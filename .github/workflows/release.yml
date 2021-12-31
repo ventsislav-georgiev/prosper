@@ -1,0 +1,28 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release:
+    runs-on: macos-latest
+    if: "startsWith(github.event.head_commit.message, 'release: v')"
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with:
+          go-version: "1.17.5"
+      - name: install fyne
+        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+      - name: set PATH
+        run: export PATH="$(go env GOPATH)/bin:$PATH"
+      - name: build-darwin
+        run: make build-darwin VERSION=$(echo ${{github.event.head_commit.message}} | cut -d"v" -f2)
+      - name: zip
+        run: cd dist && zip -r Prosper-darwin.zip Prosper.app
+      - name: release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/Prosper-darwin.zip
