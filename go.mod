@@ -4,7 +4,7 @@ go 1.17
 
 replace fyne.io/fyne/v2 => github.com/ventsislav-georgiev/fyne/v2 v2.1.3-0.20211229201052-c7f1a0309c48
 
-replace golang.design/x/hotkey => github.com/ventsislav-georgiev/hotkey v0.2.2-0.20211225211328-bdab82048dbe
+replace golang.design/x/hotkey => github.com/ventsislav-georgiev/hotkey v0.2.2-0.20211231123830-060ae7ddfbc4
 
 replace github.com/iineva/bom => github.com/ventsislav-georgiev/bom v0.0.0-20211225180107-0897c1eecaae
 

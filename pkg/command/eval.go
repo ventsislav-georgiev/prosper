@@ -17,11 +17,11 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 		return "", nil, nil, nil
 	}
 
-	switch expr {
+	switch strings.ToLower(expr) {
 	case ":q":
 		return "Quit", nil, func() { global.Quit() }, nil
 	case ":s":
-		return "Shortcuts", nil, func() { go shortcuts.Open() }, nil
+		return "Shortcuts", nil, func() { go shortcuts.Edit() }, nil
 	}
 
 	return "", nil, nil, nil

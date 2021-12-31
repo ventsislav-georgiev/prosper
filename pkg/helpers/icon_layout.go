@@ -1,4 +1,4 @@
-package core
+package helpers
 
 import (
 	"fyne.io/fyne/v2"
@@ -28,6 +28,6 @@ func (l *iconLayout) MinSize(objects []fyne.CanvasObject) (min fyne.Size) {
 	return
 }
 
-func newIconLayout() fyne.Layout {
+func NewIconLayout() fyne.Layout {
 	return &iconLayout{}
 }

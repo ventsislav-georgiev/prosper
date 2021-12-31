@@ -23,20 +23,28 @@ const (
 	darwinSysAppsPath  = "/System/Applications"
 )
 
-type fuzzySource []app
+type fuzzySource []ExecInfo
 
 func (f fuzzySource) String(i int) string {
-	return f[i].name
+	return f[i].DisplayName
 }
 
 func (f fuzzySource) Len() int {
 	return len(f)
 }
 
-type app struct {
-	name     string
-	filename string
-	path     string
+type ExecInfo struct {
+	DisplayName string
+	Filename    string
+	Path        string
+}
+
+func (e *ExecInfo) Exec() {
+	exec.Command("open", e.Filepath()).Run()
+}
+
+func (e *ExecInfo) Filepath() string {
+	return filepath.Join(e.Path, e.Filename)
 }
 
 func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
@@ -50,38 +58,53 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 
 	name := strings.ToLower(expr[2:])
 
+	app, err := EvalWithoutIcon(name)
+	if err != nil {
+		return app.DisplayName, nil, onEnter, nil
+	}
+
+	return EvalWithIcon(app)
+}
+
+func EvalWithoutIcon(name string) (a ExecInfo, err error) {
 	userApps, err := os.ReadDir(darwinUserAppsPath)
 	if err != nil {
-		return "", nil, nil, nil
+		return ExecInfo{}, nil
 	}
 
 	sysApps, err := os.ReadDir(darwinSysAppsPath)
 	if err != nil {
-		return "", nil, nil, nil
+		return ExecInfo{}, nil
 	}
 
-	var apps fuzzySource = make([]app, 0, len(userApps)+len(sysApps))
+	var apps fuzzySource = make([]ExecInfo, 0, len(userApps)+len(sysApps))
 	for _, f := range userApps {
-		apps = append(apps, app{name: strings.TrimSuffix(f.Name(), ".app"), path: darwinUserAppsPath, filename: f.Name()})
+		apps = append(apps, ExecInfo{DisplayName: strings.TrimSuffix(f.Name(), ".app"), Path: darwinUserAppsPath, Filename: f.Name()})
 	}
 	for _, f := range sysApps {
-		apps = append(apps, app{name: strings.TrimSuffix(f.Name(), ".app"), path: darwinSysAppsPath, filename: f.Name()})
+		apps = append(apps, ExecInfo{DisplayName: strings.TrimSuffix(f.Name(), ".app"), Path: darwinSysAppsPath, Filename: f.Name()})
 	}
 
 	matches := fuzzy.FindFrom(name, apps)
 	if len(matches) == 0 {
-		return "", nil, nil, nil
+		return ExecInfo{}, nil
 	}
 
 	app := apps[matches[0].Index]
-	appPath := filepath.Join(app.path, app.filename)
+
+	return app, nil
+}
+
+func EvalWithIcon(app ExecInfo) (s string, icon []byte, onEnter func(), err error) {
 	onEnter = func() {
-		exec.Command("open", appPath).Run()
+		app.Exec()
 	}
+
+	appPath := filepath.Join(app.Path, app.Filename)
 
 	info, err := ioutil.ReadFile(filepath.Join(appPath, "Contents", "Info.plist"))
 	if err != nil {
-		return app.name, nil, onEnter, nil
+		return app.DisplayName, nil, onEnter, nil
 	}
 
 	var bundleHeader struct {
@@ -91,15 +114,15 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 
 	err = plist.Unmarshal(info, &bundleHeader)
 	if err != nil {
-		return app.name, nil, onEnter, nil
+		return app.DisplayName, nil, onEnter, nil
 	}
 
 	if bundleHeader.CFBundleIconFile == "" && bundleHeader.CFBundleIconName == "" {
-		return app.name, nil, onEnter, nil
+		return app.DisplayName, nil, onEnter, nil
 	}
 
 	var img image.Image
-	resPath := filepath.Join(app.path, app.filename, "Contents", "Resources")
+	resPath := filepath.Join(app.Path, app.Filename, "Contents", "Resources")
 
 	if bundleHeader.CFBundleIconFile != "" {
 		if !strings.HasSuffix(bundleHeader.CFBundleIconFile, ".icns") {
@@ -113,16 +136,16 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	}
 
 	if err != nil || img == nil {
-		return app.name, nil, onEnter, nil
+		return app.DisplayName, nil, onEnter, nil
 	}
 
 	var buf bytes.Buffer
 	err = png.Encode(&buf, img)
 	if err != nil {
-		return app.name, nil, onEnter, nil
+		return app.DisplayName, nil, onEnter, nil
 	}
 
-	return app.name, buf.Bytes(), onEnter, nil
+	return app.DisplayName, buf.Bytes(), onEnter, nil
 }
 
 func getImageFromIcns(cfBundleIconFile string, resPath string) (img image.Image, err error) {

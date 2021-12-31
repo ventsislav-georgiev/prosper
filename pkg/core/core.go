@@ -50,7 +50,7 @@ func Run() {
 	out.Bind(r)
 
 	i := widget.NewIcon(helpers.EmptyIcon())
-	iconContainer := container.New(newIconLayout(), i)
+	iconContainer := container.New(helpers.NewIconLayout(), i)
 	iconContainer.Hide()
 
 	in := widget.NewEntry()
@@ -86,16 +86,15 @@ func Run() {
 		app.Quit()
 	}
 
-	optKey := []hotkey.Modifier{hotkey.ModOption}
-	spaceKey := hotkey.Key(49)
-	shortcuts.Register(optKey, spaceKey, func() {
-		global.AppWindow.Show()
-		win.Canvas().Focus(in)
-	})
-
 	win.RunOnMainWhenCreated(func() {
 		setupWinHooks(win, reset, onClose)
 	})
+
+	shortcuts.Register([]hotkey.Modifier{hotkey.ModOption}, hotkey.Key(glfw.GetKeyScancode(glfw.KeySpace)), func() {
+		global.AppWindow.Show()
+		win.Canvas().Focus(in)
+	})
+	shortcuts.RegisterDefined()
 
 	app.Run()
 }
@@ -129,19 +128,6 @@ func setupWinHooks(w fyne.GLFWWindow, onHide func(), onClose *struct{ fn func() 
 
 	w.SetCloseIntercept(func() { global.Quit() })
 }
-
-// type mainLoopListener struct {
-// 	ch <-chan struct{}
-// 	fn func()
-// }
-
-// func (l *mainLoopListener) Ch() <-chan struct{} {
-// 	return l.ch
-// }
-
-// func (l *mainLoopListener) Fn() {
-// 	l.fn()
-// }
 
 func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Container, onEnter *struct{ fn func() }) func(expr string) {
 	evals := []func(string) (string, []byte, func(), error){
