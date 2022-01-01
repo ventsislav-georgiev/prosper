@@ -53,7 +53,8 @@ func Run() {
 	iconContainer := container.New(helpers.NewIconLayout(), i)
 	iconContainer.Hide()
 
-	in := widget.NewEntry()
+	in := &exprEntry{}
+	in.ExtendBaseWidget(in)
 	in.SetPlaceHolder("Enter expression here...")
 
 	onEnter := &struct{ fn func() }{}
@@ -63,6 +64,11 @@ func Run() {
 		in.SetText("")
 		r.Set("")
 		iconContainer.Hide()
+	}
+
+	in.OnEsc = func() {
+		reset()
+		win.ViewPort().Hide()
 	}
 
 	in.OnSubmitted = func(_ string) {
