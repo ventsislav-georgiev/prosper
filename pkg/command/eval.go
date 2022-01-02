@@ -13,6 +13,7 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 		return "", nil, nil, helpers.ErrSkip
 	}
 
+	expr = strings.TrimSpace(expr)
 	if len(expr) > 2 {
 		return "", nil, nil, nil
 	}

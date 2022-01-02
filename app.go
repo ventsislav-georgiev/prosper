@@ -1,7 +1,14 @@
 package main
 
-import "github.com/ventsislav-georgiev/prosper/pkg/core"
+import (
+	_ "embed"
+
+	"github.com/ventsislav-georgiev/prosper/pkg/core"
+)
+
+//go:embed icon.png
+var icon []byte
 
 func main() {
-	core.Run()
+	core.Run(icon)
 }
