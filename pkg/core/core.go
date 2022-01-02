@@ -19,15 +19,17 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/shortcuts"
 	"github.com/ventsislav-georgiev/prosper/pkg/translate"
 	"github.com/ventsislav-georgiev/prosper/pkg/units"
-	"golang.design/x/hotkey"
 )
 
-func Run() {
+func Run(icon []byte) {
 	os.Setenv("FYNE_THEME", "dark")
-	os.Setenv("FYNE_SCALE", "1.5")
+	if helpers.IsDarwin {
+		os.Setenv("FYNE_SCALE", "1.3")
+	}
 
 	app := app.NewWithID("com.ventsislav-georgiev.prosper")
 	global.AppInstance = app
+	app.SetIcon(fyne.NewStaticResource("icon.png", icon))
 
 	drv, ok := app.Driver().(desktop.Driver)
 	if !ok {
@@ -40,7 +42,6 @@ func Run() {
 	win := drv.CreateSplashWindow().(fyne.GLFWWindow)
 	global.AppWindow = win
 
-	win.Resize(fyne.Size{Width: 400})
 	win.SetBeforeShowed(func() {
 		center(win.ViewPort())
 	})
@@ -55,7 +56,7 @@ func Run() {
 
 	in := &exprEntry{}
 	in.ExtendBaseWidget(in)
-	in.SetPlaceHolder("Enter expression here...")
+	in.SetPlaceHolder("Enter expression here...                                        ")
 
 	onEnter := &struct{ fn func() }{}
 	in.OnChanged = getOnChanged(r, i, iconContainer, onEnter)
@@ -96,10 +97,13 @@ func Run() {
 		setupWinHooks(win, reset, onClose)
 	})
 
-	shortcuts.Register([]hotkey.Modifier{hotkey.ModOption}, hotkey.Key(glfw.GetKeyScancode(glfw.KeySpace)), func() {
-		global.AppWindow.Show()
-		win.Canvas().Focus(in)
-	})
+	if m, k, ok := shortcuts.ToHotkey([]fyne.KeyName{desktop.KeyAltLeft, fyne.KeySpace}); ok {
+		shortcuts.Register(m, k, func() {
+			win.Canvas().Focus(in)
+			global.AppWindow.Show()
+		})
+	}
+
 	shortcuts.RegisterDefined()
 
 	app.Run()
@@ -112,14 +116,14 @@ func center(w *glfw.Window) {
 	}
 
 	viewWidth, viewHeight := w.GetSize()
-	if 120 > viewHeight {
+	if viewHeight < 120 {
 		viewHeight = 120
 	}
 
 	monMode := monitor.GetVideoMode()
 	monX, monY := monitor.GetPos()
 	newX := (monMode.Width / 2) - (viewWidth / 2) + monX
-	newY := ((monMode.Height / 2) - (viewHeight / 2) + monY) - 50
+	newY := ((monMode.Height / 2) - (viewHeight / 2) + monY) - (viewHeight / 2)
 
 	w.SetPos(newX, newY)
 }
@@ -148,7 +152,7 @@ func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Containe
 	inflight := false
 	drop := false
 
-	return func(expr string) {
+	fn := func(expr string) {
 		defer func() { recover() }()
 
 		if inflight {
@@ -192,4 +196,6 @@ func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Containe
 		iconContainer.Hide()
 		r.Set("")
 	}
+
+	return func(expr string) { go fn(expr) }
 }

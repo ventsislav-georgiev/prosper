@@ -33,6 +33,13 @@ func (s *ConcurrentSliceWithFuncs) Iter() <-chan func() {
 			ch <- fn
 		}
 		close(ch)
+		s.reinit()
 	}()
 	return ch
+}
+
+func (s *ConcurrentSliceWithFuncs) reinit() {
+	s.rw.Lock()
+	defer s.rw.Unlock()
+	s.funcs = make([]func(), 0)
 }

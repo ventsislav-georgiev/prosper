@@ -5,10 +5,8 @@ on:
       - "v*.*.*"
 
 jobs:
-  release:
+  release_darwin:
     runs-on: macos-latest
-    if: "startsWith(github.event.head_commit.message, 'release: v')"
-
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-go@v2
@@ -16,13 +14,31 @@ jobs:
           go-version: "1.17.5"
       - name: install fyne
         run: go install fyne.io/fyne/v2/cmd/fyne@latest
-      - name: set PATH
-        run: export PATH="$(go env GOPATH)/bin:$PATH"
       - name: build-darwin
-        run: make build-darwin VERSION=$(echo ${{github.event.head_commit.message}} | cut -d"v" -f2)
+        run: make build-darwin VERSION=$(echo ${GITHUB_REF/refs\/tags\/v/})
       - name: zip
         run: cd dist && zip -r Prosper-darwin.zip Prosper.app
       - name: release
         uses: softprops/action-gh-release@v1
         with:
           files: dist/Prosper-darwin.zip
+
+  release_windows:
+    runs-on: windows-latest
+    needs: release_darwin
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with:
+          go-version: "1.17.5"
+      - name: install fyne
+        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+      - name: build-windows
+        shell: bash
+        run: make build-windows VERSION=$(echo ${GITHUB_REF/refs\/tags\/v/})
+      - name: zip
+        run: cd dist && Compress-Archive Prosper.exe Prosper-windows.zip
+      - name: release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/Prosper-windows.zip

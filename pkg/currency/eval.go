@@ -21,7 +21,7 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 		return "", nil, nil, helpers.ErrSkip
 	}
 
-	if parts[2] != "to" {
+	if parts[2] != "in" && parts[2] != "to" {
 		return "", nil, nil, helpers.ErrSkip
 	}
 

@@ -1,11 +1,11 @@
 package shortcuts
 
 import (
-	"runtime"
 	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 )
 
 type keysEntry struct {
@@ -23,7 +23,7 @@ func (e *keysEntry) KeyNames() string {
 			keyName = strings.ReplaceAll(keyName, "Super", "Cmd")
 		}
 
-		if runtime.GOOS == "darwin" {
+		if helpers.IsDarwin {
 			keyName = strings.ReplaceAll(keyName, "Alt", "Option")
 		}
 
@@ -53,6 +53,18 @@ func (e *keysEntry) TypedKey(key *fyne.KeyEvent) {
 
 	if len(e.keyNames) == 0 && !ismod {
 		return
+	}
+
+	if !ismod {
+		if helpers.IsWindows {
+			if _, ok := keyNameWindowVKCodeMap[key.Name]; !ok {
+				return
+			}
+		} else {
+			if _, ok := keyNameGLFWCodeMap[key.Name]; !ok {
+				return
+			}
+		}
 	}
 
 	e.keyNames = append(e.keyNames, key.Name)
