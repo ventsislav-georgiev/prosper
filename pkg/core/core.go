@@ -73,10 +73,10 @@ func Run(icon []byte) {
 	}
 
 	in.OnSubmitted = func(_ string) {
+		reset()
 		if onEnter.fn != nil {
-			onEnter.fn()
-			reset()
 			win.ViewPort().Hide()
+			onEnter.fn()
 		}
 	}
 
