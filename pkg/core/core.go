@@ -128,15 +128,15 @@ func center(w *glfw.Window) {
 	w.SetPos(newX, newY)
 }
 
-func setupWinHooks(w fyne.GLFWWindow, onHide func(), onClose *struct{ fn func() }) {
-	w.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) {
+func setupWinHooks(win fyne.GLFWWindow, onHide func(), onClose *struct{ fn func() }) {
+	win.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) {
 		if !focused {
-			w.Hide()
+			go win.Hide()
 			onHide()
 		}
 	})
 
-	w.SetCloseIntercept(func() { global.Quit() })
+	win.SetCloseIntercept(func() { global.Quit() })
 }
 
 func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Container, onEnter *struct{ fn func() }) func(expr string) {
