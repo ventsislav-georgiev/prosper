@@ -2,9 +2,11 @@ package open
 
 import (
 	"sync"
+
+	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
-type fuzzySource []ExecInfo
+type fuzzySource []exec.Info
 
 func (f fuzzySource) String(i int) string {
 	return f[i].DisplayName
@@ -16,22 +18,22 @@ func (f fuzzySource) Len() int {
 
 type appsList struct {
 	rw   sync.RWMutex
-	apps []ExecInfo
+	apps []exec.Info
 }
 
 func newAppsList() *appsList {
 	return &appsList{
-		apps: make([]ExecInfo, 0),
+		apps: make([]exec.Info, 0),
 	}
 }
 
 func (s *appsList) reinit() {
 	s.rw.Lock()
 	defer s.rw.Unlock()
-	s.apps = make([]ExecInfo, 0)
+	s.apps = make([]exec.Info, 0)
 }
 
-func (s *appsList) set(d []ExecInfo) {
+func (s *appsList) set(d []exec.Info) {
 	s.rw.Lock()
 	defer s.rw.Unlock()
 	s.apps = d
@@ -43,7 +45,7 @@ func (s *appsList) len() int {
 	return len(s.apps)
 }
 
-func (s *appsList) get(idx int) ExecInfo {
+func (s *appsList) get(idx int) exec.Info {
 	s.rw.RLock()
 	defer s.rw.RUnlock()
 	return s.apps[idx]

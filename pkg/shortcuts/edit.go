@@ -13,6 +13,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
+	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
 func Edit() {
@@ -73,9 +74,9 @@ func Edit() {
 }
 
 func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
-	in := widget.NewEntry()
-	in.SetPlaceHolder("Enter app name...")
+	in := &helpers.EscEntry{}
 	in.ExtendBaseWidget(in)
+	in.SetPlaceHolder("Enter app name...")
 
 	out := widget.NewLabel("")
 	r := binding.NewString()
@@ -119,7 +120,7 @@ func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
 	p.Show()
 	p.Canvas.Focus(in)
 
-	var execInfo open.ExecInfo
+	var execInfo exec.Info
 	in.OnSubmitted = func(s string) {
 		app, err := open.FindApp(s)
 		if err != nil {
@@ -132,6 +133,10 @@ func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
 		c1.Hide()
 		c2.Show()
 		p.Canvas.Focus(keysInput)
+	}
+
+	in.OnEsc = func() {
+		w.Canvas().Overlays().Remove(p)
 	}
 
 	keysInput.OnSubmitted = func(s string) {

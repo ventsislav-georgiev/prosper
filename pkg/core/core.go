@@ -54,7 +54,7 @@ func Run(icon []byte) {
 	iconContainer := container.New(helpers.NewIconLayout(), i)
 	iconContainer.Hide()
 
-	in := &exprEntry{}
+	in := &helpers.EscEntry{}
 	in.ExtendBaseWidget(in)
 	in.SetPlaceHolder("Enter expression here...                                        ")
 

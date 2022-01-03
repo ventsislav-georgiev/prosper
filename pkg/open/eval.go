@@ -8,6 +8,7 @@ import (
 
 	"github.com/sahilm/fuzzy"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
 var (
@@ -39,7 +40,7 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	return EvalApp(app)
 }
 
-func FindApp(name string) (a ExecInfo, err error) {
+func FindApp(name string) (a exec.Info, err error) {
 	if apps.len() == 0 {
 		switch runtime.GOOS {
 		case "darwin":
@@ -50,12 +51,12 @@ func FindApp(name string) (a ExecInfo, err error) {
 	}
 
 	if apps.len() == 0 {
-		return ExecInfo{}, helpers.ErrEmpty
+		return exec.Info{}, helpers.ErrEmpty
 	}
 
 	matches := fuzzy.FindFrom(name, apps.fuzzy())
 	if len(matches) == 0 {
-		return ExecInfo{}, helpers.ErrEmpty
+		return exec.Info{}, helpers.ErrEmpty
 	}
 
 	app := apps.get(matches[0].Index)
@@ -63,7 +64,7 @@ func FindApp(name string) (a ExecInfo, err error) {
 	return app, nil
 }
 
-func EvalApp(app ExecInfo) (s string, icon []byte, onEnter func(), err error) {
+func EvalApp(app exec.Info) (s string, icon []byte, onEnter func(), err error) {
 	onEnter = func() {
 		app.Exec()
 	}

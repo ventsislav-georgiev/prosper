@@ -6,11 +6,11 @@ import (
 
 	"fyne.io/fyne/v2"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
-	"github.com/ventsislav-georgiev/prosper/pkg/open"
+	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
 type shortcut struct {
-	ExecInfo        open.ExecInfo
+	ExecInfo        exec.Info
 	KeyNames        []fyne.KeyName
 	DisplayKeyNames string
 	unregister      func()

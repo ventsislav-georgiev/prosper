@@ -11,6 +11,7 @@ import (
 	"github.com/groob/plist"
 	"github.com/iineva/bom/pkg/asset"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 	"yrh.dev/icns"
 )
 
@@ -52,7 +53,7 @@ func findAppsDarwinRecursive(dir string, level int) fuzzySource {
 
 	for _, f := range entries {
 		if filepath.Ext(f.Name()) == ".app" {
-			apps = append(apps, ExecInfo{
+			apps = append(apps, exec.Info{
 				DisplayName: f.Name()[:len(f.Name())-4],
 				Path:        dir,
 				Filename:    f.Name(),
@@ -65,7 +66,7 @@ func findAppsDarwinRecursive(dir string, level int) fuzzySource {
 	return apps
 }
 
-func extractIconDarwin(app ExecInfo) (icon []byte, err error) {
+func extractIconDarwin(app exec.Info) (icon []byte, err error) {
 	appPath := filepath.Join(app.Path, app.Filename)
 
 	info, err := ioutil.ReadFile(filepath.Join(appPath, "Contents", "Info.plist"))

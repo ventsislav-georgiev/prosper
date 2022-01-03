@@ -15,6 +15,7 @@ import (
 	lnk "github.com/parsiya/golnk"
 	"github.com/tc-hib/winres"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
 var (
@@ -62,7 +63,7 @@ func findAppsWindowsRecursive(dir string, level int) fuzzySource {
 
 	for _, f := range entries {
 		if filepath.Ext(f.Name()) == ".lnk" {
-			apps = append(apps, ExecInfo{
+			apps = append(apps, exec.Info{
 				DisplayName: f.Name()[:len(f.Name())-4],
 				Path:        dir,
 				Filename:    f.Name(),
@@ -75,7 +76,7 @@ func findAppsWindowsRecursive(dir string, level int) fuzzySource {
 	return apps
 }
 
-func extractIconWindows(app ExecInfo) (icon []byte, err error) {
+func extractIconWindows(app exec.Info) (icon []byte, err error) {
 	f, lnkErr := lnk.File(app.Filepath())
 	if lnkErr != nil {
 		fmt.Println(lnkErr)
