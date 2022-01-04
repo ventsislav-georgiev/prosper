@@ -5,8 +5,8 @@ import (
 
 	"fyne.io/fyne/v2"
 	"github.com/go-gl/glfw/v3.3/glfw"
-	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/shortcuts/keymap"
 	"golang.design/x/hotkey"
 )
 
@@ -29,27 +29,20 @@ func RegisterDefined() {
 func Register(m []hotkey.Modifier, k hotkey.Key, fn func()) func() {
 	hk := hotkey.New(m, k)
 
-	var err error
-	run := func(fn func()) { fn() }
-	if helpers.IsDarwin {
-		run = global.AppWindow.RunOnMain
+	err := hk.Register()
+	if err != nil {
+		fmt.Printf("failed to register hotkey: %v\n", err)
+		return nil
 	}
 
 	unregister := make(chan struct{})
-
 	go func() {
-		run(func() { err = hk.Register() })
-		if err != nil {
-			fmt.Printf("failed to register hotkey: %v\n", err)
-			return
-		}
-
 		for {
 			select {
 			case <-hk.Keydown():
 				go fn()
 			case <-unregister:
-				run(func() { hk.Unregister() })
+				hk.Unregister()
 				return
 			}
 		}
@@ -63,23 +56,24 @@ func Register(m []hotkey.Modifier, k hotkey.Key, fn func()) func() {
 func ToHotkey(keyNames []fyne.KeyName) (m []hotkey.Modifier, k hotkey.Key, ok bool) {
 	m = make([]hotkey.Modifier, 0)
 	for _, keyName := range keyNames {
-		if mod.contains(keyName) {
-			m = append(m, keyNameModMap[keyName])
+		if keymap.IsModifier(keyName) {
+			m = append(m, keymap.KeyNameModMap[keyName])
 			continue
 		}
 
 		var code glfw.Key
-		if helpers.IsWindows {
-			code, ok = keyNameWindowVKCodeMap[keyName]
-			if ok {
-				k = hotkey.Key(code)
-			}
-		} else {
-			code, ok = keyNameGLFWCodeMap[keyName]
-			if ok {
-				k = hotkey.Key(glfw.GetKeyScancode(code))
-			}
+		code, ok = keymap.KeyNameGLFWCodeMap[keyName]
+		if !ok {
+			return
 		}
+
+		if helpers.IsDarwin {
+			k = hotkey.Key(glfw.GetKeyScancode(code))
+		} else {
+			k = hotkey.Key(code)
+		}
+
+		return
 	}
 
 	return

@@ -97,14 +97,16 @@ func Run(icon []byte) {
 		setupWinHooks(win, reset, onClose)
 	})
 
-	if m, k, ok := shortcuts.ToHotkey([]fyne.KeyName{desktop.KeyAltLeft, fyne.KeySpace}); ok {
-		shortcuts.Register(m, k, func() {
-			win.Canvas().Focus(in)
-			global.AppWindow.Show()
-		})
-	}
+	go func() {
+		if m, k, ok := shortcuts.ToHotkey([]fyne.KeyName{desktop.KeyAltLeft, fyne.KeySpace}); ok {
+			shortcuts.Register(m, k, func() {
+				win.Canvas().Focus(in)
+				global.AppWindow.Show()
+			})
+		}
 
-	shortcuts.RegisterDefined()
+		shortcuts.RegisterDefined()
+	}()
 
 	app.Run()
 }

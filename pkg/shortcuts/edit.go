@@ -9,7 +9,6 @@ import (
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
@@ -52,7 +51,7 @@ func Edit() {
 	})
 
 	list := container.NewVScroll(listContainer)
-	list.SetMinSize(fyne.NewSize(400, 200))
+	list.SetMinSize(fyne.NewSize(500, 200))
 
 	w.SetContent(container.
 		NewBorder(
@@ -63,13 +62,9 @@ func Edit() {
 		),
 	)
 	w.Show()
-
-	w.RunOnMainWhenCreated(func() {
-		w.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) {
-			if !focused {
-				w.SetShouldClose(true)
-			}
-		})
+	w.SetCloseIntercept(func() {
+		w.Close()
+		global.AppWindow.Show()
 	})
 }
 

@@ -5,7 +5,7 @@ on:
       - "v*.*.*"
 
 jobs:
-  release_darwin:
+  darwin:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v2
@@ -23,9 +23,9 @@ jobs:
         with:
           files: dist/Prosper-darwin.zip
 
-  release_windows:
+  windows:
     runs-on: windows-latest
-    needs: release_darwin
+    needs: darwin
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-go@v2
@@ -42,3 +42,22 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: dist/Prosper-windows.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    needs: darwin
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with:
+          go-version: "1.17.5"
+      - name: install fyne
+        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+      - name: deps
+        run: sudo apt install -y xorg-dev
+      - name: build-linux
+        run: make build-linux VERSION=$(echo ${GITHUB_REF/refs\/tags\/v/})
+      - name: release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/Prosper-linux.tar.xz

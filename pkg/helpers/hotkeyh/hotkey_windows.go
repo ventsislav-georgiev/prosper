@@ -1,4 +1,4 @@
-package helpers
+package hotkeyh
 
 import "golang.design/x/hotkey"
 

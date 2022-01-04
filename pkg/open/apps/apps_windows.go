@@ -1,4 +1,4 @@
-package open
+package apps
 
 import (
 	"bytes"
@@ -30,6 +30,7 @@ const (
 )
 
 func init() {
+	homeDir, _ := os.UserHomeDir()
 	if homeDir != "" && helpers.IsWindows {
 		windowsGlobalAppsPath = filepath.Join(homeDir[:3], "ProgramData\\Microsoft\\Windows\\Start Menu\\Programs")
 		windowsUserAppsPath = filepath.Join(homeDir, "AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs")
@@ -37,20 +38,20 @@ func init() {
 	}
 }
 
-func findAppsWindows() fuzzySource {
-	apps := findAppsWindowsRecursive(windowsGlobalAppsPath, 0)
+func Find() FuzzySource {
+	apps := findRecursive(windowsGlobalAppsPath, 0)
 	if windowsUserAppsPath != "" {
-		apps = append(apps, findAppsWindowsRecursive(windowsUserAppsPath, 0)...)
+		apps = append(apps, findRecursive(windowsUserAppsPath, 0)...)
 	}
 	if windowsUserAppsPath2 != "" {
-		apps = append(apps, findAppsWindowsRecursive(windowsUserAppsPath2, 0)...)
+		apps = append(apps, findRecursive(windowsUserAppsPath2, 0)...)
 	}
 
 	return apps
 }
 
-func findAppsWindowsRecursive(dir string, level int) fuzzySource {
-	apps := make(fuzzySource, 0)
+func findRecursive(dir string, level int) FuzzySource {
+	apps := make(FuzzySource, 0)
 
 	if !helpers.IsWindows {
 		return apps
@@ -69,14 +70,14 @@ func findAppsWindowsRecursive(dir string, level int) fuzzySource {
 				Filename:    f.Name(),
 			})
 		} else if level < 5 && f.IsDir() {
-			apps = append(apps, findAppsWindowsRecursive(filepath.Join(dir, f.Name()), level+1)...)
+			apps = append(apps, findRecursive(filepath.Join(dir, f.Name()), level+1)...)
 		}
 	}
 
 	return apps
 }
 
-func extractIconWindows(app exec.Info) (icon []byte, err error) {
+func ExtractIcon(app exec.Info) (icon []byte, err error) {
 	f, lnkErr := lnk.File(app.Filepath())
 	if lnkErr != nil {
 		fmt.Println(lnkErr)
@@ -112,9 +113,9 @@ func extractIconWindows(app exec.Info) (icon []byte, err error) {
 
 	switch ext {
 	case ".exe", ".dll":
-		icon, err = extractIconWindowsFromResFile(path, int(f.Header.IconIndex))
+		icon, err = extractIconFromResFile(path, int(f.Header.IconIndex))
 	case ".ico":
-		icon, err = extractIconWindowsFromIco(path)
+		icon, err = extractIconFromIco(path)
 	}
 
 	if icon == nil {
@@ -124,7 +125,7 @@ func extractIconWindows(app exec.Info) (icon []byte, err error) {
 	return
 }
 
-func extractIconWindowsFromResFile(path string, idx int) (icon []byte, err error) {
+func extractIconFromResFile(path string, idx int) (icon []byte, err error) {
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -160,7 +161,7 @@ func extractIconWindowsFromResFile(path string, idx int) (icon []byte, err error
 	return img, nil
 }
 
-func extractIconWindowsFromIco(path string) (icon []byte, err error) {
+func extractIconFromIco(path string) (icon []byte, err error) {
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -188,7 +189,7 @@ func getIconFromResourceSet(rs *winres.ResourceSet, resID winres.Identifier) (im
 	}
 
 	for _, i := range ico.Images {
-		data, err := extractIconWindowsToPNG(i.Image)
+		data, err := extractIconToPNG(i.Image)
 		if err == nil && len(img) < len(data) {
 			img = data
 		}
@@ -196,7 +197,7 @@ func getIconFromResourceSet(rs *winres.ResourceSet, resID winres.Identifier) (im
 	return
 }
 
-func extractIconWindowsToPNG(imgBytes []byte) ([]byte, error) {
+func extractIconToPNG(imgBytes []byte) ([]byte, error) {
 	img, _, err := image.Decode(bytes.NewReader(imgBytes))
 	if err != nil {
 		return nil, err

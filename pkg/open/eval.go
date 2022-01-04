@@ -2,23 +2,17 @@ package open
 
 import (
 	"fmt"
-	"os"
-	"runtime"
 	"strings"
 
 	"github.com/sahilm/fuzzy"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/open/apps"
 	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
 var (
-	homeDir string
-	apps    = newAppsList()
+	appsList = apps.NewAppsList()
 )
-
-func init() {
-	homeDir, _ = os.UserHomeDir()
-}
 
 func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	if !strings.HasPrefix(expr, "o ") {
@@ -26,7 +20,7 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	}
 
 	if len(expr) == 2 {
-		apps.reinit()
+		appsList.Reinit()
 		return "", nil, nil, helpers.ErrEmpty
 	}
 
@@ -34,32 +28,27 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 
 	app, err := FindApp(name)
 	if err != nil {
-		return app.DisplayName, nil, onEnter, nil
+		return app.DisplayName, nil, onEnter, helpers.ErrEmpty
 	}
 
 	return EvalApp(app)
 }
 
 func FindApp(name string) (a exec.Info, err error) {
-	if apps.len() == 0 {
-		switch runtime.GOOS {
-		case "darwin":
-			apps.set(findAppsDarwin())
-		case "windows":
-			apps.set(findAppsWindows())
-		}
+	if appsList.Len() == 0 {
+		appsList.Set(apps.Find())
 	}
 
-	if apps.len() == 0 {
+	if appsList.Len() == 0 {
 		return exec.Info{}, helpers.ErrEmpty
 	}
 
-	matches := fuzzy.FindFrom(name, apps.fuzzy())
+	matches := fuzzy.FindFrom(name, appsList.Fuzzy())
 	if len(matches) == 0 {
 		return exec.Info{}, helpers.ErrEmpty
 	}
 
-	app := apps.get(matches[0].Index)
+	app := appsList.Get(matches[0].Index)
 
 	return app, nil
 }
@@ -69,12 +58,7 @@ func EvalApp(app exec.Info) (s string, icon []byte, onEnter func(), err error) {
 		app.Exec()
 	}
 
-	switch runtime.GOOS {
-	case "darwin":
-		icon, err = extractIconDarwin(app)
-	case "windows":
-		icon, err = extractIconWindows(app)
-	}
+	icon, err = apps.ExtractIcon(app)
 
 	if err != nil {
 		fmt.Println(err.Error())

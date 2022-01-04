@@ -1,4 +1,4 @@
-package open
+package apps
 
 import (
 	"bytes"
@@ -16,6 +16,7 @@ import (
 )
 
 func init() {
+	homeDir, _ := os.UserHomeDir()
 	if homeDir != "" && helpers.IsDarwin {
 		darwinUserAppsPath = filepath.Join(homeDir, "Applications")
 	}
@@ -30,17 +31,17 @@ var (
 	darwinUserAppsPath string
 )
 
-func findAppsDarwin() fuzzySource {
-	apps := findAppsDarwinRecursive(darwinGlobalAppsPath, 0)
-	apps = append(apps, findAppsDarwinRecursive(darwinSysAppsPath, 0)...)
+func Find() FuzzySource {
+	apps := findRecursive(darwinGlobalAppsPath, 0)
+	apps = append(apps, findRecursive(darwinSysAppsPath, 0)...)
 	if darwinUserAppsPath != "" {
-		apps = append(apps, findAppsDarwinRecursive(darwinUserAppsPath, 0)...)
+		apps = append(apps, findRecursive(darwinUserAppsPath, 0)...)
 	}
 	return apps
 }
 
-func findAppsDarwinRecursive(dir string, level int) fuzzySource {
-	apps := make(fuzzySource, 0)
+func findRecursive(dir string, level int) FuzzySource {
+	apps := make(FuzzySource, 0)
 
 	if !helpers.IsDarwin {
 		return apps
@@ -59,14 +60,14 @@ func findAppsDarwinRecursive(dir string, level int) fuzzySource {
 				Filename:    f.Name(),
 			})
 		} else if level < 1 && f.IsDir() {
-			apps = append(apps, findAppsDarwinRecursive(filepath.Join(dir, f.Name()), level+1)...)
+			apps = append(apps, findRecursive(filepath.Join(dir, f.Name()), level+1)...)
 		}
 	}
 
 	return apps
 }
 
-func extractIconDarwin(app exec.Info) (icon []byte, err error) {
+func ExtractIcon(app exec.Info) (icon []byte, err error) {
 	appPath := filepath.Join(app.Path, app.Filename)
 
 	info, err := ioutil.ReadFile(filepath.Join(appPath, "Contents", "Info.plist"))
@@ -95,11 +96,11 @@ func extractIconDarwin(app exec.Info) (icon []byte, err error) {
 		if filepath.Ext(bundleHeader.CFBundleIconFile) == "" {
 			bundleHeader.CFBundleIconFile += ".icns"
 		}
-		img, err = getIconDarwinFromIcns(bundleHeader.CFBundleIconFile, resPath)
+		img, err = getIconFromIcns(bundleHeader.CFBundleIconFile, resPath)
 	}
 
 	if img == nil && bundleHeader.CFBundleIconName != "" {
-		img, err = getIconDarwinFromAssetsCar(bundleHeader.CFBundleIconName, resPath)
+		img, err = getIconFromAssetsCar(bundleHeader.CFBundleIconName, resPath)
 	}
 
 	if err != nil || img == nil {
@@ -115,7 +116,7 @@ func extractIconDarwin(app exec.Info) (icon []byte, err error) {
 	return buf.Bytes(), nil
 }
 
-func getIconDarwinFromIcns(cfBundleIconFile string, resPath string) (img image.Image, err error) {
+func getIconFromIcns(cfBundleIconFile string, resPath string) (img image.Image, err error) {
 	imgBytes, err := ioutil.ReadFile(filepath.Join(resPath, cfBundleIconFile))
 	if err != nil {
 		return nil, err
@@ -141,7 +142,7 @@ func getIconDarwinFromIcns(cfBundleIconFile string, resPath string) (img image.I
 	return
 }
 
-func getIconDarwinFromAssetsCar(cfBundleIconName string, resPath string) (img image.Image, err error) {
+func getIconFromAssetsCar(cfBundleIconName string, resPath string) (img image.Image, err error) {
 	b, err := ioutil.ReadFile(filepath.Join(resPath, "Assets.car"))
 	if err != nil {
 		return nil, err

@@ -22,7 +22,7 @@ require (
 	github.com/parsiya/golnk v0.0.0-20200515071614-5db3107130ce
 	github.com/sahilm/fuzzy v0.1.0
 	github.com/tc-hib/winres v0.1.6
-	golang.design/x/hotkey v0.3.0-alpha
+	golang.design/x/hotkey v0.3.0
 	yrh.dev/icns v0.0.0-20210608051050-de3ea6a57b33
 )
 

@@ -1,4 +1,4 @@
-package open
+package apps
 
 import (
 	"sync"
@@ -6,52 +6,55 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
-type fuzzySource []exec.Info
+type FuzzySource []exec.Info
 
-func (f fuzzySource) String(i int) string {
+func (f FuzzySource) String(i int) string {
 	return f[i].DisplayName
 }
 
-func (f fuzzySource) Len() int {
+func (f FuzzySource) Len() int {
 	return len(f)
 }
 
-type appsList struct {
+type List struct {
 	rw   sync.RWMutex
 	apps []exec.Info
 }
 
-func newAppsList() *appsList {
-	return &appsList{
+func NewAppsList() *List {
+	return &List{
 		apps: make([]exec.Info, 0),
 	}
 }
 
-func (s *appsList) reinit() {
+func (s *List) Reinit() {
 	s.rw.Lock()
 	defer s.rw.Unlock()
 	s.apps = make([]exec.Info, 0)
 }
 
-func (s *appsList) set(d []exec.Info) {
+func (s *List) Set(d []exec.Info) {
+	if d == nil {
+		return
+	}
 	s.rw.Lock()
 	defer s.rw.Unlock()
 	s.apps = d
 }
 
-func (s *appsList) len() int {
+func (s *List) Len() int {
 	s.rw.RLock()
 	defer s.rw.RUnlock()
 	return len(s.apps)
 }
 
-func (s *appsList) get(idx int) exec.Info {
+func (s *List) Get(idx int) exec.Info {
 	s.rw.RLock()
 	defer s.rw.RUnlock()
 	return s.apps[idx]
 }
 
-func (s *appsList) fuzzy() fuzzySource {
+func (s *List) Fuzzy() FuzzySource {
 	s.rw.RLock()
 	defer s.rw.RUnlock()
 	return s.apps

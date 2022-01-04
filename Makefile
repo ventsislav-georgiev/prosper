@@ -8,14 +8,19 @@ info:
 
 .PHONY: build-darwin
 build-darwin: info
-	@mkdir -p dist && cd dist \
-	&& fyne package -os darwin -name ${NAME} -appVersion ${VERSION} -appID ${ID} -release -src ../ \
-	&& plutil -insert LSUIElement -bool true Prosper.app/Contents/Info.plist
+	@fyne package -os darwin -name ${NAME} -appVersion ${VERSION} -appID ${ID} -icon icon.png -release \
+	&& plutil -insert LSUIElement -bool true ${NAME}.app/Contents/Info.plist \
+	&& mkdir -p dist && mv ${NAME}.app dist/${NAME}.app
 
 .PHONY: build-windows
 build-windows: info
-	@fyne package -os windows -name ${NAME} -appVersion ${VERSION} -appID ${ID} -release \
+	@fyne package -os windows -name ${NAME} -appVersion ${VERSION} -appID ${ID} -icon icon.png -release \
 	&& mkdir -p dist && mv ${NAME}.exe dist/${NAME}.exe
+
+.PHONY: build-linux
+build-linux: info
+	@fyne package -os linux -name ${NAME} -appVersion ${VERSION} -appID ${ID} -icon icon.png -release \
+	&& mkdir -p dist && mv ${NAME}.tar.xz dist/${NAME}-linux.tar.xz
 
 .PHONY: install-darwin
 install-darwin: build-darwin

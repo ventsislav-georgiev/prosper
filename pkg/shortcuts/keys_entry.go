@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/shortcuts/keymap"
 )
 
 type keysEntry struct {
@@ -17,7 +18,7 @@ func (e *keysEntry) KeyNames() string {
 	keyNames := make([]string, 0)
 	for _, k := range e.keyNames {
 		keyName := string(k)
-		if mod.contains(k) {
+		if keymap.IsModifier(k) {
 			keyName = strings.ReplaceAll(keyName, "Left", "")
 			keyName = strings.ReplaceAll(keyName, "Right", "")
 			keyName = strings.ReplaceAll(keyName, "Super", "Cmd")
@@ -33,7 +34,7 @@ func (e *keysEntry) KeyNames() string {
 }
 
 func (e *keysEntry) TypedKey(key *fyne.KeyEvent) {
-	ismod := mod.contains(key.Name)
+	ismod := keymap.IsModifier(key.Name)
 
 	if key.Name == fyne.KeyReturn {
 		e.Entry.TypedKey(key)
@@ -56,19 +57,12 @@ func (e *keysEntry) TypedKey(key *fyne.KeyEvent) {
 	}
 
 	if !ismod {
-		if helpers.IsWindows {
-			if _, ok := keyNameWindowVKCodeMap[key.Name]; !ok {
-				return
-			}
-		} else {
-			if _, ok := keyNameGLFWCodeMap[key.Name]; !ok {
-				return
-			}
+		if _, ok := keymap.KeyNameGLFWCodeMap[key.Name]; !ok {
+			return
 		}
 	}
 
 	e.keyNames = append(e.keyNames, key.Name)
-
 	e.SetText(e.KeyNames())
 }
 

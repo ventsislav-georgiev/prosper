@@ -22,7 +22,7 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	case ":q":
 		return "Quit", nil, func() { global.Quit() }, nil
 	case ":s":
-		return "Shortcuts", nil, func() { go shortcuts.Edit() }, nil
+		return "Shortcuts", nil, func() { shortcuts.Edit() }, nil
 	}
 
 	return "", nil, nil, nil
