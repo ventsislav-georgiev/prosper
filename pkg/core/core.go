@@ -14,6 +14,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/currency"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/fyneh"
 	"github.com/ventsislav-georgiev/prosper/pkg/mathexpr"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
 	"github.com/ventsislav-georgiev/prosper/pkg/shortcuts"
@@ -46,7 +47,8 @@ func Run(icon []byte) {
 		center(win.ViewPort())
 	})
 
-	out := widget.NewLabel("")
+	out := &fyneh.OutputLabel{}
+	out.ExtendBaseWidget(out)
 	r := binding.NewString()
 	out.Bind(r)
 
@@ -54,9 +56,9 @@ func Run(icon []byte) {
 	iconContainer := container.New(helpers.NewIconLayout(), i)
 	iconContainer.Hide()
 
-	in := &helpers.EscEntry{}
+	in := &fyneh.InputEntry{}
 	in.ExtendBaseWidget(in)
-	in.SetPlaceHolder("Enter expression here...                                        ")
+	in.SetPlaceHolder("Enter expression here..")
 
 	onEnter := &struct{ fn func() }{}
 	in.OnChanged = getOnChanged(r, i, iconContainer, onEnter)
@@ -72,16 +74,25 @@ func Run(icon []byte) {
 		win.ViewPort().Hide()
 	}
 
-	in.OnSubmitted = func(_ string) {
-		reset()
+	in.OnSubmitted = func(string) {
 		if onEnter.fn != nil {
 			win.ViewPort().Hide()
 			onEnter.fn()
+		} else {
+			win.Clipboard().SetContent(out.FullText)
 		}
+		reset()
 	}
 
-	results := container.NewHBox(iconContainer, out)
-	win.SetContent(container.NewVBox(in, results))
+	scrollIn := container.NewHScroll(in)
+	scrollIn.SetMinSize(fyne.NewSize(320, 40))
+	scrollOut := container.NewHScroll(container.NewHBox(iconContainer, out))
+	scrollOut.SetMinSize(fyne.NewSize(320, 0))
+
+	win.SetContent(container.NewVBox(
+		scrollIn,
+		scrollOut,
+	))
 	win.Canvas().Focus(in)
 	win.Show()
 

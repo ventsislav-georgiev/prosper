@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/fyneh"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
 	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
@@ -69,7 +70,7 @@ func Edit() {
 }
 
 func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
-	in := &helpers.EscEntry{}
+	in := &fyneh.InputEntry{}
 	in.ExtendBaseWidget(in)
 	in.SetPlaceHolder("Enter app name...")
 
