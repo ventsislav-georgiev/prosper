@@ -14,23 +14,24 @@ const (
 )
 
 func Show() {
-	w := global.AppInstance.NewWindow(WindowName).(fyne.GLFWWindow)
+	w := global.NewWindow(WindowName)
 	w.CenterOnScreen()
 
 	encode := widget.NewMultiLineEntry()
 	encode.Wrapping = fyne.TextWrapBreak
 	encodeC := container.NewHScroll(encode)
-	encodeC.SetMinSize(fyne.NewSize(300, 150))
+	encodeC.SetMinSize(fyne.NewSize(0, 150))
 
 	decode := widget.NewMultiLineEntry()
 	decode.Wrapping = fyne.TextWrapBreak
 	decodeC := container.NewHScroll(decode)
-	decodeC.SetMinSize(fyne.NewSize(300, 150))
+	decodeC.SetMinSize(fyne.NewSize(0, 150))
 
 	encode.OnChanged = getOnEncodeChanged(decode)
 	decode.OnChanged = getOnDecodeChanged(encode)
 
 	w.SetContent(container.NewHSplit(encodeC, decodeC))
+	w.Resize(fyne.Size{Width: 650, Height: 150})
 	w.Show()
 	w.SetCloseIntercept(func() {
 		w.Close()

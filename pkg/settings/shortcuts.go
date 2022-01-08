@@ -49,7 +49,6 @@ func RegisterDefined() {
 	})
 
 	Save()
-	Load()
 }
 
 func register(m []hotkey.Modifier, k hotkey.Key, fn func()) func() {

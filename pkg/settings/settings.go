@@ -32,18 +32,19 @@ func Show() {
 		return true
 	})
 
-	sortKey := make([]string, 0, len(s))
-	noKeys := make([]*shortcut, 0)
+	sortKey := make([]string, 0)
+	sortNames := make([]string, 0)
 	for _, v := range s {
-		if v.DisplayKeyNames != "" {
-			sortKey = append(sortKey, v.DisplayKeyNames)
+		if v.Command != nil {
+			sortNames = append(sortNames, v.ID())
 		} else {
-			noKeys = append(noKeys, v)
+			sortKey = append(sortKey, v.DisplayKeyNames)
 		}
 	}
+	sort.Strings(sortNames)
 	sort.Strings(sortKey)
 
-	w := global.AppInstance.NewWindow(WindowName).(fyne.GLFWWindow)
+	w := global.NewWindow(WindowName)
 	w.CenterOnScreen()
 
 	execList := container.NewVBox()
@@ -54,32 +55,22 @@ func Show() {
 			}
 		}
 	}
-	for _, v := range noKeys {
-		if v.ExecInfo != nil {
-			addListItem(w, execList, v, true, false)
-		}
-	}
 
 	addButton := widget.NewButtonWithIcon("Add New", theme.ContentAddIcon(), func() { addShortcutView(w, execList) })
 
 	execListC := container.NewVScroll(execList)
-	execListC.SetMinSize(fyne.NewSize(500, 250))
+	execListC.SetMinSize(fyne.NewSize(500, 0))
 
 	commandList := container.NewVBox()
-	for _, k := range sortKey {
+	for _, k := range sortNames {
 		for _, v := range s {
-			if v.DisplayKeyNames == k && v.Command != nil {
+			if v.ID() == k {
 				addListItem(w, commandList, v, true, true)
 			}
 		}
 	}
-	for _, v := range noKeys {
-		if v.Command != nil {
-			addListItem(w, commandList, v, true, true)
-		}
-	}
 	commandListC := container.NewVScroll(commandList)
-	commandListC.SetMinSize(fyne.NewSize(500, 250))
+	commandListC.SetMinSize(fyne.NewSize(500, 0))
 
 	w.SetContent(container.
 		NewBorder(
@@ -89,6 +80,7 @@ func Show() {
 			nil,
 		),
 	)
+	w.Resize(fyne.Size{Width: 550, Height: 500})
 	w.Show()
 	w.SetCloseIntercept(func() {
 		w.Close()

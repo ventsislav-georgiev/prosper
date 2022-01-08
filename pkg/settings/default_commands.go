@@ -11,7 +11,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/tools/b64"
 )
 
-const maxNameLen = 15
+const maxNameLen = 16
 
 var (
 	defaultCommands map[string]*shortcut
