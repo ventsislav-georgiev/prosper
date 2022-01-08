@@ -24,8 +24,8 @@ func RegisterDefined() {
 			if ok {
 				v.Command.icon = d.Command.icon
 				v.Command.run = d.Command.run
+				delete(defaultCommands, v.ID())
 			}
-			delete(defaultCommands, v.ID())
 			return true
 		})
 
@@ -38,14 +38,21 @@ func RegisterDefined() {
 
 	prefs.Range(func(k, value interface{}) bool {
 		v := value.(*shortcut)
+		if v.Command != nil && v.Command.run == nil {
+			prefs.Delete(v.Command.ID)
+			return true
+		}
 		if m, k, ok := ToHotkey(v.KeyNames); ok {
-			v.unregister = Register(m, k, v.Run)
+			v.unregister = register(m, k, v.Run)
 		}
 		return true
 	})
+
+	Save()
+	Load()
 }
 
-func Register(m []hotkey.Modifier, k hotkey.Key, fn func()) func() {
+func register(m []hotkey.Modifier, k hotkey.Key, fn func()) func() {
 	hk := hotkey.New(m, k)
 
 	err := hk.Register()

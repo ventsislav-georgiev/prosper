@@ -18,6 +18,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/mathexpr"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
 	"github.com/ventsislav-georgiev/prosper/pkg/settings"
+	"github.com/ventsislav-georgiev/prosper/pkg/tools"
 	"github.com/ventsislav-georgiev/prosper/pkg/translate"
 	"github.com/ventsislav-georgiev/prosper/pkg/units"
 )
@@ -147,6 +148,7 @@ func setupWinHooks(win fyne.GLFWWindow, onHide func(), onShow func(), onClose *s
 func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Container, onEnter *struct{ fn func() }) func(expr string) {
 	evals := []func(string) (string, []byte, func(), error){
 		command.Eval,
+		tools.Eval,
 		mathexpr.Eval,
 		currency.Eval,
 		translate.Eval,

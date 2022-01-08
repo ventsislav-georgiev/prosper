@@ -23,7 +23,7 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	case ":q":
 		return "Quit", theme.LogoutIcon().Content(), func() { global.Quit() }, nil
 	case ":s":
-		return "Settings", theme.SettingsIcon().Content(), func() { settings.Edit() }, nil
+		return "Settings", theme.SettingsIcon().Content(), func() { settings.Show() }, nil
 	}
 
 	return "", nil, nil, nil

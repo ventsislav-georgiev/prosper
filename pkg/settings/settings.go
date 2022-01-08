@@ -16,7 +16,11 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
-func Edit() {
+const (
+	WindowName = "Settings"
+)
+
+func Show() {
 	err := Load()
 	if err != nil {
 		fmt.Println(err.Error())
@@ -39,7 +43,7 @@ func Edit() {
 	}
 	sort.Strings(sortKey)
 
-	w := global.AppInstance.NewWindow("Settings").(fyne.GLFWWindow)
+	w := global.AppInstance.NewWindow(WindowName).(fyne.GLFWWindow)
 	w.CenterOnScreen()
 
 	execList := container.NewVBox()
@@ -75,13 +79,13 @@ func Edit() {
 		}
 	}
 	commandListC := container.NewVScroll(commandList)
-	commandListC.SetMinSize(fyne.NewSize(500, 150))
+	commandListC.SetMinSize(fyne.NewSize(500, 250))
 
 	w.SetContent(container.
 		NewBorder(
-			commandListC,
+			nil,
 			addButton,
-			execListC,
+			container.NewVSplit(commandListC, execListC),
 			nil,
 		),
 	)
@@ -205,12 +209,10 @@ func editShortcutView(w fyne.Window, v *shortcut, b binding.ExternalString) {
 		}
 
 		if m, k, ok := ToHotkey(v.KeyNames); ok {
-			v.unregister = Register(m, k, v.Run)
+			v.unregister = register(m, k, v.Run)
 		}
 	}
 }
-
-const maxNameLen = 15
 
 func addListItem(w fyne.Window, c *fyne.Container, v *shortcut, registered bool, readonly bool) {
 	name := v.Name()
@@ -262,7 +264,7 @@ func addListItem(w fyne.Window, c *fyne.Container, v *shortcut, registered bool,
 
 	if v.unregister == nil {
 		if m, k, ok := ToHotkey(v.KeyNames); ok {
-			v.unregister = Register(m, k, v.Run)
+			v.unregister = register(m, k, v.Run)
 		}
 	}
 }

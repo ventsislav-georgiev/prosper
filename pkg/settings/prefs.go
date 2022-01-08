@@ -5,10 +5,7 @@ import (
 	"sync"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/theme"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
-	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
 	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
@@ -16,8 +13,7 @@ import (
 const shortcutsStore = "shortcuts.json"
 
 var (
-	prefs           *sync.Map
-	defaultCommands map[string]*shortcut
+	prefs *sync.Map
 )
 
 type shortcut struct {
@@ -26,34 +22,6 @@ type shortcut struct {
 	KeyNames        []fyne.KeyName
 	DisplayKeyNames string
 	unregister      func()
-}
-
-func init() {
-	optionKey := "Alt"
-	if helpers.IsDarwin {
-		optionKey = "Option"
-	}
-
-	defaultCommands = map[string]*shortcut{
-		"Show Launcher": {
-			Command: &Command{
-				ID:   "Show Launcher",
-				Name: "Show Launcher",
-				icon: func() []byte { return theme.RadioButtonCheckedIcon().Content() },
-				run:  func() { global.AppWindow.Show() },
-			},
-			KeyNames:        []fyne.KeyName{desktop.KeyAltLeft, fyne.KeySpace},
-			DisplayKeyNames: optionKey + "+Space",
-		},
-		"Open Settings": {
-			Command: &Command{
-				ID:   "Open Settings",
-				Name: "Open Settings",
-				icon: func() []byte { return theme.SettingsIcon().Content() },
-				run:  func() { Edit() },
-			},
-		},
-	}
 }
 
 func Load() error {
@@ -99,11 +67,16 @@ func Save() error {
 
 	s := make(map[string]*shortcut)
 	prefs.Range(func(k, v interface{}) bool {
-		s[k.(string)] = v.(*shortcut)
+		sh := v.(*shortcut)
+		if sh.Command != nil && sh.Command.run == nil {
+			return true
+		}
+		s[k.(string)] = sh
 		return true
 	})
 
 	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
 	err = e.Encode(s)
 	if err != nil {
 		return err
