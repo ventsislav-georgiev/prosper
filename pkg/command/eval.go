@@ -3,9 +3,10 @@ package command
 import (
 	"strings"
 
+	"fyne.io/fyne/v2/theme"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
-	"github.com/ventsislav-georgiev/prosper/pkg/shortcuts"
+	"github.com/ventsislav-georgiev/prosper/pkg/settings"
 )
 
 func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
@@ -20,9 +21,9 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 
 	switch strings.ToLower(expr) {
 	case ":q":
-		return "Quit", nil, func() { global.Quit() }, nil
+		return "Quit", theme.LogoutIcon().Content(), func() { global.Quit() }, nil
 	case ":s":
-		return "Shortcuts", nil, func() { shortcuts.Edit() }, nil
+		return "Settings", theme.SettingsIcon().Content(), func() { settings.Edit() }, nil
 	}
 
 	return "", nil, nil, nil

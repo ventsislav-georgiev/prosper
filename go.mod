@@ -12,6 +12,8 @@ replace github.com/blacktop/lzfse-cgo => github.com/ventsislav-georgiev/lzfse-cg
 
 replace github.com/tc-hib/winres => github.com/ventsislav-georgiev/winres v0.1.7-0.20220103002232-5d2af9a563d4
 
+replace golang.design/x/hotkey => github.com/ventsislav-georgiev/hotkey v0.2.2-0.20220105232147-16e8db4bb80e
+
 require (
 	fyne.io/fyne/v2 v2.1.2
 	github.com/Knetic/govaluate v3.0.1-0.20171022003610-9aa49832a739+incompatible
@@ -20,6 +22,7 @@ require (
 	github.com/groob/plist v0.0.0-20210519001750-9f754062e6d6
 	github.com/iineva/bom v0.0.0-20210605043415-7d45ba1bcca3
 	github.com/parsiya/golnk v0.0.0-20200515071614-5db3107130ce
+	github.com/pkg/profile v1.6.0
 	github.com/sahilm/fuzzy v0.1.0
 	github.com/tc-hib/winres v0.1.6
 	golang.design/x/hotkey v0.3.0

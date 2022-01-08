@@ -1,4 +1,4 @@
-package shortcuts
+package settings
 
 import (
 	"strings"
@@ -6,7 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
-	"github.com/ventsislav-georgiev/prosper/pkg/shortcuts/keymap"
+	"github.com/ventsislav-georgiev/prosper/pkg/settings/keymap"
 )
 
 type keysEntry struct {

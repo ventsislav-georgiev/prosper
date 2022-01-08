@@ -17,7 +17,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers/fyneh"
 	"github.com/ventsislav-georgiev/prosper/pkg/mathexpr"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
-	"github.com/ventsislav-georgiev/prosper/pkg/shortcuts"
+	"github.com/ventsislav-georgiev/prosper/pkg/settings"
 	"github.com/ventsislav-georgiev/prosper/pkg/translate"
 	"github.com/ventsislav-georgiev/prosper/pkg/units"
 )
@@ -105,19 +105,9 @@ func Run(icon []byte) {
 	}
 
 	win.RunOnMainWhenCreated(func() {
-		setupWinHooks(win, reset, onClose)
+		go setupWinHooks(win, reset, func() { win.Canvas().Focus(in) }, onClose)
+		go settings.RegisterDefined()
 	})
-
-	go func() {
-		if m, k, ok := shortcuts.ToHotkey([]fyne.KeyName{desktop.KeyAltLeft, fyne.KeySpace}); ok {
-			shortcuts.Register(m, k, func() {
-				win.Canvas().Focus(in)
-				global.AppWindow.Show()
-			})
-		}
-
-		shortcuts.RegisterDefined()
-	}()
 
 	app.Run()
 }
@@ -141,11 +131,13 @@ func center(w *glfw.Window) {
 	w.SetPos(newX, newY)
 }
 
-func setupWinHooks(win fyne.GLFWWindow, onHide func(), onClose *struct{ fn func() }) {
+func setupWinHooks(win fyne.GLFWWindow, onHide func(), onShow func(), onClose *struct{ fn func() }) {
 	win.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) {
 		if !focused {
 			go win.Hide()
 			onHide()
+		} else {
+			onShow()
 		}
 	})
 

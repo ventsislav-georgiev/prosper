@@ -1,4 +1,4 @@
-package shortcuts
+package settings
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
-	"github.com/ventsislav-georgiev/prosper/pkg/shortcuts/keymap"
+	"github.com/ventsislav-georgiev/prosper/pkg/settings/keymap"
 	"golang.design/x/hotkey"
 )
 
@@ -17,10 +17,29 @@ func RegisterDefined() {
 		return
 	}
 
+	if defaultCommands != nil {
+		prefs.Range(func(k, value interface{}) bool {
+			v := value.(*shortcut)
+			d, ok := defaultCommands[v.ID()]
+			if ok {
+				v.Command.icon = d.Command.icon
+				v.Command.run = d.Command.run
+			}
+			delete(defaultCommands, v.ID())
+			return true
+		})
+
+		for k, v := range defaultCommands {
+			prefs.Store(k, v)
+		}
+	}
+
+	defaultCommands = nil
+
 	prefs.Range(func(k, value interface{}) bool {
 		v := value.(*shortcut)
 		if m, k, ok := ToHotkey(v.KeyNames); ok {
-			v.unregister = Register(m, k, v.ExecInfo.Exec)
+			v.unregister = Register(m, k, v.Run)
 		}
 		return true
 	})
