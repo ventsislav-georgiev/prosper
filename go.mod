@@ -20,11 +20,14 @@ require (
 	github.com/bcicen/go-units v1.0.2
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20211024062804-40e447a793be
 	github.com/groob/plist v0.0.0-20210519001750-9f754062e6d6
+	github.com/hashicorp/golang-lru v0.5.4
 	github.com/iineva/bom v0.0.0-20210605043415-7d45ba1bcca3
+	github.com/lithammer/dedent v1.1.0
 	github.com/parsiya/golnk v0.0.0-20200515071614-5db3107130ce
 	github.com/pkg/profile v1.6.0
 	github.com/sahilm/fuzzy v0.1.0
 	github.com/tc-hib/winres v0.1.6
+	golang.design/x/clipboard v0.5.3
 	golang.design/x/hotkey v0.3.0
 	yrh.dev/icns v0.0.0-20210608051050-de3ea6a57b33
 )
@@ -39,10 +42,8 @@ require (
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
 	github.com/goki/freetype v0.0.0-20181231101311-fa8a33aabaff // indirect
 	github.com/google/go-cmp v0.5.6 // indirect
-	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/lithammer/dedent v1.1.0 // indirect
 	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
@@ -51,7 +52,6 @@ require (
 	github.com/srwiley/rasterx v0.0.0-20200120212402-85cb7272f5e9 // indirect
 	github.com/stretchr/testify v1.7.0 // indirect
 	github.com/yuin/goldmark v1.3.8 // indirect
-	golang.design/x/clipboard v0.5.3 // indirect
 	golang.org/x/exp v0.0.0-20190731235908-ec7cb31e5a56 // indirect
 	golang.org/x/image v0.0.0-20210628002857-a66eb6448b8d // indirect
 	golang.org/x/mobile v0.0.0-20210716004757-34ab1303b554 // indirect

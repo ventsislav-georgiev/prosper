@@ -63,7 +63,8 @@ type FixedContainer struct {
 	minSize fyne.Size
 	offset  fyne.Position
 
-	Content fyne.CanvasObject
+	Content  fyne.CanvasObject
+	OnTapped func()
 }
 
 func NewFixedContainer(content fyne.CanvasObject, offsetX float32, offsetY float32) *FixedContainer {
@@ -86,25 +87,31 @@ func (*FixedContainer) Scrolled(ev *fyne.ScrollEvent) {}
 func (*FixedContainer) DragEnd()                      {}
 func (*FixedContainer) Dragged(e *fyne.DragEvent)     {}
 
-func (s *FixedContainer) MinSize() fyne.Size {
-	min := fyne.NewSize(float32(0), float32(0)).Max(s.minSize)
-	min.Width = fyne.Max(min.Width, s.Content.MinSize().Width)
+func (f *FixedContainer) Tapped(*fyne.PointEvent) {
+	if f.OnTapped != nil {
+		f.OnTapped()
+	}
+}
+
+func (f *FixedContainer) MinSize() fyne.Size {
+	min := fyne.NewSize(float32(0), float32(0)).Max(f.minSize)
+	min.Width = fyne.Max(min.Width, f.Content.MinSize().Width)
 	return min
 }
 
-func (s *FixedContainer) SetMinSize(size fyne.Size) {
-	s.minSize = size
+func (f *FixedContainer) SetMinSize(size fyne.Size) {
+	f.minSize = size
 }
 
-func (s *FixedContainer) Refresh() {
-	s.BaseWidget.Refresh()
+func (f *FixedContainer) Refresh() {
+	f.BaseWidget.Refresh()
 }
 
-func (s *FixedContainer) Resize(sz fyne.Size) {
-	if sz == s.Size() {
+func (f *FixedContainer) Resize(sz fyne.Size) {
+	if sz == f.Size() {
 		return
 	}
 
-	s.BaseWidget.Resize(sz)
-	s.Refresh()
+	f.BaseWidget.Resize(sz)
+	f.Refresh()
 }

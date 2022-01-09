@@ -82,6 +82,7 @@ func Show() {
 	)
 	w.Resize(fyne.Size{Width: 0, Height: 500})
 	w.Show()
+	w.SetFixedSize(true)
 }
 
 func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
