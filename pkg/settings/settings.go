@@ -44,7 +44,7 @@ func Show() {
 	sort.Strings(sortNames)
 	sort.Strings(sortKey)
 
-	w := global.NewWindow(WindowName)
+	w, _ := global.NewWindow(WindowName, false)
 	w.CenterOnScreen()
 
 	execList := container.NewVBox()
@@ -80,12 +80,8 @@ func Show() {
 			nil,
 		),
 	)
-	w.Resize(fyne.Size{Width: 550, Height: 500})
+	w.Resize(fyne.Size{Width: 0, Height: 500})
 	w.Show()
-	w.SetCloseIntercept(func() {
-		w.Close()
-		global.AppWindow.Show()
-	})
 }
 
 func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
@@ -98,7 +94,7 @@ func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
 	out.Bind(r)
 
 	i := widget.NewIcon(helpers.EmptyIcon())
-	iconContainer := container.New(helpers.NewIconLayout(), i)
+	iconContainer := container.New(fyneh.NewIconLayout(), i)
 	iconContainer.Hide()
 	results := container.NewHBox(iconContainer, out)
 
@@ -201,7 +197,9 @@ func editShortcutView(w fyne.Window, v *shortcut, b binding.ExternalString) {
 		}
 
 		if m, k, ok := ToHotkey(v.KeyNames); ok {
-			v.unregister = register(m, k, v.Run)
+			v.unregister = register(v.Name(), m, k, v.Run)
+		} else if v.Name() == CommandRunnerName {
+			global.IsRunnerCommandRegistered.Set(false)
 		}
 	}
 }
@@ -214,7 +212,7 @@ func addListItem(w fyne.Window, c *fyne.Container, v *shortcut, registered bool,
 
 	label := widget.NewLabel(name)
 	i := widget.NewIcon(helpers.EmptyIcon())
-	iconContainer := container.New(helpers.NewIconLayout(), i)
+	iconContainer := container.New(fyneh.NewIconLayout(), i)
 	iconContainer.Hide()
 	nameWithIcon := container.NewHBox(iconContainer, label)
 
@@ -228,11 +226,10 @@ func addListItem(w fyne.Window, c *fyne.Container, v *shortcut, registered bool,
 
 	keysBinding := binding.BindString(&v.DisplayKeyNames)
 
-	edit := widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), func() {
+	edit := widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), func() {
 		editShortcutView(w, v, keysBinding)
 	})
-
-	remove := widget.NewButtonWithIcon("Remove", theme.ContentClearIcon(), func() {
+	remove := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
 		prefs.Delete(v.ID())
 		Save()
 		c.Remove(item)
@@ -245,18 +242,16 @@ func addListItem(w fyne.Window, c *fyne.Container, v *shortcut, registered bool,
 		remove.Disable()
 	}
 
-	item = container.NewGridWithColumns(4,
-		nameWithIcon,
-		widget.NewLabelWithData(keysBinding),
-		edit,
-		remove,
+	item = container.NewBorder(nil, nil, nil,
+		container.NewHBox(edit, remove),
+		container.NewGridWithColumns(2, nameWithIcon, widget.NewLabelWithData(keysBinding)),
 	)
 
 	c.Add(item)
 
 	if v.unregister == nil {
 		if m, k, ok := ToHotkey(v.KeyNames); ok {
-			v.unregister = register(m, k, v.Run)
+			v.unregister = register(v.Name(), m, k, v.Run)
 		}
 	}
 }

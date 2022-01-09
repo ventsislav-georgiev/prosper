@@ -5,6 +5,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"github.com/go-gl/glfw/v3.3/glfw"
+	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/settings/keymap"
 	"golang.design/x/hotkey"
@@ -43,7 +44,7 @@ func RegisterDefined() {
 			return true
 		}
 		if m, k, ok := ToHotkey(v.KeyNames); ok {
-			v.unregister = register(m, k, v.Run)
+			v.unregister = register(v.Name(), m, k, v.Run)
 		}
 		return true
 	})
@@ -51,13 +52,17 @@ func RegisterDefined() {
 	Save()
 }
 
-func register(m []hotkey.Modifier, k hotkey.Key, fn func()) func() {
+func register(c string, m []hotkey.Modifier, k hotkey.Key, fn func()) func() {
 	hk := hotkey.New(m, k)
 
 	err := hk.Register()
 	if err != nil {
 		fmt.Printf("failed to register hotkey: %v\n", err)
 		return nil
+	}
+
+	if c == CommandRunnerName {
+		global.IsRunnerCommandRegistered.Set(true)
 	}
 
 	unregister := make(chan struct{})

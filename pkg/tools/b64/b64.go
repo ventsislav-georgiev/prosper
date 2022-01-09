@@ -14,7 +14,7 @@ const (
 )
 
 func Show() {
-	w := global.NewWindow(WindowName)
+	w, _ := global.NewWindow(WindowName, false)
 	w.CenterOnScreen()
 
 	encode := widget.NewMultiLineEntry()
@@ -33,10 +33,6 @@ func Show() {
 	w.SetContent(container.NewHSplit(encodeC, decodeC))
 	w.Resize(fyne.Size{Width: 650, Height: 150})
 	w.Show()
-	w.SetCloseIntercept(func() {
-		w.Close()
-		global.AppWindow.Show()
-	})
 }
 
 func getOnEncodeChanged(decode *widget.Entry) func(s string) {

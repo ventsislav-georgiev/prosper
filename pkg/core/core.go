@@ -54,7 +54,7 @@ func Run(icon []byte) {
 	out.Bind(r)
 
 	i := widget.NewIcon(helpers.EmptyIcon())
-	iconContainer := container.New(helpers.NewIconLayout(), i)
+	iconContainer := container.New(fyneh.NewIconLayout(), i)
 	iconContainer.Hide()
 
 	in := &fyneh.InputEntry{}
@@ -72,12 +72,16 @@ func Run(icon []byte) {
 
 	in.OnEsc = func() {
 		reset()
-		win.ViewPort().Hide()
+		if global.IsRunnerCommandRegistered.Get() {
+			win.Hide()
+		}
 	}
 
 	in.OnSubmitted = func(string) {
 		if onEnter.fn != nil {
-			win.ViewPort().Hide()
+			if global.IsRunnerCommandRegistered.Get() {
+				win.Hide()
+			}
 			onEnter.fn()
 		} else {
 			win.Clipboard().SetContent(out.FullText)
@@ -135,11 +139,20 @@ func center(w *glfw.Window) {
 func setupWinHooks(win fyne.GLFWWindow, onHide func(), onShow func(), onClose *struct{ fn func() }) {
 	win.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) {
 		if !focused {
-			go win.Hide()
-			onHide()
-		} else {
-			onShow()
+			if global.IsRunnerCommandRegistered.Get() {
+				go win.Hide()
+				onHide()
+			}
+			return
 		}
+
+		if global.IgnoreNextFocus.Get() {
+			global.IgnoreNextFocus.Set(false)
+			go win.Hide()
+			return
+		}
+
+		onShow()
 	})
 
 	win.SetCloseIntercept(func() { global.Quit() })

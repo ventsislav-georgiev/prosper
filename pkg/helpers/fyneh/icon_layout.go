@@ -1,4 +1,4 @@
-package helpers
+package fyneh
 
 import (
 	"fyne.io/fyne/v2"

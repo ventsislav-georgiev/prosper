@@ -39,8 +39,10 @@ require (
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
 	github.com/goki/freetype v0.0.0-20181231101311-fa8a33aabaff // indirect
 	github.com/google/go-cmp v0.5.6 // indirect
+	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
+	github.com/lithammer/dedent v1.1.0 // indirect
 	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
@@ -49,7 +51,10 @@ require (
 	github.com/srwiley/rasterx v0.0.0-20200120212402-85cb7272f5e9 // indirect
 	github.com/stretchr/testify v1.7.0 // indirect
 	github.com/yuin/goldmark v1.3.8 // indirect
-	golang.org/x/image v0.0.0-20201208152932-35266b937fa6 // indirect
+	golang.design/x/clipboard v0.5.3 // indirect
+	golang.org/x/exp v0.0.0-20190731235908-ec7cb31e5a56 // indirect
+	golang.org/x/image v0.0.0-20210628002857-a66eb6448b8d // indirect
+	golang.org/x/mobile v0.0.0-20210716004757-34ab1303b554 // indirect
 	golang.org/x/net v0.0.0-20210423184538-5f58ad60dda6 // indirect
 	golang.org/x/sys v0.0.0-20210630005230-0f9fa26af87c // indirect
 	golang.org/x/text v0.3.6 // indirect

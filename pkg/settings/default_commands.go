@@ -9,12 +9,14 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/tools/b64"
+	"github.com/ventsislav-georgiev/prosper/pkg/tools/cb"
 )
 
 const maxNameLen = 16
 
 var (
-	defaultCommands map[string]*shortcut
+	CommandRunnerName = "Command Runner"
+	defaultCommands   map[string]*shortcut
 )
 
 func init() {
@@ -23,12 +25,11 @@ func init() {
 		optionKey = "Option"
 	}
 
-	commandRunner := "Command Runner"
 	commands := []*shortcut{
 		{
 			Command: &Command{
-				ID:   commandRunner,
-				Name: commandRunner,
+				ID:   CommandRunnerName,
+				Name: CommandRunnerName,
 				icon: func() []byte { return theme.RadioButtonCheckedIcon().Content() },
 				run:  func() { global.AppWindow.Show() },
 			},
@@ -42,6 +43,8 @@ func init() {
 				icon: func() []byte { return theme.SettingsIcon().Content() },
 				run:  func() { Show() },
 			},
+			KeyNames:        []fyne.KeyName{desktop.KeyAltLeft, fyne.KeyBackslash},
+			DisplayKeyNames: optionKey + "+\\",
 		},
 		{
 			Command: &Command{
@@ -50,6 +53,18 @@ func init() {
 				icon: func() []byte { return theme.StorageIcon().Content() },
 				run:  func() { b64.Show() },
 			},
+			KeyNames:        []fyne.KeyName{desktop.KeyAltLeft, fyne.KeySlash},
+			DisplayKeyNames: optionKey + "+/",
+		},
+		{
+			Command: &Command{
+				ID:   cb.WindowName,
+				Name: cb.WindowName,
+				icon: func() []byte { return theme.StorageIcon().Content() },
+				run:  func() { cb.Show() },
+			},
+			KeyNames:        []fyne.KeyName{desktop.KeyAltLeft, desktop.KeyShiftLeft, fyne.KeyA},
+			DisplayKeyNames: optionKey + "Shift+A",
 		},
 	}
 

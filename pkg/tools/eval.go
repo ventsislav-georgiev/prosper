@@ -6,6 +6,11 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/tools/b64"
+	"github.com/ventsislav-georgiev/prosper/pkg/tools/cb"
+)
+
+var (
+	toolsIcon = func() []byte { return theme.StorageIcon().Content() }
 )
 
 func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
@@ -16,7 +21,9 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	expr = strings.TrimSpace(expr[2:])
 	switch strings.ToLower(expr) {
 	case "base64":
-		return "Base64 Encode/Decode", theme.StorageIcon().Content(), func() { b64.Show() }, nil
+		return b64.WindowName, toolsIcon(), b64.Show, nil
+	case "clipboard":
+		return cb.WindowName, toolsIcon(), cb.Show, nil
 	}
 
 	return "", nil, nil, nil
