@@ -162,11 +162,11 @@ func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Containe
 	evals := []func(string) (string, []byte, func(), error){
 		command.Eval,
 		tools.Eval,
+		open.Eval,
 		mathexpr.Eval,
 		currency.Eval,
-		translate.Eval,
 		units.Eval,
-		open.Eval,
+		translate.Eval,
 	}
 
 	inflight := false

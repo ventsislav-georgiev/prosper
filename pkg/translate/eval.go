@@ -12,20 +12,23 @@ import (
 
 func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	parts := strings.Split(strings.ToLower(expr), " ")
-	if len(parts) != 3 {
+	if len(parts) < 3 {
 		return "", nil, nil, helpers.ErrSkip
 	}
 
-	if parts[1] != "in" && parts[1] != "to" {
+	lastTwo := parts[len(parts)-2:]
+
+	if lastTwo[0] != "in" && lastTwo[0] != "to" {
 		return "", nil, nil, helpers.ErrSkip
 	}
 
-	_, ok := code[parts[2]]
+	_, ok := code[lastTwo[1]]
 	if !ok {
 		return "", nil, nil, helpers.ErrSkip
 	}
 
-	resp, err := http.DefaultClient.Get(fmt.Sprintf("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=%s&dt=t&q=%s", parts[2], url.QueryEscape(parts[0])))
+	sentence := strings.Join(parts[:len(parts)-2], " ")
+	resp, err := http.DefaultClient.Get(fmt.Sprintf("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=%s&dt=t&q=%s", lastTwo[1], url.QueryEscape(sentence)))
 	if err != nil {
 		return err.Error(), nil, nil, nil
 	}
