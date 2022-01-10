@@ -16,6 +16,12 @@ Supports: Mac, Windows and Linux
 
 <br/>
 
+Quick commands:
+* `:s` to see shortcuts and change them
+* `:q` Quit the app
+
+<br/>
+
 ## Preview
 ![preview](https://user-images.githubusercontent.com/5616486/147394501-8d2f5a72-b3b7-44c0-bbea-7537fdece378.gif)
 
