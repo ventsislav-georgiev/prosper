@@ -21,6 +21,12 @@ const (
 )
 
 func Show() {
+	w, _ := global.NewWindow(WindowName, false)
+	if w == nil {
+		return
+	}
+	w.CenterOnScreen()
+
 	err := Load()
 	if err != nil {
 		fmt.Println(err.Error())
@@ -43,9 +49,6 @@ func Show() {
 	}
 	sort.Strings(sortNames)
 	sort.Strings(sortKey)
-
-	w, _ := global.NewWindow(WindowName, false)
-	w.CenterOnScreen()
 
 	execList := container.NewVBox()
 	for _, k := range sortKey {
@@ -94,17 +97,21 @@ func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
 	r := binding.NewString()
 	out.Bind(r)
 
-	i := widget.NewIcon(helpers.EmptyIcon())
+	emptyIcon := helpers.EmptyIcon()
+	i := widget.NewIcon(emptyIcon)
 	iconContainer := container.New(fyneh.NewIconLayout(), i)
 	iconContainer.Hide()
 	results := container.NewHBox(iconContainer, out)
 
 	in.OnChanged = func(s string) {
+		iconContainer.Hide()
+
 		app, err := open.FindApp(s)
 		if err != nil {
 			r.Set(err.Error())
 			return
 		}
+
 		res, icon, _, err := open.EvalApp(app)
 		if err != nil {
 			r.Set(err.Error())
@@ -113,8 +120,6 @@ func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
 		if icon != nil {
 			i.SetResource(fyne.NewStaticResource(res, icon))
 			iconContainer.Show()
-		} else {
-			iconContainer.Hide()
 		}
 		r.Set(res)
 	}
@@ -199,7 +204,7 @@ func editShortcutView(w fyne.Window, v *shortcut, b binding.ExternalString) {
 
 		if m, k, ok := ToHotkey(v.KeyNames); ok {
 			v.unregister = register(v.Name(), m, k, v.Run)
-		} else if v.Name() == CommandRunnerName {
+		} else if v.Name() == commandRunnerName {
 			global.IsRunnerCommandRegistered.Set(false)
 		}
 	}

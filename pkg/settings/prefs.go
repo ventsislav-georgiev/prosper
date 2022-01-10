@@ -31,9 +31,9 @@ func Load() error {
 
 	prefs = &sync.Map{}
 
-	r, err := global.AppInstance.Storage().Open(shortcutsStore)
+	r, err := global.App.Storage().Open(shortcutsStore)
 	if err != nil {
-		w, err := global.AppInstance.Storage().Create(shortcutsStore)
+		w, err := global.App.Storage().Create(shortcutsStore)
 		if err != nil {
 			return err
 		}
@@ -58,7 +58,7 @@ func Load() error {
 }
 
 func Save() error {
-	w, err := global.AppInstance.Storage().Save(shortcutsStore)
+	w, err := global.App.Storage().Save(shortcutsStore)
 	if err != nil {
 		return err
 	}

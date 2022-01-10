@@ -12,11 +12,13 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/tools/cb"
 )
 
-const maxNameLen = 16
+const (
+	maxNameLen        = 16
+	commandRunnerName = "Command Runner"
+)
 
 var (
-	CommandRunnerName = "Command Runner"
-	defaultCommands   map[string]*shortcut
+	defaultCommands map[string]*shortcut
 )
 
 func init() {
@@ -28,10 +30,10 @@ func init() {
 	commands := []*shortcut{
 		{
 			Command: &Command{
-				ID:   CommandRunnerName,
-				Name: CommandRunnerName,
+				ID:   commandRunnerName,
+				Name: commandRunnerName,
 				icon: func() []byte { return theme.RadioButtonCheckedIcon().Content() },
-				run:  func() { global.AppWindow.Show() },
+				run:  func() { global.ShowRunner() },
 			},
 			KeyNames:        []fyne.KeyName{desktop.KeyAltLeft, fyne.KeySpace},
 			DisplayKeyNames: optionKey + "+Space",

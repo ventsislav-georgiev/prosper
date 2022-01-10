@@ -61,7 +61,7 @@ func register(c string, m []hotkey.Modifier, k hotkey.Key, fn func()) func() {
 		return nil
 	}
 
-	if c == CommandRunnerName {
+	if c == commandRunnerName {
 		global.IsRunnerCommandRegistered.Set(true)
 	}
 

@@ -30,7 +30,7 @@ func Run(icon []byte) {
 	}
 
 	app := app.NewWithID("com.ventsislav-georgiev.prosper")
-	global.AppInstance = app
+	global.App = app
 	app.SetIcon(fyne.NewStaticResource("icon.png", icon))
 
 	drv, ok := app.Driver().(desktop.Driver)
@@ -42,7 +42,8 @@ func Run(icon []byte) {
 	}
 
 	win := drv.CreateSplashWindow().(fyne.GLFWWindow)
-	global.AppWindow = win
+	focused := &helpers.AtomicBool{}
+	global.RunnerWindow = win
 
 	win.SetBeforeShowed(func() {
 		center(win.ViewPort())
@@ -68,6 +69,7 @@ func Run(icon []byte) {
 		in.SetText("")
 		r.Set("")
 		iconContainer.Hide()
+		win.Content().Refresh()
 	}
 
 	in.OnEsc = func() {
@@ -78,15 +80,14 @@ func Run(icon []byte) {
 	}
 
 	in.OnSubmitted = func(string) {
-		if onEnter.fn != nil {
-			if global.IsRunnerCommandRegistered.Get() {
-				win.Hide()
-			}
-			onEnter.fn()
-		} else {
+		if onEnter.fn == nil {
 			win.Clipboard().SetContent(out.FullText)
 		}
 		reset()
+		if global.IsRunnerCommandRegistered.Get() {
+			go win.Hide()
+		}
+		onEnter.fn()
 	}
 
 	scrollIn := container.NewHScroll(in)
@@ -109,8 +110,37 @@ func Run(icon []byte) {
 		app.Quit()
 	}
 
+	hideRunner := func() {
+		reset()
+		if global.IsRunnerCommandRegistered.Get() {
+			focused.Set(false)
+			go win.Hide()
+		}
+	}
+
+	showRunner := func() {
+		if focused.Get() {
+			hideRunner()
+			return
+		}
+		focused.Set(true)
+		win.Show()
+		win.Canvas().Focus(in)
+	}
+	global.ShowRunner = showRunner
+
+	ignoreFocus := func() bool {
+		if !global.IgnoreNextFocus.Get() {
+			return false
+		}
+		global.IgnoreNextFocus.Set(false)
+		focused.Set(false)
+		go win.Hide()
+		return true
+	}
+
 	win.RunOnMainWhenCreated(func() {
-		go setupWinHooks(win, reset, func() { win.Canvas().Focus(in) }, onClose)
+		go setupWinHooks(win, hideRunner, func() { win.Canvas().Focus(in) }, ignoreFocus, onClose)
 		go settings.RegisterDefined()
 	})
 
@@ -136,22 +166,18 @@ func center(w *glfw.Window) {
 	w.SetPos(newX, newY)
 }
 
-func setupWinHooks(win fyne.GLFWWindow, onHide func(), onShow func(), onClose *struct{ fn func() }) {
+func setupWinHooks(win fyne.GLFWWindow, hide func(), onShow func(), ignoreFocus func() bool, onClose *struct{ fn func() }) {
 	win.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) {
 		if !focused {
-			if global.IsRunnerCommandRegistered.Get() {
-				go win.Hide()
-				onHide()
-			}
+			hide()
 			return
 		}
 
-		if global.IgnoreNextFocus.Get() {
-			global.IgnoreNextFocus.Set(false)
-			go win.Hide()
+		if ignoreFocus() {
 			return
 		}
 
+		win.Show()
 		onShow()
 	})
 

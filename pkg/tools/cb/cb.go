@@ -45,7 +45,7 @@ func init() {
 	go func() {
 		ch := clipboard.Watch(context.Background(), clipboard.FmtText)
 		for data := range ch {
-			if string(data) == "" {
+			if strings.TrimSpace(string(data)) == "" {
 				continue
 			}
 			lruCache.Add(string(data), nil)
@@ -55,6 +55,9 @@ func init() {
 
 func Show() {
 	w, onClose := global.NewWindow(WindowName, false)
+	if w == nil {
+		return
+	}
 	w.CenterOnScreen()
 
 	if cell == nil {
@@ -92,16 +95,21 @@ func Show() {
 		return true
 	}
 
-	onTypedKey := func(k *fyne.KeyEvent) bool {
-		if k.Name == fyne.KeyEscape {
-			go close()
-			return true
+	onTypedKey := func(k *fyne.KeyEvent, i int) bool {
+		var err error
+
+		if k != nil {
+			if k.Name == fyne.KeyEscape {
+				go close()
+				return true
+			}
+
+			i, err = strconv.Atoi(string(k.Name))
+			if err != nil {
+				return false
+			}
 		}
 
-		i, err := strconv.Atoi(string(k.Name))
-		if err != nil {
-			return false
-		}
 		i--
 		if i == -1 {
 			i = 9
@@ -109,7 +117,7 @@ func Show() {
 		return copyAndClose(i)
 	}
 
-	w.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) { onTypedKey(ke) })
+	w.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) { onTypedKey(ke, 0) })
 	w.SetCloseIntercept(func() {
 		onClose()
 		w.Close()
@@ -120,13 +128,13 @@ func Show() {
 	filter.SetPlaceHolder("Filter...")
 	filter.OnEsc = close
 	filter.OnSubmitted = func(s string) {
-		filter.SetText("")
+		copyAndClose(0)
 	}
 
 	list := container.NewVBox()
 	history := cbHistory
 	if len(cbHistory) > histViewCount {
-		history = cbHistory[:histViewCount-1]
+		history = cbHistory[:histViewCount]
 	}
 
 	lruResults := make([]string, histViewCount)
@@ -141,10 +149,12 @@ func Show() {
 	populateList(lruResults, list, copyAndClose)
 
 	filter.OnChanged = func(s string) {
-		matches := fuzzy.Find(s, cbHistory.Strings(histViewCount))
-		if len(matches) == 0 {
+		if s == "" {
 			results = lruResults
+		} else if len(s) == 1 && s[0] >= 48 && s[0] <= 57 && onTypedKey(nil, int(s[0]-48)) {
+			return
 		} else {
+			matches := fuzzy.Find(s, cbHistory.Strings(histViewCount))
 			results = make([]string, histViewCount)
 			for i := range results {
 				if i < len(matches) {
@@ -167,6 +177,7 @@ func Show() {
 	w.SetContent(container.NewBorder(nil, filter, nil, nil, list))
 	w.Resize(fyne.Size{Width: 0, Height: clipSize.Height * 13})
 	w.Show()
+	w.Canvas().Focus(filter)
 	w.SetFixedSize(true)
 }
 
@@ -179,13 +190,9 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 	}
 
 	for i, v := range history {
-		n := ""
-		if i < histViewCount {
-			if i < histViewCount-1 {
-				n = strconv.Itoa(i + 1)
-			} else {
-				n = "0"
-			}
+		n := strconv.Itoa(i + 1)
+		if i == 9 {
+			n = "0"
 		}
 
 		indexContainer := container.New(fyneh.NewFixedLayout(numbersSize, -9, -9), newLabel(n))

@@ -16,7 +16,7 @@ type OutputLabel struct {
 }
 
 func (l *OutputLabel) TappedSecondary(*fyne.PointEvent) {
-	global.AppWindow.Clipboard().SetContent(l.FullText)
+	global.RunnerWindow.Clipboard().SetContent(l.FullText)
 }
 
 func (l *OutputLabel) Bind(data binding.String) {

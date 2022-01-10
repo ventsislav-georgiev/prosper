@@ -3,11 +3,11 @@ package helpers
 import "sync/atomic"
 
 type AtomicBool struct {
-	val int32
+	Val int32
 }
 
 func (b *AtomicBool) Get() bool {
-	return atomic.LoadInt32(&b.val) == 1
+	return atomic.LoadInt32(&b.Val) == 1
 }
 
 func (b *AtomicBool) Set(v bool) {
@@ -15,5 +15,5 @@ func (b *AtomicBool) Set(v bool) {
 	if v {
 		i = 1
 	}
-	atomic.StoreInt32(&b.val, i)
+	atomic.StoreInt32(&b.Val, i)
 }

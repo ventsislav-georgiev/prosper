@@ -5,8 +5,8 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/fyneh"
 )
 
 const (
@@ -14,28 +14,42 @@ const (
 )
 
 func Show() {
-	w, _ := global.NewWindow(WindowName, false)
+	w, onClose := global.NewWindow(WindowName, false)
+	if w == nil {
+		return
+	}
 	w.CenterOnScreen()
 
-	encode := widget.NewMultiLineEntry()
+	close := func() {
+		onClose()
+		w.Close()
+	}
+
+	encode := fyneh.InputEntry{}
+	encode.MultiLine = true
 	encode.Wrapping = fyne.TextWrapBreak
-	encodeC := container.NewHScroll(encode)
+	encode.OnEsc = close
+	encode.ExtendBaseWidget(&encode)
+	encodeC := container.NewHScroll(&encode)
 	encodeC.SetMinSize(fyne.NewSize(0, 150))
 
-	decode := widget.NewMultiLineEntry()
+	decode := fyneh.InputEntry{}
+	decode.MultiLine = true
+	decode.OnEsc = close
 	decode.Wrapping = fyne.TextWrapBreak
-	decodeC := container.NewHScroll(decode)
+	decode.ExtendBaseWidget(&decode)
+	decodeC := container.NewHScroll(&decode)
 	decodeC.SetMinSize(fyne.NewSize(0, 150))
 
-	encode.OnChanged = getOnEncodeChanged(decode)
-	decode.OnChanged = getOnDecodeChanged(encode)
+	encode.OnChanged = getOnEncodeChanged(&decode)
+	decode.OnChanged = getOnDecodeChanged(&encode)
 
 	w.SetContent(container.NewHSplit(encodeC, decodeC))
 	w.Resize(fyne.Size{Width: 650, Height: 150})
 	w.Show()
 }
 
-func getOnEncodeChanged(decode *widget.Entry) func(s string) {
+func getOnEncodeChanged(decode *fyneh.InputEntry) func(s string) {
 	return func(s string) {
 		r := base64.StdEncoding.EncodeToString([]byte(s))
 		h := decode.OnChanged
@@ -45,7 +59,7 @@ func getOnEncodeChanged(decode *widget.Entry) func(s string) {
 	}
 }
 
-func getOnDecodeChanged(encode *widget.Entry) func(s string) {
+func getOnDecodeChanged(encode *fyneh.InputEntry) func(s string) {
 	return func(s string) {
 		r, err := base64.StdEncoding.DecodeString(s)
 		if err != nil {
