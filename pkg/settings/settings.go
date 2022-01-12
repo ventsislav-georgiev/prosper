@@ -21,7 +21,7 @@ const (
 )
 
 func Show() {
-	w, _ := global.NewWindow(WindowName, false)
+	w, _, _ := global.NewWindow(WindowName, false, nil)
 	if w == nil {
 		return
 	}

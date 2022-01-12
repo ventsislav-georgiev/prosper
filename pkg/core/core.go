@@ -23,6 +23,10 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/units"
 )
 
+var (
+	initialized = &helpers.AtomicBool{}
+)
+
 func Run(icon []byte) {
 	os.Setenv("FYNE_THEME", "dark")
 	if helpers.IsDarwin {
@@ -41,13 +45,26 @@ func Run(icon []byte) {
 		return
 	}
 
-	win := drv.CreateSplashWindow().(fyne.GLFWWindow)
-	focused := &helpers.AtomicBool{}
-	global.RunnerWindow = win
+	global.ShowRunner = func() { createRunnerWindow(drv) }
+	global.Quit = func() {
+		for fn := range global.OnClose.Iter() {
+			fn()
+		}
+		app.Quit()
+	}
 
-	win.SetBeforeShowed(func() {
-		center(win.ViewPort())
+	global.ShowRunner()
+	app.Run()
+}
+
+func createRunnerWindow(drv desktop.Driver) {
+	win, onClose, onFocus := global.NewWindow("Command Runner", false, func() fyne.GLFWWindow {
+		return drv.CreateSplashWindow().(fyne.GLFWWindow)
 	})
+
+	if win == nil {
+		return
+	}
 
 	out := &fyneh.OutputLabel{}
 	out.ExtendBaseWidget(out)
@@ -72,22 +89,30 @@ func Run(icon []byte) {
 		win.Content().Refresh()
 	}
 
+	close := func() {
+		onClose()
+		go win.Close()
+	}
+
 	in.OnEsc = func() {
 		reset()
 		if global.IsRunnerCommandRegistered.Get() {
-			win.Hide()
+			close()
 		}
 	}
 
 	in.OnSubmitted = func(string) {
 		if onEnter.fn == nil {
 			win.Clipboard().SetContent(out.FullText)
+			reset()
+			return
 		}
+
 		reset()
-		if global.IsRunnerCommandRegistered.Get() {
-			go win.Hide()
-		}
 		onEnter.fn()
+		if global.IsRunnerCommandRegistered.Get() {
+			close()
+		}
 	}
 
 	scrollIn := container.NewHScroll(in)
@@ -102,86 +127,19 @@ func Run(icon []byte) {
 	win.Canvas().Focus(in)
 	win.Show()
 
-	onClose := &struct{ fn func() }{}
-	global.Quit = func() {
-		for fn := range global.OnClose.Iter() {
-			fn()
-		}
-		app.Quit()
-	}
-
-	hideRunner := func() {
-		reset()
-		if global.IsRunnerCommandRegistered.Get() {
-			focused.Set(false)
-			go win.Hide()
-		}
-	}
-
-	showRunner := func() {
-		if focused.Get() {
-			hideRunner()
-			return
-		}
-		focused.Set(true)
-		win.Show()
-		win.Canvas().Focus(in)
-	}
-	global.ShowRunner = showRunner
-
-	ignoreFocus := func() bool {
-		if !global.IgnoreNextFocus.Get() {
-			return false
-		}
-		global.IgnoreNextFocus.Set(false)
-		focused.Set(false)
-		go win.Hide()
-		return true
-	}
-
 	win.RunOnMainWhenCreated(func() {
-		go setupWinHooks(win, hideRunner, func() { win.Canvas().Focus(in) }, ignoreFocus, onClose)
-		go settings.RegisterDefined()
-	})
-
-	app.Run()
-}
-
-func center(w *glfw.Window) {
-	monitor := w.GetMonitor()
-	if monitor == nil {
-		monitor = glfw.GetPrimaryMonitor()
-	}
-
-	viewWidth, viewHeight := w.GetSize()
-	if viewHeight < 120 {
-		viewHeight = 120
-	}
-
-	monMode := monitor.GetVideoMode()
-	monX, monY := monitor.GetPos()
-	newX := (monMode.Width / 2) - (viewWidth / 2) + monX
-	newY := ((monMode.Height / 2) - (viewHeight / 2) + monY) - (viewHeight / 2)
-
-	w.SetPos(newX, newY)
-}
-
-func setupWinHooks(win fyne.GLFWWindow, hide func(), onShow func(), ignoreFocus func() bool, onClose *struct{ fn func() }) {
-	win.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) {
-		if !focused {
-			hide()
-			return
+		if !initialized.Get() {
+			initialized.Set(true)
+			go settings.RegisterDefined()
 		}
 
-		if ignoreFocus() {
-			return
-		}
-
-		win.Show()
-		onShow()
+		win.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) {
+			onFocus(focused)
+			if !focused && global.IsRunnerCommandRegistered.Get() {
+				close()
+			}
+		})
 	})
-
-	win.SetCloseIntercept(func() { global.Quit() })
 }
 
 func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Container, onEnter *struct{ fn func() }) func(expr string) {

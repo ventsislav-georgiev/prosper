@@ -6,7 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/widget"
-	"github.com/ventsislav-georgiev/prosper/pkg/global"
+	"golang.design/x/clipboard"
 )
 
 type OutputLabel struct {
@@ -16,7 +16,7 @@ type OutputLabel struct {
 }
 
 func (l *OutputLabel) TappedSecondary(*fyne.PointEvent) {
-	global.RunnerWindow.Clipboard().SetContent(l.FullText)
+	clipboard.Write(clipboard.FmtText, []byte(l.FullText))
 }
 
 func (l *OutputLabel) Bind(data binding.String) {
