@@ -55,7 +55,7 @@ func init() {
 }
 
 func Show() {
-	w, onClose, _ := global.NewWindow(WindowName, false, nil)
+	w, onClose, _ := global.NewWindow(WindowName, nil)
 	if w == nil {
 		return
 	}
@@ -64,7 +64,7 @@ func Show() {
 	if cell == nil {
 		cell = canvas.NewText("M", color.White)
 		cell.TextStyle.Monospace = true
-		height := cell.MinSize().Height*linesPerClip - 1
+		height := cell.MinSize().Height * linesPerClip
 		numbersSize = fyne.Size{Width: 0, Height: height}
 		clipSize = fyne.Size{Width: 400, Height: height}
 	}
@@ -203,9 +203,11 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 			Text:  t,
 			Style: style,
 		})
-		w.Wrapping = fyne.TextWrapBreak
+		w.Wrapping = fyne.TextTruncate
 		return w
 	}
+
+	var elementsOffset float32 = -9
 
 	for i, v := range history {
 		n := strconv.Itoa(i + 1)
@@ -213,14 +215,14 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 			n = "0"
 		}
 
-		indexContainer := container.New(fyneh.NewFixedLayout(numbersSize, -9, -9), newLabel(n, indexStyle))
+		indexContainer := container.New(fyneh.NewFixedLayout(numbersSize, elementsOffset, elementsOffset), newLabel(n, indexStyle))
 
 		var clip string
 		if v != "" {
 			clip = strings.TrimLeft(dedent.Dedent(v), "\n")
 		}
 
-		clipContainer := fyneh.NewFixedContainer(newLabel(clip, clipStyle), 5, -7)
+		clipContainer := fyneh.NewFixedContainer(newLabel(clip, clipStyle), 5, elementsOffset)
 		clipContainer.SetMinSize(clipSize)
 		clipContainer.OnTapped = func(i int) func() {
 			return func() {

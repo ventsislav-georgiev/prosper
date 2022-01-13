@@ -58,7 +58,7 @@ func Run(icon []byte) {
 }
 
 func createRunnerWindow(drv desktop.Driver) {
-	win, onClose, onFocus := global.NewWindow("Command Runner", false, func() fyne.GLFWWindow {
+	win, onClose, onFocus := global.NewWindow("Command Runner", func() fyne.GLFWWindow {
 		return drv.CreateSplashWindow().(fyne.GLFWWindow)
 	})
 

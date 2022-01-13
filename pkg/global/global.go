@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/windowh"
 )
 
 var (
@@ -23,12 +24,10 @@ type openWindow struct {
 	Focused *helpers.AtomicBool
 }
 
-func NewWindow(windowName string, showRunner bool, createWin func() fyne.GLFWWindow) (w fyne.GLFWWindow, onClose func(), onFocus func(focused bool)) {
+func NewWindow(windowName string, createWin func() fyne.GLFWWindow) (w fyne.GLFWWindow, onClose func(), onFocus func(focused bool)) {
 	onClose = func() {
 		openWindows.Delete(windowName)
-		if showRunner {
-			go ShowRunner()
-		}
+		go windowh.HideApp()
 	}
 
 	v, ok := openWindows.Load(windowName)

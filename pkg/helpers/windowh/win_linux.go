@@ -1,0 +1,4 @@
+package windowh
+
+func HideApp() {
+}

@@ -14,7 +14,7 @@ const (
 )
 
 func Show() {
-	w, onClose, _ := global.NewWindow(WindowName, false, nil)
+	w, onClose, _ := global.NewWindow(WindowName, nil)
 	if w == nil {
 		return
 	}
