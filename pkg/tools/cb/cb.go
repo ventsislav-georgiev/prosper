@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/lithammer/dedent"
@@ -63,7 +64,7 @@ func Show() {
 	if cell == nil {
 		cell = canvas.NewText("M", color.White)
 		cell.TextStyle.Monospace = true
-		height := cell.MinSize().Height*linesPerClip + 3
+		height := cell.MinSize().Height*linesPerClip - 1
 		numbersSize = fyne.Size{Width: 0, Height: height}
 		clipSize = fyne.Size{Width: 400, Height: height}
 	}
@@ -181,10 +182,27 @@ func Show() {
 	w.SetFixedSize(true)
 }
 
+var (
+	indexStyle = widget.RichTextStyle{
+		ColorName: theme.ColorNamePlaceHolder,
+		Inline:    false,
+		SizeName:  theme.SizeNameCaptionText,
+		TextStyle: fyne.TextStyle{Italic: true, Monospace: true},
+	}
+	clipStyle = widget.RichTextStyle{
+		ColorName: theme.ColorNameForeground,
+		Inline:    false,
+		SizeName:  theme.SizeNameCaptionText,
+		TextStyle: fyne.TextStyle{Monospace: true},
+	}
+)
+
 func populateList(history []string, list *fyne.Container, copyAndClose func(i int) bool) {
-	newLabel := func(t string) *widget.Label {
-		w := widget.NewLabel(t)
-		w.TextStyle.Monospace = true
+	newLabel := func(t string, style widget.RichTextStyle) *widget.RichText {
+		w := widget.NewRichText(&widget.TextSegment{
+			Text:  t,
+			Style: style,
+		})
 		w.Wrapping = fyne.TextWrapBreak
 		return w
 	}
@@ -195,14 +213,14 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 			n = "0"
 		}
 
-		indexContainer := container.New(fyneh.NewFixedLayout(numbersSize, -9, -9), newLabel(n))
+		indexContainer := container.New(fyneh.NewFixedLayout(numbersSize, -9, -9), newLabel(n, indexStyle))
 
 		var clip string
 		if v != "" {
 			clip = strings.TrimLeft(dedent.Dedent(v), "\n")
 		}
 
-		clipContainer := fyneh.NewFixedContainer(newLabel(clip), 10, -7)
+		clipContainer := fyneh.NewFixedContainer(newLabel(clip, clipStyle), 5, -7)
 		clipContainer.SetMinSize(clipSize)
 		clipContainer.OnTapped = func(i int) func() {
 			return func() {
