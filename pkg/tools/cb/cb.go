@@ -13,7 +13,6 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/lithammer/dedent"
 	"github.com/sahilm/fuzzy"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers/fyneh"
@@ -219,7 +218,11 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 
 		var clip string
 		if v != "" {
-			clip = strings.TrimLeft(dedent.Dedent(v), "\n")
+			lines := strings.Split(v, "\n")
+			for i, l := range lines {
+				lines[i] = strings.TrimSpace(l)
+			}
+			clip = strings.Join(lines, "↵")
 		}
 
 		clipContainer := fyneh.NewFixedContainer(newLabel(clip, clipStyle), 5, elementsOffset)

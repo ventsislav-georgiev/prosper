@@ -22,7 +22,6 @@ require (
 	github.com/groob/plist v0.0.0-20210519001750-9f754062e6d6
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/iineva/bom v0.0.0-20210605043415-7d45ba1bcca3
-	github.com/lithammer/dedent v1.1.0
 	github.com/parsiya/golnk v0.0.0-20200515071614-5db3107130ce
 	github.com/pkg/profile v1.6.0
 	github.com/sahilm/fuzzy v0.1.0
