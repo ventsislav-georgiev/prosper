@@ -24,17 +24,27 @@ type openWindow struct {
 	Focused *helpers.AtomicBool
 }
 
+func hideApp(targetWindow fyne.GLFWWindow) {
+	for _, w := range App.Driver().AllWindows() {
+		if w != targetWindow && w.Content().Visible() {
+			return
+		}
+	}
+
+	go targetWindow.RunOnMain(windowh.HideApp)
+}
+
 func NewWindow(windowName string, createWin func() fyne.GLFWWindow) (w fyne.GLFWWindow, onClose func(), onFocus func(focused bool)) {
-	onClose = func() {
+	_onClose := func(w fyne.GLFWWindow) {
 		openWindows.Delete(windowName)
-		go windowh.HideApp()
+		hideApp(w)
 	}
 
 	v, ok := openWindows.Load(windowName)
 	if ok {
 		w := v.(openWindow)
 		if w.Focused.Get() {
-			onClose()
+			_onClose(w.Window)
 			w.Window.Close()
 		} else {
 			w.Window.Show()
@@ -59,6 +69,7 @@ func NewWindow(windowName string, createWin func() fyne.GLFWWindow) (w fyne.GLFW
 		w.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) { onFocus(focused) })
 	})
 
+	onClose = func() { _onClose(w) }
 	w.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
 		if k.Name == fyne.KeyEscape {
 			onClose()

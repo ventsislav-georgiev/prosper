@@ -18,6 +18,16 @@ const (
 )
 
 var (
+	RunnerShortcut = &shortcut{
+		Command: &Command{
+			ID:   commandRunnerName,
+			Name: commandRunnerName,
+			icon: func() []byte { return theme.RadioButtonCheckedIcon().Content() },
+			run:  func() { global.ShowRunner() },
+		},
+		KeyNames: []fyne.KeyName{desktop.KeyAltLeft, fyne.KeySpace},
+	}
+
 	defaultCommands map[string]*shortcut
 )
 
@@ -27,17 +37,10 @@ func init() {
 		optionKey = "Option"
 	}
 
+	RunnerShortcut.DisplayKeyNames = optionKey + "+Space"
+
 	commands := []*shortcut{
-		{
-			Command: &Command{
-				ID:   commandRunnerName,
-				Name: commandRunnerName,
-				icon: func() []byte { return theme.RadioButtonCheckedIcon().Content() },
-				run:  func() { global.ShowRunner() },
-			},
-			KeyNames:        []fyne.KeyName{desktop.KeyAltLeft, fyne.KeySpace},
-			DisplayKeyNames: optionKey + "+Space",
-		},
+		RunnerShortcut,
 		{
 			Command: &Command{
 				ID:   "Open " + WindowName,

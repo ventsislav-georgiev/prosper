@@ -2,6 +2,7 @@ package settings
 
 import (
 	"fmt"
+	"io"
 
 	"fyne.io/fyne/v2"
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -13,13 +14,13 @@ import (
 
 func RegisterDefined() {
 	err := Load()
-	if err != nil {
+	if err != nil && err != io.EOF {
 		fmt.Println(err)
 		return
 	}
 
 	if defaultCommands != nil {
-		prefs.Range(func(k, value interface{}) bool {
+		Prefs.Range(func(k, value interface{}) bool {
 			v := value.(*shortcut)
 			d, ok := defaultCommands[v.ID()]
 			if ok {
@@ -31,25 +32,29 @@ func RegisterDefined() {
 		})
 
 		for k, v := range defaultCommands {
-			prefs.Store(k, v)
+			Prefs.Store(k, v)
 		}
 	}
 
 	defaultCommands = nil
 
-	prefs.Range(func(k, value interface{}) bool {
+	Prefs.Range(func(k, value interface{}) bool {
 		v := value.(*shortcut)
 		if v.Command != nil && v.Command.run == nil {
-			prefs.Delete(v.Command.ID)
+			Prefs.Delete(v.Command.ID)
 			return true
 		}
-		if m, k, ok := ToHotkey(v.KeyNames); ok {
-			v.unregister = register(v.Name(), m, k, v.Run)
-		}
+		RegisterShortcut(v)
 		return true
 	})
 
 	Save()
+}
+
+func RegisterShortcut(s *shortcut) {
+	if m, k, ok := ToHotkey(s.KeyNames); ok {
+		s.unregister = register(s.Name(), m, k, s.Run)
+	}
 }
 
 func register(c string, m []hotkey.Modifier, k hotkey.Key, fn func()) func() {

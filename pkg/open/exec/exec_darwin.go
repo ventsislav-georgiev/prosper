@@ -1,6 +1,9 @@
 package exec
 
-import "os/exec"
+import (
+	"os/exec"
+)
 
-func setAttr(c *exec.Cmd) {
+func preExec(c *exec.Cmd, e *Info) bool {
+	return true
 }

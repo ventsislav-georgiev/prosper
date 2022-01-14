@@ -1,0 +1,4 @@
+package osh
+
+func Initialize() {
+}

@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -15,6 +16,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers/fyneh"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/osh"
 	"github.com/ventsislav-georgiev/prosper/pkg/mathexpr"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
 	"github.com/ventsislav-georgiev/prosper/pkg/settings"
@@ -130,7 +132,13 @@ func createRunnerWindow(drv desktop.Driver) {
 	win.RunOnMainWhenCreated(func() {
 		if !initialized.Get() {
 			initialized.Set(true)
-			go settings.RegisterDefined()
+			go func() {
+				if helpers.IsLinux {
+					osh.Initialize()
+					time.Sleep(100 * time.Millisecond)
+				}
+				settings.RegisterDefined()
+			}()
 		}
 
 		win.ViewPort().SetFocusCallback(func(w *glfw.Window, focused bool) {

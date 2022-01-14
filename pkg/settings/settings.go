@@ -2,6 +2,7 @@ package settings
 
 import (
 	"fmt"
+	"io"
 	"sort"
 
 	"fyne.io/fyne/v2"
@@ -28,12 +29,12 @@ func Show() {
 	w.CenterOnScreen()
 
 	err := Load()
-	if err != nil {
+	if err != nil && err != io.EOF {
 		fmt.Println(err.Error())
 	}
 
 	s := make(map[string]*shortcut)
-	prefs.Range(func(k, v interface{}) bool {
+	Prefs.Range(func(k, v interface{}) bool {
 		s[k.(string)] = v.(*shortcut)
 		return true
 	})
@@ -165,7 +166,7 @@ func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
 			DisplayKeyNames: keysInput.KeyNames(),
 		}
 
-		prefs.Store(v.ID(), &v)
+		Prefs.Store(v.ID(), &v)
 		err := Save()
 		if err != nil {
 			fmt.Println(err.Error())
@@ -236,7 +237,7 @@ func addListItem(w fyne.Window, c *fyne.Container, v *shortcut, registered bool,
 		editShortcutView(w, v, keysBinding)
 	})
 	remove := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
-		prefs.Delete(v.ID())
+		Prefs.Delete(v.ID())
 		Save()
 		c.Remove(item)
 		if v.unregister != nil {

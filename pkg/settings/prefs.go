@@ -13,7 +13,7 @@ import (
 const shortcutsStore = "shortcuts.json"
 
 var (
-	prefs *sync.Map
+	Prefs *sync.Map
 )
 
 type shortcut struct {
@@ -25,11 +25,11 @@ type shortcut struct {
 }
 
 func Load() error {
-	if prefs != nil {
+	if Prefs != nil {
 		return nil
 	}
 
-	prefs = &sync.Map{}
+	Prefs = &sync.Map{}
 
 	r, err := global.App.Storage().Open(shortcutsStore)
 	if err != nil {
@@ -51,7 +51,7 @@ func Load() error {
 	}
 
 	for k, v := range s {
-		prefs.Store(k, v)
+		Prefs.Store(k, v)
 	}
 
 	return nil
@@ -66,7 +66,7 @@ func Save() error {
 	defer w.Close()
 
 	s := make(map[string]*shortcut)
-	prefs.Range(func(k, v interface{}) bool {
+	Prefs.Range(func(k, v interface{}) bool {
 		sh := v.(*shortcut)
 		if sh.Command != nil && sh.Command.run == nil {
 			return true

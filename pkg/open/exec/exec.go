@@ -13,14 +13,21 @@ type Info struct {
 }
 
 func (e *Info) Exec() {
+	var c *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		c := exec.Command("open", e.Filepath())
-		setAttr(c)
-		c.Start()
+		c = exec.Command("open", e.Filepath())
 	case "windows":
-		c := exec.Command("cmd", "/c", e.Filepath())
-		setAttr(c)
+		c = exec.Command("cmd", "/c", e.Filepath())
+	case "linux":
+		c = &exec.Cmd{}
+	}
+
+	if c == nil {
+		return
+	}
+
+	if preExec(c, e) {
 		c.Start()
 	}
 }

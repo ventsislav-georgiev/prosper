@@ -10,14 +10,13 @@ import (
 
 	"github.com/groob/plist"
 	"github.com/iineva/bom/pkg/asset"
-	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 	"yrh.dev/icns"
 )
 
 func init() {
 	homeDir, _ := os.UserHomeDir()
-	if homeDir != "" && helpers.IsDarwin {
+	if homeDir != "" {
 		darwinUserAppsPath = filepath.Join(homeDir, "Applications")
 	}
 }
@@ -42,10 +41,6 @@ func Find() FuzzySource {
 
 func findRecursive(dir string, level int) FuzzySource {
 	apps := make(FuzzySource, 0)
-
-	if !helpers.IsDarwin {
-		return apps
-	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {

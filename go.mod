@@ -12,7 +12,7 @@ replace github.com/blacktop/lzfse-cgo => github.com/ventsislav-georgiev/lzfse-cg
 
 replace github.com/tc-hib/winres => github.com/ventsislav-georgiev/winres v0.1.7-0.20220103002232-5d2af9a563d4
 
-replace golang.design/x/hotkey => github.com/ventsislav-georgiev/hotkey v0.2.2-0.20220105232147-16e8db4bb80e
+replace golang.design/x/hotkey => github.com/ventsislav-georgiev/hotkey v0.2.2-0.20220114002610-89940ba076ea
 
 require (
 	fyne.io/fyne/v2 v2.1.2

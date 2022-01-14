@@ -5,6 +5,7 @@ import (
 	"syscall"
 )
 
-func setAttr(c *exec.Cmd) {
+func preExec(c *exec.Cmd, e *Info) bool {
 	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	return true
 }
