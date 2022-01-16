@@ -14,27 +14,28 @@ import (
 	"yrh.dev/icns"
 )
 
-func init() {
-	homeDir, _ := os.UserHomeDir()
-	if homeDir != "" {
-		darwinUserAppsPath = filepath.Join(homeDir, "Applications")
-	}
-}
-
 const (
-	darwinGlobalAppsPath = "/Applications"
-	darwinSysAppsPath    = "/System/Applications"
+	globalAppsPath = "/Applications"
+	sysAppsPath    = "/System/Applications"
 )
 
 var (
-	darwinUserAppsPath string
+	homeDir      string
+	userAppsPath string
 )
 
+func init() {
+	homeDir, _ = os.UserHomeDir()
+	if homeDir != "" {
+		userAppsPath = filepath.Join(homeDir, "Applications")
+	}
+}
+
 func Find() FuzzySource {
-	apps := findRecursive(darwinGlobalAppsPath, 0)
-	apps = append(apps, findRecursive(darwinSysAppsPath, 0)...)
-	if darwinUserAppsPath != "" {
-		apps = append(apps, findRecursive(darwinUserAppsPath, 0)...)
+	apps := findRecursive(globalAppsPath, 0)
+	apps = append(apps, findRecursive(sysAppsPath, 0)...)
+	if userAppsPath != "" {
+		apps = append(apps, findRecursive(userAppsPath, 0)...)
 	}
 	return apps
 }

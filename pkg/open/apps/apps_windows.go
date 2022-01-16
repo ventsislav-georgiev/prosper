@@ -19,10 +19,10 @@ import (
 )
 
 var (
-	windowsGlobalAppsPath string
-	windowsUserAppsPath   string
-	windowsUserAppsPath2  string
-	envExpandRegexp       = regexp.MustCompile(`%(.*?)%`)
+	globalAppsPath  string
+	userAppsPath    string
+	userAppsPath2   string
+	envExpandRegexp = regexp.MustCompile(`%(.*?)%`)
 )
 
 const (
@@ -32,19 +32,19 @@ const (
 func init() {
 	homeDir, _ := os.UserHomeDir()
 	if homeDir != "" && helpers.IsWindows {
-		windowsGlobalAppsPath = filepath.Join(homeDir[:3], "ProgramData\\Microsoft\\Windows\\Start Menu\\Programs")
-		windowsUserAppsPath = filepath.Join(homeDir, "AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs")
-		windowsUserAppsPath2 = filepath.Join(homeDir, "AppData\\Roaming\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar")
+		globalAppsPath = filepath.Join(homeDir[:3], "ProgramData\\Microsoft\\Windows\\Start Menu\\Programs")
+		userAppsPath = filepath.Join(homeDir, "AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs")
+		userAppsPath2 = filepath.Join(homeDir, "AppData\\Roaming\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar")
 	}
 }
 
 func Find() FuzzySource {
-	apps := findRecursive(windowsGlobalAppsPath, 0)
-	if windowsUserAppsPath != "" {
-		apps = append(apps, findRecursive(windowsUserAppsPath, 0)...)
+	apps := findRecursive(globalAppsPath, 0)
+	if userAppsPath != "" {
+		apps = append(apps, findRecursive(userAppsPath, 0)...)
 	}
-	if windowsUserAppsPath2 != "" {
-		apps = append(apps, findRecursive(windowsUserAppsPath2, 0)...)
+	if userAppsPath2 != "" {
+		apps = append(apps, findRecursive(userAppsPath2, 0)...)
 	}
 
 	return apps

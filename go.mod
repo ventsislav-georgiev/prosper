@@ -25,6 +25,8 @@ require (
 	github.com/parsiya/golnk v0.0.0-20200515071614-5db3107130ce
 	github.com/pkg/profile v1.6.0
 	github.com/sahilm/fuzzy v0.1.0
+	github.com/srwiley/oksvg v0.0.0-20200311192757-870daf9aa564
+	github.com/srwiley/rasterx v0.0.0-20200120212402-85cb7272f5e9
 	github.com/tc-hib/winres v0.1.6
 	golang.design/x/clipboard v0.5.3
 	golang.design/x/hotkey v0.3.0
@@ -47,8 +49,6 @@ require (
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/srwiley/oksvg v0.0.0-20200311192757-870daf9aa564 // indirect
-	github.com/srwiley/rasterx v0.0.0-20200120212402-85cb7272f5e9 // indirect
 	github.com/stretchr/testify v1.7.0 // indirect
 	github.com/yuin/goldmark v1.3.8 // indirect
 	golang.org/x/exp v0.0.0-20190731235908-ec7cb31e5a56 // indirect

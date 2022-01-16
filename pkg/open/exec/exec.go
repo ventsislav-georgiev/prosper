@@ -10,6 +10,7 @@ type Info struct {
 	DisplayName string
 	Filename    string
 	Path        string
+	IconName    string
 }
 
 func (e *Info) Exec() {
