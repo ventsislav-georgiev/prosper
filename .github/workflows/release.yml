@@ -30,7 +30,7 @@ jobs:
         with:
           files: |
             dist/Prosper-darwin.zip
-            dist/bin-darwin
+            dist/bin-darwin.gz
 
   windows:
     runs-on: windows-latest
@@ -40,6 +40,8 @@ jobs:
       - uses: actions/setup-go@v2
         with:
           go-version: "1.17.5"
+      - name: install gzip
+        run: choco install gzip
       - name: install fyne
         run: go install fyne.io/fyne/v2/cmd/fyne@latest
       - name: build-windows
@@ -52,7 +54,7 @@ jobs:
         with:
           files: |
             dist/Prosper-windows.zip
-            dist/bin-windows
+            dist/bin-windows.gz
 
   linux:
     runs-on: ubuntu-latest
@@ -73,4 +75,4 @@ jobs:
         with:
           files: |
             dist/Prosper-linux.tar.xz
-            dist/bin-linux
+            dist/bin-linux.gz
