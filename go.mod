@@ -2,17 +2,14 @@ module github.com/ventsislav-georgiev/prosper
 
 go 1.17
 
-replace fyne.io/fyne/v2 => github.com/ventsislav-georgiev/fyne/v2 v2.1.3-0.20220112202425-5687da65ff10
-
-replace github.com/iineva/bom => github.com/ventsislav-georgiev/bom v0.0.0-20220102051948-0e6a1a4b3c30
-
-replace github.com/go-gl/glfw/v3.3/glfw => github.com/ventsislav-georgiev/glfw/v3.3/glfw v0.0.0-20211227121345-369db807f73d
-
-replace github.com/blacktop/lzfse-cgo => github.com/ventsislav-georgiev/lzfse-cgo v1.1.17-0.20220102053312-50b37453a738
-
-replace github.com/tc-hib/winres => github.com/ventsislav-georgiev/winres v0.1.7-0.20220103002232-5d2af9a563d4
-
-replace golang.design/x/hotkey => github.com/ventsislav-georgiev/hotkey v0.2.2-0.20220114002610-89940ba076ea
+replace (
+	fyne.io/fyne/v2 => github.com/ventsislav-georgiev/fyne/v2 v2.1.3-0.20220112202425-5687da65ff10
+	github.com/blacktop/lzfse-cgo => github.com/ventsislav-georgiev/lzfse-cgo v1.1.17-0.20220102053312-50b37453a738
+	github.com/go-gl/glfw/v3.3/glfw => github.com/ventsislav-georgiev/glfw/v3.3/glfw v0.0.0-20211227121345-369db807f73d
+	github.com/iineva/bom => github.com/ventsislav-georgiev/bom v0.0.0-20220102051948-0e6a1a4b3c30
+	github.com/tc-hib/winres => github.com/ventsislav-georgiev/winres v0.1.7-0.20220103002232-5d2af9a563d4
+	golang.design/x/hotkey => github.com/ventsislav-georgiev/hotkey v0.2.2-0.20220114002610-89940ba076ea
+)
 
 require (
 	fyne.io/fyne/v2 v2.1.2
