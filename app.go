@@ -4,18 +4,44 @@ import (
 	_ "embed"
 	"flag"
 	"os"
+	"runtime"
+	"strings"
+	"time"
 
+	"github.com/jpillora/overseer"
+	"github.com/jpillora/overseer/fetcher"
 	"github.com/pkg/profile"
 	"github.com/ventsislav-georgiev/prosper/pkg/core"
+	"github.com/ventsislav-georgiev/prosper/pkg/global"
 )
 
 //go:embed icon.png
 var icon []byte
 
 func main() {
+	overseer.Run(overseer.Config{
+		Program: app,
+		Address: "localhost:13003",
+		Fetcher: &fetcher.Github{
+			User:     "ventsislav-georgiev",
+			Repo:     "prosper",
+			Interval: 15 * time.Minute,
+			Asset: func(filename string) bool {
+				return strings.HasPrefix(filename, "bin-"+runtime.GOOS)
+			},
+		},
+	})
+}
+
+func app(state overseer.State) {
 	if prof := profileIfRequested(); prof != nil {
 		defer prof()
 	}
+
+	go func() {
+		<-state.GracefulShutdown
+		global.Quit()
+	}()
 
 	core.Run(icon)
 }
