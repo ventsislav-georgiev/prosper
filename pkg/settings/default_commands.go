@@ -69,7 +69,7 @@ func init() {
 				run:  func() { cb.Show() },
 			},
 			KeyNames:        []fyne.KeyName{desktop.KeyAltLeft, desktop.KeyShiftLeft, fyne.KeyA},
-			DisplayKeyNames: optionKey + "Shift+A",
+			DisplayKeyNames: optionKey + "+Shift+A",
 		},
 	}
 

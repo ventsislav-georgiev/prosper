@@ -78,7 +78,9 @@ func Show() {
 		cbHistory = make([]interface{}, 0)
 	}
 
+	quit := make(chan struct{})
 	close := func() {
+		quit <- struct{}{}
 		onClose()
 		w.Close()
 	}
@@ -118,10 +120,7 @@ func Show() {
 	}
 
 	w.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) { onTypedKey(ke, 0) })
-	w.SetCloseIntercept(func() {
-		onClose()
-		w.Close()
-	})
+	w.SetCloseIntercept(close)
 
 	filter := &fyneh.InputEntry{}
 	filter.ExtendBaseWidget(filter)
@@ -148,13 +147,13 @@ func Show() {
 	results = lruResults
 	populateList(lruResults, list, copyAndClose)
 
-	filter.OnChanged = func(s string) {
+	onChanged := func(s string) {
 		if s == "" {
 			results = lruResults
 		} else if len(s) == 1 && s[0] >= 48 && s[0] <= 57 && onTypedKey(nil, int(s[0]-48)) {
 			return
 		} else {
-			matches := fuzzy.Find(s, cbHistory.Strings(histViewCount))
+			matches := fuzzy.Find(s, cbHistory.Strings(len(cbHistory)))
 			results = make([]string, histViewCount)
 			for i := range results {
 				if i < len(matches) {
@@ -173,6 +172,19 @@ func Show() {
 
 		populateList(results, list, copyAndClose)
 	}
+
+	changeCh := make(chan string)
+	filter.OnChanged = func(s string) { changeCh <- s }
+	go func() {
+		for {
+			select {
+			case s := <-changeCh:
+				onChanged(s)
+			case <-quit:
+				return
+			}
+		}
+	}()
 
 	w.SetContent(container.NewBorder(nil, filter, nil, nil, list))
 	w.Resize(fyne.Size{Width: 0, Height: clipSize.Height * 13})
