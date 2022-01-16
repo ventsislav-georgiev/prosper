@@ -10,7 +10,7 @@ import (
 
 	"github.com/groob/plist"
 	"github.com/iineva/bom/pkg/asset"
-	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/exec"
 	"yrh.dev/icns"
 )
 

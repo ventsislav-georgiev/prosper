@@ -33,6 +33,7 @@ Example expressions:
 * currency `32 usd to eur` => `28.02 €`
 * unit `1 year to minutes` => `525960 minutes`
 * apps `o iTerm` => opens iTerm
+* shell `$ say "hello world"` => executes command (`say` will read the text aloud on macOS)
 
 <br/>
 

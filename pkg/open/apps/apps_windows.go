@@ -15,7 +15,7 @@ import (
 	lnk "github.com/parsiya/golnk"
 	"github.com/tc-hib/winres"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
-	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/exec"
 )
 
 var (

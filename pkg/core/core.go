@@ -20,6 +20,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/mathexpr"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
 	"github.com/ventsislav-georgiev/prosper/pkg/settings"
+	"github.com/ventsislav-georgiev/prosper/pkg/shell"
 	"github.com/ventsislav-georgiev/prosper/pkg/tools"
 	"github.com/ventsislav-georgiev/prosper/pkg/translate"
 	"github.com/ventsislav-georgiev/prosper/pkg/units"
@@ -155,6 +156,7 @@ func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Containe
 		command.Eval,
 		tools.Eval,
 		open.Eval,
+		shell.Eval,
 		mathexpr.Eval,
 		currency.Eval,
 		units.Eval,

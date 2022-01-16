@@ -2,10 +2,11 @@ package exec
 
 import (
 	"os/exec"
-	"syscall"
 )
 
+func procAttr(c *exec.Cmd) {
+}
+
 func preExec(c *exec.Cmd, e *Info) bool {
-	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return true
 }

@@ -20,6 +20,9 @@ func init() {
 	checkForLauncher()
 }
 
+func procAttr(c *exec.Cmd) {
+}
+
 func preExec(c *exec.Cmd, e *Info) bool {
 	if !checked {
 		checkForLauncher()

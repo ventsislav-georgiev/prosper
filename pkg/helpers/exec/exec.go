@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 type Info struct {
@@ -11,10 +12,23 @@ type Info struct {
 	Filename    string
 	Path        string
 	IconName    string
+	Command     string
 }
 
 func (e *Info) Exec() {
 	var c *exec.Cmd
+	if e.Command != "" {
+		parts := strings.Split(e.Command, " ")
+		if len(parts) > 1 {
+			c = exec.Command(parts[0], parts[1:]...)
+		} else {
+			c = exec.Command(e.Command)
+		}
+		procAttr(c)
+		c.Start()
+		return
+	}
+
 	switch runtime.GOOS {
 	case "darwin":
 		c = exec.Command("open", e.Filepath())
@@ -28,9 +42,12 @@ func (e *Info) Exec() {
 		return
 	}
 
-	if preExec(c, e) {
-		c.Start()
+	if !preExec(c, e) {
+		return
 	}
+
+	procAttr(c)
+	c.Start()
 }
 
 func (e *Info) Filepath() string {

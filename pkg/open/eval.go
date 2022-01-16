@@ -6,8 +6,8 @@ import (
 
 	"github.com/sahilm/fuzzy"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/exec"
 	"github.com/ventsislav-georgiev/prosper/pkg/open/apps"
-	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
 var (

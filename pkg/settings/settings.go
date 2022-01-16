@@ -12,9 +12,9 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/exec"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers/fyneh"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
-	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
 )
 
 const (

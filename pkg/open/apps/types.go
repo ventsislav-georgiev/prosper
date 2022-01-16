@@ -3,7 +3,7 @@ package apps
 import (
 	"sync"
 
-	"github.com/ventsislav-georgiev/prosper/pkg/open/exec"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/exec"
 )
 
 type FuzzySource []exec.Info

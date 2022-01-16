@@ -14,7 +14,7 @@ import (
 
 	"github.com/srwiley/oksvg"
 	"github.com/srwiley/rasterx"
-	open "github.com/ventsislav-georgiev/prosper/pkg/open/exec"
+	open "github.com/ventsislav-georgiev/prosper/pkg/helpers/exec"
 )
 
 const (
