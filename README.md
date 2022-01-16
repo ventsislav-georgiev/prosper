@@ -21,9 +21,20 @@ Supports: Mac, Windows and Linux
 
 Tips:
 * Clicking `Enter` in the command runner copies the output to the clipboard
-* Using the same shortcut again works as toggle i.e. `Option+Space` to show runner, again to hide it
+* Using the same shortcut again works as toggle i.e. `Alt+Space` to show runner, again to hide it
 * `:s` to see shortcuts and change them
 * `:q` Quit the app
+
+<br/>
+
+Example expressions:
+* translation `hello world in de` => `hallo welt`
+* math `128*24` => `3072`
+* currency `32 usd to eur` => `28.02 €`
+* unit `1 year to minutes` => `525960 minutes`
+* apps `o iTerm` => opens iTerm
+
+<br/>
 
 ## Features
 
@@ -49,6 +60,8 @@ Usage:
 Usage:
 * `Alt+/` - toggle
 * `Esc` - close
+
+<br/>
 
 ## License
 
