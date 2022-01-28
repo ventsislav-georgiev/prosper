@@ -14,6 +14,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/core"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers/archh"
 )
 
 //go:embed icon.png
@@ -30,7 +31,7 @@ func main() {
 			Asset: func(filename string) bool {
 				binName := "bin-" + runtime.GOOS
 				if helpers.IsDarwin {
-					binName += "-" + runtime.GOARCH
+					binName += "-" + archh.Arch
 				}
 				return strings.HasPrefix(filename, binName)
 			},
