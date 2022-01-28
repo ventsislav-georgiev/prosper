@@ -29,12 +29,16 @@ Tips:
 
 Example expressions:
 * translation `hello world in de` => `hallo welt`
+
 * math `128*24` => `3072`
+
 * currency `32 usd to eur` => `28.02 €`
+
 * unit `1 year to minutes` => `525960 minutes`
+
 * apps `o iTerm` => opens iTerm
+
 * shell `> say "hello world"` => executes command (`say` will read the text aloud on macOS)
-* in settings (`:s`) when adding a shortcut a shell command may be used by using the shell syntax `> open /Users/ventsislavg`
 
 <br/>
 
@@ -46,6 +50,8 @@ Example expressions:
 Usage:
 * `Alt+\` - toggle
 * `Esc` - close
+* When adding a shortcut, either enter an app name or a shell command (`> open /Users/ventsislavg`)
+<img width="469" alt="image" src="https://user-images.githubusercontent.com/5616486/151606628-5ccd37ad-00f3-405d-9693-8d27bb63d4d4.png">
 
 ### Clipboard History
 <img width="467" alt="image" src="https://user-images.githubusercontent.com/5616486/149509926-b787e092-e4a0-4af1-8050-9052c12fce32.png">
