@@ -21,6 +21,11 @@ import (
 var icon []byte
 
 func main() {
+	if os.Getenv("ENV") == "local" {
+		core.Run(icon)
+		return
+	}
+
 	overseer.Run(overseer.Config{
 		Program: app,
 		Address: "localhost:13003",

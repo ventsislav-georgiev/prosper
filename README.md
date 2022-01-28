@@ -34,6 +34,7 @@ Example expressions:
 * unit `1 year to minutes` => `525960 minutes`
 * apps `o iTerm` => opens iTerm
 * shell `> say "hello world"` => executes command (`say` will read the text aloud on macOS)
+* in settings (`:s`) when adding a shortcut a shell command may be used by using the shell syntax `> open /Users/ventsislavg`
 
 <br/>
 

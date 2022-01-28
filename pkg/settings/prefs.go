@@ -5,9 +5,11 @@ import (
 	"sync"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/theme"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers/exec"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
+	"github.com/ventsislav-georgiev/prosper/pkg/shell"
 )
 
 const shortcutsStore = "shortcuts.json"
@@ -18,6 +20,7 @@ var (
 
 type shortcut struct {
 	ExecInfo        *exec.Info
+	ShellCommand    *string
 	Command         *Command
 	KeyNames        []fyne.KeyName
 	DisplayKeyNames string
@@ -97,6 +100,9 @@ func (e shortcut) ID() string {
 	if e.ExecInfo != nil {
 		return e.ExecInfo.Filepath()
 	}
+	if e.ShellCommand != nil {
+		return *e.ShellCommand
+	}
 	return e.Command.ID
 }
 
@@ -104,15 +110,22 @@ func (e shortcut) Name() string {
 	if e.ExecInfo != nil {
 		return e.ExecInfo.DisplayName
 	}
+	if e.ShellCommand != nil {
+		return *e.ShellCommand
+	}
 	return e.Command.Name
 }
 
 func (e shortcut) Icon() (icon []byte) {
 	if e.ExecInfo != nil {
 		_, icon, _, _ = open.EvalApp(*e.ExecInfo)
-	} else {
-		icon = e.Command.icon()
+		return
 	}
+	if e.ShellCommand != nil {
+		icon = theme.ComputerIcon().Content()
+		return
+	}
+	icon = e.Command.icon()
 	return
 }
 
@@ -121,7 +134,13 @@ func (e shortcut) Run() {
 		e.ExecInfo.Exec()
 		return
 	}
-
+	if e.ShellCommand != nil {
+		_, _, exec, err := shell.Eval(*e.ShellCommand)
+		if err == nil {
+			exec()
+		}
+		return
+	}
 	e.Command.run()
 }
 

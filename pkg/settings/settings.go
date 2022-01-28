@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -54,7 +55,7 @@ func Show() {
 	execList := container.NewVBox()
 	for _, k := range sortKey {
 		for _, v := range s {
-			if v.DisplayKeyNames == k && v.ExecInfo != nil {
+			if v.DisplayKeyNames == k && (v.ExecInfo != nil || v.ShellCommand != nil) {
 				addListItem(w, execList, v, true, false)
 			}
 		}
@@ -105,22 +106,30 @@ func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
 	results := container.NewHBox(iconContainer, out)
 
 	in.OnChanged = func(s string) {
-		iconContainer.Hide()
+		if strings.HasPrefix(s, "> ") {
+			iconContainer.Hide()
+			r.Set("Execute command")
+			return
+		}
 
 		app, err := open.FindApp(s)
 		if err != nil {
 			r.Set(err.Error())
+			iconContainer.Hide()
 			return
 		}
 
 		res, icon, _, err := open.EvalApp(app)
 		if err != nil {
 			r.Set(err.Error())
+			iconContainer.Hide()
 			return
 		}
 		if icon != nil {
 			i.SetResource(fyne.NewStaticResource(res, icon))
 			iconContainer.Show()
+		} else {
+			iconContainer.Hide()
 		}
 		r.Set(res)
 	}
@@ -134,19 +143,24 @@ func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
 	c2.Hide()
 
 	p := widget.NewModalPopUp(container.NewVBox(c1, c2), w.Canvas())
-	p.Resize(fyne.NewSize(200, 0))
+	p.Resize(fyne.NewSize(300, 0))
 	p.Show()
 	p.Canvas.Focus(in)
 
-	var execInfo exec.Info
+	var execInfo *exec.Info
+	var shellCommand *string
 	in.OnSubmitted = func(s string) {
-		app, err := open.FindApp(s)
-		if err != nil {
-			w.Canvas().Overlays().Remove(p)
-			return
-		}
+		if strings.HasPrefix(s, "> ") {
+			shellCommand = &s
+		} else {
+			app, err := open.FindApp(s)
+			if err != nil {
+				w.Canvas().Overlays().Remove(p)
+				return
+			}
 
-		execInfo = app
+			execInfo = &app
+		}
 
 		c1.Hide()
 		c2.Show()
@@ -161,7 +175,8 @@ func addShortcutView(w fyne.Window, listContainer *fyne.Container) {
 		defer w.Canvas().Overlays().Remove(p)
 
 		v := shortcut{
-			ExecInfo:        &execInfo,
+			ExecInfo:        execInfo,
+			ShellCommand:    shellCommand,
 			KeyNames:        keysInput.keyNames,
 			DisplayKeyNames: keysInput.KeyNames(),
 		}
