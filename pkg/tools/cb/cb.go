@@ -164,12 +164,7 @@ func Show() {
 			}
 		}
 
-		objectsCopy := make([]fyne.CanvasObject, len(list.Objects))
-		objectsCopy = append(objectsCopy, list.Objects...)
-		for _, v := range objectsCopy {
-			list.Remove(v)
-		}
-
+		list.Objects = make([]fyne.CanvasObject, 0, histViewCount)
 		populateList(results, list, copyAndClose)
 	}
 

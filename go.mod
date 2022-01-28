@@ -3,7 +3,7 @@ module github.com/ventsislav-georgiev/prosper
 go 1.17
 
 replace (
-	fyne.io/fyne/v2 => github.com/ventsislav-georgiev/fyne/v2 v2.1.3-0.20220112202425-5687da65ff10
+	fyne.io/fyne/v2 => github.com/ventsislav-georgiev/fyne/v2 v2.1.3-0.20220128154656-089ec03e6ed6
 	github.com/blacktop/lzfse-cgo => github.com/ventsislav-georgiev/lzfse-cgo v1.1.17-0.20220102053312-50b37453a738
 	github.com/go-gl/glfw/v3.3/glfw => github.com/ventsislav-georgiev/glfw/v3.3/glfw v0.0.0-20211227121345-369db807f73d
 	github.com/iineva/bom => github.com/ventsislav-georgiev/bom v0.0.0-20220102051948-0e6a1a4b3c30
@@ -19,6 +19,7 @@ require (
 	github.com/groob/plist v0.0.0-20210519001750-9f754062e6d6
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/iineva/bom v0.0.0-20210605043415-7d45ba1bcca3
+	github.com/jpillora/overseer v1.1.6
 	github.com/parsiya/golnk v0.0.0-20200515071614-5db3107130ce
 	github.com/pkg/profile v1.6.0
 	github.com/sahilm/fuzzy v0.1.0
@@ -42,7 +43,6 @@ require (
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
 	github.com/goki/freetype v0.0.0-20181231101311-fa8a33aabaff // indirect
 	github.com/google/go-cmp v0.5.6 // indirect
-	github.com/jpillora/overseer v1.1.6 // indirect
 	github.com/jpillora/s3 v1.1.4 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect

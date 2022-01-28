@@ -24,13 +24,13 @@ jobs:
       - name: build-darwin
         run: make build-darwin VERSION=$(echo ${GITHUB_REF/refs\/tags\/v/})
       - name: zip
-        run: cd dist && zip -r Prosper-darwin.zip Prosper.app
+        run: cd dist && zip -r Prosper-darwin-amd64.zip Prosper.app
       - name: release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            dist/Prosper-darwin.zip
-            dist/bin-darwin.gz
+            dist/Prosper-darwin-amd64.zip
+            dist/bin-darwin-amd64.gz
 
   windows:
     runs-on: windows-latest

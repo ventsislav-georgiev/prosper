@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/profile"
 	"github.com/ventsislav-georgiev/prosper/pkg/core"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
+	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 )
 
 //go:embed icon.png
@@ -27,7 +28,11 @@ func main() {
 			Repo:     "prosper",
 			Interval: 15 * time.Minute,
 			Asset: func(filename string) bool {
-				return strings.HasPrefix(filename, "bin-"+runtime.GOOS)
+				binName := "bin-" + runtime.GOOS
+				if helpers.IsDarwin {
+					binName += "-" + runtime.GOARCH
+				}
+				return strings.HasPrefix(filename, binName)
 			},
 		},
 	})

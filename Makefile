@@ -11,8 +11,8 @@ build-darwin: info
 	@fyne package -os darwin -name ${NAME} -appVersion ${VERSION} -appID ${ID} -icon icon.png -release \
 	&& plutil -insert LSUIElement -bool true ${NAME}.app/Contents/Info.plist \
 	&& mkdir -p dist && mv ${NAME}.app dist/${NAME}.app \
-	&& cp dist/${NAME}.app/Contents/MacOS/prosper dist/bin-darwin \
-	&& gzip dist/bin-darwin
+	&& cp dist/${NAME}.app/Contents/MacOS/prosper dist/bin-darwin-$(shell go env GOARCH) \
+	&& gzip dist/bin-darwin-$(shell go env GOARCH)
 
 .PHONY: build-windows
 build-windows: info
