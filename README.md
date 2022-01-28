@@ -42,6 +42,11 @@ Example expressions:
 
 <br/>
 
+Disabling of the auto-updates:
+* create an empty file in the user dir `touch ~/.prosper-no-updates`
+
+<br/>
+
 ## Features
 
 ### Global Shortcuts
