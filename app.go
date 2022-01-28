@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"flag"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -21,7 +22,15 @@ import (
 var icon []byte
 
 func main() {
-	if os.Getenv("ENV") == "local" {
+	withUpdater := true
+
+	dir, err := os.UserHomeDir()
+	if err == nil {
+		_, err := os.Stat(filepath.Join(dir, ".prosper-no-updates"))
+		withUpdater = err != nil
+	}
+
+	if !withUpdater || os.Getenv("ENV") == "local" {
 		core.Run(icon)
 		return
 	}
