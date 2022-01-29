@@ -74,6 +74,19 @@ Usage:
 * `Alt+/` - toggle
 * `Esc` - close
 
+### Numi Integration (MacOS only)
+
+If you have [Numi](https://numi.app) installed, running and have enabled the integration API in Numi's setttings:
+
+<img width="220" alt="image" src="https://user-images.githubusercontent.com/5616486/151655468-b72e68d6-4d28-4cbe-81dc-044662fdfd78.png">
+
+<br/>
+
+then `Numi` expressions can be used:
+<img width="220" alt="image" src="https://user-images.githubusercontent.com/5616486/151655485-aa186981-5a0b-447d-91aa-08808e928ad1.png">
+<img width="220" alt="image" src="https://user-images.githubusercontent.com/5616486/151655512-611f8f46-0782-4144-8d6f-f9ad13db31b7.png">
+
+
 <br/>
 
 ## License

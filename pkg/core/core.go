@@ -18,6 +18,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers/fyneh"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers/osh"
 	"github.com/ventsislav-georgiev/prosper/pkg/mathexpr"
+	"github.com/ventsislav-georgiev/prosper/pkg/numi"
 	"github.com/ventsislav-georgiev/prosper/pkg/open"
 	"github.com/ventsislav-georgiev/prosper/pkg/settings"
 	"github.com/ventsislav-georgiev/prosper/pkg/shell"
@@ -157,6 +158,7 @@ func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Containe
 		tools.Eval,
 		open.Eval,
 		shell.Eval,
+		numi.Eval,
 		mathexpr.Eval,
 		currency.Eval,
 		units.Eval,
