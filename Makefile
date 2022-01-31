@@ -18,16 +18,16 @@ build-darwin: info
 build-windows: info
 	@fyne package -os windows -name ${NAME} -appVersion ${VERSION} -appID ${ID} -icon icon.png -release \
 	&& mkdir -p dist && mv ${NAME}.exe dist/${NAME}.exe \
-	&& cp dist/${NAME}.exe dist/bin-windows \
-	&& gzip dist/bin-windows
+	&& cp dist/${NAME}.exe dist/bin-windows-$(shell go env GOARCH) \
+	&& gzip dist/bin-windows-$(shell go env GOARCH)
 
 .PHONY: build-linux
 build-linux: info
 	@fyne package -os linux -name ${NAME} -appVersion ${VERSION} -appID ${ID} -icon icon.png -release \
-	&& mkdir -p dist && mv ${NAME}.tar.xz dist/${NAME}-linux.tar.xz \
-	&& tar -xf dist/Prosper-linux.tar.xz usr/local/bin/prosper \
-	&& mv usr/local/bin/prosper dist/bin-linux \
-	&& gzip dist/bin-linux
+	&& mkdir -p dist && mv ${NAME}.tar.xz dist/${NAME}-linux-$(shell go env GOARCH).tar.xz \
+	&& tar -xf dist/${NAME}-linux-$(shell go env GOARCH).tar.xz usr/local/bin/prosper \
+	&& mv usr/local/bin/prosper dist/bin-linux-$(shell go env GOARCH) \
+	&& gzip dist/bin-linux-$(shell go env GOARCH)
 
 .PHONY: install-darwin
 install-darwin: build-darwin

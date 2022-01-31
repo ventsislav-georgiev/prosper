@@ -14,7 +14,6 @@ import (
 	"github.com/pkg/profile"
 	"github.com/ventsislav-georgiev/prosper/pkg/core"
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
-	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers/archh"
 )
 
@@ -43,10 +42,7 @@ func main() {
 			Repo:     "prosper",
 			Interval: 15 * time.Minute,
 			Asset: func(filename string) bool {
-				binName := "bin-" + runtime.GOOS
-				if helpers.IsDarwin {
-					binName += "-" + archh.Arch
-				}
+				binName := "bin-" + runtime.GOOS + "-" + archh.Arch
 				return strings.HasPrefix(filename, binName)
 			},
 		},

@@ -48,13 +48,13 @@ jobs:
         shell: bash
         run: make build-windows VERSION=$(echo ${GITHUB_REF/refs\/tags\/v/})
       - name: zip
-        run: cd dist && Compress-Archive Prosper.exe Prosper-windows.zip
+        run: cd dist && Compress-Archive Prosper.exe Prosper-windows-amd64.zip
       - name: release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            dist/Prosper-windows.zip
-            dist/bin-windows.gz
+            dist/Prosper-windows-amd64.zip
+            dist/bin-windows-amd64.gz
 
   linux:
     runs-on: ubuntu-latest
@@ -74,5 +74,5 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            dist/Prosper-linux.tar.xz
-            dist/bin-linux.gz
+            dist/Prosper-linux-amd64.tar.xz
+            dist/bin-linux-amd64.gz
