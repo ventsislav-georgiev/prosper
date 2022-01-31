@@ -33,9 +33,9 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	defer resp.Body.Close()
 	o, err := io.ReadAll(resp.Body)
 
-	if string(o) != "" {
-		icon = numiIcon
+	if string(o) == "" {
+		return "", nil, nil, helpers.ErrSkip
 	}
 
-	return string(o), icon, nil, nil
+	return string(o), numiIcon, nil, nil
 }
