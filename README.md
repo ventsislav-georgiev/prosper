@@ -18,6 +18,24 @@ Supports: Mac, Windows and Linux
 
 <br/>
 
+## Install
+
+### Download pre-built binary
+Check releases and download the appropriate `Prosper-$OS-$ARCH` archive for your platfrom.
+
+### Manual from sources
+The app is based on [fyne](https://github.com/fyne-io/fyne).
+
+Follow prerequisites here: https://developer.fyne.io/started/#prerequisites (for Windows I recommend using TDM-GCC)
+
+Then you can install directly from the source code using the Fyne command as follows:
+```
+go install fyne.io/fyne/v2/cmd/fyne@latest
+fyne get github.com/ventsislav-georgiev/prosper
+```
+
+<br/>
+
 ## Preview
 <img width="567" alt="image" src="https://user-images.githubusercontent.com/5616486/147394501-8d2f5a72-b3b7-44c0-bbea-7537fdece378.gif">
 
