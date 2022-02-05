@@ -20,7 +20,7 @@ Supports: Mac, Windows and Linux
 
 ## Install
 
-### Download pre-built binary
+### Download pre-built binary (unsigned)
 Check releases and download the appropriate `Prosper-$OS-$ARCH` archive for your platfrom.
 
 ### Manual from sources
