@@ -22,6 +22,7 @@ var (
 type openWindow struct {
 	Window  fyne.GLFWWindow
 	Focused *helpers.AtomicBool
+	Bag     map[string]interface{}
 }
 
 func hideApp(targetWindow fyne.GLFWWindow) {
@@ -34,7 +35,7 @@ func hideApp(targetWindow fyne.GLFWWindow) {
 	go targetWindow.RunOnMain(windowh.HideApp)
 }
 
-func NewWindow(windowName string, createWin func() fyne.GLFWWindow) (w fyne.GLFWWindow, onClose func(), onFocus func(focused bool)) {
+func NewWindow(windowName string, createWin func() fyne.GLFWWindow, closeOnFocused bool) (w fyne.GLFWWindow, onClose func(), onFocus func(focused bool), existing bool, bag map[string]interface{}) {
 	_onClose := func(w fyne.GLFWWindow) {
 		openWindows.Delete(windowName)
 		hideApp(w)
@@ -43,13 +44,13 @@ func NewWindow(windowName string, createWin func() fyne.GLFWWindow) (w fyne.GLFW
 	v, ok := openWindows.Load(windowName)
 	if ok {
 		w := v.(openWindow)
-		if w.Focused.Get() {
+		if w.Focused.Get() && closeOnFocused {
 			_onClose(w.Window)
 			w.Window.Close()
 		} else {
 			w.Window.Show()
 		}
-		return nil, nil, nil
+		return w.Window, nil, nil, true, w.Bag
 	}
 
 	if createWin != nil {
@@ -82,7 +83,8 @@ func NewWindow(windowName string, createWin func() fyne.GLFWWindow) (w fyne.GLFW
 		w.Close()
 	})
 
-	openWindows.Store(windowName, openWindow{Window: w, Focused: shouldClose})
+	bag = make(map[string]interface{})
+	openWindows.Store(windowName, openWindow{Window: w, Focused: shouldClose, Bag: bag})
 	return
 }
 

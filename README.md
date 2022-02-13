@@ -77,9 +77,10 @@ Usage:
 <img width="467" alt="image" src="https://user-images.githubusercontent.com/5616486/149509926-b787e092-e4a0-4af1-8050-9052c12fce32.png">
 
 Usage:
-* `Shift+Alt+A` - toggle
+* `Shift+Alt+A` - show window and switch selection
+* `Enter` to select the highlighted clip
 * `1, 2, 3 .. to 0 keys` - select a clip
-* Filter clip by fuzzy search and press `Enter` to select the top clip
+* Filter clip by fuzzy search
 * `Esc` - close
 
 ### Base64 Encode/Decode

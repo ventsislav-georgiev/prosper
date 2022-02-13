@@ -14,8 +14,8 @@ const (
 )
 
 func Show() {
-	w, onClose, _ := global.NewWindow(WindowName, nil)
-	if w == nil {
+	w, onClose, _, existing, _ := global.NewWindow(WindowName, nil, true)
+	if existing {
 		return
 	}
 	w.CenterOnScreen()

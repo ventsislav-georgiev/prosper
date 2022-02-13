@@ -54,8 +54,9 @@ func init() {
 }
 
 func Show() {
-	w, onClose, _ := global.NewWindow(WindowName, nil)
-	if w == nil {
+	w, onClose, _, existing, bag := global.NewWindow(WindowName, nil, false)
+	if existing {
+		bag["updateSelection"].(func())()
 		return
 	}
 	w.CenterOnScreen()
@@ -122,15 +123,30 @@ func Show() {
 	w.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) { onTypedKey(ke, 0) })
 	w.SetCloseIntercept(close)
 
+	selection := 0
+
 	filter := &fyneh.InputEntry{}
 	filter.ExtendBaseWidget(filter)
 	filter.SetPlaceHolder("Filter...")
 	filter.OnEsc = close
 	filter.OnSubmitted = func(s string) {
-		copyAndClose(0)
+		copyAndClose(selection)
 	}
 
 	list := container.NewVBox()
+
+	bag["updateSelection"] = func() {
+		selection++
+		if selection == 10 {
+			selection = 0
+		}
+		if results[selection] == "" {
+			selection = 0
+		}
+		list.Objects = make([]fyne.CanvasObject, 0, histViewCount)
+		populateList(results, list, copyAndClose, selection)
+	}
+
 	history := cbHistory
 	if len(cbHistory) > histViewCount {
 		history = cbHistory[:histViewCount]
@@ -145,9 +161,10 @@ func Show() {
 		}
 	}
 	results = lruResults
-	populateList(lruResults, list, copyAndClose)
+	populateList(lruResults, list, copyAndClose, selection)
 
 	onChanged := func(s string) {
+		selection = 0
 		if s == "" {
 			results = lruResults
 		} else if len(s) == 1 && s[0] >= 48 && s[0] <= 57 && onTypedKey(nil, int(s[0]-48)) {
@@ -165,7 +182,7 @@ func Show() {
 		}
 
 		list.Objects = make([]fyne.CanvasObject, 0, histViewCount)
-		populateList(results, list, copyAndClose)
+		populateList(results, list, copyAndClose, selection)
 	}
 
 	changeCh := make(chan string)
@@ -195,7 +212,19 @@ var (
 		SizeName:  theme.SizeNameCaptionText,
 		TextStyle: fyne.TextStyle{Italic: true, Monospace: true},
 	}
+	selectedIndexStyle = widget.RichTextStyle{
+		ColorName: theme.ColorNameForeground,
+		Inline:    false,
+		SizeName:  theme.SizeNameCaptionText,
+		TextStyle: fyne.TextStyle{Italic: true, Monospace: true},
+	}
 	clipStyle = widget.RichTextStyle{
+		ColorName: theme.ColorNamePlaceHolder,
+		Inline:    false,
+		SizeName:  theme.SizeNameCaptionText,
+		TextStyle: fyne.TextStyle{Monospace: true},
+	}
+	selectedClipStyle = widget.RichTextStyle{
 		ColorName: theme.ColorNameForeground,
 		Inline:    false,
 		SizeName:  theme.SizeNameCaptionText,
@@ -203,7 +232,7 @@ var (
 	}
 )
 
-func populateList(history []string, list *fyne.Container, copyAndClose func(i int) bool) {
+func populateList(history []string, list *fyne.Container, copyAndClose func(i int) bool, selection int) {
 	newLabel := func(t string, style widget.RichTextStyle) *widget.RichText {
 		w := widget.NewRichText(&widget.TextSegment{
 			Text:  t,
@@ -221,7 +250,14 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 			n = "0"
 		}
 
-		indexContainer := container.New(fyneh.NewFixedLayout(numbersSize, elementsOffset, elementsOffset), newLabel(n, indexStyle))
+		istyle := indexStyle
+		cstyle := clipStyle
+		if i == selection {
+			istyle = selectedIndexStyle
+			cstyle = selectedClipStyle
+		}
+
+		indexContainer := container.New(fyneh.NewFixedLayout(numbersSize, elementsOffset, elementsOffset), newLabel(n, istyle))
 
 		var clip string
 		if v != "" {
@@ -232,7 +268,7 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 			clip = strings.Join(lines, "↵")
 		}
 
-		clipContainer := fyneh.NewFixedContainer(newLabel(clip, clipStyle), 5, elementsOffset)
+		clipContainer := fyneh.NewFixedContainer(newLabel(clip, cstyle), 5, elementsOffset)
 		clipContainer.SetMinSize(clipSize)
 		clipContainer.OnTapped = func(i int) func() {
 			return func() {

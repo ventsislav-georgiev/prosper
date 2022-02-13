@@ -23,8 +23,8 @@ const (
 )
 
 func Show() {
-	w, _, _ := global.NewWindow(WindowName, nil)
-	if w == nil {
+	w, _, _, existing, _ := global.NewWindow(WindowName, nil, true)
+	if existing {
 		return
 	}
 	w.CenterOnScreen()
