@@ -23,41 +23,42 @@ require (
 	github.com/parsiya/golnk v0.0.0-20200515071614-5db3107130ce
 	github.com/pkg/profile v1.6.0
 	github.com/sahilm/fuzzy v0.1.0
-	github.com/srwiley/oksvg v0.0.0-20200311192757-870daf9aa564
-	github.com/srwiley/rasterx v0.0.0-20200120212402-85cb7272f5e9
+	github.com/srwiley/oksvg v0.0.0-20220128195007-1f435e4c2b44
+	github.com/srwiley/rasterx v0.0.0-20220128185129-2efea2b9ea41
 	github.com/tc-hib/winres v0.1.6
-	golang.design/x/clipboard v0.5.3
+	golang.design/x/clipboard v0.6.0
 	golang.design/x/hotkey v0.3.0
 	yrh.dev/icns v0.0.0-20210608051050-de3ea6a57b33
 )
 
 require (
-	github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d // indirect
-	github.com/bcicen/bfstree v0.0.0-20180121191807-11ea469698a6 // indirect
+	github.com/StackExchange/wmi v1.2.1 // indirect
+	github.com/bcicen/bfstree v0.0.0-20200329162357-95f698fa66f9 // indirect
 	github.com/blacktop/lzfse-cgo v1.1.17-0.20210807041049-183fba3c3f10 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fredbi/uri v0.0.0-20181227131451-3dcfdacbaaf3 // indirect
-	github.com/fsnotify/fsnotify v1.4.9 // indirect
-	github.com/go-gl/gl v0.0.0-20210813123233-e4099ee2221f // indirect
+	github.com/fsnotify/fsnotify v1.5.1 // indirect
+	github.com/go-gl/gl v0.0.0-20211210172815-726fda9656d6 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/godbus/dbus/v5 v5.0.4 // indirect
-	github.com/goki/freetype v0.0.0-20181231101311-fa8a33aabaff // indirect
-	github.com/google/go-cmp v0.5.6 // indirect
+	github.com/godbus/dbus/v5 v5.0.6 // indirect
+	github.com/goki/freetype v0.0.0-20220119013949-7a161fd3728c // indirect
+	github.com/google/go-cmp v0.5.7 // indirect
 	github.com/jpillora/s3 v1.1.4 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/mattn/go-runewidth v0.0.9 // indirect
+	github.com/mattn/go-runewidth v0.0.13 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/stretchr/testify v1.7.0 // indirect
-	github.com/yuin/goldmark v1.3.8 // indirect
-	golang.org/x/exp v0.0.0-20190731235908-ec7cb31e5a56 // indirect
+	github.com/yuin/goldmark v1.4.6 // indirect
+	golang.org/x/exp/shiny v0.0.0-20220212023102-3e31098684e2 // indirect
 	golang.org/x/image v0.0.0-20211028202545-6944b10bf410 // indirect
-	golang.org/x/mobile v0.0.0-20210716004757-34ab1303b554 // indirect
-	golang.org/x/net v0.0.0-20210423184538-5f58ad60dda6 // indirect
-	golang.org/x/sys v0.0.0-20211123173158-ef496fb156ab // indirect
-	golang.org/x/text v0.3.6 // indirect
+	golang.org/x/mobile v0.0.0-20220112015953-858099ff7816 // indirect
+	golang.org/x/net v0.0.0-20220127200216-cd36cc0744dd // indirect
+	golang.org/x/sys v0.0.0-20220209214540-3681064d5158 // indirect
+	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
