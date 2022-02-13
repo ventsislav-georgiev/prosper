@@ -1,4 +1,4 @@
-<img align="left" width="115px" height="115px" src="icon.png">
+<img align="left" width="115px" height="115px" src="Icon.png">
 
 # Prosper
 

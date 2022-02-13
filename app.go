@@ -17,7 +17,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers/archh"
 )
 
-//go:embed icon.png
+//go:embed Icon.png
 var icon []byte
 
 func main() {

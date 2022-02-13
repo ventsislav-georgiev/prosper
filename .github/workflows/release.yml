@@ -67,7 +67,9 @@ jobs:
       - name: install fyne
         run: go install fyne.io/fyne/v2/cmd/fyne@latest
       - name: deps
-        run: sudo apt install -y xorg-dev
+        run: |
+          sudo apt update
+          sudo apt install -y xorg-dev
       - name: build-linux
         run: make build-linux VERSION=$(echo ${GITHUB_REF/refs\/tags\/v/})
       - name: release

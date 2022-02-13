@@ -39,7 +39,7 @@ func Run(icon []byte) {
 
 	app := app.NewWithID("com.ventsislav-georgiev.prosper")
 	global.App = app
-	app.SetIcon(fyne.NewStaticResource("icon.png", icon))
+	app.SetIcon(fyne.NewStaticResource("Icon.png", icon))
 
 	drv, ok := app.Driver().(desktop.Driver)
 	if !ok {
