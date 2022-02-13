@@ -1,12 +1,16 @@
 package apps
 
 import (
+	"bufio"
 	"bytes"
 	"image"
 	"image/png"
+	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/groob/plist"
 	"github.com/iineva/bom/pkg/asset"
@@ -65,15 +69,21 @@ func findRecursive(dir string, level int) FuzzySource {
 
 func ExtractIcon(app exec.Info) (icon []byte, err error) {
 	appPath := filepath.Join(app.Path, app.Filename)
+	infoPlistPath := findInfoPList(appPath)
 
-	info, err := ioutil.ReadFile(filepath.Join(appPath, "Contents", "Info.plist"))
+	if infoPlistPath == "" {
+		return nil, nil
+	}
+
+	info, err := ioutil.ReadFile(filepath.Join(infoPlistPath, "Info.plist"))
 	if err != nil {
 		return nil, nil
 	}
 
 	var bundleHeader struct {
-		CFBundleIconFile string `plist:"CFBundleIconFile"`
-		CFBundleIconName string `plist:"CFBundleIconName"`
+		CFBundleIconFile string                 `plist:"CFBundleIconFile"`
+		CFBundleIconName string                 `plist:"CFBundleIconName"`
+		CFBundleIcons    map[string]interface{} `plist:"CFBundleIcons"`
 	}
 
 	err = plist.Unmarshal(info, &bundleHeader)
@@ -81,12 +91,15 @@ func ExtractIcon(app exec.Info) (icon []byte, err error) {
 		return nil, err
 	}
 
-	if bundleHeader.CFBundleIconFile == "" && bundleHeader.CFBundleIconName == "" {
+	if bundleHeader.CFBundleIconFile == "" && bundleHeader.CFBundleIconName == "" && bundleHeader.CFBundleIcons == nil {
 		return nil, nil
 	}
 
 	var img image.Image
-	resPath := filepath.Join(app.Path, app.Filename, "Contents", "Resources")
+	resPath := filepath.Join(infoPlistPath, "Resources")
+	if _, err := os.Stat(resPath); err != nil {
+		resPath = infoPlistPath
+	}
 
 	if bundleHeader.CFBundleIconFile != "" {
 		if filepath.Ext(bundleHeader.CFBundleIconFile) == "" {
@@ -97,6 +110,18 @@ func ExtractIcon(app exec.Info) (icon []byte, err error) {
 
 	if img == nil && bundleHeader.CFBundleIconName != "" {
 		img, err = getIconFromAssetsCar(bundleHeader.CFBundleIconName, resPath)
+	}
+
+	if img == nil && bundleHeader.CFBundleIcons != nil {
+		if primaryIcon, ok := bundleHeader.CFBundleIcons["CFBundlePrimaryIcon"]; ok {
+			if primaryIconData, ok := primaryIcon.(map[string]interface{}); ok {
+				if nameData, ok := primaryIconData["CFBundleIconName"]; ok {
+					if name, ok := nameData.(string); ok {
+						img, err = getIconFromFile(resPath, name)
+					}
+				}
+			}
+		}
 	}
 
 	if err != nil || img == nil {
@@ -110,6 +135,30 @@ func ExtractIcon(app exec.Info) (icon []byte, err error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+func findInfoPList(root string) string {
+	if _, err := os.Stat(filepath.Join(root, "Info.plist")); err == nil {
+		return root
+	}
+
+	var infoPath string
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if d.IsDir() {
+			if _, err := os.Stat(filepath.Join(path, "Info.plist")); err == nil {
+				infoPath = path
+				return io.EOF
+			}
+		}
+
+		return nil
+	})
+
+	return infoPath
 }
 
 func getIconFromIcns(cfBundleIconFile string, resPath string) (img image.Image, err error) {
@@ -150,4 +199,30 @@ func getIconFromAssetsCar(cfBundleIconName string, resPath string) (img image.Im
 	}
 
 	return a.Image(cfBundleIconName)
+}
+
+func getIconFromFile(path string, name string) (img image.Image, err error) {
+	var imgFile *os.File
+	entries, err := os.ReadDir(path)
+
+	for i := len(entries) - 1; i > 0; i-- {
+		e := entries[i]
+		if e.IsDir() || !strings.HasPrefix(e.Name(), name) {
+			continue
+		}
+
+		imgFile, err = os.Open(filepath.Join(path, e.Name()))
+		if err != nil {
+			continue
+		}
+
+		defer imgFile.Close()
+
+		img, _, err = image.Decode(bufio.NewReader(imgFile))
+		if err == nil {
+			return
+		}
+	}
+
+	return
 }

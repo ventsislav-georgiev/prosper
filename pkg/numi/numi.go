@@ -17,7 +17,7 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 		return "", nil, nil, helpers.ErrSkip
 	}
 
-	resp, err := http.DefaultClient.Get("http://localhost:15055?q=" + url.PathEscape(expr))
+	resp, err := http.DefaultClient.Get("http://localhost:15055?q=" + url.PathEscape(expr) + " ")
 	if err != nil {
 		return "", nil, nil, helpers.ErrSkip
 	}
