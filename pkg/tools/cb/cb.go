@@ -56,7 +56,7 @@ func init() {
 func Show() {
 	w, onClose, _, existing, bag := global.NewWindow(WindowName, nil, false)
 	if existing {
-		bag["updateSelection"].(func())()
+		bag["updateSelection"].(func(int))(1)
 		return
 	}
 	w.CenterOnScreen()
@@ -123,7 +123,29 @@ func Show() {
 	w.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) { onTypedKey(ke, 0) })
 	w.SetCloseIntercept(close)
 
+	list := container.NewVBox()
 	selection := 0
+	updateSelection := func(direction int) {
+		selection += direction
+		if selection == 10 {
+			selection = 0
+		}
+		if selection < 0 {
+			lastIndex := len(results) - 1
+			for i := lastIndex; i >= 0; i-- {
+				selection = i
+				if results[selection] != "" {
+					break
+				}
+			}
+		}
+		if results[selection] == "" {
+			selection = 0
+		}
+		list.Objects = make([]fyne.CanvasObject, 0, histViewCount)
+		populateList(results, list, copyAndClose, selection)
+	}
+	bag["updateSelection"] = updateSelection
 
 	filter := &fyneh.InputEntry{}
 	filter.ExtendBaseWidget(filter)
@@ -132,19 +154,16 @@ func Show() {
 	filter.OnSubmitted = func(s string) {
 		copyAndClose(selection)
 	}
-
-	list := container.NewVBox()
-
-	bag["updateSelection"] = func() {
-		selection++
-		if selection == 10 {
-			selection = 0
+	filter.OnTypedKey = func(ke *fyne.KeyEvent) bool {
+		if ke.Name == fyne.KeyUp {
+			updateSelection(-1)
+			return true
 		}
-		if results[selection] == "" {
-			selection = 0
+		if ke.Name == fyne.KeyDown {
+			updateSelection(1)
+			return true
 		}
-		list.Objects = make([]fyne.CanvasObject, 0, histViewCount)
-		populateList(results, list, copyAndClose, selection)
+		return false
 	}
 
 	history := cbHistory
