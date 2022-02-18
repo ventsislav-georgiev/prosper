@@ -1,80 +1,152 @@
 name: Release
 on:
+  schedule:
+    - cron: "0 10 * * *"
   push:
+    branches: [develop]
     tags:
       - "v*.*.*"
+  workflow_dispatch: ~
+
+env:
+  APP_VER: 0.0.0
 
 jobs:
-  release:
+  create_release:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v2
       - uses: softprops/action-gh-release@v1
 
-  darwin:
-    runs-on: macos-latest
-    needs: release
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-go@v2
-        with:
-          go-version: "1.17.5"
-      - name: install fyne
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
-      - name: build-darwin
-        run: make build-darwin VERSION=$(echo ${GITHUB_REF/refs\/tags\/v/})
-      - name: zip
-        run: cd dist && zip -r Prosper-darwin-amd64.zip Prosper.app
-      - name: release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            dist/Prosper-darwin-amd64.zip
-            dist/bin-darwin-amd64.gz
-
-  windows:
-    runs-on: windows-latest
-    needs: release
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-go@v2
-        with:
-          go-version: "1.17.5"
-      - name: install gzip
-        run: choco install gzip
-      - name: install fyne
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
-      - name: build-windows
-        shell: bash
-        run: make build-windows VERSION=$(echo ${GITHUB_REF/refs\/tags\/v/})
-      - name: zip
-        run: cd dist && Compress-Archive Prosper.exe Prosper-windows-amd64.zip
-      - name: release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            dist/Prosper-windows-amd64.zip
-            dist/bin-windows-amd64.gz
-
-  linux:
+  build_artifacts:
     runs-on: ubuntu-latest
-    needs: release
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-go@v2
         with:
-          go-version: "1.17.5"
-      - name: install fyne
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
-      - name: deps
+          go-version: "1.17.6"
+
+      - name: cache docker
+        id: docker-cache
+        uses: actions/cache@v1
+        env:
+          cache-name: cache-docker
+        with:
+          path: |
+            ~/.cache/docker
+          key: ${{ runner.os }}-docker-v1-cli_tools_13.2
+          restore-keys: |
+            ${{ runner.os }}-docker-
+
+      - name: cache go dependencies
+        id: go-deps
+        uses: actions/cache@v1
+        env:
+          cache-name: cache-go-deps
+        with:
+          path: ~/go
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: cache go build artifacts
+        uses: actions/cache@v1
+        env:
+          cache-name: cache-go-artifacts
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-go-artifacts-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-artifacts-
+
+      - name: cache fyne-cross
+        uses: actions/cache@v1
+        env:
+          cache-name: cache-fyne-cross
+        with:
+          path: ~/.cache/fyne-cross
+          key: ${{ runner.os }}-fyne-cross-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-fyne-cross-
+
+      - name: get darwin image
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.cache/docker
+          cd ~/.cache/docker && wget -O fyne-cross-1.1-darwin.tar.gz ${{secrets.REMOTE_HOST}}/files/fyne-cross-1.1-darwin.tar.gz?token=${{secrets.SRV_TOKEN}}
+          cd ~/.cache/docker && docker load < fyne-cross-1.1-darwin.tar.gz
+
+      - name: load darwin image
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: |
+          cd ~/.cache/docker && docker load < fyne-cross-1.1-darwin.tar.gz
+
+      - name: get fyne-cross
+        if: steps.go-deps.outputs.cache-hit != 'true'
+        run: |
+          go install github.com/fyne-io/fyne-cross@latest
+
+      - name: get upx
         run: |
           sudo apt update
-          sudo apt install -y xorg-dev
-      - name: build-linux
-        run: make build-linux VERSION=$(echo ${GITHUB_REF/refs\/tags\/v/})
+          sudo apt install upx-ucl
+
+      - name: build
+        run: |
+          tag=$(echo ${GITHUB_REF/refs\/tags\/v/})
+          if [ ${#tag} -lt 7 ]; then export APP_VER=${tag}; fi
+          echo "building v${APP_VER}"
+
+          fyne-cross darwin -arch=amd64,arm64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}"
+          fyne-cross linux -arch=amd64,arm64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}" -release
+          fyne-cross windows -arch=amd64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}"
+
+      - name: list binaries
+        run: |
+          find fyne-cross
+
+      - name: decrease distribution size
+        run: |
+          cp fyne-cross/dist/darwin-amd64/Prosper.app/Contents/MacOS/Prosper fyne-cross/bin/darwin-amd64/bin-darwin-amd64
+          cp fyne-cross/dist/darwin-arm64/Prosper.app/Contents/MacOS/Prosper fyne-cross/bin/darwin-arm64/bin-darwin-arm64
+          upx fyne-cross/bin/darwin-*/*
+          upx fyne-cross/bin/linux-*/*
+          upx fyne-cross/bin/windows-*/*
+
+      - name: prepare release artifacts
+        run: |
+          gzip fyne-cross/bin/darwin-amd64/bin-darwin-amd64
+          gzip fyne-cross/bin/darwin-arm64/bin-darwin-arm64
+          cd fyne-cross/dist/darwin-amd64 && zip -r Prosper-darwin-amd64.zip Prosper.app && cd ../../..
+          cd fyne-cross/dist/darwin-arm64 && zip -r Prosper-darwin-arm64.zip Prosper.app && cd ../../..
+
+          gzip fyne-cross/bin/linux-amd64/Prosper && mv fyne-cross/bin/linux-amd64/Prosper.gz fyne-cross/bin/linux-amd64/bin-linux-amd64.gz
+          gzip fyne-cross/bin/linux-arm64/Prosper && mv fyne-cross/bin/linux-arm64/Prosper.gz fyne-cross/bin/linux-arm64/bin-linux-arm64.gz
+          mv fyne-cross/dist/linux-amd64/Prosper.tar.xz fyne-cross/dist/linux-amd64/Prosper-linux-amd64.tar.xz
+          mv fyne-cross/dist/linux-arm64/Prosper.tar.xz fyne-cross/dist/linux-arm64/Prosper-linux-arm64.tar.xz
+
+          mv fyne-cross/bin/windows-amd64/Prosper fyne-cross/bin/windows-amd64/Prosper.exe && gzip fyne-cross/bin/windows-amd64/Prosper.exe && mv fyne-cross/bin/windows-amd64/Prosper.exe.gz fyne-cross/bin/windows-amd64/bin-windows-amd64.gz
+          mv fyne-cross/dist/windows-amd64/Prosper.zip fyne-cross/dist/windows-amd64/Prosper-windows-amd64.zip
+
+      - name: list all
+        run: |
+          find fyne-cross
+
       - name: release
+        if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            dist/Prosper-linux-amd64.tar.xz
-            dist/bin-linux-amd64.gz
+            fyne-cross/bin/darwin-amd64/bin-darwin-amd64.gz
+            fyne-cross/bin/darwin-arm64/bin-darwin-arm64.gz
+            fyne-cross/dist/darwin-amd64/Prosper-darwin-amd64.zip
+            fyne-cross/dist/darwin-arm64/Prosper-darwin-arm64.zip
+
+            fyne-cross/bin/linux-amd64/bin-linux-amd64.gz
+            fyne-cross/bin/linux-arm64/bin-linux-arm64.gz
+            fyne-cross/dist/linux-amd64/Prosper-linux-amd64.tar.xz
+            fyne-cross/dist/linux-arm64/Prosper-linux-arm64.tar.xz
+
+            fyne-cross/bin/windows-amd64/bin-windows-amd64.gz
+            fyne-cross/dist/windows-amd64/Prosper-windows-amd64.zip
