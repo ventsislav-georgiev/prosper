@@ -1,7 +1,11 @@
 package core
 
 import (
+	"bufio"
 	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -33,9 +37,7 @@ var (
 
 func Run(icon []byte) {
 	os.Setenv("FYNE_THEME", "dark")
-	if helpers.IsDarwin {
-		os.Setenv("FYNE_SCALE", "1.3")
-	}
+	updateScale()
 
 	app := app.NewWithID("com.ventsislav-georgiev.prosper")
 	global.App = app
@@ -150,6 +152,56 @@ func createRunnerWindow(drv desktop.Driver) {
 			}
 		})
 	})
+}
+
+func updateScale() {
+	if helpers.IsDarwin {
+		os.Setenv("FYNE_SCALE", "1.3")
+		return
+	}
+
+	if helpers.IsLinux {
+		homeDir, _ := os.UserHomeDir()
+		if homeDir == "" {
+			return
+		}
+		file, err := os.Open(filepath.Join(homeDir, ".config/monitors.xml"))
+		if err != nil {
+			return
+		}
+
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		scaleRegEx := regexp.MustCompile(`.*?scale\>(?P<scale>.*?)\<.*`)
+		primaryRegEx := regexp.MustCompile(`.*?primary\>(?P<primary>.*?)\<.*`)
+
+		var scale string
+		var primary bool
+		for scanner.Scan() {
+			text := scanner.Text()
+			scaleMatch := scaleRegEx.FindStringSubmatch(text)
+			if len(scaleMatch) == 2 {
+				scale = scaleMatch[1]
+			}
+			primaryMatch := primaryRegEx.FindStringSubmatch(text)
+			if len(primaryMatch) == 2 && primaryMatch[1] == "yes" {
+				primary = true
+			}
+			if scale != "" && primary {
+				break
+			}
+			if strings.Contains(text, "</logicalmonitor>") {
+				scale = ""
+			}
+		}
+
+		if scale == "" {
+			scale = "1"
+		}
+
+		os.Setenv("FYNE_SCALE", scale)
+	}
 }
 
 func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Container, onEnter *struct{ fn func() }) func(expr string) {
