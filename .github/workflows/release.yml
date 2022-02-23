@@ -1,7 +1,5 @@
 name: Release
 on:
-  schedule:
-    - cron: "0 10 * * *"
   push:
     branches: [develop]
     tags:
