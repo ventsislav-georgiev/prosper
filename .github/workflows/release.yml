@@ -83,7 +83,7 @@ jobs:
       - name: get fyne-cross
         if: steps.go-deps.outputs.cache-hit != 'true'
         run: |
-          go install github.com/fyne-io/fyne-cross@latest
+          go install github.com/fyne-io/fyne-cross@v1.1.3
 
       - name: get upx
         run: |
