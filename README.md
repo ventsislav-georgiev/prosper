@@ -20,6 +20,12 @@ Supports: Mac, Windows and Linux
 
 ## Install
 
+### macOS
+
+```
+wget https://github.com/ventsislav-georgiev/prosper/releases/latest/download/Prosper-darwin-arm64.zip && unzip Prosper-darwin-arm64.zip && cp -rf Prosper.app /Applications/ && rm -rf Prosper-darwin-arm64.zip; rm -rf Prosper.app
+```
+
 ### Download pre-built binary (unsigned)
 Check releases and download the appropriate `Prosper-$OS-$ARCH` archive for your platfrom.
 
