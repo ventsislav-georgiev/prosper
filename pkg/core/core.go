@@ -217,21 +217,14 @@ func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Containe
 		translate.Eval,
 	}
 
-	inflight := false
-	drop := false
-
-	fn := func(expr string) {
+	fn := func(expr string, cancel *helpers.AtomicBool) {
 		defer func() { recover() }()
 
-		if inflight {
-			drop = true
+		if cancel.Get() {
+			return
 		}
 
-		inflight = true
-
 		if len(expr) < 2 {
-			inflight = false
-			drop = false
 			iconContainer.Hide()
 			r.Set("")
 			return
@@ -240,15 +233,13 @@ func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Containe
 		for _, fn := range evals {
 			res, icon, enterFn, err := fn(expr)
 
-			if drop {
-				drop = false
+			if cancel.Get() {
 				return
 			}
 
 			onEnter.fn = enterFn
 
 			if err == nil {
-				inflight = false
 				if icon != nil {
 					i.SetResource(fyne.NewStaticResource(res, icon))
 					iconContainer.Show()
@@ -260,10 +251,18 @@ func getOnChanged(r binding.String, i *widget.Icon, iconContainer *fyne.Containe
 			}
 		}
 
-		inflight = false
 		iconContainer.Hide()
 		r.Set("")
 	}
 
-	return func(expr string) { go fn(expr) }
+	var cancel *helpers.AtomicBool
+
+	return func(expr string) {
+		if cancel != nil {
+			cancel.Set(true)
+		}
+
+		cancel = helpers.NewAtomicBool(false)
+		go fn(expr, cancel)
+	}
 }

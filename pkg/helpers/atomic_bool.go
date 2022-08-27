@@ -6,6 +6,14 @@ type AtomicBool struct {
 	Val int32
 }
 
+func NewAtomicBool(v bool) *AtomicBool {
+	var i int32
+	if v {
+		i = 1
+	}
+	return &AtomicBool{Val: i}
+}
+
 func (b *AtomicBool) Get() bool {
 	return atomic.LoadInt32(&b.Val) == 1
 }
