@@ -260,7 +260,8 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 			}
 		}(i)
 
-		list.Add(clipContainer)
+		item := container.NewBorder(nil, nil, nil, nil, clipContainer)
+		list.Add(item)
 	}
 }
 
