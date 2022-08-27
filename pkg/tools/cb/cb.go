@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"image/color"
-	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -66,7 +65,7 @@ func Show() {
 		cell.TextStyle.Monospace = true
 		height := cell.MinSize().Height * linesPerClip
 		numbersSize = fyne.Size{Width: 0, Height: height}
-		clipSize = fyne.Size{Width: 400, Height: height}
+		clipSize = fyne.Size{Width: 450, Height: height}
 	}
 
 	var cbHistory clipHistory
@@ -99,25 +98,12 @@ func Show() {
 	}
 
 	onTypedKey := func(k *fyne.KeyEvent, i int) bool {
-		var err error
-
-		if k != nil {
-			if k.Name == fyne.KeyEscape {
-				go close()
-				return true
-			}
-
-			i, err = strconv.Atoi(string(k.Name))
-			if err != nil {
-				return false
-			}
+		if k == nil || k.Name != fyne.KeyEscape {
+			return false
 		}
 
-		i--
-		if i == -1 {
-			i = 9
-		}
-		return copyAndClose(i)
+		go close()
+		return true
 	}
 
 	w.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) { onTypedKey(ke, 0) })
@@ -225,18 +211,6 @@ func Show() {
 }
 
 var (
-	indexStyle = widget.RichTextStyle{
-		ColorName: theme.ColorNamePlaceHolder,
-		Inline:    false,
-		SizeName:  theme.SizeNameCaptionText,
-		TextStyle: fyne.TextStyle{Italic: true, Monospace: true},
-	}
-	selectedIndexStyle = widget.RichTextStyle{
-		ColorName: theme.ColorNameForeground,
-		Inline:    false,
-		SizeName:  theme.SizeNameCaptionText,
-		TextStyle: fyne.TextStyle{Italic: true, Monospace: true},
-	}
 	clipStyle = widget.RichTextStyle{
 		ColorName: theme.ColorNamePlaceHolder,
 		Inline:    false,
@@ -264,19 +238,10 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 	var elementsOffset float32 = -9
 
 	for i, v := range history {
-		n := strconv.Itoa(i + 1)
-		if i == 9 {
-			n = "0"
-		}
-
-		istyle := indexStyle
 		cstyle := clipStyle
 		if i == selection {
-			istyle = selectedIndexStyle
 			cstyle = selectedClipStyle
 		}
-
-		indexContainer := container.New(fyneh.NewFixedLayout(numbersSize, elementsOffset, elementsOffset), newLabel(n, istyle))
 
 		var clip string
 		if v != "" {
@@ -287,7 +252,7 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 			clip = strings.Join(lines, "↵")
 		}
 
-		clipContainer := fyneh.NewFixedContainer(newLabel(clip, cstyle), 5, elementsOffset)
+		clipContainer := fyneh.NewFixedContainer(newLabel(clip, cstyle), 0, elementsOffset)
 		clipContainer.SetMinSize(clipSize)
 		clipContainer.OnTapped = func(i int) func() {
 			return func() {
@@ -295,13 +260,7 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 			}
 		}(i)
 
-		item := container.NewBorder(nil, nil,
-			indexContainer,
-			nil,
-			clipContainer,
-		)
-
-		list.Add(item)
+		list.Add(clipContainer)
 	}
 }
 

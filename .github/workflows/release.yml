@@ -72,7 +72,7 @@ jobs:
         if: steps.docker-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.cache/docker
-          cd ~/.cache/docker && wget -O fyne-cross-1.1-darwin.tar.gz ${{secrets.REMOTE_HOST}}/files/fyne-cross-1.1-darwin.tar.gz?token=${{secrets.SRV_TOKEN}}
+          cd ~/.cache/docker && wget -q -O fyne-cross-1.1-darwin.tar.gz ${{secrets.REMOTE_HOST}}/files/fyne-cross-1.1-darwin.tar.gz?token=${{secrets.SRV_TOKEN}}
           cd ~/.cache/docker && docker load < fyne-cross-1.1-darwin.tar.gz
 
       - name: load darwin image
