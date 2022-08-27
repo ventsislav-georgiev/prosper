@@ -7,6 +7,7 @@ import (
 	"github.com/ventsislav-georgiev/prosper/pkg/global"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
 	"github.com/ventsislav-georgiev/prosper/pkg/settings"
+	"github.com/ventsislav-georgiev/prosper/version"
 )
 
 func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
@@ -24,6 +25,8 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 		return "Quit", theme.LogoutIcon().Content(), func() { global.Quit() }, nil
 	case ":s":
 		return "Settings", theme.SettingsIcon().Content(), func() { settings.Show() }, nil
+	case ":v":
+		return version.Value, theme.InfoIcon().Content(), nil, nil
 	}
 
 	return "", nil, nil, nil
