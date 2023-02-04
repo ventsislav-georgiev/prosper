@@ -22,7 +22,7 @@ const (
 	WindowName    = "Clipboard History"
 	histViewCount = 10
 	linesPerClip  = 1
-	maxHistory    = 1000
+	maxHistory    = 300
 )
 
 var (
@@ -70,9 +70,10 @@ func Show() {
 
 	var cbHistory clipHistory
 	if lruCache != nil {
-		cbHistory = lruCache.Keys()
-		for i, j := 0, len(cbHistory)-1; i < j; i, j = i+1, j-1 {
-			cbHistory[i], cbHistory[j] = cbHistory[j], cbHistory[i]
+		keys := lruCache.Keys()
+		cbHistory = make([]interface{}, len(keys))
+		for i, j := len(keys)-1, 0; i >= 0; i, j = i-1, j+1 {
+			cbHistory[j] = keys[i]
 		}
 	} else {
 		cbHistory = make([]interface{}, 0)
@@ -235,7 +236,7 @@ func populateList(history []string, list *fyne.Container, copyAndClose func(i in
 		return w
 	}
 
-	var elementsOffset float32 = -9
+	var elementsOffset float32 = -5
 
 	for i, v := range history {
 		cstyle := clipStyle
