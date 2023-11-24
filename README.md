@@ -12,7 +12,6 @@ Also includes:
 * [Clipboard History](#clipboard-history)
 * [Base64 Encode/Decode](#base64-encodedecode)
 * [Numi Integration](#numi-integration-macos-only)
-* [Automatic Updates](#automatic-updates)
 
 Supports: Mac, Windows and Linux
 
@@ -115,13 +114,6 @@ then `Numi` expressions can be used:
 <img width="300" alt="image" src="https://user-images.githubusercontent.com/5616486/151655485-aa186981-5a0b-447d-91aa-08808e928ad1.png">
 
 <img width="300" alt="image" src="https://user-images.githubusercontent.com/5616486/151655512-611f8f46-0782-4144-8d6f-f9ad13db31b7.png">
-
-### Automatic Updates
-
-`Prosper` will periodically check for new releases via the Github API. They will be silently downloaded and the app will restart.
-
-#### Turn Off
-In order to disable the automatic updates, create an empty file in the user dir `touch ~/.prosper-no-updates` and restart `Prosper`
 
 <br/>
 
