@@ -19,7 +19,6 @@ require (
 	github.com/groob/plist v0.0.0-20220217120414-63fa881b19a5
 	github.com/hashicorp/golang-lru v0.5.1
 	github.com/iineva/bom v0.0.0-20210605043415-7d45ba1bcca3
-	github.com/jpillora/overseer v1.1.6
 	github.com/parsiya/golnk v0.0.0-20200515071614-5db3107130ce
 	github.com/pkg/profile v1.7.0
 	github.com/sahilm/fuzzy v0.1.0
@@ -33,7 +32,6 @@ require (
 
 require (
 	fyne.io/systray v1.10.1-0.20221115204952-d16a6177e6f1 // indirect
-	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/bcicen/bfstree v1.0.0 // indirect
 	github.com/benoitkugler/textlayout v0.3.0 // indirect
 	github.com/blacktop/lzfse-cgo v1.1.17-0.20210807041049-183fba3c3f10 // indirect
@@ -45,14 +43,12 @@ require (
 	github.com/fyne-io/glfw-js v0.0.0-20220120001248-ee7290d23504 // indirect
 	github.com/fyne-io/image v0.0.0-20220602074514-4956b0afb3d2 // indirect
 	github.com/go-gl/gl v0.0.0-20211210172815-726fda9656d6 // indirect
-	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-text/typesetting v0.0.0-20221212183139-1eb938670a1f // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/goki/freetype v0.0.0-20220119013949-7a161fd3728c // indirect
 	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/google/pprof v0.0.0-20230131232505-5a9e8f65f08f // indirect
 	github.com/gopherjs/gopherjs v1.17.2 // indirect
-	github.com/jpillora/s3 v1.1.4 // indirect
 	github.com/jsummers/gobmp v0.0.0-20151104160322-e2ba15ffa76e // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect

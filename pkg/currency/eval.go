@@ -1,6 +1,7 @@
 package currency
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -35,7 +36,12 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 		return "", nil, nil, helpers.ErrSkip
 	}
 
-	resp, err := http.DefaultClient.Get(fmt.Sprintf("https://api.exchangerate.host/convert?from=%s&to=%s&amount=%s", parts[1], parts[3], parts[0]))
+	key, err := base64.StdEncoding.DecodeString("Yjk4YTFhZDA4MzJmNDE3NDFlMGFhNDcxYWU0NDliYzk=")
+	if err != nil {
+		return err.Error(), nil, nil, nil
+	}
+
+	resp, err := http.DefaultClient.Get(fmt.Sprintf("http://api.exchangerate.host/convert?from=%s&to=%s&amount=%s&access_key=%s", parts[1], parts[3], parts[0], key))
 	if err != nil {
 		return err.Error(), nil, nil, nil
 	}
