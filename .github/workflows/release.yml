@@ -10,36 +10,30 @@ env:
   APP_VER: 0.0.0
 
 jobs:
-  create_release:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
-    steps:
-      - uses: actions/checkout@v2
-      - uses: softprops/action-gh-release@v1
-
-  build_artifacts:
+  release:
+    name: Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-go@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.21"
 
-      - name: cache docker
-        id: docker-cache
-        uses: actions/cache@v1
+      - name: Cache SDKs
+        id: sdks-cache
+        uses: actions/cache@v3
         env:
-          cache-name: cache-docker
+          cache-name: cache-sdks
         with:
           path: |
-            ~/.cache/docker
-          key: ${{ runner.os }}-docker-v1-cli_tools_13.2
+            ~/.cache/SDKs
+          key: ${{ runner.os }}-1.4-darwin-14.3.1
           restore-keys: |
-            ${{ runner.os }}-docker-
+            ${{ runner.os }}-sdks-
 
-      - name: cache go dependencies
+      - name: Cache go dependencies
         id: go-deps
-        uses: actions/cache@v1
+        uses: actions/cache@v3
         env:
           cache-name: cache-go-deps
         with:
@@ -48,8 +42,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: cache go build artifacts
-        uses: actions/cache@v1
+      - name: Cache go build artifacts
+        uses: actions/cache@v3
         env:
           cache-name: cache-go-artifacts
         with:
@@ -58,8 +52,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-artifacts-
 
-      - name: cache fyne-cross
-        uses: actions/cache@v1
+      - name: Cache fyne-cross
+        uses: actions/cache@v3
         env:
           cache-name: cache-fyne-cross
         with:
@@ -68,43 +62,44 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-fyne-cross-
 
-      - name: get darwin image
-        if: steps.docker-cache.outputs.cache-hit != 'true'
+      - name: Get Darwin SDKs
+        if: steps.sdks-cache.outputs.cache-hit != 'true'
         run: |
-          mkdir -p ~/.cache/docker
-          cd ~/.cache/docker && wget -q -O fyne-cross-1.1-darwin.tar.gz ${{secrets.REMOTE_HOST}}/files/fyne-cross-1.1-darwin.tar.gz?token=${{secrets.SRV_TOKEN}}
-          cd ~/.cache/docker && docker load < fyne-cross-1.1-darwin.tar.gz
+          mkdir -p ~/.cache/SDKs
+          cd ~/.cache/SDKs
+          echo "Downloading SDKs"
+          wget -O SDKs-1.4-darwin-14.3.1.tar.gz --no-check-certificate ${{secrets.REMOTE_HOST}}/files/SDKs-1.4-darwin-14.3.1.tar.gz?token=${{secrets.SRV_TOKEN}}
+          echo "Extracting SDKs"
+          tar -xzf SDKs-1.4-darwin-14.3.1.tar.gz
+          rm SDKs-1.4-darwin-14.3.1.tar.gz
+          echo "Listing SDKs"
+          ls -la
 
-      - name: load darwin image
-        if: steps.docker-cache.outputs.cache-hit == 'true'
-        run: |
-          cd ~/.cache/docker && docker load < fyne-cross-1.1-darwin.tar.gz
-
-      - name: get fyne-cross
+      - name: Install fyne-cross
         if: steps.go-deps.outputs.cache-hit != 'true'
         run: |
-          go install github.com/fyne-io/fyne-cross@v1.1.3
+          go install github.com/fyne-io/fyne-cross@v1.4.0
 
-      - name: get upx
+      - name: Install upx
         run: |
           sudo apt update
           sudo apt install upx-ucl
 
-      - name: build
+      - name: Build
         run: |
           tag=$(echo ${GITHUB_REF/refs\/tags\/v/})
           if [ ${#tag} -lt 7 ]; then export APP_VER=${tag}; fi
           echo "building v${APP_VER}"
 
-          fyne-cross darwin -arch=amd64,arm64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}"
+          fyne-cross darwin -arch=amd64,arm64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}" --macosx-sdk-path ~/.cache/SDKs/MacOSX.sdk
           fyne-cross linux -arch=amd64,arm64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}" -release
           fyne-cross windows -arch=amd64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}"
 
-      - name: list binaries
+      - name: List binaries
         run: |
           find fyne-cross
 
-      - name: decrease distribution size
+      - name: Decrease distribution size
         run: |
           cp fyne-cross/dist/darwin-amd64/Prosper.app/Contents/MacOS/Prosper fyne-cross/bin/darwin-amd64/bin-darwin-amd64
           cp fyne-cross/dist/darwin-arm64/Prosper.app/Contents/MacOS/Prosper fyne-cross/bin/darwin-arm64/bin-darwin-arm64
@@ -112,7 +107,7 @@ jobs:
           upx fyne-cross/bin/linux-*/*
           upx fyne-cross/bin/windows-*/*
 
-      - name: prepare release artifacts
+      - name: Prepare release artifacts
         run: |
           gzip fyne-cross/bin/darwin-amd64/bin-darwin-amd64
           gzip fyne-cross/bin/darwin-arm64/bin-darwin-arm64
@@ -127,11 +122,14 @@ jobs:
           mv fyne-cross/bin/windows-amd64/Prosper fyne-cross/bin/windows-amd64/Prosper.exe && gzip fyne-cross/bin/windows-amd64/Prosper.exe && mv fyne-cross/bin/windows-amd64/Prosper.exe.gz fyne-cross/bin/windows-amd64/bin-windows-amd64.gz
           mv fyne-cross/dist/windows-amd64/Prosper.zip fyne-cross/dist/windows-amd64/Prosper-windows-amd64.zip
 
-      - name: list all
+      - name: List all
         run: |
           find fyne-cross
 
-      - name: release
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+
+      - name: Upload release artifacts
         if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
