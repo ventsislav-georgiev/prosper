@@ -27,7 +27,7 @@ jobs:
         with:
           path: |
             ~/.cache/SDKs
-          key: ${{ runner.os }}-1.4-darwin-14.3.1
+          key: ${{ runner.os }}-1.1-darwin
           restore-keys: |
             ${{ runner.os }}-sdks-
 
@@ -62,23 +62,35 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-fyne-cross-
 
-      - name: Get Darwin SDKs
+      # - name: Get Darwin SDKs
+      #   if: steps.sdks-cache.outputs.cache-hit != 'true'
+      #   run: |
+      #     mkdir -p ~/.cache/SDKs
+      #     cd ~/.cache/SDKs
+      #     echo "Downloading SDKs"
+      #     wget -O fyne-cross-1.4-darwin-14.3.1.tar.gz --no-check-certificate ${{secrets.REMOTE_HOST}}/files/fyne-cross-1.4-darwin-14.3.1.tar.gz?token=${{secrets.SRV_TOKEN}}
+      #     echo "Extracting SDKs"
+      #     tar -xzf fyne-cross-1.4-darwin-14.3.1.tar.gz
+      #     rm fyne-cross-1.4-darwin-14.3.1.tar.gz
+      #     echo "Listing SDKs"
+      #     ls -la
+
+      - name: Get Darwin Image
         if: steps.sdks-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.cache/SDKs
-          cd ~/.cache/SDKs
-          echo "Downloading SDKs"
-          wget -O SDKs-1.4-darwin-14.3.1.tar.gz --no-check-certificate ${{secrets.REMOTE_HOST}}/files/SDKs-1.4-darwin-14.3.1.tar.gz?token=${{secrets.SRV_TOKEN}}
-          echo "Extracting SDKs"
-          tar -xzf SDKs-1.4-darwin-14.3.1.tar.gz
-          rm SDKs-1.4-darwin-14.3.1.tar.gz
-          echo "Listing SDKs"
-          ls -la
+          cd ~/.cache/SDKs && wget -q -O fyne-cross-1.1-darwin.tar.gz --no-check-certificate ${{secrets.REMOTE_HOST}}/files/fyne-cross-1.1-darwin.tar.gz?token=${{secrets.SRV_TOKEN}}
+          cd ~/.cache/SDKs && docker load < fyne-cross-1.1-darwin.tar.gz
+
+      - name: Load darwin image
+        if: steps.sdks-cache.outputs.cache-hit == 'true'
+        run: |
+          cd ~/.cache/SDKs && docker load < fyne-cross-1.1-darwin.tar.gz
 
       - name: Install fyne-cross
         if: steps.go-deps.outputs.cache-hit != 'true'
         run: |
-          go install github.com/fyne-io/fyne-cross@v1.4.0
+          go install github.com/fyne-io/fyne-cross@v1.1.3
 
       - name: Install upx
         run: |
@@ -91,7 +103,7 @@ jobs:
           if [ ${#tag} -lt 7 ]; then export APP_VER=${tag}; fi
           echo "building v${APP_VER}"
 
-          fyne-cross darwin -arch=amd64,arm64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}" --macosx-sdk-path ~/.cache/SDKs/MacOSX.sdk
+          fyne-cross darwin -arch=amd64,arm64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}"
           fyne-cross linux -arch=amd64,arm64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}" -release
           fyne-cross windows -arch=amd64 -name=Prosper -app-id=com.ventsislav-georgiev.prosper -app-version="${APP_VER}"
 

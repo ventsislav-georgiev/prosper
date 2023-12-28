@@ -19,6 +19,9 @@ Supports: Mac, Windows and Linux
 
 ## Install
 
+### Download pre-built binary (unsigned)
+Check releases and download the appropriate `Prosper-$OS-$ARCH` archive for your platfrom.
+
 ### macOS ARM
 
 ```
@@ -30,9 +33,6 @@ wget https://github.com/ventsislav-georgiev/prosper/releases/latest/download/Pro
 ```
 wget https://github.com/ventsislav-georgiev/prosper/releases/latest/download/Prosper-darwin-amd64.zip && ditto -x -k Prosper-darwin-amd64.zip ./ && cp -rf Prosper.app /Applications/ && rm -rf Prosper-darwin-amd64.zip; rm -rf Prosper.app
 ```
-
-### Download pre-built binary (unsigned)
-Check releases and download the appropriate `Prosper-$OS-$ARCH` archive for your platfrom.
 
 ### Manual from sources
 The app is based on [fyne](https://github.com/fyne-io/fyne).

@@ -22,12 +22,12 @@ jobs:
         id: xcode-cli-tools-cache
         uses: actions/cache@v3
         env:
-          cache-name: cache-cli_tools_14.3.1
+          cache-name: cache-cli_tools_15.1
         with:
           path: ~/.cache/xcode
-          key: ${{ runner.os }}-cli_tools_14.3.1
+          key: ${{ runner.os }}-cli_tools_15.1
           restore-keys: |
-            ${{ runner.os }}-cli_tools_14.3.1
+            ${{ runner.os }}-cli_tools_15.1
 
       - name: Cache SDKs
         id: sdks-cache
@@ -37,7 +37,7 @@ jobs:
         with:
           path: |
             ~/.cache/SDKs
-          key: ${{ runner.os }}-1.4-darwin-clt-14.3.1
+          key: ${{ runner.os }}-1.1-darwin-15.1
           restore-keys: |
             ${{ runner.os }}-sdks-
 
@@ -48,22 +48,22 @@ jobs:
       - name: Install fyne-cross
         run: |
           go install fyne.io/fyne/v2/cmd/fyne@latest
-          go install github.com/fyne-io/fyne-cross@v1.4.0
+          go install github.com/fyne-io/fyne-cross@v1.1.3
 
       - name: Get xcode cli tools
         if: steps.xcode-cli-tools-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.cache/xcode
-          cd ~/.cache/xcode && wget -O Command_Line_Tools_for_Xcode_14.3.1.dmg --no-check-certificate ${{secrets.REMOTE_HOST}}/files/Command_Line_Tools_for_Xcode_14.3.1.dmg?token=${{secrets.SRV_TOKEN}}
+          cd ~/.cache/xcode && wget -O Command_Line_Tools_for_Xcode_15.1.dmg --no-check-certificate ${{secrets.REMOTE_HOST}}/files/Command_Line_Tools_for_Xcode_15.1.dmg?token=${{secrets.SRV_TOKEN}}
 
       - name: Install brew deps
-        if: steps.sdks-cache.outputs.cache-hit != 'true'
+        # if: steps.sdks-cache.outputs.cache-hit != 'true'
         run: |
           brew install docker colima
 
       - name: Start colima
         id: start-colima
-        if: steps.sdks-cache.outputs.cache-hit != 'true'
+        # if: steps.sdks-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         run: |
           colima start
@@ -71,17 +71,20 @@ jobs:
       - name: Extract SDKs
         id: extract-sdks
         continue-on-error: true
-        if: steps.sdks-cache.outputs.cache-hit != 'true' && steps.start-colima.outcome == 'success'
+        if: steps.start-colima.outcome == 'success'
+        # run: |
+          # sudo xcode-select -s /Applications/Xcode_15.1.app/Contents/Developer
+          # fyne-cross darwin-sdk-extract --xcode-path ~/.cache/xcode/Command_Line_Tools_for_Xcode_15.1.dmg --pull=false 
+          # cd ~/.cache/xcode/SDKs
+          # tar -czf fyne-cross-1.4-darwin-15.1.tar.gz *
+          # mv fyne-cross-1.4-darwin-15.1.tar.gz ~/.cache/SDKs
+          # rm -rf ~/.cache/xcode/SDKs
         run: |
-          sudo xcode-select -s /Applications/Xcode_14.3.1.app/Contents/Developer
-          fyne-cross darwin-sdk-extract --xcode-path ~/.cache/xcode/Command_Line_Tools_for_Xcode_14.3.1.dmg --pull=false 
-          cd ~/.cache/xcode/SDKs
-          tar -czf SDKs-1.4-darwin-14.3.1.tar.gz *
-          mkdir -p ~/.cache/SDKs
-          mv SDKs-1.4-darwin-14.3.1.tar.gz ~/.cache/SDKs
-          rm -rf ~/.cache/xcode/SDKs
+          fyne-cross darwin-image --xcode-path ~/.cache/xcode/Command_Line_Tools_for_Xcode_15.1.dmg
+          mkdir -p ~/.cache/SDKs && cd ~/.cache/SDKs
+          docker save fyneio/fyne-cross:1.1-darwin | gzip > fyne-cross-1.1-darwin-15.1.tar.gz
 
       - name: Send image
         if: steps.sdks-cache.outputs.cache-hit == 'true' || steps.extract-sdks.outcome == 'success'
         run: |
-          cd ~/.cache/SDKs && curl -k -Ffile=@SDKs-1.4-darwin-14.3.1.tar.gz ${{secrets.REMOTE_HOST}}/upload?token=${{secrets.SRV_TOKEN}}
+          cd ~/.cache/SDKs && curl -k -Ffile=@fyne-cross-1.1-darwin-15.1.tar.gz ${{secrets.REMOTE_HOST}}/upload?token=${{secrets.SRV_TOKEN}}
