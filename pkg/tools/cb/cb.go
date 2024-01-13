@@ -32,6 +32,21 @@ var (
 	clipSize    fyne.Size
 )
 
+var (
+	clipStyle = widget.RichTextStyle{
+		ColorName: theme.ColorNamePlaceHolder,
+		Inline:    false,
+		SizeName:  theme.SizeNameCaptionText,
+		TextStyle: fyne.TextStyle{Monospace: true},
+	}
+	selectedClipStyle = widget.RichTextStyle{
+		ColorName: theme.ColorNameForeground,
+		Inline:    false,
+		SizeName:  theme.SizeNameCaptionText,
+		TextStyle: fyne.TextStyle{Monospace: true},
+	}
+)
+
 func init() {
 	var err error
 
@@ -129,8 +144,23 @@ func Show() {
 		if results[selection] == "" {
 			selection = 0
 		}
-		list.Objects = make([]fyne.CanvasObject, 0, histViewCount)
-		populateList(results, list, copyAndClose, selection)
+
+		for i, v := range list.Objects {
+			border := v.(*fyne.Container)
+			clipContainer := border.Objects[0].(*fyneh.FixedContainer)
+			label := clipContainer.Content.(*widget.RichText)
+			textSegment := label.Segments[0].(*widget.TextSegment)
+
+			style := clipStyle
+			if i == selection {
+				style = selectedClipStyle
+			}
+
+			if textSegment.Style != style {
+				textSegment.Style = style
+				label.Refresh()
+			}
+		}
 	}
 	bag["updateSelection"] = updateSelection
 
@@ -210,21 +240,6 @@ func Show() {
 	w.Canvas().Focus(filter)
 	w.SetFixedSize(true)
 }
-
-var (
-	clipStyle = widget.RichTextStyle{
-		ColorName: theme.ColorNamePlaceHolder,
-		Inline:    false,
-		SizeName:  theme.SizeNameCaptionText,
-		TextStyle: fyne.TextStyle{Monospace: true},
-	}
-	selectedClipStyle = widget.RichTextStyle{
-		ColorName: theme.ColorNameForeground,
-		Inline:    false,
-		SizeName:  theme.SizeNameCaptionText,
-		TextStyle: fyne.TextStyle{Monospace: true},
-	}
-)
 
 func populateList(history []string, list *fyne.Container, copyAndClose func(i int) bool, selection int) {
 	newLabel := func(t string, style widget.RichTextStyle) *widget.RichText {
