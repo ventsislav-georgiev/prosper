@@ -3,7 +3,7 @@ module github.com/ventsislav-georgiev/prosper
 go 1.18
 
 replace (
-	fyne.io/fyne/v2 => github.com/ventsislav-georgiev/fyne/v2 v2.4.4-0.20231227230520-8a2b91848190
+	fyne.io/fyne/v2 => github.com/ventsislav-georgiev/fyne/v2 v2.3.6-0.20240113141759-d3b62e10861e
 	github.com/blacktop/lzfse-cgo => github.com/ventsislav-georgiev/lzfse-cgo v1.1.17-0.20220102053312-50b37453a738
 	github.com/go-gl/glfw/v3.3/glfw => github.com/ventsislav-georgiev/glfw/v3.3/glfw v0.0.0-20230204191122-6dcb195621b6
 	github.com/iineva/bom => github.com/ventsislav-georgiev/bom v0.0.0-20220102051948-0e6a1a4b3c30
@@ -12,7 +12,7 @@ replace (
 )
 
 require (
-	fyne.io/fyne/v2 v2.4.3
+	fyne.io/fyne/v2 v2.3.5
 	github.com/Knetic/govaluate v3.0.1-0.20171022003610-9aa49832a739+incompatible
 	github.com/bcicen/go-units v1.0.5
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20231124074035-2de0cf0c80af
@@ -42,9 +42,9 @@ require (
 	github.com/fyne-io/glfw-js v0.0.0-20231117203605-bc7c6f97d52f // indirect
 	github.com/fyne-io/image v0.0.0-20230811065323-ed435dc8bca6 // indirect
 	github.com/go-gl/gl v0.0.0-20231021071112-07e5d0ea2e71 // indirect
-	github.com/go-text/render v0.0.0-20230619120952-35bccb6164b8 // indirect
 	github.com/go-text/typesetting v0.0.0-20231120180320-af78120ccb13 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/goki/freetype v0.0.0-20220119013949-7a161fd3728c // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/pprof v0.0.0-20231101202521-4ca4178f5c7a // indirect
 	github.com/gopherjs/gopherjs v1.17.2 // indirect
