@@ -3,6 +3,7 @@ package mathexpr
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/Knetic/govaluate"
 	"github.com/ventsislav-georgiev/prosper/pkg/helpers"
@@ -13,6 +14,10 @@ func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
 	if !isDigit && expr[0] != '(' {
 		return "", nil, nil, helpers.ErrSkip
 	}
+
+	expr = strings.ReplaceAll(expr, " % ", "__MOD__")
+	expr = strings.ReplaceAll(expr, "%", "/100")
+	expr = strings.ReplaceAll(expr, "__MOD__", "%")
 
 	e, err := govaluate.NewEvaluableExpression(expr)
 	if err != nil {

@@ -11,6 +11,11 @@ import (
 )
 
 func Eval(expr string) (s string, icon []byte, onEnter func(), err error) {
+	isDigit := expr[0] >= 48 && expr[0] <= 57
+	if isDigit || expr[0] != '(' {
+		return "", nil, nil, helpers.ErrSkip
+	}
+
 	parts := strings.Split(strings.ToLower(expr), " ")
 	if len(parts) < 3 {
 		return "", nil, nil, helpers.ErrSkip

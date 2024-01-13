@@ -13,7 +13,7 @@ replace (
 
 require (
 	fyne.io/fyne/v2 v2.3.5
-	github.com/Knetic/govaluate v3.0.1-0.20171022003610-9aa49832a739+incompatible
+	github.com/Knetic/govaluate v3.0.0+incompatible
 	github.com/bcicen/go-units v1.0.5
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20231124074035-2de0cf0c80af
 	github.com/groob/plist v0.0.0-20220217120414-63fa881b19a5
