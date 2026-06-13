@@ -26,8 +26,6 @@
 - **A local coding agent** — `⌥G` opens a chat window driving an on-device tool-using agent (read/edit files, run shells, MCP tools), powered by an in-process MLX model — no API key, no cloud.
 - **Extensible end to end** — Lua commands without recompiling, plus MCP servers, agent lifecycle hooks, and JS/TS plugins for the coding agent.
 
-> Successor to Prosper v1 (Go/fyne).
-
 ---
 
 ## Install
@@ -108,22 +106,6 @@ Typing `:name` also ghost-replaces with an emoji on accept.
 
 ---
 
-## QuickLinks & QuickDirs
-
-Saved URLs with `{query}` templates and saved directories with per-dir actions — browse with a prefix, create new ones inline with `ql add` / `qd add`.
-
-<p align="center"><img width="960" height="724" alt="prosper-demo-links" src="https://github.com/user-attachments/assets/c0355ae7-7311-4aac-8285-5a869d0f8152" /></p>
-
----
-
-## Translate
-
-`⌥L` (or just type a sentence) — best translation plus alternative renderings, entirely on-device. A single ambiguous word lists its candidate meanings; a full sentence picks up the context.
-
-<p align="center"><img width="960" height="724" alt="prosper-demo-translate" src="https://github.com/user-attachments/assets/3ed555fc-04ef-4db3-b637-1a13293fd500" /></p>
-
----
-
 ## Coding agent
 
 `⌥G` opens a chat window with a local, tool-using coding agent — it reads and edits files, runs shell commands, and calls MCP tools, all driven by an in-process MLX model (default **Qwen3-Coder 30B-A3B**; lighter Qwen3 variants selectable in **Settings → Agent**). No API key, no cloud round-trip — the model server is loopback-only and never exposed to the network.
@@ -135,6 +117,22 @@ Saved URLs with `{query}` templates and saved directories with per-dir actions �
 - **Real tool use** — file read/write, shell, and any MCP server you add; approvals surface inline so you stay in control of writes and commands.
 - **Run from the terminal** — `prosper agent [--cwd <dir>] <prompt…>` queues a one-shot run against the already-running app (sessions persist).
 - **Extensible** — bring your own **MCP servers** (`~/.config/prosper/mcp.json`), **lifecycle hooks** (`~/.config/prosper/hooks.json`, Claude Code-compatible schema), and **JS/TS plugins** (opencode-style, run on a sandboxed Bun host). Manage in **Settings → Agent**.
+
+---
+
+## Translate
+
+`⌥L` (or just type a sentence) — best translation plus alternative renderings, entirely on-device. A single ambiguous word lists its candidate meanings; a full sentence picks up the context.
+
+<p align="center"><img width="960" height="724" alt="prosper-demo-translate" src="https://github.com/user-attachments/assets/3ed555fc-04ef-4db3-b637-1a13293fd500" /></p>
+
+---
+
+## QuickLinks & QuickDirs
+
+Saved URLs with `{query}` templates and saved directories with per-dir actions — browse with a prefix, create new ones inline with `ql add` / `qd add`.
+
+<p align="center"><img width="960" height="724" alt="prosper-demo-links" src="https://github.com/user-attachments/assets/c0355ae7-7311-4aac-8285-5a869d0f8152" /></p>
 
 ---
 
