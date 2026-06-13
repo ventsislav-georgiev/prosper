@@ -1,0 +1,315 @@
+name: Build & Release
+
+# Builds Prosper.app from the PRIVATE source repo (ventsislav-georgiev/prosper-base),
+# signs the archive with Sparkle's EdDSA key, generates an appcast, and publishes a
+# GitHub Release HERE (the public repo). The in-app updater (Sparkle) polls this
+# repo's appcast.xml and offers new versions.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE PROTECTION — why this is safe to keep public:
+#   • Triggers are tag-push (v*) + manual dispatch ONLY. Both require WRITE access
+#     to this repo, so forks / outside contributors cannot fire the build. There is
+#     deliberately NO pull_request / pull_request_target trigger — fork PRs never
+#     receive repository secrets, so a malicious PR editing this file gets no token.
+#   • The job is gated to this exact repo, so a fork that enables Actions no-ops.
+#   • The source is cloned with actions/checkout + persist-credentials:false, so the
+#     read-only SOURCE_REPO_TOKEN is never written to disk or git config, and GitHub
+#     masks it in logs.
+#   • build/bundle stdout+stderr are redirected to a NON-uploaded log file. Public
+#     Actions logs therefore never show compiled file names or source snippets from
+#     warnings/errors. Only the release ASSETS (Prosper-<v>.zip, appcast.xml) and the
+#     source archive is NEVER uploaded anywhere — the runner is destroyed after.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Required repository secrets (set on THIS repo):
+#   SOURCE_REPO_TOKEN    — fine-grained PAT, READ-ONLY "Contents" on prosper-base ONLY
+#                          (no other scope, no other repo). Used to clone the source.
+#   SPARKLE_PRIVATE_KEY  — EdDSA private key from Sparkle's generate_keys. Matching
+#                          public key lives in scripts/Info.plist (SUPublicEDKey).
+#                          Unset → appcast published UNSIGNED (clients reject it).
+# Optional:
+#   MACOS_SIGN_CERT_P12 / MACOS_SIGN_CERT_PWD — base64 .p12 + password for a stable
+#                          code-signing identity (keeps TCC grants across updates).
+#   HOMEBREW_TAP_TOKEN   — PAT with repo write on the Homebrew tap (cask auto-bump).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  SOURCE_REPO: ventsislav-georgiev/prosper-base
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Gate to this repo so a fork enabling Actions can't run the pipeline.
+    if: ${{ github.repository == 'ventsislav-georgiev/prosper' }}
+    # macos-15 ships Xcode 16.3/16.4 (Swift 6.1+); macos-14 tops out at Swift
+    # 6.0, which can't resolve mlx-swift-lm (requires tools version 6.1).
+    runs-on: macos-15
+    steps:
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="0.0.0-dev.${GITHUB_SHA::7}"
+            TAG="v${VERSION}"
+          fi
+          # A pre-release is any version carrying a SemVer pre-release suffix
+          # (e.g. "2.55.0-beta.1"). These publish as GitHub pre-releases and get
+          # the Sparkle `beta` channel, so only opted-in users receive them.
+          if [[ "${VERSION}" == *-* ]]; then PRERELEASE=true; else PRERELEASE=false; fi
+          # The source ref to clone: the matching tag on prosper-base for a real
+          # release (reproducible, pinned), or main for a manual dispatch test.
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then SRCREF="${TAG}"; else SRCREF="main"; fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "src_ref=${SRCREF}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=${VERSION} tag=${TAG} prerelease=${PRERELEASE} src_ref=${SRCREF}"
+
+      - name: Checkout source (private)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ steps.ver.outputs.src_ref }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          # Do NOT persist the token into source/.git/config — keeps it out of
+          # reach of every later build step and out of any git remote URL.
+          persist-credentials: false
+
+      - name: Select Xcode 16 (Swift 6 toolchain)
+        id: xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_16*.app /Applications/Xcode_2*.app 2>/dev/null | sort -V | tail -n1)
+          if [[ -z "$XC" ]]; then
+            echo "::error::No Xcode 16+ found on runner"; ls -d /Applications/Xcode_*.app; exit 1
+          fi
+          echo "Selecting $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          swift --version
+          # Toolchain fingerprint so the build cache busts on any Swift/Xcode change.
+          TC=$(swift --version 2>/dev/null | tr -d ' \n' | shasum -a 256 | cut -c1-12)
+          echo "toolchain=$TC" >> "$GITHUB_OUTPUT"
+
+      - name: Cache SwiftPM build + dependencies
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          # source/app/.build holds checked-out dep sources + compiled artifacts;
+          # the swiftpm caches hold the global dependency/manifest cache. Key + path
+          # + restore-keys MUST stay byte-identical to cache-warm.yml so tagged runs
+          # (tag ref scope) restore the cache the warmer saved under the main scope.
+          path: |
+            source/app/.build
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('source/app/Package.resolved') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
+            spm-${{ runner.os }}-
+
+      - name: Build (release)
+        working-directory: source
+        run: |
+          # scripts/build.sh runs `swift build -c release` AND compiles MLX's Metal
+          # shaders. Output is redirected to a NON-uploaded log so the public Actions
+          # log never shows source file names or code snippets from warnings/errors.
+          # To debug a build failure, reproduce locally in the prosper-base repo.
+          set -o pipefail
+          if ! ./scripts/build.sh release > "$RUNNER_TEMP/build.log" 2>&1; then
+            echo "::error::Build failed. Logs withheld (would expose private source). Reproduce in prosper-base."
+            exit 1
+          fi
+          echo "Build succeeded."
+
+      - name: Import code-signing certificate
+        # Optional. With MACOS_SIGN_CERT_P12 + MACOS_SIGN_CERT_PWD set, import the
+        # cert into a throwaway keychain and export PROSPER_SIGN_IDENTITY so bundle.sh
+        # signs with a STABLE identity — macOS keys TCC grants to the signature, so a
+        # stable identity lets users keep Accessibility/Input-Monitoring across updates.
+        # Unset → bundle.sh falls back to ad-hoc signing (grant resets each update).
+        if: ${{ github.ref_type == 'tag' }}
+        env:
+          CERT_P12: ${{ secrets.MACOS_SIGN_CERT_P12 }}
+          CERT_PWD: ${{ secrets.MACOS_SIGN_CERT_PWD }}
+        run: |
+          if [[ -z "${CERT_P12}" ]]; then
+            echo "::warning::MACOS_SIGN_CERT_P12 not set — bundling with ad-hoc signature (TCC grants reset on update)."
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/prosper-signing.keychain-db"
+          KEYCHAIN_PWD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          echo "${CERT_P12}" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "${CERT_PWD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          IDENT=$(security find-identity -p codesigning "$KEYCHAIN" \
+            | awk '/Prosper Self-Signed/ {print $2; exit}')
+          if [[ -z "$IDENT" ]]; then
+            echo "::error::No code-signing identity found in imported keychain."
+            security find-identity -p codesigning "$KEYCHAIN" || true
+            exit 1
+          fi
+          echo "Imported signing identity: $IDENT (Prosper Self-Signed)"
+          echo "PROSPER_SIGN_IDENTITY=$IDENT" >> "$GITHUB_ENV"
+
+      - name: Bundle Prosper.app
+        if: ${{ github.ref_type == 'tag' }}
+        working-directory: source
+        env:
+          PROSPER_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -o pipefail
+          if ! ./scripts/bundle.sh release > "$RUNNER_TEMP/bundle.log" 2>&1; then
+            echo "::error::Bundle failed. Logs withheld (would expose private source). Reproduce in prosper-base."
+            exit 1
+          fi
+          echo "Bundle succeeded → source/dist/Prosper.app"
+
+      - name: Zip the app
+        if: ${{ github.ref_type == 'tag' }}
+        id: zip
+        working-directory: source
+        run: |
+          mkdir -p dist
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent Prosper.app "Prosper-${{ steps.ver.outputs.version }}.zip"
+          echo "zip=source/dist/Prosper-${{ steps.ver.outputs.version }}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch Sparkle signing tools
+        if: ${{ github.ref_type == 'tag' }}
+        working-directory: source
+        run: |
+          SPARKLE_VERSION=2.6.4
+          curl -L -o sparkle.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          mkdir -p sparkle-tools
+          tar -xf sparkle.tar.xz -C sparkle-tools
+
+      - name: Sign update + generate appcast
+        if: ${{ github.ref_type == 'tag' }}
+        working-directory: source
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          IS_PRERELEASE: ${{ steps.ver.outputs.is_prerelease }}
+        run: |
+          BIN=$(find sparkle-tools -name sign_update -type f | head -n1)
+          GEN=$(find sparkle-tools -name generate_appcast -type f | head -n1)
+          # Enclosure URLs point at THIS release's own asset (releases/download/<tag>/)
+          # rather than the moving "latest" path. ${GITHUB_REPOSITORY} is THIS public
+          # repo, so update URLs resolve here.
+          DL_PREFIX="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/"
+          CHANNEL_ARGS=()
+          if [[ "${IS_PRERELEASE}" == "true" ]]; then CHANNEL_ARGS=(--channel beta); fi
+          if [[ -n "${SPARKLE_PRIVATE_KEY}" && -n "${GEN}" ]]; then
+            printf '%s' "${SPARKLE_PRIVATE_KEY}" > eddsa_priv.pem
+            "${GEN}" --ed-key-file eddsa_priv.pem \
+              --download-url-prefix "${DL_PREFIX}" \
+              "${CHANNEL_ARGS[@]}" \
+              dist/
+            rm -f eddsa_priv.pem
+          else
+            echo "::warning::SPARKLE_PRIVATE_KEY not set or tools missing — publishing unsigned appcast."
+            CHANNEL_TAG=""
+            if [[ "${IS_PRERELEASE}" == "true" ]]; then CHANNEL_TAG="<sparkle:channel>beta</sparkle:channel>"; fi
+            cat > dist/appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Prosper</title>
+              <item>
+                <title>${VERSION}</title>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                ${CHANNEL_TAG}
+                <enclosure url="${DL_PREFIX}Prosper-${VERSION}.zip" sparkle:os="macos" type="application/octet-stream"/>
+              </item>
+            </channel>
+          </rss>
+          XML
+          fi
+          # Fold this build into the canonical feed (the appcast GitHub serves as
+          # "latest") so it keeps BOTH the newest stable and newest beta item.
+          curl -fsSL -o canonical.xml \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml" || true
+          python3 scripts/merge_appcast.py canonical.xml dist/appcast.xml dist/appcast.xml
+          echo "Final appcast:"; cat dist/appcast.xml
+
+      - name: Publish GitHub Release
+        if: ${{ github.ref_type == 'tag' }}
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
+          name: Prosper ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          prerelease: ${{ steps.ver.outputs.is_prerelease == 'true' }}
+          files: |
+            source/dist/Prosper-${{ steps.ver.outputs.version }}.zip
+            source/dist/appcast.xml
+
+      - name: Update stable feed with beta item
+        # A beta release is NOT "latest", so the feed at releases/latest/download/
+        # appcast.xml (which every installed client polls) wouldn't pick it up.
+        # Re-attach the merged appcast to the current latest STABLE release so
+        # opted-in beta users receive the build via the same feed URL.
+        if: ${{ github.ref_type == 'tag' && steps.ver.outputs.is_prerelease == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          STABLE=$(gh release list --exclude-pre-releases -L 1 \
+            --json tagName -q '.[0].tagName' 2>/dev/null || true)
+          if [[ -z "${STABLE}" ]]; then
+            STABLE=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          fi
+          if [[ -n "${STABLE}" ]]; then
+            gh release upload "${STABLE}" source/dist/appcast.xml --clobber
+            echo "Updated stable feed (${STABLE}) to include beta ${{ steps.ver.outputs.version }}."
+          else
+            echo "::warning::No stable release found to host the beta appcast — beta users won't see it via the latest feed until a stable release exists."
+          fi
+
+      - name: Update Homebrew cask
+        # Stable releases only — never bump the public cask to a pre-release.
+        if: ${{ github.ref_type == 'tag' && steps.ver.outputs.is_prerelease == 'false' }}
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          ZIP: ${{ steps.zip.outputs.zip }}
+        run: |
+          # Bump the canonical cask in ventsislav-georgiev/homebrew-tap to this
+          # release: rewrite only the version + sha256 lines. Requires
+          # HOMEBREW_TAP_TOKEN (PAT with repo write on the tap); skipped if unset.
+          if [[ -z "${TAP_TOKEN}" ]]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN not set — skipping Homebrew cask publish."
+            exit 0
+          fi
+          SHA=$(shasum -a 256 "${ZIP}" | awk '{print $1}')
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/homebrew-tap.git" tap
+          sed -i '' -E "s/^  version \".*\"/  version \"${VERSION}\"/" tap/Casks/prosper.rb
+          sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"${SHA}\"/"     tap/Casks/prosper.rb
+          cd tap
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/prosper.rb
+          if git diff --cached --quiet; then
+            echo "cask already at ${VERSION}; nothing to push."
+          else
+            git commit -m "prosper ${VERSION}"
+            git push
+          fi

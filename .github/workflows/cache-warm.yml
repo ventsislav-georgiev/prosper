@@ -1,0 +1,79 @@
+name: Warm SwiftPM Cache
+
+# Populates the SwiftPM build + dependency cache under THIS repo's default-branch
+# (main) ref scope so tagged-release runs in release.yml can restore it (GitHub
+# Actions caches are ref-scoped: a tag run restores only from its own tag ref or
+# the default branch). Without this warmer every release would build cold — an MLX
+# build from scratch is very slow.
+#
+# Source lives in the PRIVATE prosper-base repo, so this can't watch its
+# Package.resolved for changes; it runs on a weekly schedule + manual dispatch,
+# clones prosper-base@main, and builds to refresh the main-scoped cache.
+#
+# The cache key + path + restore-keys MUST stay byte-identical to release.yml's
+# "Cache SwiftPM build + dependencies" step, or release runs won't hit it.
+#
+# Source protection: same gates as release.yml — repo-gated, read-only token clone
+# with persist-credentials:false, build output redirected to a non-uploaded log.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+env:
+  SOURCE_REPO: ventsislav-georgiev/prosper-base
+
+permissions:
+  contents: read
+
+jobs:
+  warm:
+    if: ${{ github.repository == 'ventsislav-georgiev/prosper' }}
+    runs-on: macos-15
+    steps:
+      - name: Checkout source (private)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Select Xcode 16 (Swift 6 toolchain)
+        id: xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_16*.app /Applications/Xcode_2*.app 2>/dev/null | sort -V | tail -n1)
+          if [[ -z "$XC" ]]; then
+            echo "::error::No Xcode 16+ found on runner"; ls -d /Applications/Xcode_*.app; exit 1
+          fi
+          echo "Selecting $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          swift --version
+          TC=$(swift --version 2>/dev/null | tr -d ' \n' | shasum -a 256 | cut -c1-12)
+          echo "toolchain=$TC" >> "$GITHUB_OUTPUT"
+
+      - name: Cache SwiftPM build + dependencies
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            source/app/.build
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('source/app/Package.resolved') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
+            spm-${{ runner.os }}-
+
+      - name: Build (release) to warm cache
+        working-directory: source/app
+        run: |
+          # Output redirected to a non-uploaded log so public Actions logs never
+          # show source file names / snippets.
+          set -o pipefail
+          if ! swift build -c release > "$RUNNER_TEMP/warm.log" 2>&1; then
+            echo "::error::Warm build failed. Logs withheld. Reproduce in prosper-base."
+            exit 1
+          fi
+          echo "Cache warmed."
