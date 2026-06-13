@@ -1,0 +1,52 @@
+Prosper End-User License Agreement
+
+Copyright (c) 2026 Ventsislav Georgiev. All rights reserved.
+
+Prosper ("the Software") is proprietary, closed-source software. Its source
+code is not published and is not part of this repository. This repository
+contains only documentation and the public CI workflows used to build and
+publish releases.
+
+1. Grant of license
+   You are granted a free, worldwide, non-exclusive, royalty-free license to
+   download, install, and use the Software for personal, non-commercial
+   purposes only, on any number of devices you own or control.
+
+2. Redistribution
+   You may redistribute the Software only as the complete, unmodified official
+   release archive obtained from the official distribution channels (this
+   repository's GitHub Releases and the official Homebrew tap), with this
+   license intact, and without charging a fee for the Software itself.
+
+3. Restrictions
+   You may not:
+   (a) modify, adapt, translate, or create derivative works of the Software;
+   (b) reverse engineer, decompile, or disassemble the Software, or otherwise
+       attempt to derive its source code, except to the extent this
+       restriction is prohibited by applicable law;
+   (c) remove or alter any proprietary notices, branding, or this license;
+   (d) sell, rent, lease, sublicense, or relicense the Software;
+   (e) represent the Software's source code, in whole or in part, as your own
+       or as open source; or
+   (f) use the Software for any commercial purpose, including use within a
+       business or for commercial advantage or monetary compensation.
+
+4. Ownership
+   The Software is licensed, not sold. All title, ownership rights, and
+   intellectual property rights in and to the Software remain with the
+   copyright holder. No rights are granted except as expressly stated herein.
+
+5. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+6. Limitation of liability
+   IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+   OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE,
+   ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+7. Termination
+   This license terminates automatically if you breach any of its terms. Upon
+   termination you must cease all use and destroy all copies of the Software.
