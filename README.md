@@ -212,4 +212,4 @@ Prosper is free, but the application source is not publicly available. You can s
 
 ## License
 
-Prosper is **free to use** but **closed-source** — the application is proprietary and its source lives outside this repository. This repo holds only the README, `extensions.md`, and the CI workflows used to build and publish releases.
+Prosper is **free to use** but **closed-source** — the application is proprietary and its source lives outside this repository. This repo holds only the README, `extensions.md`, and the CI workflows used to build and publish releases. See [LICENSE](LICENSE) for the full terms.
