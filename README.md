@@ -1,6 +1,6 @@
 <div align="center">
 
-<img width="128" height="128" src="https://github.com/user-attachments/assets/04cdaecc-ed97-4031-999f-7ee2fa415b27" alt="Prosper icon">
+<img width="128" height="128" src="assets/AppIcon.png" alt="Prosper icon">
 
 # Prosper
 

@@ -6,37 +6,45 @@ name: Build & Release
 # repo's appcast.xml and offers new versions.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# SOURCE PROTECTION — why this is safe to keep public:
-#   • Triggers are tag-push (v*) + manual dispatch ONLY. Both require WRITE access
-#     to this repo, so forks / outside contributors cannot fire the build. There is
-#     deliberately NO pull_request / pull_request_target trigger — fork PRs never
-#     receive repository secrets, so a malicious PR editing this file gets no token.
-#   • The job is gated to this exact repo, so a fork that enables Actions no-ops.
-#   • The source is cloned with actions/checkout + persist-credentials:false, so the
-#     read-only SOURCE_REPO_TOKEN is never written to disk or git config, and GitHub
-#     masks it in logs.
-#   • build/bundle stdout+stderr are redirected to a NON-uploaded log file. Public
-#     Actions logs therefore never show compiled file names or source snippets from
-#     warnings/errors. Only the release ASSETS (Prosper-<v>.zip, appcast.xml) and the
-#     source archive is NEVER uploaded anywhere — the runner is destroyed after.
+# WHY workflow_dispatch (NOT a tag trigger):
+#   The build must NOT be triggered by mirroring a git tag from prosper-base into
+#   this repo — pushing a tag pushes the COMMIT OBJECT it points to, which is a
+#   prosper-base commit, and git then uploads the entire private source tree+history
+#   to this public repo to satisfy the ref. That is a source leak. Instead,
+#   scripts/release.sh in prosper-base calls `gh workflow run` with the source ref
+#   as an INPUT. No git object ever crosses into this repo. The release tag is
+#   created at publish time by softprops, pointing at THIS repo's commit.
+#
+# SOURCE PROTECTION:
+#   • Dispatch-only + repo-gated → only someone with write access to THIS repo can
+#     run it; forks no-op. There is no pull_request trigger, so fork PRs (which get
+#     no secrets) can never run it with the token.
+#   • Source is cloned with actions/checkout + persist-credentials:false → the
+#     read-only SOURCE_REPO_TOKEN is never written to disk/git config; GitHub masks
+#     it in logs.
+#   • build/bundle stdout+stderr are redirected to a NON-uploaded log → public
+#     Actions logs never show source file names or snippets. Only release ASSETS
+#     (Prosper-<v>.zip, appcast.xml) leave the runner; the source archive never does.
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # Required repository secrets (set on THIS repo):
-#   SOURCE_REPO_TOKEN    — fine-grained PAT, READ-ONLY "Contents" on prosper-base ONLY
-#                          (no other scope, no other repo). Used to clone the source.
-#   SPARKLE_PRIVATE_KEY  — EdDSA private key from Sparkle's generate_keys. Matching
-#                          public key lives in scripts/Info.plist (SUPublicEDKey).
-#                          Unset → appcast published UNSIGNED (clients reject it).
+#   SOURCE_REPO_TOKEN    — fine-grained PAT, READ-ONLY "Contents" on prosper-base ONLY.
+#   SPARKLE_PRIVATE_KEY  — EdDSA private key from Sparkle's generate_keys. Unset →
+#                          appcast published UNSIGNED (clients reject it).
 # Optional:
 #   MACOS_SIGN_CERT_P12 / MACOS_SIGN_CERT_PWD — base64 .p12 + password for a stable
 #                          code-signing identity (keeps TCC grants across updates).
 #   HOMEBREW_TAP_TOKEN   — PAT with repo write on the Homebrew tap (cask auto-bump).
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "prosper-base ref to build (e.g. v2.83.0)"
+        required: true
+      version:
+        description: "version without leading v (e.g. 2.83.0); defaults from source_ref"
+        required: false
 
 env:
   SOURCE_REPO: ventsislav-georgiev/prosper-base
@@ -54,26 +62,21 @@ jobs:
     steps:
       - name: Resolve version
         id: ver
+        env:
+          SRC_REF: ${{ inputs.source_ref }}
+          VER_IN: ${{ inputs.version }}
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            VERSION="0.0.0-dev.${GITHUB_SHA::7}"
-            TAG="v${VERSION}"
-          fi
+          if [[ -z "${SRC_REF}" ]]; then echo "::error::source_ref is required"; exit 1; fi
+          if [[ -n "${VER_IN}" ]]; then VERSION="${VER_IN}"; else VERSION="${SRC_REF#v}"; fi
+          TAG="v${VERSION}"
           # A pre-release is any version carrying a SemVer pre-release suffix
-          # (e.g. "2.55.0-beta.1"). These publish as GitHub pre-releases and get
-          # the Sparkle `beta` channel, so only opted-in users receive them.
+          # (e.g. "2.83.0-beta.1") → GitHub pre-release + Sparkle `beta` channel.
           if [[ "${VERSION}" == *-* ]]; then PRERELEASE=true; else PRERELEASE=false; fi
-          # The source ref to clone: the matching tag on prosper-base for a real
-          # release (reproducible, pinned), or main for a manual dispatch test.
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then SRCREF="${TAG}"; else SRCREF="main"; fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
-          echo "src_ref=${SRCREF}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version=${VERSION} tag=${TAG} prerelease=${PRERELEASE} src_ref=${SRCREF}"
+          echo "src_ref=${SRC_REF}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=${VERSION} tag=${TAG} prerelease=${PRERELEASE} src_ref=${SRC_REF}"
 
       - name: Checkout source (private)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -105,8 +108,8 @@ jobs:
         with:
           # source/app/.build holds checked-out dep sources + compiled artifacts;
           # the swiftpm caches hold the global dependency/manifest cache. Key + path
-          # + restore-keys MUST stay byte-identical to cache-warm.yml so tagged runs
-          # (tag ref scope) restore the cache the warmer saved under the main scope.
+          # + restore-keys MUST stay byte-identical to cache-warm.yml so dispatched
+          # runs restore the cache the warmer saved under the main scope.
           path: |
             source/app/.build
             ~/Library/Caches/org.swift.swiftpm
@@ -136,7 +139,6 @@ jobs:
         # signs with a STABLE identity — macOS keys TCC grants to the signature, so a
         # stable identity lets users keep Accessibility/Input-Monitoring across updates.
         # Unset → bundle.sh falls back to ad-hoc signing (grant resets each update).
-        if: ${{ github.ref_type == 'tag' }}
         env:
           CERT_P12: ${{ secrets.MACOS_SIGN_CERT_P12 }}
           CERT_PWD: ${{ secrets.MACOS_SIGN_CERT_PWD }}
@@ -168,7 +170,6 @@ jobs:
           echo "PROSPER_SIGN_IDENTITY=$IDENT" >> "$GITHUB_ENV"
 
       - name: Bundle Prosper.app
-        if: ${{ github.ref_type == 'tag' }}
         working-directory: source
         env:
           PROSPER_VERSION: ${{ steps.ver.outputs.version }}
@@ -181,7 +182,6 @@ jobs:
           echo "Bundle succeeded → source/dist/Prosper.app"
 
       - name: Zip the app
-        if: ${{ github.ref_type == 'tag' }}
         id: zip
         working-directory: source
         run: |
@@ -191,7 +191,6 @@ jobs:
           echo "zip=source/dist/Prosper-${{ steps.ver.outputs.version }}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Fetch Sparkle signing tools
-        if: ${{ github.ref_type == 'tag' }}
         working-directory: source
         run: |
           SPARKLE_VERSION=2.6.4
@@ -201,7 +200,6 @@ jobs:
           tar -xf sparkle.tar.xz -C sparkle-tools
 
       - name: Sign update + generate appcast
-        if: ${{ github.ref_type == 'tag' }}
         working-directory: source
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -251,10 +249,12 @@ jobs:
           echo "Final appcast:"; cat dist/appcast.xml
 
       - name: Publish GitHub Release
-        if: ${{ github.ref_type == 'tag' }}
+        # Creates the release + tag ON THIS public repo, pointing at this repo's
+        # dispatched commit (github.sha) — NOT any prosper-base object.
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: Prosper ${{ steps.ver.outputs.version }}
           generate_release_notes: true
           prerelease: ${{ steps.ver.outputs.is_prerelease == 'true' }}
@@ -267,7 +267,7 @@ jobs:
         # appcast.xml (which every installed client polls) wouldn't pick it up.
         # Re-attach the merged appcast to the current latest STABLE release so
         # opted-in beta users receive the build via the same feed URL.
-        if: ${{ github.ref_type == 'tag' && steps.ver.outputs.is_prerelease == 'true' }}
+        if: ${{ steps.ver.outputs.is_prerelease == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -285,7 +285,7 @@ jobs:
 
       - name: Update Homebrew cask
         # Stable releases only — never bump the public cask to a pre-release.
-        if: ${{ github.ref_type == 'tag' && steps.ver.outputs.is_prerelease == 'false' }}
+        if: ${{ steps.ver.outputs.is_prerelease == 'false' }}
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.ver.outputs.version }}
