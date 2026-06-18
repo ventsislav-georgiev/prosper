@@ -40,7 +40,7 @@ else
   fi
   DD="$ROOT/app/.build/xcode-metallib"
   xcodebuild build \
-    -scheme Prosper \
+    -scheme ProsperApp \
     -configuration Release \
     -destination 'platform=macOS' \
     -derivedDataPath "$DD" \
