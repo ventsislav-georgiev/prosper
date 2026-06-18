@@ -59,6 +59,6 @@ echo "Releasing $NEXT (from ${LATEST:-explicit})"
 # Push main first so the branch ref advances with the tag, then push the tag.
 # release.yml triggers on the v* tag and builds the exact tagged commit.
 git push origin HEAD
-git tag -a "$NEXT" -m "Prosper $NEXT"
+git tag -s "$NEXT" -m "Prosper $NEXT"
 git push origin "$NEXT"
 echo "Pushed $NEXT — release.yml will build, sign, notarize, and publish the Release."
