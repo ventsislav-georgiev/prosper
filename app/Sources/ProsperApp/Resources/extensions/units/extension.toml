@@ -1,0 +1,29 @@
+[extension]
+id          = "com.prosper.units"
+name        = "units"
+title       = "Unit Convert"
+description = "Deterministic unit conversion (length, mass, duration, data, temperature, speed, area, volume)."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+[[contributes.commands]]
+id          = "unit.convert"
+title       = "Convert"
+description = "Convert a value between units (e.g. \"1 year to minutes\")"
+mode        = "no-view"
+keywords    = ["unit", "convert", "conversion", "length", "mass", "duration"]
+# Router pre-filter: a number somewhere followed by a " to " / " in " / "->" / "→".
+match       = "[0-9].*( to | in |->|→)"

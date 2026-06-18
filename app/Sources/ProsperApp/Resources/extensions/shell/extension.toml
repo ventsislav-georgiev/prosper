@@ -1,0 +1,35 @@
+[extension]
+id          = "com.prosper.shell"
+name        = "shell"
+title       = "Run Shell"
+description = "Run a shell command via your login shell and show its output."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "terminal"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# Runner-mode command. `! ` (and the `> ` / bare `!` aliases) lock the launcher
+# into shell mode; the whole query becomes the command. This replaces the old
+# native `.shell` mode — the capability now ships as a system extension over
+# host.shell (see docs/ADR-002-extensibility.md).
+[[contributes.commands]]
+id          = "shell.run"
+title       = "Run Shell"
+description = "Run the typed text as a shell command"
+mode        = "no-view"
+icon        = "terminal"
+keywords    = ["shell", "run", "command", "terminal", "exec", "sh", "zsh"]
+prefix      = "! "
+prefixes    = ["> ", "!"]

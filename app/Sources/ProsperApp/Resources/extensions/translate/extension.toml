@@ -1,0 +1,64 @@
+[extension]
+id          = "com.prosper.translate"
+name        = "translate"
+title       = "Translate"
+description = "Translate text into your configured language using the local AI model."
+version     = "1.1.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "globe"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# Runner-mode command. `l ` (and the `t ` alias) lock the launcher into translate
+# mode; the ⌥L shortcut opens the same mode. `requires = ["model"]` keeps the
+# command out of the palette until the local AI model is loaded, and ties this
+# extension into the host's "any LLM consumer enabled?" unload policy.
+[[contributes.commands]]
+id          = "translate.run"
+title       = "Translate"
+description = "Translate the typed text into the target language"
+mode        = "no-view"
+icon        = "globe"
+keywords    = ["translate", "translation", "language", "localize"]
+prefix      = "l "
+prefixes    = ["t "]
+requires    = ["model"]
+
+# Declarative settings (Tier-A): own sidebar section, host-rendered + persisted to
+# host.prefs, read from Lua via host.prefs.get("target"|"source"). The source/target
+# language live with the extension (replacing the old global language preferences).
+[[contributes.settings_sections]]
+id        = "translate"
+title     = "Translate"
+icon      = "globe"
+subtitle  = "Languages for the translate command"
+
+  [[contributes.settings_sections.controls]]
+  kind = "group"
+  title = "Languages"
+  footer = "Source \"Auto\" lets the model detect the input language."
+
+  [[contributes.settings_sections.controls]]
+  kind = "text"
+  key = "target"
+  title = "Target language"
+  default = "Bulgarian"
+  placeholder = "Spanish, German, Japanese…"
+
+  [[contributes.settings_sections.controls]]
+  kind = "text"
+  key = "source"
+  title = "Source language"
+  default = "Auto"
+  placeholder = "Auto"

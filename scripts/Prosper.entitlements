@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hardened-runtime + keychain entitlements for the NOTARIZED Developer ID build.
+  Used by scripts/bundle.sh ONLY when signing with a "Developer ID Application"
+  identity. Self-signed / ad-hoc builds are signed without these (a restricted
+  entitlement like keychain-access-groups makes AMFI kill the launch unless a
+  matching provisioning profile is embedded — see bundle.sh).
+
+  __TEAM_ID__ is a placeholder. bundle.sh substitutes the real 10-char Team ID
+  (read from the Developer ID cert's "... (TEAMID)" common name) at bundle time,
+  exactly like the version is stamped into Info.plist — never edit by hand.
+
+  The keychain-access-groups entry is what lets SyncKeyStore's synchronizable
+  (iCloud Keychain) item resolve instead of returning errSecMissingEntitlement.
+  It is a restricted entitlement: it requires an embedded.provisionprofile that
+  authorizes it (App ID eu.illegible.prosper with the Keychain Sharing capability).
+  bundle.sh uses this full file only when scripts/embedded.provisionprofile is
+  present; otherwise it falls back to a hardened-runtime-only entitlement set so
+  notarization still succeeds and SyncKeyStore stays on the LOCAL device key.
+-->
+<plist version="1.0">
+<dict>
+	<!-- MLX compiles Metal GPU kernels at runtime; hardened runtime blocks the
+	     JIT mapping without this. Required or the app aborts on first model load. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<!-- iCloud-Keychain settings-sync key (SyncKeyStore). The default keychain
+	     access group is <TeamID>.<bundleID>; declaring it explicitly is what
+	     clears errSecMissingEntitlement for the kSecAttrSynchronizable item. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>__TEAM_ID__.eu.illegible.prosper</string>
+	</array>
+</dict>
+</plist>

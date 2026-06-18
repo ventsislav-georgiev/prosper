@@ -1,0 +1,29 @@
+[extension]
+id          = "com.prosper.calc"
+name        = "calc"
+title       = "Calculator"
+description = "Deterministic local arithmetic (shunting-yard evaluator)."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+[[contributes.commands]]
+id          = "calc.eval"
+title       = "Calculate"
+description = "Evaluate an arithmetic expression"
+mode        = "no-view"
+keywords    = ["math", "calc", "arithmetic"]
+# Router pre-filter: a digit, '(', '.', or leading unary sign followed by a digit.
+match       = "[0-9]"

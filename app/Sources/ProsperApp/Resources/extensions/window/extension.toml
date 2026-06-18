@@ -1,0 +1,30 @@
+# Window Management — move/resize the focused window into halves, quarters,
+# thirds, maximize, center, etc. Raycast-parity feature
+# (https://www.raycast.com/core-features/window-management), implemented over
+# the native host.window API (Accessibility — same permission as autocomplete).
+[extension]
+id          = "com.prosper.window"
+name        = "window"
+title       = "Window Management"
+description = "Snap the focused window: halves, quarters, thirds, maximize, center."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Single no-view command; the layout keyword follows the `win`/`window` verb.
+# Runs on the off-main async lane (host.window bridges to the main thread).
+[[contributes.commands]]
+id          = "window.move"
+title       = "Window"
+description = "Snap the focused window. e.g. win left, win top-right, win max, win center."
+mode        = "no-view"
+keywords    = ["win", "window", "snap", "resize", "move", "maximize", "tile"]
+match       = "^win(dow)?( |$)"

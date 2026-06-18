@@ -1,0 +1,34 @@
+[extension]
+id          = "com.prosper.open"
+name        = "open"
+title       = "Open App"
+description = "Search installed applications and launch one."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "square.grid.2x2"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# Runner-mode command. `o ` locks the launcher into app-search mode; the query
+# is fuzzy-matched against the app index (host.apps.search) and each result row
+# launches that app on Enter. Replaces the old native `.openApp` mode — the
+# capability now ships as a system extension (see docs/ADR-002-extensibility.md).
+[[contributes.commands]]
+id          = "open.run"
+title       = "Open App"
+description = "Search installed applications and launch one"
+mode        = "no-view"
+icon        = "square.grid.2x2"
+keywords    = ["open", "app", "application", "launch", "run"]
+prefix      = "o "
