@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Prosper</string>
+	<key>CFBundleExecutable</key>
+	<string>ProsperApp</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>eu.illegible.prosper</string>
+	<key>CFBundleName</key>
+	<string>Prosper</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- Placeholder only. The real version is stamped at bundle time from the
+	     git tag via PROSPER_VERSION (scripts/bundle.sh). Do not edit by hand. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/ventsislav-georgiev/prosper/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>FDGYa9u6ip6f93IilJhHfof0DgQnggdXx5Ow/LhbBVs=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+</dict>
+</plist>

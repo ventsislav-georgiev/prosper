@@ -1,0 +1,174 @@
+diff --git a/Libraries/MLXLLM/Models/Gemma4Text.swift b/Libraries/MLXLLM/Models/Gemma4Text.swift
+index 1cf8ae7..7b402f3 100644
+--- a/Libraries/MLXLLM/Models/Gemma4Text.swift
++++ b/Libraries/MLXLLM/Models/Gemma4Text.swift
+@@ -160,7 +160,7 @@ private class RMSNormNoScale: Module {
+     }
+ }
+ 
+-private class ScaledLinear: Module {
++private class ScaledLinear: Module, Quantizable {
+     let weight: MLXArray
+     let scalar: Float
+ 
+@@ -170,9 +170,57 @@ private class ScaledLinear: Module {
+         super.init()
+     }
+ 
++    /// Subclass entry point (used by ``QuantizedScaledLinear``) to supply the
++    /// weight matrix directly.
++    fileprivate init(weight: MLXArray, scalar: Float) {
++        self.weight = weight
++        self.scalar = scalar
++        super.init()
++    }
++
+     func callAsFunction(_ x: MLXArray) -> MLXArray {
+         matmul(x, weight.T) * scalar
+     }
++
++    /// Make `ScaledLinear` quantization-aware. Without this, stock
++    /// `quantize(model:)` (which only converts `Linear`/`Embedding`) leaves this
++    /// layer in full precision, so a quantization-aware-trained (QAT) checkpoint —
++    /// which ships `per_layer_model_projection` pre-quantized (weight+scales+biases,
++    /// packed shape `[out, in * bits / 32]`) — fails to load with a shape mismatch
++    /// against the unpacked `[out, in]` weight.
++    func toQuantized(groupSize: Int, bits: Int, mode: QuantizationMode) -> Module {
++        QuantizedScaledLinear(self, groupSize: groupSize, bits: bits, mode: mode)
++    }
++}
++
++/// Quantized counterpart of ``ScaledLinear``. Subclasses `ScaledLinear` so the
++/// `@ModuleInfo` accessor typed `ScaledLinear?` still resolves after
++/// `quantize(model:)` swaps the module in place — mirroring how `QuantizedLinear`
++/// subclasses `Linear`.
++private final class QuantizedScaledLinear: ScaledLinear, Quantized {
++    let groupSize: Int
++    let bits: Int
++    let mode: QuantizationMode
++    let scales: MLXArray
++    let biases: MLXArray?
++
++    init(_ other: ScaledLinear, groupSize: Int, bits: Int, mode: QuantizationMode) {
++        self.groupSize = groupSize
++        self.bits = bits
++        self.mode = mode
++        let (quantizedWeight, scales, biases) = MLX.quantized(
++            other.weight, groupSize: groupSize, bits: bits, mode: mode)
++        self.scales = scales
++        self.biases = biases
++        super.init(weight: quantizedWeight, scalar: other.scalar)
++        self.freeze()
++    }
++
++    override func callAsFunction(_ x: MLXArray) -> MLXArray {
++        quantizedMatmul(
++            x, weight, scales: scales, biases: biases, transpose: true,
++            groupSize: groupSize, bits: bits, mode: mode) * scalar
++    }
+ }
+ 
+ private enum Gemma4PositionOffset {
+@@ -214,15 +262,20 @@ private class Gemma4Attention: Module {
+     let nKvHeads: Int
+     let useKeqV: Bool
+     let scale: Float
++    /// KV-shared layers reuse an earlier layer's K/V (see `previousKvs`) and so
++    /// carry NO own `k_proj`/`v_proj` weights. QAT checkpoints omit those tensors
++    /// for shared layers; allocating the projections would make the loader demand
++    /// missing keys (`keyNotFound: ...k_proj.weight`).
++    let isKvSharedLayer: Bool
+ 
+     @ModuleInfo(key: "q_proj") var qProj: Linear
+-    @ModuleInfo(key: "k_proj") var kProj: Linear
++    @ModuleInfo(key: "k_proj") var kProj: Linear?
+     @ModuleInfo(key: "v_proj") var vProj: Linear?
+     @ModuleInfo(key: "o_proj") var oProj: Linear
+ 
+     @ModuleInfo(key: "q_norm") var qNorm: RMSNorm
+-    @ModuleInfo(key: "k_norm") var kNorm: RMSNorm
+-    @ModuleInfo(key: "v_norm") var vNorm: RMSNormNoScale
++    @ModuleInfo(key: "k_norm") var kNorm: RMSNorm?
++    @ModuleInfo(key: "v_norm") var vNorm: RMSNormNoScale?
+ 
+     @ModuleInfo var rope: RoPELayer
+ 
+@@ -249,16 +302,28 @@ private class Gemma4Attention: Module {
+ 
+         self.scale = 1.0
+ 
++        let firstKvSharedLayerIdx = config.numHiddenLayers - config.numKvSharedLayers
++        self.isKvSharedLayer =
++            config.numKvSharedLayers > 0 && layerIdx >= firstKvSharedLayerIdx
++
+         self._qProj.wrappedValue = Linear(dim, nHeads * effectiveHeadDim, bias: false)
+-        self._kProj.wrappedValue = Linear(dim, nKvHeads * effectiveHeadDim, bias: false)
+-        if !useKeqV {
+-            self._vProj.wrappedValue = Linear(dim, nKvHeads * effectiveHeadDim, bias: false)
++        // Only non-shared layers own K/V projections; shared layers reuse cached KV.
++        if !isKvSharedLayer {
++            self._kProj.wrappedValue = Linear(dim, nKvHeads * effectiveHeadDim, bias: false)
++            if !useKeqV {
++                self._vProj.wrappedValue = Linear(dim, nKvHeads * effectiveHeadDim, bias: false)
++            }
+         }
+         self._oProj.wrappedValue = Linear(nHeads * effectiveHeadDim, dim, bias: false)
+ 
+         self._qNorm.wrappedValue = RMSNorm(dimensions: effectiveHeadDim, eps: config.rmsNormEps)
+-        self._kNorm.wrappedValue = RMSNorm(dimensions: effectiveHeadDim, eps: config.rmsNormEps)
+-        self._vNorm.wrappedValue = RMSNormNoScale(eps: config.rmsNormEps)
++        // K/V norms live on the owning (non-shared) layer only; shared layers
++        // consume already-normed KV via `sharedKV`.
++        if !isKvSharedLayer {
++            self._kNorm.wrappedValue = RMSNorm(
++                dimensions: effectiveHeadDim, eps: config.rmsNormEps)
++            self._vNorm.wrappedValue = RMSNormNoScale(eps: config.rmsNormEps)
++        }
+ 
+         // RoPE: sliding uses default, full uses proportional with partial rotation
+         if isSliding {
+@@ -299,6 +364,11 @@ private class Gemma4Attention: Module {
+             keys = sharedK
+             values = sharedV
+         } else {
++            // Non-shared layer (shared layers always take the `sharedKV` branch).
++            guard let kProj, let kNorm, let vNorm else {
++                fatalError(
++                    "Gemma4Attention: k_proj/k_norm/v_norm absent on non-KV-shared layer \(layerIdx)")
++            }
+             var k = kProj(x).reshaped(B, L, nKvHeads, effectiveHeadDim)
+             k = kNorm(k)
+             k = k.transposed(0, 2, 1, 3)
+@@ -664,6 +734,21 @@ public class Gemma4TextModel: Module, LLMModel, KVCacheDimensionProvider {
+     }
+ 
+     public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
++        // KV-shared layers (idx >= firstKvShared) reuse an earlier layer's K/V, so
++        // their own K/V projections + K/V norms are never used. QAT checkpoints omit
++        // them; uniform mlx-community conversions ship them redundantly. The model
++        // only allocates K/V proj+norm on non-shared layers, so those redundant
++        // weights would trip `verify: [.all]`'s `noUnusedKeys` — drop them here so
++        // both checkpoint flavors load through the same architecture.
++        let firstKvShared = config.numHiddenLayers - config.numKvSharedLayers
++        let kvSharedAttnSubstrings: [String] = config.numKvSharedLayers > 0
++            ? (firstKvShared ..< config.numHiddenLayers).flatMap { i in
++                ["k_proj", "v_proj", "k_norm", "v_norm"].map {
++                    ".layers.\(i).self_attn.\($0)."
++                }
++            }
++            : []
++
+         var sanitized = [String: MLXArray]()
+         for (k, v) in weights {
+             // Skip vision/audio/rotary weights
+@@ -675,6 +760,10 @@ public class Gemma4TextModel: Module, LLMModel, KVCacheDimensionProvider {
+             {
+                 continue
+             }
++            // Skip redundant K/V proj+norm on KV-shared layers.
++            if kvSharedAttnSubstrings.contains(where: { k.contains($0) }) {
++                continue
++            }
+             sanitized[k] = v
+         }
+         return sanitized

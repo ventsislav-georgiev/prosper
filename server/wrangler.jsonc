@@ -1,0 +1,37 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "prosper-server",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-06-01",
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"EMAIL_FROM": "Prosper <login@mail.illegible.eu>",
+		"APP_BASE_URL": "https://prosper.illegible.eu",
+		"MAGIC_LINK_TTL_SECONDS": "900",
+		"SUPPORTER_TOKEN_TTL_DAYS": "30",
+		"SESSION_TTL_DAYS": "365",
+		"DEVICE_LIMIT": "5",
+		"SYNC_MAX_BYTES": "1048576"
+	},
+	"kv_namespaces": [
+		{
+			"binding": "KV",
+			"id": "52c4ed86272b411399fd829e9b7751cb"
+		}
+	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "prosper",
+			"database_id": "0277df86-b7a0-4a60-86f9-877848f8ae2e",
+			"migrations_dir": "migrations"
+		}
+	],
+	"triggers": {
+		"crons": [
+			"0 3 * * *"
+		]
+	}
+}

@@ -1,0 +1,62 @@
+# Quickdirs — register directory roots (e.g. ~/projects), browse their
+# immediate subfolders from the palette, and run an action (shell command or URL)
+# against the chosen directory. Each quickdir can also claim its own activation
+# prefix (e.g. `p `) for one-keystroke browsing.
+#
+# Browsing / picking is rendered natively (folder rows); this Lua command only
+# handles the management verbs (add / rm / list / help) that the native router
+# delegates here. Storage is shared with the native side via host.prefs `dirs`
+# (a JSON array of {name, path, prefix, action, actionLabel}).
+[extension]
+id          = "com.prosper.quickdirs"
+name        = "quickdirs"
+title       = "Quickdirs"
+description = "Browse a directory's subfolders and run an action on the selected one."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# `qd add` opens a host-rendered dialog (host.window.open + host.ui.form) to
+# register a new quickdir — listed FIRST so its `^qd add` route wins over the
+# broader `^qd( |$)` of quickdirs.run. Surfaces as a launcher row; Enter opens it.
+[[contributes.commands]]
+id              = "quickdirs.add"
+title           = "Add Quickdir"
+description     = "Register a new quickdir in a dialog"
+mode            = "no-view"
+icon            = "folder.badge.plus"
+keywords        = ["qd add", "add quickdir", "new quickdir", "create quickdir", "quickdir add"]
+match           = "^qd add( |$)"
+launches_window = true
+
+# Single no-view command; the leading `qd` verb is sub-parsed in Lua
+# (add / rm / list / help). Browse + picker queries are intercepted natively.
+[[contributes.commands]]
+id          = "quickdirs.run"
+title       = "Quickdir"
+description = "Browse a quickdir's subfolders, or manage them: qd add|rm|list."
+mode        = "no-view"
+keywords    = ["qd", "quickdir", "dir", "directory", "folder", "browse"]
+match       = "^qd( |$)"
+# Runner-mode trigger: typing "qd " locks the launcher into this command, showing
+# the "Quickdir" chip and stripping the prefix from the visible query.
+prefix      = "qd "
+
+# Dynamic (Tier-B) settings: own sidebar section, rendered by settings_render and
+# edited via settings_action. The quickdirs list is a `records` control over the
+# same host.prefs `dirs` store the runner reads. `accent = "Dirs"` tints it neon.
+[[contributes.settings_sections]]
+id        = "quickdirs"
+title     = "QuickDirs"
+icon      = "folder.fill"
+accent    = "Dirs"
+subtitle  = "Browse a directory's subfolders and run an action on the one you pick"
+dynamic   = true

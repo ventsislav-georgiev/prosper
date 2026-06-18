@@ -1,0 +1,8 @@
+module CLua {
+    header "lua.h"
+    header "lualib.h"
+    header "lauxlib.h"
+    header "luaconf.h"
+    header "clua_shim.h"
+    export *
+}

@@ -1,0 +1,13 @@
+{
+  "name": "prosper-snippet-electron-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Electron app with native-feeling Chromium text fields, used to manually verify Prosper inline snippet expansion in the lazy-AX (Electron) insertion site.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^31.0.0"
+  }
+}

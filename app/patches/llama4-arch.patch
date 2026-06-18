@@ -1,0 +1,554 @@
+diff --git a/Libraries/MLXLLM/LLMModelFactory.swift b/Libraries/MLXLLM/LLMModelFactory.swift
+index 969b9ca..3cbc4bf 100644
+--- a/Libraries/MLXLLM/LLMModelFactory.swift
++++ b/Libraries/MLXLLM/LLMModelFactory.swift
+@@ -33,6 +33,8 @@ public enum LLMTypeRegistry {
+         "gemma3n": create(Gemma3nTextConfiguration.self, Gemma3nTextModel.init),
+         "gemma4": create(Gemma4Configuration.self, Gemma4Model.init),
+         "gemma4_text": create(Gemma4TextConfiguration.self, Gemma4TextModel.init),
++        "llama4": create(Llama4Configuration.self, Llama4Model.init),
++        "llama4_text": create(Llama4TextConfiguration.self, Llama4Model.init),
+         "qwen2": create(Qwen2Configuration.self, Qwen2Model.init),
+         "qwen3": create(Qwen3Configuration.self, Qwen3Model.init),
+         "qwen3_moe": create(Qwen3MoEConfiguration.self, Qwen3MoEModel.init),
+diff --git a/Libraries/MLXLLM/Models/Llama4.swift b/Libraries/MLXLLM/Models/Llama4.swift
+new file mode 100644
+index 0000000..5ff67a5
+--- /dev/null
++++ b/Libraries/MLXLLM/Models/Llama4.swift
+@@ -0,0 +1,535 @@
++//
++//  Llama4.swift
++//  mlx-swift-lm
++//
++//  Faithful port of https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/models/llama4.py
++//  (text-only — vision tower + multimodal projector are stripped in `sanitize`).
++//
++// ─────────────────────────────────────────────────────────────────────────────
++// VERIFIED CHECKPOINT KEY MAPPING (mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit)
++// ─────────────────────────────────────────────────────────────────────────────
++// Top config.json: model_type "llama4", nested `text_config` (model_type
++// "llama4_text") holds the LM params; quantization {group_size:64, bits:4}.
++// Weight keys are prefixed `language_model.…`, so the module tree below nests a
++// `language_model` submodule (→ `model` + `lm_head`) and the keys map 1:1 with
++// NO renaming except the expert fuse-split done in `sanitize`:
++//
++//   language_model.model.embed_tokens.weight                      → language_model.model.embedTokens
++//   language_model.model.layers.N.self_attn.{q,k,v,o}_proj.weight → …self_attn.{wq,wk,wv,wo}
++//   language_model.model.layers.N.input_layernorm.weight          → …input_layernorm
++//   language_model.model.layers.N.post_attention_layernorm.weight → …post_attention_layernorm
++//   language_model.model.layers.N.feed_forward.router.weight      → …feed_forward.router  (MoE layer)
++//   language_model.model.layers.N.feed_forward.experts.gate_up_proj (FUSED, bare, no `.weight`)
++//   language_model.model.layers.N.feed_forward.experts.down_proj    (FUSED, bare, no `.weight`)
++//   language_model.model.layers.N.feed_forward.shared_expert.{gate,up,down}_proj.weight
++//   language_model.model.norm.weight                              → language_model.model.norm
++//   language_model.lm_head.weight                                 → language_model.lmHead  (tie_word_embeddings=false)
++//   vision_model.* / multi_modal_projector.*                      → REMOVED in sanitize
++//
++// EXPERT-QUANT SPLIT DECISION (the #1 correctness risk in the task):
++//   The model.safetensors.index.json for the 4bit repo contains ZERO `.scales`
++//   and ZERO `.biases` keys for ANY tensor (verified: scales|biases match → 0).
++//   The fused expert tensors are stored at full precision (bf16); this MLX
++//   checkpoint quantizes at LOAD time (ModelFactory reads config.json's
++//   `quantization` block and calls `quantize(model:)` AFTER `sanitize`).
++//   Therefore the experts are NOT packed-int4 here and we replicate the Python
++//   reference's plain float `mx.split(v, 2, axis=-1)` + `swapaxes(1, 2)`
++//   directly. No packed-tensor / `.scales`/`.biases` splitting is needed (that
++//   hazard only applies to repos that pre-quantize the fused expert tensors on
++//   disk, which this one does not).
++// ─────────────────────────────────────────────────────────────────────────────
++
++import Foundation
++import MLX
++import MLXLMCommon
++import MLXNN
++
++// MARK: - Configuration
++
++/// Text-side params (mirrors Python `TextArgs`). Used directly for a `llama4_text`
++/// checkpoint, and as the nested `text_config` of a full `llama4` checkpoint.
++public struct Llama4TextConfiguration: Codable, Sendable {
++    var modelType: String = "llama4_text"
++    var hiddenSize: Int
++    var hiddenLayers: Int
++    var intermediateSize: Int
++    var intermediateSizeMLP: Int
++    var attentionHeads: Int
++    var kvHeads: Int
++    var headDim: Int
++    var numLocalExperts: Int
++    var numExpertsPerToken: Int
++    var interleaveMoeLayerStep: Int
++    var attentionChunkSize: Int
++    var rmsNormEps: Float
++    var ropeTheta: Float
++    var maxPositionEmbeddings: Int
++    var vocabularySize: Int
++    var useQKNorm: Bool
++    var attentionBias: Bool
++    var attnTemperatureTuning: Int
++    var floorScale: Int
++    var attnScale: Float
++    var ropeScaling: [String: StringOrNumber]?
++
++    enum CodingKeys: String, CodingKey {
++        case modelType = "model_type"
++        case hiddenSize = "hidden_size"
++        case hiddenLayers = "num_hidden_layers"
++        case intermediateSize = "intermediate_size"
++        case intermediateSizeMLP = "intermediate_size_mlp"
++        case attentionHeads = "num_attention_heads"
++        case kvHeads = "num_key_value_heads"
++        case headDim = "head_dim"
++        case numLocalExperts = "num_local_experts"
++        case numExpertsPerToken = "num_experts_per_tok"
++        case interleaveMoeLayerStep = "interleave_moe_layer_step"
++        case attentionChunkSize = "attention_chunk_size"
++        case rmsNormEps = "rms_norm_eps"
++        case ropeTheta = "rope_theta"
++        case maxPositionEmbeddings = "max_position_embeddings"
++        case vocabularySize = "vocab_size"
++        case useQKNorm = "use_qk_norm"
++        case attentionBias = "attention_bias"
++        case attnTemperatureTuning = "attn_temperature_tuning"
++        case floorScale = "floor_scale"
++        case attnScale = "attn_scale"
++        case ropeScaling = "rope_scaling"
++    }
++
++    public init(from decoder: Decoder) throws {
++        let c = try decoder.container(keyedBy: CodingKeys.self)
++        self.modelType = try c.decodeIfPresent(String.self, forKey: .modelType) ?? "llama4_text"
++        self.hiddenSize = try c.decode(Int.self, forKey: .hiddenSize)
++        self.hiddenLayers = try c.decode(Int.self, forKey: .hiddenLayers)
++        self.intermediateSize = try c.decode(Int.self, forKey: .intermediateSize)
++        self.intermediateSizeMLP = try c.decode(Int.self, forKey: .intermediateSizeMLP)
++        self.attentionHeads = try c.decode(Int.self, forKey: .attentionHeads)
++        self.kvHeads = try c.decode(Int.self, forKey: .kvHeads)
++        // head_dim may be absent → fall back to hidden_size / heads.
++        if let hd = try c.decodeIfPresent(Int.self, forKey: .headDim) {
++            self.headDim = hd
++        } else {
++            self.headDim = self.hiddenSize / self.attentionHeads
++        }
++        self.numLocalExperts = try c.decode(Int.self, forKey: .numLocalExperts)
++        self.numExpertsPerToken = try c.decode(Int.self, forKey: .numExpertsPerToken)
++        self.interleaveMoeLayerStep =
++            try c.decodeIfPresent(Int.self, forKey: .interleaveMoeLayerStep) ?? 1
++        self.attentionChunkSize =
++            try c.decodeIfPresent(Int.self, forKey: .attentionChunkSize) ?? 8192
++        self.rmsNormEps = try c.decodeIfPresent(Float.self, forKey: .rmsNormEps) ?? 1e-5
++        self.ropeTheta = try c.decodeIfPresent(Float.self, forKey: .ropeTheta) ?? 500000
++        self.maxPositionEmbeddings =
++            try c.decodeIfPresent(Int.self, forKey: .maxPositionEmbeddings) ?? 10485760
++        self.vocabularySize = try c.decode(Int.self, forKey: .vocabularySize)
++        self.useQKNorm = try c.decodeIfPresent(Bool.self, forKey: .useQKNorm) ?? true
++        self.attentionBias = try c.decodeIfPresent(Bool.self, forKey: .attentionBias) ?? false
++        self.attnTemperatureTuning =
++            try c.decodeIfPresent(Int.self, forKey: .attnTemperatureTuning) ?? 4
++        self.floorScale = try c.decodeIfPresent(Int.self, forKey: .floorScale) ?? 8192
++        self.attnScale = try c.decodeIfPresent(Float.self, forKey: .attnScale) ?? 0.1
++        self.ropeScaling = try c.decodeIfPresent(
++            [String: StringOrNumber].self, forKey: .ropeScaling)
++    }
++}
++
++/// Full `llama4` config — wraps the nested `text_config` (mirrors Python `ModelArgs`).
++public struct Llama4Configuration: Codable, Sendable {
++    var modelType: String = "llama4"
++    var textConfig: Llama4TextConfiguration
++
++    enum CodingKeys: String, CodingKey {
++        case modelType = "model_type"
++        case textConfig = "text_config"
++    }
++
++    public init(from decoder: Decoder) throws {
++        let c = try decoder.container(keyedBy: CodingKeys.self)
++        self.modelType = try c.decodeIfPresent(String.self, forKey: .modelType) ?? "llama4"
++        self.textConfig = try c.decode(Llama4TextConfiguration.self, forKey: .textConfig)
++    }
++
++    /// Wrap a bare `llama4_text` config (top-level text-only checkpoint, no
++    /// `text_config` nesting) so `Llama4Model` has a single init path.
++    public init(textConfig: Llama4TextConfiguration) {
++        self.modelType = "llama4"
++        self.textConfig = textConfig
++    }
++}
++
++// MARK: - Attention
++
++private class Llama4Attention: Module {
++    let nHeads: Int
++    let nKVHeads: Int
++    let headDim: Int
++    let scale: Float
++    let useRope: Bool
++    let useQKNorm: Bool
++    let attnTemperatureTuning: Int
++    let floorScale: Float
++    let attnScale: Float
++    let qkNormEps: Float = 1e-6
++
++    @ModuleInfo(key: "q_proj") var wq: Linear
++    @ModuleInfo(key: "k_proj") var wk: Linear
++    @ModuleInfo(key: "v_proj") var wv: Linear
++    @ModuleInfo(key: "o_proj") var wo: Linear
++
++    let rope: RoPELayer?
++
++    init(_ args: Llama4TextConfiguration, layerIdx: Int) {
++        let dim = args.hiddenSize
++        self.nHeads = args.attentionHeads
++        self.nKVHeads = args.kvHeads
++        self.headDim = args.headDim
++        self.scale = pow(Float(args.headDim), -0.5)
++
++        // rope unused for every 4th ("dense"/NoPE) layer — matches Python
++        // `int((layer_idx + 1) % 4 != 0)`.
++        self.useRope = (layerIdx + 1) % 4 != 0
++        self.useQKNorm = args.useQKNorm && self.useRope
++        self.attnTemperatureTuning = args.attnTemperatureTuning
++        self.floorScale = Float(args.floorScale)
++        self.attnScale = args.attnScale
++
++        let bias = args.attentionBias
++        _wq.wrappedValue = Linear(dim, nHeads * headDim, bias: bias)
++        _wk.wrappedValue = Linear(dim, nKVHeads * headDim, bias: bias)
++        _wv.wrappedValue = Linear(dim, nKVHeads * headDim, bias: bias)
++        _wo.wrappedValue = Linear(nHeads * headDim, dim, bias: bias)
++
++        if useRope {
++            self.rope = initializeRope(
++                dims: headDim,
++                base: args.ropeTheta,
++                traditional: true,
++                scalingConfig: args.ropeScaling,
++                maxPositionEmbeddings: args.maxPositionEmbeddings
++            )
++        } else {
++            self.rope = nil
++        }
++    }
++
++    /// Weightless RMS norm over the head dim (Python `mx.fast.rms_norm(x, weight=None, eps=1e-6)`).
++    private func l2NormHeads(_ x: MLXArray) -> MLXArray {
++        x * MLX.rsqrt(MLX.mean(x * x, axis: -1, keepDims: true) + qkNormEps)
++    }
++
++    func callAsFunction(
++        _ x: MLXArray, mask: MLXFast.ScaledDotProductAttentionMaskMode, cache: KVCache?
++    ) -> MLXArray {
++        let (B, L) = (x.dim(0), x.dim(1))
++
++        var queries = wq(x)
++        var keys = wk(x)
++        var values = wv(x)
++
++        queries = queries.reshaped(B, L, nHeads, -1).transposed(0, 2, 1, 3)
++        keys = keys.reshaped(B, L, nKVHeads, -1).transposed(0, 2, 1, 3)
++        values = values.reshaped(B, L, nKVHeads, -1).transposed(0, 2, 1, 3)
++
++        let offset = cache?.offset ?? 0
++
++        if useRope, let rope {
++            queries = applyRotaryPosition(rope, to: queries, cache: cache)
++            keys = applyRotaryPosition(rope, to: keys, cache: cache)
++        }
++
++        if useQKNorm {
++            queries = l2NormHeads(queries)
++            keys = l2NormHeads(keys)
++        }
++
++        // Attention temperature tuning, applied to queries on NoPE layers only.
++        // Python: scales = log(floor(arange(offset+1, offset+L+1)/floor_scale)+1)*attn_scale + 1
++        if attnTemperatureTuning != 0 && !useRope {
++            let positions = MLXArray(Int32(offset + 1) ... Int32(offset + L)).asType(.float32)
++            var attnScales = MLX.log(MLX.floor(positions / floorScale) + 1.0) * attnScale + 1.0
++            // shape [L] → [L, 1] to broadcast over head dim of [B, H, L, D].
++            attnScales = attnScales[0..., .newAxis]
++            queries = (queries * attnScales).asType(queries.dtype)
++        }
++
++        let output = attentionWithCacheUpdate(
++            queries: queries,
++            keys: keys,
++            values: values,
++            cache: cache,
++            scale: scale,
++            mask: mask
++        )
++        .transposed(0, 2, 1, 3)
++        .reshaped(B, L, -1)
++
++        return wo(output)
++    }
++}
++
++// MARK: - MLP (dense feed-forward + shared expert)
++
++private class Llama4MLP: Module, UnaryLayer {
++    @ModuleInfo(key: "gate_proj") var gate: Linear
++    @ModuleInfo(key: "down_proj") var down: Linear
++    @ModuleInfo(key: "up_proj") var up: Linear
++
++    init(dimensions: Int, hiddenDimensions: Int) {
++        _gate.wrappedValue = Linear(dimensions, hiddenDimensions, bias: false)
++        _down.wrappedValue = Linear(hiddenDimensions, dimensions, bias: false)
++        _up.wrappedValue = Linear(dimensions, hiddenDimensions, bias: false)
++    }
++
++    func callAsFunction(_ x: MLXArray) -> MLXArray {
++        down(silu(gate(x)) * up(x))
++    }
++}
++
++// MARK: - MoE
++
++private class Llama4MoE: Module, UnaryLayer {
++    let topK: Int
++    let numExperts: Int
++
++    @ModuleInfo(key: "experts") var experts: SwitchGLU
++    @ModuleInfo(key: "router") var router: Linear
++    @ModuleInfo(key: "shared_expert") var sharedExpert: Llama4MLP
++
++    init(_ args: Llama4TextConfiguration) {
++        self.topK = args.numExpertsPerToken
++        precondition(self.topK == 1, "Llama4 MoE only supports 1 expert per token")
++        self.numExperts = args.numLocalExperts
++
++        _experts.wrappedValue = SwitchGLU(
++            inputDims: args.hiddenSize, hiddenDims: args.intermediateSize,
++            numExperts: args.numLocalExperts)
++        _router.wrappedValue = Linear(args.hiddenSize, args.numLocalExperts, bias: false)
++        _sharedExpert.wrappedValue = Llama4MLP(
++            dimensions: args.hiddenSize, hiddenDimensions: args.intermediateSize)
++    }
++
++    func callAsFunction(_ x: MLXArray) -> MLXArray {
++        let logits = router(x)
++        let k = topK
++        let indices = MLX.argPartition(-logits, kth: k - 1, axis: -1)[.ellipsis, ..<k]
++        var scores = MLX.takeAlong(logits, indices, axis: -1)
++        scores = sigmoid(scores.asType(.float32)).asType(x.dtype)
++
++        // experts(x * scores, indices) → [B, L, 1, D]; squeeze the top-1 axis.
++        let out = experts(x * scores, indices).squeezed(axis: 2)
++        return out + sharedExpert(x)
++    }
++}
++
++// MARK: - Decoder Layer
++
++private class Llama4DecoderLayer: Module {
++    @ModuleInfo(key: "self_attn") var selfAttn: Llama4Attention
++    @ModuleInfo(key: "input_layernorm") var inputLayerNorm: RMSNorm
++    @ModuleInfo(key: "post_attention_layernorm") var postAttentionLayerNorm: RMSNorm
++
++    let feedForward: UnaryLayer
++
++    init(_ args: Llama4TextConfiguration, layerIdx: Int) {
++        _selfAttn.wrappedValue = Llama4Attention(args, layerIdx: layerIdx)
++
++        // is_moe_layer = (layer_idx % step) == (step - 1). For Scout step==1 ⇒ every layer MoE.
++        let isMoeLayer =
++            (layerIdx % args.interleaveMoeLayerStep) == (args.interleaveMoeLayerStep - 1)
++        if isMoeLayer {
++            self.feedForward = Llama4MoE(args)
++        } else {
++            self.feedForward = Llama4MLP(
++                dimensions: args.hiddenSize, hiddenDimensions: args.intermediateSizeMLP)
++        }
++
++        _inputLayerNorm.wrappedValue = RMSNorm(dimensions: args.hiddenSize, eps: args.rmsNormEps)
++        _postAttentionLayerNorm.wrappedValue = RMSNorm(
++            dimensions: args.hiddenSize, eps: args.rmsNormEps)
++    }
++
++    func callAsFunction(
++        _ x: MLXArray, mask: MLXFast.ScaledDotProductAttentionMaskMode, cache: KVCache?
++    ) -> MLXArray {
++        var r = selfAttn(inputLayerNorm(x), mask: mask, cache: cache)
++        let h = x + r
++        r = feedForward(postAttentionLayerNorm(h))
++        return h + r
++    }
++}
++
++// MARK: - Inner model (`language_model.model`)
++
++private class Llama4ModelInner: Module {
++    let args: Llama4TextConfiguration
++    let attentionChunkSize: Int
++
++    @ModuleInfo(key: "embed_tokens") var embedTokens: Embedding
++    fileprivate let layers: [Llama4DecoderLayer]
++    let norm: RMSNorm
++
++    init(_ args: Llama4TextConfiguration) {
++        self.args = args
++        self.attentionChunkSize = args.attentionChunkSize
++        precondition(args.vocabularySize > 0)
++
++        _embedTokens.wrappedValue = Embedding(
++            embeddingCount: args.vocabularySize, dimensions: args.hiddenSize)
++        self.layers = (0 ..< args.hiddenLayers).map { Llama4DecoderLayer(args, layerIdx: $0) }
++        self.norm = RMSNorm(dimensions: args.hiddenSize, eps: args.rmsNormEps)
++    }
++
++    func callAsFunction(_ inputs: MLXArray, cache: [KVCache]?) -> MLXArray {
++        var h = embedTokens(inputs)
++
++        // Mirror Python: trim the chunked-cache fronts, then read start/offset
++        // off the first (chunked) cache. ChunkedKVCache exposes start_position
++        // via metaState[1]; offset is the public KVCache `offset`.
++        var start = 0
++        var offset = 0
++        if let cache {
++            for (idx, c) in cache.enumerated() where (idx + 1) % 4 != 0 {
++                (c as? ChunkedKVCache)?.maybeTrimFront()
++            }
++            offset = cache[0].offset
++            if let chunked = cache[0] as? ChunkedKVCache, chunked.metaState.count == 2 {
++                start = Int(chunked.metaState[1]) ?? 0
++            }
++        }
++        let end = offset + h.dim(1)
++
++        // Only materialize masks for the prefill (multi-token) pass — single-token
++        // decode needs none (matches the repo's createAttentionMask convention).
++        var chunkMaskMode: MLXFast.ScaledDotProductAttentionMaskMode = .none
++        var globalMaskMode: MLXFast.ScaledDotProductAttentionMaskMode = .none
++        if h.dim(1) > 1 {
++            // Chunked (local) attention mask — port of the Python block-position math:
++            //   linds = arange(start, end)            (keys, row / last axis)
++            //   rinds = arange(offset, end)[:, None]  (queries, column axis)
++            //   block_pos = |(linds // chunk) - (rinds // chunk)|
++            //   token_pos = linds <= rinds
++            //   chunk_mask = (block_pos == 0) & token_pos
++            let linds = MLXArray(Int32(start) ..< Int32(end))
++            let rinds = MLXArray(Int32(offset) ..< Int32(end))[0..., .newAxis]
++            let zero = MLXArray(Int32(0))
++            let blockPos = MLX.abs(
++                (linds / Int32(attentionChunkSize)) - (rinds / Int32(attentionChunkSize)))
++            let tokenPos = linds .<= rinds
++            let chunkMask = (blockPos .== zero) & tokenPos
++            chunkMaskMode = .array(chunkMask)
++
++            // Global (full-causal) mask, keyed off a global-cache layer (index 3,
++            // which is a plain KVCacheSimple). Python: create_attention_mask(h, cache[3]).
++            let globalOffset = cache.map { $0[3].offset } ?? 0
++            globalMaskMode = .array(createCausalMask(n: h.dim(1), offset: globalOffset))
++        }
++
++        for (idx, layer) in layers.enumerated() {
++            let useChunked = (idx + 1) % 4 != 0
++            let mask = useChunked ? chunkMaskMode : globalMaskMode
++            h = layer(h, mask: mask, cache: cache?[idx])
++        }
++
++        return norm(h)
++    }
++}
++
++// MARK: - Language model (`language_model`)
++
++private class Llama4LanguageModel: Module {
++    fileprivate let model: Llama4ModelInner
++    @ModuleInfo(key: "lm_head") var lmHead: Linear
++
++    init(_ args: Llama4TextConfiguration) {
++        self.model = Llama4ModelInner(args)
++        // tie_word_embeddings is false for Scout → real lm_head.
++        _lmHead.wrappedValue = Linear(args.hiddenSize, args.vocabularySize, bias: false)
++    }
++
++    func callAsFunction(_ inputs: MLXArray, cache: [KVCache]?) -> MLXArray {
++        lmHead(model(inputs, cache: cache))
++    }
++}
++
++// MARK: - Public model
++
++public class Llama4Model: Module, LLMModel, KVCacheDimensionProvider {
++    public let vocabularySize: Int
++    public let kvHeads: [Int]
++
++    @ModuleInfo(key: "language_model") fileprivate var languageModel: Llama4LanguageModel
++
++    let configuration: Llama4Configuration
++    private let hiddenLayers: Int
++    private let attentionChunkSize: Int
++
++    /// Init from a bare `llama4_text` config (text-only checkpoint, no `text_config` nesting).
++    public convenience init(_ textConfig: Llama4TextConfiguration) {
++        self.init(Llama4Configuration(textConfig: textConfig))
++    }
++
++    public init(_ args: Llama4Configuration) {
++        let text = args.textConfig
++        self.configuration = args
++        self.vocabularySize = text.vocabularySize
++        self.kvHeads = (0 ..< text.hiddenLayers).map { _ in text.kvHeads }
++        self.hiddenLayers = text.hiddenLayers
++        self.attentionChunkSize = text.attentionChunkSize
++        _languageModel.wrappedValue = Llama4LanguageModel(text)
++    }
++
++    public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]?) -> MLXArray {
++        languageModel(inputs, cache: cache)
++    }
++
++    public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
++        var w = weights
++
++        // Text-only port: drop the vision tower + multimodal projector.
++        w = w.filter {
++            !($0.key.contains("vision_model") || $0.key.contains("multi_modal_projector"))
++        }
++
++        // Fused experts → SwitchGLU layout. The 4bit repo stores these at full
++        // precision (no `.scales`/`.biases` on disk — see header note), so the
++        // Python split+swapaxes applies directly to float tensors.
++        let prefixBase = "language_model.model.layers"
++        for l in 0 ..< hiddenLayers {
++            let prefix = "\(prefixBase).\(l).feed_forward.experts"
++            if let v = w["\(prefix).gate_up_proj"] {
++                w["\(prefix).gate_up_proj"] = nil
++                let parts = MLX.split(v, parts: 2, axis: -1)
++                // [num_experts, in, hidden] → [num_experts, hidden, in] for SwitchGLU.
++                w["\(prefix).gate_proj.weight"] = MLX.swappedAxes(parts[0], 1, 2)
++                w["\(prefix).up_proj.weight"] = MLX.swappedAxes(parts[1], 1, 2)
++            }
++            if let down = w["\(prefix).down_proj"] {
++                w["\(prefix).down_proj"] = nil
++                w["\(prefix).down_proj.weight"] = MLX.swappedAxes(down, 1, 2)
++            }
++        }
++
++        return w
++    }
++
++    /// Cache factory (port of Python `make_cache`): chunked local cache for the
++    /// 3-of-4 RoPE layers, global (plain) cache every 4th layer.
++    public func newCache(parameters: GenerateParameters?) -> [KVCache] {
++        (0 ..< hiddenLayers).map { i in
++            if (i + 1) % 4 != 0 {
++                return ChunkedKVCache(chunkSize: attentionChunkSize)
++            } else {
++                return KVCacheSimple()
++            }
++        }
++    }
++}
++
++// MARK: - LoRA
++
++extension Llama4Model: LoRAModel {
++    public var loraLayers: [Module] {
++        languageModel.model.layers
++    }
++}

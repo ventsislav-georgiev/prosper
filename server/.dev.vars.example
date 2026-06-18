@@ -1,0 +1,6 @@
+# Copy to `.dev.vars` for local `wrangler dev`. Never commit `.dev.vars`.
+# In production these are set with `wrangler secret put <NAME>`.
+
+RESEND_API_KEY="re_xxxxxxxx"
+LICENSE_SIGNING_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"..."}'
+LEMONSQUEEZY_WEBHOOK_SECRET="your-webhook-signing-secret"

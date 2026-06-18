@@ -1,0 +1,36 @@
+[extension]
+id          = "com.prosper.base64"
+name        = "base64"
+title       = "Base64"
+description = "Base64 encode / decode in a live split-pane window."
+version     = "2.0.0"
+author      = "prosper"
+license     = "MIT"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# A plain command that LAUNCHES the Base64 window (no runner "mode"). Typing any
+# of the verbs in the launcher and pressing Enter opens the split-pane converter;
+# `base64 <text>` pre-fills it. The router pre-filter accepts the bare verb or the
+# verb followed by text (word boundary), so "b64encoded" does not trigger it.
+[[contributes.commands]]
+id          = "base64.open"
+title       = "Base64"
+description = "Open the Base64 encode / decode window"
+mode            = "no-view"
+icon            = "lock.rectangle"
+keywords        = ["base64", "encode", "decode", "b64"]
+match           = "^(base64|b64|unbase64|base64d|b64d)\\b"
+# Surfaces as a launcher row; Enter opens the split-pane window (host.window.open)
+# instead of auto-running on each keystroke.
+launches_window = true

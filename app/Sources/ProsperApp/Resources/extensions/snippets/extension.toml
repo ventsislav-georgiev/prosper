@@ -1,0 +1,67 @@
+# Snippets — save reusable text snippets with dynamic placeholders and insert
+# them from the palette (Enter pastes the resolved text into the frontmost app).
+# Inline keyword auto-expansion is handled natively (see Snippets/SnippetExpander);
+# this extension is the hackable management + browse/insert surface over the
+# native store + placeholder engine (host.snippets.*). Alfred/Raycast-parity.
+[extension]
+id          = "com.prosper.snippets"
+name        = "snippets"
+title       = "Snippets"
+description = "Insert saved text snippets with dynamic placeholders; manage them with sn add|rm|list."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# `sn add` opens a host-rendered dialog (host.window.open + host.ui.form) to save
+# a new snippet — listed FIRST so its `^sn add` route wins over the broader
+# `^sn( |$)` of snippets.run. Surfaces as a launcher row; Enter opens the form.
+[[contributes.commands]]
+id              = "snippets.add"
+title           = "Add Snippet"
+description     = "Save a new snippet in a dialog"
+mode            = "no-view"
+icon            = "text.badge.plus"
+keywords        = ["sn add", "add snippet", "new snippet", "create snippet", "snippet add"]
+match           = "^sn add( |$)"
+launches_window = true
+
+# Single no-view command; the leading `sn` verb is sub-parsed in Lua
+# (browse / rm / list / help). Browsing returns a host.ui.list whose item titles
+# are the resolved snippet bodies, so Enter pastes the expansion into the prior app.
+[[contributes.commands]]
+id          = "snippets.run"
+title       = "Snippet"
+description = "Insert a saved snippet, or manage them: sn add|rm|list."
+mode        = "no-view"
+icon        = "text.append"
+keywords    = ["sn", "snippet", "snippets", "expand", "paste"]
+match       = "^sn( |$)"
+# Runner-mode trigger: typing "sn " locks the launcher into this command, showing
+# the "Snippet" chip and stripping the prefix from the visible query.
+prefix      = "sn "
+
+# Dynamic (Tier-B) settings: the whole Snippets management page — expansion
+# toggles, the snippet library (with a rich-text body editor), collections, and
+# ignored apps — is rendered by `settings_render` and edited via `settings_action`,
+# replacing the former hardcoded Swift pane. Snippet/collection edits go through
+# the native SnippetStore (host.snippets.*) so the file mirror + inline expander
+# stay in sync; the four toggles + ignored apps read/write global Preferences.
+[[contributes.settings_sections]]
+id        = "snippets"
+title     = "Snippets"
+icon      = "text.append"
+accent    = "Snippets"
+subtitle  = "Reusable text with dynamic placeholders"
+dynamic   = true

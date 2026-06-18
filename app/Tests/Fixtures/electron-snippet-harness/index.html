@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Prosper Snippet Harness</title>
+    <style>
+      body { font: 14px -apple-system, system-ui; margin: 16px; }
+      label { display: block; margin: 12px 0 4px; color: #444; }
+      input, textarea, #ce {
+        display: block; width: 420px; font: 14px -apple-system, system-ui;
+      }
+      #ce { min-height: 48px; border: 1px solid #888; padding: 6px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h3>Electron snippet harness</h3>
+    <p>Click a field and type a snippet keyword (e.g. <code>;;sig</code>).</p>
+
+    <label for="webinput">&lt;input&gt;</label>
+    <input id="webinput" type="text" />
+
+    <label for="webtextarea">&lt;textarea&gt;</label>
+    <textarea id="webtextarea" rows="3"></textarea>
+
+    <label for="ce">contenteditable</label>
+    <div id="ce" contenteditable="true"></div>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+dist/
+.dev.vars
+*.log
+# never commit signing keys
+*.pem
+license-key*.json

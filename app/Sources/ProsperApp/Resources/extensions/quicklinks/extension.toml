@@ -1,0 +1,59 @@
+# Quicklinks — save frequently used URLs, file paths, and deeplinks and open
+# them instantly from the palette, with `{query}` argument substitution.
+# Raycast-parity feature (https://manual.raycast.com/quicklinks), implemented as
+# a pure-Lua system extension over host.shell (`open`) + host.prefs storage.
+[extension]
+id          = "com.prosper.quicklinks"
+name        = "quicklinks"
+title       = "Quicklinks"
+description = "Save URLs / file paths / deeplinks and open them with {query} substitution."
+version     = "1.1.0"
+author      = "Prosper"
+license     = "MIT"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# `ql add` opens a host-rendered dialog (host.window.open + host.ui.form) to save
+# a new quicklink — listed FIRST so its `^ql add` route wins over the broader
+# `^ql( |$)` of quicklinks.run. Surfaces as a launcher row; Enter opens the form.
+[[contributes.commands]]
+id              = "quicklinks.add"
+title           = "Add Quicklink"
+description     = "Save a new quicklink in a dialog"
+mode            = "no-view"
+icon            = "link.badge.plus"
+keywords        = ["ql add", "add quicklink", "new quicklink", "create quicklink", "quicklink add"]
+match           = "^ql add( |$)"
+launches_window = true
+
+# Single no-view command; the leading `ql` verb is sub-parsed in Lua
+# (open / add / rm / list / help). Runs on the off-main async lane because the
+# `open` action goes through host.shell.
+[[contributes.commands]]
+id          = "quicklinks.run"
+title       = "Quicklink"
+description = "Open a saved quicklink, or manage them: ql add|rm|list."
+mode        = "no-view"
+keywords    = ["ql", "quicklink", "link", "open", "bookmark"]
+match       = "^ql( |$)"
+# Runner-mode trigger: typing "ql " locks the launcher into this command, showing
+# the "Quicklink" chip and stripping the prefix from the visible query.
+prefix      = "ql "
+
+# Dynamic (Tier-B) settings: its own sidebar section, rendered by the extension's
+# settings_render handler and edited via settings_action. The editable quicklinks
+# list is a `records` control over the same host.prefs store the runner reads, so
+# edits show up immediately. `accent = "Links"` tints the trailing word neon.
+[[contributes.settings_sections]]
+id        = "quicklinks"
+title     = "QuickLinks"
+icon      = "link"
+accent    = "Links"
+subtitle  = "Save URLs, file paths and deeplinks; open them with ql <name>"
+dynamic   = true

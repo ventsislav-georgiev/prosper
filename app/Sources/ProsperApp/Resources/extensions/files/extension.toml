@@ -1,0 +1,35 @@
+[extension]
+id          = "com.prosper.files"
+name        = "files"
+title       = "Find Files"
+description = "Search files and folders with Spotlight and open one."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "doc.text.magnifyingglass"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# Runner-mode command. `f ` locks the launcher into file-search mode; the query is
+# matched against file/folder names via Spotlight (host.files.search) and each
+# result row offers the Alfred/Raycast file actions — Open (⏎), Reveal (⌘⏎),
+# Quick Look (⌘Y), Copy Path, Copy File, Move to Trash — surfaced natively by the
+# runner. Filter tokens: `kind:pdf`, `ext:png`, `in:~/Documents`, `content:1`.
+[[contributes.commands]]
+id          = "files.run"
+title       = "Find Files"
+description = "Search files and folders with Spotlight and open one"
+mode        = "no-view"
+icon        = "doc.text.magnifyingglass"
+keywords    = ["find", "file", "files", "folder", "search", "open", "spotlight"]
+prefix      = "f "

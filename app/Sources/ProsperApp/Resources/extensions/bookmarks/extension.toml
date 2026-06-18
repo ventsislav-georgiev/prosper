@@ -1,0 +1,54 @@
+# Browser Bookmarks — import bookmarks from Chrome/Brave/Edge/Vivaldi/Opera, Arc,
+# Safari, and Firefox, then search and open them from the palette. A pure-Lua
+# system extension over host.shell (cat / plutil / sqlite3) + host.json, caching a
+# flattened snapshot in host.prefs so search never re-shells. Opening a result
+# goes through the host's native URL-open path (the same favicon engine as
+# Quicklinks). See docs/ADR-002-extensibility.md and BROWSER_BOOKMARKS_PLAN.md.
+[extension]
+id          = "com.prosper.bookmarks"
+name        = "bookmarks"
+title       = "Browser Bookmarks"
+description = "Search and open bookmarks imported from Chrome, Brave, Edge, Vivaldi, Opera, Arc, Safari, and Firefox."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "bookmark"
+system      = true
+# Optional host permission this extension can use. Only the Safari source needs
+# Full Disk Access (its bookmarks live under the TCC-protected ~/Library/Safari);
+# every other browser imports without it. Surfaced in Settings › Extensions.
+permissions = ["full-disk-access"]
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Single no-view command; the leading `bm` verb is sub-parsed in Lua
+# (search / import / browsers / help). Search runs on the off-main async lane
+# because the import path goes through host.shell.
+[[contributes.commands]]
+id          = "bookmarks.run"
+title       = "Browser Bookmarks"
+description = "Search bookmarks, or manage them: bm import | browsers | help."
+mode        = "no-view"
+icon        = "bookmark"
+keywords    = ["bm", "bookmark", "bookmarks", "browser", "chrome", "safari", "firefox", "arc", "brave", "edge"]
+match       = "^bm( |$)"
+# Runner-mode trigger: typing "bm " locks the launcher into this command, showing
+# the "Browser Bookmarks" chip and stripping the prefix from the visible query.
+prefix      = "bm "
+
+# Dynamic (Tier-B) settings: rendered by the extension's `settings_render` handler
+# so each enabled browser's Sources toggle can carry a live count badge of the
+# bookmarks detected at the last scan. Editing a toggle / max_results / re-scanning
+# routes through `settings_action`. Persists to the same host.prefs keys the runner
+# reads (`source.<browser>`, `max_results`). No hardcoded Swift UI.
+[[contributes.settings_sections]]
+id        = "bookmarks"
+title     = "Browser Bookmarks"
+icon      = "bookmark"
+subtitle  = "Import and search browser bookmarks"
+dynamic   = true

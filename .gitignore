@@ -1,0 +1,45 @@
+# Rust
+/core/target/
+**/*.rs.bk
+
+# Swift / SwiftPM
+/app/.build/
+/app/.swiftpm/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# Build output
+/build/
+/dist/
+*.app
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# OMC state (local orchestration only)
+.omc/state/
+.omc/logs/
+
+# Demo pipeline (local until the recordings/media are ready; extracted media
+# will live in .github/media)
+demo/
+
+# Sparkle signing — never commit private keys or downloaded tools
+.sparkle-tools/
+*.pem
+eddsa_priv*
+app/*.log
+docs/
+scripts/AppIcon-1024.png
+
+# Signing / notarization secrets (never commit)
+scripts/embedded.provisionprofile
+*.p12
+*.cer
+
+# Signing keys (never commit)
+*.jwk
+server/.signing-key.jwk

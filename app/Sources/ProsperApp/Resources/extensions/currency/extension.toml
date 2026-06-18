@@ -1,0 +1,66 @@
+[extension]
+id          = "com.prosper.currency"
+name        = "currency"
+title       = "Currency"
+description = "Convert between currencies using daily FX rates (cached once per day). Demonstrates host.http + host.prefs + host.time."
+version     = "1.1.0"
+author      = "prosper"
+license     = "MIT"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+[[contributes.commands]]
+id          = "currency.convert"
+title       = "Convert"
+description = "Convert an amount between currencies (e.g. \"32 usd to eur\")"
+mode        = "no-view"
+keywords    = ["currency", "fx", "exchange", "money", "convert"]
+# Router pre-filter: a number, a separator, then a trailing 3-letter code
+# (so "32 usd to eur" matches but "1 year to minutes" / "5 km to kg" do not).
+match       = "[0-9].*( to | in |->|→)\\s*[A-Za-z]{3}\\s*$"
+
+# Tier-A declarative settings section (manifest only — host-rendered + persisted to
+# host.prefs). A worked example of the pluggable settings system; the values are
+# persisted for the extension to consume (wiring them into conversion is a follow-up).
+[[contributes.settings_sections]]
+id        = "currency"
+title     = "Currency"
+icon      = "banknote"
+subtitle  = "Defaults for currency conversion"
+
+  [[contributes.settings_sections.controls]]
+  kind = "group"
+  title = "Conversion"
+  footer = "Used when you omit a target, e.g. \"32 usd\"."
+
+  [[contributes.settings_sections.controls]]
+  kind = "enum"
+  key = "base"
+  title = "Base currency"
+  values = ["USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD"]
+  default = "USD"
+
+  [[contributes.settings_sections.controls]]
+  kind = "number"
+  key = "decimals"
+  title = "Decimal places"
+  default = 2
+  min = 0
+  max = 6
+  step = 1
+
+  [[contributes.settings_sections.controls]]
+  kind = "toggle"
+  key = "show_inverse"
+  title = "Show inverse rate"
+  default = false
