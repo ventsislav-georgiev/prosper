@@ -54,8 +54,11 @@ brew install --cask ventsislav-georgiev/tap/prosper
 | **Currency** | `32 usd to eur` · `$30 CAD + 5 USD - 7 EUR` | today's FX (cached daily), mixed-currency math |
 | **Time** | `2:30 pm HKT in Berlin` · `time in Tokyo` | cross-zone conversion, city or zone names |
 | **App** | `o Safari` | launch app by name (fuzzy) |
+| **Files** | `f report.pdf` | Spotlight file/folder search, open one |
 | **Shell** | `> date` | run command, output inline |
 | **Base64** | `base64 hi` / `unbase64 aGk=` | live dual-pane encode/decode |
+| **Bookmarks** | `bm github` | search browser bookmarks (Chrome/Brave/Edge/Vivaldi/Opera/Arc/Safari/Firefox/Zen), open one |
+| **Snippets** | `sn sig` · `sn add` | insert a saved snippet (dynamic placeholders); `add`/`rm`/`list` to manage |
 | **QuickLink** | `ql gh anthropics/repo` | open a saved URL/path with `{query}` |
 | **QuickDir** | `qd projects api` | browse a saved dir's subfolders, run its action on one |
 | **Window** | `win left` / `win max` | snap the focused window (also `⌃⌥←→↑↓` / `⌃⌥⏎` / `⌃⌥C` global hotkeys) |
