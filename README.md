@@ -21,7 +21,7 @@
 ## Why Prosper
 
 - **Inline autocomplete everywhere** — ghost-text continuations at your caret in *any* app, powered by an in-process MLX model (Gemma 4 E4B QAT 8-bit, auto-downloaded on first launch; lighter E2B/E4B variants selectable in Settings).
-- **A command palette that computes** — calc, units, currency, time zones, translate, shell, window snapping, quicklinks… one hotkey, type, `⏎`.
+- **A command palette that computes** — calc, units, currency, time zones, translate, base64, shell, window snapping, app launcher, file search, browser bookmarks, snippets, quicklinks, quickdirs… one hotkey, type, `⏎`.
 - **Local by architecture, not by promise** — Swift with **in-process MLX inference**: no extra process, minimal CPU/memory, nothing leaves your Mac but the one-time model pull.
 - **A local coding agent** — `⌥G` opens a chat window driving an on-device tool-using agent (read/edit files, run shells, MCP tools), powered by an in-process MLX model — no API key, no cloud.
 - **Extensible end to end** — Lua commands without recompiling, plus MCP servers, agent lifecycle hooks, and JS/TS plugins for the coding agent.
