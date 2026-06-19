@@ -1442,10 +1442,13 @@ private struct ExtCardRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
+            // No .textSelection here: these cards are click-to-open (onTapGesture
+            // below), and SwiftUI's text-selection machinery swallows the FIRST
+            // click to place a cursor, so the first tap on a fresh list did nothing
+            // and only the second opened the row (the bookmark "first click dead" bug).
             Text(row.primary)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundColor(Neon.textPrimary)
-                .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1464,7 +1467,6 @@ private struct ExtCardRow: View {
                         Text(row.secondary)
                             .font(.system(size: 13))
                             .foregroundColor(Neon.textSecondary)
-                            .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
