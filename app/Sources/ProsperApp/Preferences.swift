@@ -433,18 +433,18 @@ enum Preferences {
 
     static var autocompleteEnabled: Bool {
         get {
-            if defaults.object(forKey: Keys.autocompleteEnabled) == nil { return true }
+            if defaults.object(forKey: Keys.autocompleteEnabled) == nil { return false }
             return defaults.bool(forKey: Keys.autocompleteEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.autocompleteEnabled) }
     }
 
     /// Whether the coding agent is enabled. When off, its Settings category and
-    /// the menu-bar "Coding Agent…" item are hidden. Defaults on (matches the
-    /// prior always-available behaviour).
+    /// the menu-bar "Coding Agent…" item are hidden. Defaults off so a fresh
+    /// install is opt-in.
     static var agentEnabled: Bool {
         get {
-            if defaults.object(forKey: Keys.agentEnabled) == nil { return true }
+            if defaults.object(forKey: Keys.agentEnabled) == nil { return false }
             return defaults.bool(forKey: Keys.agentEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.agentEnabled) }

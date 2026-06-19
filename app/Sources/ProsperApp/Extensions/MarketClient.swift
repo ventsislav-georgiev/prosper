@@ -109,8 +109,19 @@ enum MarketClient {
         return Dictionary(resp.packages.map { ($0.id, $0.latest_version) }, uniquingKeysWith: { a, _ in a })
     }
 
+    /// The latest published version of `id`, or nil if it was never published
+    /// (404) or has been yanked. Drives the Publish/Published row UX.
+    static func publishedVersion(id: String) async -> String? {
+        guard let (data, code) = try? await get(base("/market/packages/\(id)")), code < 300
+        else { return nil }
+        struct Resp: Codable { struct Pkg: Codable { let latest_version: String; let status: String }; let package: Pkg }
+        guard let p = (try? JSONDecoder().decode(Resp.self, from: data))?.package, p.status == "active"
+        else { return nil }
+        return p.latest_version
+    }
+
     static func download(id: String, version: String) async throws -> Download {
-        let url = base("/market/download/\(enc(id))/\(enc(version))")
+        let url = base("/market/download/\(id)/\(version)")
         let (data, code) = try await get(url)
         guard code < 300 else { throw MarketError.http(code, errorText(data)) }
         guard let dl = try? JSONDecoder().decode(Download.self, from: data) else { throw MarketError.decode }
@@ -147,16 +158,16 @@ enum MarketClient {
 
     static func yank(id: String) async throws {
         guard let session = SupporterStore.load()?.session else { throw MarketError.notSignedIn }
-        let (data, code) = try await send("DELETE", path: "/market/packages/\(enc(id))", session: session, body: nil)
+        let (data, code) = try await send("DELETE", path: "/market/packages/\(id)", session: session, body: nil)
         guard code < 300 else { throw MarketError.http(code, errorText(data)) }
     }
 
     // MARK: - HTTP helpers
 
+    // appending(path:) percent-encodes the path itself (preserving "/" and ".").
+    // Pass RAW id/version segments — pre-encoding them here double-encodes ("." ->
+    // "%2E" -> "%252E"), which the server reads as a literal id and 404s.
     private static func base(_ path: String) -> URL { ProsperServer.baseURL.appending(path: path) }
-    private static func enc(_ s: String) -> String {
-        s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s
-    }
 
     private static func get(_ url: URL) async throws -> (Data, Int) {
         var r = URLRequest(url: url)

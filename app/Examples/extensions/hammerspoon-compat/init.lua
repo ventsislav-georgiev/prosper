@@ -596,6 +596,86 @@ function hs_eventtap_dispatch(payload)
 end
 
 -- ============ settings (dynamic Tier-B) ============
+
+-- Describe one hs.prosper.* native rule for the diagnostics list.
+local function native_rule_label(r)
+    if r.double_tap then return r.from .. "  ⇒  double-tap " .. tostring(r.double_tap) end
+    if r.to then return r.from .. "  ⇒  " .. tostring(r.to) end
+    if r.system then return r.from .. "  ⇒  media " .. tostring(r.system) end
+    if r.launch then return r.from .. "  ⇒  launch " .. tostring(r.launch) end
+    if r.swallow then return r.from .. "  ⇒  swallow" end
+    return r.from or "?"
+end
+
+-- Re-run the config (effects suppressed) and report what was parsed and shimmed:
+-- hotkeys, native key rules, raw eventtaps (and which event types actually run),
+-- and timers. Returns a list of `info` rows ready to splice into the section.
+-- This is the user-facing answer to "did my init.lua actually take effect?".
+local function diagnostics_rows()
+    local rows = {}
+    local function info(title, subtitle)
+        rows[#rows + 1] = host.ui.settings.row { kind = "info", title = title, subtitle = subtitle }
+    end
+    if not is_enabled() then
+        info("Status", "Disabled — turn on the toggle above to load your config.")
+        return rows
+    end
+    -- If Accessibility is missing, NOTHING below will actually fire — say so first,
+    -- loudly, so the parsed-count rows aren't mistaken for "working".
+    if host.perms and host.perms.has and not host.perms.has("accessibility") then
+        info("⚠︎ Accessibility NOT granted",
+            "Everything below is parsed but DEAD until you grant Accessibility (row above) and Re-check.")
+    end
+    local ctx = run_user_config("rebuild")
+    if not ctx then
+        info("Status", "No ~/.hammerspoon/init.lua found, or it failed to load (check logs).")
+        return rows
+    end
+
+    -- Hotkeys (hs.hotkey.bind) → invoke rules.
+    local hot = {}
+    for _, b in ipairs(ctx.binds or {}) do
+        if b.combo and b.enabled then hot[#hot + 1] = b.combo end
+    end
+    info("Hotkeys", #hot == 0 and "none"
+        or (#hot .. " active:  " .. table.concat(hot, "   ·   ")))
+
+    -- Native key rules (hs.prosper.doubleTap / remap / swallow / …).
+    local nat = {}
+    for _, r in ipairs(ctx.native or {}) do nat[#nat + 1] = native_rule_label(r) end
+    info("Key remaps (hs.prosper)", #nat == 0 and "none"
+        or (#nat .. " active:  " .. table.concat(nat, "   ·   ")))
+
+    -- Raw eventtaps (hs.eventtap.new) — these need the resident VM (event_taps).
+    local taps, kd, sd, ignored = 0, false, false, false
+    for _, t in ipairs(ctx.eventtaps or {}) do
+        if t.running then
+            taps = taps + 1
+            if t.types["keyDown"] then kd = true end
+            if t.types["systemDefined"] then sd = true end
+            if t.types["keyUp"] or t.types["flagsChanged"] then ignored = true end
+        end
+    end
+    local served = {}
+    if kd then served[#served + 1] = "keyDown" end
+    if sd then served[#served + 1] = "systemDefined" end
+    local tapMsg
+    if taps == 0 then
+        tapMsg = "none"
+    else
+        tapMsg = taps .. " running, serving: " .. (next(served) and table.concat(served, " + ") or "—")
+        if ignored then
+            tapMsg = tapMsg .. "  (⚠︎ keyUp/flagsChanged taps are NOT delivered)"
+        end
+    end
+    info("Raw eventtaps (hs.eventtap)", tapMsg)
+
+    -- Timers (hs.timer.doAfter / doEvery).
+    local timers = ctx.timers and #ctx.timers or 0
+    info("Timers", timers == 0 and "none" or (timers .. " scheduled"))
+    return rows
+end
+
 -- The section is `dynamic = true` so EVERY control change is delivered to
 -- settings_action (a static section would silently write the pref and run
 -- nothing — the toggle would never install rules without a restart/Apply).
@@ -617,6 +697,18 @@ function settings_render(section_id, _state)
                         subtitle = "When off, this extension does nothing at all",
                         value = is_enabled() and "true" or "false",
                     },
+                    -- HARD requirement: every shortcut this extension installs rides
+                    -- Prosper's CGEvent keystroke tap, and macOS refuses to start that
+                    -- tap without Accessibility. Carbon-based app shortcuts work without
+                    -- it, which is why those keep firing while hotkeys/remaps/eventtaps/
+                    -- media keys stay dead. This row shows the live grant state + a
+                    -- one-click "Open" into System Settings and a "Re-check".
+                    host.ui.settings.row {
+                        kind = "permission", name = "accessibility",
+                        title = "Accessibility (required)",
+                        subtitle = "Hotkeys, key remaps, raw eventtaps and media keys do "
+                            .. "NOT fire without this. Grant it, then Re-check.",
+                    },
                     host.ui.settings.row {
                         kind = "info", title = "Config path",
                         subtitle = "~/.hammerspoon/init.lua",
@@ -628,6 +720,13 @@ function settings_render(section_id, _state)
                         style = "neon",
                     },
                 },
+            },
+            -- What actually parsed + shimmed — so a config that silently registered
+            -- nothing (e.g. an eventtap that never :start()ed) is visible at a glance.
+            host.ui.settings.section {
+                id = section_id .. ".loaded", title = "What's loaded", accent = "list.bullet",
+                footer = "Re-read above after editing init.lua to refresh this list.",
+                rows = diagnostics_rows(),
             },
         },
     })

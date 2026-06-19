@@ -58,7 +58,7 @@ struct ExtensionsPane: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Button("Check for Updates", action: checkUpdates)
-                            .buttonStyle(.borderless).font(.caption)
+                            .rowAction()
                             .help("Poll GitHub- and marketplace-installed extensions for newer versions and update them")
                     }
                 }
@@ -132,7 +132,9 @@ private struct ExtensionRow: View {
     let record: ExtensionRecord
 
     @State private var publishing = false
-    @State private var published = false
+    /// Latest version live on the marketplace for this id (nil = never published /
+    /// yanked / not yet fetched). Drives the Publish vs Published-badge UX.
+    @State private var publishedVersion: String?
     /// Errors from this row's own actions (trust/publish/uninstall/…) render
     /// inline here, not in the unrelated GitHub-install section below the list.
     @State private var rowError: String?
@@ -177,24 +179,24 @@ private struct ExtensionRow: View {
                     if let dir = registry.directory(id: record.id) {
                         NSWorkspace.shared.activateFileViewerSelecting([dir])
                     }
-                }.buttonStyle(.borderless).font(.caption)
+                }.rowAction()
 
                 if record.isSystem {
                     Button("Reset", action: reset)
-                        .buttonStyle(.borderless).font(.caption)
+                        .rowAction()
                         .help("Restore this system extension to its bundled version")
                 } else {
                     if record.trusted {
                         Button("Untrust", action: untrust)
-                            .buttonStyle(.borderless).font(.caption)
+                            .rowAction()
                             .help("Stop loading this extension until you trust it again")
                         publishButton
                     } else {
                         Button("Trust", action: trust)
-                            .buttonStyle(.borderless).font(.caption).bold()
+                            .rowAction(prominent: true)
                     }
                     Button(role: .destructive, action: uninstall) { Text("Uninstall") }
-                        .buttonStyle(.borderless).font(.caption)
+                        .rowAction()
                 }
             }
 
@@ -203,17 +205,37 @@ private struct ExtensionRow: View {
             }
         }
         .padding(.vertical, 4)
+        .task(id: record.id) { await refreshPublishedVersion() }
     }
 
     @ViewBuilder private var publishButton: some View {
         if publishing {
             ProgressView().controlSize(.small)
+        } else if let pv = publishedVersion {
+            if SemanticVersion(meta.version) > SemanticVersion(pv) {
+                // Local build is ahead of the marketplace — show what's live AND
+                // offer the version bump.
+                badge("v\(pv) published")
+                    .help("Version \(pv) is live on the marketplace")
+                Button("Publish v\(meta.version)", action: publish)
+                    .rowAction(prominent: true)
+                    .help("Push the newer local version (\(meta.version)) to the marketplace")
+            } else {
+                // Up to date (local == live, or somehow behind) — nothing to push.
+                badge("Published v\(pv)")
+                    .help("This version is live on the marketplace")
+            }
         } else {
-            Button(published ? "Published" : "Publish", action: publish)
-                .buttonStyle(.borderless).font(.caption)
-                .disabled(published)
-                .help("Publish this extension to the marketplace (or push a new version)")
+            Button("Publish", action: publish)
+                .rowAction()
+                .help("Publish this extension to the marketplace")
         }
+    }
+
+    private func refreshPublishedVersion() async {
+        guard !record.isSystem else { return }
+        let v = await MarketClient.publishedVersion(id: record.id)
+        await MainActor.run { publishedVersion = v }
     }
 
     /// Derive the marketplace category + look-and-feel preview from an extension's
@@ -292,7 +314,7 @@ private struct ExtensionRow: View {
                 let (kind, preview) = Self.themePreview(themes: themes, dir: dir)
                 try await MarketClient.publish(manifest: manifest, blobBase64: blob,
                                                kind: kind, preview: preview)
-                await MainActor.run { publishing = false; published = true }
+                await MainActor.run { publishing = false; publishedVersion = m.version }
             } catch {
                 await MainActor.run {
                     publishing = false
@@ -300,6 +322,30 @@ private struct ExtensionRow: View {
                 }
             }
         }
+    }
+}
+
+/// Borderless text actions read as labels, not buttons (no cursor change, no
+/// affordance). This styles them accent-colored with pressed feedback, and the
+/// `.rowAction` modifier adds a pointing-hand cursor on hover.
+private struct RowActionStyle: ButtonStyle {
+    var prominent = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.caption)
+            .fontWeight(prominent ? .bold : .regular)
+            .foregroundStyle(configuration.role == .destructive ? Neon.magenta : Color.accentColor)
+            .opacity(configuration.isPressed ? 0.5 : 1)
+            .contentShape(Rectangle())
+    }
+}
+
+private extension View {
+    func rowAction(prominent: Bool = false) -> some View {
+        buttonStyle(RowActionStyle(prominent: prominent))
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
     }
 }
 
@@ -349,7 +395,7 @@ private struct MarketBrowseSection: View {
                 if loading {
                     ProgressView().controlSize(.small)
                 } else {
-                    Button("Search", action: load).buttonStyle(.borderless).font(.caption)
+                    Button("Search", action: load).rowAction()
                 }
             }
             if let error {
