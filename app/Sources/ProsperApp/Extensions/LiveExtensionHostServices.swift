@@ -1,8 +1,10 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import SystemConfiguration
 import UniformTypeIdentifiers
 import UserNotifications
+import os
 
 /// Production implementation of `ExtensionHostServices`, bridging the extension
 /// host API to Prosper's native subsystems (system pasteboard, clipboard store,
@@ -89,26 +91,6 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
 
     func shellRun(_ command: String) async -> String {
         await ShellRunner.run(command)
-    }
-
-    // MARK: Coding agent (host.agent.*; drives AgentController on the main actor)
-
-    func agentRun(goal: String, cwd: String?, optsJSON: String?) -> String {
-        mainSync {
-            guard let runID = AgentController.shared.startExtensionRun(
-                goal: goal, cwd: cwd, optsJSON: optsJSON) else {
-                return #"{"error":"agent busy or empty goal"}"#
-            }
-            return "{\"runId\":\"\(runID)\"}"
-        }
-    }
-
-    func agentStatus(_ runID: String) -> String {
-        mainSync { AgentController.shared.extensionStatusJSON(runID) }
-    }
-
-    func agentResult(_ runID: String) -> String {
-        mainSync { AgentController.shared.extensionResultJSON(runID) }
     }
 
     // MARK: Outbound HTTP (trusted-extension capability)
@@ -478,6 +460,179 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
 
     func closeWindow() {
         mainSync { self.windowCloser?() }
+    }
+
+    /// Opens the Prosper Settings window at an extension's pane. `selection` is the
+    /// sidebar id ("ext:<extID>|<sectionID>") the window restores on open. Injected
+    /// by `AppDelegate`; nil before wiring / in headless runs (`openSettings` no-ops).
+    var settingsOpener: (@MainActor (_ selection: String) -> Void)?
+
+    func openSettings(extensionID: String, sectionID: String?) {
+        mainSync {
+            // nil sectionID → the extension's first sidebar section. Resolve it (an
+            // "ext:<id>|" with an empty section is not a real sidebar id and would
+            // just bounce the window to General). No pane for this extension → no-op
+            // rather than open Settings somewhere unrelated.
+            let sid = sectionID ?? SettingsHooks.shared.extensionRegistry?
+                .settingsSections(placement: "sidebar")
+                .first { $0.record.id == extensionID }?.section.id
+            guard let sid, !sid.isEmpty else { return }
+            self.settingsOpener?("ext:\(extensionID)|\(sid)")
+        }
+    }
+
+    // MARK: Durable timers (host.timer → TimerScheduler)
+
+    func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String) {
+        TimerScheduler.shared.schedule(extID: extensionID, id: id, every: every,
+                                       seconds: seconds, handler: handler)
+    }
+
+    func timerCancel(extensionID: String, id: String) {
+        TimerScheduler.shared.cancel(extID: extensionID, id: id)
+    }
+
+    // MARK: Logging + environment
+
+    private static let extLog = Logger(subsystem: "com.prosper.app", category: "extension")
+
+    func log(level: String, message: String) {
+        switch level {
+        case "error": Self.extLog.error("\(message, privacy: .public)")
+        case "warn":  Self.extLog.warning("\(message, privacy: .public)")
+        default:      Self.extLog.info("\(message, privacy: .public)")
+        }
+    }
+
+    func envGet(_ name: String) -> String? { ProcessInfo.processInfo.environment[name] }
+
+    // MARK: Power / caffeinate (host.caffeinate → IOKit + privileged pmset)
+
+    func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool) {
+        ExtensionResources.shared.setAssertion(extID: extensionID, kind: kind, on: on)
+    }
+
+    /// `pmset -a disablesleep` overrides lid-close sleep. Needs root — relies on the
+    /// user's NOPASSWD sudoers entry (same as the Hammerspoon openlid setup). Tracked
+    /// in ExtensionResources so it is reset on disable/quit (a crash can't wedge it).
+    func caffeinateSetDisableLidSleep(extensionID: String, on: Bool) async {
+        _ = await ShellRunner.run("/usr/bin/sudo /usr/bin/pmset -a disablesleep \(on ? 1 : 0)")
+        ExtensionResources.shared.setLidSleepDisabled(extID: extensionID, on: on)
+    }
+
+    func caffeinateLockScreen() {
+        // User-space lock (no entitlement): the CGSession menu-extra suspends the
+        // session. Fire-and-forget off-main.
+        Task.detached {
+            _ = await ShellRunner.run(
+                "'/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession' -suspend")
+        }
+    }
+
+    func caffeinateStartScreensaver() {
+        Task.detached { _ = await ShellRunner.run("/usr/bin/open -a ScreenSaverEngine") }
+    }
+
+    // MARK: Battery / network / screen (read-only)
+
+    func batteryPowerSource() -> String { SystemInfo.powerSource() }
+    func batteryPercentage() -> Int { SystemInfo.batteryPercentage() ?? -1 }
+
+    func networkIsReachable() -> Bool {
+        var addr = sockaddr()
+        addr.sa_len = UInt8(MemoryLayout<sockaddr>.size)
+        addr.sa_family = sa_family_t(AF_INET)
+        guard let reach = withUnsafePointer(to: &addr, { ptr in
+            SCNetworkReachabilityCreateWithAddress(nil, ptr)
+        }) else { return true }
+        var flags = SCNetworkReachabilityFlags()
+        guard SCNetworkReachabilityGetFlags(reach, &flags) else { return true }
+        return flags.contains(.reachable) && !flags.contains(.connectionRequired)
+    }
+
+    func screenAllJSON() -> String { mainSync { SystemInfo.screensJSON() } }
+
+    func screenLidClosed() -> Int {
+        switch SystemInfo.lidClosed() {
+        case .some(true): return 1
+        case .some(false): return 0
+        case nil: return -1
+        }
+    }
+
+    func resetResources(extensionID: String) {
+        let hadLid = ExtensionResources.shared.releaseAll(extID: extensionID)
+        if hadLid {
+            Task.detached { _ = await ShellRunner.run("/usr/bin/sudo /usr/bin/pmset -a disablesleep 0") }
+        }
+        Task { @MainActor in
+            ExtensionMenuBar.shared.removeAll(extensionID: extensionID)
+            ExtensionKeyRules.shared.removeRules(extensionID: extensionID)
+            ExtensionFSWatch.shared.removeAll(extensionID: extensionID)
+        }
+    }
+
+    // MARK: Host-rendered UI (menubar / dialog / alert) — main-bridged
+
+    func menubarSet(extensionID: String, id: String, json: String) {
+        Task { @MainActor in ExtensionMenuBar.shared.set(extensionID: extensionID, id: id, json: json) }
+    }
+
+    func menubarRemove(extensionID: String, id: String) {
+        Task { @MainActor in ExtensionMenuBar.shared.remove(extensionID: extensionID, id: id) }
+    }
+
+    func dialogPrompt(json: String) async -> String? {
+        await MainActor.run { ExtensionMenuBar.shared.prompt(json: json) }
+    }
+
+    func dialogConfirm(json: String) async -> Bool {
+        await MainActor.run { ExtensionMenuBar.shared.confirm(json: json) }
+    }
+
+    func alertShow(text: String, seconds: Double) {
+        Task { @MainActor in ExtensionMenuBar.shared.alert(text: text, seconds: seconds) }
+    }
+
+    // MARK: App control / scripting / keyboard
+
+    func appLaunchOrFocus(_ nameOrBundleID: String) {
+        Task { @MainActor in AppControl.launchOrFocus(nameOrBundleID) }
+    }
+    func appFrontmostJSON() -> String { mainSync { AppControl.frontmostJSON() } }
+    func appWindowCount(bundleID: String) -> Int { mainSync { AppControl.windowCount(bundleID: bundleID) } }
+    func appHide(bundleID: String) { Task { @MainActor in AppControl.hide(bundleID: bundleID) } }
+    func runAppleScript(_ source: String) -> String { Scripting.runAppleScript(source) }
+    func keyboardCurrentSource() -> String { KeyboardSource.currentSourceID() }
+    func keyboardLayoutsJSON() -> String { KeyboardSource.layoutsJSON() }
+    func keyboardSetSource(_ id: String) -> Bool { KeyboardSource.setSource(id) }
+
+    func keysSetRules(extensionID: String, json: String) {
+        Task { @MainActor in
+            ExtensionKeyRules.shared.setRules(extensionID: extensionID, json: json)
+            // A (re)install is the one signal the extension's config — and thus its
+            // eventtap set — may have changed. Cheap no-op unless it opted in.
+            EventTapHost.shared.refreshIfDeclares(extensionID: extensionID)
+        }
+    }
+    func keysStroke(_ spec: String) {
+        guard let chord = KeyChord(spec: spec) else { return }
+        Task { @MainActor in KeyInjector.stroke(chord) }
+    }
+    func keysSystem(_ name: String) { Task { @MainActor in KeyInjector.system(name) } }
+
+    func urlOpen(_ url: String, bundleID: String?) -> Bool { URLServices.open(url, bundleID: bundleID) }
+    func urlDefaultBrowser() -> String { URLServices.defaultBrowserBundleID() }
+    func urlSetDefaultBrowser(_ bundleID: String) -> Bool { URLServices.setDefaultBrowser(bundleID) }
+
+    func fsExists(_ path: String) -> Bool { FSReads.exists(path) }
+    func fsAttributesJSON(_ path: String) -> String { FSReads.attributesJSON(path) }
+    func fsRead(_ path: String) -> String? { FSReads.read(path) }
+    func fsWatch(extensionID: String, path: String, handler: String) {
+        Task { @MainActor in ExtensionFSWatch.shared.watch(extensionID: extensionID, path: path, handler: handler) }
+    }
+    func fsUnwatch(extensionID: String, path: String) {
+        Task { @MainActor in ExtensionFSWatch.shared.unwatch(extensionID: extensionID, path: path) }
     }
 
     // MARK: Notifications

@@ -40,3 +40,15 @@ export async function signSupporterToken(jwkStr: string, claims: SupporterClaims
   );
   return `${signingInput}.${b64urlFromBytes(new Uint8Array(sig))}`;
 }
+
+/**
+ * Ed25519 detached signature over an arbitrary message, returned base64url. Used
+ * to sign marketplace artifact claims with the same key the supporter tokens use
+ * (`SUPPORTER_SIGNING_JWK`); the macOS app verifies offline with its embedded
+ * public key.
+ */
+export async function signDetached(jwkStr: string, message: string): Promise<string> {
+  const key = await importSigningKey(jwkStr);
+  const sig = await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(message));
+  return b64urlFromBytes(new Uint8Array(sig));
+}

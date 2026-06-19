@@ -55,6 +55,12 @@ struct ExtensionMeta: Codable, Sendable, Equatable {
 struct HostRequirement: Codable, Sendable, Equatable {
     let min_version: String   // semver floor; host refuses to load if below
     let api_level: Int        // integer API level the extension targets
+    /// Opt-in: this extension needs a RESIDENT VM on the keystroke path to run
+    /// synchronous `hs.eventtap`-style per-event callbacks (see EventTapHost).
+    /// Absent/false (the default) = no resident VM, zero hot-path cost. Only the
+    /// hammerspoon-compat shim sets this; the host still builds the VM lazily and
+    /// only if the loaded config actually registers a running tap.
+    let event_taps: Bool?     // nil == false
 }
 
 /// `[extension.entry]` — Lua entry point, loaded lazily on first activation.
@@ -85,6 +91,15 @@ struct Contributes: Codable, Sendable, Equatable {
     let settings_sections: [SettingsSection]?
     /// Dynamic-placeholder names this extension supplies to the snippet engine.
     let placeholders: [PlaceholderContribution]?
+    /// Native events this extension wants delivered to a named Lua handler. The
+    /// host owns the watcher; the handler is invoked (off-main, serialized) with a
+    /// JSON payload string. See `EventSubscription` and the stateless event model
+    /// in .omc/plans/hammerspoon-parity-host-api.md.
+    let events: [EventSubscription]?
+    /// Color themes this extension contributes. Each points at a theme.json file
+    /// (relative to the extension dir) with a flat color-token map. Declarative
+    /// data only — selecting a theme never spawns the extension's Lua VM.
+    let themes: [ThemeContribution]?
 
     var allCommands: [CommandContribution] { commands ?? [] }
     var allKeybindings: [KeybindingContribution] { keybindings ?? [] }
@@ -92,6 +107,31 @@ struct Contributes: Codable, Sendable, Equatable {
     var allViews: [ViewContribution] { views ?? [] }
     var allSettingsSections: [SettingsSection] { settings_sections ?? [] }
     var allPlaceholders: [PlaceholderContribution] { placeholders ?? [] }
+    var allEvents: [EventSubscription] { events ?? [] }
+    var allThemes: [ThemeContribution] { themes ?? [] }
+}
+
+/// One `[[contributes.themes]]` row: a selectable color theme. `path` is a theme
+/// JSON file (relative to the extension directory) holding `{ appearance, colors,
+/// assets }`. See Theme/Theme.swift (`ThemeSpec`) and extensions.md.
+struct ThemeContribution: Codable, Sendable, Equatable {
+    let id: String         // globally unique theme id (reverse-DNS recommended)
+    let title: String
+    let path: String       // theme.json, relative to the extension dir
+    let appearance: String? // "dark" (default) | "light" — selector hint
+}
+
+/// One `[[contributes.events]]` row: a native event name the host delivers to a
+/// Lua global. The host runs the watcher and re-invokes `handler` per event with a
+/// JSON payload string (decoded Lua-side via `host.json`), keeping the extension
+/// stateless — no resident VM, no live Lua closure held by native code. Recognized
+/// events: `system.launch` (one-shot at startup — the place to install key rules
+/// or filesystem watches), `battery.changed`, `network.changed`, `system.wake`,
+/// `app.activated`, `lid.changed`, `url.open`, plus `timer.fired` delivered by the
+/// durable scheduler.
+struct EventSubscription: Codable, Sendable, Equatable {
+    let event: String
+    let handler: String       // Lua global invoked with the event payload (JSON string)
 }
 
 /// A custom dynamic-placeholder an extension contributes to the snippet engine
@@ -147,8 +187,19 @@ struct CommandContribution: Codable, Sendable, Equatable {
     /// keystroke. Lets an extension ship a "command that launches a UI" (ADR-002).
     let launches_window: Bool?
 
+    /// When true a locked runner mode for this command RUNS on an empty query (so a
+    /// `no-view` command that renders a listing — e.g. Bookmarks — lists everything
+    /// the moment its mode opens, then filters as the user types). Without it the
+    /// runner clears the result for an empty field (the right default for a scalar
+    /// no-view command like Translate, which has nothing to show for empty input).
+    let list_on_empty: Bool?
+
     /// True when this command depends on the local AI model (`host.llm`).
     var requiresModel: Bool { (requires ?? []).contains("model") }
+
+    /// True when the locked mode should invoke the handler on an empty query to list
+    /// all entries (see `list_on_empty`).
+    var listsOnEmpty: Bool { list_on_empty ?? false }
 
     /// True when invoking this command opens its own window rather than returning
     /// an inline result (see `launches_window`).

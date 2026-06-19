@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# hammerspoon-compat — user/marketplace extension
+#
+# LIMITATIONS (read before installing):
+#   • Must be TRUSTED to do anything. Install lands UNTRUSTED → review the files,
+#     click Trust, then enable the toggle in Settings. Until trusted it installs
+#     zero key rules and runs none of your config.
+#   • Trusted grants the AUTOMATION tier only: hotkeys/key-rules, app launch/focus,
+#     osascript, caffeinate, menubar/alerts, file read/watch, Lua load. It does NOT
+#     grant the SYSTEM-ONLY tier — `hs.execute` (host.shell), the coding-agent, and
+#     destructive file ops (trash) are refused. init.lua lines using hs.execute get
+#     an "restricted to system extensions" string back instead of shell output.
+#   • osascript IS granted, and AppleScript can `do shell script` — so a trusted
+#     config is NOT fully sandboxed. Only install configs you have read.
+#   • Raw per-event taps (hs.eventtap.new keyDown/systemDefined) DO run, via a
+#     resident VM (event_taps=true below). The host builds it lazily — only if your
+#     init.lua actually :start()s a tap — and evicts it when the extension is
+#     disabled, so a config with no taps costs nothing. The callback runs
+#     synchronously on the keystroke; keep it cheap. For pure remaps/swallows the
+#     NATIVE hs.prosper.* bridge below is still faster (~340ns, no Lua per press) —
+#     prefer it when you don't need real Lua logic in the callback.
+#
+# NECESSARY MIGRATIONS to your ~/.hammerspoon/init.lua (guard each with
+# `if hs.prosper then ... else <original> end` so the file still runs under real
+# Hammerspoon):
+#   • ⌘Q double-tap-to-quit:   hs.prosper.doubleTap("cmd+q")
+#   • per-app key remaps:      hs.prosper.remap{ from=, to=, apps={bundleIDs} }
+#   • per-app swallow:         hs.prosper.swallow{ from=, apps={bundleIDs} }
+#   These emit NATIVE key rules (matched in ~340ns, no Lua per keystroke).
+#   hs.hotkey.bind works unmodified (delivered as invoke rules).
+# ─────────────────────────────────────────────────────────────────────────────
+[extension]
+id          = "eu.illegible.prosper.hammerspoon"
+name        = "hammerspoon-compat"
+title       = "Hammerspoon Compat"
+description = "Load your existing ~/.hammerspoon/init.lua by shimming hs.* onto Prosper's host.* automation surface. Disabled by default. Requires Trust to run; trusted grants the automation tier (hotkeys/apps/osascript/caffeinate/UI/file-read) but NOT shell, the coding-agent, or destructive file ops. Raw hs.eventtap.new keyDown/systemDefined taps run via a lazy resident VM (built only if your config starts one)."
+version     = "1.0.0"
+author      = "ventsislav.georgiev"
+license     = "MIT"
+icon        = "hammer.fill"
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+# Opt into a resident VM so raw `hs.eventtap.new` keyDown/systemDefined callbacks
+# can run synchronously on the keystroke path. The host still builds the VM lazily
+# (only if init.lua actually :start()s a tap) and evicts it when disabled. Without
+# this flag, hs.eventtap.new just records and never fires. See EventTapHost.swift.
+event_taps  = true
+
+[extension.entry]
+main = "init.lua"
+
+# Reacts to system.launch only. The handler reads the `enabled` pref FIRST and
+# returns immediately when off, so a disabled extension installs zero key rules
+# and runs none of the user's config. Hotkeys defined by the loaded init.lua are
+# delivered back as `invoke` key rules (see init.lua's hs_dispatch).
+[extension.activation]
+on_event = ["system.launch"]
+eager    = true
+
+[[contributes.events]]
+event   = "system.launch"
+handler = "on_launch"
+
+# Durable timers: hs.timer.doAfter/doEvery schedule host.timer, which re-invokes
+# this handler via the "timer.fired" event (payload {id}). Gated on `enabled`.
+[[contributes.events]]
+event   = "timer.fired"
+handler = "hs_timer_fired"
+
+# Single settings section, DYNAMIC: the enable toggle's flip is delivered to
+# settings_action so it can install/teardown rules live (a static section would
+# write the pref silently and run nothing until restart). Rendered by
+# settings_render; rows = enable switch + config-path info + re-read button.
+[[contributes.settings_sections]]
+id        = "hammerspoon-compat"
+title     = "Hammerspoon"
+icon      = "hammer.fill"
+subtitle  = "Run your ~/.hammerspoon/init.lua through Prosper"
+dynamic   = true

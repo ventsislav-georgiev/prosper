@@ -45,6 +45,19 @@ enum SupporterToken {
         return claims
     }
 
+    /// Verify a detached Ed25519 signature (base64url) over `message` using the
+    /// embedded public key. The marketplace signs artifact claims with the same
+    /// server key that mints supporter tokens, so the same key verifies both —
+    /// see `RemoteInstaller.fetchFromMarket`.
+    static func verifyDetached(signatureB64URL: String, message: String) -> Bool {
+        guard
+            let sig = b64urlDecode(signatureB64URL),
+            let keyData = Data(base64Encoded: publicKeyBase64),
+            let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData)
+        else { return false }
+        return publicKey.isValidSignature(sig, for: Data(message.utf8))
+    }
+
     static func b64urlDecode(_ s: String) -> Data? {
         var str = s.replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")

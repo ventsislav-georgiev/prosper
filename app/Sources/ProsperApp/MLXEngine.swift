@@ -110,6 +110,24 @@ actor MLXEngine {
     /// Loaded text container, or nil until `load` completes.
     private var container: ModelContainer?
 
+    /// In-flight generation count (inline + `generate` + chat). Unload paths consult it so a
+    /// free can't `clearCache()` GPU buffers under an active compute. Actor-isolated →
+    /// no lock; stays >0 across a generation's internal `await`s (where actor reentrancy
+    /// would otherwise let an unload run), so a concurrent unload correctly defers.
+    private var activeGenerations = 0
+
+    /// A forced unload (`requestUnload`) that arrived mid-generation, to run when the
+    /// last generation finishes. Lets autocomplete-disable / load-cancel free memory
+    /// without freeing buffers under an active compute.
+    private var pendingUnload = false
+
+    /// Decrement the in-flight count and, when it reaches zero, run any unload that was
+    /// deferred because it arrived mid-generation. Called from every generation's `defer`.
+    private func endGeneration() {
+        activeGenerations -= 1
+        if activeGenerations == 0 && pendingUnload { unload() }
+    }
+
     /// Persistent KV cache for the inline-completion path, reused across
     /// keystrokes. `KVCache` is a non-Sendable reference type and `ModelContainer
     /// .perform` takes a `@Sendable` closure, so the cache lives in this box that
@@ -454,7 +472,33 @@ actor MLXEngine {
         inlineBox.reset()        // drop primed KV cache so a reload starts clean
         chatBox.reset()
         didWarmup = false        // next load must re-warm the kernels
+        pendingUnload = false     // satisfied any deferred forced unload
         MLX.GPU.clearCache()     // release pooled GPU buffers held by the weights
+    }
+
+    /// Unload only when no generation is in flight. The idle auto-unloader calls this
+    /// (not `unload` directly) so a timer firing during a translation defers instead
+    /// of freeing GPU buffers mid-compute. A no-op while busy; the next idle tick
+    /// (re-armed on the generation's completion) reclaims the memory.
+    func unloadIfIdle() {
+        guard activeGenerations == 0 else { return }
+        unload()
+    }
+
+    /// Cancel a deferred forced unload (a `requestUnload` that set `pendingUnload` while
+    /// busy). Called when something decides the model must stay resident — e.g. autocomplete
+    /// re-enabled — before the in-flight generation that would drain `pendingUnload` finishes.
+    /// Without this, a disable→enable toggle during a generation would free the model out
+    /// from under now-enabled autocomplete when that generation completes.
+    func cancelPendingUnload() { pendingUnload = false }
+
+    /// Forced unload that must happen but can't free buffers under an active compute.
+    /// Frees now if idle; otherwise marks `pendingUnload` so the last in-flight
+    /// generation frees on completion (`endGeneration`). Used by autocomplete-disable
+    /// and load-cancel. Unlike `unloadIfIdle`, the unload is never dropped — only deferred.
+    func requestUnload() {
+        guard activeGenerations == 0 else { pendingUnload = true; return }
+        unload()
     }
 
     /// Prepare a live model switch: drop the current container (+ draft / VLM / adapter
@@ -600,6 +644,8 @@ actor MLXEngine {
         stop: [String] = [],
         maxWords: Int = 0
     ) async throws -> String {
+        activeGenerations += 1
+        defer { endGeneration() }
         guard let container else { throw MLXEngineError.notLoaded }
 
         let parameters = Self.makeParameters(
@@ -743,6 +789,9 @@ actor MLXEngine {
         stop: [String],
         continuation: AsyncThrowingStream<String, Error>.Continuation
     ) async throws {
+        // Tracked like the other generation paths so a forced unload mid-stream defers.
+        activeGenerations += 1
+        defer { endGeneration() }
         guard let container else { throw MLXEngineError.notLoaded }
         let parameters = Self.makeParameters(
             maxTokens: maxTokens, temperature: temperature, topP: topP,
@@ -1044,6 +1093,11 @@ actor MLXEngine {
         stop: [String] = [],
         maxWords: Int = 0
     ) async throws -> String {
+        // Tracked so a forced unload (autocomplete-disable) arriving mid-completion
+        // defers instead of freeing GPU buffers under the inline compute. Cost is two
+        // integer ops on the actor — negligible against multi-ms inference.
+        activeGenerations += 1
+        defer { endGeneration() }
         if Self.shouldUseSpeculative(
             enabled: Preferences.speculativeDecodingEnabled,
             draftLoaded: draftContainer != nil
@@ -1313,6 +1367,10 @@ actor MLXEngine {
         stop: [String] = [],
         maxWords: Int = 0
     ) async throws -> String {
+        // Counted (held across loadVLM + the VLM compute) so a forced unload mid-OCR
+        // defers instead of freeing vlmContainer under an active multimodal generation.
+        activeGenerations += 1
+        defer { endGeneration() }
         Self.configureMemoryLimits()
         try await loadVLM { _, _ in }
         guard let vlmContainer else { throw MLXEngineError.notLoaded }

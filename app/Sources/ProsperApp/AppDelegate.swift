@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// model-backed command (e.g. Translate) runs on-device generation that can
     /// take tens of seconds, and a short timeout would silently drop the result.
     private let extensions = ExtensionRegistry(callTimeout: 60)
+    /// Native watchers (battery / network / wake / lid) → extension events.
+    private let systemEventWatchers = SystemEventWatchers()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Writing to a pipe whose reader died (a crashed codex/bun subprocess) raises
@@ -95,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await extensions.checkForUpdates() }
         CommandRouter.registry = extensions
         SettingsHooks.shared.extensionRegistry = extensions
+        // Opt-in resident event-tap VM (hammerspoon-compat raw eventtaps). Set the
+        // registry ref before any extension's system.launch handler installs rules,
+        // so the keysSetRules → refresh hook can build/evict the VM as needed.
+        EventTapHost.shared.registry = extensions
         // Opt-out usage analytics (default ON; gated on Preferences.analyticsEnabled).
         AnalyticsService.shared.start()
         // Apply any cached supporter status (fail-open to free) and refresh it best-effort.
@@ -132,6 +138,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LiveExtensionHostServices.shared.windowCloser = { [weak self] in
             self?.extensionViewPanel.close()
         }
+        // host.settings.open(section) → restore the target sidebar pane, then show
+        // the window. SettingsRootView binds the selection via @AppStorage, so
+        // writing the default selects the pane whether the window is new or reused.
+        LiveExtensionHostServices.shared.settingsOpener = { [weak self] selection in
+            UserDefaults.standard.set(selection, forKey: "settingsSelectedPane")
+            self?.openSettings()
+        }
+        // Durable timers: deliver a fired timer's "timer.fired" event into the
+        // owning extension's serialized invoke lane, then re-arm persisted timers
+        // (overdue one-shots fire once — openlid's expiry depends on it).
+        TimerScheduler.shared.deliver = { [weak self] extID, handler, payload in
+            Task { @MainActor in
+                await self?.extensions.deliverEvent(
+                    extensionID: extID, handler: handler, payloadJSON: payload)
+            }
+        }
+        TimerScheduler.shared.restore()
+        // Native system watchers (battery / network / wake / lid) broadcast their
+        // events to subscribing extensions. Started once; each watcher is cheap and
+        // the broadcast is a no-op when nothing subscribes.
+        systemEventWatchers.emit = { [weak self] event, payload in
+            self?.extensions.broadcastEvent(event, payloadJSON: payload)
+        }
+        // Skip building the per-switch app.activated payload when no extension wants it.
+        systemEventWatchers.shouldEmit = { [weak self] event in
+            self?.extensions.hasSubscribers(event) ?? false
+        }
+        systemEventWatchers.start()
+        // A host-rendered menubar item's menu click re-invokes the extension's
+        // named Lua handler on its serialized lane (stateless, like timers/events).
+        ExtensionMenuBar.shared.invoke = { [weak self] extID, handler, payload in
+            Task { @MainActor in
+                await self?.extensions.deliverEvent(
+                    extensionID: extID, handler: handler, payloadJSON: payload)
+            }
+        }
+        // A filesystem watch (§Q) re-invokes its named handler the same way.
+        ExtensionFSWatch.shared.invoke = { [weak self] extID, handler, payload in
+            Task { @MainActor in
+                await self?.extensions.deliverEvent(
+                    extensionID: extID, handler: handler, payloadJSON: payload)
+            }
+        }
+        // An `.invoke` key rule (hammerspoon-compat hotkeys) re-invokes its named Lua
+        // handler off-main on the owning extension's lane, exactly like a timer/event.
+        ExtensionKeyRules.shared.invoke = { [weak self] extID, handler, payload in
+            Task { @MainActor in
+                await self?.extensions.deliverEvent(
+                    extensionID: extID, handler: handler, payloadJSON: payload)
+            }
+        }
+        // Rules register during extension activation (possibly after the launch-time
+        // tap check, and off-main on an extension lane). Re-reconcile the tap on every
+        // change so the first key-rule extension brings the tap up regardless of order.
+        ExtensionKeyRules.shared.onRulesChanged = { [weak self] in
+            Task { @MainActor in self?.reconcileKeyTap() }
+        }
+        // When Prosper is the default browser, opened links arrive as a GURL Apple
+        // Event — forward them to extensions as the `url.open` event ({ url }).
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+        // One-shot startup event so a stateless extension can render its menubar /
+        // restore its session at launch (the equivalent of openlid's M.start()).
+        extensions.broadcastEvent("system.launch")
         // Each configured quickdir contributes its own runtime mode prefix (e.g.
         // `p ` → browse ~/projects) on top of the static `qd ` trigger.
         extensions.dynamicModeProvider = { QuickdirStore.modeSpecs() }
@@ -140,8 +211,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // global hotkeys: an extension-owned shortcut (e.g. Translate's ⌥L) must
         // register/unregister live as its extension is enabled/disabled.
         extensions.onEnabledChanged = { [weak self] in
-            self?.reconcileModelResidency()
-            self?.registerHotKeys()
+            guard let self else { return }
+            self.reconcileModelResidency()
+            self.registerHotKeys()
+            // Trust/untrust/enable/disable changes which extensions are live, so the
+            // set of contributed themes changes too. Re-push it so a just-trusted
+            // theme appears in the selector immediately (no relaunch). setAvailable
+            // re-applies the persisted selection and suppresses no-op rebuilds.
+            ThemeStore.shared.setAvailable(self.extensions.contributedThemes())
         }
 
         // Reconcile quicklinks with their human-editable file
@@ -192,9 +269,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.menuBar = menuBar
 
+        // Theming. SwiftUI windows redraw themselves (the Themed{} root wrapper
+        // observes ThemeStore); this hook re-skins the AppKit-only surfaces — the
+        // menu-bar icon, the dock/app icon, and any open opaque window background.
+        // App appearance (aqua/darkAqua) is set inside ThemeStore.apply itself.
+        // setAvailable restores the persisted selection and fires onChange once.
+        ThemeStore.shared.onChange = { [weak self] in self?.applyThemeToAppKit() }
+        ThemeStore.shared.setAvailable(extensions.contributedThemes())
+
         // Settings-window side effects: keep engines/login item in sync with the
         // SwiftUI panes.
         SettingsHooks.shared.onAutocompleteChanged = { [weak self] on in self?.setAutocomplete(enabled: on) }
+        // Idle auto-unload of the lazily-loaded model (Translate / host.llm) reads its
+        // window from the Translate extension's settings; defaults to 2 min if unset.
+        ModelIdleUnloader.shared.minutesProvider = { [weak self] in
+            let raw = self?.extensions.prefValue(
+                extensionID: "com.prosper.translate", key: "idle_unload_minutes")
+            return ModelIdleUnloader.minutes(fromPref: raw)
+        }
         SettingsHooks.shared.onLaunchAtLoginChanged = { on in LaunchAtLogin.setEnabled(on) }
         SettingsHooks.shared.onClipboardHistoryChanged = { [weak self] on in self?.setClipboardHistory(enabled: on) }
         SettingsHooks.shared.onClipboardMaxItemsChanged = { ClipboardStore.shared.applyMaxItemsChange() }
@@ -328,6 +420,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// slot), Translate (⌥L), Open Settings (⌥\), clipboard, window management —
     /// is rebindable and clearable. Safe to call again after a rebind — it tears
     /// down and rebuilds the whole set.
+    /// GURL Apple Event (a link opened while Prosper is the default browser). Forward
+    /// the URL to extensions as `url.open`; a url-dispatcher extension then rewrites or
+    /// re-opens it in the real browser. With no handler extension the link is dropped
+    /// — only set Prosper default once such an extension is enabled.
+    @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent: NSAppleEventDescriptor) {
+        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let data = try? JSONSerialization.data(withJSONObject: ["url": urlString]),
+              let payload = String(data: data, encoding: .utf8) else { return }
+        extensions.broadcastEvent("url.open", payloadJSON: payload)
+    }
+
+    /// Re-skin the AppKit-only surfaces for the active theme. SwiftUI windows
+    /// handle themselves via the Themed{} wrapper; these have no SwiftUI host.
+    private func applyThemeToAppKit() {
+        let store = ThemeStore.shared
+        // Menu-bar icon: themed image or the bundled default (nil → default).
+        menuBar?.setMenuBarImage(store.image("menuBarIcon"))
+        // Dock / app icon: nil restores the app bundle's icon.
+        NSApp.applicationIconImage = store.image("appIcon")
+        // Already-open opaque windows (Settings/Chat/Onboarding/ModelSetup): refresh
+        // their backdrop. ponytail: keyed on opacity so we never paint over the
+        // borderless transparent panels (runner/clipboard) — they read Neon via
+        // SwiftUI and redraw themselves.
+        let bg = NSColor(Neon.bgTop)
+        for win in NSApp.windows where win.backgroundColor.alphaComponent > 0.9 {
+            win.backgroundColor = bg
+        }
+    }
+
     private func registerHotKeys() {
         hotKeys.forEach { $0.unregister() }
         hotKeys.removeAll()
@@ -419,8 +540,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
 
+        // Extension-contributed global hotkeys (`[[contributes.keybindings]]`):
+        // each maps a key string to a command id that the host runs through normal
+        // dispatch on press — no Lua callback, no resident VM (host API plan §C).
+        // Ids start at 300 to stay clear of the fixed + custom-shortcut ids above.
+        var hotkeyIndex = 0
+        for record in extensions.records where record.isLive {
+            for kb in record.manifest.contributes?.allKeybindings ?? [] {
+                guard let combo = KeyCombo.parse(kb.key), combo.carbonModifiers != 0 else { continue }
+                let command = kb.command
+                bound.append(
+                    (GlobalHotKey(keyCode: combo.keyCode, modifiers: combo.carbonModifiers,
+                                  id: UInt32(300 + hotkeyIndex)) { [weak self] in
+                        Task { @MainActor in _ = await self?.extensions.invokeAsync(commandID: command, query: "") }
+                    },
+                     "\(record.manifest.extension.title) · \(combo.display)")
+                )
+                hotkeyIndex += 1
+            }
+        }
+
         hotKeys = bound.map(\.key)
         reportHotKeyConflicts(bound.filter { !$0.key.isRegistered }.map(\.label))
+
+        // Reserve every successfully-registered native chord so an extension key
+        // rule (hammerspoon-compat) on the same chord yields to the dedicated Carbon
+        // hotkey instead of swallowing it in the shared tap (e.g. openlid's
+        // cmd+alt+ctrl+l). Only registered ones — an unclaimed combo should still
+        // let a shim rule handle it.
+        let reserved = Set(hotKeys.filter(\.isRegistered).map {
+            KeyChord(carbonKeyCode: $0.keyCode, carbonModifiers: $0.modifiers)
+        })
+        ExtensionKeyRules.shared.setReservedChords(reserved)
+
+        // Load the user's native shortcut rules into the shared engine (idempotent;
+        // empty by default). Done after reserving chords so a native shortcut never
+        // shadows a registered Carbon hotkey.
+        ShortcutRulesStore.shared.apply()
     }
 
     /// Warns the user once when one or more global hotkeys could not be claimed.
@@ -478,8 +634,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startAutocompleteIfReady() {
-        if Preferences.autocompleteEnabled, PermissionsManager.isAccessibilityTrusted() {
-            autocomplete.start()
+        reconcileKeyTap()
+    }
+
+    /// The single CGEvent keystroke tap (owned by AutocompleteEngine) is shared:
+    /// inline autocomplete AND extension key rules (hammerspoon-compat hotkeys /
+    /// remaps / double-taps) both ride it. Run it when EITHER needs it — so a
+    /// trusted key-rule extension works even with inline autocomplete switched off
+    /// (the previous coupling left the tap down and silently killed all key rules).
+    /// Idempotent: start()/stop() no-op when already in the desired state.
+    func reconcileKeyTap() {
+        let acEnabled = Preferences.autocompleteEnabled
+        let extRules = !ExtensionKeyRules.shared.isEmpty
+        let needTap = acEnabled || extRules
+        let trusted = PermissionsManager.isAccessibilityTrusted()
+        NSLog("prosper: reconcileKeyTap autocomplete=%d extRules=%d needTap=%d axTrusted=%d",
+              acEnabled, extRules, needTap, trusted)
+        if needTap {
+            if trusted { _ = autocomplete.start() }
+            else { NSLog("prosper: key tap needed but Accessibility not trusted — tap not started") }
+        } else {
+            autocomplete.stop()
         }
     }
 
@@ -487,6 +662,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autocomplete.stop()
         hotKeys.forEach { $0.unregister() }
         BunHarness.shared.shutdown()
+        // Release every extension's native resources (power assertions, pmset lid
+        // override) so a "disable sleep" can never outlive the app.
+        for record in extensions.records {
+            LiveExtensionHostServices.shared.resetResources(extensionID: record.id)
+        }
     }
 
     // MARK: - Actions
@@ -528,36 +708,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setAutocomplete(enabled: Bool) {
         Preferences.autocompleteEnabled = enabled
-        if enabled {
-            // Prompt for Accessibility if needed; only start once trusted.
-            if PermissionsManager.ensureAccessibilityTrust(prompt: true) {
-                autocomplete.start()
-            } else {
-                NSLog("prosper: autocomplete enabled but Accessibility not yet trusted")
-            }
-        } else {
-            // Disabled → tear down the event tap so OCR/screenshot capture (driven
-            // by the completion flow) can no longer fire. Model residency is decided
-            // separately below: an enabled extension may still need the weights.
-            autocomplete.stop()
-        }
+        // Prompt for Accessibility on enable so the tap can actually start.
+        if enabled { _ = PermissionsManager.ensureAccessibilityTrust(prompt: true) }
+        // Reconcile the shared tap from BOTH inputs (autocomplete pref + extension
+        // key rules) — disabling inline autocomplete must NOT tear the tap down
+        // while a key-rule extension still needs it.
+        reconcileKeyTap()
         // Reconcile after the toggle: load/preload when any LLM consumer is on,
         // unload the multi-GB weights when none remain. Lightweight off-state.
         reconcileModelResidency()
     }
 
-    /// True when some feature needs the local AI model resident: inline
-    /// autocomplete, or an enabled extension that declares `requires = ["model"]`
-    /// (e.g. Translate). When false the weights can be freed.
+    /// True when a feature needs the local AI model resident *continuously*: only
+    /// inline autocomplete, which would otherwise pay a user-visible cold load on
+    /// the first keystroke. Model-requiring extensions (e.g. Translate) do NOT keep
+    /// it resident — they load it lazily on first use (CommandRouter.runExtension
+    /// awaits the load; host.llm callers go through `CoreBridge`, which ensure-loads),
+    /// so keeping multi-GB resident just because such an extension is *enabled* is
+    /// wasted memory. When false the weights can be freed.
     private func shouldKeepModelResident() -> Bool {
-        Preferences.autocompleteEnabled || extensions.anyEnabledRequiresModel()
+        Preferences.autocompleteEnabled
     }
 
     /// Reconcile model residency after a toggle. Two independent concerns:
-    ///   • Unload: free the multi-GB weights when NO LLM consumer remains enabled
-    ///     (autocomplete off AND no model-requiring extension). This is the only
-    ///     place we unload — never yank the model out from under an enabled
-    ///     extension (e.g. Translate) that may use it.
+    ///   • Unload: free the multi-GB weights when inline autocomplete is off.
+    ///     Model-requiring extensions load lazily on demand, so they don't pin the
+    ///     weights — disabling autocomplete frees them even with Translate enabled.
     ///   • Preload: warm the model eagerly ONLY for inline autocomplete, where a
     ///     cold load on the first keystroke is user-visible. Extensions like
     ///     Translate load the model LAZILY on first use (MLXEngine loads on
@@ -565,14 +741,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///     lightweight boot is preserved.
     /// Called on autocomplete toggle and on `extensions.onEnabledChanged`.
     private func reconcileModelResidency() {
-        if !shouldKeepModelResident() {
-            Task { await MLXEngine.shared.unload() }
-        } else if Preferences.autocompleteEnabled {
+        if shouldKeepModelResident() {
+            // Autocomplete owns residency now — drop any pending idle unload AND any
+            // deferred forced unload (a disable→enable toggle during a generation could
+            // otherwise free the model the moment that generation finishes).
+            ModelIdleUnloader.shared.cancel()
+            Task { await MLXEngine.shared.cancelPendingUnload() }
             // Download if missing + warm so the first completion isn't a cold load.
             runModelSetup(force: false)
+        } else {
+            // requestUnload (not unload) so disabling autocomplete mid-completion defers
+            // the free until that generation finishes instead of clearing GPU buffers
+            // under an active compute.
+            Task { await MLXEngine.shared.requestUnload() }
         }
-        // Else: kept resident only because a model-requiring extension is enabled
-        // → stay lazy. Don't preload; first actual use loads it on demand.
     }
 
     private func runModelSetup(force: Bool) {

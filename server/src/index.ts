@@ -7,6 +7,7 @@ import { activateDevice, deleteAccount, deleteDevice, listDevices } from "./acco
 import { getSettings, putSettings } from "./sync";
 import { lemonSqueezyWebhook } from "./payment";
 import { listSupporters } from "./supporters";
+import { market } from "./market";
 import { nowSec } from "./util";
 
 const app = new Hono<Env>();
@@ -31,6 +32,9 @@ app.delete("/devices/:id", requireSession, deleteDevice);
 app.post("/account/delete", requireSession, deleteAccount);
 app.get("/sync", requireSession, getSettings);
 app.put("/sync", requireSession, putSettings);
+
+// Extension marketplace: public browse/download + authenticated publish/yank.
+app.route("/market", market);
 
 export default {
   fetch: app.fetch,

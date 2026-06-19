@@ -87,9 +87,6 @@ final class AgentController {
     /// `ensureSession` instead of opening a fresh thread. Defers the model load until
     /// the user actually sends a follow-up prompt.
     private var pendingResumeID: String?
-    /// Correlates a run started via the extension API (`host.agent.run`) so
-    /// status/result polling can target it. One at a time (single resident model).
-    private var extensionRunID: String?
     /// Prompts queued via the `prosper agent` CLI. Unlike `queued` (follow-ups in
     /// the CURRENT session), each CLI job runs in its own fresh session, strictly
     /// after the previous turn completes; every one lands in history.
@@ -325,103 +322,19 @@ final class AgentController {
         Task { await AgentSessionStore.shared.saveTranscript(id: session.raw, items: snapshot) }
     }
 
-    // MARK: - Extension API (host.agent.*)
+    // MARK: - Runner entry (`g ` command)
 
-    /// Start a run on behalf of an extension. Refuses if a run is already active
-    /// (one resident coding model at a time). Opens the agent window so the run is
-    /// visible and tool approvals can be answered, then submits the goal. Returns
-    /// the runID, or nil when busy / empty goal.
-    func startExtensionRun(goal: String, cwd: String?, optsJSON: String?) -> String? {
-        guard !isActive else { return nil }
+    /// Start a run from the runner's `g <goal>` command: open the agent window (so
+    /// progress is visible and tool approvals can be answered) and submit the goal.
+    /// No-op when busy (one resident coding model at a time) or the goal is empty.
+    /// The run uses `workingDirectory` (Preferences.agentWorkingDirectory); the
+    /// window's folder picker lets the user change it.
+    func startFromRunner(goal: String) {
+        guard !isActive else { return }
         let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        // The cwd becomes the agent sandbox's writable root — resolve symlinks and
-        // require a real directory so an extension can't smuggle a link to e.g.
-        // ~/.ssh in as its "project".
-        var dir: String?
-        if let raw = cwd ?? Self.jsonString(optsJSON, key: "cwd") {
-            let resolved = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
-                .resolvingSymlinksInPath().path
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: resolved, isDirectory: &isDir), isDir.boolValue else {
-                return nil
-            }
-            dir = resolved
-        }
-        let runID = UUID().uuidString
-        extensionRunID = runID
+        guard !trimmed.isEmpty else { return }
         ChatWindow.shared.show()
-        submit(goal: trimmed, cwd: dir)
-        return runID
-    }
-
-    /// JSON status for an extension-started run.
-    func extensionStatusJSON(_ runID: String) -> String {
-        guard runID == extensionRunID else { return Self.errorJSON("unknown run") }
-        return Self.json([
-            "runId": runID,
-            "phase": phaseLabel,
-            "active": isActive,
-            "items": items.count,
-            "approvals": pendingApprovals.count,
-        ])
-    }
-
-    /// JSON result (assistant text + done flag) for an extension-started run.
-    func extensionResultJSON(_ runID: String) -> String {
-        guard runID == extensionRunID else { return Self.errorJSON("unknown run") }
-        var done = false
-        var errorMessage: String?
-        switch phase {
-        case .idle: done = true
-        case .error(let m): done = true; errorMessage = m
-        default: done = false
-        }
-        var obj: [String: Any] = [
-            "runId": runID,
-            "done": done,
-            "phase": phaseLabel,
-            "text": assistantText,
-        ]
-        if let errorMessage { obj["error"] = errorMessage }
-        return Self.json(obj)
-    }
-
-    private var phaseLabel: String {
-        switch phase {
-        case .idle: return "idle"
-        case .loadingModel: return "loading"
-        case .running: return "running"
-        case .awaitingApproval: return "awaiting_approval"
-        case .error: return "error"
-        }
-    }
-
-    /// All assistant prose (excluding reasoning) accumulated so far, in order.
-    private var assistantText: String {
-        items.compactMap { item in
-            if case .assistant(_, let text, let reasoning) = item, !reasoning { return text }
-            return nil
-        }.joined(separator: "\n\n")
-    }
-
-    private static func jsonString(_ json: String?, key: String) -> String? {
-        guard let json, let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let v = obj[key] as? String, !v.isEmpty else { return nil }
-        return v
-    }
-
-    private static func json(_ obj: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: obj),
-              let s = String(data: data, encoding: .utf8) else { return errorJSON("encode failed") }
-        return s
-    }
-
-    private static func errorJSON(_ message: String) -> String {
-        let escaped = message.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "{\"error\":\"\(escaped)\"}"
+        submit(goal: trimmed)
     }
 
     // MARK: - Run

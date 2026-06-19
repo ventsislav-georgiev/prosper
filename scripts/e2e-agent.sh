@@ -88,12 +88,7 @@ check() {  # check "<label>" "<grep-pattern>"
 echo "▶ boot assertions"
 # The app process is alive.
 if kill -0 "$APP_PID" 2>/dev/null; then echo "  ✓ app process alive"; else echo "  ✗ app exited early"; pass=1; fi
-# The `agent` system extension seeded into the editable dir on first launch.
-if [[ -f "$HOME/.config/prosper/extensions/agent/extension.toml" ]]; then
-  echo "  ✓ agent extension seeded (~/.config/prosper/extensions/agent)"
-else
-  echo "  ✗ agent extension not seeded"; partial=1
-fi
+# The coding agent is native (driven by the runner's `g ` command); no extension to seed.
 
 if [[ "$DRIVE" -eq 1 ]]; then
   echo "▶ driving a goal run via the runner (⌘Space → '$GOAL')"

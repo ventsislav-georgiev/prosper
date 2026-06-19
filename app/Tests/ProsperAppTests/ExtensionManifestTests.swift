@@ -37,19 +37,22 @@ final class ExtensionManifestTests: XCTestCase {
     command = "calc.eval"
     key     = "cmd+shift+c"
 
-    [[contributes.settings]]
+    [[contributes.settings_sections]]
+    id    = "general"
+    title = "General"
+
+    [[contributes.settings_sections.controls]]
+    kind    = "number"
     key     = "precision"
     title   = "Decimal places"
-    type    = "number"
     default = 6
 
-    [[contributes.settings]]
-    key      = "mode"
-    title    = "Mode"
-    type     = "enum"
-    values   = ["auto", "manual"]
-    default  = "auto"
-    required = true
+    [[contributes.settings_sections.controls]]
+    kind    = "enum"
+    key     = "mode"
+    title   = "Mode"
+    values  = ["auto", "manual"]
+    default = "auto"
     """
 
     private func writeExtension(
@@ -95,13 +98,14 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertEqual(commands.first?.mode, .noView)
         XCTAssertEqual(commands.first?.match, "^[0-9(]")
 
-        let settings = loaded.manifest.contributes?.allSettings ?? []
-        XCTAssertEqual(settings.count, 2)
-        XCTAssertEqual(settings[0].type, .number)
-        XCTAssertEqual(settings[0].default?.stringValue, "6")
-        XCTAssertEqual(settings[1].type, .enumeration)
-        XCTAssertTrue(settings[1].isRequired)
-        XCTAssertEqual(settings[1].values, ["auto", "manual"])
+        let sections = loaded.manifest.contributes?.allSettingsSections ?? []
+        XCTAssertEqual(sections.count, 1)
+        let controls = sections.first?.allControls ?? []
+        XCTAssertEqual(controls.count, 2)
+        XCTAssertEqual(controls[0].kind, .number)
+        XCTAssertEqual(controls[0].default?.stringValue, "6")
+        XCTAssertEqual(controls[1].kind, .enumeration)
+        XCTAssertEqual(controls[1].values, ["auto", "manual"])
     }
 
     // MARK: - Semver + validation

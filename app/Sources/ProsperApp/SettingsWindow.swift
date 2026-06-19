@@ -21,7 +21,7 @@ final class SettingsWindow {
             return
         }
         let root = SettingsRootView()
-        let hosting = NSHostingController(rootView: root)
+        let hosting = NSHostingController(rootView: Themed { root })
         let win = CommandWClosableWindow(contentViewController: hosting)
         win.title = "Prosper Settings"
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -326,6 +326,32 @@ final class SettingsModel: ObservableObject {
         persistCustomShortcuts()
     }
 
+    // MARK: - Native key mappings (launch app / remap / media — replaces the old
+    // appkeys / app-remaps / media-layer extensions). Each edit re-applies to the
+    // shared key-rule engine immediately.
+
+    @Published var keyMappings: [ShortcutRulesStore.Rule] = ShortcutRulesStore.shared.rules
+
+    private func persistKeyMappings() {
+        ShortcutRulesStore.shared.setRules(keyMappings)
+    }
+
+    func addKeyMapping() {
+        keyMappings.append(ShortcutRulesStore.Rule())
+        persistKeyMappings()
+    }
+
+    func updateKeyMapping(_ rule: ShortcutRulesStore.Rule) {
+        guard let i = keyMappings.firstIndex(where: { $0.id == rule.id }) else { return }
+        keyMappings[i] = rule
+        persistKeyMappings()
+    }
+
+    func removeKeyMapping(id: UUID) {
+        keyMappings.removeAll { $0.id == id }
+        persistKeyMappings()
+    }
+
     func setShortcut(_ combo: KeyCombo, for action: ShortcutAction) {
         ShortcutStore.setCombo(combo, for: action)
         shortcutCombos[action] = combo
@@ -498,6 +524,7 @@ private struct SettingsRootView: View {
     private var content: some View {
         switch selection {
         case "general": GeneralPane(model: model)
+        case "appearance": AppearanceSettingsPane()
         case "completions": CompletionsPane(model: model)
         case "context": ContextPane(model: model)
         case "apps": AppsPane(model: model)
@@ -1229,10 +1256,10 @@ private struct ShortcutsPane: View {
 
     var body: some View {
         NeonScroll {
-            PaneTitle(title: "Shortcuts", subtitle: "Global triggers and custom commands")
+            PaneTitle(title: "Shortcuts", subtitle: "Trigger Prosper features, jump to commands, and remap keys")
 
-            NeonSection("Global Shortcuts (click to rebind)",
-                        footer: "Click a shortcut to rebind, ↩ to reset to default, ✕ to disable it.") {
+            NeonSection("Prosper Shortcuts (click to rebind)",
+                        footer: "Global hotkeys for Prosper's own features. Click to rebind, ↩ to reset to default, ✕ to disable.") {
                 let actions = ShortcutAction.allCases.filter {
                     !$0.isWindowManagement && $0.isAvailable(registry: SettingsHooks.shared.extensionRegistry)
                 }
@@ -1242,7 +1269,7 @@ private struct ShortcutsPane: View {
                 }
             }
 
-            NeonSection("Custom Shortcuts",
+            NeonSection("Command Shortcuts",
                         footer: "Each shortcut opens the command runner already scoped to the chosen command \u{2014} including any quickdir, so you can jump straight to its directory listing without typing a prefix.") {
                 ForEach(Array(model.customShortcuts.enumerated()), id: \.element.id) { idx, cs in
                     if idx > 0 { NeonDivider() }
@@ -1253,6 +1280,22 @@ private struct ShortcutsPane: View {
                     Button {
                         model.addCustomShortcut()
                     } label: { Label("Add Shortcut", systemImage: "plus") }
+                        .buttonStyle(.neon)
+                    Spacer()
+                }
+            }
+
+            NeonSection("Key Remapping",
+                        footer: "Bind any key or media key to launch an app, remap to another key, send a media key, or disable it \u{2014} for every app or just one. No defaults; add what you want.") {
+                ForEach(Array(model.keyMappings.enumerated()), id: \.element.id) { idx, rule in
+                    if idx > 0 { NeonDivider() }
+                    KeyMappingRow(model: model, rule: rule)
+                }
+                if !model.keyMappings.isEmpty { NeonDivider() }
+                HStack {
+                    Button {
+                        model.addKeyMapping()
+                    } label: { Label("Add Mapping", systemImage: "plus") }
                         .buttonStyle(.neon)
                     Spacer()
                 }
@@ -1369,6 +1412,133 @@ private struct CustomShortcutRow: View {
             .buttonStyle(.borderless)
             .help("Remove this shortcut")
         }
+    }
+}
+
+/// One native key-mapping row: trigger → action → target, applied to the live engine
+/// on every edit. Replaces the old appkeys/app-remaps/media-layer extensions.
+private struct KeyMappingRow: View {
+    @ObservedObject var model: SettingsModel
+    let rule: ShortcutRulesStore.Rule
+
+    private static let mediaNames = MediaKey.nameToCode.keys.sorted()
+
+    private func update(_ mutate: (inout ShortcutRulesStore.Rule) -> Void) {
+        var r = rule; mutate(&r); model.updateKeyMapping(r)
+    }
+
+    private var triggerIsMedia: Bool { rule.trigger.lowercased().hasPrefix("media:") }
+    private var triggerCombo: KeyCombo { KeyCombo.parse(rule.trigger) ?? unsetKeyCombo }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            triggerEditor
+            Image(systemName: "arrow.right").foregroundStyle(Neon.textSecondary)
+            Picker("", selection: Binding(
+                get: { rule.action },
+                set: { a in update { $0.action = a; $0.target = "" } }
+            )) {
+                Text("Launch App").tag(ShortcutRulesStore.ActionKind.launchApp)
+                Text("Remap Key").tag(ShortcutRulesStore.ActionKind.remap)
+                Text("Send Media").tag(ShortcutRulesStore.ActionKind.sendMedia)
+                Text("Disable").tag(ShortcutRulesStore.ActionKind.swallow)
+            }
+            .labelsHidden().fixedSize()
+            targetEditor
+            Spacer()
+            scopeEditor
+            Button { model.removeKeyMapping(id: rule.id) } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless).help("Remove this mapping")
+        }
+    }
+
+    @ViewBuilder private var triggerEditor: some View {
+        HStack(spacing: 2) {
+            if triggerIsMedia {
+                Text(String(rule.trigger.dropFirst("media:".count)))
+                    .foregroundStyle(Neon.textPrimary).frame(width: 96, alignment: .leading)
+            } else {
+                ShortcutRecorder(combo: triggerCombo) { combo in
+                    if let s = combo.specString { update { $0.trigger = s } }
+                }
+                .frame(width: 96, height: 24).fixedSize()
+            }
+            Menu {
+                Button("Record Key…") { update { $0.trigger = "" } }
+                Divider()
+                ForEach(Self.mediaNames, id: \.self) { n in
+                    Button(n) { update { $0.trigger = "media:\(n)" } }
+                }
+            } label: { Image(systemName: "chevron.down").imageScale(.small) }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Use a media key as the trigger")
+        }
+    }
+
+    /// Per-app scope: empty `apps` = every app; otherwise the rule only fires when one
+    /// of the listed bundle ids is frontmost. Multi-select with checkmarks.
+    @ViewBuilder private var scopeEditor: some View {
+        Menu(scopeLabel) {
+            Button("Any app") { update { $0.apps = [] } }
+            Divider()
+            ForEach(AppIndex.shared.ensureBuilt()) { app in
+                let id = app.bundleId ?? app.url.path
+                Button {
+                    update {
+                        if let i = $0.apps.firstIndex(of: id) { $0.apps.remove(at: i) }
+                        else { $0.apps.append(id) }
+                    }
+                } label: {
+                    if rule.apps.contains(id) { Label(app.name, systemImage: "checkmark") }
+                    else { Text(app.name) }
+                }
+            }
+        }
+        .menuIndicator(.hidden).fixedSize().help("Limit this mapping to specific apps")
+    }
+
+    private var scopeLabel: String {
+        switch rule.apps.count {
+        case 0: return "Any app"
+        case 1: return appDisplay(rule.apps[0])
+        default: return "\(rule.apps.count) apps"
+        }
+    }
+
+    @ViewBuilder private var targetEditor: some View {
+        switch rule.action {
+        case .launchApp:
+            Menu(appDisplay(rule.target)) {
+                ForEach(AppIndex.shared.ensureBuilt()) { app in
+                    Button(app.name) { update { $0.target = app.bundleId ?? app.url.path } }
+                }
+            }
+            .fixedSize()
+        case .remap:
+            ShortcutRecorder(combo: KeyCombo.parse(rule.target) ?? unsetKeyCombo) { combo in
+                if let s = combo.specString { update { $0.target = s } }
+            }
+            .frame(width: 96, height: 24).fixedSize()
+        case .sendMedia:
+            Picker("", selection: Binding(
+                get: { rule.target.isEmpty ? Self.mediaNames.first! : rule.target.uppercased() },
+                set: { v in update { $0.target = v } }
+            )) {
+                ForEach(Self.mediaNames, id: \.self) { Text($0).tag($0) }
+            }
+            .labelsHidden().fixedSize()
+        case .swallow:
+            Text("\u{2014}").foregroundStyle(Neon.textSecondary)
+        }
+    }
+
+    /// Show the app's display name for a stored bundle-id/path target, else a prompt.
+    private func appDisplay(_ target: String) -> String {
+        guard !target.isEmpty else { return "Choose App\u{2026}" }
+        if let app = AppIndex.shared.ensureBuilt().first(where: { $0.bundleId == target || $0.url.path == target }) {
+            return app.name
+        }
+        return target
     }
 }
 
@@ -1787,6 +1957,7 @@ func settingsSidebarGroups(registry: ExtensionRegistry?) -> [(String, [SettingsT
     var general: [SettingsTab] = [
         SettingsTab(id: "general", title: "General", icon: "gearshape.fill"),
         SettingsTab(id: "shortcuts", title: "Shortcuts", icon: "command"),
+        SettingsTab(id: "appearance", title: "Appearance", icon: "paintpalette.fill"),
     ]
     if registry != nil {
         general.append(SettingsTab(id: "extensions", title: "Extensions", icon: "puzzlepiece.extension.fill"))

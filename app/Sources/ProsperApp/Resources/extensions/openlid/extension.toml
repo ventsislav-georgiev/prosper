@@ -1,0 +1,91 @@
+[extension]
+id          = "com.prosper.openlid"
+name        = "openlid"
+title       = "OpenLid"
+description = "Keep the Mac awake with the lid closed (sleep / lid-close override), guarded by battery, network, and AC-power state."
+version     = "1.8.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "bolt.circle"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Reacts to host events (no resident VM); each delivery spins the worker, runs the
+# named handler against durable host.prefs state, and exits. system.launch renders
+# the menubar + restores an in-progress session at startup.
+[extension.activation]
+on_event = ["system.launch", "battery.changed", "network.changed", "system.wake", "lid.changed"]
+eager    = true
+
+[[contributes.commands]]
+id          = "openlid.toggle"
+title       = "Toggle Mac Awake"
+description = "Keep the Mac awake with the lid closed"
+mode        = "no-view"
+icon        = "bolt.circle"
+keywords    = ["openlid", "lid", "mac awake", "awake", "sleep", "keep awake"]
+prefix      = "lid "
+
+[[contributes.commands]]
+id          = "openlid.status"
+title       = "OpenLid Status"
+description = "Show current keep-awake status (read-only)"
+mode        = "no-view"
+icon        = "info.circle"
+keywords    = ["openlid", "lid", "status", "caffeine", "awake"]
+prefix      = "lid? "
+
+[[contributes.commands]]
+id          = "openlid.caffeine"
+title       = "Toggle Display Awake"
+description = "Keep the display awake (no screensaver) while the lid is open"
+mode        = "no-view"
+icon        = "cup.and.saucer"
+keywords    = ["openlid", "caffeine", "display", "screensaver", "awake", "keep awake"]
+prefix      = "caffeine "
+
+[[contributes.keybindings]]
+command = "openlid.toggle"
+key     = "cmd+alt+ctrl+l"
+
+[[contributes.keybindings]]
+command = "openlid.caffeine"
+key     = "cmd+alt+ctrl+k"
+
+[[contributes.keybindings]]
+command = "openlid.status"
+key     = "cmd+alt+ctrl+shift+l"
+
+[[contributes.settings_sections]]
+id       = "openlid"
+title    = "OpenLid"
+icon     = "bolt.circle"
+accent   = "Lid"
+subtitle = "Keep your Mac awake with the lid closed"
+dynamic  = true
+
+[[contributes.events]]
+event   = "system.launch"
+handler = "on_launch"
+
+[[contributes.events]]
+event   = "battery.changed"
+handler = "on_battery"
+
+[[contributes.events]]
+event   = "network.changed"
+handler = "on_network"
+
+[[contributes.events]]
+event   = "system.wake"
+handler = "on_wake"
+
+[[contributes.events]]
+event   = "lid.changed"
+handler = "on_lid"

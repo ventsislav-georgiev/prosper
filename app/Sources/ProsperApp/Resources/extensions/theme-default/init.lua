@@ -1,0 +1,3 @@
+-- The default theme is pure data (theme.json). No commands, no handlers — the
+-- host reads the theme declaratively and never runs this script. It exists only
+-- so the theme ships as an editable, resettable system extension.
