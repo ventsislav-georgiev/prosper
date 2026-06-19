@@ -243,6 +243,8 @@ function M.makeHost(opts)
         agentResult = opts.agentResult,
         httpResponse = opts.httpResponse,
         setDefaultOK = (opts.setDefaultOK ~= false),
+        defaultBrowser = opts.defaultBrowser, -- current system default (url.default_browser)
+        urlOpens = {},                        -- full log of url.open(url, browser) calls
         perms = opts.perms or {},
         snippets = opts.snippets or {},
         snippetCollections = opts.snippetCollections or {},
@@ -362,9 +364,16 @@ function M.makeHost(opts)
             end,
         },
         url = {
-            open = function(u, b) env.urlOpened = { url = u, browser = b } end,
+            -- Every open is recorded (last in env.urlOpened, full log in env.urlOpens)
+            -- so a router test can assert the browser each link went to.
+            open = function(u, b)
+                env.urlOpened = { url = u, browser = b }
+                env.urlOpens[#env.urlOpens + 1] = env.urlOpened
+            end,
+            default_browser = function() return env.defaultBrowser end,
             set_default_browser = function(id)
                 env.defaultBrowserSet = id
+                if env.setDefaultOK then env.defaultBrowser = id end
                 return env.setDefaultOK
             end,
         },

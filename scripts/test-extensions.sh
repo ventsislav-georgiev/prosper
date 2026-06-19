@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXT_DIR="$ROOT/app/Sources/ProsperApp/Resources/extensions"
+EXAMPLES_DIR="$ROOT/app/Examples/extensions"   # marketplace examples (hammerspoon-compat…)
 HARNESS_DIR="$ROOT/scripts/ext-test"
 LUA="${LUA:-lua}"
 
@@ -17,7 +18,7 @@ while IFS= read -r t; do
   count=$((count + 1))
   printf '▶ %s\n' "${t#"$ROOT"/}"
   "$LUA" "$t" || fail=1
-done < <(find "$EXT_DIR" "$HARNESS_DIR" -name '*.test.lua' | sort)
+done < <(find "$EXT_DIR" "$EXAMPLES_DIR" "$HARNESS_DIR" -name '*.test.lua' | sort)
 
 if [ "$count" -eq 0 ]; then echo "no extension tests found"; exit 0; fi
 [ "$fail" -eq 0 ] && echo "✅ all $count extension test file(s) passed" \

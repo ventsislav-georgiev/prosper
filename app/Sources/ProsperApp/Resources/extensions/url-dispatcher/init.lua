@@ -53,7 +53,8 @@ local ROUTES_KEY, FALLBACK_KEY = "routes", "fallback"
 local function load_routes()
     local raw = host.prefs.get(ROUTES_KEY)
     if not raw or #raw == 0 then return {} end
-    return host.json.decode(raw) or {}
+    local t = host.json.decode(raw)
+    return type(t) == "table" and t or {} -- corrupt pref -> empty, never crash routing
 end
 local function save_routes(t)
     host.prefs.set(ROUTES_KEY, host.json.encode(t))
@@ -75,7 +76,12 @@ local function pick(url)
 end
 
 function on_url(payload)
-    local url = payload and payload.url
+    -- Event payloads arrive as a JSON STRING (callGlobal pushes a Lua string), not
+    -- a table — decode before reading. The old `payload.url` indexed a string and
+    -- silently got nil, so routing never fired.
+    local data = payload and host.json.decode(payload) or nil
+    if type(data) ~= "table" then return end
+    local url = data.url
     if type(url) ~= "string" or #url == 0 then return end
     local browser = pick(url) or load_fallback()
     -- Loop guard: Prosper IS the system default now, so opening with a nil/own
