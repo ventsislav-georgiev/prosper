@@ -28,13 +28,24 @@
 #   • per-app swallow:         hs.prosper.swallow{ from=, apps={bundleIDs} }
 #   These emit NATIVE key rules (matched in ~340ns, no Lua per keystroke).
 #   hs.hotkey.bind works unmodified (delivered as invoke rules).
+#
+# URL ROUTING (finicky-style, works unmodified):
+#   hs.urlevent.setDefaultHandler("http")        -- makes Prosper the default browser
+#   hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
+#       hs.urlevent.openURLWithBundle(fullURL, "com.google.Chrome")
+#   end
+#   Each opened link re-runs init.lua (effects suppressed) to rebuild the callback,
+#   then fires it — same model as hotkeys. ROUTE WITH openURLWithBundle(url, bundleID):
+#   hs.execute("open -b …") is SHELL (system-only) and is refused here, and a plain
+#   openURL re-opens in Prosper (loop). DISABLE the url-dispatcher extension first —
+#   it also handles url.open, so leaving both on opens every link twice.
 # ─────────────────────────────────────────────────────────────────────────────
 [extension]
 id          = "eu.illegible.prosper.hammerspoon"
 name        = "hammerspoon-compat"
 title       = "Hammerspoon Compat"
 description = "Load your existing ~/.hammerspoon/init.lua by shimming hs.* onto Prosper's host.* automation surface. Disabled by default. Requires Trust to run; trusted grants the automation tier (hotkeys/apps/osascript/caffeinate/UI/file-read) but NOT shell, the coding-agent, or destructive file ops. Raw hs.eventtap.new keyDown/systemDefined taps run via a lazy resident VM (built only if your config starts one)."
-version     = "1.2.0"
+version     = "1.3.0"
 author      = "ventsislav.georgiev"
 license     = "MIT"
 icon        = "hammer.fill"
@@ -68,6 +79,14 @@ handler = "on_launch"
 [[contributes.events]]
 event   = "timer.fired"
 handler = "hs_timer_fired"
+
+# URL routing: every link opened while Prosper is the default browser arrives as
+# url.open and is forwarded to the config's hs.urlevent.httpCallback (payload {url}).
+# No-op unless init.lua defines httpCallback. NOTE: url-dispatcher also subscribes
+# url.open — disable it to let init.lua drive routing, or links open twice.
+[[contributes.events]]
+event   = "url.open"
+handler = "hs_url_open"
 
 # Single settings section, DYNAMIC: the enable toggle's flip is delivered to
 # settings_action so it can install/teardown rules live (a static section would
