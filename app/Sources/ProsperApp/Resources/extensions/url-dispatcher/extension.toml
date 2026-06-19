@@ -3,7 +3,7 @@ id          = "com.prosper.url-dispatcher"
 name        = "url-dispatcher"
 title       = "URL Dispatcher"
 description = "Routes opened links to different browsers by domain (§O). Make Prosper the default browser and every clicked link arrives as a `url.open` event; this extension picks the right browser and re-opens it there — a stateless port of finicky / Hammerspoon URL routing."
-version     = "1.1.0"
+version     = "1.2.0"
 author      = "prosper"
 license     = "MIT"
 icon        = "arrow.triangle.branch"
@@ -35,3 +35,14 @@ mode     = "no-view"
 launches_window = true
 icon     = "checkmark.seal"
 keywords = ["default", "browser", "url"]
+
+# Dynamic (Tier-B) settings: default-browser status + button, fallback browser,
+# and the domain→browser routing rules. Rendered by `settings_render`, edited via
+# `settings_action`. No hardcoded routes — everything lives in host.prefs.
+[[contributes.settings_sections]]
+id       = "url-dispatcher"
+title    = "URL Dispatcher"
+icon     = "arrow.triangle.branch"
+accent   = "url-dispatcher"
+subtitle = "Route opened links to a browser by domain"
+dynamic  = true
