@@ -10,7 +10,7 @@
 
 <br>
 
-<p align="center"><img width="960" height="724" alt="Command palette part 1 — calc, percentages, units, currency, time zones" src="https://github.com/user-attachments/assets/04cdaecc-ed97-4031-999f-7ee2fa415b27" /></p>
+<p align="center"><img width="960" height="724" alt="Command palette part 1 — calc, percentages, units, currency, time zones" src="https://github.com/user-attachments/assets/ab5b9ed2-ccbb-4e4f-8343-feb659ee0392" /></p>
 
 <sub>Everything runs locally. No cloud, no daemon, no typed text leaving your machine.</sub>
 
@@ -64,7 +64,7 @@ brew install --cask ventsislav-georgiev/tap/prosper
 | **Translate** | *free text* (or `⌥L`) | best translation + alternatives, on-device |
 
 
-<p align="center"><img width="960" height="724" alt="Command palette part 2 — emoji, shell, live base64, fuzzy app launch" src="https://github.com/user-attachments/assets/e7ea203a-d6e8-4cd1-a28a-26ccf890ae4d" /></p>
+<p align="center"><img width="960" height="724" alt="Command palette part 2 — emoji, shell, live base64, fuzzy app launch" src="https://github.com/user-attachments/assets/987e6aae-5e03-4479-9030-9d63b2f41ea0" /></p>
 
 > **Shortcut already taken?** Another launcher may own the hotkey (Raycast claims `⌥Space` by default). Prosper detects the conflict on launch and notifies; rebind in **Settings → Shortcuts**.
 
@@ -74,7 +74,7 @@ brew install --cask ventsislav-georgiev/tap/prosper
 
 `⇧⌥A` opens a floating history (text, files, image previews). Off by default — enable in **Settings → General**. Blobs live on disk; concealed/transient types are skipped.
 
-<p align="center"><img width="960" height="724" alt="prosper-demo-clipboard" src="https://github.com/user-attachments/assets/e7a06f9f-03ab-45d0-9be8-6713423bd9ad" /></p>
+<p align="center"><img width="960" height="724" alt="prosper-demo-clipboard" src="https://github.com/user-attachments/assets/0c54151f-ed67-4606-b104-2164e914a903" /></p>
 
 Text is auto-typed into **link / email / color** (with a color swatch preview) for at-a-glance icons and filtering. In-panel keys: `⏎` paste · `⌘.` pin (pinned entries sort to the top and survive eviction / clear-all) · `⌘E` rename · `⌘P` cycle the type filter · `⌘⌫` delete · `↑↓` navigate · `Esc` dismiss.
 
@@ -84,7 +84,7 @@ Text is auto-typed into **link / email / color** (with a color swatch preview) f
 
 Type in *any* text field → Prosper shows a continuation as ghost text at the caret.
 
-<p align="center"><img width="960" height="290" alt="prosper-demo-typing" src="https://github.com/user-attachments/assets/cc02b2ec-f32e-4cee-915c-0eae517320b0" /></p>
+<p align="center"><img width="960" height="290" alt="prosper-demo-typing" src="https://github.com/user-attachments/assets/69ba3409-27c7-469d-91c6-2e2048dc3f46" /></p>
 
 | Key | Action |
 | --- | --- |
@@ -125,7 +125,7 @@ Typing `:name` also ghost-replaces with an emoji on accept.
 
 `⌥L` (or just type a sentence) — best translation plus alternative renderings, entirely on-device. A single ambiguous word lists its candidate meanings; a full sentence picks up the context.
 
-<p align="center"><img width="960" height="724" alt="prosper-demo-translate" src="https://github.com/user-attachments/assets/3ed555fc-04ef-4db3-b637-1a13293fd500" /></p>
+<p align="center"><img width="960" height="724" alt="prosper-demo-translate" src="https://github.com/user-attachments/assets/0683c69a-955c-434b-8448-b80758b4b64e" /></p>
 
 ---
 
@@ -133,7 +133,7 @@ Typing `:name` also ghost-replaces with an emoji on accept.
 
 Saved URLs with `{query}` templates and saved directories with per-dir actions — browse with a prefix, create new ones inline with `ql add` / `qd add`.
 
-<p align="center"><img width="960" height="724" alt="prosper-demo-links" src="https://github.com/user-attachments/assets/c0355ae7-7311-4aac-8285-5a869d0f8152" /></p>
+<p align="center"><img width="960" height="724" alt="prosper-demo-links" src="https://github.com/user-attachments/assets/a9a19b68-4f7d-4324-bbb4-dda5b2710ccb" /></p>
 
 ---
 
@@ -151,7 +151,7 @@ Prosper lives in the notification tray: toggle completions globally or per-app, 
 
 A full **Settings** window (`⌥\`) covers General / Shortcuts / QuickLinks / QuickDirs / Extensions / Agent / Completions / Context / Apps / Personalization / Statistics / About — per-app enable lists, Disable-Tab list, model selector, custom AI instructions, hotkey rebinding, and usage stats.
 
-<p align="center"><img width="960" height="724" alt="prosper-demo-system" src="https://github.com/user-attachments/assets/7391956d-e8e4-4e0f-9693-84f110e7107c" /></p>
+<p align="center"><img width="960" height="724" alt="prosper-demo-system" src="https://github.com/user-attachments/assets/e61519a5-1cc9-4452-ab09-aa7de9580adc" /></p>
 
 ---
 
