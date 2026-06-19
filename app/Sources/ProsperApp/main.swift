@@ -31,7 +31,10 @@ if let bundleId = Bundle.main.bundleIdentifier {
 // Plain AppKit entry point (no @main SwiftUI App) so we keep full control over
 // the status item, global hotkey, and the CGEvent tap.
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory) // menu-bar agent, no Dock icon (LSUIElement)
+// Start dock-less at runtime (no static LSUIElement in Info.plist — that flag would
+// hide us from the macOS default-browser picker). DockPolicy flips to .regular only
+// while a window is open. Set before app.run() so no Dock icon ever flashes.
+app.setActivationPolicy(.accessory)
 
 let delegate = AppDelegate()
 app.delegate = delegate
