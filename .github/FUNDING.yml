@@ -1,0 +1,3 @@
+# Adds a "Sponsor" button to the repo. Prosper is free forever; this is the
+# pay-what-you-want supporter checkout (Lemon Squeezy, Merchant of Record).
+custom: ["https://getprosper.lemonsqueezy.com/checkout/buy/7452e3cc-d14d-4c14-b795-d9d95b4a5ba9?discount=0&logo=0"]
