@@ -72,7 +72,7 @@ Long-running natives are async, bridged to sync Lua with a hard timeout — exte
 
 ## Stateless background extensions
 
-Not every extension is a palette command. Prosper can also drive **system automation** — global hotkeys, key remaps, app launchers, screen/power control, filesystem watches — the kind of thing people reach for Hammerspoon to do. These run on a **stateless event model**: there is no resident VM holding live closures. The host owns every watcher (timers, key taps, FSEvents, the menubar) and, when something happens, spins a short-lived runtime, runs **one named Lua handler**, and tears it down. Durable state lives in `host.prefs`; durable timers in the scheduler; native resources (key rules, watches, power assertions) in the host.
+Not every extension is a palette command. Prosper can also drive **system automation** — global hotkeys, key remaps, app launchers, screen/power control, filesystem watches — the kind of thing people reach for Hammerspoon to do. These run on a **stateless event model**: by default there is no resident VM holding live closures (raw event taps are the one opt-in exception, below). The host owns every watcher (timers, key taps, FSEvents, the menubar) and, when something happens, spins a short-lived runtime, runs **one named Lua handler**, and tears it down. Durable state lives in `host.prefs`; durable timers in the scheduler; native resources (key rules, watches, power assertions) in the host.
 
 **Subscribe to a native event** in the manifest — the handler is a Lua global, invoked with a JSON payload that arrives pre-decoded as a Lua table:
 
@@ -83,6 +83,8 @@ handler = "install_rules"
 ```
 
 Recognized events: `system.launch` (once, at startup — the place to install key rules or filesystem watches), `system.wake`, `battery.changed`, `network.changed`, `app.activated` (`{ bundleID, name, pid }`), `lid.changed`, `url.open` (`{ url }`, delivered when Prosper is the default browser), plus `timer.fired` from the scheduler. A native watcher stays dormant until at least one enabled extension subscribes.
+
+**Raw event taps (opt-in resident VM).** The one exception to the no-live-closures rule: set `event_taps = true` under `[extension.host]` and `hs.eventtap.new(keyDown|systemDefined, fn)` callbacks run synchronously on the keystroke, holding a live closure in a resident VM. The host builds that VM **lazily** (only if your config actually `:start()`s a tap) and evicts it when the extension is disabled, so a config with no taps costs nothing. The callback runs on the key path — keep it cheap; for pure remaps/swallows the native key-rule engine (§ Key rules) is faster and needs no Lua per press. hammerspoon-compat is the worked example.
 
 **Durable named-handler timers** survive relaunch and re-invoke a global by name (no live closure):
 
@@ -117,9 +119,44 @@ appearance = "dark"         # or "light"
 
 Pick a theme in **Settings → Personalization**; the whole app (and the AppKit menu-bar / dock chrome) redraws instantly. Missing tokens fall back to the default palette, so a partial palette is valid. The bundled **theme-amber** extension is the worked example.
 
+## Settings sections
+
+An extension can contribute its own pane to the **Settings → Extensions** detail view — declare a section in the manifest and render its rows from Lua:
+
+```toml
+[[contributes.settings_sections]]
+id       = "my-ext"
+title    = "My Extension"
+icon     = "hammer.fill"
+subtitle = "Configure the thing"
+dynamic  = true   # deliver row events to settings_action so you can react live
+```
+
+```lua
+-- settings_render(section_id, state) returns the row tree; settings_action(...)
+-- handles a row's event (toggle flip, button tap) when the section is dynamic.
+function settings_render(_, _)
+    return host.ui.settings.render(host.ui.settings.ui {
+        sections = {
+            host.ui.settings.section {
+                id = "my-ext",
+                rows = {
+                    host.ui.settings.row { kind = "toggle", key = "enabled", title = "Enabled" },
+                    host.ui.settings.row { kind = "permission", name = "accessibility",
+                                           title = "Accessibility (required)" },
+                    host.ui.settings.row { kind = "info", title = "Status", subtitle = "…" },
+                },
+            },
+        },
+    })
+end
+```
+
+Row `kind`s: `toggle`, `text`, `secret`, `number`, `enum` (with `options`/`optionLabels`), `path`, `info`, `permission` (shows a Granted/Not-granted badge with **Open** + **Re-check** wired to `host.perms`), `button`, `link`. A `records{ … }` block renders an add/remove list (how Quicklinks, Quickdirs, and Snippets manage their entries). A `dynamic = true` section delivers every row event to `settings_action`, so a toggle can install/tear down rules live instead of silently writing a pref. hammerspoon-compat is the worked example (permission row + a live "What's loaded" diagnostics list).
+
 ## Host API — automation surface
 
-Reads (frontmost app, keyboard layout, fs attributes, battery/network/screen) are open to **every** extension. Side-effecting/privileged calls (launching apps, AppleScript, setting the keyboard layout or default browser, installing key rules, watching the filesystem, power/menubar/dialogs) are gated to **system extensions** (`system = true`); for a non-system extension they are inert no-ops.
+Reads (frontmost app, keyboard layout, fs attributes, battery/network/screen) are open to **every** extension. Side-effecting calls (launching apps, AppleScript, setting the keyboard layout or default browser, installing key rules, watching the filesystem, power/menubar/dialogs) form the **automation tier**, granted to bundled **system extensions** (`system = true`) *and* to marketplace extensions you have **trusted**; for an untrusted, non-system extension they are inert no-ops. A narrower **system-only** tier — `host.shell.run`, the coding agent, and destructive file ops — stays restricted to system extensions and is never reachable by a merely-trusted one (note that `host.osascript` is in the automation tier, and AppleScript can `do shell script`, so trusting a config is not a full sandbox — only trust configs you've read).
 
 - `host.apps.search(query)` · `host.apps.launch_or_focus(name|bundleID)` · `host.apps.hide(bundleID)` · `host.apps.frontmost()` → `{ bundleID, name, pid }` · `host.apps.windows(bundleID)` → window count (via Accessibility)
 - `host.osascript.run(source)` → `{ ok, output, error }` — AppleScript / JXA bridge
@@ -130,6 +167,7 @@ Reads (frontmost app, keyboard layout, fs attributes, battery/network/screen) ar
 - `host.battery.{source,percentage}` · `host.network.reachable()` · `host.screen.{all,lid_closed}` — read-only
 - `host.caffeinate.{prevent_idle_sleep, set_disable_lid_sleep, lock_screen, start_screensaver}` — power / sleep control
 - `host.menubar.{set,remove}` · `host.dialog.{prompt,confirm}` · `host.alert.show(text [, seconds])` — host-rendered UI
+- `host.perms.has(name)` → bool — read-only check of a macOS privacy grant (`"accessibility"`, `"full-disk-access"`, …); open to every extension. Surface a missing grant in your settings with a `permission` row (below). Bookmarks gates its Safari source on `full-disk-access`; hammerspoon-compat warns when `accessibility` is missing.
 - `host.log.{info,warn,error}` · `host.env.get(name)`
 
 ### Key rules
@@ -157,7 +195,7 @@ end
 
 The bundled **url-dispatcher** extension and **hammerspoon-compat** are the worked examples for this surface. User-facing key/media/app shortcuts now live natively in **Settings → Shortcuts → Key Mappings** (the old opinionated `appkeys` / `media-layer` / `app-remaps` system extensions are gone — no hard-coded combos; configure your own, including remapping/swallowing *incoming* media keys). They feed the same `host.keys.set_rules` engine under the reserved owner `com.prosper.shortcuts`.
 
-**System vs user** — bundled features ship as *system extensions*: editable and disablable, **resettable to original**, but never uninstallable. Currently **Calc**, **Unit Convert**, **Base64**, **Currency**, **Translate**, **Open**, **Shell**, **Quicklinks**, **Quickdirs**, **Window Management**, **Bookmarks** (Safari / Chrome / Firefox / Zen), **URL Dispatcher**, and the **theme** extensions are implemented this way; the conversion engines keep a native fallback, so a disabled/edited extension never loses the feature. Any installed extension whose `match` regex accepts the palette query is dispatched on the off-main async lane — that is how Quicklinks (and user extensions) surface as palette commands. (Temperature conversion stays native — Foundation's affine Fahrenheit constants can't be reproduced byte-for-byte in the Lua port.) Currency is the worked example for the async surface — it fetches daily FX over `host.http` (with retry), caches them via `host.prefs`/`host.time`, and runs on the off-main async lane.
+**System vs user** — bundled features ship as *system extensions*: editable and disablable, **resettable to original**, but never uninstallable. Currently **Calc**, **Unit Convert**, **Base64**, **Currency**, **Translate**, **Open**, **Find Files**, **Shell**, **Snippets**, **Quicklinks**, **Quickdirs**, **Window Management**, **Bookmarks** (Chrome / Brave / Edge / Vivaldi / Opera / Arc / Safari / Firefox / Zen), **OpenLid**, **URL Dispatcher**, and the **theme** extensions are implemented this way; the conversion engines keep a native fallback, so a disabled/edited extension never loses the feature. Any installed extension whose `match` regex accepts the palette query is dispatched on the off-main async lane — that is how Quicklinks (and user extensions) surface as palette commands. (Temperature conversion stays native — Foundation's affine Fahrenheit constants can't be reproduced byte-for-byte in the Lua port.) Currency is the worked example for the async surface — it fetches daily FX over `host.http` (with retry), caches them via `host.prefs`/`host.time`, and runs on the off-main async lane.
 
 **Everything lives in `~/.config/prosper/extensions`** — one editable directory. On launch, bundled system extensions are *copied* there (missing folders only, never clobbering your edits) and loaded from there, so you can open any extension in your editor and change it live. **Reset to original** re-copies the pristine bundled version over your edits. User extensions install into the same directory and remove freely; system extensions can't be uninstalled, only reset.
 

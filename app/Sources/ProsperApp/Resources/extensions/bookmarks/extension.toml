@@ -8,7 +8,7 @@
 id          = "com.prosper.bookmarks"
 name        = "bookmarks"
 title       = "Browser Bookmarks"
-description = "Search and open bookmarks imported from Chrome, Brave, Edge, Vivaldi, Opera, Arc, Safari, and Firefox."
+description = "Search and open bookmarks imported from Chrome, Brave, Edge, Vivaldi, Opera, Arc, Safari, Firefox, and Zen."
 version     = "1.0.0"
 author      = "Prosper"
 license     = "MIT"
