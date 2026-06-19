@@ -5,6 +5,18 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.93.0
+
+### Fixes
+- First click on a command-palette result card (browser bookmarks, file search, app
+  launcher, snippets) now opens it. Previously the first click did nothing and you
+  had to click a second time.
+
+### Browser
+- Prosper can now be chosen as your **default web browser** directly in System
+  Settings → Desktop & Dock, alongside the existing "Make Prosper the Default
+  Browser" palette command. (It was previously hidden from that list.)
+
 ## v2.92.0
 
 ### Keyboard
