@@ -21,4 +21,13 @@ enum ProsperServer {
     static var isConfigured: Bool {
         baseURL.host != "prosper-server.example.workers.dev"
     }
+
+    /// Lemon Squeezy pay-what-you-want checkout. Override with `PROSPER_CHECKOUT_URL`.
+    static var checkoutURL: URL {
+        if let override = ProcessInfo.processInfo.environment["PROSPER_CHECKOUT_URL"],
+           let url = URL(string: override) {
+            return url
+        }
+        return URL(string: "https://getprosper.lemonsqueezy.com/checkout/buy/7452e3cc-d14d-4c14-b795-d9d95b4a5ba9?discount=0&logo=0")!
+    }
 }
