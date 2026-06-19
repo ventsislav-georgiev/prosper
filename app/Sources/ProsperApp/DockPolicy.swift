@@ -3,7 +3,7 @@ import AppKit
 /// Temporarily shows a Dock icon (and a Cmd-Tab entry) while any Prosper window
 /// is on screen.
 ///
-/// Prosper runs as an `.accessory` agent (LSUIElement) so it has no Dock tile and
+/// Prosper runs as an `.accessory` agent (set at launch in main.swift) so it has no Dock tile and
 /// its floating panels never appear in Cmd-Tab. The downside: once the user
 /// clicks another app, an open Prosper window (command runner, clipboard history,
 /// settings, …) is left behind in the background with no way to bring it forward —

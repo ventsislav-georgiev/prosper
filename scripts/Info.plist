@@ -22,8 +22,11 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
-	<key>LSUIElement</key>
-	<true/>
+	<!-- No LSUIElement: the static agent flag makes macOS hide the app from the
+	     System Settings "Default web browser" picker. We instead start dock-less at
+	     runtime via NSApp.setActivationPolicy(.accessory) in main.swift (DockPolicy
+	     flips to .regular only while a window is open), which keeps the menu-bar-agent
+	     behaviour AND lets the app appear as a selectable default browser. -->
 	<!-- Lets Prosper register as a default web browser so a Lua extension can
 	     intercept opened links (host API §O url-dispatcher). Inert until the user
 	     sets Prosper default via host.url.set_default_browser; opened URLs arrive as
