@@ -12,11 +12,11 @@ About list.
 
 ```
  macOS app ──HTTPS──▶ Worker (Hono)
-                        ├─ D1   users · licenses · devices · whitelist · sessions · settings
+                        ├─ D1   users · supporter_tokens · devices · whitelist · sessions · settings
                         ├─ KV   one-time magic-link tokens + pickup slots (TTL auto-expire)
                         ├─ Cron daily session cleanup
                         ├─ Resend  → magic-link emails
-                        └─ Lemon Squeezy webhook → lifetime licenses
+                        └─ Lemon Squeezy webhook → supporter records
 ```
 
 ## Layout
@@ -25,14 +25,17 @@ About list.
 | --- | --- |
 | `src/index.ts` | routes + scheduled (cron) handler |
 | `src/auth.ts` | magic-link: `/auth/start`, `/auth/verify`, `/auth/poll` |
-| `src/license.ts` | supporter-status resolution + signed-token minting (`/license`) |
+| `src/supporter.ts` | supporter-status resolution + signed-token minting (`/supporter`) |
 | `src/supporters.ts` | public recent supporter names (`GET /supporters`) |
 | `src/account.ts` | `/activate`, `/devices`, `/account/delete` |
 | `src/sync.ts` | settings sync (`GET`/`PUT /sync`, optimistic concurrency) |
 | `src/payment.ts` | Lemon Squeezy webhook (`/payment/lemonsqueezy`) |
-| `src/jwt.ts` | Ed25519 (EdDSA) license-token signing via WebCrypto |
+| `src/market.ts` | extension marketplace (`/market/*`) |
+| `src/jwt.ts` | Ed25519 (EdDSA) supporter-token signing via WebCrypto |
 | `migrations/0001_init.sql` | D1 schema |
 | `migrations/0002_supporter.sql` | supporter name column + index |
+| `migrations/0003_rename_licenses.sql` | `licenses` → `supporter_tokens` |
+| `migrations/0004_market.sql`, `0005_market_kind.sql` | marketplace tables |
 | `scripts/gen-keys.mjs` | generate the Ed25519 signing keypair |
 
 ## One-time setup
@@ -51,7 +54,7 @@ npx wrangler kv namespace create KV
 # 3) Apply the schema (remote)
 npm run db:migrate
 
-# 4) Generate the license signing key; set the private JWK as a secret,
+# 4) Generate the supporter signing key; set the private JWK as a secret,
 #    embed the printed public key in the macOS app.
 npm run gen:keys
 #   …copy the SUPPORTER_SIGNING_JWK line, then:
@@ -87,33 +90,33 @@ All authenticated calls send `Authorization: Bearer <session>`.
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/auth/start` | — | `{email}` → emails a one-time link, returns `{pickup}` |
-| `GET` | `/auth/verify?token=` | — | clicked in browser; mints session + license |
-| `POST` | `/auth/poll` | — | `{pickup}` → `{status}` then `{session, license, email}` |
+| `GET` | `/auth/verify?token=` | — | clicked in browser; mints session + supporter token |
+| `POST` | `/auth/poll` | — | `{pickup}` → `{status}` then `{session, token, email}` |
 | `GET` | `/supporters` | — | `{supporters}` — recent distinct supporter display names for the About list |
-| `GET` | `/license` | session | mint a fresh signed status token `{license, tier, exp}` |
+| `GET` | `/supporter` | session | mint a fresh signed status token `{token, status, exp}` |
 | `POST` | `/activate` | session | `{device_id, name}`; 409 `device_limit` when over cap |
 | `GET` | `/devices` | session | list activated devices |
 | `DELETE` | `/devices/:id` | session | deactivate a device |
 | `GET` | `/sync` | session | `{version, blob, updated_at}` |
 | `PUT` | `/sync` | session | `{base_version, blob}`; 409 `conflict` returns server state |
-| `POST` | `/account/delete` | session | GDPR delete (keeps license/financial records) |
-| `POST` | `/payment/lemonsqueezy` | HMAC | webhook → lifetime license |
+| `POST` | `/account/delete` | session | GDPR delete (keeps supporter/financial records) |
+| `POST` | `/payment/lemonsqueezy` | HMAC | webhook → supporter record |
 
 ### Client flow (macOS app)
 
 1. User types email → `POST /auth/start` → keep the `pickup`.
 2. Poll `POST /auth/poll` every ~2 s (until `ready` or `expired`) while the user
    clicks the emailed link in their browser.
-3. On `ready`, store `session` + `license` in the **Keychain**.
-4. Verify the `license` JWT **offline** with the embedded Ed25519 public key
+3. On `ready`, store `session` + supporter `token` in the **Keychain**.
+4. Verify the `token` JWT **offline** with the embedded Ed25519 public key
    (EdDSA). Treat it as valid until `exp` → that is your **offline grace period**.
-5. Refresh via `GET /license` only when online *and* near `exp`. On any network
+5. Refresh via `GET /supporter` only when online *and* near `exp`. On any network
    failure, **fail open to the free tier** — never block the core app.
 
-### License token
+### Supporter token
 
-Compact EdDSA JWT, claims: `sub` (email), `tier` (`free|supporter`), `iat`,
-`exp`, `jti`, `iss="prosper-license"`. Signed with the server's Ed25519 private
+Compact EdDSA JWT, claims: `sub` (email), `status` (`free|supporter`), `iat`,
+`exp`, `jti`, `iss="prosper-supporter"`. Signed with the server's Ed25519 private
 key; verified app-side with the public key from `gen:keys`. The token reflects
 **status only** — the app never gates features on it.
 
