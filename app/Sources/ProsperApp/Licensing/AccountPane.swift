@@ -14,9 +14,6 @@ struct AccountPane: View {
     @State private var email = ""
     @State private var confirmingDelete = false
 
-    /// TODO: set to your Lemon Squeezy pay-what-you-want checkout.
-    private static let checkoutURL = URL(string: "https://prosper.lemonsqueezy.com/buy/REPLACE")!
-
     var body: some View {
         NeonScroll {
             PaneTitle(title: "Account",
@@ -157,7 +154,7 @@ struct AccountPane: View {
                     footer: "Prosper is free, forever — every feature, no paywall. If it's earned a place in your workflow, you can chip in (pay what you want, as often as you like). Supporters get a badge; the most recent 100 are listed in About.") {
             NeonRow("Buy me a coffee", subtitle: ent.isSupporter ? "Thank you for supporting Prosper ♥ — chip in again anytime" : "Pay what you want — anytime") {
                 Button(ent.isSupporter ? "Support again ♥" : "Support ♥") {
-                    NSWorkspace.shared.open(Self.checkoutURL)
+                    NSWorkspace.shared.open(ProsperServer.checkoutURL)
                 }
                 .buttonStyle(.neon)
             }
