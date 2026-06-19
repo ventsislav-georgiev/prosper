@@ -101,6 +101,7 @@ Type in *any* text field → Prosper shows a continuation as ghost text at the c
 - **Live indicator** (optional accessory icon) — pulses while thinking, shows a lock under Secure Input, turns orange when generation failed (click it, or hit `⌥.`, to retry). The menu bar names the app holding Secure Input when completions are paused.
 - **Electron/Chromium-aware caret tracking** — Slack, Discord & co. hide caret geometry from assistive tooling; Prosper unlocks their accessibility tree and pins the ghost to the real caret, baseline-aligned with your text.
 - Completion length (short/medium/long), optional trailing space after the final word-accept, custom AI instructions, per-app/per-domain rules, hide-overlays-on-click — **Settings → Completions / Apps**. The menu-bar icon also toggles completions for the app you were just using.
+- **Frees its own RAM** — the model unloads when you turn completions off, and after an idle timeout (default 2 min, configurable), reloading on demand. The inline hot path is untouched.
 
 Typing `:name` also ghost-replaces with an emoji on accept.
 
@@ -138,9 +139,9 @@ Saved URLs with `{query}` templates and saved directories with per-dir actions �
 
 ## Extensions
 
-Add commands without recompiling — small **Lua** scripts, auto-loaded, routed by regex. Manage in **Settings → Extensions**: enable/disable, edit live (everything lives in `~/.config/prosper/extensions`), reset bundled extensions to original, or **install from GitHub** by pasting a repo URL.
+Add commands without recompiling — small **Lua** scripts, auto-loaded, routed by regex. Manage in **Settings → Extensions**: enable/disable, edit live (everything lives in `~/.config/prosper/extensions`), reset bundled extensions to original, **install from GitHub** by pasting a repo URL, or browse the **Marketplace** to one-click-install (and publish) signed extensions — fresh installs stay untrusted until you grant trust.
 
-The built-in commands above (calc, currency, units, base64, quicklinks, quickdirs, window, open, translate, shell) *are* Lua extensions — open them in Settings to see how they're written, or use them as templates. See [Writing extensions](extensions.md).
+The built-in commands above (calc, currency, units, base64, quicklinks, quickdirs, window, open, translate, shell, browser bookmarks) *are* Lua extensions — open them in Settings to see how they're written, or use them as templates. Extensions can also **contribute themes** (a flat 12-token palette that re-skins the whole app, including menu-bar/dock chrome — pick one in **Settings → Personalization**) and drive **system automation** — global hotkeys, key remaps, app launchers, screen/power control, filesystem watches — the Hammerspoon territory, with a facade that even loads an unmodified `~/.hammerspoon/init.lua`. See [Writing extensions](extensions.md).
 
 ---
 

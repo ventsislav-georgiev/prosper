@@ -44,7 +44,7 @@ function shout_run(query)
 end
 ```
 
-Useful optional command fields: `keywords` (launcher discovery), `prefix` (e.g. `"sh "` locks the runner into the command as a labelled mode), `launches_window = true` (surface as a row that opens the window on Enter instead of running per keystroke), `requires = ["model"]` (hidden until the local LLM is loaded).
+Useful optional command fields: `keywords` (launcher discovery), `prefix` (e.g. `"sh "` locks the runner into the command as a labelled mode), `launches_window = true` (surface as a row that opens the window on Enter instead of running per keystroke), `list_on_empty = true` (run the command on an empty query so the mode opens pre-populated, then filters as you type), `requires = ["model"]` (hidden until the local LLM is loaded). A manifest-level `permissions = ["full-disk-access"]` flags an OS permission the extension needs (surfaced in Settings → Extensions).
 
 **Runtime** — Lua 5.4 vendored in-process (pure C, no JIT → notarization-clean). Sandboxed (no `io`/`os`/`package`/`require`/file/net) with an instruction budget that aborts runaways. VMs activate lazily on first match — zero cost until used.
 
@@ -92,6 +92,31 @@ host.timer.schedule{ id = "once",    after = 120,   handler = "on_soon" }      -
 host.timer.cancel("once")
 ```
 
+## Themes
+
+An extension can also contribute a **theme** — no Lua, just a manifest entry and a flat JSON palette:
+
+```toml
+[[contributes.themes]]
+id         = "com.example.amber"
+title      = "Amber Terminal"
+path       = "theme.json"   # 12-token color palette, relative to the extension dir
+appearance = "dark"         # or "light"
+```
+
+```json
+{
+  "appearance": "dark",
+  "colors": {
+    "blue": "#FFB000", "blueBright": "#FFD166", "indigo": "#FF7A1A", "magenta": "#FF4D6D",
+    "terminal": "#FFE08A", "bgTop": "#14100A", "bgBottom": "#0B0905", "sidebar": "#0F0C07",
+    "card": "#1E1810", "cardHi": "#2A2216", "textPrimary": "#F5ECDD", "textSecondary": "#B8A98C"
+  }
+}
+```
+
+Pick a theme in **Settings → Personalization**; the whole app (and the AppKit menu-bar / dock chrome) redraws instantly. Missing tokens fall back to the default palette, so a partial palette is valid. The bundled **theme-amber** extension is the worked example.
+
 ## Host API — automation surface
 
 Reads (frontmost app, keyboard layout, fs attributes, battery/network/screen) are open to **every** extension. Side-effecting/privileged calls (launching apps, AppleScript, setting the keyboard layout or default browser, installing key rules, watching the filesystem, power/menubar/dialogs) are gated to **system extensions** (`system = true`); for a non-system extension they are inert no-ops.
@@ -132,8 +157,10 @@ end
 
 The bundled **url-dispatcher** extension and **hammerspoon-compat** are the worked examples for this surface. User-facing key/media/app shortcuts now live natively in **Settings → Shortcuts → Key Mappings** (the old opinionated `appkeys` / `media-layer` / `app-remaps` system extensions are gone — no hard-coded combos; configure your own, including remapping/swallowing *incoming* media keys). They feed the same `host.keys.set_rules` engine under the reserved owner `com.prosper.shortcuts`.
 
-**System vs user** — bundled features ship as *system extensions*: editable and disablable, **resettable to original**, but never uninstallable. Currently **Calc**, **Unit Convert**, **Base64**, **Currency**, **Translate**, **Open**, **Shell**, **Quicklinks**, **Quickdirs**, **Window Management**, and **URL Dispatcher** are implemented this way; the conversion engines keep a native fallback, so a disabled/edited extension never loses the feature. Any installed extension whose `match` regex accepts the palette query is dispatched on the off-main async lane — that is how Quicklinks (and user extensions) surface as palette commands. (Temperature conversion stays native — Foundation's affine Fahrenheit constants can't be reproduced byte-for-byte in the Lua port.) Currency is the worked example for the async surface — it fetches daily FX over `host.http` (with retry), caches them via `host.prefs`/`host.time`, and runs on the off-main async lane.
+**System vs user** — bundled features ship as *system extensions*: editable and disablable, **resettable to original**, but never uninstallable. Currently **Calc**, **Unit Convert**, **Base64**, **Currency**, **Translate**, **Open**, **Shell**, **Quicklinks**, **Quickdirs**, **Window Management**, **Bookmarks** (Safari / Chrome / Firefox / Zen), **URL Dispatcher**, and the **theme** extensions are implemented this way; the conversion engines keep a native fallback, so a disabled/edited extension never loses the feature. Any installed extension whose `match` regex accepts the palette query is dispatched on the off-main async lane — that is how Quicklinks (and user extensions) surface as palette commands. (Temperature conversion stays native — Foundation's affine Fahrenheit constants can't be reproduced byte-for-byte in the Lua port.) Currency is the worked example for the async surface — it fetches daily FX over `host.http` (with retry), caches them via `host.prefs`/`host.time`, and runs on the off-main async lane.
 
 **Everything lives in `~/.config/prosper/extensions`** — one editable directory. On launch, bundled system extensions are *copied* there (missing folders only, never clobbering your edits) and loaded from there, so you can open any extension in your editor and change it live. **Reset to original** re-copies the pristine bundled version over your edits. User extensions install into the same directory and remove freely; system extensions can't be uninstalled, only reset.
 
 **Install from GitHub** — paste a repo/subdir URL into **Settings → Extensions** (`github.com/owner/repo`, `…/tree/<ref>/<subdir>`, `.git`, `git@` forms all parse). Prosper fetches the tarball, validates `extension.toml`, installs.
+
+**Marketplace** — browse and one-click-install published extensions, or **Publish** your own, from **Settings → Extensions**. Manifests are signed (Ed25519) and verified on download; a freshly installed extension lands **untrusted** and runs only after you grant trust (install-then-trust gate), so privileged host APIs stay opt-in.
