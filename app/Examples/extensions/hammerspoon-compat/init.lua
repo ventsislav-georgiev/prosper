@@ -24,6 +24,7 @@
 -- on, so with the switch off this extension installs no rules and runs no config.
 
 local HS_INIT = "~/.hammerspoon/init.lua"
+local PROSPER = "eu.illegible.prosper"
 
 -- ============ Enable gate ============
 local function is_enabled()
@@ -192,10 +193,31 @@ local function build_hs(ctx)
     }
 
     -- URLs / shell / AppleScript / alerts / notifications / clipboard.
+    -- URL routing. A config makes Prosper the default browser (setDefaultHandler),
+    -- then routes each opened link from `hs.urlevent.httpCallback` by calling
+    -- openURLWithBundle(url, bundleID). The callback closure is invoked per link via
+    -- the url.open event — see hs_url_open, which re-runs the config (cold VM) to
+    -- rebuild the callback then fires it, exactly like hs_dispatch does for hotkeys.
     hs.urlevent = {
         openURL = function(url) if allowed() then host.url.open(url) end end,
-        bind = function() end, -- scheme handlers: unsupported
+        -- Route to a chosen browser. Loop guard: Prosper IS the default handler, so a
+        -- nil/own bundle id bounces the link back to url.open forever — send those to
+        -- Safari instead so the link is never lost.
+        openURLWithBundle = function(url, bundle)
+            if allowed() then
+                if not bundle or #bundle == 0 or bundle == PROSPER then bundle = "com.apple.Safari" end
+                host.url.open(url, bundle)
+            end
+            return true
+        end,
+        -- Make Prosper the system http(s) handler so opened links arrive here.
+        setDefaultHandler = function(_scheme) if allowed() then host.url.set_default_browser(PROSPER) end end,
+        getDefaultHandler = function() return host.url.default_browser() end,
+        bind = function() end, -- custom (non-http) scheme handlers: unsupported
     }
+    -- httpCallback is assigned by the config (hs.urlevent.httpCallback = fn). Hold a
+    -- ref to the table so hs_url_open can read that closure after a (re)run.
+    ctx.urlevent = hs.urlevent
     hs.openURL = function(url) if allowed() then host.url.open(url) end end
     hs.execute = function(cmd) return allowed() and host.shell.run(cmd) or "" end
     hs.osascript = {
@@ -528,6 +550,42 @@ function hs_timer_fired(payload)
     if not idx then return end
     if not (_HS and _HS.ctx) then run_user_config("rebuild") end
     fire_timer(idx)
+end
+
+-- Split a URL into the (scheme, host, params) HS hands hs.urlevent.httpCallback.
+-- ponytail: enough for routing decisions (host/scheme/fullURL); not a full RFC 3986
+-- parser. Most callbacks branch on host or the full URL, both of which are exact.
+local function parse_url(u)
+    local scheme = u:match("^(%a[%w+.-]*):") or ""
+    local authority = u:match("^%a[%w+.-]*://([^/?#]*)") or ""
+    local host_ = authority:match("@(.*)$") or authority      -- strip user:pass@
+    host_ = host_:match("^([^:]*)") or host_                   -- strip :port
+    local params = {}
+    local query = u:match("%?([^#]*)")
+    if query then for k, v in query:gmatch("([^&=?]+)=?([^&]*)") do params[k] = v end end
+    return scheme, host_, params
+end
+
+-- url.open event -> invoke the config's hs.urlevent.httpCallback. Same warm/cold
+-- contract as hs_dispatch: a warm VM fires the cached closure; a cold/evicted VM
+-- rebuilds (effects suppressed) once. No-op when the config defines no httpCallback
+-- (so configs that only use hotkeys/timers don't intercept links).
+-- NOTE: url-dispatcher also subscribes url.open — if both are enabled WITH routing,
+-- a link opens twice. Disable url-dispatcher to let init.lua drive URL routing.
+function hs_url_open(payload)
+    if not is_enabled() then return end
+    local data = payload and host.json.decode(payload) or nil
+    local full = data and data.url
+    if type(full) ~= "string" or #full == 0 then return end
+    if not (_HS and _HS.ctx) then run_user_config("rebuild") end
+    local ctx = _HS and _HS.ctx
+    local cb = ctx and ctx.urlevent and ctx.urlevent.httpCallback
+    if type(cb) ~= "function" then return end -- this config does no URL routing
+    local scheme, host_, params = parse_url(full)
+    ctx.firing = true                         -- side-effecting hs.* allowed in the callback
+    local ok, err = pcall(cb, scheme, host_, params, full)
+    ctx.firing = false
+    if not ok then host.log.error("hammerspoon-compat: httpCallback error: " .. tostring(err)) end
 end
 
 -- ============ raw eventtaps (resident VM, opt-in) ============
