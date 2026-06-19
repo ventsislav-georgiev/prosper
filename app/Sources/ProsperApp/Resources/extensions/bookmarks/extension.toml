@@ -35,11 +35,13 @@ title       = "Browser Bookmarks"
 description = "Search bookmarks, or manage them: bm import | browsers | help."
 mode        = "no-view"
 icon        = "bookmark"
-keywords    = ["bm", "bookmark", "bookmarks", "browser", "chrome", "safari", "firefox", "arc", "brave", "edge"]
+keywords    = ["bm", "bookmark", "bookmarks", "browser", "chrome", "safari", "firefox", "zen", "arc", "brave", "edge"]
 match       = "^bm( |$)"
 # Runner-mode trigger: typing "bm " locks the launcher into this command, showing
 # the "Browser Bookmarks" chip and stripping the prefix from the visible query.
 prefix      = "bm "
+# List all bookmarks the moment the mode opens (empty query), then filter on type.
+list_on_empty = true
 
 # Dynamic (Tier-B) settings: rendered by the extension's `settings_render` handler
 # so each enabled browser's Sources toggle can carry a live count badge of the

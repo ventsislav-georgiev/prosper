@@ -48,12 +48,14 @@ struct ModeTrigger: Sendable {
     /// Built-in triggers, longest-prefix-first so `base64 ` wins over a shorter
     /// overlap. Translation is gated here: nothing translates unless the user
     /// types `l `/`t ` or enters translate mode via the shortcut.
-    /// No built-in triggers remain: translate (`l `/`t `), open-app (`o `) and
-    /// shell (`! `/`> `/`!`) all ship as system extensions that contribute their
-    /// prefixes via their manifests (see Resources/extensions/*). Kept as an empty
-    /// list so `match` stays a cheap, allocation-free fast path before the
-    /// registry's manifest-declared triggers are consulted in `resolve`.
-    static let builtin: [ModeTrigger] = []
+    /// Translate (`l `/`t `), open-app (`o `) and shell (`! `/`> `/`!`) ship as
+    /// system extensions that contribute their prefixes via their manifests (see
+    /// Resources/extensions/*). The coding agent (`g `) is native — it drives
+    /// `AgentController` directly, so it locks in here rather than via a manifest.
+    static let builtin: [ModeTrigger] = [
+        ModeTrigger(prefix: "g ", mode: .ext(id: CommandRouter.agentCommandID, title: "Coding Agent",
+                                             icon: "sparkles", arg: nil)),
+    ]
 
     /// If `input` begins with a built-in trigger, returns the mode and the query
     /// with the prefix removed. Built-ins only (native modes); see `resolve` for
@@ -188,6 +190,11 @@ enum RunnerOutcome: Sendable {
 /// currency needs 3-letter codes — these are mutually exclusive in practice, so
 /// the first that parses wins.
 enum CommandRouter {
+
+    /// Sentinel command id for the native coding-agent runner mode (`g `). Special-
+    /// cased in `run` and `RunnerPanel.launchExtension` — it is NOT an extension id
+    /// and must never resolve in the registry.
+    static let agentCommandID = "prosper.agent"
 
     /// Extension registry, set at launch by the app. Command handlers that have
     /// been migrated to system extensions are tried through this; the native
@@ -353,6 +360,16 @@ enum CommandRouter {
             if id == "quickdirs.run", let qd = quickdirsOutcome(arg: arg, rest: trimmed) {
                 return qd
             }
+            // Native coding agent (`g `): surface a launcher row that opens the agent
+            // window and submits the goal on Enter (RunnerPanel routes the sentinel id
+            // to AgentController, not the registry). Window launcher, like its old
+            // `launches_window` extension shape — never auto-runs per keystroke.
+            if id == agentCommandID {
+                return .extLaunch([ExtLaunchHit(
+                    commandID: agentCommandID, title: "Coding Agent", icon: "sparkles",
+                    detail: "Run the typed text as a goal for the local coding agent",
+                    query: trimmed)])
+            }
             return await runExtension(id: id, title: title, query: trimmed)
 
         case .universal:
@@ -467,6 +484,21 @@ enum CommandRouter {
         //    fallback here; it lives behind the `l ` prefix / translate mode).
         let apps = await MainActor.run { AppIndex.shared.search(trimmed) }
         if !apps.isEmpty { return .apps(apps) }
+
+        // 5. Inline bookmarks (opt-in). Below apps/quicklinks: only when nothing
+        //    higher matched. Gated by the bookmarks extension's `show_in_launcher`
+        //    pref (default off → no VM spin on the hot path); the Lua handler reuses
+        //    the same search/render as `bm` and returns "" (→ nil) when no match.
+        let bmID = "com.prosper.bookmarks"
+        let bmInline = await MainActor.run { () -> Bool in
+            registry?.prefValue(extensionID: bmID, key: "show_in_launcher") == "true"
+        }
+        if trimmed.count >= 2, bmInline,
+           let registry = await MainActor.run(body: { registry }),
+           let node = await registry.callExtensionViewAsync(
+               extensionID: bmID, function: "bookmarks_inline", args: [trimmed]) {
+            return .extView(node)
+        }
 
         return .noResults(query: trimmed)
     }

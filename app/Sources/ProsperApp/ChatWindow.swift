@@ -31,7 +31,7 @@ final class ChatWindow {
         }
         if let goal { ChatComposerModel.shared.draft = goal }
 
-        let hosting = NSHostingController(rootView: ChatRootView())
+        let hosting = NSHostingController(rootView: Themed { ChatRootView() })
         let win = ChatClosableWindow(contentViewController: hosting)
         win.title = "Prosper Coding Agent"
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]

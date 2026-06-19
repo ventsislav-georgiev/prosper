@@ -78,12 +78,81 @@ final class ExtensionInstallTests: XCTestCase {
         let record = try registry.installLocal(from: source)
         XCTAssertEqual(record.id, "com.test.hello")
         XCTAssertFalse(record.isSystem)
-        XCTAssertNotNil(registry.command(id: "hello.run"))
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: userDir.appendingPathComponent("com.test.hello/extension.toml").path))
 
-        // Invoking the installed Lua handler works end to end.
+        // Trust gate: a freshly installed extension lands untrusted and inert.
+        XCTAssertFalse(record.trusted)
+        XCTAssertNil(registry.command(id: "hello.run"))
+        XCTAssertNil(registry.invokeSync(commandID: "hello.run", query: "hello world"))
+
+        // After trusting, it routes and invokes end to end.
+        try registry.trust(id: "com.test.hello")
+        XCTAssertNotNil(registry.command(id: "hello.run"))
         XCTAssertEqual(registry.invokeSync(commandID: "hello.run", query: "hello world"), "hi")
+    }
+
+    func testTrustGate() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let userDir = tmp.appendingPathComponent("user")
+        let source = tmp.appendingPathComponent("source")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try writeSource(into: source, id: "com.test.hello")
+
+        let registry = makeRegistry(userDir: userDir)
+        registry.discover()   // seeds the (empty) trusted key, so the install below is untrusted
+        try registry.installLocal(from: source)
+
+        // Untrusted: route() declines and no VM is spawned.
+        XCTAssertNil(registry.route(query: "hello world"))
+        XCTAssertFalse(registry.isTrusted(id: "com.test.hello"))
+
+        // Trust persists and makes it live; untrust tears it back down.
+        try registry.trust(id: "com.test.hello")
+        XCTAssertTrue(registry.isTrusted(id: "com.test.hello"))
+        XCTAssertNotNil(registry.route(query: "hello world"))
+
+        try registry.untrust(id: "com.test.hello")
+        XCTAssertNil(registry.route(query: "hello world"))
+
+        // Trust survives a rescan (persisted in UserDefaults).
+        try registry.trust(id: "com.test.hello")
+        registry.discover()
+        XCTAssertTrue(registry.isTrusted(id: "com.test.hello"))
+        XCTAssertNotNil(registry.command(id: "hello.run"))
+    }
+
+    func testSystemExtensionAlwaysTrusted() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let sysParent = tmp.appendingPathComponent("system")
+        let extDir = sysParent.appendingPathComponent("hello")
+        try writeSource(into: extDir, id: "com.test.hello")
+
+        let registry = ExtensionRegistry(
+            systemDir: sysParent,
+            userDir: tmp.appendingPathComponent("user"),
+            hostVersion: "2.0.0",
+            defaults: UserDefaults(suiteName: "test.\(UUID().uuidString)")!,
+            services: NoopServices())
+        registry.discover()
+        // System extensions are trusted without any user action and route immediately.
+        XCTAssertEqual(registry.isTrusted(id: "com.test.hello"), true)
+        XCTAssertNotNil(registry.command(id: "hello.run"))
+    }
+
+    func testGrandfatherTrustsPreexistingInstalls() throws {
+        // An extension already on disk before the trust gate existed (no trusted key
+        // in defaults yet) must be trusted on first discover, not silently disabled.
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let userDir = tmp.appendingPathComponent("user")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try writeSource(into: userDir.appendingPathComponent("com.test.hello"), id: "com.test.hello")
+
+        let registry = makeRegistry(userDir: userDir)
+        registry.discover()
+        XCTAssertEqual(registry.isTrusted(id: "com.test.hello"), true)
+        XCTAssertNotNil(registry.command(id: "hello.run"))
     }
 
     func testUninstallUserExtensionRemovesIt() throws {
@@ -101,6 +170,98 @@ final class ExtensionInstallTests: XCTestCase {
         XCTAssertNil(registry.record(id: "com.test.hello"))
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: userDir.appendingPathComponent("com.test.hello").path))
+    }
+
+    // MARK: - Zip-slip predicate (pure, no I/O)
+
+    func testUnsafeEntryReason() {
+        // Safe entries — manifest at root, nested files, dot-prefixed names.
+        for safe in ["extension.toml", "init.lua", "themes/dark.json", "a/b/c.lua", ".keep", "a..b/c"] {
+            XCTAssertNil(RemoteInstaller.unsafeEntryReason(safe), "should accept \(safe)")
+        }
+        // Escapes — absolute, home, and every shape of `..` traversal.
+        for bad in ["/etc/passwd", "~/.ssh/key", "../evil", "a/../../b", "foo/..", "../"] {
+            XCTAssertNotNil(RemoteInstaller.unsafeEntryReason(bad), "should reject \(bad)")
+        }
+    }
+
+    // MARK: - Market id binding (authenticity)
+
+    func testMarketIdentityBinding() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = tmp.appendingPathComponent("source")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try writeSource(into: source, id: "com.test.hello")   // tarball declares this id
+
+        let registry = makeRegistry(userDir: tmp.appendingPathComponent("user"))
+
+        // Match (signed id == manifest id): accepted.
+        XCTAssertNoThrow(try registry.bindMarketIdentity(extDir: source, expected: "com.test.hello"))
+
+        // Spoof (published as another id): rejected before any install/overwrite.
+        XCTAssertThrowsError(try registry.bindMarketIdentity(extDir: source, expected: "com.trusted.victim")) {
+            XCTAssertEqual($0 as? ExtensionError,
+                           .marketIdMismatch(expected: "com.trusted.victim", got: "com.test.hello"))
+        }
+    }
+
+    // MARK: - Hot path
+
+    /// Build N distinct extensions directly under `userDir`. Pre-seeding before the
+    /// first discover() grandfathers them all as trusted → live (see discover()).
+    private func writeRoutes(into userDir: URL, count: Int) throws {
+        for i in 0..<count {
+            let dir = userDir.appendingPathComponent("com.test.ext\(i)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let toml = """
+            [extension]
+            id = "com.test.ext\(i)"
+            name = "ext\(i)"
+            title = "Ext \(i)"
+            description = "perf"
+            version = "1.0.0"
+            author = "tester"
+
+            [extension.host]
+            min_version = "2.0.0"
+            api_level = 1
+
+            [extension.entry]
+            main = "init.lua"
+
+            [[contributes.commands]]
+            id = "ext\(i).run"
+            title = "Run \(i)"
+            mode = "no-view"
+            match = "^cmd\(i)\\\\b"
+            """
+            try toml.write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+            try "-- noop".write(to: dir.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// route() is per-keystroke. Budget: O(live routes) precompiled-regex matches,
+    /// no regex compilation, no allocations beyond one NSRange. Asserts a non-matching
+    /// worst-case query (scans every route) stays well under budget over 200 routes.
+    func testRoutePerformance() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let userDir = tmp.appendingPathComponent("user")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try writeRoutes(into: userDir, count: 200)
+
+        let registry = makeRegistry(userDir: userDir)
+        registry.discover()   // grandfathers all 200 as trusted → live
+        XCTAssertNotNil(registry.route(query: "cmd5 hello"))   // sanity: routes resolve
+
+        let iterations = 2_000
+        let worstCase = "zzz no route matches this"   // forces a full scan of all 200 regexes
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for _ in 0..<iterations { _ = registry.route(query: worstCase) }
+        }
+        let perCall = elapsed / iterations
+        // Budget: < 1ms per keystroke even scanning 200 routes with no match.
+        XCTAssertLessThan(perCall, .milliseconds(1), "route() over 200 routes took \(perCall)/call")
     }
 
     func testCannotUninstallSystemExtension() throws {

@@ -130,8 +130,12 @@ final class AutocompleteEngine {
             return false
         }
 
+        // systemDefined (14) carries media/aux keys (PLAY, SOUND_UP, …). We watch it
+        // so user shortcut rules can remap/swallow INCOMING media keys; with no media
+        // rule registered the callback returns the event untouched (volume HUD intact).
         let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << 14 /* NX_SYSDEFINED / CGEventType.systemDefined */)
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
@@ -154,10 +158,33 @@ final class AutocompleteEngine {
                     MainActor.assumeIsolated { engine.handleMouseDown() }
                     return Unmanaged.passUnretained(event)
                 }
+                // systemDefined (14): incoming media/aux key. Decode NX_KEYTYPE from
+                // the NSEvent and let user rules remap/swallow it. Untouched (passed
+                // through) unless a media rule matches — keeps the system volume HUD
+                // and playback working by default.
+                if type.rawValue == 14 {
+                    guard let ns = NSEvent(cgEvent: event), ns.subtype.rawValue == 8 else {
+                        return Unmanaged.passUnretained(event)
+                    }
+                    let data1 = ns.data1
+                    let mediaCode = (data1 & 0xFFFF0000) >> 16
+                    let down = ((data1 & 0xFF00) >> 8) == 0xA
+                    let flags = event.flags
+                    let swallow = MainActor.assumeIsolated {
+                        engine.handleMediaEvent(
+                            code: mediaCode, down: down,
+                            cmd: flags.contains(.maskCommand), alt: flags.contains(.maskAlternate),
+                            ctrl: flags.contains(.maskControl), shift: flags.contains(.maskShift),
+                            fn: flags.contains(.maskSecondaryFn))
+                    }
+                    return swallow ? nil : Unmanaged.passUnretained(event)
+                }
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
                 let optionHeld = event.flags.contains(.maskAlternate)
                 let controlHeld = event.flags.contains(.maskControl)
                 let commandHeld = event.flags.contains(.maskCommand)
+                let shiftHeld = event.flags.contains(.maskShift)
+                let fnHeld = event.flags.contains(.maskSecondaryFn)
                 // The typed character(s), for type-through matching against the
                 // live ghost. Empty for non-printing keys.
                 var typed = ""
@@ -177,7 +204,8 @@ final class AutocompleteEngine {
                 let swallow = MainActor.assumeIsolated {
                     engine.handle(
                         type: type, keyCode: keyCode, optionHeld: optionHeld,
-                        controlHeld: controlHeld, commandHeld: commandHeld, typed: typed
+                        controlHeld: controlHeld, commandHeld: commandHeld,
+                        shiftHeld: shiftHeld, fnHeld: fnHeld, typed: typed
                     )
                 }
                 return swallow ? nil : Unmanaged.passUnretained(event)
@@ -193,6 +221,8 @@ final class AutocompleteEngine {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        NSLog("prosper: keystroke tap started (autocomplete=%d extRules=%d)",
+              Preferences.autocompleteEnabled, !ExtensionKeyRules.shared.isEmpty)
 
         // Dismiss the indicator/ghost whenever the frontmost app changes. The
         // overlays are pinned to a text field in another process; once that app
@@ -267,18 +297,72 @@ final class AutocompleteEngine {
         accessoryButton.hide()
         ScreenContextCache.shared.invalidate() // drop cached OCR text + sampled color
         isRunning = false
+        NSLog("prosper: keystroke tap stopped")
     }
 
     // Note: owners must call stop() explicitly before releasing the engine to
     // tear down the event tap. A nonisolated deinit cannot touch the
     // MainActor-isolated, non-Sendable tap state under Swift 6.
 
+    // MARK: - Media keys (§D, incoming)
+
+    /// Resolve an incoming media/aux key against user shortcut rules. Returns true to
+    /// swallow it. Fast no-op when no media rule is registered.
+    func handleMedia(code: Int) -> Bool {
+        guard ExtensionKeyRules.shared.hasMediaRules else { return false }
+        let bundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        switch ExtensionKeyRules.shared.evaluateMedia(code: code, bundleID: bundleId) {
+        case .passThrough:
+            return false
+        case .swallow:
+            return true
+        case .inject(let target):
+            KeyInjector.stroke(target)
+            return true
+        case .system(let name):
+            KeyInjector.system(name)
+            return true
+        case .launchApp(let app):
+            AutocompleteEngine.launchApp(app)
+            return true
+        case .invoke(let extID, let handler, let arg):
+            ExtensionKeyRules.shared.invoke?(extID, handler, arg)
+            return true
+        }
+    }
+
+    /// Incoming media/aux key → native rules first (press only, existing behavior),
+    /// then the opt-in resident-VM eventtap (sees both press AND release so a Lua
+    /// callback can branch on `:systemKey().down`). Returns true to swallow.
+    func handleMediaEvent(code: Int, down: Bool,
+                          cmd: Bool, alt: Bool, ctrl: Bool, shift: Bool, fn: Bool) -> Bool {
+        if down, handleMedia(code: code) { return true }
+        if EventTapHost.shared.wantsSystemDefined, let name = MediaKey.name(forCode: code) {
+            return EventTapHost.shared.handleSystemDefined(
+                key: name, down: down, cmd: cmd, alt: alt, ctrl: ctrl, shift: shift, fn: fn)
+        }
+        return false
+    }
+
+    /// Launch or activate an app by bundle id (`com.apple.Safari`) or `.app` path.
+    static func launchApp(_ app: String) {
+        let ws = NSWorkspace.shared
+        let cfg = NSWorkspace.OpenConfiguration()
+        if app.hasSuffix(".app") || app.hasPrefix("/") {
+            ws.openApplication(at: URL(fileURLWithPath: app), configuration: cfg)
+        } else if let url = ws.urlForApplication(withBundleIdentifier: app) {
+            ws.openApplication(at: url, configuration: cfg)
+        } else {
+            NSLog("prosper: shortcut launchApp — app not found: %@", app)
+        }
+    }
+
     // MARK: - Tap callback
 
     /// Handles a tap event on the main actor. Returns true to swallow the key.
     private func handle(
         type: CGEventType, keyCode: Int64, optionHeld: Bool,
-        controlHeld: Bool, commandHeld: Bool, typed: String
+        controlHeld: Bool, commandHeld: Bool, shiftHeld: Bool, fnHeld: Bool, typed: String
     ) -> Bool {
         // Re-enable if the system disabled the tap (timeout / user input).
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -300,6 +384,55 @@ final class AutocompleteEngine {
 
         // Per-app rules: resolve the frontmost app's bundle id.
         let bundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+
+        // §D extension key remaps run FIRST (ahead of snippets/autocomplete) so a
+        // remapped chord is transformed at the source. Skipped instantly when no
+        // extension has registered rules. Injected events are tagged synthetic, so
+        // they bypass this tap (no remap loop).
+        // ponytail: remaps require the autocomplete tap to be running (it owns the
+        // single shared tap); acceptable while the engine is the multiplexer — move
+        // the tap to a standalone owner if autocomplete is ever disabled independently.
+        if !ExtensionKeyRules.shared.isEmpty {
+            let chord = KeyChord(
+                keyCode: keyCode, cmd: commandHeld, alt: optionHeld,
+                ctrl: controlHeld, shift: shiftHeld
+            )
+            switch ExtensionKeyRules.shared.evaluate(chord: chord, bundleID: bundleId) {
+            case .passThrough:
+                break
+            case .swallow:
+                return true
+            case .inject(let target):
+                KeyInjector.stroke(target)
+                return true
+            case .system(let name):
+                KeyInjector.system(name)
+                return true
+            case .launchApp(let app):
+                AutocompleteEngine.launchApp(app)
+                return true
+            case .invoke(let extID, let handler, let arg):
+                // Swallow here (native, in the hot path); the handler runs off-main
+                // on the extension's lane via the app-wired invoke hook.
+                ExtensionKeyRules.shared.invoke?(extID, handler, arg)
+                return true
+            }
+        }
+
+        // Opt-in resident-VM eventtap (e.g. hammerspoon-compat raw keyDown taps).
+        // Runs AFTER native declarative rules so those keep priority, and is gated to
+        // a single Bool when no tap is registered — zero cost in the default product.
+        if EventTapHost.shared.wantsKeyDown,
+           EventTapHost.shared.handleKeyDown(
+                keyCode: keyCode, cmd: commandHeld, alt: optionHeld,
+                ctrl: controlHeld, shift: shiftHeld, fn: fnHeld) {
+            return true
+        }
+
+        // The tap may be running SOLELY for extension key rules (handled above)
+        // while inline autocomplete is switched off. In that case do no
+        // suggestion/snippet work — just pass the key through untouched.
+        guard Preferences.autocompleteEnabled else { return false }
 
         // Inline snippet expansion shares this single tap. Forward the keystroke to
         // the expander first; it maintains its own trigger buffer and performs its

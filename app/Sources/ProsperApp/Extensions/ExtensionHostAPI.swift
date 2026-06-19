@@ -18,15 +18,6 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func llmTranslate(_ text: String, target: String, source: String?) async -> String
     // Shell (user-permissioned).
     func shellRun(_ command: String) async -> String
-    // Coding agent (user-permissioned; same trust domain as shell). Fire-and-poll:
-    // `agentRun` starts a run, opens the agent window so it is visible and approvals
-    // can be answered, and returns a JSON `{ "runId": ... }` (or `{ "error": ... }`).
-    // `agentStatus`/`agentResult` poll that handle. All return JSON object strings.
-    // Synchronous (quick fire / state reads) — never block the extension worker for
-    // the lifetime of a multi-minute run.
-    func agentRun(goal: String, cwd: String?, optsJSON: String?) -> String
-    func agentStatus(_ runID: String) -> String
-    func agentResult(_ runID: String) -> String
     // Outbound HTTP (trusted-extension capability; http/https only, size-capped).
     func httpRequest(method: String, url: String, headers: [String: String],
                      body: String?, timeout: TimeInterval) async -> HTTPResponse?
@@ -36,11 +27,57 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func setFocusedWindowFrame(x: Double, y: Double, width: Double, height: Double) -> Bool
     // Wall-clock, for cache keys / scheduling (the sandbox removes `os`).
     func currentEpochSeconds() -> Double
+    // Local calendar breakdown of "now" (the sandbox removes `os.date`). JSON
+    // { epoch, year, month, day, hour, min, sec, wday }. Powers e.g. openlid's
+    // "stay awake until HH:MM".
+    func currentLocalDateJSON() -> String
     // Per-extension settings (typed values declared in the manifest).
     func prefGet(extensionID: String, key: String) -> String?
     func prefSet(extensionID: String, key: String, value: String)
     // User notification.
     func notify(title: String, body: String)
+    // Host-rendered menubar status item (upsert/remove by id), modal dialogs, and
+    // a transient alert HUD — the openlid UI surface. Privileged (system
+    // extensions only). `json` shapes are documented at the Lua surface. Dialogs
+    // are async (they block on the user); the host bridges them to sync Lua calls.
+    func menubarSet(extensionID: String, id: String, json: String)
+    func menubarRemove(extensionID: String, id: String)
+    func dialogPrompt(json: String) async -> String?
+    func dialogConfirm(json: String) async -> Bool
+    func alertShow(text: String, seconds: Double)
+    // App control + scripting + keyboard input source (§G/§P/§F). Control ops
+    // (launch/hide/run-script/set-source) are privileged; reads (frontmost,
+    // windows, current source, layouts) are open. `*JSON` return documented shapes.
+    func appLaunchOrFocus(_ nameOrBundleID: String)
+    func appFrontmostJSON() -> String
+    func appWindowCount(bundleID: String) -> Int
+    func appHide(bundleID: String)
+    func runAppleScript(_ source: String) -> String
+    func keyboardCurrentSource() -> String
+    func keyboardLayoutsJSON() -> String
+    func keyboardSetSource(_ id: String) -> Bool
+    // Declarative per-app key remapping (§D) + synthetic key injection (§E). Rules
+    // (a JSON array) are evaluated natively inside the shared event tap — NO Lua in
+    // the keystroke path. An extension registers its full set from `on_launch`;
+    // passing an empty array clears it. Privileged. `stroke` takes a combo spec
+    // ("cmd+alt+i"); `system` a media-key name ("PLAY").
+    func keysSetRules(extensionID: String, json: String)
+    func keysStroke(_ spec: String)
+    func keysSystem(_ name: String)
+    // URL handling + default-browser control (§O). open / reads are open; setting the
+    // default browser is privileged. When Prosper is the default browser, opened
+    // links arrive as the `url.open` event ({ url }).
+    func urlOpen(_ url: String, bundleID: String?) -> Bool
+    func urlDefaultBrowser() -> String
+    func urlSetDefaultBrowser(_ bundleID: String) -> Bool
+    // Filesystem reads (open) + path watching (privileged, §Q). A watch fires a named
+    // handler with payload { paths }. The host owns the FSEventStream; it is released
+    // on disable/reset.
+    func fsExists(_ path: String) -> Bool
+    func fsAttributesJSON(_ path: String) -> String
+    func fsRead(_ path: String) -> String?
+    func fsWatch(extensionID: String, path: String, handler: String)
+    func fsUnwatch(extensionID: String, path: String)
     // Whether a named macOS privacy grant (manifest `permissions`) is currently
     // held — e.g. "full-disk-access" for the bookmarks extension's Safari source.
     // Read-only; lets an extension degrade gracefully when a grant is missing.
@@ -89,6 +126,39 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     // Close the currently-open host-rendered window (`host.window.close`). Used by
     // form/dialog submit handlers to dismiss themselves after persisting.
     func closeWindow()
+    // Open the Prosper Settings window at this extension's settings pane
+    // (`host.settings.open(sectionID)`). `sectionID` nil → the extension's first
+    // section. Used by menubar "… Settings" items to deep-link into preferences.
+    func openSettings(extensionID: String, sectionID: String?)
+    // Durable named timer (host.timer). The host owns the timer + persistence and
+    // re-invokes a NAMED Lua handler (event "timer.fired") — no resident VM / live
+    // closure. `every` distinguishes one-shot (after) from repeating; `seconds` is
+    // the delay/period. See TimerScheduler + the stateless model in the plan.
+    func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String)
+    func timerCancel(extensionID: String, id: String)
+    // Structured logging (host.log) → os_log. level ∈ {"info","warn","error"}.
+    func log(level: String, message: String)
+    // Environment variable read (host.env.get) — the sandbox strips Lua's `os`.
+    func envGet(_ name: String) -> String?
+    // Power / caffeinate (privileged). Idle-sleep assertions are host-held keyed by
+    // extension id (ExtensionResources) and reset on disable/quit. `kind` is
+    // "display" | "system". Lid-sleep override goes through privileged pmset.
+    func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool)
+    func caffeinateSetDisableLidSleep(extensionID: String, on: Bool) async
+    func caffeinateLockScreen()
+    func caffeinateStartScreensaver()
+    // Battery (read-only, open). powerSource() = "AC Power"|"Battery Power"|"".
+    func batteryPowerSource() -> String
+    func batteryPercentage() -> Int          // -1 when no battery
+    // Network reachability (read-only, open).
+    func networkIsReachable() -> Bool
+    // Screens (read-only, open). all() = JSON array; lidClosed = 1/0/-1(unknown).
+    func screenAllJSON() -> String
+    func screenLidClosed() -> Int
+    // Release every native resource (power assertions, pmset lid override) an
+    // extension holds. Called on disable/reset/quit so a wedged "disable sleep" can
+    // never outlive its owner (stateless-resource teardown, plan §2.3).
+    func resetResources(extensionID: String)
 }
 
 extension ExtensionHostServices {
@@ -127,15 +197,83 @@ extension ExtensionHostServices {
     /// Default: no windowing (test / minimal hosts).
     func closeWindow() {}
 
+    /// Default: no settings window (test / minimal hosts). The live host opens the
+    /// real Prosper Settings window at the extension's pane.
+    func openSettings(extensionID: String, sectionID: String?) {}
+
+    /// Default: no scheduler (test / minimal hosts). The live host overrides these
+    /// to drive `TimerScheduler`.
+    func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String) {}
+    func timerCancel(extensionID: String, id: String) {}
+
+    /// Default: stderr log + no environment (test / minimal hosts).
+    func log(level: String, message: String) {}
+    func envGet(_ name: String) -> String? { ProcessInfo.processInfo.environment[name] }
+
+    /// Default: local calendar breakdown of now (works in any host — pure Foundation).
+    func currentLocalDateJSON() -> String {
+        let now = Date()
+        let c = Calendar.current.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second, .weekday], from: now)
+        let obj: [String: Any] = [
+            "epoch": now.timeIntervalSince1970,
+            "year": c.year ?? 0, "month": c.month ?? 0, "day": c.day ?? 0,
+            "hour": c.hour ?? 0, "min": c.minute ?? 0, "sec": c.second ?? 0,
+            "wday": c.weekday ?? 0,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
+    }
+
+    /// Default: no power/battery/network/screen backing (test / minimal hosts).
+    func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool) {}
+    func caffeinateSetDisableLidSleep(extensionID: String, on: Bool) async {}
+    func caffeinateLockScreen() {}
+    func caffeinateStartScreensaver() {}
+    func batteryPowerSource() -> String { "" }
+    func batteryPercentage() -> Int { -1 }
+    func networkIsReachable() -> Bool { true }
+    func screenAllJSON() -> String { "[]" }
+    func screenLidClosed() -> Int { -1 }
+
+    /// Default: nothing to release (test / minimal hosts). The live host frees native
+    /// resources (lid assertion, menubar items, key rules, fs watches) here.
+    func resetResources(extensionID: String) {}
+
+    /// Default: no host UI (test / minimal hosts). The live host drives
+    /// `ExtensionMenuBar`.
+    func menubarSet(extensionID: String, id: String, json: String) {}
+    func menubarRemove(extensionID: String, id: String) {}
+    func dialogPrompt(json: String) async -> String? { nil }
+    func dialogConfirm(json: String) async -> Bool { false }
+    func alertShow(text: String, seconds: Double) {}
+
+    /// Default: no app/scripting/keyboard backend (test / minimal hosts). The live
+    /// host drives `AppControl` / `Scripting` / `KeyboardSource`.
+    func appLaunchOrFocus(_ nameOrBundleID: String) {}
+    func appFrontmostJSON() -> String { "{}" }
+    func appWindowCount(bundleID: String) -> Int { 0 }
+    func appHide(bundleID: String) {}
+    func runAppleScript(_ source: String) -> String { #"{"ok":false,"error":"scripting unavailable"}"# }
+    func keyboardCurrentSource() -> String { "" }
+    func keyboardLayoutsJSON() -> String { "[]" }
+    func keyboardSetSource(_ id: String) -> Bool { false }
+    func keysSetRules(extensionID: String, json: String) {}
+    func keysStroke(_ spec: String) {}
+    func keysSystem(_ name: String) {}
+    func urlOpen(_ url: String, bundleID: String?) -> Bool { false }
+    func urlDefaultBrowser() -> String { "" }
+    func urlSetDefaultBrowser(_ bundleID: String) -> Bool { false }
+    func fsExists(_ path: String) -> Bool { false }
+    func fsAttributesJSON(_ path: String) -> String { #"{"exists":false}"# }
+    func fsRead(_ path: String) -> String? { nil }
+    func fsWatch(extensionID: String, path: String, handler: String) {}
+    func fsUnwatch(extensionID: String, path: String) {}
+
     /// Default: no grants (test / minimal hosts). The live host overrides this
     /// with real `PermissionsManager` checks.
     func permissionGranted(_ name: String) -> Bool { false }
-
-    /// Default: no agent backend (test / minimal hosts). The live host overrides
-    /// these to drive `AgentController`.
-    func agentRun(goal: String, cwd: String?, optsJSON: String?) -> String { #"{"error":"agent unavailable"}"# }
-    func agentStatus(_ runID: String) -> String { #"{"error":"agent unavailable"}"# }
-    func agentResult(_ runID: String) -> String { #"{"error":"agent unavailable"}"# }
 }
 
 /// A captured HTTP response handed back to a Lua extension via `host.http`.
@@ -167,20 +305,28 @@ struct ExtensionHost {
     let extensionID: String
     let services: ExtensionHostServices
     let callTimeout: TimeInterval
-    /// Bundled system extensions get the privileged surface (`host.shell`,
-    /// `host.agent` — arbitrary command execution / workspace-write agent runs);
-    /// user/remote-installed ones get error stubs. `isSystem` is derived from the
-    /// bundle dir, not the manifest, so a remote extension can't claim it.
+    /// System-only tier. Bundled system extensions get the RCE / destructive
+    /// surface (`host.shell` — arbitrary command execution — and `host.files.act`);
+    /// everyone else gets error stubs. `isSystem` is derived from the bundle dir,
+    /// not the manifest, so a remote extension can't claim it.
     let privileged: Bool
+    /// Automation tier. Trusted (user-reviewed) extensions — plus system ones — get
+    /// the automation surface (key rules, app launch/hide, osascript, caffeinate,
+    /// host-rendered UI, file read/watch, Lua `load`). This is everything the
+    /// `privileged` tier grants EXCEPT the system-only RCE/destructive surface
+    /// above. A bare untrusted extension never executes, so it gets neither.
+    let trusted: Bool
 
     init(extensionID: String,
          services: ExtensionHostServices,
          callTimeout: TimeInterval = ExtensionHost.defaultCallTimeout,
-         privileged: Bool = true) {
+         privileged: Bool = true,
+         trusted: Bool = true) {
         self.extensionID = extensionID
         self.services = services
         self.callTimeout = callTimeout
         self.privileged = privileged
+        self.trusted = trusted
     }
 
     /// Register every host function and assemble the `host` table. Call before
@@ -189,6 +335,9 @@ struct ExtensionHost {
         let services = self.services
         let extID = self.extensionID
         let timeout = self.callTimeout
+        // Automation tier = system OR trusted. The narrower `privileged` (system-only)
+        // tier still gates the RCE/destructive surface (host.shell/agent/files.act).
+        let automation = privileged || trusted
 
         // --- clipboard ---
         lua.register("__h_clip_read") { rt in
@@ -286,6 +435,11 @@ struct ExtensionHost {
         // --- time (sync; wall-clock epoch seconds) ---
         lua.register("__h_time") { rt in
             rt.push(services.currentEpochSeconds())
+            return 1
+        }
+        // --- date (sync; local calendar breakdown JSON; decoded in UI bootstrap) ---
+        lua.register("__h_date") { rt in
+            rt.push(services.currentLocalDateJSON())
             return 1
         }
 
@@ -442,35 +596,6 @@ struct ExtensionHost {
             lua.register("__h_files_act") { _ in 0 }
         }
 
-        // --- agent (coding-agent runs; sync fire-and-poll; system extensions only:
-        // a run gets workspace-write in its chosen cwd) ---
-        // run(goal, optsJSON?) starts a run + returns {runId|error}; status/result
-        // poll by runId. JSON strings; the UI bootstrap decodes them into tables.
-        if privileged {
-            lua.register("__h_agent_run") { rt in
-                let goal = rt.stringArgument(1) ?? ""
-                let opts = rt.stringArgument(2)
-                rt.push(services.agentRun(goal: goal, cwd: nil, optsJSON: opts))
-                return 1
-            }
-            lua.register("__h_agent_status") { rt in
-                rt.push(services.agentStatus(rt.stringArgument(1) ?? ""))
-                return 1
-            }
-            lua.register("__h_agent_result") { rt in
-                rt.push(services.agentResult(rt.stringArgument(1) ?? ""))
-                return 1
-            }
-        } else {
-            let denied = "{\"error\":\"host.agent is restricted to system extensions\"}"
-            for name in ["__h_agent_run", "__h_agent_status", "__h_agent_result"] {
-                lua.register(name) { rt in
-                    rt.push(denied)
-                    return 1
-                }
-            }
-        }
-
         // --- window.open (host-rendered standalone window; main-bridged) ---
         // Arg: a JSON ExtensionViewNode string. Side effect only.
         lua.register("__h_window_open") { rt in
@@ -481,6 +606,174 @@ struct ExtensionHost {
         lua.register("__h_window_close") { _ in
             services.closeWindow()
             return 0
+        }
+        // --- settings.open(sectionID?) — deep-link to this ext's prefs pane ---
+        lua.register("__h_settings_open") { rt in
+            let sec = rt.stringArgument(1)
+            services.openSettings(extensionID: extID, sectionID: (sec?.isEmpty ?? true) ? nil : sec)
+            return 0
+        }
+
+        // --- timer (durable, host-owned; named handler re-invoked on fire) ---
+        // schedule(id, every, seconds, handler): every=true → repeating, else
+        // one-shot. The host persists + re-arms; the handler is invoked via the
+        // "timer.fired" event with a JSON payload {id=...}. cancel(id) removes it.
+        lua.register("__h_timer_schedule") { rt in
+            let id = rt.stringArgument(1) ?? ""
+            let every = rt.boolArgument(2) ?? false
+            let seconds = rt.numberArgument(3) ?? 0
+            let handler = rt.stringArgument(4) ?? ""
+            guard !id.isEmpty, !handler.isEmpty else { return 0 }
+            services.timerSchedule(extensionID: extID, id: id, every: every,
+                                   seconds: seconds, handler: handler)
+            return 0
+        }
+        lua.register("__h_timer_cancel") { rt in
+            services.timerCancel(extensionID: extID, id: rt.stringArgument(1) ?? "")
+            return 0
+        }
+
+        // --- log (os_log; sync) ---
+        lua.register("__h_log") { rt in
+            services.log(level: rt.stringArgument(1) ?? "info", message: rt.stringArgument(2) ?? "")
+            return 0
+        }
+
+        // --- env (read-only environment variable; sync) ---
+        lua.register("__h_env_get") { rt in
+            if let v = services.envGet(rt.stringArgument(1) ?? "") { rt.push(v) } else { rt.pushNil() }
+            return 1
+        }
+
+        // --- battery / network / screen (read-only; open to all extensions) ---
+        lua.register("__h_battery_source") { rt in rt.push(services.batteryPowerSource()); return 1 }
+        lua.register("__h_battery_pct") { rt in rt.push(Double(services.batteryPercentage())); return 1 }
+        lua.register("__h_network_reachable") { rt in rt.push(services.networkIsReachable()); return 1 }
+        lua.register("__h_screen_all") { rt in rt.push(services.screenAllJSON()); return 1 }
+        lua.register("__h_screen_lid") { rt in rt.push(Double(services.screenLidClosed())); return 1 }
+
+        // --- caffeinate / power (automation: holds system resources + pmset) ---
+        if automation {
+            lua.register("__h_caf_idle") { rt in
+                services.caffeinatePreventIdleSleep(
+                    extensionID: extID, kind: rt.stringArgument(1) ?? "display",
+                    on: rt.boolArgument(2) ?? false)
+                return 0
+            }
+            lua.register("__h_caf_lidsleep") { rt in
+                let on = rt.boolArgument(1) ?? false
+                _ = ExtensionHost.awaitSync(timeout: timeout) {
+                    await services.caffeinateSetDisableLidSleep(extensionID: extID, on: on)
+                }
+                return 0
+            }
+            lua.register("__h_caf_lock") { _ in services.caffeinateLockScreen(); return 0 }
+            lua.register("__h_caf_screensaver") { _ in services.caffeinateStartScreensaver(); return 0 }
+        } else {
+            for name in ["__h_caf_idle", "__h_caf_lidsleep", "__h_caf_lock", "__h_caf_screensaver"] {
+                lua.register(name) { _ in 0 }
+            }
+        }
+
+        // --- menubar / dialog / alert (automation: host-rendered UI) ---
+        if automation {
+            lua.register("__h_menubar_set") { rt in
+                services.menubarSet(extensionID: extID, id: rt.stringArgument(1) ?? "",
+                                    json: rt.stringArgument(2) ?? "{}")
+                return 0
+            }
+            lua.register("__h_menubar_remove") { rt in
+                services.menubarRemove(extensionID: extID, id: rt.stringArgument(1) ?? "")
+                return 0
+            }
+            // Dialogs block on the user; bridge with a generous timeout (treat a
+            // 5-min no-answer as a cancel rather than wedging the worker forever).
+            lua.register("__h_dialog_prompt") { rt in
+                let json = rt.stringArgument(1) ?? "{}"
+                let out = ExtensionHost.awaitSync(timeout: 300) { await services.dialogPrompt(json: json) }
+                if let inner = out, let s = inner { rt.push(s) } else { rt.pushNil() }
+                return 1
+            }
+            lua.register("__h_dialog_confirm") { rt in
+                let json = rt.stringArgument(1) ?? "{}"
+                let out = ExtensionHost.awaitSync(timeout: 300) { await services.dialogConfirm(json: json) }
+                rt.push(out ?? false)
+                return 1
+            }
+            lua.register("__h_alert_show") { rt in
+                services.alertShow(text: rt.stringArgument(1) ?? "", seconds: rt.numberArgument(2) ?? 0)
+                return 0
+            }
+        } else {
+            for name in ["__h_menubar_set", "__h_menubar_remove", "__h_alert_show"] {
+                lua.register(name) { _ in 0 }
+            }
+            lua.register("__h_dialog_prompt") { rt in rt.pushNil(); return 1 }
+            lua.register("__h_dialog_confirm") { rt in rt.push(false); return 1 }
+        }
+
+        // --- app reads / scripting reads / keyboard reads (open to all) ---
+        lua.register("__h_app_frontmost") { rt in rt.push(services.appFrontmostJSON()); return 1 }
+        lua.register("__h_app_windows") { rt in
+            rt.push(Double(services.appWindowCount(bundleID: rt.stringArgument(1) ?? ""))); return 1
+        }
+        lua.register("__h_kbd_current") { rt in rt.push(services.keyboardCurrentSource()); return 1 }
+        lua.register("__h_kbd_layouts") { rt in rt.push(services.keyboardLayoutsJSON()); return 1 }
+        lua.register("__h_url_open") { rt in
+            rt.push(services.urlOpen(rt.stringArgument(1) ?? "", bundleID: rt.stringArgument(2))); return 1
+        }
+        lua.register("__h_url_default") { rt in rt.push(services.urlDefaultBrowser()); return 1 }
+        lua.register("__h_fs_exists") { rt in rt.push(services.fsExists(rt.stringArgument(1) ?? "")); return 1 }
+        lua.register("__h_fs_attrs") { rt in rt.push(services.fsAttributesJSON(rt.stringArgument(1) ?? "")); return 1 }
+
+        // --- app control / scripting / keyboard set (automation) ---
+        if automation {
+            lua.register("__h_app_launch") { rt in
+                services.appLaunchOrFocus(rt.stringArgument(1) ?? ""); return 0
+            }
+            lua.register("__h_app_hide") { rt in
+                services.appHide(bundleID: rt.stringArgument(1) ?? ""); return 0
+            }
+            lua.register("__h_osascript") { rt in
+                rt.push(services.runAppleScript(rt.stringArgument(1) ?? "")); return 1
+            }
+            lua.register("__h_kbd_set") { rt in
+                rt.push(services.keyboardSetSource(rt.stringArgument(1) ?? "")); return 1
+            }
+            lua.register("__h_keys_rules") { rt in
+                services.keysSetRules(extensionID: extID, json: rt.stringArgument(1) ?? "[]"); return 0
+            }
+            lua.register("__h_keys_stroke") { rt in
+                services.keysStroke(rt.stringArgument(1) ?? ""); return 0
+            }
+            lua.register("__h_keys_system") { rt in
+                services.keysSystem(rt.stringArgument(1) ?? ""); return 0
+            }
+            lua.register("__h_url_set_default") { rt in
+                rt.push(services.urlSetDefaultBrowser(rt.stringArgument(1) ?? "")); return 1
+            }
+            lua.register("__h_fs_watch") { rt in
+                services.fsWatch(extensionID: extID, path: rt.stringArgument(1) ?? "",
+                                 handler: rt.stringArgument(2) ?? ""); return 0
+            }
+            lua.register("__h_fs_unwatch") { rt in
+                services.fsUnwatch(extensionID: extID, path: rt.stringArgument(1) ?? ""); return 0
+            }
+            // Read a text file (privileged — arbitrary path). Powers the
+            // hammerspoon-compat shim loading the user's ~/.hammerspoon/init.lua.
+            lua.register("__h_fs_read") { rt in
+                if let s = services.fsRead(rt.stringArgument(1) ?? "") { rt.push(s) } else { rt.pushNil() }
+                return 1
+            }
+        } else {
+            for name in ["__h_app_launch", "__h_app_hide", "__h_keys_rules", "__h_keys_stroke",
+                         "__h_keys_system", "__h_fs_watch", "__h_fs_unwatch"] {
+                lua.register(name) { _ in 0 }
+            }
+            lua.register("__h_fs_read") { rt in rt.pushNil(); return 1 }
+            lua.register("__h_osascript") { rt in rt.push(#"{"ok":false,"error":"not permitted"}"#); return 1 }
+            lua.register("__h_kbd_set") { rt in rt.push(false); return 1 }
+            lua.register("__h_url_set_default") { rt in rt.push(false); return 1 }
         }
 
         // Assemble the namespaced `host` table and hide the raw bindings.
@@ -493,6 +786,11 @@ struct ExtensionHost {
     /// Lua that groups the flat `__h_*` bindings under `host.*` then removes the
     /// raw globals so extensions only see the namespaced API.
     private static let bootstrap = """
+    -- Capture the raw bindings that the wrappers below reference by name, so they
+    -- keep working after the globals are nil'd at the end of this chunk.
+    local _timer_schedule = __h_timer_schedule
+    local _timer_cancel   = __h_timer_cancel
+    local _log            = __h_log
     host = {
         clipboard = {
             read    = __h_clip_read,
@@ -509,6 +807,26 @@ struct ExtensionHost {
         notify = __h_notify,
         time   = __h_time,
         sleep  = __h_sleep,
+        -- Durable named-handler timers (host-owned, persisted). schedule with
+        -- after= (one-shot) OR every= (repeating); the handler global is invoked
+        -- via the "timer.fired" event with a JSON payload {id=...}.
+        --   host.timer.schedule{ id=, after=|every=, handler= }
+        --   host.timer.cancel(id)
+        timer  = {
+            schedule = function(opts)
+                opts = opts or {}
+                local every = opts.every ~= nil
+                local seconds = every and opts.every or (opts.after or 0)
+                _timer_schedule(opts.id or "", every, seconds, opts.handler or "")
+            end,
+            cancel = function(id) _timer_cancel(id or "") end,
+        },
+        log = {
+            info  = function(m) _log("info",  m or "") end,
+            warn  = function(m) _log("warn",  m or "") end,
+            error = function(m) _log("error", m or "") end,
+        },
+        env = { get = __h_env_get },
     }
     __h_clip_read = nil; __h_clip_write = nil; __h_clip_history = nil
     __h_llm_complete = nil; __h_llm_translate = nil
@@ -517,6 +835,8 @@ struct ExtensionHost {
     __h_perms_has = nil
     __h_notify = nil
     __h_time = nil; __h_sleep = nil
+    __h_timer_schedule = nil; __h_timer_cancel = nil
+    __h_log = nil; __h_env_get = nil
     -- __h_http_request, __h_window_frame/__h_window_set and __h_fs_list_dirs stay
     -- alive; host.http, host.window and host.fs are assembled in the UI bootstrap
     -- (they need host.json's decoder, defined there) and nil'd afterwards.
@@ -756,6 +1076,13 @@ struct ExtensionHost {
     __h_window_open = nil
     __h_window_close = nil
 
+    -- Open the Prosper Settings window at this extension's pane.
+    --   host.settings.open()            -- first declared section
+    --   host.settings.open("sectionId") -- a specific section
+    local raw_settings_open = __h_settings_open
+    host.settings = { open = function(sectionID) raw_settings_open(sectionID or "") end }
+    __h_settings_open = nil
+
     -- Filesystem (read-only). Lists the immediate subdirectory names of `path`
     -- (tilde-expanded host-side, hidden entries skipped, sorted) as a Lua array;
     -- {} on a missing/unreadable path. The only filesystem capability exposed.
@@ -769,18 +1096,178 @@ struct ExtensionHost {
     }
     __h_fs_list_dirs = nil
 
+    -- Power / battery / network / screen (Hammerspoon openlid parity). Reads are
+    -- open; the caffeinate writes are privileged (no-op stubs otherwise). Captured
+    -- as upvalues before the globals are cleared, like http / fs above.
+    local raw_caf_idle        = __h_caf_idle
+    local raw_caf_lidsleep    = __h_caf_lidsleep
+    local raw_caf_lock        = __h_caf_lock
+    local raw_caf_screensaver = __h_caf_screensaver
+    host.caffeinate = {
+        -- prevent_idle_sleep(kind, on): kind = "display" | "system".
+        prevent_idle_sleep    = function(kind, on) raw_caf_idle(kind or "display", on and true or false) end,
+        set_disable_lid_sleep = function(on) raw_caf_lidsleep(on and true or false) end,
+        lock_screen           = function() raw_caf_lock() end,
+        start_screensaver     = function() raw_caf_screensaver() end,
+    }
+    __h_caf_idle = nil; __h_caf_lidsleep = nil; __h_caf_lock = nil; __h_caf_screensaver = nil
+
+    local raw_bat_source = __h_battery_source
+    local raw_bat_pct    = __h_battery_pct
+    host.battery = {
+        power_source = function() return raw_bat_source() end,
+        -- nil when there is no battery (host returns -1).
+        percentage   = function() local p = raw_bat_pct(); return p >= 0 and p or nil end,
+    }
+    __h_battery_source = nil; __h_battery_pct = nil
+
+    local raw_net_reach = __h_network_reachable
+    host.network = { is_reachable = function() return raw_net_reach() end }
+    __h_network_reachable = nil
+
+    local raw_screen_all = __h_screen_all
+    local raw_screen_lid = __h_screen_lid
+    host.screen = {
+        all   = function() return json_decode(raw_screen_all()) or {} end,
+        count = function() local a = json_decode(raw_screen_all()); return a and #a or 0 end,
+        -- true | false | nil(unknown, e.g. desktop).
+        lid_closed = function() local v = raw_screen_lid(); if v < 0 then return nil end; return v == 1 end,
+    }
+    __h_screen_all = nil; __h_screen_lid = nil
+
+    -- Local calendar breakdown of now (sandbox has no os.date).
+    --   host.date() -> { epoch, year, month, day, hour, min, sec, wday }
+    local raw_date = __h_date
+    host.date = function() return json_decode(raw_date()) or {} end
+    __h_date = nil
+
+    -- Host-rendered menubar + dialogs + alert HUD (openlid UI surface; privileged,
+    -- no-op stubs otherwise). The host owns the NSStatusItem; a menu item's
+    -- `handler` is a named global re-invoked with `payload` (JSON) on click — the
+    -- same stateless event model as timers.
+    --   host.menubar.set{ id=, title=, icon=, menu={ {title=, handler=, payload=} | {separator=true} } }
+    --   host.menubar.remove(id)
+    --   host.dialog.prompt{ title=, message=, default=, ok=, cancel= } -> string | nil(cancel)
+    --   host.dialog.confirm{ title=, message=, ok=, cancel= }          -> boolean
+    --   host.alert.show(text [, seconds])   -- transient on-screen HUD
+    local raw_menubar_set    = __h_menubar_set
+    local raw_menubar_remove = __h_menubar_remove
+    local raw_dialog_prompt  = __h_dialog_prompt
+    local raw_dialog_confirm = __h_dialog_confirm
+    local raw_alert_show     = __h_alert_show
+    host.menubar = {
+        set    = function(opts) raw_menubar_set((opts and opts.id) or "", raw_json_encode(opts or {})) end,
+        remove = function(id) raw_menubar_remove(id or "") end,
+    }
+    host.dialog = {
+        prompt  = function(opts) return raw_dialog_prompt(raw_json_encode(opts or {})) end,
+        confirm = function(opts) return raw_dialog_confirm(raw_json_encode(opts or {})) end,
+    }
+    host.alert = { show = function(text, seconds) raw_alert_show(text or "", seconds or 0) end }
+    __h_menubar_set = nil; __h_menubar_remove = nil
+    __h_dialog_prompt = nil; __h_dialog_confirm = nil; __h_alert_show = nil
+
     -- App launcher search. Returns a Lua array of { name = , path = } ranked
     -- application matches for `query` ({} when nothing matches), decoded from the
     -- host's JSON array. Powers the `open` system extension.
     --   host.apps.search(query) -> { { name = , path = }, ... }
+    --   host.apps.launch_or_focus(name|bundleID)   -- launch if not running, else activate
+    --   host.apps.hide(bundleID)
+    --   host.apps.frontmost()        -> { name=, bundleID=, pid= }
+    --   host.apps.windows(bundleID)  -> integer (AX window count; 0 if no a11y grant)
     local raw_apps_search = __h_apps_search
+    local raw_app_launch    = __h_app_launch
+    local raw_app_hide      = __h_app_hide
+    local raw_app_frontmost = __h_app_frontmost
+    local raw_app_windows   = __h_app_windows
     host.apps = {
         search = function(query)
             local raw = raw_apps_search(query or "")
             return raw and json_decode(raw) or {}
         end,
+        launch_or_focus = function(name) raw_app_launch(name or "") end,
+        hide            = function(bundleID) raw_app_hide(bundleID or "") end,
+        frontmost       = function() return json_decode(raw_app_frontmost()) or {} end,
+        windows         = function(bundleID) return raw_app_windows(bundleID or "") end,
     }
     __h_apps_search = nil
+    __h_app_launch = nil; __h_app_hide = nil; __h_app_frontmost = nil; __h_app_windows = nil
+
+    -- AppleScript / JXA bridge (privileged). Returns { ok=, output=, error= }.
+    --   host.osascript.run(source) -> { ok=, output=, error= }
+    local raw_osascript = __h_osascript
+    host.osascript = { run = function(src) return json_decode(raw_osascript(src or "")) or {} end }
+    __h_osascript = nil
+
+    -- Keyboard input source (Carbon TIS). Reads open; set privileged.
+    --   host.keyboard.current_source()  -> id string
+    --   host.keyboard.layouts()         -> { { id=, name= }, ... }
+    --   host.keyboard.set_source(id)    -> boolean
+    local raw_kbd_current = __h_kbd_current
+    local raw_kbd_layouts = __h_kbd_layouts
+    local raw_kbd_set     = __h_kbd_set
+    host.keyboard = {
+        current_source = function() return raw_kbd_current() end,
+        layouts        = function() return json_decode(raw_kbd_layouts()) or {} end,
+        set_source     = function(id) return raw_kbd_set(id or "") end,
+    }
+    __h_kbd_current = nil; __h_kbd_layouts = nil; __h_kbd_set = nil
+
+    -- Declarative per-app key remaps (§D) + synthetic injection (§E). Rules are
+    -- evaluated NATIVELY in the event tap (no Lua per keystroke) — register the full
+    -- set once from on_launch; an empty list clears them.
+    --   host.keys.set_rules{
+    --     { from = "cmd+shift+i", to = "cmd+alt+i", apps = { "com.apple.Safari" } },
+    --     { from = "f8", system = "PLAY" },
+    --     { from = "cmd+q", double_tap = "cmd+q" },   -- single swallowed; double quits
+    --     { from = "f5", swallow = true },
+    --   }
+    --   host.keys.stroke("cmd+alt+i")   -- inject a combo
+    --   host.keys.system("PLAY")        -- inject a media key
+    local raw_keys_rules  = __h_keys_rules
+    local raw_keys_stroke = __h_keys_stroke
+    local raw_keys_system = __h_keys_system
+    host.keys = {
+        set_rules = function(rules) raw_keys_rules(raw_json_encode(rules or {})) end,
+        stroke    = function(spec) raw_keys_stroke(spec or "") end,
+        system    = function(name) raw_keys_system(name or "") end,
+    }
+    __h_keys_rules = nil; __h_keys_stroke = nil; __h_keys_system = nil
+
+    -- URLs + default browser (§O). Set Prosper default to receive opened links as
+    -- the "url.open" event ({ url }) — a url-dispatcher then rewrites/forwards them.
+    --   host.url.open(url [, bundleID])     -- open (optionally in a chosen browser)
+    --   host.url.default_browser()          -> bundle id of current http handler
+    --   host.url.set_default_browser(id)    -> boolean  (privileged)
+    local raw_url_open        = __h_url_open
+    local raw_url_default     = __h_url_default
+    local raw_url_set_default = __h_url_set_default
+    host.url = {
+        open                = function(u, bundleID) return raw_url_open(u or "", bundleID) end,
+        default_browser     = function() return raw_url_default() end,
+        set_default_browser = function(id) return raw_url_set_default(id or "") end,
+    }
+    __h_url_open = nil; __h_url_default = nil; __h_url_set_default = nil
+
+    -- Filesystem reads + watch (§Q). watch fires a NAMED handler with { paths } when
+    -- the path (file or dir tree) changes — register from on_launch, stateless.
+    --   host.fs.exists(path)        -> boolean
+    --   host.fs.attributes(path)    -> { exists, isDir, size, mtime }
+    --   host.fs.watch(path, "handler_name")   (privileged)
+    --   host.fs.unwatch(path)                 (privileged)
+    local raw_fs_exists  = __h_fs_exists
+    local raw_fs_attrs   = __h_fs_attrs
+    local raw_fs_read    = __h_fs_read
+    local raw_fs_watch   = __h_fs_watch
+    local raw_fs_unwatch = __h_fs_unwatch
+    -- EXTEND the existing host.fs (do not reassign — that would drop `list_dirs`
+    -- wired above).
+    host.fs.exists     = function(p) return raw_fs_exists(p or "") end
+    host.fs.attributes = function(p) return json_decode(raw_fs_attrs(p or "")) or {} end
+    host.fs.read       = function(p) return raw_fs_read(p or "") end   -- string | nil (privileged)
+    host.fs.watch      = function(p, handler) raw_fs_watch(p or "", handler or "") end
+    host.fs.unwatch    = function(p) raw_fs_unwatch(p or "") end
+    __h_fs_exists = nil; __h_fs_attrs = nil; __h_fs_read = nil; __h_fs_watch = nil; __h_fs_unwatch = nil
 
     -- Snippets (host.snippets). Native store + placeholder engine: CRUD plus
     -- expand(keyword [, args]) which returns the resolved text (dates, clipboard,
@@ -870,35 +1357,6 @@ struct ExtensionHost {
     __h_files_search = nil
     __h_files_act = nil
 
-    -- Coding agent (host.agent). Drives the goal-prompt coding agent. run() starts
-    -- a session — opening the agent window so the run is visible and tool approvals
-    -- can be answered — and returns { runId = } or { error = }; status()/result()
-    -- poll it. `opts` is an optional table { cwd = , ... }. Returns Lua tables
-    -- (decoded from the host's JSON), so handlers never touch host.json directly.
-    --   host.agent.run(goal [, opts]) -> { runId = } | { error = }
-    --   host.agent.status(runId)      -> { phase=, active=, items=, approvals=, ... }
-    --   host.agent.result(runId)      -> { done=, phase=, text=, error= }
-    local raw_agent_run    = __h_agent_run
-    local raw_agent_status = __h_agent_status
-    local raw_agent_result = __h_agent_result
-    host.agent = {
-        run = function(goal, opts)
-            local raw = raw_agent_run(goal or "", opts and json_encode(opts) or nil)
-            return raw and json_decode(raw) or { error = "no response" }
-        end,
-        status = function(run_id)
-            local raw = raw_agent_status(run_id or "")
-            return raw and json_decode(raw) or { error = "no response" }
-        end,
-        result = function(run_id)
-            local raw = raw_agent_result(run_id or "")
-            return raw and json_decode(raw) or { error = "no response" }
-        end,
-    }
-    __h_agent_run = nil
-    __h_agent_status = nil
-    __h_agent_result = nil
-
     -- Convenience builders: stamp the discriminator so handlers can write
     -- `return host.ui.render(host.ui.list{ items = {...} })`.
     local function tag(kind)
@@ -986,15 +1444,24 @@ struct ExtensionHost {
     /// Run an async operation to completion synchronously, returning nil if it
     /// does not finish within `timeout`. The calling thread blocks — must not be
     /// the main thread (extensions run on a dedicated queue).
+    ///
+    /// On timeout the detached task is **cancelled**, not merely abandoned: a hung
+    /// `host.http`/`host.llm` would otherwise keep an in-flight URLSession request
+    /// (and a cooperative-pool thread) alive long after the extension gave up. The
+    /// URLSession async API and structured `Task.sleep` backoff honor cancellation,
+    /// so the leaf work actually stops; a non-cancellation-aware op still runs to
+    /// completion but its result is discarded (cancel is then a harmless no-op).
     static func awaitSync<T>(timeout: TimeInterval, _ op: @escaping @Sendable () async -> T) -> T? {
         let sem = DispatchSemaphore(value: 0)
         let box = ResultBox<T>()
-        Task.detached {
+        let task = Task.detached {
             let value = await op()
             box.set(value)
             sem.signal()
         }
-        return sem.wait(timeout: .now() + timeout) == .success ? box.get() : nil
+        if sem.wait(timeout: .now() + timeout) == .success { return box.get() }
+        task.cancel()
+        return nil
     }
 
     /// Thread-safe one-shot holder for the bridged async result.

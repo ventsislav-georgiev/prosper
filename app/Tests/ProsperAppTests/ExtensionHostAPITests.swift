@@ -70,16 +70,59 @@ private final class FakeServices: ExtensionHostServices, @unchecked Sendable {
     /// Records every built-in file action the extension fired.
     var fileActs: [(id: String, path: String)] = []
     func filesAct(id: String, path: String) { fileActs.append((id, path)) }
-    /// Records agent runs (goal + marshalled opts) and returns canned JSON.
-    var agentRuns: [(goal: String, optsJSON: String?)] = []
-    var agentRunResult = #"{"runId":"r1"}"#
-    var agentStatusResult = #"{"phase":"running","active":true}"#
-    var agentResultResult = #"{"done":true,"text":"fixed it"}"#
-    func agentRun(goal: String, cwd: String?, optsJSON: String?) -> String {
-        agentRuns.append((goal, optsJSON)); return agentRunResult
+    /// Records durable-timer schedule/cancel calls + log/env reads.
+    var timerSchedules: [(id: String, every: Bool, seconds: Double, handler: String)] = []
+    var timerCancels: [String] = []
+    var logs: [(level: String, message: String)] = []
+    var env: [String: String] = [:]
+    func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String) {
+        timerSchedules.append((id, every, seconds, handler))
     }
-    func agentStatus(_ runID: String) -> String { agentStatusResult }
-    func agentResult(_ runID: String) -> String { agentResultResult }
+    func timerCancel(extensionID: String, id: String) { timerCancels.append(id) }
+    func log(level: String, message: String) { logs.append((level, message)) }
+    func envGet(_ name: String) -> String? { env[name] }
+
+    // --- Hammerspoon-parity surface (§G/§P/§F/§D/§E/§O/§Q) recording ---
+    var appLaunches: [String] = []
+    var appHides: [String] = []
+    var frontmostJSON = #"{"name":"Safari","bundleID":"com.apple.Safari","pid":42}"#
+    var windowCounts: [String: Int] = ["com.apple.Safari": 3]
+    func appLaunchOrFocus(_ nameOrBundleID: String) { appLaunches.append(nameOrBundleID) }
+    func appFrontmostJSON() -> String { frontmostJSON }
+    func appWindowCount(bundleID: String) -> Int { windowCounts[bundleID] ?? 0 }
+    func appHide(bundleID: String) { appHides.append(bundleID) }
+
+    var scripts: [String] = []
+    var scriptResult = #"{"ok":true,"output":"done","error":""}"#
+    func runAppleScript(_ source: String) -> String { scripts.append(source); return scriptResult }
+
+    var currentKbd = "com.apple.keylayout.US"
+    var kbdSets: [String] = []
+    func keyboardCurrentSource() -> String { currentKbd }
+    func keyboardLayoutsJSON() -> String { #"[{"id":"com.apple.keylayout.US","name":"U.S."}]"# }
+    func keyboardSetSource(_ id: String) -> Bool { kbdSets.append(id); return true }
+
+    var keyRulesJSON: [String] = []
+    var keyStrokes: [String] = []
+    var keySystems: [String] = []
+    func keysSetRules(extensionID: String, json: String) { keyRulesJSON.append(json) }
+    func keysStroke(_ spec: String) { keyStrokes.append(spec) }
+    func keysSystem(_ name: String) { keySystems.append(name) }
+
+    var urlOpens: [(String, String?)] = []
+    var defaultBrowser = "com.apple.Safari"
+    var setDefaults: [String] = []
+    func urlOpen(_ url: String, bundleID: String?) -> Bool { urlOpens.append((url, bundleID)); return true }
+    func urlDefaultBrowser() -> String { defaultBrowser }
+    func urlSetDefaultBrowser(_ bundleID: String) -> Bool { setDefaults.append(bundleID); return true }
+
+    var existsPaths: Set<String> = ["/tmp"]
+    var watches: [(path: String, handler: String)] = []
+    var unwatches: [String] = []
+    func fsExists(_ path: String) -> Bool { existsPaths.contains(path) }
+    func fsAttributesJSON(_ path: String) -> String { #"{"exists":true,"isDir":true,"size":0,"mtime":1700000000}"# }
+    func fsWatch(extensionID: String, path: String, handler: String) { watches.append((path, handler)) }
+    func fsUnwatch(extensionID: String, path: String) { unwatches.append(path) }
 }
 
 final class ExtensionHostAPITests: XCTestCase {
@@ -108,23 +151,79 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertEqual(try lua.callGlobal("probe"), "table,nil,function,function")
     }
 
-    func testAgentBridgeMarshalsAndDecodes() throws {
+    func testTimerLogEnvSurface() throws {
         let lua = try LuaRuntime()
         let svc = FakeServices()
+        svc.env["EDITOR"] = "vim"
         try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
         try lua.run("""
-        function probe()
-            local r = host.agent.run("fix the bug", { cwd = "/tmp/repo" })
-            local s = host.agent.status(r.runId)
-            local res = host.agent.result(r.runId)
-            return r.runId .. ',' .. tostring(s.active) .. ',' .. tostring(res.done) .. ',' .. res.text
-        end
+        function t_after()  host.timer.schedule{ id='expiry', after=120, handler='on_expiry' }; return 'ok' end
+        function t_every()  host.timer.schedule{ id='tick',   every=5,   handler='on_tick'   }; return 'ok' end
+        function t_cancel() host.timer.cancel('expiry'); return 'ok' end
+        function t_log()    host.log.warn('careful'); return 'ok' end
+        function t_env()    return host.env.get('EDITOR') or 'none' end
         """)
-        XCTAssertEqual(try lua.callGlobal("probe"), "r1,true,true,fixed it")
-        XCTAssertEqual(svc.agentRuns.count, 1)
-        XCTAssertEqual(svc.agentRuns[0].goal, "fix the bug")
-        // opts table is marshalled to JSON containing the cwd.
-        XCTAssertTrue(svc.agentRuns[0].optsJSON?.contains("/tmp/repo") == true)
+        XCTAssertEqual(try lua.callGlobal("t_after"), "ok")
+        XCTAssertEqual(try lua.callGlobal("t_every"), "ok")
+        XCTAssertEqual(try lua.callGlobal("t_cancel"), "ok")
+        XCTAssertEqual(try lua.callGlobal("t_log"), "ok")
+        XCTAssertEqual(try lua.callGlobal("t_env"), "vim")
+        XCTAssertEqual(svc.timerSchedules.count, 2)
+        XCTAssertEqual(svc.timerSchedules[0].id, "expiry")
+        XCTAssertFalse(svc.timerSchedules[0].every)
+        XCTAssertEqual(svc.timerSchedules[0].seconds, 120)
+        XCTAssertEqual(svc.timerSchedules[0].handler, "on_expiry")
+        XCTAssertTrue(svc.timerSchedules[1].every)
+        XCTAssertEqual(svc.timerSchedules[1].seconds, 5)
+        XCTAssertEqual(svc.timerCancels, ["expiry"])
+        XCTAssertEqual(svc.logs.first?.level, "warn")
+    }
+
+    func testTimerSchedulerOneShotFiresAndIsDurable() {
+        let defaults = UserDefaults(suiteName: "timer-test-\(UUID().uuidString)")!
+        let scheduler = TimerScheduler(defaults: defaults)
+        let fired = expectation(description: "timer fired")
+        var got: (String, String, String)?
+        scheduler.deliver = { extID, handler, payload in
+            got = (extID, handler, payload)
+            fired.fulfill()
+        }
+        scheduler.schedule(extID: "com.test", id: "expiry", every: false, seconds: 0.1, handler: "on_expiry")
+        wait(for: [fired], timeout: 2)
+        XCTAssertEqual(got?.0, "com.test")
+        XCTAssertEqual(got?.1, "on_expiry")
+        XCTAssertTrue(got?.2.contains("\"id\":\"expiry\"") == true)
+    }
+
+    func testTimerFirePayloadEscapesID() throws {
+        // A timer id is extension-controlled; a `"` / `\` in it must not corrupt the
+        // JSON payload the handler decodes via host.json.
+        let payload = TimerScheduler.firePayload(id: #"weird"id\with"#)
+        let obj = try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any]
+        XCTAssertEqual(obj?["id"] as? String, #"weird"id\with"#, "id must round-trip through valid JSON")
+        // And the common case stays exactly as before.
+        XCTAssertEqual(TimerScheduler.firePayload(id: "expiry"), #"{"id":"expiry"}"#)
+    }
+
+    @MainActor
+    func testAppActivatedGateSkipsPayloadWhenNoSubscriber() {
+        let w = SystemEventWatchers()
+        var emitted: [(String, String)] = []
+        w.emit = { emitted.append(($0, $1)) }
+
+        // No subscriber → gate false → nothing emitted, no payload built.
+        w.shouldEmit = { _ in false }
+        w.emitAppActivated(bundleID: "com.apple.Safari", name: "Safari", pid: 42)
+        XCTAssertTrue(emitted.isEmpty, "app.activated must not emit when nothing subscribes")
+
+        // Subscriber present → emits valid JSON carrying the fields.
+        w.shouldEmit = { $0 == "app.activated" }
+        w.emitAppActivated(bundleID: "com.apple.Safari", name: "Safari", pid: 42)
+        XCTAssertEqual(emitted.count, 1)
+        XCTAssertEqual(emitted.first?.0, "app.activated")
+        let obj = try? JSONSerialization.jsonObject(with: Data((emitted.first?.1 ?? "").utf8)) as? [String: Any]
+        XCTAssertEqual(obj?["bundleID"] as? String, "com.apple.Safari")
+        XCTAssertEqual(obj?["pid"] as? Int, 42)
     }
 
     func testClipboardPrefsNotify() throws {
@@ -627,5 +726,144 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertEqual(performer.calls.map(\.id), [FileActions.ID.open, FileActions.ID.reveal])
         XCTAssertEqual(performer.calls.first?.path, "\(home)/Documents/Q3 Report.pdf")
         XCTAssertGreaterThan(frecency.boost(path: path, now: now), 0)  // engagements recorded
+    }
+
+    // MARK: - Hammerspoon parity surface (§G app / §P osascript / §F keyboard /
+    // §D-§E keys / §O url / §Q fs) — Lua wrappers reach the right service calls.
+
+    func testAppControlSurface() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("""
+        function go()
+            host.apps.launch_or_focus("Slack")
+            host.apps.hide("com.apple.Safari")
+            local f = host.apps.frontmost()
+            local n = host.apps.windows("com.apple.Safari")
+            return f.bundleID .. "|" .. tostring(math.floor(n))
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "com.apple.Safari|3")
+        XCTAssertEqual(svc.appLaunches, ["Slack"])
+        XCTAssertEqual(svc.appHides, ["com.apple.Safari"])
+    }
+
+    func testOsascriptSurface() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("""
+        function go()
+            local r = host.osascript.run('tell app "Finder" to empty trash')
+            return tostring(r.ok) .. "|" .. r.output
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "true|done")
+        XCTAssertEqual(svc.scripts.count, 1)
+    }
+
+    func testKeyboardSourceSurface() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("""
+        function go()
+            local cur = host.keyboard.current_source()
+            local ls = host.keyboard.layouts()
+            local ok = host.keyboard.set_source("com.apple.keylayout.US")
+            return cur .. "|" .. ls[1].name .. "|" .. tostring(ok)
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "com.apple.keylayout.US|U.S.|true")
+        XCTAssertEqual(svc.kbdSets, ["com.apple.keylayout.US"])
+    }
+
+    func testKeyRulesAndInjectionSurface() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("""
+        function go()
+            host.keys.set_rules({
+                { from = "cmd+shift+i", to = "cmd+alt+i", apps = { "com.apple.Safari" } },
+                { from = "f8", system = "PLAY" },
+            })
+            host.keys.stroke("cmd+alt+i")
+            host.keys.system("REWIND")
+        end
+        """)
+        _ = try lua.callGlobal("go")
+        XCTAssertEqual(svc.keyRulesJSON.count, 1)
+        XCTAssertTrue(svc.keyRulesJSON[0].contains("com.apple.Safari"))
+        XCTAssertTrue(svc.keyRulesJSON[0].contains("cmd+alt+i"))
+        XCTAssertEqual(svc.keyStrokes, ["cmd+alt+i"])
+        XCTAssertEqual(svc.keySystems, ["REWIND"])
+    }
+
+    func testURLSurface() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("""
+        function go()
+            host.url.open("https://example.com", "com.google.Chrome")
+            local def = host.url.default_browser()
+            local ok = host.url.set_default_browser("eu.illegible.prosper")
+            return def .. "|" .. tostring(ok)
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "com.apple.Safari|true")
+        XCTAssertEqual(svc.urlOpens.first?.0, "https://example.com")
+        XCTAssertEqual(svc.urlOpens.first?.1, "com.google.Chrome")
+        XCTAssertEqual(svc.setDefaults, ["eu.illegible.prosper"])
+    }
+
+    func testFSSurface() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("""
+        function go()
+            local e = host.fs.exists("/tmp")
+            local a = host.fs.attributes("/tmp")
+            host.fs.watch("/tmp", "on_change")
+            host.fs.unwatch("/tmp")
+            return tostring(e) .. "|" .. tostring(a.isDir)
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "true|true")
+        XCTAssertEqual(svc.watches.first?.handler, "on_change")
+        XCTAssertEqual(svc.unwatches, ["/tmp"])
+    }
+
+    /// Non-privileged extensions must NOT reach control surfaces: rules/injection,
+    /// osascript, default-browser, app launch/hide, fs.watch are gated; reads stay open.
+    func testPrivilegedGating() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        // Automation surfaces (rules/osascript/browser/launch/watch) gate on the
+        // automation tier = privileged || trusted, so neither may be granted here.
+        try ExtensionHost(extensionID: "com.test", services: svc, privileged: false, trusted: false).install(into: lua)
+        try lua.run("""
+        function go()
+            host.keys.set_rules({ { from = "f8", system = "PLAY" } })
+            host.keys.stroke("cmd+a")
+            host.apps.launch_or_focus("Slack")
+            local s = host.osascript.run("x")
+            local ok = host.url.set_default_browser("eu.illegible.prosper")
+            host.fs.watch("/tmp", "h")
+            -- reads still work:
+            local f = host.apps.frontmost()
+            return tostring(s.ok) .. "|" .. tostring(ok) .. "|" .. f.bundleID
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "false|false|com.apple.Safari")
+        XCTAssertTrue(svc.keyRulesJSON.isEmpty)
+        XCTAssertTrue(svc.keyStrokes.isEmpty)
+        XCTAssertTrue(svc.appLaunches.isEmpty)
+        XCTAssertTrue(svc.scripts.isEmpty)
+        XCTAssertTrue(svc.setDefaults.isEmpty)
+        XCTAssertTrue(svc.watches.isEmpty)
     }
 }

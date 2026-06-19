@@ -13,7 +13,8 @@
 		"SUPPORTER_TOKEN_TTL_DAYS": "30",
 		"SESSION_TTL_DAYS": "365",
 		"DEVICE_LIMIT": "5",
-		"SYNC_MAX_BYTES": "1048576"
+		"SYNC_MAX_BYTES": "1048576",
+		"MARKET_MAX_BYTES": "262144"
 	},
 	"kv_namespaces": [
 		{

@@ -1,0 +1,27 @@
+[extension]
+id          = "com.prosper.theme.amber"
+name        = "theme-amber"
+title       = "Amber Terminal Theme"
+description = "A warm amber-on-espresso theme — worked example of a theme extension."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "paintpalette.fill"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+[[contributes.themes]]
+id         = "com.prosper.theme.amber"
+title      = "Amber Terminal"
+path       = "theme.json"
+appearance = "dark"

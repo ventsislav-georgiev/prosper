@@ -62,3 +62,22 @@ subtitle  = "Languages for the translate command"
   title = "Source language"
   default = "Auto"
   placeholder = "Auto"
+
+  [[contributes.settings_sections.controls]]
+  kind = "group"
+  title = "Model"
+  footer = "Translate uses the same on-device model as inline autocomplete — there is no separate download. It loads on first use and, while autocomplete is off, unloads after the idle window below to free memory."
+
+  [[contributes.settings_sections.controls]]
+  kind = "info"
+  title = "Shared model"
+  subtitle = "Same model as inline autocomplete (Completions → AI Model)."
+
+  [[contributes.settings_sections.controls]]
+  kind = "number"
+  key = "idle_unload_minutes"
+  title = "Unload model after idle (minutes)"
+  subtitle = "0 = keep loaded. Only applies while inline autocomplete is off."
+  default = 2
+  min = 0
+  max = 60

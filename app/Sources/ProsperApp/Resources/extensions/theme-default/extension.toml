@@ -1,0 +1,31 @@
+[extension]
+id          = "com.prosper.theme.default"
+name        = "theme-default"
+title       = "Default Theme"
+description = "Prosper's built-in neon-blue console theme."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "paintpalette.fill"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# A theme is pure declarative data: a color-token map in theme.json. Selecting it
+# never runs this extension's Lua. The id here matches the host's reserved default
+# id, so this file IS the editable copy of the default look — edit theme.json and
+# Reset restores it.
+[[contributes.themes]]
+id         = "com.prosper.theme.default"
+title      = "Default"
+path       = "theme.json"
+appearance = "dark"

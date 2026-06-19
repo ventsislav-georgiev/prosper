@@ -72,29 +72,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         super.init()
 
-        if let button = statusItem.button {
-            // Neon-Vulcan hand (transparent background, full color), scaled to
-            // fill the menu-bar height. Not a template image — we want the neon
-            // glow, not a flat monochrome glyph. Shipped in Contents/Resources
-            // by scripts/bundle.sh.
-            let icon = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png")
-                .flatMap { NSImage(contentsOf: $0) }
-            if let icon {
-                // As large as the bar allows: full thickness height, width to
-                // preserve the hand's aspect ratio.
-                let h = NSStatusBar.system.thickness
-                let w = h * (icon.size.width / max(icon.size.height, 1))
-                icon.size = NSSize(width: w, height: h)
-                icon.isTemplate = false
-                button.image = icon
-            } else {
-                button.image = NSImage(
-                    systemSymbolName: "character.bubble",
-                    accessibilityDescription: "Prosper"
-                )
-                button.image?.isTemplate = true
-            }
-        }
+        setMenuBarImage(nil)   // bundled default; a theme can swap it later
 
         statusItem.menu = buildMenu()
         statusItem.isVisible = Preferences.showMenuBarIcon
@@ -125,6 +103,31 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self?.setIconPulsing(active)
         }
         setIconPulsing(AppUpdater.shared.isActive)
+    }
+
+    /// Sets the status-bar button image. Pass a theme-provided image to override
+    /// the bundled Neon-Vulcan hand; pass nil to use the bundled default (or the
+    /// SF Symbol fallback if even that is missing). Either way it's scaled to fill
+    /// the bar height. Not a template image — we want the color/glow, not a flat
+    /// glyph. The bundled PNG ships in Contents/Resources via scripts/bundle.sh.
+    func setMenuBarImage(_ themed: NSImage?) {
+        guard let button = statusItem.button else { return }
+        // Copy: `themed` is the cached NSImage owned by ThemeStore; resizing it in
+        // place would corrupt the shared instance (also used for the dock icon path).
+        let icon = (themed?.copy() as? NSImage)
+            ?? Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png")
+                .flatMap { NSImage(contentsOf: $0) }
+        if let icon {
+            let h = NSStatusBar.system.thickness
+            let w = h * (icon.size.width / max(icon.size.height, 1))
+            icon.size = NSSize(width: w, height: h)
+            icon.isTemplate = false
+            button.image = icon
+        } else {
+            button.image = NSImage(systemSymbolName: "character.bubble",
+                                   accessibilityDescription: "Prosper")
+            button.image?.isTemplate = true
+        }
     }
 
     /// Starts/stops a slow opacity pulse on the status-bar button. Idempotent:

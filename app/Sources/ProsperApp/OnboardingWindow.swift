@@ -22,7 +22,7 @@ final class OnboardingWindow {
             return
         }
         let root = OnboardingRootView(onFinish: { [weak self] in self?.finish() })
-        let hosting = NSHostingController(rootView: root)
+        let hosting = NSHostingController(rootView: Themed { root })
         let win = NSWindow(contentViewController: hosting)
         win.title = "Welcome to Prosper"
         win.styleMask = [.titled, .closable, .fullSizeContentView]

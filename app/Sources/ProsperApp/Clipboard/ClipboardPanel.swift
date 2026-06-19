@@ -38,7 +38,7 @@ final class ClipboardPanel {
             onCopy: { [weak self] item in self?.copyOnly(item) },
             onCancel: { [weak self] in self?.dismiss() }
         )
-        let hosting = NSHostingView(rootView: root)
+        let hosting = NSHostingView(rootView: Themed { root })
         // The SwiftUI root fixes width (750) and has an intrinsic height (search bar
         // + pinned list viewport + action bar). Size the borderless panel to that
         // fitting height so the list viewport stays an exact pitch multiple.

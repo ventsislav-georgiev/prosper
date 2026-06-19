@@ -17,6 +17,7 @@ export type Bindings = {
   SESSION_TTL_DAYS?: string;
   DEVICE_LIMIT?: string;
   SYNC_MAX_BYTES?: string;
+  MARKET_MAX_BYTES?: string;
 };
 
 export type Variables = {

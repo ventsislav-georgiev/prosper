@@ -20,8 +20,12 @@
 
 local STORE_KEY = "cache"
 local STAMP_KEY = "imported_at"
+local VERSION_KEY = "cache_version"   -- monotonic; bumped on each import (cheap memo signal)
 local MAX_BOOKMARKS = 5000        -- cap so a giant library can't blow the VM budget
 local MAX_RESULTS   = 50          -- default rows per search (overridable in settings)
+local MAX_RESULTS_CAP = 500       -- hard ceiling (matches the settings control's max);
+                                  -- clamps a raw/oversized host.prefs value so a bad
+                                  -- pref can't make every keystroke build an unbounded list.
 local USAGE = "bm <query> · bm import · bm browsers · bm help"
 
 -- Declarative settings (see extension.toml `settings_sections`), read straight
@@ -35,7 +39,7 @@ end
 local function max_results()
     local n = tonumber(host.prefs.get("max_results"))
     if type(n) ~= "number" or n < 1 then return MAX_RESULTS end
-    return math.floor(n)
+    return math.min(math.floor(n), MAX_RESULTS_CAP)
 end
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
@@ -160,8 +164,17 @@ end
 -- grant (so the caller can tell the user how to enable it).
 local function parse_safari(acc)
     if not host.perms.has("full-disk-access") then return nil end
-    local data = decode(sh("plutil -convert json -o - "
-        .. shq(p("Library/Safari/Bookmarks.plist")) .. " 2>/dev/null"))
+    -- plutil's JSON converter ABORTS on the whole document if it hits any node JSON
+    -- can't represent — and a real Safari Bookmarks.plist embeds <data> (Sync/CloudKit
+    -- blobs) and <date> nodes, so a direct `-convert json` yields 0 bytes and every
+    -- Safari import silently returns nothing. Convert to xml1 first, blank those two
+    -- node types (their content is never a bookmark URL/title), then JSON-convert the
+    -- scrubbed XML. /usr/bin/perl ships with macOS; -0 slurps so `.` spans newlines.
+    local plist = shq(p("Library/Safari/Bookmarks.plist"))
+    local cmd = "plutil -convert xml1 -o - " .. plist .. " 2>/dev/null"
+        .. " | /usr/bin/perl -0pe 's{<(data|date)>.*?</\\1>}{<string></string>}gs'"
+        .. " | plutil -convert json -o - - 2>/dev/null"
+    local data = decode(sh(cmd))
     if not data then return 0 end
     local count0 = #acc
     walk_safari(data, acc, "")
@@ -179,9 +192,10 @@ local function file_uri(abs_path)
     return "file:" .. enc .. "?immutable=1"
 end
 
-local function parse_firefox(acc)
+-- Any Mozilla-family browser (Firefox, Zen, …): identical places.sqlite schema
+-- under `<profiles_root>/<profile>/places.sqlite`. `browser` is the display label.
+local function parse_mozilla(profiles_root, browser, acc)
     local count0 = #acc
-    local profiles_root = p("Library/Application Support/Firefox/Profiles")
     local sql = "SELECT b.title AS title, p.url AS url FROM moz_bookmarks b "
         .. "JOIN moz_places p ON b.fk = p.id WHERE b.type = 1 AND p.url LIKE 'http%';"
     for _, prof in ipairs(list_dirs(profiles_root)) do
@@ -190,7 +204,7 @@ local function parse_firefox(acc)
         local rows = decode(sh(cmd))
         if type(rows) == "table" then
             for _, r in ipairs(rows) do
-                if type(r) == "table" then add(acc, r.title, r.url, "Firefox", prof) end
+                if type(r) == "table" then add(acc, r.title, r.url, browser, prof) end
             end
         end
     end
@@ -295,25 +309,46 @@ local function do_import()
         parse_chromium(p("Library/Application Support/com.operasoftware.Opera"),     "Opera",   true,  acc)
     end
     if source_on("arc") then parse_arc(acc) end
-    if source_on("firefox") then parse_firefox(acc) end
+    if source_on("firefox") then
+        parse_mozilla(p("Library/Application Support/Firefox/Profiles"), "Firefox", acc)
+    end
+    if source_on("zen") then   -- Zen is Firefox-based (same places.sqlite schema)
+        parse_mozilla(p("Library/Application Support/zen/Profiles"), "Zen", acc)
+    end
     if source_on("safari") then
         if parse_safari(acc) == nil then blocked[#blocked + 1] = "Safari (needs Full Disk Access)" end
     end
     host.prefs.set(STORE_KEY, host.json.encode(acc))
     host.prefs.set(STAMP_KEY, tostring(math.floor(host.time())))
+    -- Bump a monotonic version so load_cache can detect a refresh by reading this
+    -- tiny string instead of re-marshaling the whole cache JSON every keystroke.
+    -- Monotonic (not the second-resolution stamp) so two imports in the same second
+    -- still invalidate.
+    host.prefs.set(VERSION_KEY, tostring((tonumber(host.prefs.get(VERSION_KEY)) or 0) + 1))
     return acc, blocked
 end
 
 -- Decoded-cache memo. The async VM is reused across keystrokes, so we decode the
 -- stored JSON only when it actually changes (i.e. after an import), keeping
--- per-keystroke search allocation-free. Decode itself is native (host.json.decode).
-local _cache_raw, _cache_val
+-- per-keystroke search allocation-free. We key the memo on the tiny VERSION_KEY,
+-- not the cache blob: a keystroke reads only that short string to decide it's
+-- unchanged, never re-marshaling the (up to ~MAX_BOOKMARKS-row) JSON across the
+-- Lua↔host boundary. The big STORE_KEY read + native decode happen only when the
+-- version moved (i.e. after an import). Decode itself is native (host.json.decode).
+-- We also fold each row's title/url/folder into one lowercased `hay` string here,
+-- once per import, so the per-keystroke `matches` does only plain `find` scans
+-- instead of rebuilding+lowercasing a haystack for every row on every keystroke.
+local _cache_ver, _cache_val
 local function load_cache()
+    local ver = host.prefs.get(VERSION_KEY)
+    if ver == _cache_ver and _cache_val ~= nil then return _cache_val end
     local raw = host.prefs.get(STORE_KEY)
-    if raw == _cache_raw and _cache_val ~= nil then return _cache_val end
     local t = raw and host.json.decode(raw) or nil
     if type(t) ~= "table" then t = {} end
-    _cache_raw, _cache_val = raw, t
+    for _, b in ipairs(t) do
+        b.hay = ((b.title or "") .. " " .. (b.url or "") .. " " .. (b.folder or "")):lower()
+    end
+    _cache_ver, _cache_val = ver, t
     return t
 end
 
@@ -331,7 +366,7 @@ end
 -- MARK: Search
 
 local function matches(item, terms)
-    local hay = ((item.title or "") .. " " .. (item.url or "") .. " " .. (item.folder or "")):lower()
+    local hay = item.hay
     for _, t in ipairs(terms) do
         if not hay:find(t, 1, true) then return false end
     end
@@ -346,19 +381,11 @@ local function empty_list(message)
     })
 end
 
-local function do_search(query)
-    local cache = load_cache()
-    -- Auto-import once, on first ever use (no prior import stamp). A genuinely
-    -- empty result after an import must NOT re-shell on every keystroke; the user
-    -- refreshes explicitly with `bm import`.
-    if #cache == 0 and host.prefs.get(STAMP_KEY) == nil then
-        cache = (do_import())
-    end
-
+-- Build result rows from the cache for a query (empty query => all), capped at
+-- `limit`. Shared by the `bm` runner and the inline launcher fallback.
+local function collect_items(cache, query, limit)
     local terms = {}
     for w in query:lower():gmatch("%S+") do terms[#terms + 1] = w end
-
-    local limit = max_results()
     local items = {}
     for _, b in ipairs(cache) do
         if #terms == 0 or matches(b, terms) then
@@ -373,12 +400,43 @@ local function do_search(query)
             if #items >= limit then break end
         end
     end
+    return items
+end
 
+local function do_search(query)
+    local cache = load_cache()
+    -- Auto-import once, on first ever use (no prior import stamp). A genuinely
+    -- empty result after an import must NOT re-shell on every keystroke; the user
+    -- refreshes explicitly with `bm import`.
+    if #cache == 0 and host.prefs.get(STAMP_KEY) == nil then
+        do_import()              -- writes the cache; reload so rows carry `hay`
+        cache = load_cache()
+    end
+
+    local items = collect_items(cache, query, max_results())
     if #items == 0 then
         return empty_list(#cache == 0 and "No bookmarks imported"
                                        or ("No bookmarks match \"" .. trim(query) .. "\""))
     end
     return host.ui.render(host.ui.list{ title = "Browser Bookmarks", style = "rows", items = items })
+end
+
+-- MARK: Inline launcher fallback (opt-in)
+--
+-- When "Show in launcher" is on, the universal launcher calls this for queries
+-- it didn't match to an app/quicklink. Returns a compact list ONLY when there
+-- are real matches, else "" so the launcher cleanly falls through (no empty-state
+-- row, no auto-import — this is the hot path; a missing cache just declines).
+local INLINE_LIMIT = 5
+function bookmarks_inline(query)
+    if host.prefs.get("show_in_launcher") ~= "true" then return "" end
+    query = trim(query or "")
+    if #query < 2 then return "" end
+    local cache = load_cache()
+    if #cache == 0 then return "" end
+    local items = collect_items(cache, query, INLINE_LIMIT)
+    if #items == 0 then return "" end
+    return host.ui.render(host.ui.list{ title = "Bookmarks", style = "rows", items = items })
 end
 
 -- MARK: Command handler
@@ -428,6 +486,7 @@ local SOURCES = {
     { key = "opera",   name = "Opera"   },
     { key = "arc",     name = "Arc"     },
     { key = "firefox", name = "Firefox" },
+    { key = "zen",     name = "Zen"     },
     { key = "safari",  name = "Safari"  },
 }
 
@@ -465,8 +524,13 @@ function settings_render(section_id, state)
     }
     sections[#sections + 1] = s.section{
         id = "search", title = "Search",
-        rows = { s.row{ kind = "number", key = "max_results", title = "Max results",
-                        value = tostring(max_results()), min = 1, max = 500, step = 1 } },
+        rows = {
+            s.row{ kind = "toggle", key = "show_in_launcher", title = "Show in launcher",
+                   subtitle = "Surface matching bookmarks in the main launcher (no bm prefix), below apps and quicklinks.",
+                   value = (host.prefs.get("show_in_launcher") == "true") and "true" or "false" },
+            s.row{ kind = "number", key = "max_results", title = "Max results",
+                   value = tostring(max_results()), min = 1, max = 500, step = 1 },
+        },
     }
     sections[#sections + 1] = s.section{
         id = "scan", title = "Scan",

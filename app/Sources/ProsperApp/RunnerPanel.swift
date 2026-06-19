@@ -73,7 +73,7 @@ final class RunnerPanel {
             onLaunchExtension: { [weak self] id, query in self?.launchExtension(commandID: id, query: query) },
             onFileAction: { [weak self] id, path in self?.performFileAction(id: id, path: path) }
         )
-        let hosting = NSHostingView(rootView: root)
+        let hosting = NSHostingView(rootView: Themed { root })
         hosting.frame = panel.contentView?.bounds ?? .zero
         hosting.autoresizingMask = [.width, .height]
         hosting.wantsLayer = true
@@ -357,6 +357,11 @@ final class RunnerPanel {
     /// no inline result is rendered. Fire-and-forget — the window appears async.
     private func launchExtension(commandID: String, query: String) {
         dismiss()
+        // Native coding agent: drive AgentController directly (not the registry).
+        if commandID == CommandRouter.agentCommandID {
+            Task { @MainActor in AgentController.shared.startFromRunner(goal: query) }
+            return
+        }
         Task { @MainActor in
             _ = await CommandRouter.registry?.invokeAsync(commandID: commandID, query: query)
         }
@@ -474,7 +479,10 @@ final class RunnerModel: ObservableObject {
         let extRunsEmpty: Bool = {
             if case .ext(let id, _, _, _) = mode {
                 if id == "quicklinks.run" || id == "quickdirs.run" { return true }
-                return CommandRouter.registry?.command(id: id)?.command.mode == .view
+                let cmd = CommandRouter.registry?.command(id: id)?.command
+                // A view command always runs on empty; a no-view command opts in via
+                // `list_on_empty` (e.g. Bookmarks lists all, then filters on type).
+                return cmd?.mode == .view || cmd?.listsOnEmpty == true
             }
             return false
         }()

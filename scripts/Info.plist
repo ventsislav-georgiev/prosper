@@ -24,6 +24,24 @@
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<!-- Lets Prosper register as a default web browser so a Lua extension can
+	     intercept opened links (host API §O url-dispatcher). Inert until the user
+	     sets Prosper default via host.url.set_default_browser; opened URLs arrive as
+	     the "url.open" event. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Web URL</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>http</string>
+				<string>https</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>SUEnableAutomaticChecks</key>

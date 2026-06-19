@@ -1,0 +1,1 @@
+-- Themes are declarative (theme.json); this script is never run. See theme-default.

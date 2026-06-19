@@ -30,6 +30,11 @@ public final class LuaRuntime {
     /// `lua_State *`. Recreated on `reset()`.
     private var L: OpaquePointer!
     private let maxInstructions: Int32
+    /// When true, `load` (text-mode source) survives the sandbox so a privileged
+    /// runtime can compile source it fetched itself — the hammerspoon-compat shim
+    /// loads the user's `~/.hammerspoon/init.lua` this way. Still no `io`/`os`/
+    /// `require`/`loadfile`, so the only source it can reach is what the host hands it.
+    private let allowLoad: Bool
 
     /// Boxed host closures, retained for the life of the runtime so the C
     /// trampoline's light-userdata upvalue stays valid.
@@ -41,8 +46,10 @@ public final class LuaRuntime {
     /// Replayed on every `reset()` so a hot-reloaded state keeps its host API.
     private var registrations: [(name: String, fn: (LuaRuntime) -> Int32)] = []
 
-    public init(maxInstructions: Int32 = LuaRuntime.defaultInstructionBudget) throws {
+    public init(maxInstructions: Int32 = LuaRuntime.defaultInstructionBudget,
+                allowLoad: Bool = false) throws {
         self.maxInstructions = maxInstructions
+        self.allowLoad = allowLoad
         try open()
     }
 
@@ -72,7 +79,9 @@ public final class LuaRuntime {
     /// Remove filesystem/process/loader access. Capabilities come back only via
     /// explicitly registered host functions.
     private func applySandbox() {
-        for global in ["io", "os", "package", "require", "dofile", "loadfile", "load"] {
+        var stripped = ["io", "os", "package", "require", "dofile", "loadfile", "load"]
+        if allowLoad { stripped.removeAll { $0 == "load" } }
+        for global in stripped {
             lua_pushnil(L)
             lua_setglobal(L, global)
         }
@@ -96,23 +105,26 @@ public final class LuaRuntime {
 
     /// Call a global Lua function by name with string arguments, returning its
     /// first result as a string (or nil if it returned nothing / non-string).
+    /// `budget` overrides the per-VM instruction ceiling for THIS call only — pass a
+    /// tighter value for hot-path calls (e.g. a keystroke-time dispatch) so a heavy
+    /// callback can't burn the full default budget on a latency-critical thread.
     @discardableResult
-    public func callGlobal(_ name: String, _ args: [String] = []) throws -> String? {
+    public func callGlobal(_ name: String, _ args: [String] = [], budget: Int32? = nil) throws -> String? {
         lua_getglobal(L, name)
         if clua_isfunction(L, -1) == 0 {
             clua_pop(L, 1)
             throw LuaError.notAFunction(name)
         }
         for a in args { lua_pushstring(L, a) }
-        try pcall(args: Int32(args.count), results: 1)
+        try pcall(args: Int32(args.count), results: 1, budget: budget)
         let result = clua_tostring(L, -1).map { String(cString: $0) }
         clua_pop(L, 1)
         return result
     }
 
     /// Protected call with a freshly-armed instruction budget.
-    private func pcall(args: Int32, results: Int32) throws {
-        clua_set_count_hook(L, LuaRuntime.budgetHook, maxInstructions)
+    private func pcall(args: Int32, results: Int32, budget: Int32? = nil) throws {
+        clua_set_count_hook(L, LuaRuntime.budgetHook, budget ?? maxInstructions)
         let status = clua_pcall(L, args, results, 0)
         clua_clear_hook(L)
         if status != 0 {
@@ -183,6 +195,13 @@ public final class LuaRuntime {
         var isNum: Int32 = 0
         let v = lua_tonumberx(L, i, &isNum)
         return isNum != 0 ? v : nil
+    }
+
+    /// Boolean argument at 1-based index `i` using Lua truthiness (nil/false →
+    /// false, everything else → true), or nil if no value occupies the slot.
+    public func boolArgument(_ i: Int32) -> Bool? {
+        guard lua_type(L, i) != LUA_TNONE else { return nil }
+        return lua_toboolean(L, i) != 0
     }
 
     /// Push a string result.

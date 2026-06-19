@@ -278,11 +278,37 @@ jobs:
           python3 scripts/merge_appcast.py canonical.xml dist/appcast.xml dist/appcast.xml
           echo "Final appcast:"; cat dist/appcast.xml
 
+      - name: Compose release notes from CHANGELOG
+        # Pull the section for this version out of CHANGELOG.md (heading `## vX.Y.Z`,
+        # up to the next `## `) and use it as the Release body. The auto-generated
+        # commit list is appended below it by generate_release_notes. If CHANGELOG.md
+        # has no matching section the file is left empty → notes fall back to the
+        # auto-generated list alone, so a missing entry never blocks a release.
+        id: notes
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          NOTES="$RUNNER_TEMP/notes.md"
+          : > "$NOTES"
+          if [[ -f CHANGELOG.md ]]; then
+            awk -v ver="$VERSION" '
+              /^## / { if (cap) exit; if (index($0, "v" ver) > 0) { cap=1; next } }
+              cap { print }
+            ' CHANGELOG.md | sed -e '/./,$!d' > "$NOTES"
+          fi
+          if [[ -s "$NOTES" ]]; then
+            echo "Using CHANGELOG.md section for v${VERSION}:"; cat "$NOTES"
+          else
+            echo "::warning::No CHANGELOG.md section for v${VERSION} — using auto-generated notes only."
+          fi
+          echo "file=$NOTES" >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Prosper ${{ steps.ver.outputs.version }}
+          body_path: ${{ steps.notes.outputs.file }}
           generate_release_notes: true
           prerelease: ${{ steps.ver.outputs.is_prerelease == 'true' }}
           files: |

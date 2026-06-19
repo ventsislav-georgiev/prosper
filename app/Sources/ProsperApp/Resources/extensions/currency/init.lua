@@ -239,7 +239,7 @@ function currency_convert(query)
         return rates[code]
     end
     local rFrom, rTo = rate(from), rate(to)
-    if rFrom == nil or rTo == nil or rFrom <= 0 then return nil end
+    if rFrom == nil or rTo == nil or rFrom <= 0 or rTo <= 0 then return nil end
 
     local result = (amount / rFrom) * rTo
     local crossRate = rTo / rFrom

@@ -8,33 +8,43 @@ import SwiftUI
 // edges, glow, and uppercase machine labels. All tokens live here so panes stay
 // declarative and the look stays consistent.
 
+// Tokens are now backed by the active theme (see Theme/Theme.swift). Each member
+// reads the live `ThemePalette` from `ThemeRuntime`, so a theme switch re-skins
+// every call site. The default theme reproduces the original values byte-for-byte
+// (ThemePalette.default), so the look is unchanged until a theme overrides a
+// token. Derived tokens (stroke + the two gradients) are computed from the base
+// colors, so theming the twelve colors re-tints them automatically.
 enum Neon {
+    private static var p: ThemePalette { ThemeRuntime.palette }
+
     // Accents
-    static let blue = Color(red: 0.13, green: 0.80, blue: 1.00)        // #21CCFF electric cyan-blue
-    static let blueBright = Color(red: 0.46, green: 0.92, blue: 1.00)  // #75EBFF hot highlight
-    static let indigo = Color(red: 0.36, green: 0.50, blue: 1.00)      // #5C80FF cool secondary
-    static let magenta = Color(red: 0.96, green: 0.27, blue: 0.69)     // #F545B0 danger / pop
-    static let terminal = Color(red: 0.27, green: 1.00, blue: 0.71)    // #45FFB5 robotic terminal-green
+    static var blue: Color { p.blue }              // electric cyan-blue
+    static var blueBright: Color { p.blueBright }  // hot highlight
+    static var indigo: Color { p.indigo }          // cool secondary
+    static var magenta: Color { p.magenta }        // danger / pop
+    static var terminal: Color { p.terminal }      // robotic terminal-green
 
     // Surfaces (deep blue-black, never pure grey)
-    static let bgTop = Color(red: 0.043, green: 0.063, blue: 0.094)    // #0B1018
-    static let bgBottom = Color(red: 0.020, green: 0.031, blue: 0.051) // #05080D
-    static let sidebar = Color(red: 0.031, green: 0.047, blue: 0.075)  // #080C13
-    static let card = Color(red: 0.075, green: 0.098, blue: 0.137)     // #131923
-    static let cardHi = Color(red: 0.106, green: 0.137, blue: 0.184)   // #1B232F
+    static var bgTop: Color { p.bgTop }
+    static var bgBottom: Color { p.bgBottom }
+    static var sidebar: Color { p.sidebar }
+    static var card: Color { p.card }
+    static var cardHi: Color { p.cardHi }
 
     // Lines + text
-    static let stroke = Color(red: 0.13, green: 0.80, blue: 1.00).opacity(0.16)
-    static let textPrimary = Color(red: 0.91, green: 0.95, blue: 0.99)
-    static let textSecondary = Color(red: 0.55, green: 0.62, blue: 0.73)
+    static var stroke: Color { p.blue.opacity(0.16) }
+    static var textPrimary: Color { p.textPrimary }
+    static var textSecondary: Color { p.textSecondary }
 
-    static let cardStroke = LinearGradient(
-        colors: [blue.opacity(0.38), indigo.opacity(0.10)],
-        startPoint: .topLeading, endPoint: .bottomTrailing)
+    static var cardStroke: LinearGradient {
+        LinearGradient(colors: [p.blue.opacity(0.38), p.indigo.opacity(0.10)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
 
-    static let barFill = LinearGradient(
-        colors: [blueBright, blue, indigo],
-        startPoint: .top, endPoint: .bottom)
+    static var barFill: LinearGradient {
+        LinearGradient(colors: [p.blueBright, p.blue, p.indigo],
+                       startPoint: .top, endPoint: .bottom)
+    }
 }
 
 // MARK: - Backdrop
@@ -97,44 +107,74 @@ struct NeonSection<Content: View>: View {
     let title: String?
     let accent: String?
     let footer: String?
+    /// When non-nil the section is collapsible and this binding drives + persists
+    /// its state (callers back it with @AppStorage). Nil = always expanded.
+    let collapsed: Binding<Bool>?
     @ViewBuilder var content: () -> Content
 
     init(_ title: String? = nil, accent: String? = nil, footer: String? = nil,
+         collapsed: Binding<Bool>? = nil,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.accent = accent
         self.footer = footer
+        self.collapsed = collapsed
         self.content = content
     }
+
+    private var collapsible: Bool { collapsed != nil }
+    private var isCollapsed: Bool { collapsed?.wrappedValue ?? false }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let title {
-                HStack(spacing: 8) {
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(Neon.blue)
-                        .frame(width: 3, height: 12)
-                        .shadow(color: Neon.blue.opacity(0.9), radius: 4)
-                    neonAccentedText(title, accent: accent)
-                        .font(.system(size: 11, weight: .bold))
-                        .textCase(.uppercase)
-                        .tracking(1.4)
-                        .foregroundStyle(Neon.textSecondary)
+                titleRow(title)
+            }
+            if !isCollapsed {
+                VStack(alignment: .leading, spacing: 14) {
+                    content()
                 }
-                .padding(.leading, 2)
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .neonCard()
+                if let footer {
+                    Text(footer)
+                        .font(.caption)
+                        .foregroundStyle(Neon.textSecondary)
+                        .padding(.horizontal, 4)
+                }
             }
-            VStack(alignment: .leading, spacing: 14) {
-                content()
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .neonCard()
-            if let footer {
-                Text(footer)
-                    .font(.caption)
+        }
+    }
+
+    @ViewBuilder
+    private func titleRow(_ title: String) -> some View {
+        let label = HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Neon.blue)
+                .frame(width: 3, height: 12)
+                .shadow(color: Neon.blue.opacity(0.9), radius: 4)
+            neonAccentedText(title, accent: accent)
+                .font(.system(size: 11, weight: .bold))
+                .textCase(.uppercase)
+                .tracking(1.4)
+                .foregroundStyle(Neon.textSecondary)
+            if collapsible {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(Neon.textSecondary)
-                    .padding(.horizontal, 4)
+                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
             }
+        }
+        .padding(.leading, 2)
+
+        if let collapsed {
+            Button { withAnimation(.easeInOut(duration: 0.15)) { collapsed.wrappedValue.toggle() } } label: {
+                label.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            label
         }
     }
 }

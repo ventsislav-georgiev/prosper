@@ -25,6 +25,9 @@ private final class BookmarkFakeServices: ExtensionHostServices, @unchecked Send
     var granted: Set<String> = []
     /// host.prefs store (the import cache lives here).
     var prefs: [String: String] = [:]
+    /// Number of reads of the big cache blob ("cache" key) — used to prove a
+    /// keystroke search does NOT re-marshal the whole cache across the boundary.
+    var cacheBlobReads = 0
 
     func clipboardRead() -> String? { nil }
     func clipboardWrite(_ text: String) {}
@@ -36,7 +39,10 @@ private final class BookmarkFakeServices: ExtensionHostServices, @unchecked Send
     func focusedWindowFrame() -> WindowFrame? { nil }
     func setFocusedWindowFrame(x: Double, y: Double, width: Double, height: Double) -> Bool { false }
     func currentEpochSeconds() -> Double { 1_700_000_000 }
-    func prefGet(extensionID: String, key: String) -> String? { prefs[key] }
+    func prefGet(extensionID: String, key: String) -> String? {
+        if key == "cache" { cacheBlobReads += 1 }
+        return prefs[key]
+    }
     func prefSet(extensionID: String, key: String, value: String) { prefs[key] = value }
     func notify(title: String, body: String) {}
     func listDirectories(_ path: String) -> [String] { dirs[path] ?? [] }
@@ -93,6 +99,7 @@ final class BookmarksExtensionTests: XCTestCase {
     private static let operaSupport   = support("com.operasoftware.Opera")
     private static let arcPath        = support("Arc/StorableSidebar.json")
     private static let firefoxProfiles = support("Firefox/Profiles")
+    private static let zenProfiles     = support("zen/Profiles")
     private static let safariPlist    = "\(home)/Library/Safari/Bookmarks.plist"
 
     // MARK: - Fixtures
@@ -324,6 +331,84 @@ final class BookmarksExtensionTests: XCTestCase {
         XCTAssertEqual(item(items, titled: "Rust")?.subtitle, "Firefox · p1.default")
     }
 
+    /// The locked `bm ` mode must list all bookmarks on an empty query (then filter
+    /// on type). The runner gates that on the command's `list_on_empty` manifest flag
+    /// (RunnerPanel.extRunsEmpty), so assert the flag is declared + decoded.
+    @MainActor
+    func testCommandListsOnEmptyQuery() throws {
+        let registry = try makeRegistry(BookmarkFakeServices())
+        XCTAssertEqual(registry.command(id: "bookmarks.run")?.command.listsOnEmpty, true,
+                       "bookmarks.run must set list_on_empty so `bm ` lists all on open")
+    }
+
+    /// Decode the inline launcher fallback (`bookmarks_inline`) into its rows.
+    /// nil = the handler declined (returned "") — off, too-short, or no match.
+    @MainActor
+    private func inlineItems(_ registry: ExtensionRegistry, _ query: String) async -> [ListItem]? {
+        guard let node = await registry.callExtensionViewAsync(
+            extensionID: "com.prosper.bookmarks", function: "bookmarks_inline", args: [query]),
+              case .list(let list) = node else { return nil }
+        return list.items
+    }
+
+    /// Opt-in inline bookmarks for the universal launcher: declines (nil) until the
+    /// `show_in_launcher` pref is on, then surfaces a capped (≤5) CONTAINS match.
+    @MainActor
+    func testInlineLauncherOptIn() async throws {
+        let fake = BookmarkFakeServices()
+        fake.dirs[Self.firefoxProfiles] = ["p1.default"]
+        fake.sqlite["\(Self.firefoxProfiles)/p1.default/places.sqlite"] = Self.firefoxJSON
+        let registry = try makeRegistry(fake)
+        _ = try await searchItems(registry, "")   // first use → import populates the cache
+
+        // Off by default → declines regardless of match.
+        let off = await inlineItems(registry, "mozilla")
+        XCTAssertNil(off, "inline must be off until show_in_launcher is enabled")
+
+        fake.prefs["show_in_launcher"] = "true"
+        // < 2 chars declines (don't flood the launcher on a single keystroke).
+        let short = await inlineItems(registry, "m")
+        XCTAssertNil(short)
+        // No match declines (so the launcher falls through to noResults).
+        let none = await inlineItems(registry, "zzzznope")
+        XCTAssertNil(none)
+        // A real match surfaces rows carrying the openable url.
+        let hits = await inlineItems(registry, "mozilla")
+        let hit = try XCTUnwrap(hits)
+        XCTAssertEqual(item(hit, titled: "Mozilla")?.url, "https://mozilla.org/")
+    }
+
+    /// Inline results are capped (≤5) so they never flood the launcher.
+    @MainActor
+    func testInlineLauncherCapsRows() async throws {
+        let fake = BookmarkFakeServices()
+        fake.dirs[Self.chromeSupport] = ["Default"]
+        fake.files["\(Self.chromeSupport)/Default/Bookmarks"] = Self.largeChromium(20)
+        fake.prefs["show_in_launcher"] = "true"
+        let registry = try makeRegistry(fake)
+        _ = try await searchItems(registry, "")   // import → cache
+
+        let matched = await inlineItems(registry, "site")   // matches all 20
+        let rows = try XCTUnwrap(matched)
+        XCTAssertEqual(rows.count, 5)
+    }
+
+    @MainActor
+    func testZenExtraction() async throws {
+        // Zen is Firefox-based: same places.sqlite schema. Profile dir name carries a
+        // space ("...Default (alpha)"), exercising the file: URI %20 encoding.
+        let fake = BookmarkFakeServices()
+        fake.dirs[Self.zenProfiles] = ["h97fnrma.Default (alpha)"]
+        fake.sqlite["\(Self.zenProfiles)/h97fnrma.Default (alpha)/places.sqlite"] =
+            #"[{"title":"Zen Home","url":"https://zen-browser.app/"}]"#
+        let registry = try makeRegistry(fake)
+
+        let items = try await searchItems(registry, "")
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(item(items, titled: "Zen Home")?.url, "https://zen-browser.app/")
+        XCTAssertEqual(item(items, titled: "Zen Home")?.subtitle, "Zen · h97fnrma.Default (alpha)")
+    }
+
     @MainActor
     func testFirefoxEnumeratesMultipleProfiles() async throws {
         let fake = BookmarkFakeServices()
@@ -443,6 +528,165 @@ final class BookmarksExtensionTests: XCTestCase {
         let selected = try XCTUnwrap(items.first)
         XCTAssertEqual(selected.title, "Apple")
         XCTAssertEqual(selected.url, "https://apple.com/")   // what onOpenURL receives
+    }
+
+    // MARK: - Performance (hot path: per-keystroke search over a large library)
+
+    /// Build one Chromium `Bookmarks` JSON with `n` distinct bookmarks on the bar.
+    private static func largeChromium(_ n: Int) -> String {
+        var kids = [String]()
+        kids.reserveCapacity(n)
+        for i in 0..<n {
+            kids.append(#"{"type":"url","name":"Bookmark \#(i) site","url":"https://example\#(i).com/page"}"#)
+        }
+        return """
+        {"roots":{
+          "bookmark_bar":{"type":"folder","name":"Bookmarks Bar","children":[\(kids.joined(separator: ","))]},
+          "other":{"type":"folder","name":"Other","children":[]},
+          "synced":{"type":"folder","name":"Mobile","children":[]}
+        }}
+        """
+    }
+
+    /// HOT-PATH REQUIREMENT: per-keystroke search over a large (≈MAX_BOOKMARKS)
+    /// library must stay interactive. The decode is memoized and the lowercased
+    /// haystack is precomputed once at import, so a keystroke is a plain `find`
+    /// scan over the cache — no per-row string rebuilds. Ceiling is generous
+    /// (CI noise) but ~10× under the old per-keystroke cost; actual is printed.
+    @MainActor
+    func testSearchHotPathBudget() async throws {
+        let n = 5000
+        let fake = BookmarkFakeServices()
+        fake.granted = ["full-disk-access"]   // no Safari data staged → import stays Chrome-only, no skip note
+        fake.dirs[Self.chromeSupport] = ["Default"]
+        fake.files["\(Self.chromeSupport)/Default/Bookmarks"] = Self.largeChromium(n)
+        let registry = try makeRegistry(fake)
+
+        // Import once, then warm the decode/haystack memo with a first search.
+        let summary = await registry.invokeAsync(commandID: "bookmarks.run", query: "bm import")
+        XCTAssertEqual(summary, "Imported \(n) bookmarks (Chrome \(n)).")
+        _ = try await searchItems(registry, "warmup")
+
+        // Worst case: a single term that matches nothing → every row's full
+        // haystack is scanned to completion before failing.
+        let iters = 30
+        let start = DispatchTime.now().uptimeNanoseconds
+        for _ in 0..<iters {
+            let items = try await searchItems(registry, "zzqqnomatch")
+            XCTAssertEqual(items.count, 1)   // empty-state row only
+        }
+        let perCallMs = Double(DispatchTime.now().uptimeNanoseconds - start) / Double(iters) / 1_000_000
+        print("bookmarks search hot path: \(String(format: "%.2f", perCallMs)) ms/keystroke over \(n) bookmarks (full-scan miss)")
+
+        XCTAssertLessThan(perCallMs, 25, "per-keystroke search over \(n) bookmarks exceeded the 25ms hot-path budget")
+    }
+
+    /// STABILITY: an oversized `max_results` pref (set raw in host.prefs, bypassing
+    /// the settings control's max=500) must be clamped so a keystroke can't build an
+    /// unbounded result list. 600 bookmarks + max_results=100000 → still ≤ 500 rows.
+    @MainActor
+    func testMaxResultsClampedToCap() async throws {
+        let fake = BookmarkFakeServices()
+        fake.granted = ["full-disk-access"]
+        fake.prefs["max_results"] = "100000"   // pathological raw pref, past the UI ceiling
+        fake.dirs[Self.chromeSupport] = ["Default"]
+        fake.files["\(Self.chromeSupport)/Default/Bookmarks"] = Self.largeChromium(600)
+        let registry = try makeRegistry(fake)
+        _ = await registry.invokeAsync(commandID: "bookmarks.run", query: "bm import")
+
+        let items = try await searchItems(registry, "")   // list-all; limit = clamped cap
+        XCTAssertEqual(items.count, 500, "max_results not clamped to the 500 cap")
+    }
+
+    /// REAL-ENVIRONMENT REGRESSION (no mock). The mocked suite stages pre-converted
+    /// JSON for `plutil`, which hid that a direct `plutil -convert json` ABORTS on a
+    /// real Safari plist's <data> (Sync/CloudKit blobs) and <date> nodes — yielding 0
+    /// bytes, so every Safari import silently returned nothing. This runs the
+    /// extension's exact scrub pipeline through the real shell against a genuine
+    /// BINARY plist holding both node types and asserts the leaf URL survives.
+    func testSafariScrubPipelineHandlesDataAndDateNodes() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict>
+          <key>WebBookmarkType</key><string>WebBookmarkTypeList</string>
+          <key>Children</key><array><dict>
+            <key>WebBookmarkType</key><string>WebBookmarkTypeLeaf</string>
+            <key>URLString</key><string>https://apple.com/</string>
+            <key>URIDictionary</key><dict><key>title</key><string>Apple</string></dict>
+            <key>Sync</key><dict><key>Data</key><data>aGVsbG8=</data><key>ServerData</key><data>d29ybGQ=</data></dict>
+            <key>LastModified</key><date>2024-01-01T00:00:00Z</date>
+          </dict></array>
+        </dict></plist>
+        """
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let xmlURL = dir.appendingPathComponent("b.xml")
+        let binURL = dir.appendingPathComponent("Bookmarks.plist")
+        try xml.write(to: xmlURL, atomically: true, encoding: .utf8)
+        _ = Self.run("/usr/bin/plutil", ["-convert", "binary1", "-o", binURL.path, xmlURL.path])
+
+        let q = "'" + binURL.path + "'"
+        // Control: the pre-fix naive conversion must fail on this plist.
+        let naive = Self.run("/bin/zsh", ["-lc", "plutil -convert json -o - \(q) 2>&1"])
+        XCTAssertFalse(naive.contains("apple.com"), "control invalid: naive convert unexpectedly succeeded")
+
+        // The shipped pipeline (mirrors init.lua parse_safari).
+        let cmd = "plutil -convert xml1 -o - \(q) 2>/dev/null"
+            + " | /usr/bin/perl -0pe 's{<(data|date)>.*?</\\1>}{<string></string>}gs'"
+            + " | plutil -convert json -o - - 2>/dev/null"
+        let out = Self.run("/bin/zsh", ["-lc", cmd])
+        XCTAssertTrue(out.contains("\"URLString\":\"https:\\/\\/apple.com\\/\"") || out.contains("https://apple.com/"),
+                      "scrub pipeline did not recover the bookmark URL; got: \(out)")
+    }
+
+    /// Run a process to completion, returning combined stdout (test helper only).
+    private static func run(_ launch: String, _ args: [String]) -> String {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: launch); p.arguments = args
+        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+        do { try p.run() } catch { return "spawn error: \(error)" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// HOT-PATH REQUIREMENT: a keystroke must NOT re-marshal the whole cache blob
+    /// across the Lua↔host boundary. The memo keys on the tiny version counter, so
+    /// after the first (warming) read the big "cache" key is never fetched again
+    /// until an import bumps the version.
+    @MainActor
+    func testSearchDoesNotRefetchCacheBlobPerKeystroke() async throws {
+        let fake = makeCombinedFake(); fake.granted = ["full-disk-access"]
+        let registry = try makeRegistry(fake)
+        _ = await registry.invokeAsync(commandID: "bookmarks.run", query: "bm import")
+
+        _ = try await searchItems(registry, "warm")   // first search decodes → reads the blob
+        let baseline = fake.cacheBlobReads
+        for _ in 0..<10 { _ = try await searchItems(registry, "git") }
+        XCTAssertEqual(fake.cacheBlobReads, baseline,
+            "keystroke searches re-read the full cache blob — the version-keyed memo is not short-circuiting")
+    }
+
+    /// A re-import within the same wall-clock second still refreshes the cache: the
+    /// memo keys on a monotonic version, not the second-resolution stamp (the fake's
+    /// clock is fixed, so both imports share a stamp).
+    @MainActor
+    func testReimportSameInstantRefreshesCache() async throws {
+        let fake = BookmarkFakeServices()
+        fake.dirs[Self.chromeSupport] = ["Default"]
+        fake.files["\(Self.chromeSupport)/Default/Bookmarks"] = Self.chromium("First", "https://first/")
+        let registry = try makeRegistry(fake)
+        _ = await registry.invokeAsync(commandID: "bookmarks.run", query: "bm import")
+        let firstTitle = try await searchItems(registry, "").first?.title
+        XCTAssertEqual(firstTitle, "First")
+
+        // Same fixed clock (currentEpochSeconds is constant) → identical stamp.
+        fake.files["\(Self.chromeSupport)/Default/Bookmarks"] = Self.chromium("Second", "https://second/")
+        _ = await registry.invokeAsync(commandID: "bookmarks.run", query: "bm import")
+        let after = try await searchItems(registry, "")
+        XCTAssertEqual(after.count, 1)
+        XCTAssertEqual(after.first?.title, "Second", "re-import did not invalidate the cache memo")
     }
 
     // MARK: - Manifest + host.perms

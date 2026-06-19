@@ -253,7 +253,7 @@ enum CoreBridge {
     /// `switchModel`. Cancels the load task and frees any partial state via
     /// `MLXEngine.unload`. The pending `completion(false)` still fires.
     static func cancelModelLoad() {
-        Task { await MLXEngine.shared.unload() }
+        Task { await MLXEngine.shared.requestUnload() }
     }
 
     // MARK: translate
@@ -266,6 +266,10 @@ enum CoreBridge {
     ) {
         Task {
             do {
+                // Lazy-load: the model is resident only while inline autocomplete is
+                // on, so a host.llm/Translate call may arrive cold. `load` is
+                // idempotent (no-op when already resident).
+                try await MLXEngine.shared.load { _, _ in }
                 // Stage 1 — the single best translation, on a focused pass for
                 // maximum orthographic accuracy (this is the word the user pastes).
                 let primaryPrompt = buildPrimaryTranslationPrompt(
@@ -322,9 +326,15 @@ enum CoreBridge {
                         detectedLanguage: enriched.detectedLanguage,
                         primary: primary,
                         candidates: candidates)
-                await MainActor.run { completion(result) }
+                await MainActor.run {
+                    ModelIdleUnloader.shared.noteUsage()
+                    completion(result)
+                }
             } catch {
-                await MainActor.run { completion(nil) }
+                await MainActor.run {
+                    ModelIdleUnloader.shared.noteUsage()
+                    completion(nil)
+                }
             }
         }
     }
@@ -1032,6 +1042,9 @@ enum CoreBridge {
     ) {
         Task {
             do {
+                // Lazy-load: the model is resident only while inline autocomplete is
+                // on, so a host.llm call may arrive cold. `load` is idempotent.
+                try await MLXEngine.shared.load { _, _ in }
                 let raw = try await MLXEngine.shared.generate(
                     prompt: prompt,
                     system: system,
@@ -1039,9 +1052,15 @@ enum CoreBridge {
                     temperature: temperature
                 )
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                await MainActor.run { completion(trimmed.isEmpty ? nil : trimmed) }
+                await MainActor.run {
+                    ModelIdleUnloader.shared.noteUsage()
+                    completion(trimmed.isEmpty ? nil : trimmed)
+                }
             } catch {
-                await MainActor.run { completion(nil) }
+                await MainActor.run {
+                    ModelIdleUnloader.shared.noteUsage()
+                    completion(nil)
+                }
             }
         }
     }

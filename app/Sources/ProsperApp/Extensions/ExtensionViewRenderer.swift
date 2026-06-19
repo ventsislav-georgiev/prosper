@@ -555,7 +555,9 @@ final class ExtensionViewPanel {
         win.titlebarAppearsTransparent = true
         win.isMovableByWindowBackground = true
         win.backgroundColor = NSColor(Neon.bgTop)
-        win.appearance = NSAppearance(named: .darkAqua)
+        // Inherit the app appearance (set by ThemeStore from the active theme)
+        // instead of hardcoding dark — so a light theme gets light chrome and a
+        // live switch flips this window for free via NSApp.appearance.
         // A converter is a side-by-side split, so it wants a wider canvas than the
         // single-column list / detail / form views.
         let size: NSSize = {
@@ -622,10 +624,17 @@ final class ExtensionViewHostController: NSHostingController<AnyView> {
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
     private func rebuild() {
-        rootView = AnyView(ExtensionRenderedView(
-            node: current,
-            onAction: { [weak self] id, value, form in self?.fire(id, value, form) },
-            transform: transform))
+        // Copy into locals so the stored rootView closure captures no strong self
+        // (only the onAction weakly) — otherwise controller → rootView → closure →
+        // self is a retain cycle. Themed{} re-skins the rendered UI on a live switch.
+        let node = current
+        let transform = transform
+        rootView = AnyView(Themed {
+            ExtensionRenderedView(
+                node: node,
+                onAction: { [weak self] id, value, form in self?.fire(id, value, form) },
+                transform: transform)
+        })
     }
 
     /// Run an action: show a built-in spinner immediately (so any async work —

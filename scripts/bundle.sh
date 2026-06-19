@@ -69,6 +69,9 @@ fi
 if [[ -d "$ROOT/app/Sources/ProsperApp/Resources/extensions" ]]; then
   /usr/bin/ditto "$ROOT/app/Sources/ProsperApp/Resources/extensions" \
     "$APP/Contents/Resources/extensions"
+  # Dev-only extension tests (*.test.lua) aren't runtime code — keep them out of
+  # the shipped app. The loader only runs each manifest's main entry anyway.
+  /usr/bin/find "$APP/Contents/Resources/extensions" -name '*.test.lua' -delete
 else
   echo "warn: Resources/extensions not found — system extensions won't ship." >&2
 fi
