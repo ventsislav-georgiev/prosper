@@ -1301,6 +1301,46 @@ private struct ShortcutsPane: View {
                 }
             }
 
+            // Read-only guide: launcher prefixes contributed by enabled extensions.
+            // Sourced live from modeTriggers() (already filtered to enabled+trusted).
+            // arg == nil drops dynamic per-item triggers (e.g. each quickdir dir),
+            // keeping just the manifest activators like "sn ", "bm ", "ql ".
+            let activators = (SettingsHooks.shared.extensionRegistry?.modeTriggers() ?? [])
+                .filter { $0.arg == nil }
+                .sorted { $0.prefix.localizedCaseInsensitiveCompare($1.prefix) == .orderedAscending }
+            if !activators.isEmpty {
+                NeonSection("Extension Activators",
+                            footer: "Type one of these prefixes in the launcher to jump straight to that command. Read-only \u{2014} updates as you enable or disable extensions.") {
+                    ForEach(Array(activators.enumerated()), id: \.offset) { idx, t in
+                        if idx > 0 { NeonDivider() }
+                        ExtensionActivatorRow(trigger: t)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One read-only row: launcher prefix badge + command title + contributing
+/// extension. Pure guide; no interaction.
+private struct ExtensionActivatorRow: View {
+    let trigger: ExtensionRegistry.ModeTriggerSpec
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: trigger.icon)
+                .foregroundStyle(Neon.textSecondary)
+                .frame(width: 18)
+            Text(trigger.prefix)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(Neon.textPrimary)
+                .padding(.horizontal, 8).padding(.vertical, 2)
+                .neonCard()
+            Text(trigger.title).foregroundStyle(Neon.textPrimary)
+            Spacer()
+            if !trigger.extensionTitle.isEmpty {
+                Text(trigger.extensionTitle).foregroundStyle(Neon.textSecondary)
+            }
         }
     }
 }

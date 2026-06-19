@@ -31,6 +31,18 @@ final class EventTapHost {
     /// The single extension whose VM is currently serving taps (nil when inactive).
     private var activeID: String?
 
+    /// True when at least one event type is being served — i.e. the shared CGEvent
+    /// tap must be RUNNING for these callbacks to ever fire. A pure-`hs.eventtap`
+    /// config registers no `ExtensionKeyRules`, so this is the only signal that keeps
+    /// the tap alive when inline autocomplete is off.
+    var isActive: Bool { wantsKeyDown || wantsSystemDefined }
+
+    /// Fired after `refresh()` flips `isActive`, so the app can reconcile the shared
+    /// keystroke tap's lifecycle (wired to `reconcileKeyTap`). Without this an
+    /// eventtap that activates *after* the launch-time tap check would never run —
+    /// the tap that calls back into it was never installed.
+    var onActiveChanged: (() -> Void)?
+
     /// Instruction ceiling for a keystroke-time dispatch. The call runs synchronously
     /// on the main thread inside the CGEvent tap, so a heavy/wedged callback adds
     /// latency to EVERY keystroke and can trip the OS tap timeout. This is ~20× below
@@ -59,6 +71,8 @@ final class EventTapHost {
     /// hammerspoon-compat shim opts in, so one is enough.
     func refresh() {
         guard let reg = registry else { return }
+        let wasActive = isActive
+        defer { if isActive != wasActive { onActiveChanged?() } }
         for id in reg.eventTapExtensionIDs() {
             guard let types = reg.callExtensionString(
                 extensionID: id, function: "hs_eventtap_probe", arg: ""), !types.isEmpty

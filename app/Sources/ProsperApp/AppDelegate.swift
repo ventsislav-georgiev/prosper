@@ -195,6 +195,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExtensionKeyRules.shared.onRulesChanged = { [weak self] in
             Task { @MainActor in self?.reconcileKeyTap() }
         }
+        // A resident eventtap (hammerspoon-compat) activates AFTER its rules are set
+        // (the probe runs once rules install). Re-reconcile when that flips so the tap
+        // comes up for a pure-eventtap config even with inline autocomplete off.
+        EventTapHost.shared.onActiveChanged = { [weak self] in
+            Task { @MainActor in self?.reconcileKeyTap() }
+        }
         // When Prosper is the default browser, opened links arrive as a GURL Apple
         // Event — forward them to extensions as the `url.open` event ({ url }).
         NSAppleEventManager.shared().setEventHandler(
@@ -643,13 +649,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// trusted key-rule extension works even with inline autocomplete switched off
     /// (the previous coupling left the tap down and silently killed all key rules).
     /// Idempotent: start()/stop() no-op when already in the desired state.
+    /// Pure rule for whether the shared CGEvent keystroke tap must run. Three
+    /// independent consumers ride it — inline autocomplete, native `ExtensionKeyRules`,
+    /// and resident `hs.eventtap` callbacks — and it runs if ANY needs it. Extracted +
+    /// unit-tested precisely because the "every shortcut dead" bug was a dropped term
+    /// here (`eventTaps`), which silently kept the tap down for pure-eventtap configs.
+    static func needKeyTap(autocomplete: Bool, extRules: Bool, eventTaps: Bool) -> Bool {
+        autocomplete || extRules || eventTaps
+    }
+
     func reconcileKeyTap() {
         let acEnabled = Preferences.autocompleteEnabled
         let extRules = !ExtensionKeyRules.shared.isEmpty
-        let needTap = acEnabled || extRules
+        // A pure-`hs.eventtap` config (no native key rules) needs the tap too — it is
+        // the surface those raw callbacks ride. Without this term the tap stays down
+        // when autocomplete is off and the only consumer is a resident eventtap.
+        let eventTaps = EventTapHost.shared.isActive
+        let needTap = Self.needKeyTap(autocomplete: acEnabled, extRules: extRules, eventTaps: eventTaps)
         let trusted = PermissionsManager.isAccessibilityTrusted()
-        NSLog("prosper: reconcileKeyTap autocomplete=%d extRules=%d needTap=%d axTrusted=%d",
-              acEnabled, extRules, needTap, trusted)
+        NSLog("prosper: reconcileKeyTap autocomplete=%d extRules=%d eventTaps=%d needTap=%d axTrusted=%d",
+              acEnabled, extRules, eventTaps, needTap, trusted)
         if needTap {
             if trusted { _ = autocomplete.start() }
             else { NSLog("prosper: key tap needed but Accessibility not trusted — tap not started") }

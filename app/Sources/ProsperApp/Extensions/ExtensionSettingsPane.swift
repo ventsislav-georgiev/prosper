@@ -120,7 +120,10 @@ struct SettingsUIView: View {
                       subtitle: ui.subtitle ?? section.subtitle ?? "")
             ForEach(ui.sections) { sec in
                 NeonSection(sec.title, accent: sec.accent, footer: sec.footer) {
-                    ForEach(Array(sec.rows.enumerated()), id: \.element.id) { idx, row in
+                    // Index, not row.id: info rows with no id/key/actionID all decode
+                    // to the same id ("info.row"), and ForEach with duplicate ids
+                    // renders the first match N times (the "What's loaded" 4× dup bug).
+                    ForEach(Array(sec.rows.enumerated()), id: \.offset) { idx, row in
                         if idx > 0, needsDivider(row) { NeonDivider() }
                         SettingsRowView(row: row, permissionTick: permissionTick, onEvent: onEvent)
                     }

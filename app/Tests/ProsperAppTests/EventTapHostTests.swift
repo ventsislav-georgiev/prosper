@@ -128,6 +128,14 @@ final class EventTapHostTests: XCTestCase {
         XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
     }
 
+    func testSettingsRenderSummarizesLoadedConfig() throws {
+        // The diagnostics section runs the real config-summary path (run_user_config
+        // + ipairs over binds/native/eventtaps/timers). Must not throw and must
+        // produce output for a config that registers a running eventtap.
+        let (lua, _) = try makeRuntime(config: Self.userConfig)
+        XCTAssertNoThrow(try lua.callGlobal("settings_render", ["hammerspoon-compat", "{}"]))
+    }
+
     func testProbeWarnsOnUnsupportedTapType() throws {
         // keyUp/flagsChanged taps are never delivered by the native tap → probe
         // must warn (not silently drop) and still report nothing.
@@ -241,5 +249,21 @@ final class EventTapHostTests: XCTestCase {
         for _ in 0..<n { _ = try lua.callGlobal("hs_eventtap_dispatch", [payload]) }
         let perMs = Double(DispatchTime.now().uptimeNanoseconds - start) / Double(n) / 1_000_000
         XCTAssertLessThan(perMs, 1.0, "warm eventtap dispatch >1ms — VM re-parsing per press?")
+    }
+
+    // MARK: - key-tap lifecycle decision
+
+    /// Regression guard for the "every shortcut dead" bug: the shared CGEvent tap must
+    /// run if ANY of its three consumers needs it. The bug was a dropped `eventTaps`
+    /// term, so a pure-`hs.eventtap` config (autocomplete off, no native key rules)
+    /// left the tap down. Each consumer alone must keep it up; all-off keeps it down.
+    @MainActor
+    func testNeedKeyTapIsOrOfAllConsumers() {
+        XCTAssertFalse(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false),
+                       "tap must be DOWN when no consumer needs it")
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: true,  extRules: false, eventTaps: false))
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: true,  eventTaps: false))
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: true),
+                      "the eventTaps term is the one that regressed — must keep the tap up alone")
     }
 }
