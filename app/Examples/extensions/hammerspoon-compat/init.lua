@@ -575,7 +575,8 @@ end
 function hs_url_open(payload)
     if not is_enabled() then return end
     local data = payload and host.json.decode(payload) or nil
-    local full = data and data.url
+    if type(data) ~= "table" then return end
+    local full = data.url
     if type(full) ~= "string" or #full == 0 then return end
     if not (_HS and _HS.ctx) then run_user_config("rebuild") end
     local ctx = _HS and _HS.ctx
