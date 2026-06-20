@@ -7,7 +7,7 @@ id          = "com.prosper.window"
 name        = "window"
 title       = "Window Management"
 description = "Snap the focused window: halves, quarters, thirds, maximize, center."
-version     = "1.1.0"
+version     = "1.1.1"
 author      = "Prosper"
 license     = "MIT"
 system      = true
@@ -36,13 +36,21 @@ match       = "^win(dow)?( |$)"
 # natively from this manifest — no Lua. `shortcut` controls bind 1:1 to the host
 # ShortcutActions (the `name` is the action's rawValue); the recorder writes
 # ShortcutStore and pokes onShortcutsChanged, which re-registers the Carbon
-# hotkeys. A Permissions group below surfaces the Accessibility grant inline.
+# hotkeys. A Permissions group at the top surfaces the Accessibility grant inline.
 [[contributes.settings_sections]]
 id        = "window"
 title     = "Window Management"
 icon      = "macwindow.on.rectangle"
 accent    = "Window"
 subtitle  = "Snap and resize the frontmost window with global shortcuts"
+
+[[contributes.settings_sections.controls]]
+kind  = "group"
+title = "Permissions"
+
+[[contributes.settings_sections.controls]]
+kind = "permission"
+name = "accessibility"
 
 [[contributes.settings_sections.controls]]
 kind   = "group"
@@ -72,11 +80,3 @@ name = "windowMaximize"
 [[contributes.settings_sections.controls]]
 kind = "shortcut"
 name = "windowCenter"
-
-[[contributes.settings_sections.controls]]
-kind  = "group"
-title = "Permissions"
-
-[[contributes.settings_sections.controls]]
-kind = "permission"
-name = "accessibility"

@@ -5,6 +5,16 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.98.0
+
+### Extensions
+- **Consistent permission UI across extensions.** Every extension that requires a
+  host permission now surfaces it the same way: a group titled **"Permissions"**
+  (plural) at the **top** of its settings page. The Window Management page moved its
+  Accessibility group above the shortcut recorders, and Browser Bookmarks' Full Disk
+  Access group was renamed from the singular "Permission" — so the look and feel is
+  uniform with Snippets.
+
 ## v2.97.0
 
 ### Extensions
