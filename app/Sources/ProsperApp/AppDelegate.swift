@@ -11,7 +11,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var runnerPanel: RunnerPanel?
     private var clipboardPanel: ClipboardPanel?
     private var settingsWindow: SettingsWindow?
-    private var onboarding: OnboardingWindow?
     /// Reusable host for `host.window.open` (extension-driven standalone windows,
     /// e.g. the Base64 converter). Lazily presented; survives close.
     private let extensionViewPanel = ExtensionViewPanel()
@@ -333,22 +332,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ClipboardMonitor.shared.start()
         }
 
-        // First run: show the onboarding flow (permissions + model download).
-        // Otherwise run model setup if the model isn't ready and start engines.
-        if !Preferences.onboardingCompleted {
-            showOnboarding()
-        } else {
-            // Only preload the language model when inline autocomplete is on —
-            // that's the one path where a cold load on the first keystroke is
-            // user-visible. The model is the app's largest memory consumer (~4 GB
-            // resident). Model-requiring extensions (e.g. Translate) load it
-            // LAZILY on first use, so a fresh boot with autocomplete off stays
-            // lightweight (~120 MB) even when Translate is enabled.
-            if Preferences.autocompleteEnabled {
-                runModelSetup(force: false)
-            }
-            startAutocompleteIfReady()
+        // Only preload the language model when inline autocomplete is on —
+        // that's the one path where a cold load on the first keystroke is
+        // user-visible. The model is the app's largest memory consumer (~4 GB
+        // resident). Model-requiring extensions (e.g. Translate) load it
+        // LAZILY on first use, so a fresh boot with autocomplete off stays
+        // lightweight (~120 MB) even when Translate is enabled. Autocomplete +
+        // coding agent are off by default; when a user enables one, General
+        // settings surfaces a clickable warning if the needed grant is missing
+        // (no first-run wizard — see GeneralPane).
+        if Preferences.autocompleteEnabled {
+            runModelSetup(force: false)
         }
+        startAutocompleteIfReady()
 
         // E2E handshake (gated by PROSPER_E2E=1): tell the launching test process
         // whether the keystroke tap is live so it can proceed — or skip with a
@@ -445,7 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar?.setMenuBarImage(store.image("menuBarIcon"))
         // Dock / app icon: nil restores the app bundle's icon.
         NSApp.applicationIconImage = store.image("appIcon")
-        // Already-open opaque windows (Settings/Chat/Onboarding/ModelSetup): refresh
+        // Already-open opaque windows (Settings/Chat/ModelSetup): refresh
         // their backdrop. ponytail: keyed on opacity so we never paint over the
         // borderless transparent panels (runner/clipboard) — they read Neon via
         // SwiftUI and redraw themselves.
@@ -628,15 +624,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             panel.present(prefill: prefill)
         }
-    }
-
-    private func showOnboarding() {
-        let onboarding = self.onboarding ?? OnboardingWindow(onFinished: { [weak self] in
-            self?.onboarding = nil
-            self?.startAutocompleteIfReady()
-        })
-        self.onboarding = onboarding
-        onboarding.show()
     }
 
     private func startAutocompleteIfReady() {

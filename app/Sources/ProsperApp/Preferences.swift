@@ -102,8 +102,6 @@ enum Preferences {
         static let useClipboardContext = "useClipboardContext"
         static let midlineCompletionsEnabled = "midlineCompletionsEnabled"
         static let emojiSuggestionsEnabled = "emojiSuggestionsEnabled"
-        static let onboardingCompleted = "onboardingCompleted"
-        static let onboardingStep = "onboardingStep"
         static let suppressOnTypo = "suppressOnTypo"
         static let collectTypingHistory = "collectTypingHistory"
         static let personalizeWordChoice = "personalizeWordChoice"
@@ -585,21 +583,6 @@ enum Preferences {
             return defaults.bool(forKey: Keys.emojiSuggestionsEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.emojiSuggestionsEnabled) }
-    }
-
-    /// Whether the first-run onboarding flow has been completed. Default false.
-    static var onboardingCompleted: Bool {
-        get { defaults.bool(forKey: Keys.onboardingCompleted) }
-        set { defaults.set(newValue, forKey: Keys.onboardingCompleted) }
-    }
-
-    /// The onboarding step the user last reached (raw value of OnboardingStep).
-    /// Persisted so that a quit-and-reopen (required after granting a TCC
-    /// permission) resumes the wizard on the same step instead of restarting.
-    /// Default 0 (welcome).
-    static var onboardingStep: Int {
-        get { defaults.integer(forKey: Keys.onboardingStep) }
-        set { defaults.set(newValue, forKey: Keys.onboardingStep) }
     }
 
     /// Append a space after accepting the FINAL word of a suggestion with Tab, so

@@ -14,7 +14,7 @@ enum AnalyticsSnapshot {
     /// The single `daily_snapshot` event payload. Every key is prefixed with the
     /// module / feature it comes from (`meta_`, `general_`, `clipboard_`,
     /// `completions_`, `emoji_`, `context_`, `personalization_`, `updates_`,
-    /// `onboarding_`, `agent_`, `apps_`, `quicklinks_`, `quickdirs_`, `shortcuts_`,
+    /// `agent_`, `apps_`, `quicklinks_`, `quickdirs_`, `shortcuts_`,
     /// `extensions_`). Bools are emitted as Int 0/1.
     static func build(registry: ExtensionRegistry? = SettingsHooks.shared.extensionRegistry) -> [String: Any] {
         var p: [String: Any] = [:]
@@ -68,9 +68,6 @@ enum AnalyticsSnapshot {
         // updates
         p["updates_automatic_checks"] = b(Preferences.automaticUpdateChecks)
         p["updates_allow_beta"] = b(Preferences.allowBetaUpdates)
-
-        // onboarding
-        p["onboarding_completed"] = b(Preferences.onboardingCompleted)
 
         // agent — coding agent + its model and customizable items (counts only)
         p["agent_model"] = Preferences.agentModel

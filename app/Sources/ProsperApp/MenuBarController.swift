@@ -172,9 +172,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private var shouldShowSetup: Bool {
-        Preferences.autocompleteEnabled
-            && (!PermissionsManager.isAccessibilityTrusted()
-                || !PermissionsManager.isInputMonitoringTrusted())
+        // Autocomplete's active session event tap is gated by Accessibility (it
+        // injects/swallows keys + reads the caret via AX). Input Monitoring is the
+        // listen-only HID grant, which this active tap doesn't need — so don't nag
+        // for it. See AutocompleteEngine.start() (guards Accessibility only).
+        Preferences.autocompleteEnabled && !PermissionsManager.isAccessibilityTrusted()
     }
 
     private func buildMenu() -> NSMenu {

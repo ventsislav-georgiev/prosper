@@ -607,6 +607,14 @@ struct PaneTitle: View {
 
 private struct GeneralPane: View {
     @ObservedObject var model: SettingsModel
+    // Deep-link target: writing the shared selection key switches the sidebar
+    // pane (SettingsRootView binds it via @AppStorage), so the warning below can
+    // jump the user straight to the Context pane's permission grants.
+    @AppStorage("settingsSelectedPane") private var selection = "general"
+    // Autocomplete's keystroke tap is gated by Accessibility. Checked on appear
+    // (granting happens out-of-process); the user fixes it on the Context pane
+    // and returns. There's no first-run wizard, so this is the only nudge.
+    @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
 
     var body: some View {
         NeonScroll {
@@ -637,6 +645,14 @@ private struct GeneralPane: View {
                 Toggle("Enable inline autocomplete", isOn: Binding(
                     get: { model.autocompleteEnabled },
                     set: { model.setAutocomplete($0) }))
+                if model.autocompleteEnabled && !hasAccessibility {
+                    NeonDivider()
+                    PermissionWarningRow(
+                        title: "Accessibility permission needed",
+                        message: "Completions can't appear until you grant it. Open Context to fix.") {
+                            selection = "context"
+                        }
+                }
             }
 
             NeonSection("Coding Agent",
@@ -668,6 +684,36 @@ private struct GeneralPane: View {
                        isOn: $model.useClipboardContext)
             }
         }
+        .onAppear { hasAccessibility = PermissionsManager.isAccessibilityTrusted() }
+    }
+}
+
+/// A tappable warning row: amber triangle + message, chevron affordance. Used in
+/// General to flag a missing permission and deep-link to the pane that fixes it.
+private struct PermissionWarningRow: View {
+    let title: String
+    let message: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Neon.magenta)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Neon.textPrimary)
+                    Text(message)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Neon.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(Neon.textSecondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -823,7 +869,6 @@ private struct ContextPane: View {
     @ObservedObject var model: SettingsModel
     @State private var hasScreenPermission = VisionContext.hasScreenRecordingPermission()
     @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
-    @State private var hasInputMonitoring = PermissionsManager.isInputMonitoringTrusted()
     @State private var hasNotifications = false
 
     /// Re-reads every privacy grant. The TCC checks are synchronous; the
@@ -831,7 +876,6 @@ private struct ContextPane: View {
     private func refreshPermissions() {
         hasScreenPermission = VisionContext.hasScreenRecordingPermission()
         hasAccessibility = PermissionsManager.isAccessibilityTrusted()
-        hasInputMonitoring = PermissionsManager.isInputMonitoringTrusted()
         Task { @MainActor in hasNotifications = await PermissionsManager.notificationStatus() }
     }
 
@@ -852,25 +896,15 @@ private struct ContextPane: View {
             }
 
             NeonSection("Permissions",
-                        footer: "macOS privacy grants Prosper needs. Accessibility and Input Monitoring power system-wide autocomplete; Screen Recording enables screenshot/OCR context; Notifications surface update and status messages. Use “Open” to grant in System Settings, then “Re-check”.") {
+                        footer: "macOS privacy grants Prosper needs. Accessibility powers system-wide autocomplete (watching keystrokes and inserting completions); Screen Recording enables screenshot/OCR context; Notifications surface update and status messages. Use “Open” to grant in System Settings, then “Re-check”.") {
                 PermissionStatusRow(
                     title: "Accessibility",
-                    subtitle: "Read focused text fields and insert completions",
+                    subtitle: "Watch keystrokes, read focused text fields, and insert completions",
                     granted: hasAccessibility) {
                         if !PermissionsManager.ensureAccessibilityTrust(prompt: true) {
                             PermissionsManager.openAccessibilitySettings()
                         }
                         hasAccessibility = PermissionsManager.isAccessibilityTrusted()
-                    }
-                NeonDivider()
-                PermissionStatusRow(
-                    title: "Input Monitoring",
-                    subtitle: "Listen for keystrokes to trigger completions",
-                    granted: hasInputMonitoring) {
-                        if !PermissionsManager.requestInputMonitoring() {
-                            PermissionsManager.openInputMonitoringSettings()
-                        }
-                        hasInputMonitoring = PermissionsManager.isInputMonitoringTrusted()
                     }
                 NeonDivider()
                 PermissionStatusRow(
