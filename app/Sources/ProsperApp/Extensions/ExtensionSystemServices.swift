@@ -293,14 +293,18 @@ enum URLServices {
         return ws.open(url)
     }
 
-    /// Bundle id of the current default handler for http(s), "" if none.
+    /// Bundle id of the browser macOS would ACTUALLY launch for an http(s) URL, "" if
+    /// none. Resolves the concrete app (NSWorkspace.urlForApplication) rather than
+    /// reading the recorded handler string — LaunchServices can hold a dangling
+    /// handler id (e.g. a stale/duplicate bundle) that no longer resolves to a real
+    /// browser; the old LSCopyDefaultHandlerForURLScheme returned that ghost id and
+    /// made "is Prosper default?" report a false positive. urlForApplication returns
+    /// what would truly open, so a broken registration honestly reads as not-default.
     static func defaultBrowserBundleID() -> String {
-        // ponytail: LSCopyDefaultHandlerForURLScheme is deprecated but the modern
-        // replacement (NSWorkspace.urlForApplication(toOpen:)) needs a concrete URL
-        // and returns a path; this returns the bundle id callers expect. Swap if it
-        // is ever removed.
-        guard let handler = LSCopyDefaultHandlerForURLScheme("http" as CFString)?.takeRetainedValue() else { return "" }
-        return handler as String
+        guard let url = URL(string: "https://example.com"),
+              let appURL = NSWorkspace.shared.urlForApplication(toOpen: url),
+              let id = Bundle(url: appURL)?.bundleIdentifier else { return "" }
+        return id
     }
 
     /// Make `bundleID` the default http+https handler. Returns true if both succeed.
