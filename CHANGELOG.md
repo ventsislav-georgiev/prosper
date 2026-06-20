@@ -5,6 +5,37 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.97.0
+
+### Extensions
+- **Window Management is now a first-class extension settings page.** The shortcut
+  recorders + Accessibility permission that used to be a hardcoded Swift pane are
+  now declared entirely in the extension's manifest, rendered natively with the
+  same look. This also removes the duplicate "Window Management" entry that showed
+  in the Settings sidebar. A new declarative `shortcut` control kind lets a manifest
+  bind a recorder row to a host global shortcut by name (writes through to the same
+  store, re-registers the Carbon hotkey on change) — no Lua required.
+
+### Hammerspoon Compat
+- **`URLDispatcher` Spoon now works.** Configs that route links by domain through
+  the popular `spoon.SpoonInstall:andUse("URLDispatcher", …)` setup previously did
+  nothing (Spoons were inert), so per-domain browser routing and URL rewriting from
+  `~/.hammerspoon/init.lua` silently never ran. The Spoon is now shimmed: it wires
+  `url_patterns`, `url_redir_decoders`, `default_handler`, and
+  `decode_slack_redir_urls` onto the existing `hs.urlevent.httpCallback` path —
+  decoders run, then the first matching pattern routes to its app, else the default
+  handler. A minimal `hs.http` (`urlParts`, `encodeForQuery`) backs the decoders.
+  Routing reuses the existing automation surface, so it carries no new privilege.
+  Other Spoons stay inert. The "What's loaded" diagnostic now shows the live
+  route/rewriter counts.
+
+### Fixes
+- **"Prosper is your default browser" no longer reports a false positive.** The
+  check matched the recorded LaunchServices handler id as a string, which can be a
+  stale/duplicate registration that no longer resolves to a real browser. It now
+  resolves the app macOS would *actually* launch for an http(s) URL, so a broken or
+  ghost registration honestly reads as not-default.
+
 ## v2.96.1
 
 ### Fixes
