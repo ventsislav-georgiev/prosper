@@ -274,6 +274,12 @@ if [[ "$NOTARIZE" == 1 ]]; then
 <dict>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
+	<!-- Send Apple Events to other apps (osascript host API / Hammerspoon-compat
+	     `tell application "Safari"` URL routing). Unrestricted entitlement; safe on
+	     the --deep set. Without it NSAppleScript controlling another app is denied
+	     (errAEEventNotPermitted) and "nothing happens". -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
 </dict>
 </plist>
 PLIST

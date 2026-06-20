@@ -24,6 +24,11 @@
 	     JIT mapping without this. Required or the app aborts on first model load. -->
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
+	<!-- Send Apple Events to other apps (osascript host API / Hammerspoon-compat
+	     `tell application "Safari"` URL routing). Without it NSAppleScript
+	     controlling another app is denied (errAEEventNotPermitted). -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
 	<!-- iCloud-Keychain settings-sync key (SyncKeyStore). The default keychain
 	     access group is <TeamID>.<bundleID>; declaring it explicitly is what
 	     clears errSecMissingEntitlement for the kSecAttrSynchronizable item. -->

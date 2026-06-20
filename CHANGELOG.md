@@ -5,6 +5,24 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.100.0
+
+### Fixes
+- **Hammerspoon URL routing that opens links via AppleScript now works.** A
+  finicky-style config whose handler does `tell application "Safari" …` (or any
+  `hs.osascript`/osascript host call that drives another app) was silently denied
+  under the hardened runtime — Prosper shipped without the Apple Events automation
+  entitlement, so a clicked link just focused Prosper and nothing opened. Added
+  `com.apple.security.automation.apple-events` (and an `NSAppleEventsUsageDescription`
+  so macOS can show the one-time Automation prompt). On the first routed link, allow
+  "Prosper wants to control Safari". The native URL Dispatcher was unaffected — it
+  routes through NSWorkspace, which needs no automation grant.
+
+### Settings
+- **Permission rows explain *why* the grant is needed** instead of repeating the
+  status. The subtitle previously read "Granted", duplicating the badge; it now shows
+  a short rationale (per permission), regardless of grant state.
+
 ## v2.99.0
 
 ### Extensions
