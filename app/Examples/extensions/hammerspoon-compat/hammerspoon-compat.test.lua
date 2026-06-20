@@ -16,6 +16,8 @@ local set_default_calls = {}
 local kbd_set = {} -- host.keyboard.set_source calls (per-app input switching)
 local scheduled, alerts, confirms, osascripts = {}, {}, {}, {}
 local confirm_result = true -- what host.dialog.confirm returns (OK vs Cancel)
+local hidden = {}           -- host.apps.hide calls (bundleID) — window API
+local window_count = 0      -- what host.apps.windows returns (AX window count)
 local FAKE_INIT = [[
 hs.urlevent.setDefaultHandler("http")
 hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
@@ -69,7 +71,9 @@ host = {
     osascript = { run = function(src) osascripts[#osascripts + 1] = src
                                        return { ok = true, output = "", error = "" } end },
     apps = { frontmost = function() return { name = "Finder", bundleID = "com.apple.finder", pid = 1 } end,
-             launch_or_focus = function() end },
+             launch_or_focus = function() end,
+             windows = function(_) return window_count end,
+             hide = function(bid) hidden[#hidden + 1] = bid end },
     keyboard = {
         current_source = function() return "com.apple.keylayout.ABC" end,
         layouts = function() return { { id = "id.ABC", name = "ABC" },
@@ -315,6 +319,29 @@ check(#scheduled == 1 and scheduled[1].handler == "hs_timer_fired", "doAfter sch
 -- the host fires timer.fired -> the deferred osascript runs
 hs_timer_fired('{"id":"' .. scheduled[1].id .. '"}')
 check(#osascripts == 1 and osascripts[1]:find("empty trash") ~= nil, "timer.fired runs the empty-trash osascript")
+
+-- 9i. window API: hideAppIfNoWindows(app) hides the frontmost app only when it has
+--     zero windows. app:allWindows() length tracks host.apps.windows (AX count);
+--     app:hide() calls host.apps.hide, gated on the firing context.
+FAKE_INIT = [[
+function hideAppIfNoWindows(app)
+    if #app:allWindows() == 0 then app:hide() end
+end
+hs.hotkey.bind({"cmd"}, "W", function()
+    hideAppIfNoWindows(hs.application.frontmostApplication())
+end)
+]]
+env._HS = nil; hidden = {}
+on_launch(nil)
+local w_idx
+for i, b in ipairs(env._HS.ctx.binds) do if b.combo == "cmd+w" then w_idx = i end end
+check(w_idx ~= nil, "cmd+w bind recorded")
+window_count = 2; hidden = {}
+hs_dispatch(tostring(w_idx))
+check(#hidden == 0, "windows remain (allWindows #=2) -> app NOT hidden")
+window_count = 0; hidden = {}
+hs_dispatch(tostring(w_idx))
+check(#hidden == 1 and hidden[1] == "com.apple.finder", "no windows -> host.apps.hide(frontmost bundleID)")
 
 -- restore the URL-routing config for the perf tests below
 FAKE_INIT = [[

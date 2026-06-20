@@ -5,6 +5,29 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.105.0
+
+### Extensions
+- **Privileged mode — opt-in system access for your own extensions.** A new
+  per-extension toggle (Settings → Extensions → "Grant System Access") elevates a
+  *trusted* user/marketplace extension from the automation tier to the full system
+  tier: `host.shell`, the coding-agent, and destructive file ops become available to
+  its Lua. It is a deliberate, explicit escalation — separate from Trust, default
+  OFF, and persisted per extension — so a trusted-but-not-privileged extension keeps
+  exactly today's behaviour (shell refused). Grant it only to a config you have read
+  end-to-end; a privileged extension can run any command as you.
+
+### Hammerspoon Compat
+- **`hs.execute` works when privileged.** With "Grant System Access" on, init.lua
+  lines like `hs.execute("open -a Ghostty …")` or `pmset displaysleepnow` now run
+  instead of returning the "restricted to system extensions" string. Without the
+  grant, behaviour is unchanged (refused).
+- **Window API: `hideAppIfNoWindows` works.** The app object from
+  `hs.application.frontmostApplication()` (and the app-activation watcher) now has
+  real `allWindows()` (length = AX window count via `host.apps.windows`) and `hide()`
+  (`host.apps.hide`), so the common "hide the app after its last window closes" idiom
+  on ⌘W / ⌘⇧W runs unmodified. Needs Accessibility (Prosper holds it in normal use).
+
 ## v2.104.0
 
 ### Hammerspoon Compat
