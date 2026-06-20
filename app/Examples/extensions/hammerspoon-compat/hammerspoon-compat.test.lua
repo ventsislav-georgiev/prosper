@@ -168,6 +168,56 @@ hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
 end
 ]]
 
+-- 9d. URLDispatcher Spoon shim: a config that routes via spoon.URLDispatcher
+--     (url_patterns + a url_redir_decoder using hs.http.urlParts) drives the same
+--     hs.urlevent.httpCallback path. Proves the shim wires start()->httpCallback,
+--     applies decoders before patterns, and falls back to default_handler.
+FAKE_INIT = [[
+hs.loadSpoon("SpoonInstall")
+local function strip_utm(scheme, host, params, fullURL)
+    local p = hs.http.urlParts(fullURL)
+    if not p.query then return fullURL end
+    local kept = {}
+    for pair in p.query:gmatch("[^&]+") do
+        local k = pair:match("([^=]+)=")
+        if k ~= "utm_source" then kept[#kept + 1] = pair end
+    end
+    local q = table.concat(kept, "&")
+    return p.scheme .. "://" .. p.host .. (p.path or "") .. (q ~= "" and ("?" .. q) or "")
+end
+spoon.SpoonInstall:andUse("URLDispatcher", {
+    config = { default_handler = "com.apple.Safari" },
+    start = true,
+})
+spoon.URLDispatcher.url_patterns = {
+    { "github%.com", "com.google.Chrome" },
+}
+spoon.URLDispatcher.url_redir_decoders = {
+    { "strip utm", strip_utm, nil, true },
+}
+]]
+env._HS = nil
+reset()
+hs_url_open(payload("https://github.com/x"))
+check(last() and last().browser == "com.google.Chrome", "URLDispatcher: github -> Chrome via url_patterns")
+reset()
+hs_url_open(payload("https://example.com/p?utm_source=x&id=5"))
+check(last() and last().browser == "com.apple.Safari", "URLDispatcher: unmatched -> default_handler (Safari)")
+check(last() and not last().url:find("utm_source") and last().url:find("id=5") ~= nil,
+      "URLDispatcher: decoder stripped utm, kept id (" .. tostring(last() and last().url) .. ")")
+-- diagnostics row should show the live route/rewriter counts
+default_browser = "eu.illegible.prosper"
+env._HS = nil
+row = find_row(settings_render("hammerspoon-compat", "{}"), "URL routing (hs.urlevent)")
+check(row and row.subtitle and row.subtitle:find("route(s)", 1, true) ~= nil,
+      "URLDispatcher: diagnostics shows route/rewriter counts")
+default_browser = "com.apple.Safari"
+FAKE_INIT = [[
+hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
+    hs.urlevent.openURLWithBundle(fullURL, "com.google.Chrome")
+end
+]]
+
 -- 10. perf: warm-VM hs_url_open (closure already built) per link
 env._HS = nil
 hs_url_open(payload("https://github.com/warm"))   -- warm it
