@@ -327,7 +327,12 @@ final class ExtensionRegistry: ObservableObject {
         let privileged = privilegedIDs()
         for record in found {
             record.trusted = record.isSystem || trusted.contains(record.id)
-            record.privileged = record.isSystem || privileged.contains(record.id)
+            // Privilege can never exceed trust: a non-system extension is privileged
+            // only if BOTH trusted and explicitly granted. This is the invariant gate —
+            // even if some path clears trust without clearing the privilege set, an
+            // untrusted extension can never reach the system tier. (untrust/uninstall
+            // still scrub the set so a later re-trust requires an explicit re-grant.)
+            record.privileged = record.isSystem || (record.trusted && privileged.contains(record.id))
         }
 
         records = found
@@ -1070,6 +1075,8 @@ final class ExtensionRegistry: ObservableObject {
     func grantPrivilege(id: String) throws {
         guard let record = record(id: id) else { throw ExtensionError.notFound(id) }
         guard !record.isSystem else { return }
+        // Privilege requires trust — enforce the invariant at the API, not just the UI.
+        guard record.trusted else { throw ExtensionError.untrusted(id) }
         var ids = privilegedIDs()
         ids.insert(id)
         persistPrivileged(ids)

@@ -165,6 +165,12 @@ final class ExtensionInstallTests: XCTestCase {
         XCTAssertTrue(registry.isPrivileged(id: "com.test.hello"))
         try registry.untrust(id: "com.test.hello")
         XCTAssertFalse(registry.isPrivileged(id: "com.test.hello"))
+        // Granting privilege to an UNTRUSTED extension is refused at the API (not just
+        // hidden in the UI): privilege can never exceed trust.
+        XCTAssertThrowsError(try registry.grantPrivilege(id: "com.test.hello")) { error in
+            XCTAssertEqual(error as? ExtensionError, .untrusted("com.test.hello"))
+        }
+        XCTAssertFalse(registry.isPrivileged(id: "com.test.hello"))
         // A fresh registry on the same defaults agrees — the set was persisted clear.
         let registry3 = ExtensionRegistry(
             systemDir: nil, userDir: userDir, hostVersion: "2.0.0",
@@ -202,6 +208,32 @@ final class ExtensionInstallTests: XCTestCase {
         let registry2 = freshRegistry()
         registry2.discover()
         XCTAssertFalse(registry2.isPrivileged(id: "com.test.hello"))
+    }
+
+    // Defense-in-depth: even if some path persists a privilege grant WITHOUT trust
+    // (e.g. trust cleared by a route that forgot to scrub the set), discover() must
+    // never elevate an untrusted extension to the system tier. The compute-time gate
+    // (`record.trusted && privileged.contains`) enforces the invariant regardless of
+    // which mutation path ran.
+    func testPrivilegeNeverExceedsTrustOnDiscover() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let userDir = tmp.appendingPathComponent("user")
+        let source = tmp.appendingPathComponent("source")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try writeSource(into: source, id: "com.test.hello")
+
+        let defaults = UserDefaults(suiteName: "test.\(UUID().uuidString)")!
+        // Forge the corrupt state directly: id is in the privilege set but NOT trusted.
+        defaults.set(["com.test.hello"], forKey: "privilegedExtensionIDs")
+
+        let registry = ExtensionRegistry(
+            systemDir: nil, userDir: userDir, hostVersion: "2.0.0",
+            defaults: defaults, services: NoopServices())
+        registry.discover()
+        try registry.installLocal(from: source)
+        registry.discover()
+        // Untrusted → privilege gate denies it despite the stale set entry.
+        XCTAssertFalse(registry.isPrivileged(id: "com.test.hello"))
     }
 
     func testSystemExtensionAlwaysTrusted() throws {
