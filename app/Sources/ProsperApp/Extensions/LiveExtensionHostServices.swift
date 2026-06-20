@@ -610,9 +610,13 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     func appWindowCount(bundleID: String) -> Int { mainSync { AppControl.windowCount(bundleID: bundleID) } }
     func appHide(bundleID: String) { Task { @MainActor in AppControl.hide(bundleID: bundleID) } }
     func runAppleScript(_ source: String) -> String { Scripting.runAppleScript(source) }
-    func keyboardCurrentSource() -> String { KeyboardSource.currentSourceID() }
-    func keyboardLayoutsJSON() -> String { KeyboardSource.layoutsJSON() }
-    func keyboardSetSource(_ id: String) -> Bool { KeyboardSource.setSource(id) }
+    // Carbon TIS must be called on the main thread — these handlers fire on the
+    // off-main async event lane (e.g. app.activated → per-app input switching), where
+    // TISSelectInputSource silently no-ops. Funnel through mainSync like every other
+    // AppKit/system call here.
+    func keyboardCurrentSource() -> String { mainSync { KeyboardSource.currentSourceID() } }
+    func keyboardLayoutsJSON() -> String { mainSync { KeyboardSource.layoutsJSON() } }
+    func keyboardSetSource(_ id: String) -> Bool { mainSync { KeyboardSource.setSource(id) } }
 
     func keysSetRules(extensionID: String, json: String) {
         Task { @MainActor in

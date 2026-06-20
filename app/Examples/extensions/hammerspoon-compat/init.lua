@@ -1018,6 +1018,19 @@ local function diagnostics_rows()
     end
     info("Raw eventtaps (hs.eventtap)", tapMsg)
 
+    -- App-activation watchers (hs.application.watcher) — fire on every focus change;
+    -- the common use is per-app keyboard input switching via hs.keycodes.currentSourceID.
+    local watching = 0
+    for _, w in ipairs(ctx.appwatchers or {}) do if w.started then watching = watching + 1 end end
+    if watching == 0 then
+        info("App watchers (hs.application.watcher)", "none")
+    else
+        local cur = host.keyboard and host.keyboard.current_source and host.keyboard.current_source()
+        info("App watchers (hs.application.watcher)",
+            watching .. " active — fire on app focus (e.g. per-app input switching)."
+            .. (cur and ("   Current input source: " .. tostring(cur)) or ""))
+    end
+
     -- Timers (hs.timer.doAfter / doEvery).
     local timers = ctx.timers and #ctx.timers or 0
     info("Timers", timers == 0 and "none" or (timers .. " scheduled"))
