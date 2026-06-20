@@ -7,11 +7,19 @@ import SwiftUI
 @MainActor
 final class ModelSetup: NSObject, NSWindowDelegate {
 
+    /// A model operation: ensureModel / switchModel share this shape, so Retry can
+    /// re-run whichever one this run started with — in the same window.
+    private typealias Operation = (
+        @escaping @MainActor @Sendable (SetupProgress) -> Void,
+        @escaping @MainActor @Sendable (Bool) -> Void
+    ) -> Void
+
     private var window: NSWindow?
     private var progressBar: NSProgressIndicator?
     private var statusLabel: NSTextField?
+    private weak var retryButton: NSButton?
+    private var operation: Operation?
     private var isRunning = false
-    private var wasCancelled = false
     /// Reports the run outcome: `true` only when the model loaded successfully.
     /// `false` on cancel or genuine failure — callers revert the selection.
     private var onFinish: ((Bool) -> Void)?
@@ -37,19 +45,10 @@ final class ModelSetup: NSObject, NSWindowDelegate {
 
     private func beginSetup(onFinish: ((Bool) -> Void)? = nil) {
         guard !isRunning else { return }
-        isRunning = true
-        wasCancelled = false
         self.onFinish = onFinish
+        operation = CoreBridge.ensureModel
         showWindow()
-
-        CoreBridge.ensureModel(
-            progress: { [weak self] progress in
-                self?.update(with: progress)
-            },
-            completion: { [weak self] success in
-                self?.finish(success: success)
-            }
-        )
+        start()
     }
 
     /// Live model switch (Settings model picker): unload the current model and
@@ -58,32 +57,45 @@ final class ModelSetup: NSObject, NSWindowDelegate {
     /// routes through `CoreBridge.switchModel`.
     func runSwitch(onFinish: ((Bool) -> Void)? = nil) {
         guard !isRunning else { return }
-        isRunning = true
-        wasCancelled = false
         self.onFinish = onFinish
+        operation = CoreBridge.switchModel
         showWindow()
+        start()
+    }
 
-        CoreBridge.switchModel(
-            progress: { [weak self] progress in
-                self?.update(with: progress)
-            },
-            completion: { [weak self] success in
-                self?.finish(success: success)
-            }
+    /// Runs (or re-runs, on Retry) the stored operation against the live window.
+    private func start() {
+        guard !isRunning, let operation else { return }
+        isRunning = true
+        operation(
+            { [weak self] progress in self?.update(with: progress) },
+            { [weak self] success in self?.finish(success: success) }
         )
     }
 
-    /// User pressed Cancel: abort the in-flight download/load and close the window.
-    /// The pending `completion(false)` from the aborted load is swallowed by
-    /// `finish` (already not running) — the revert is driven from here.
+    /// Cancel / Esc / close box. Aborts any in-flight load, then closes and reverts.
+    /// Works both during a run and after a failure (when `isRunning` is already
+    /// false and the window sits on its error state) — so the window is never stuck.
+    /// The pending `completion(false)` from an aborted load is swallowed by `finish`
+    /// (already not running) — the revert is driven from here.
     @objc private func cancelTapped() {
-        guard isRunning else { return }
-        wasCancelled = true
-        isRunning = false
-        CoreBridge.cancelModelLoad()
+        if isRunning {
+            isRunning = false
+            CoreBridge.cancelModelLoad()
+        }
         closeWindow()
         let cb = onFinish; onFinish = nil
         cb?(false)
+    }
+
+    /// Retry after a failure: re-run the same operation in the existing window.
+    @objc private func retryTapped() {
+        guard !isRunning, operation != nil else { return }
+        retryButton?.isHidden = true
+        statusLabel?.stringValue = "Preparing the language model\u{2026}"
+        progressBar?.isIndeterminate = true
+        progressBar?.startAnimation(nil)
+        start()
     }
 
     // MARK: - UI
@@ -134,6 +146,16 @@ final class ModelSetup: NSObject, NSWindowDelegate {
         cancel.keyEquivalent = "\u{1b}" // Esc cancels
         content.addSubview(cancel)
 
+        // Hidden until a failure; re-runs the same operation in this window.
+        let retry = NSButton(title: "Retry", target: self, action: #selector(retryTapped))
+        retry.bezelStyle = .rounded
+        retry.frame = NSRect(x: 192, y: 16, width: 80, height: 28)
+        retry.autoresizingMask = [.minXMargin, .maxYMargin]
+        retry.keyEquivalent = "\r" // Return retries
+        retry.isHidden = true
+        content.addSubview(retry)
+        retryButton = retry
+
         window.contentView = content
         self.window = window
 
@@ -163,16 +185,18 @@ final class ModelSetup: NSObject, NSWindowDelegate {
         // trailing completion(false).
         guard isRunning else { return }
         isRunning = false
-        let cb = onFinish; onFinish = nil
         if success {
+            let cb = onFinish; onFinish = nil
             closeWindow()
             cb?(true)
             return
         }
-        // Leave the window up with the error so the user can retry from the menu.
+        // Failure: keep the window AND `onFinish` so Retry can re-run, or Cancel can
+        // close + revert the selection. (Don't fire onFinish here — that would revert
+        // the pending model, making a retry switch back to the old one.)
         progressBar?.stopAnimation(nil)
-        statusLabel?.stringValue = "Setup failed. Use \u{201C}Re-run Setup\u{2026}\u{201D} to try again."
-        cb?(false)
+        statusLabel?.stringValue = "Setup failed \u{2014} check your internet connection, then Retry."
+        retryButton?.isHidden = false
     }
 
     private func closeWindow() {
