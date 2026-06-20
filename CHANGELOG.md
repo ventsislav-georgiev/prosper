@@ -5,6 +5,21 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.101.0
+
+### Hammerspoon Compat
+- **`hs.dialog.blockAlert` and `hs.alert.closeSpecific` now work.** Configs with a
+  confirm-then-act hotkey — e.g. the common cmd+shift+delete "Empty Trash" binding
+  that does `hs.dialog.blockAlert("Empty Trash", …)` and acts only if the returned
+  button equals `"Empty Trash"` — did nothing: `hs.dialog` was unshimmed, so the
+  call fell through to an inert stub that returned a table instead of the button
+  title, and the `== "Empty Trash"` branch was never taken (no dialog, no action,
+  silently). `hs.dialog.blockAlert` is now backed by the native confirm dialog and
+  returns the chosen button title; `hs.alert.closeSpecific` is shimmed as a no-op so
+  the progress-alert dismissal pattern doesn't error. (Actions that then drive
+  another app via osascript — like `tell application "Finder" to empty trash` — also
+  need the Apple Events automation grant added in v2.100.0.)
+
 ## v2.100.0
 
 ### Fixes
