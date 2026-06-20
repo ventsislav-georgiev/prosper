@@ -13,6 +13,9 @@ local DIR = (arg[0]:match("^(.*/)") or "./")
 local prefs = { enabled = "true" }
 local opened = {}
 local set_default_calls = {}
+local kbd_set = {} -- host.keyboard.set_source calls (per-app input switching)
+local scheduled, alerts, confirms, osascripts = {}, {}, {}, {}
+local confirm_result = true -- what host.dialog.confirm returns (OK vs Cancel)
 local FAKE_INIT = [[
 hs.urlevent.setDefaultHandler("http")
 hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
@@ -32,6 +35,8 @@ local function json_decode(s)
     if url then return { url = url } end
     local id = s and s:match('"id"%s*:%s*"(.-)"')
     if id then return { id = id } end
+    local name = s and s:match('"name"%s*:%s*"(.-)"')
+    if name then return { name = name } end -- app.activated payload {"name":...}
     return {}
 end
 local function json_encode() return "{}" end
@@ -56,9 +61,21 @@ host = {
     time = function() return 0 end,
     env = { get = function() return nil end },
     log = { info = function() end, warn = function() end, error = function(m) print("ERR " .. tostring(m)) end },
-    keys = { set_rules = function() end },
-    timer = { cancel = function() end },
-    alert = { show = function() end },
+    keys = { set_rules = function() end, stroke = function() end },
+    timer = { cancel = function() end,
+              schedule = function(spec) scheduled[#scheduled + 1] = spec end }, -- doAfter/doEvery
+    alert = { show = function(t) alerts[#alerts + 1] = t end },
+    dialog = { confirm = function(o) confirms[#confirms + 1] = o; return confirm_result end },
+    osascript = { run = function(src) osascripts[#osascripts + 1] = src
+                                       return { ok = true, output = "", error = "" } end },
+    apps = { frontmost = function() return { name = "Finder", bundleID = "com.apple.finder", pid = 1 } end,
+             launch_or_focus = function() end },
+    keyboard = {
+        current_source = function() return "com.apple.keylayout.ABC" end,
+        layouts = function() return { { id = "id.ABC", name = "ABC" },
+                                      { id = "id.BG", name = "Bulgarian-Phonetic" } } end,
+        set_source = function(id) kbd_set[#kbd_set + 1] = id; return true end,
+    },
 }
 
 -- ---- load real init.lua ----
@@ -67,6 +84,9 @@ local chunk = assert(loadfile(DIR .. "init.lua", "t", env))
 chunk()
 local hs_url_open = env.hs_url_open
 local on_launch = env.on_launch
+local hs_app_activated = env.hs_app_activated
+local hs_dispatch = env.hs_dispatch
+local hs_timer_fired = env.hs_timer_fired
 local settings_render = env.settings_render
 
 local fails = 0
@@ -212,6 +232,91 @@ row = find_row(settings_render("hammerspoon-compat", "{}"), "URL routing (hs.url
 check(row and row.subtitle and row.subtitle:find("route(s)", 1, true) ~= nil,
       "URLDispatcher: diagnostics shows route/rewriter counts")
 default_browser = "com.apple.Safari"
+FAKE_INIT = [[
+hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
+    hs.urlevent.openURLWithBundle(fullURL, "com.google.Chrome")
+end
+]]
+
+-- 9e. app.activated: hs.application.watcher.new(fn):start() fires per-app input
+--     switching via hs.keycodes.currentSourceID (the "Keyboard Pilot" init.lua idiom).
+FAKE_INIT = [[
+local bg = "com.apple.keylayout.Bulgarian-Phonetic"
+local map = { Slack = bg, Telegram = bg }
+local function upd(app) hs.keycodes.currentSourceID(map[app] or "com.apple.keylayout.ABC") end
+appWatcher = hs.application.watcher.new(function(app, event)
+    if event == hs.application.watcher.activated then upd(app) end
+end)
+appWatcher:start()
+]]
+env._HS = nil; kbd_set = {}
+on_launch(nil) -- register: records the watcher (started), fires no callback
+check(#kbd_set == 0, "no input switch at register (watcher only records)")
+hs_app_activated('{"name":"Slack"}')
+check(kbd_set[#kbd_set] == "com.apple.keylayout.Bulgarian-Phonetic", "app.activated Slack -> Bulgarian")
+hs_app_activated('{"name":"Finder"}')
+check(kbd_set[#kbd_set] == "com.apple.keylayout.ABC", "app.activated Finder -> default ABC")
+check(#kbd_set == 2, "one input switch per activation")
+
+-- 9f. disabled gate + malformed payloads don't switch input
+prefs.enabled = "false"; env._HS = nil; kbd_set = {}
+hs_app_activated('{"name":"Slack"}')
+check(#kbd_set == 0, "disabled extension switches no input source")
+prefs.enabled = "true"
+env._HS = nil; kbd_set = {}
+hs_app_activated(nil); hs_app_activated(""); hs_app_activated('{"nope":1}')
+check(#kbd_set == 0, "nil/empty/garbage app.activated payload -> no switch")
+
+-- 9g. hs.keycodes.layouts(true) -> source ids (vs names), observed via the setter
+FAKE_INIT = [[
+appWatcher = hs.application.watcher.new(function(app, event)
+    if event == hs.application.watcher.activated then
+        hs.keycodes.currentSourceID(hs.keycodes.layouts(true)[2]) -- 2nd source *id*
+    end
+end)
+appWatcher:start()
+]]
+env._HS = nil; kbd_set = {}
+on_launch(nil)
+hs_app_activated('{"name":"X"}')
+check(kbd_set[1] == "id.BG", "hs.keycodes.layouts(true) returns source ids")
+
+-- 9h. hs.dialog.blockAlert + deferred work: the Empty-Trash idiom. A hotkey shows a
+--     modal confirm; on OK it schedules an osascript via hs.timer.doAfter (NOT run
+--     synchronously). The host fires timer.fired later -> the osascript runs.
+FAKE_INIT = [[
+hs.hotkey.bind({"cmd", "shift"}, "delete", function()
+    local btn = hs.dialog.blockAlert("Empty Trash", "Sure?", "Empty Trash", "Cancel", "warning")
+    if btn == "Empty Trash" then
+        hs.alert.show("Emptying Trash...")
+        hs.timer.doAfter(0.1, function()
+            if hs.osascript.applescript('tell application "Finder" to empty trash') then
+                hs.alert.show("emptied")
+            end
+        end)
+    end
+end)
+]]
+env._HS = nil; scheduled = {}; alerts = {}; confirms = {}; osascripts = {}
+on_launch(nil)
+local trash_idx
+for i, b in ipairs(env._HS.ctx.binds) do if b.combo == "cmd+shift+delete" then trash_idx = i end end
+check(trash_idx ~= nil, "cmd+shift+delete bind recorded (keycode-based, layout-independent)")
+-- Cancel: confirm returns the cancel button -> no work scheduled
+confirm_result = false
+hs_dispatch(tostring(trash_idx))
+check(#confirms == 1, "blockAlert shows a confirm dialog")
+check(#scheduled == 0 and #osascripts == 0, "Cancel -> nothing scheduled, no osascript")
+-- OK: schedules the osascript via doAfter, does NOT run it synchronously
+confirm_result = true; scheduled = {}; alerts = {}; confirms = {}; osascripts = {}
+hs_dispatch(tostring(trash_idx))
+check(#osascripts == 0, "Empty Trash deferred (in doAfter), not run synchronously")
+check(#scheduled == 1 and scheduled[1].handler == "hs_timer_fired", "doAfter scheduled a host timer")
+-- the host fires timer.fired -> the deferred osascript runs
+hs_timer_fired('{"id":"' .. scheduled[1].id .. '"}')
+check(#osascripts == 1 and osascripts[1]:find("empty trash") ~= nil, "timer.fired runs the empty-trash osascript")
+
+-- restore the URL-routing config for the perf tests below
 FAKE_INIT = [[
 hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
     hs.urlevent.openURLWithBundle(fullURL, "com.google.Chrome")
