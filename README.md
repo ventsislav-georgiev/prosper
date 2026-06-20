@@ -205,12 +205,11 @@ With personalization on, Prosper records your **accepted** completions to a loca
 
 ## Permissions
 
-Two macOS privacy permissions, both requested on first use:
+Inline autocomplete needs one macOS privacy permission, requested when you enable the feature:
 
-- **Accessibility** — read the focused field / caret, insert accepted suggestions.
-- **Input Monitoring** — the global keystroke tap driving autocomplete.
+- **Accessibility** — drives the global keystroke tap: watch keys, read the focused field / caret, and insert accepted suggestions. The tap is an active session event tap, so Accessibility alone authorizes it — Input Monitoring (the listen-only HID grant) is not used.
 
-Grant in **System Settings → Privacy & Security**. The menu has shortcuts to both panes.
+Grant in **System Settings → Privacy & Security**. Settings → Context links straight to the pane and shows a live status check. (Screen Recording is needed only for screenshot / OCR context.)
 
 ---
 

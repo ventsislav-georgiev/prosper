@@ -24,9 +24,9 @@ open dist/Prosper.app
 
 ### Code signing & privacy grants
 
-macOS keys each privacy grant (Accessibility, Input Monitoring) to the app's **code-signing identity**, not its file path. An **ad-hoc** build (`codesign --sign -`, the default for `scripts/bundle.sh`) gets a brand-new signature on every rebuild, so an existing grant silently stops matching — the toggle stays **ON** in System Settings but the app is no longer trusted ("toggle on, still not granted"). Two fixes:
+macOS keys each privacy grant (e.g. Accessibility) to the app's **code-signing identity**, not its file path. An **ad-hoc** build (`codesign --sign -`, the default for `scripts/bundle.sh`) gets a brand-new signature on every rebuild, so an existing grant silently stops matching — the toggle stays **ON** in System Settings but the app is no longer trusted ("toggle on, still not granted"). Two fixes:
 
-- **One-off:** the onboarding screens have a **Reset & re-add Prosper** button — it runs `tccutil reset <service> com.prosper.app` and re-requests, binding a fresh grant to the current binary.
+- **One-off:** Settings → Context shows a **Reset & re-add** button on the Accessibility row when it isn't trusted — it runs `tccutil reset <service> com.prosper.app` and re-requests, binding a fresh grant to the current binary.
 - **Permanent (local dev):** sign with a **stable identity** so the grant survives rebuilds:
   ```bash
   scripts/make-signing-cert.sh        # once per machine — creates "Prosper Self-Signed"

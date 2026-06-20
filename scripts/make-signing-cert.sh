@@ -2,7 +2,7 @@
 # Create a stable self-signed code-signing identity named "Prosper Self-Signed"
 # in the login keychain. Idempotent: a no-op if the identity already exists.
 #
-# WHY: macOS keys TCC privacy grants (Accessibility / Input Monitoring) to the
+# WHY: macOS keys TCC privacy grants (e.g. Accessibility) to the
 # app's *code-signing identity*, not the per-build cdhash. Ad-hoc signing
 # ("codesign --sign -") produces a fresh signature on every rebuild, so the
 # grant silently stops matching the running binary — the toggle stays ON in
@@ -70,8 +70,8 @@ security import identity.p12 -k "$LOGIN_KEYCHAIN" -P "$P12_PWD" \
 # self-signed identity (trust is a launch/verify concern, handled the same way as
 # today: right-click → Open once for an un-notarized app). All we need is a
 # *stable* signature so the TCC designated requirement becomes cert-based instead
-# of a per-build cdhash — that is what makes Accessibility / Input Monitoring
-# grants survive rebuilds and updates.
+# of a per-build cdhash — that is what makes Accessibility grants
+# survive rebuilds and updates.
 #
 # The first build's codesign will prompt once for keychain access to the private
 # key — click "Always Allow" to silence it on later builds. (We can't pre-authorize
@@ -80,7 +80,7 @@ security import identity.p12 -k "$LOGIN_KEYCHAIN" -P "$P12_PWD" \
 if security find-identity -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
   echo "Created code-signing identity \"$IDENTITY\" in the login keychain."
   echo "Rebuild with scripts/build.sh && scripts/bundle.sh — bundle.sh auto-detects it."
-  echo "TCC grants (Accessibility / Input Monitoring) will then persist across rebuilds."
+  echo "TCC grants (e.g. Accessibility) will then persist across rebuilds."
 else
   echo "error: identity creation reported success but it is not listed. Check Keychain Access." >&2
   exit 1

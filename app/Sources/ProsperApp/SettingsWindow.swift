@@ -906,6 +906,22 @@ private struct ContextPane: View {
                         }
                         hasAccessibility = PermissionsManager.isAccessibilityTrusted()
                     }
+                // Recovery for the ad-hoc-signing "toggle on, still not trusted"
+                // trap: a rebuild's new code signature no longer matches the old
+                // grant. One-step reset + re-request binds a fresh grant to the
+                // current binary. (Formerly lived in the now-removed onboarding.)
+                if !hasAccessibility {
+                    NeonDivider()
+                    NeonRow("Enabled in System Settings but still not trusted?",
+                            subtitle: "An ad-hoc-signed rebuild changes the app's signature, so macOS's old grant stops matching. Reset and re-add in one step.") {
+                        Button("Reset & re-add") {
+                            PermissionsManager.resetPrivacyGrant(service: "Accessibility")
+                            PermissionsManager.ensureAccessibilityTrust(prompt: true)
+                            PermissionsManager.openAccessibilitySettings()
+                            hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+                        }.buttonStyle(.neon)
+                    }
+                }
                 NeonDivider()
                 PermissionStatusRow(
                     title: "Screen Recording",
