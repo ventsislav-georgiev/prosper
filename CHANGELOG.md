@@ -5,6 +5,14 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.102.0
+
+### Build
+- **Surface codesign failures in the release log.** The bundle step previously
+  hid codesign's stderr (`>/dev/null 2>&1`) and only printed a generic "codesign
+  failed" warning, so a notarization-blocking signing error gave no diagnostic. It
+  now prints codesign's actual output when a signature fails.
+
 ## v2.101.0
 
 ### Hammerspoon Compat
