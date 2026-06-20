@@ -274,28 +274,6 @@ enum KeyboardSource {
         return false
     }
 
-    /// The character the CURRENT keyboard layout produces for a virtual keycode with no
-    /// modifiers, lowercased — or nil if it can't be resolved (dead key, non-printing,
-    /// no layout data). Lets KeyInjector decide whether a synthetic ⌘/⌃ chord actually
-    /// needs its ASCII char stamped: only when the live layout is non-Latin for that key.
-    static func currentLayoutChar(forKeyCode code: UInt32) -> String? {
-        guard let src = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-              let ptr = TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData)
-        else { return nil }
-        let layoutData = Unmanaged<CFData>.fromOpaque(ptr).takeUnretainedValue() as Data
-        var deadKeyState: UInt32 = 0
-        var chars = [UniChar](repeating: 0, count: 4)
-        var length = 0
-        let status = layoutData.withUnsafeBytes { raw -> OSStatus in
-            guard let base = raw.bindMemory(to: UCKeyboardLayout.self).baseAddress else { return -1 }
-            return UCKeyTranslate(base, UInt16(code), UInt16(kUCKeyActionDown), 0,
-                                  UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
-                                  &deadKeyState, chars.count, &length, &chars)
-        }
-        guard status == noErr, length > 0 else { return nil }
-        return String(utf16CodeUnits: chars, count: length).lowercased()
-    }
-
     private static func id(of src: TISInputSource) -> String? {
         property(src, kTISPropertyInputSourceID)
     }
