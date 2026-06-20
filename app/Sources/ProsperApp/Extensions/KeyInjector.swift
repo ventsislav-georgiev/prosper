@@ -28,8 +28,18 @@ enum KeyInjector {
         // nothing happens. Stamp the ASCII char for ⌘/⌃ chords — mirroring how macOS
         // routes real command-key events through an ASCII-capable layout — so the match
         // is layout-independent. No char for arrows/F-keys/space: keycode alone is fine.
+        //
+        // BUT only when the LIVE layout is actually non-Latin for this key: stamping a
+        // unicode string on a ⌘ chord confuses Chromium/WebKit accelerator matching
+        // (Slack/Telegram/Safari stop closing on ⌘W). When the layout already produces
+        // the ASCII char, the bare keycode closes the window in every app — so skip the
+        // stamp and stay byte-identical to a real keypress.
+        // ponytail: under a non-Latin layout, Chromium/WebKit apps may still not match
+        // the stamped ⌘W — full fix needs a temporary layout switch; not worth it.
         var asciiUTF16: [UniChar]? = nil
-        if chord.cmd || chord.ctrl, let ch = KeyCombo.asciiChar(forKeyCode: UInt32(chord.keyCode)) {
+        if chord.cmd || chord.ctrl, let ch = KeyCombo.asciiChar(forKeyCode: UInt32(chord.keyCode)),
+           needsASCIIStamp(asciiChar: ch,
+                           layoutChar: KeyboardSource.currentLayoutChar(forKeyCode: UInt32(chord.keyCode))) {
             asciiUTF16 = Array((chord.shift ? ch.uppercased() : ch).utf16)
         }
         for down in [true, false] {
@@ -41,6 +51,16 @@ enum KeyInjector {
             event.setIntegerValueField(.eventSourceUserData, value: syntheticEventMagic)
             event.post(tap: .cgSessionEventTap)
         }
+    }
+
+    /// Whether a synthetic ⌘/⌃ chord needs its ASCII char stamped onto the event.
+    /// `layoutChar` is what the live layout produces for the keycode (nil if unknown).
+    /// Stamp only when the layout WON'T already yield the ASCII char (non-Latin layout):
+    /// when it matches (Latin) or is unknown, the bare keycode is correct in every app,
+    /// and stamping would break Chromium/WebKit accelerator matching.
+    nonisolated static func needsASCIIStamp(asciiChar: String, layoutChar: String?) -> Bool {
+        guard let layoutChar else { return false }
+        return layoutChar.caseInsensitiveCompare(asciiChar) != .orderedSame
     }
 
     /// Post a system-defined (media) key by name: PLAY, NEXT, PREVIOUS, FAST, REWIND,
