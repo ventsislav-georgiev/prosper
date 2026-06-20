@@ -139,7 +139,7 @@ local function snip_fields(name, keyword, collection, auto, rich, text)
         { id = "name", label = "Name", kind = "text", value = name, placeholder = "My address" },
         { id = "keyword", label = "Keyword", kind = "text", value = keyword, placeholder = ";;addr" },
         { id = "collection", label = "Collection", kind = "text", value = collection },
-        { id = "autoExpand", label = "Auto-expand", kind = "toggle", value = b2s(auto) },
+        { id = "autoExpand", label = "Include in system-wide auto-expand", kind = "toggle", value = b2s(auto) },
         { id = "richText", label = "Rich text (RTF)", kind = "toggle", value = b2s(rich) },
         -- RTF editor when richText is on, multi-line plain otherwise (toggleKey).
         { id = "text", label = "Snippet", kind = "richtext", toggleKey = "richText",
@@ -237,9 +237,24 @@ function settings_render(section_id, state)
                  addLabel = "Add ignored app", emptyText = "None." } },
     }
 
+    -- Inline auto-expansion rides the native active key tap (same as completions),
+    -- which Accessibility authorizes for both watching keystrokes and typing the
+    -- expansion in place. Shown here even if granted elsewhere, so a user whose
+    -- snippets won't expand finds the fix in this extension's own settings.
+    local permissions = s.section{
+        id = "permissions", title = "Permissions",
+        footer = "Auto-expansion watches your typing and types the snippet in place. "
+            .. "If snippets don't expand, make sure Accessibility is enabled.",
+        rows = {
+            s.row{ kind = "permission", name = "accessibility",
+                title = "Accessibility",
+                subtitle = "Required to detect snippet keywords and type the expansion into the focused app." },
+        },
+    }
+
     return s.render(s.ui{
         title = "Snippets", subtitle = "Reusable text with dynamic placeholders",
-        sections = { expansion, library, collections, ignored },
+        sections = { permissions, expansion, library, collections, ignored },
     })
 end
 

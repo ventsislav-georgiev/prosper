@@ -79,3 +79,25 @@ function window_move(query)
     host.window.set(round(x), round(y), round(w), round(h))
     return "Snapped: " .. key
 end
+
+-- Snapping moves the focused window through the AX API, so it needs Accessibility.
+-- Surfaced here even if granted elsewhere, so a user whose `win` command does
+-- nothing finds the fix in this extension's own settings.
+function settings_render(section_id, state)
+    local s = host.ui.settings
+    local permissions = s.section{
+        id = "permissions", title = "Permissions",
+        footer = "Window snapping moves the focused window for you. If `win` does "
+            .. "nothing, make sure Accessibility is enabled.",
+        rows = {
+            s.row{ kind = "permission", name = "accessibility",
+                title = "Accessibility",
+                subtitle = "Required to move and resize the focused window." },
+        },
+    }
+    return s.render(s.ui{
+        title = "Window Management",
+        subtitle = "Snap the focused window: halves, quarters, thirds, maximize, center",
+        sections = { permissions },
+    })
+end
