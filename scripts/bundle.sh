@@ -295,8 +295,10 @@ PLIST
   # the known-good path for this bundle; do not "fix" it to inside-out without
   # reproducing against a real release-config build + the Sparkle generate_appcast
   # validator. See memory: prosper-release-flow.
-  codesign "${SIGN_FLAGS[@]}" --deep --entitlements "$BASE_ENT" "$APP" >/dev/null 2>&1 || \
-    echo "warn: codesign failed — bundle is not validly signed." >&2
+  if ! codesign "${SIGN_FLAGS[@]}" --deep --entitlements "$BASE_ENT" "$APP" >/tmp/prosper-cs.log 2>&1; then
+    echo "warn: codesign failed — bundle is not validly signed. codesign output:" >&2
+    sed 's/^/  codesign(deep): /' /tmp/prosper-cs.log >&2
+  fi
   rm -f "$BASE_ENT"
 
   if [[ -f "$PROFILE_SRC" ]]; then
@@ -309,8 +311,10 @@ PLIST
     # real Team ID.
     APP_ENT="$(mktemp -t prosper-app-ent).plist"
     sed "s/__TEAM_ID__/$TEAM_ID/g" "$ROOT/scripts/Prosper.entitlements" > "$APP_ENT"
-    codesign "${SIGN_FLAGS[@]}" --entitlements "$APP_ENT" "$APP" >/dev/null 2>&1 || \
-      echo "warn: codesign (keychain entitlement) failed — iCloud-Keychain sync disabled." >&2
+    if ! codesign "${SIGN_FLAGS[@]}" --entitlements "$APP_ENT" "$APP" >/tmp/prosper-cs-kc.log 2>&1; then
+      echo "warn: codesign (keychain entitlement) failed — iCloud-Keychain sync disabled. codesign output:" >&2
+      sed 's/^/  codesign(keychain): /' /tmp/prosper-cs-kc.log >&2
+    fi
     rm -f "$APP_ENT"
     echo "Entitlements: hardened runtime + keychain-access-groups ($TEAM_ID.eu.illegible.prosper) on the app executable — iCloud-Keychain sync enabled; nested helpers profile-free."
   else
