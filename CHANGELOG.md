@@ -7,6 +7,16 @@ below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
 ## v2.96.0
 
+### Fixes
+- **Auto-update now installs.** Updates were downloaded but failed at the install
+  step with "An error occurred while running the updater." The signing pass stamped
+  the restricted `keychain-access-groups` entitlement onto *every* nested binary,
+  including Sparkle's `Autoupdate` helper — a bare executable that can't carry the
+  provisioning profile that entitlement requires, so macOS (AMFI) killed it on
+  launch and the updater's helper process never came up. Signing now applies that
+  entitlement to the main app executable only; the nested helpers stay
+  profile-free and launchable.
+
 ### OpenLid
 - **Keep awake with the lid closed now works out of the box — no `sudoers` edit.**
   The clamshell-sleep override (`pmset disablesleep`) needs root, which previously
@@ -17,6 +27,33 @@ below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
   resets the override automatically if the app quits or crashes, so the lid is
   never left wedged awake. Nothing is installed unless you use the feature — if
   the OpenLid extension is disabled, no background item is ever created.
+- **Background Helper approval is now an inline settings row.** The one-time
+  Login Items approval shows as a native permission row in the OpenLid section
+  (only while the override is active), instead of an alert.
+- **The lid is no longer left wedged awake if the helper is force-killed.** A
+  daemon kill (force-quit, OOM) used to leave `disablesleep` on with nothing to
+  reset it. The daemon now clears any stale override at cold start; a client that
+  still wants it reconnects and re-applies.
+
+### Permissions & Settings
+- **First-run onboarding removed; Input Monitoring no longer requested.** Inline
+  autocomplete and the coding agent are off by default, so first launch needs no
+  permissions or model. The keystroke tap was always gated on Accessibility alone,
+  so the Input Monitoring grant was redundant — it's gone everywhere. Enabling
+  autocomplete without Accessibility now shows a tappable warning in General
+  settings that deep-links to the grant.
+- **Restored the "Reset & re-add Prosper" Accessibility recovery button.** It now
+  lives on the Context pane's Accessibility row (shown only when not trusted) and
+  fixes the "toggle is ON in System Settings but the app isn't trusted" trap.
+- **"Re-run Setup…" is gated on the selected model, not Accessibility.** It runs
+  the model download, so it now appears whenever the chosen completion model is
+  missing — and won't pointlessly re-download when the model is already present.
+- **Per-extension permission grants are surfaced in each extension's settings.**
+  Snippets and window extensions list their Accessibility requirement in their own
+  page, so a dead `win`/snippet expansion is debuggable from there.
+- **Sync transparency.** Extension settings (`ext.*`) now sync (with machine-local
+  state like timers excluded), and the Sync pane has a new "What's synced" section
+  listing exactly which categories propagate.
 
 ## v2.95.0
 
