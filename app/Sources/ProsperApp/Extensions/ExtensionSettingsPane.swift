@@ -303,7 +303,7 @@ private struct PermissionRow: View {
     private var granted: Bool { PermissionsManager.isGranted(name) }
     var body: some View {
         NeonRow(row.title ?? PermissionsManager.label(forPermission: name),
-                subtitle: row.subtitle ?? (granted ? "Granted" : "Required — grant in System Settings")) {
+                subtitle: row.subtitle ?? PermissionsManager.reason(forPermission: name)) {
             HStack(spacing: 10) {
                 Label(granted ? "Granted" : "Not granted",
                       systemImage: granted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
