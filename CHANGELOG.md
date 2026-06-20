@@ -5,6 +5,22 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.94.0
+
+### Browser
+- **Route links to a browser by domain.** Make Prosper your default browser and
+  every clicked link is sent to the browser you choose per domain — set it up in
+  **Settings → URL Dispatcher** (make-default button, fallback browser, and a
+  domain → browser rule list). Nothing is hardcoded; rules live in your config.
+- The **Hammerspoon facade** now runs an existing `hs.urlevent.httpCallback`
+  (Finicky-style) URL-routing config unmodified.
+
+### Fixes
+- URL routing **never actually fired** before: the `url.open` event payload arrives
+  as a JSON string, and the handler read it as an object, so every link silently
+  fell through. Decoded correctly now, with a loop guard so a link is never bounced
+  back to Prosper (the new default) forever.
+
 ## v2.93.0
 
 ### Fixes
