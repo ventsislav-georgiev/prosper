@@ -111,7 +111,7 @@ if [[ ! -f "$METALLIB" ]]; then
 fi
 
 # Code-signing identity. A STABLE identity (self-signed cert or Developer ID)
-# makes macOS keep TCC grants (Accessibility / Input Monitoring) across rebuilds:
+# makes macOS keep TCC grants (e.g. Accessibility) across rebuilds:
 # the grant is keyed to the signing identity, not the per-build cdhash that
 # ad-hoc signing ("-") produces — which is why ad-hoc builds lose the grant on
 # every rebuild (the toggle stays ON in System Settings but no longer matches the
@@ -252,15 +252,22 @@ if [[ "$NOTARIZE" == 1 ]]; then
   # still notarize, just with a hardened-runtime-only entitlement set — the
   # iCloud-Keychain sync key (SyncKeyStore) then stays on the LOCAL device key.
   PROFILE_SRC="$ROOT/scripts/embedded.provisionprofile"
-  ENT="$(mktemp -t prosper-ent).plist"
   if [[ -f "$PROFILE_SRC" ]]; then
     cp "$PROFILE_SRC" "$APP/Contents/embedded.provisionprofile"
-    # Full entitlements incl. keychain-access-groups; stamp the real Team ID.
-    sed "s/__TEAM_ID__/$TEAM_ID/g" "$ROOT/scripts/Prosper.entitlements" > "$ENT"
-    echo "Entitlements: hardened runtime + keychain-access-groups ($TEAM_ID.eu.illegible.prosper) — iCloud-Keychain sync enabled."
-  else
-    # Hardened-runtime-only: notarizes cleanly, no restricted entitlement.
-    cat > "$ENT" <<'PLIST'
+  fi
+
+  # The --deep seal applies its --entitlements to EVERY nested binary it signs, so
+  # it must NEVER carry keychain-access-groups. That entitlement is restricted:
+  # AMFI only honors it when an embedded provisioning profile authorizes it, and a
+  # profile can live only in a bundle's Contents — never on a bare Mach-O helper.
+  # Sparkle's Autoupdate is exactly such a bare helper; stamp keychain-access-groups
+  # onto it and AMFI kills its exec with -413 "No matching profile found", which
+  # silently breaks auto-update (the updater's XPC service never registers, so the
+  # app shows "An error occurred while running the updater"). The --deep pass
+  # therefore uses a profile-free, hardened-runtime-only entitlement set;
+  # keychain-access-groups is added afterward to the top-level app executable alone.
+  BASE_ENT="$(mktemp -t prosper-base-ent).plist"
+  cat > "$BASE_ENT" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -270,12 +277,10 @@ if [[ "$NOTARIZE" == 1 ]]; then
 </dict>
 </plist>
 PLIST
-    echo "Entitlements: hardened runtime only (no scripts/embedded.provisionprofile — iCloud-Keychain sync stays on the device key)."
-  fi
-  # Seal the whole app with --deep + entitlements. --deep is REQUIRED here, not
-  # optional: it propagates SIGN_FLAGS (incl. --options runtime --timestamp) to
-  # every nested item — Sparkle.framework, Helpers/bun, and the plain
-  # Helpers/plugin-host.js script (Helpers is a codesign "nested code" dir, so
+  # Seal the whole app with --deep + the profile-free entitlements. --deep is
+  # REQUIRED here, not optional: it propagates SIGN_FLAGS (incl. --options runtime
+  # --timestamp) to every nested item — Sparkle.framework, Helpers/bun, and the
+  # plain Helpers/plugin-host.js script (Helpers is a codesign "nested code" dir, so
   # an unsigned file there fails the seal: "code object is not signed at all").
   # Apple discourages --deep for notarization, BUT an earlier attempt to replace
   # it with inside-out signing broke CI's generate_appcast with
@@ -284,9 +289,27 @@ PLIST
   # the known-good path for this bundle; do not "fix" it to inside-out without
   # reproducing against a real release-config build + the Sparkle generate_appcast
   # validator. See memory: prosper-release-flow.
-  codesign "${SIGN_FLAGS[@]}" --deep --entitlements "$ENT" "$APP" >/dev/null 2>&1 || \
+  codesign "${SIGN_FLAGS[@]}" --deep --entitlements "$BASE_ENT" "$APP" >/dev/null 2>&1 || \
     echo "warn: codesign failed — bundle is not validly signed." >&2
-  rm -f "$ENT"
+  rm -f "$BASE_ENT"
+
+  if [[ -f "$PROFILE_SRC" ]]; then
+    # Authorize keychain-access-groups on the MAIN executable only: re-sign the
+    # top-level bundle WITHOUT --deep, so nested helpers keep the profile-free
+    # signature from the pass above (Autoupdate stays launchable). This reseal
+    # recomputes CodeResources over the already-signed nested code — it does not
+    # re-sign it — and seals Contents/embedded.provisionprofile that authorizes
+    # the entitlement. Full entitlements incl. keychain-access-groups; stamp the
+    # real Team ID.
+    APP_ENT="$(mktemp -t prosper-app-ent).plist"
+    sed "s/__TEAM_ID__/$TEAM_ID/g" "$ROOT/scripts/Prosper.entitlements" > "$APP_ENT"
+    codesign "${SIGN_FLAGS[@]}" --entitlements "$APP_ENT" "$APP" >/dev/null 2>&1 || \
+      echo "warn: codesign (keychain entitlement) failed — iCloud-Keychain sync disabled." >&2
+    rm -f "$APP_ENT"
+    echo "Entitlements: hardened runtime + keychain-access-groups ($TEAM_ID.eu.illegible.prosper) on the app executable — iCloud-Keychain sync enabled; nested helpers profile-free."
+  else
+    echo "Entitlements: hardened runtime only (no scripts/embedded.provisionprofile — iCloud-Keychain sync stays on the device key)."
+  fi
   echo "Signed for notarization. Next: scripts/notarize.sh   (submits + staples)."
 else
   # --- Self-signed / ad-hoc path (unchanged) ----------------------------------
