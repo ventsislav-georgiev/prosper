@@ -10,6 +10,10 @@ struct ExtensionSettingsPane: View {
     @ObservedObject var registry: ExtensionRegistry
     let record: ExtensionRecord
     let section: SettingsSection
+    /// Optional native section rendered at the top of the pane (before the extension's
+    /// own sections). Used to surface the shared AI Model picker inside the Translate
+    /// extension's settings — see SettingsRootView.content.
+    var header: AnyView? = nil
 
     @State private var ui: SettingsUI?
     @State private var busy = false
@@ -20,11 +24,12 @@ struct ExtensionSettingsPane: View {
         Group {
             if let ui {
                 SettingsUIView(ui: ui, section: section, busy: busy,
-                               permissionTick: permissionTick, onEvent: handle)
+                               permissionTick: permissionTick, header: header, onEvent: handle)
             } else {
                 NeonScroll {
                     PaneTitle(title: section.title, accent: section.accent,
                               subtitle: section.subtitle ?? "")
+                    if let header { header }
                     ProgressView().controlSize(.small)
                 }
             }
@@ -112,12 +117,14 @@ struct SettingsUIView: View {
     let section: SettingsSection
     let busy: Bool
     let permissionTick: Int
+    var header: AnyView? = nil
     let onEvent: (SettingsEvent) -> Void
 
     var body: some View {
         NeonScroll {
             PaneTitle(title: ui.title ?? section.title, accent: section.accent,
                       subtitle: ui.subtitle ?? section.subtitle ?? "")
+            if let header { header }
             ForEach(ui.sections) { sec in
                 NeonSection(sec.title, accent: sec.accent, footer: sec.footer) {
                     // Index, not row.id: info rows with no id/key/actionID all decode

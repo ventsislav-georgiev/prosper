@@ -228,8 +228,23 @@ enum Preferences {
 
     /// Every picker-offered model, smallest→largest. Drives the AI Model picker and
     /// the revert-target search.
+    ///
+    /// The full-size 12B/26B QAT checkpoints are deliberately EXCLUDED: the vendored
+    /// mlx-swift-lm fork has no loader for them. The 12B dense ships `model_type:
+    /// gemma4_unified` (Gemma4UnifiedForConditionalGeneration) which is not registered
+    /// in LLMModelFactory, and the 26B-A4B is a 128-expert MoE whose weights don't map
+    /// onto the dense `Gemma4Model`. Both fail at load. Re-add them here (and to the
+    /// picker `models` array) only once those architectures are ported AND verified to
+    /// load — see `unsupportedModelIds`.
     static let selectableModelIds: [String] = [
         qatE2B4Id, qatE2B6Id, qatE2B8Id, qatE4B4Id, qatE4B6Id, qatE4B8Id,
+    ]
+
+    /// Checkpoints that exist on Hugging Face and have id constants above, but cannot
+    /// be loaded by the current fork (see `selectableModelIds`). `coreModel` rewrites a
+    /// stored value from this set back to `recommendedModelId` so a user who selected
+    /// one before it was pulled from the picker isn't stuck on a model that never loads.
+    static let unsupportedModelIds: Set<String> = [
         qat12B4Id, qat12B6Id, qat12B8Id, qat26B4Id, qat26B6Id, qat26B8Id,
     ]
 
@@ -327,7 +342,11 @@ enum Preferences {
 
     /// Hugging Face MLX model id used by MLXEngine. Defaults to `defaultModelId`.
     static var coreModel: String {
-        get { defaults.string(forKey: Keys.coreModel) ?? recommendedModelId }
+        get {
+            let id = defaults.string(forKey: Keys.coreModel) ?? recommendedModelId
+            // Self-heal a selection that the current fork can't load (the pulled 12B/26B).
+            return unsupportedModelIds.contains(id) ? recommendedModelId : id
+        }
         set { defaults.set(newValue, forKey: Keys.coreModel) }
     }
 

@@ -474,7 +474,12 @@ private struct SettingsRootView: View {
         let sectionID = String(body[body.index(after: sep)...])
         guard let (record, section) = registry.settingsSection(extensionID: extID, sectionID: sectionID)
         else { return nil }
-        return ExtensionSettingsPane(registry: registry, record: record, section: section)
+        // Translate uses the same local model as inline completions; surface the shared
+        // AI Model picker at the top of its settings so the model is changeable even
+        // when inline autocomplete is off (its Completions tab is then hidden).
+        let header: AnyView? = extID == "com.prosper.translate"
+            ? AnyView(AIModelSection(model: model)) : nil
+        return ExtensionSettingsPane(registry: registry, record: record, section: section, header: header)
     }
 
     var body: some View {
@@ -716,6 +721,55 @@ private struct PermissionWarningRow: View {
     }
 }
 
+// MARK: - AI Model (shared)
+
+/// The AI Model picker, selecting the local `coreModel` used by BOTH inline
+/// completions and the Translate extension. Writing `model.coreModel` drives the live
+/// model switch (download-if-needed + reload) via `onModelChanged`. Reused in the
+/// Completions pane and prepended to the Translate settings pane, so the model stays
+/// changeable even when inline autocomplete is off (and its tab hidden).
+struct AIModelSection: View {
+    @ObservedObject var model: SettingsModel
+
+    /// Picker-offered models, smallest→largest. The full-size 12B/26B QAT checkpoints
+    /// are NOT offered: the vendored mlx-swift-lm fork has no loader for them (12B =
+    /// unregistered model_type `gemma4_unified`; 26B-A4B = 128-expert MoE that doesn't
+    /// map onto the dense Gemma4Model). See Preferences.unsupportedModelIds — re-add
+    /// here only once the architectures are ported AND verified to load.
+    static let models: [(String, String)] = [
+        (Preferences.qatE2B4Id, "Gemma 4 E2B (QAT 4-bit, ~4.3 GB) — fastest, lightest"),
+        (Preferences.qatE2B6Id, "Gemma 4 E2B (QAT 6-bit, ~5.1 GB) — sharper E2B, more RAM"),
+        (Preferences.qatE2B8Id, "Gemma 4 E2B (QAT 8-bit, ~5.9 GB) — sharpest E2B, most RAM"),
+        (Preferences.qatE4B4Id, "Gemma 4 E4B (QAT 4-bit, ~6.8 GB) — larger base, smarter"),
+        (Preferences.qatE4B6Id, "Gemma 4 E4B (QAT 6-bit, ~7.8 GB) — larger base, sharper"),
+        (Preferences.qatE4B8Id, "Gemma 4 E4B (QAT 8-bit, ~8.9 GB) — recommended (smartest, most RAM)"),
+    ]
+
+    /// Prepends a "None" row whenever no model is selected (e.g. after cancelling the
+    /// first download) so the empty `coreModel` tag has a match — without it SwiftUI
+    /// shows a blank selection.
+    private var modelOptions: [(String, String)] {
+        guard model.coreModel.isEmpty else { return Self.models }
+        return [("", "None — no model downloaded (inline completions off)")] + Self.models
+    }
+
+    var body: some View {
+        NeonSection("AI Model", footer: "Switching downloads the model if needed, then reloads it — no restart required.") {
+            Picker("Model", selection: $model.coreModel) {
+                ForEach(modelOptions, id: \.0) {
+                    Text(ModelFiles.pickerLabel(for: $0.0, base: $0.1)).tag($0.0)
+                }
+            }
+            NeonDivider()
+            HStack {
+                Spacer()
+                Button("Reveal Model Files in Finder") { ModelFiles.reveal() }
+                    .buttonStyle(.neon)
+            }
+        }
+    }
+}
+
 // MARK: - Completions
 
 private struct CompletionsPane: View {
@@ -728,29 +782,6 @@ private struct CompletionsPane: View {
         ("Accept single word", "Tab \u{00B7} \u{2325}\u{2192}"),
         ("Dismiss suggestion", "Esc"),
     ]
-
-    private let models = [
-        (Preferences.qatE2B4Id, "Gemma 4 E2B (QAT 4-bit, ~4.3 GB) — fastest, lightest"),
-        (Preferences.qatE2B6Id, "Gemma 4 E2B (QAT 6-bit, ~5.1 GB) — sharper E2B, more RAM"),
-        (Preferences.qatE2B8Id, "Gemma 4 E2B (QAT 8-bit, ~5.9 GB) — sharpest E2B, most RAM"),
-        (Preferences.qatE4B4Id, "Gemma 4 E4B (QAT 4-bit, ~6.8 GB) — larger base, smarter"),
-        (Preferences.qatE4B6Id, "Gemma 4 E4B (QAT 6-bit, ~7.8 GB) — larger base, sharper"),
-        (Preferences.qatE4B8Id, "Gemma 4 E4B (QAT 8-bit, ~8.9 GB) — recommended (smartest, most RAM)"),
-        (Preferences.qat26B4Id, "Gemma 4 26B-A4B MoE (QAT 4-bit, ~14 GB) — 4B active, sharp & fast"),
-        (Preferences.qat26B6Id, "Gemma 4 26B-A4B MoE (QAT 6-bit, ~20 GB) — 4B active, sharper"),
-        (Preferences.qat26B8Id, "Gemma 4 26B-A4B MoE (QAT 8-bit, ~27 GB) — 4B active, sharpest"),
-        (Preferences.qat12B4Id, "Gemma 4 12B dense (QAT 4-bit, ~6.7 GB) — smarter, slower hot-path"),
-        (Preferences.qat12B6Id, "Gemma 4 12B dense (QAT 6-bit, ~9.6 GB) — sharper, slower hot-path"),
-        (Preferences.qat12B8Id, "Gemma 4 12B dense (QAT 8-bit, ~12.6 GB) — sharpest, slowest hot-path"),
-    ]
-
-    /// Picker rows. Prepends a "None" row whenever no model is selected (e.g. after
-    /// cancelling the first download) so the empty `coreModel` tag has a match —
-    /// without it SwiftUI shows a blank selection.
-    private var modelOptions: [(String, String)] {
-        guard model.coreModel.isEmpty else { return models }
-        return [("", "None — no model downloaded (inline completions off)")] + models
-    }
 
     var body: some View {
         NeonScroll {
@@ -770,19 +801,7 @@ private struct CompletionsPane: View {
                     .disabled(!model.autocompleteEnabled)
             }
 
-            NeonSection("AI Model", footer: "Switching downloads the model if needed, then reloads it — no restart required.") {
-                Picker("Model", selection: $model.coreModel) {
-                    ForEach(modelOptions, id: \.0) {
-                        Text(ModelFiles.pickerLabel(for: $0.0, base: $0.1)).tag($0.0)
-                    }
-                }
-                NeonDivider()
-                HStack {
-                    Spacer()
-                    Button("Reveal Model Files in Finder") { ModelFiles.reveal() }
-                        .buttonStyle(.neon)
-                }
-            }
+            AIModelSection(model: model)
 
             NeonSection("Length") {
                 VStack(alignment: .leading, spacing: 8) {
