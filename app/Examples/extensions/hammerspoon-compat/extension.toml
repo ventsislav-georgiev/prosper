@@ -45,7 +45,7 @@ id          = "eu.illegible.prosper.hammerspoon"
 name        = "hammerspoon-compat"
 title       = "Hammerspoon Compat"
 description = "Load your existing ~/.hammerspoon/init.lua by shimming hs.* onto Prosper's host.* automation surface. Disabled by default. Requires Trust to run; trusted grants the automation tier (hotkeys/apps/osascript/caffeinate/UI/file-read) but NOT shell, the coding-agent, or destructive file ops. Raw hs.eventtap.new keyDown/systemDefined taps run via a lazy resident VM (built only if your config starts one)."
-version     = "1.5.2"
+version     = "1.5.3"
 author      = "ventsislav.georgiev"
 license     = "MIT"
 icon        = "hammer.fill"
@@ -87,6 +87,13 @@ handler = "hs_timer_fired"
 [[contributes.events]]
 event   = "url.open"
 handler = "hs_url_open"
+
+# App activation: each frontmost-app change arrives as app.activated (payload
+# {bundleID, name, pid}) and fires the config's hs.application.watcher callbacks.
+# No-op unless init.lua creates a watcher. Common use: per-app keyboard input source.
+[[contributes.events]]
+event   = "app.activated"
+handler = "hs_app_activated"
 
 # Single settings section, DYNAMIC: the enable toggle's flip is delivered to
 # settings_action so it can install/teardown rules live (a static section would

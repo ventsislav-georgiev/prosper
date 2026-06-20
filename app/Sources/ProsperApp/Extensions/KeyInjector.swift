@@ -22,9 +22,22 @@ enum KeyInjector {
         if chord.ctrl { flags.insert(.maskControl) }
         if chord.shift { flags.insert(.maskShift) }
         let key = CGKeyCode(chord.keyCode)
+        // Menu key-equivalents (⌘W = Close, …) match on the event's characters, NOT
+        // its keycode. Under a non-Latin layout a synthetic keycode event carries the
+        // layout's char (⌘W → "в" under Bulgarian) and the menu item never matches, so
+        // nothing happens. Stamp the ASCII char for ⌘/⌃ chords — mirroring how macOS
+        // routes real command-key events through an ASCII-capable layout — so the match
+        // is layout-independent. No char for arrows/F-keys/space: keycode alone is fine.
+        var asciiUTF16: [UniChar]? = nil
+        if chord.cmd || chord.ctrl, let ch = KeyCombo.asciiChar(forKeyCode: UInt32(chord.keyCode)) {
+            asciiUTF16 = Array((chord.shift ? ch.uppercased() : ch).utf16)
+        }
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else { continue }
             event.flags = flags
+            if down, let chars = asciiUTF16 {
+                event.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: chars)
+            }
             event.setIntegerValueField(.eventSourceUserData, value: syntheticEventMagic)
             event.post(tap: .cgSessionEventTap)
         }
