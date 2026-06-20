@@ -483,10 +483,14 @@ function settings_render(section_id, state)
     -- row reports that grant live + offers an Open button — same pattern as the
     -- Accessibility/Input-Monitoring rows. Only shown when the lid-closed feature
     -- is actually engaged (on now, or armed at launch), so it's silent otherwise.
+    local permissions = nil
     if st.active or c.macAwakeMode == "on" or c.macAwakeMode == "power" then
-        now_rows[#now_rows + 1] = s.row{
-            kind = "permission", name = "lid-helper",
-            title = "Background helper (keep awake with lid closed)",
+        permissions = s.section{
+            id = "permissions", title = "Permissions",
+            rows = { s.row{
+                kind = "permission", name = "lid-helper",
+                title = "Background helper (keep awake with lid closed)",
+            } },
         }
     end
     local now = s.section{
@@ -537,9 +541,15 @@ function settings_render(section_id, state)
                    placeholder = "dch -ls" },
         },
     }
+    local sections = {}
+    if permissions then sections[#sections + 1] = permissions end
+    sections[#sections + 1] = now
+    sections[#sections + 1] = general
+    sections[#sections + 1] = safeguards
+    sections[#sections + 1] = busy
     return s.render(s.ui{
         title = "OpenLid", subtitle = "Keep your Mac awake with the lid closed",
-        sections = { now, general, safeguards, busy },
+        sections = sections,
     })
 end
 

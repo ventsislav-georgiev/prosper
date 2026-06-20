@@ -5,6 +5,15 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.99.0
+
+### Extensions
+- **Permission UI consistency, part 2.** Two more extensions now follow the same
+  rule — a **"Permissions"** group at the **top** of the settings page. OpenLid's
+  Background Helper (Login Items) approval moved out of the "Right now" section into
+  its own Permissions group at the top, and Hammerspoon Compat's required
+  Accessibility row moved out of the main section into a Permissions group above it.
+
 ## v2.98.0
 
 ### Extensions

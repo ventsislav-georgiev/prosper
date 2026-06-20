@@ -918,6 +918,23 @@ function settings_render(section_id, _state)
         title = "Hammerspoon",
         subtitle = "Run your ~/.hammerspoon/init.lua through Prosper",
         sections = {
+            -- HARD requirement: every shortcut this extension installs rides
+            -- Prosper's CGEvent keystroke tap, and macOS refuses to start that
+            -- tap without Accessibility. Carbon-based app shortcuts work without
+            -- it, which is why those keep firing while hotkeys/remaps/eventtaps/
+            -- media keys stay dead. This row shows the live grant state + a
+            -- one-click "Open" into System Settings and a "Re-check".
+            host.ui.settings.section {
+                id = section_id .. ".perms", title = "Permissions", accent = "hammer.fill",
+                rows = {
+                    host.ui.settings.row {
+                        kind = "permission", name = "accessibility",
+                        title = "Accessibility (required)",
+                        subtitle = "Hotkeys, key remaps, raw eventtaps and media keys do "
+                            .. "NOT fire without this. Grant it, then Re-check.",
+                    },
+                },
+            },
             host.ui.settings.section {
                 id = section_id, title = "Hammerspoon", accent = "hammer.fill",
                 footer = "Loads ~/.hammerspoon/init.lua and maps hs.* hotkeys + APIs onto "
@@ -929,18 +946,6 @@ function settings_render(section_id, _state)
                         title = "Load ~/.hammerspoon/init.lua",
                         subtitle = "When off, this extension does nothing at all",
                         value = is_enabled() and "true" or "false",
-                    },
-                    -- HARD requirement: every shortcut this extension installs rides
-                    -- Prosper's CGEvent keystroke tap, and macOS refuses to start that
-                    -- tap without Accessibility. Carbon-based app shortcuts work without
-                    -- it, which is why those keep firing while hotkeys/remaps/eventtaps/
-                    -- media keys stay dead. This row shows the live grant state + a
-                    -- one-click "Open" into System Settings and a "Re-check".
-                    host.ui.settings.row {
-                        kind = "permission", name = "accessibility",
-                        title = "Accessibility (required)",
-                        subtitle = "Hotkeys, key remaps, raw eventtaps and media keys do "
-                            .. "NOT fire without this. Grant it, then Re-check.",
                     },
                     host.ui.settings.row {
                         kind = "info", title = "Config path",
