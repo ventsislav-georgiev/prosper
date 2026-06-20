@@ -515,8 +515,10 @@ private struct ActionBar: View {
 /// `performClose` honors `isReleasedWhenClosed = false`, so the window is reused.
 private final class ExtensionWindow: NSWindow {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Match ⌘W by keycode (kVK_ANSI_W = 13), layout-independent: under a non-Latin
+        // layout charactersIgnoringModifiers is the layout glyph, not "w".
         if event.modifierFlags.contains(.command),
-           event.charactersIgnoringModifiers?.lowercased() == "w" {
+           event.keyCode == 13 || event.charactersIgnoringModifiers?.lowercased() == "w" {
             performClose(nil)
             return true
         }
