@@ -18,7 +18,7 @@ import os
 /// the lid wedged awake.
 @MainActor
 enum LidSleepHelper {
-    private static let log = Logger(subsystem: "eu.illegible.prosper", category: "lidhelper")
+    nonisolated private static let log = Logger(subsystem: "eu.illegible.prosper", category: "lidhelper")
     private static var connection: NSXPCConnection?
 
     // nonisolated: stateless (a fresh SMAppService each call, touches no shared
@@ -80,7 +80,15 @@ enum LidSleepHelper {
             guard ensureRegistered() else { return false }
             let c = connection ?? makeConnection()
             connection = c
-            return await call(c, on: true)
+            let ok = await call(c, on: true)
+            if !ok {
+                // XPC error: the connection may be dead. Drop it so the next
+                // attempt builds a fresh one instead of reusing a corpse (the
+                // invalidation handler may not have fired yet).
+                c.invalidate()
+                if connection === c { connection = nil }
+            }
+            return ok
         } else {
             guard let c = connection else { return true } // already off
             let ok = await call(c, on: false)

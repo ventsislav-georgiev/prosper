@@ -18,13 +18,17 @@ private let clientRequirement =
     "identifier \"eu.illegible.prosper\" and anchor apple generic and "
     + "certificate leaf[subject.OU] = \"V5XV3994L8\""
 
+// Idle window: launchd relaunches us on the next message, so exiting frees ALL
+// memory at zero cost. 10s is long enough to coalesce a quick toggle-off/on.
+private let idleExitSeconds = 10
+
 final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate {
     // Single serial queue guards all mutable state — XPC delivers connection
-    // events + method calls on arbitrary queues.
+    // events + method calls on arbitrary queues, and the idle timer runs here too,
+    // so every `core` call is serialized without the core needing its own lock.
     private let q = DispatchQueue(label: "\(lidHelperLabel).state")
-    private var connections = 0
-    private var disabled = false              // is the override currently on?
     private var idleTimer: DispatchSourceTimer?
+    private let core = LidHelperCore(apply: LidHelper.applyPmset, onIdle: { exit(0) })
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
         // The OS invalidates the connection automatically if the peer fails this
@@ -35,7 +39,7 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate {
         conn.invalidationHandler = { [weak self] in self?.connectionClosed() }
         conn.interruptionHandler  = { [weak self] in self?.connectionClosed() }
         q.sync {
-            connections += 1
+            core.connectionOpened()
             cancelIdleExit_locked()
         }
         conn.resume()
@@ -43,32 +47,26 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate {
     }
 
     private func connectionClosed() {
-        q.async {
-            self.connections = max(0, self.connections - 1)
-            if self.connections == 0 {
-                // App quit or crashed — NEVER leave the lid override wedged on.
-                if self.disabled {
-                    self.applyPmset(false)
-                    self.disabled = false
-                }
-                self.armIdleExit_locked()
-            }
-        }
+        // App quit or crashed — core resets the override here so the lid is NEVER
+        // left wedged awake; arm the idle exit once no client remains.
+        q.async { if self.core.connectionClosed() { self.armIdleExit_locked() } }
     }
 
     func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) {
-        q.async {
-            let ok = self.applyPmset(on)
-            if ok { self.disabled = on }
-            reply(ok)
-        }
+        q.async { reply(self.core.setOverride(on)) }
+    }
+
+    /// Arm the idle exit immediately at startup so a daemon that launchd spins up
+    /// for a connection that never completes the code-sign handshake still exits
+    /// instead of lingering with zero clients.
+    func armIdleAtStartup() {
+        q.async { self.armIdleExit_locked() }
     }
 
     // pmset is a one-shot toggle (not a hot path); shelling it matches openlid and
     // is trivially correct. Runs as root here, so no sudo. // ponytail: pmset over
     // raw IOKit IOPMSetSystemPowerSetting — switch only if spawn cost ever matters.
-    @discardableResult
-    private func applyPmset(_ on: Bool) -> Bool {
+    private static func applyPmset(_ on: Bool) -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
         p.arguments = ["-a", "disablesleep", on ? "1" : "0"]
@@ -83,16 +81,15 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate {
         }
     }
 
-    // launchd relaunches the daemon on the next message, so exiting when idle frees
-    // ALL memory at zero cost. Only armed once no client is connected (and, by
-    // connectionClosed above, the override is already off). Must run on `q`.
+    // Only armed once no client is connected (and, by connectionClosed, the
+    // override is already off). Must run on `q`.
     private func armIdleExit_locked() {
         cancelIdleExit_locked()
         let t = DispatchSource.makeTimerSource(queue: q)
-        t.schedule(deadline: .now() + 10)
+        t.schedule(deadline: .now() + .seconds(idleExitSeconds))
         t.setEventHandler { [weak self] in
             guard let self else { exit(0) }
-            if self.connections == 0 { exit(0) }
+            self.core.idleFired()
         }
         t.resume()
         idleTimer = t
@@ -107,6 +104,10 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate {
 let delegate = LidHelper()
 let listener = NSXPCListener(machServiceName: lidHelperMachServiceName)
 listener.delegate = delegate
+// Arm BEFORE accepting connections: a daemon launchd spun up for a handshake
+// that never completes still exits instead of lingering. The first valid
+// connection cancels it.
+delegate.armIdleAtStartup()
 listener.resume()
 // Block on the run loop; launchd owns our lifecycle and the idle-exit above ends
 // the process when no client remains.
