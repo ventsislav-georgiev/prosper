@@ -72,7 +72,6 @@ final class ProsperAppRunner: @unchecked Sendable {   // mutable state guarded b
         // Argument domain (highest-priority UserDefaults) seeds the prefs that gate
         // the tap, expansion, and auto-update.
         p.arguments = [
-            "-onboardingCompleted", "YES",
             "-automaticUpdateChecks", "NO",
             "-autocompleteEnabled", "YES",         // installs the keystroke tap (snippets ride on it)
             "-snippetsEnabled", "YES",
