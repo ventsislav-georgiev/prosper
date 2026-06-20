@@ -7,10 +7,13 @@ id          = "com.prosper.window"
 name        = "window"
 title       = "Window Management"
 description = "Snap the focused window: halves, quarters, thirds, maximize, center."
-version     = "1.0.0"
+version     = "1.0.1"
 author      = "Prosper"
 license     = "MIT"
 system      = true
+# Snapping the focused window goes through the AX window API (same grant as
+# autocomplete). Surfaced in Settings › Extensions so the user can grant it here.
+permissions = ["accessibility"]
 
 [extension.host]
 min_version = "2.0.0"
@@ -28,3 +31,13 @@ description = "Snap the focused window. e.g. win left, win top-right, win max, w
 mode        = "no-view"
 keywords    = ["win", "window", "snap", "resize", "move", "maximize", "tile"]
 match       = "^win(dow)?( |$)"
+
+# Dynamic (Tier-B) settings: a single Permissions section rendered by
+# `settings_render`, so a user whose window snapping fails sees the Accessibility
+# grant action right here instead of hunting through the main Settings.
+[[contributes.settings_sections]]
+id        = "window"
+title     = "Window Management"
+icon      = "macwindow"
+subtitle  = "Snap the focused window with the win command"
+dynamic   = true

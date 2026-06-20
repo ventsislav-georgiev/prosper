@@ -8,10 +8,16 @@ id          = "com.prosper.snippets"
 name        = "snippets"
 title       = "Snippets"
 description = "Insert saved text snippets with dynamic placeholders; manage them with sn add|rm|list."
-version     = "1.0.1"
+version     = "1.0.3"
 author      = "Prosper"
 license     = "MIT"
 system      = true
+# Inline auto-expansion rides the native active key tap (same as autocomplete):
+# Accessibility authorizes both watching keystrokes and typing the expansion into
+# the focused app. Surfaced in Settings › Extensions so the user can grant it from
+# the snippet section. (No Input Monitoring — an active session tap is gated by
+# Accessibility, not the listen-only HID grant.)
+permissions = ["accessibility"]
 
 [extension.host]
 min_version = "2.0.0"

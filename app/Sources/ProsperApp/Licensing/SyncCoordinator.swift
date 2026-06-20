@@ -337,7 +337,7 @@ enum SyncSnapshotBuilder {
 
 enum SyncedKeys {
     /// UserDefaults keys the user changes via Settings that should sync. Excludes
-    /// machine-local / transient state: onboarding flags, migration flags, runtime
+    /// machine-local / transient state: migration flags, runtime
     /// LoRA A/B counters, and machine-specific paths (agentWorkingDirectory,
     /// agentWritableRoots) which wouldn't be valid on another Mac.
     static let keys: Set<String> = [

@@ -49,7 +49,7 @@ struct SyncPane: View {
             }
 
             NeonSection("What's synced",
-                        footer: "Settings are end-to-end encrypted. Machine-local state (onboarding, paths, runtime timers, pane layout) never leaves this Mac.") {
+                        footer: "Settings are end-to-end encrypted. Machine-local state (paths, runtime timers, pane layout) never leaves this Mac.") {
                 ForEach(Array(Self.syncedCategories.enumerated()), id: \.offset) { idx, cat in
                     if idx > 0 { NeonDivider() }
                     NeonRow(cat.0, subtitle: cat.1) {
