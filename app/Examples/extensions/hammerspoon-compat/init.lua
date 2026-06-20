@@ -268,6 +268,26 @@ local function build_hs(ctx)
     hs.alert = {
         show = function(text) if allowed() then host.alert.show(tostring(text)) end end,
         closeAll = function() end,
+        -- hs.alert.show returns a uuid we don't track; closeSpecific is a no-op so a
+        -- `local id = hs.alert.show(...) ... hs.alert.closeSpecific(id)` pattern doesn't
+        -- error (auto-dismissing alerts close themselves anyway).
+        closeSpecific = function() end,
+    }
+    -- hs.dialog.blockAlert(message, info, buttonOne[, buttonTwo, style]) -> the title
+    -- of the pressed button. Backed by host.dialog.confirm (modal, blocks). buttonOne
+    -- maps to OK, buttonTwo to Cancel; returns buttonOne when confirmed, else buttonTwo.
+    -- Gated: a modal only makes sense while a hotkey/url callback is firing, never
+    -- during the silent register/rebuild re-run (there it returns the cancel button).
+    hs.dialog = {
+        blockAlert = function(message, _info, buttonOne, buttonTwo, _style)
+            local cancel = buttonTwo or "Cancel"
+            if not allowed() then return cancel end
+            local ok = host.dialog.confirm{
+                title = tostring(message or ""), message = tostring(_info or ""),
+                ok = buttonOne or "OK", cancel = cancel,
+            }
+            return ok and (buttonOne or "OK") or cancel
+        end,
     }
     hs.notify = {
         show = function(title, _sub, text) if allowed() then host.notify(tostring(title or ""), tostring(text or "")) end end,
