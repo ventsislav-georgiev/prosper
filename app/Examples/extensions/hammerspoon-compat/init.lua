@@ -227,6 +227,44 @@ local function build_hs(ctx)
             return r.ok, r.output, r.error
         end,
     }
+    -- hs.http — pure-Lua URL helpers used by URLDispatcher decoders (urlParts to pick
+    -- a URL apart, encodeForQuery to re-escape a rebuilt one). No host needed; safe to
+    -- read in any mode. Not a full RFC 3986 parser, but covers the fields HS exposes:
+    -- scheme/host/port/path/query/fragment/user/password.
+    hs.http = {
+        encodeForQuery = function(s)
+            return (tostring(s):gsub("[^%w%-_%.~]", function(c)
+                return string.format("%%%02X", string.byte(c))
+            end))
+        end,
+        urlParts = function(url)
+            url = tostring(url or "")
+            local parts = { absoluteString = url, relativeString = url }
+            local scheme, rest = url:match("^(%a[%w+.-]*)://(.*)$")
+            parts.scheme = scheme
+            rest = rest or url
+            local body, frag = rest:match("^([^#]*)#?(.*)$")
+            rest = body
+            if frag and #frag > 0 then parts.fragment = frag end
+            local authority, pathq = rest:match("^([^/]*)(/?.*)$")
+            authority = authority or ""
+            local userinfo, hostport = authority:match("^(.-)@(.+)$")
+            if userinfo then
+                local u, p = userinfo:match("^([^:]*):?(.*)$")
+                if u and #u > 0 then parts.user = u end
+                if p and #p > 0 then parts.password = p end
+            else
+                hostport = authority
+            end
+            local h, port = hostport:match("^(.-):(%d+)$")
+            if h then parts.host = h ~= "" and h or nil; parts.port = tonumber(port)
+            else parts.host = hostport ~= "" and hostport or nil end
+            local path, query = (pathq or ""):match("^([^?]*)%??(.*)$")
+            if path and #path > 0 then parts.path = path end
+            if query and #query > 0 then parts.query = query end
+            return parts
+        end,
+    }
     hs.alert = {
         show = function(text) if allowed() then host.alert.show(tostring(text)) end end,
         closeAll = function() end,
@@ -357,9 +395,16 @@ local function build_hs(ctx)
         end,
     }
 
-    -- Inert by design: Spoons, window mgmt, menubar, pathwatcher, logger.
+    -- Inert by design: window mgmt, menubar, pathwatcher, logger. Spoons are mostly
+    -- inert too, EXCEPT URLDispatcher which is shimmed (see build_spoon) — loadSpoon
+    -- hands back the live spoon entry so `spoon.URLDispatcher` / `spoon.SpoonInstall`
+    -- resolve to the real shim instead of a chainable no-op.
     -- Chainable so config chains don't crash.
-    hs.loadSpoon = function(name) warn_once("hs.loadSpoon(" .. tostring(name) .. ")"); return chainable() end
+    hs.loadSpoon = function(name)
+        local s = ctx.spoon and ctx.spoon[name]
+        if s then return s end
+        warn_once("hs.loadSpoon(" .. tostring(name) .. ")"); return chainable()
+    end
     hs.spoons = chainable("hs.spoons")
     hs.window = chainable("hs.window")
     hs.menubar = { new = function() warn_once("hs.menubar"); return chainable() end }
@@ -415,6 +460,111 @@ local function inert(name)
     })
 end
 
+-- ============ Spoon shim (URLDispatcher only) ============
+-- Hammerspoon's URLDispatcher Spoon is the common way to do per-domain browser
+-- routing + URL rewriting from init.lua. We reproduce enough of it to run an
+-- unmodified config: install Prosper as default browser, then on each opened link
+-- apply url_redir_decoders (rewriters) and route by url_patterns to a chosen app,
+-- falling back to default_handler. Routing reuses hs.urlevent.* (host.url.open),
+-- so it carries no new privilege. Every other Spoon stays inert.
+--
+-- ponytail: faithful to the fields a real config sets (url_patterns,
+-- url_redir_decoders, default_handler, decode_slack_redir_urls) — not the whole
+-- Spoon API. Add more only if a config needs it.
+local function build_spoon(hs, ctx)
+    local URLDispatcher = {
+        url_patterns = {},
+        url_redir_decoders = {},
+        default_handler = nil,
+        decode_slack_redir_urls = false,
+    }
+
+    -- Open a resolved URL: a function handler is called with the URL; a string is a
+    -- bundle id / app name handed to the browser-picking openURLWithBundle.
+    local function dispatch_to(app, url)
+        if type(app) == "function" then app(url); return end
+        hs.urlevent.openURLWithBundle(url, app)
+    end
+
+    -- Built-in slack-redir decoder: https://slack-redir.net/link?url=ENCODED → decoded.
+    local function decode_slack_redir(url)
+        local enc = url:match("slack%-redir%.net/link%?url=([^&]+)")
+        if not enc then return url end
+        return (enc:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end))
+    end
+
+    -- Re-derive (scheme, host, params) for decoder functions, which take the same
+    -- args HS hands hs.urlevent.httpCallback.
+    local function split(url)
+        local p = hs.http.urlParts(url)
+        local params = {}
+        if p.query then
+            for pair in p.query:gmatch("[^&]+") do
+                local k, v = pair:match("([^=]+)=(.*)")
+                if k then params[k] = v end
+            end
+        end
+        return p.scheme, p.host, params
+    end
+
+    URLDispatcher.dispatchURL = function(self, scheme, host_, params, fullURL, pid)
+        fullURL = fullURL or ""
+        if self.decode_slack_redir_urls then fullURL = decode_slack_redir(fullURL) end
+        for _, d in ipairs(self.url_redir_decoders or {}) do
+            local matcher, replacement = d[2], d[3]
+            if type(matcher) == "function" then
+                local sc, ho, pa = split(fullURL)
+                local nu = matcher(sc, ho, pa, fullURL, pid)
+                if type(nu) == "string" and #nu > 0 then fullURL = nu end
+            elseif type(matcher) == "string" and fullURL:find(matcher) then
+                fullURL = fullURL:gsub(matcher, replacement or "")
+            end
+        end
+        for _, e in ipairs(self.url_patterns or {}) do
+            local pat, app = e[1], e[2]
+            if pat and fullURL:find(pat) then dispatch_to(app, fullURL); return end
+        end
+        if self.default_handler then dispatch_to(self.default_handler, fullURL)
+        else hs.urlevent.openURLWithBundle(fullURL, nil) end -- nil → Safari (loop guard)
+    end
+
+    URLDispatcher.start = function(self)
+        -- Set the live callback hs_url_open fires (effects gated there via ctx.firing).
+        hs.urlevent.httpCallback = function(scheme, host_, params, fullURL, pid)
+            self:dispatchURL(scheme, host_, params, fullURL, pid)
+        end
+        hs.urlevent.setDefaultHandler("http") -- gated: only takes effect at register
+        return self
+    end
+    URLDispatcher.stop = function(self) hs.urlevent.httpCallback = nil; return self end
+    URLDispatcher.bindKeys = function(self) return self end
+
+    local SpoonInstall = { repos = {} }
+    SpoonInstall.andUse = function(self, name, spec)
+        spec = spec or {}
+        if name == "URLDispatcher" then
+            if type(spec.config) == "table" then
+                for k, v in pairs(spec.config) do URLDispatcher[k] = v end
+            end
+            if spec.start then URLDispatcher:start() end
+        else
+            host.log.warn("hammerspoon-compat: SpoonInstall:andUse(" .. tostring(name)
+                .. ") — only URLDispatcher is shimmed; ignored")
+        end
+        return self
+    end
+    SpoonInstall.updateRepo = function() end
+    SpoonInstall.updateAllRepos = function() end
+    SpoonInstall.andUseSpoons = function() end
+
+    return setmetatable(
+        { SpoonInstall = SpoonInstall, URLDispatcher = URLDispatcher },
+        { __index = function(_, k)
+            host.log.warn("hammerspoon-compat: spoon." .. tostring(k) .. " not supported (no-op)")
+            return inert(nil)
+        end })
+end
+
 local function run_user_config(mode)
     local source = host.fs.read(HS_INIT)
     if not source then
@@ -431,8 +581,10 @@ local function run_user_config(mode)
         date = os and os.date or nil,                 -- os stripped by sandbox -> nil; pcall-safe
         getenv = function(k) return host.env.get(k) end,
     }
+    local hsObj = build_hs(ctx)
+    ctx.spoon = build_spoon(hsObj, ctx) -- live spoon registry (URLDispatcher shimmed); read by hs.loadSpoon
     local env = {
-        hs = build_hs(ctx),
+        hs = hsObj,
         print = function() end, -- hs print goes to its console; swallow
         pairs = pairs, ipairs = ipairs, next = next, type = type, tostring = tostring,
         tonumber = tonumber, select = select, error = error, pcall = pcall, xpcall = xpcall,
@@ -443,9 +595,9 @@ local function run_user_config(mode)
         require = function(m) return inert("require(" .. tostring(m) .. ")") end,
         loadfile = function() return inert("loadfile") end,
         dofile = function() return inert("dofile") end,
-        -- HS predefines a global `spoon` table (Spoon registry). Spoons aren't
-        -- loaded here; inert keeps `spoon.X:method()` chains from aborting.
-        spoon = inert("spoon"),
+        -- HS predefines a global `spoon` table (Spoon registry). URLDispatcher is
+        -- shimmed (build_spoon); unknown spoons fall through to an inert no-op.
+        spoon = ctx.spoon,
     }
     env._G = env
 
@@ -711,11 +863,18 @@ local function diagnostics_rows()
     if ctx.urlevent and type(ctx.urlevent.httpCallback) == "function" then
         local is_def = host.url and host.url.default_browser
             and host.url.default_browser() == PROSPER
+        -- If the URLDispatcher shim drove it, surface the route/rewriter counts so the
+        -- user sees their config actually loaded.
+        local ud = ctx.spoon and ctx.spoon.URLDispatcher
+        local detail = ""
+        if ud then
+            detail = string.format(" (%d route(s), %d rewriter(s))",
+                #(ud.url_patterns or {}), #(ud.url_redir_decoders or {}))
+        end
         info("URL routing (hs.urlevent)", is_def
-            and "httpCallback active — opened links route through your config."
-            or "httpCallback active, but Prosper is NOT the default browser — links "
-                .. "won't reach it. Call hs.urlevent.setDefaultHandler(\"http\") or set "
-                .. "it in System Settings.")
+            and ("httpCallback active — opened links route through your config." .. detail)
+            or ("httpCallback active" .. detail .. ", but Prosper is NOT the default browser — "
+                .. "links won't reach it. Set Prosper as default browser in System Settings."))
     else
         info("URL routing (hs.urlevent)", "none")
     end
