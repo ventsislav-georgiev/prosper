@@ -64,6 +64,20 @@ final class LidHelperCoreTests: XCTestCase {
         XCTAssertEqual(spy.calls, [true])               // no spurious reset(false)
     }
 
+    func testReclaimAtStartupForcesOff() {
+        let spy = Spy()
+        let core = make(spy)
+        core.reclaimAtStartup()
+        XCTAssertEqual(spy.calls, [false])              // forced disablesleep=0
+        XCTAssertFalse(core.overrideOn)
+
+        // A client that still wants it on re-applies cleanly afterwards.
+        core.connectionOpened()
+        XCTAssertTrue(core.setOverride(true))
+        XCTAssertTrue(core.overrideOn)
+        XCTAssertEqual(spy.calls, [false, true])
+    }
+
     func testIdleFiresOnlyWhenNoClients() {
         let spy = Spy()
         let core = make(spy)

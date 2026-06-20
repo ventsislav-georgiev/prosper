@@ -42,6 +42,16 @@ public final class LidHelperCore {
         return true
     }
 
+    /// Force the override OFF at daemon cold-start, self-healing a value left
+    /// stuck by an unclean kill. Safe by invariant: a valid override always holds
+    /// a live connection, which keeps the daemon alive — so it never cold-starts
+    /// while a legitimate override exists. Only a stale value can be present here,
+    /// and a client that still wants it on reconnects and re-applies.
+    public func reclaimAtStartup() {
+        _ = apply(false)
+        overrideOn = false
+    }
+
     /// Apply the override on explicit request. Tracks state only when the
     /// privileged op reports success. Returns whether it took effect.
     @discardableResult
