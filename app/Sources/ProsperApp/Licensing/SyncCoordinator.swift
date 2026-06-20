@@ -159,9 +159,11 @@ enum SyncSnapshotBuilder {
         let defaults = UserDefaults.standard
         var report = SyncReport()
 
-        // (a) Allowlisted preferences (+ all `shortcut.*` keys).
+        // (a) Allowlisted preferences (+ all `shortcut.*` / `ext.*` keys), minus
+        //     the machine-local runtime/UI keys that share the `ext.` namespace.
         var defDict: [String: Any] = [:]
         for (key, value) in defaults.dictionaryRepresentation() {
+            if SyncedKeys.excluded.contains(key) { continue }
             if SyncedKeys.keys.contains(key)
                 || SyncedKeys.prefixes.contains(where: { key.hasPrefix($0) }) {
                 defDict[key] = value
@@ -368,6 +370,19 @@ enum SyncedKeys {
         "loraMinSamples", "loraABMinSamples",
     ]
 
-    /// Key prefixes synced wholesale — covers every per-action and custom shortcut.
-    static let prefixes: [String] = ["shortcut."]
+    /// Key prefixes synced wholesale:
+    /// - `shortcut.` — every per-action and custom shortcut.
+    /// - `ext.` — every extension's settings (`ext.<id>.<key>`), so an extension
+    ///   installed from the marketplace carries its config across devices with no
+    ///   per-extension allowlist to maintain.
+    static let prefixes: [String] = ["shortcut.", "ext."]
+
+    /// `ext.`-namespaced keys that are machine-local runtime/UI state, NOT user
+    /// settings — excluded so the wholesale `ext.` prefix doesn't sync them.
+    static let excluded: Set<String> = [
+        "ext.timers.v1",          // re-armed timer entries (per-machine runtime)
+        "ext.collapse.user",      // Extensions-pane section collapse (UI only)
+        "ext.collapse.system",
+        "ext.collapse.market",
+    ]
 }

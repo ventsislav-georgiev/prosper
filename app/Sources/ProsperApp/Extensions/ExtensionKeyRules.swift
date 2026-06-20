@@ -186,7 +186,10 @@ final class ExtensionKeyRules {
     static let shared = ExtensionKeyRules()
 
     /// A second press of a double-tap chord within this window triggers the action.
-    static let doubleTapWindow: TimeInterval = 0.4
+    /// 0.5s matches the macOS double-click default and the de-facto Hammerspoon
+    /// ⌘Q-to-quit snippet (`delay = 0.5`); a tighter window silently fails for a
+    /// natural-cadence double-tap (the 2nd press lands late → re-swallowed forever).
+    static let doubleTapWindow: TimeInterval = 0.5
 
     private var byExtension: [String: [KeyRule]] = [:]
     /// Rules bucketed by `keyCode` so the keystroke path only scans rules bound to the
@@ -302,7 +305,12 @@ final class ExtensionKeyRules {
             let windowNanos = UInt64(Self.doubleTapWindow * 1_000_000_000)
             if let first = pendingDoubleTap[chord], nowNanos &- first <= windowNanos {
                 pendingDoubleTap[chord] = nil
-                return .inject(target)
+                // Same chord as pressed (the ⌘Q-to-quit case): let the REAL key
+                // through untouched rather than swallowing it and re-injecting a
+                // synthetic copy — some apps ignore synthetic events for menu
+                // shortcuts (so ⌘Q never actually quit). Only a DIFFERENT target
+                // needs a synthetic injection.
+                return target == chord ? .passThrough : .inject(target)
             }
             pendingDoubleTap[chord] = nowNanos
             return .swallow

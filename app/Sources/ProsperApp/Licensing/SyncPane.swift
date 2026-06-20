@@ -48,6 +48,16 @@ struct SyncPane: View {
                 }
             }
 
+            NeonSection("What's synced",
+                        footer: "Settings are end-to-end encrypted. Machine-local state (onboarding, paths, runtime timers, pane layout) never leaves this Mac.") {
+                ForEach(Array(Self.syncedCategories.enumerated()), id: \.offset) { idx, cat in
+                    if idx > 0 { NeonDivider() }
+                    NeonRow(cat.0, subtitle: cat.1) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Neon.terminal)
+                    }
+                }
+            }
+
             if coordinator.report.includedDefaults > 0 || !coordinator.report.includedFiles.isEmpty {
                 NeonSection("Included",
                             footer: "\(coordinator.report.includedDefaults) settings plus the items below.") {
@@ -90,6 +100,16 @@ struct SyncPane: View {
             ? "Synced via iCloud Keychain — end-to-end encrypted"
             : "Local device key — single-device only for now"
     }
+
+    /// The settings categories that sync, shown so it's clear what carries across
+    /// devices — including any extension you install from the marketplace.
+    private static let syncedCategories: [(String, String)] = [
+        ("App preferences", "Completions, personalization, per-app rules, vision, clipboard, UI, updates, coding agent, LoRA"),
+        ("Keyboard shortcuts", "Every per-action and custom shortcut"),
+        ("Extension settings", "Every extension's settings — marketplace installs sync automatically"),
+        ("Extensions & plugins", "Pure, small ones (≤ 5 KB compressed); see Included / Not synced below"),
+        ("Config files", "quicklinks, quickdirs, MCP servers, hooks, agents, commands"),
+    ]
 
     private static let stamp: DateFormatter = {
         let f = DateFormatter()

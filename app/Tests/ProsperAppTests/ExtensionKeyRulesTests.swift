@@ -166,15 +166,32 @@ final class ExtensionKeyRulesTests: XCTestCase {
         let t0: UInt64 = 1_000_000_000
         // First press swallowed.
         XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, nowNanos: t0), .swallow)
-        // Second within window → injects target.
+        // Second within window → for a same-chord double-tap, the real key passes
+        // through (no synthetic re-inject) so the app's own ⌘Q actually quits.
         let within = t0 + UInt64(0.3 * 1_000_000_000)
-        XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, nowNanos: within), .inject(q))
+        XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, nowNanos: within), .passThrough)
         // A later lone press is swallowed again (timer reset).
         let later = within + UInt64(2.0 * 1_000_000_000)
         XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, nowNanos: later), .swallow)
         // A second press AFTER the window is treated as a fresh first press (swallow).
         let tooLate = later + UInt64(1.0 * 1_000_000_000)
         XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, nowNanos: tooLate), .swallow)
+        mgr.removeRules(extensionID: "t")
+    }
+
+    /// A double-tap whose target differs from the pressed chord still injects the
+    /// target on the second press (only same-chord taps pass through).
+    @MainActor
+    func testDoubleTapDistinctTargetInjects() {
+        let mgr = ExtensionKeyRules.shared
+        mgr.removeRules(extensionID: "t")
+        mgr.setRules(extensionID: "t", json: #"[{ "from": "cmd+q", "double_tap": "cmd+w" }]"#)
+        let q = KeyChord(spec: "cmd+q")!
+        let w = KeyChord(spec: "cmd+w")!
+        let t0: UInt64 = 1_000_000_000
+        XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, nowNanos: t0), .swallow)
+        let within = t0 + UInt64(0.3 * 1_000_000_000)
+        XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, nowNanos: within), .inject(w))
         mgr.removeRules(extensionID: "t")
     }
 

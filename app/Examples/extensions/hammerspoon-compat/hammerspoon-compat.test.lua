@@ -36,15 +36,23 @@ local function json_decode(s)
 end
 local function json_encode() return "{}" end
 
+local default_browser = "com.apple.Safari" -- mutable so tests can flip the default
+local function id_ui(o) o = o or {}; return o end
 host = {
     prefs = { get = function(k) return prefs[k] end, set = function(k, v) prefs[k] = v end },
     json = { decode = json_decode, encode = json_encode },
     fs = { read = function() return FAKE_INIT end },
+    perms = { has = function() return true end },
     url = {
         open = function(u, b) opened[#opened + 1] = { url = u, browser = b } end,
-        default_browser = function() return "com.apple.Safari" end,
+        default_browser = function() return default_browser end,
         set_default_browser = function(id) set_default_calls[#set_default_calls + 1] = id; return true end,
     },
+    ui = { settings = {
+        ui = function(o) o = o or {}; o.kind = "settings.ui"; return o end,
+        section = id_ui, row = id_ui,
+        render = function(node) return node end,
+    } },
     time = function() return 0 end,
     env = { get = function() return nil end },
     log = { info = function() end, warn = function() end, error = function(m) print("ERR " .. tostring(m)) end },
@@ -59,6 +67,7 @@ local chunk = assert(loadfile(DIR .. "init.lua", "t", env))
 chunk()
 local hs_url_open = env.hs_url_open
 local on_launch = env.on_launch
+local settings_render = env.settings_render
 
 local fails = 0
 local function check(c, m) if not c then fails = fails + 1; print("FAIL: " .. m) else print("ok: " .. m) end end
@@ -122,6 +131,42 @@ env._HS = nil
 reset()
 hs_url_open(nil); hs_url_open(""); hs_url_open('{"nope":1}')
 check(#opened == 0, "nil/empty/garbage payload -> no routing")
+
+-- 9b. diagnostics: a "URL routing (hs.urlevent)" row reflects httpCallback presence
+local function find_row(ui, title)
+    for _, sec in ipairs(ui and ui.sections or {}) do
+        for _, r in ipairs(sec.rows or {}) do
+            if r.title == title then return r end
+        end
+    end
+end
+-- config WITH httpCallback (restored at end of test 7), Prosper NOT the default
+FAKE_INIT = [[
+hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
+    hs.urlevent.openURLWithBundle(fullURL, "com.google.Chrome")
+end
+]]
+env._HS = nil
+local row = find_row(settings_render("hammerspoon-compat", "{}"), "URL routing (hs.urlevent)")
+check(row ~= nil, "diagnostics shows a URL routing row")
+check(row and row.subtitle and row.subtitle:find("NOT the default", 1, true) ~= nil,
+      "URL row warns when httpCallback set but Prosper isn't default")
+default_browser = "eu.illegible.prosper"
+env._HS = nil
+row = find_row(settings_render("hammerspoon-compat", "{}"), "URL routing (hs.urlevent)")
+check(row and row.subtitle and row.subtitle:find("route through your config", 1, true) ~= nil,
+      "URL row confirms routing when Prosper IS default")
+default_browser = "com.apple.Safari"
+-- config WITHOUT httpCallback -> row says none
+FAKE_INIT = "local x = 1\n"
+env._HS = nil
+row = find_row(settings_render("hammerspoon-compat", "{}"), "URL routing (hs.urlevent)")
+check(row and row.subtitle == "none", "URL row says none when config has no httpCallback")
+FAKE_INIT = [[
+hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
+    hs.urlevent.openURLWithBundle(fullURL, "com.google.Chrome")
+end
+]]
 
 -- 10. perf: warm-VM hs_url_open (closure already built) per link
 env._HS = nil

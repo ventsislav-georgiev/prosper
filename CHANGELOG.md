@@ -5,6 +5,21 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.95.0
+
+### Fixes
+- **Double-tap-to-quit (⌘Q) now works.** The detection window was 0.4s — tighter
+  than a natural double-tap, so the second press often landed late and the chord
+  was swallowed again, meaning ⌘Q appeared to do nothing no matter how many times
+  you pressed it. Widened to 0.5s (the macOS double-click default), and the second
+  press now lets the real key through instead of re-synthesizing one (some apps
+  ignored the synthetic ⌘Q for menu shortcuts).
+
+### Hammerspoon
+- The **Hammerspoon** settings diagnostics now show a **URL routing** row —
+  whether your `hs.urlevent.httpCallback` is active, and a warning if Prosper isn't
+  the default browser (so links never reach it).
+
 ## v2.94.0
 
 ### Browser
