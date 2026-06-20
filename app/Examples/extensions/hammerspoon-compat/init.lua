@@ -807,6 +807,8 @@ function hs_app_activated(payload)
     if not is_enabled() then return end
     local data = payload and host.json.decode(payload) or nil
     if type(data) ~= "table" then return end
+    local name = data.name
+    if type(name) ~= "string" or #name == 0 then return end -- no app name => ignore
     if not (_HS and _HS.ctx) then run_user_config("rebuild") end
     local ctx = _HS and _HS.ctx
     local list = ctx and ctx.appwatchers
