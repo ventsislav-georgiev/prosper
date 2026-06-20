@@ -281,8 +281,11 @@ final class ExtensionKeyRules {
     }
 
     /// Resolve a keystroke against the registered rules. `nowNanos` is injectable for
-    /// tests; production passes the monotonic clock. Performs double-tap bookkeeping.
-    func evaluate(chord: KeyChord, bundleID: String?, nowNanos: UInt64 = DispatchTime.now().uptimeNanoseconds) -> KeyRuleResolution {
+    /// tests; production passes the monotonic clock. `isRepeat` is set for an OS
+    /// key-autorepeat event (a held key), which must NOT drive double-tap bookkeeping.
+    /// Performs double-tap bookkeeping.
+    func evaluate(chord: KeyChord, bundleID: String?, isRepeat: Bool = false,
+                  nowNanos: UInt64 = DispatchTime.now().uptimeNanoseconds) -> KeyRuleResolution {
         // A chord owned by a native global hotkey wins: pass through untouched so the
         // Carbon handler (which fires after this tap) gets it. Cheap when empty.
         if !reservedChords.isEmpty, reservedChords.contains(chord) {
@@ -302,6 +305,13 @@ final class ExtensionKeyRules {
         case .swallow:
             return .swallow
         case .doubleTap(let target):
+            // Eat OS key-autorepeats of a HELD key: they arrive at ~the initial
+            // repeat delay (~0.5s), i.e. inside the double-tap window, and would
+            // otherwise consume/reset `pendingDoubleTap` so the real second press
+            // looks like a fresh first — the user had to mash the key ~4x. Swallow
+            // them without touching pending. (Only doubleTap cares; remap/swallow
+            // intentionally still act on repeats so a held key keeps repeating.)
+            if isRepeat { return .swallow }
             let windowNanos = UInt64(Self.doubleTapWindow * 1_000_000_000)
             if let first = pendingDoubleTap[chord], nowNanos &- first <= windowNanos {
                 pendingDoubleTap[chord] = nil
