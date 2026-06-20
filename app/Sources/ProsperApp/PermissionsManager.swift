@@ -80,6 +80,19 @@ enum PermissionsManager {
         }
     }
 
+    /// Why an extension needs this permission — shown as the row subtitle
+    /// regardless of grant state (the badge reports granted/not). Extensions can
+    /// override with their own `subtitle`.
+    static func reason(forPermission permission: String) -> String {
+        switch permission {
+        case "full-disk-access": return "Lets Prosper read the Safari bookmarks file; other browsers import without it."
+        case "accessibility": return "Lets Prosper read the focused window and post the keystrokes that drive shortcuts."
+        case "screen-recording": return "Lets Prosper capture on-screen text for OCR-based features."
+        case "lid-helper": return "A privileged login item applies the lid-closed sleep override (needs a one-time approval)."
+        default: return "Required for this extension to function."
+        }
+    }
+
     /// Reports whether the app may currently post user notifications. `.authorized`
     /// and `.provisional` both count as granted; `.denied`/`.notDetermined` do not.
     static func notificationStatus() async -> Bool {
