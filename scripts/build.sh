@@ -56,5 +56,9 @@ else
   echo "==> Staged MLX metallib: $METALLIB_BUNDLE"
 fi
 
+# Keep my personal example extensions installed + current in ~/.config/prosper
+# (version-gated, skips if unchanged). Self-skips in CI; never fails the build.
+"$ROOT/scripts/install-example-extensions.sh" || true
+
 echo "==> Done. Binary: $ROOT/app/.build/$PROFILE/ProsperApp"
 echo "    Package as .app with: scripts/bundle.sh $PROFILE"
