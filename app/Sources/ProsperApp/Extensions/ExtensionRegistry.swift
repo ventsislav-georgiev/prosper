@@ -794,6 +794,11 @@ final class ExtensionRegistry: ObservableObject {
     func uninstall(id: String) throws {
         guard let record = record(id: id) else { throw ExtensionError.notFound(id) }
         guard !record.isSystem else { throw ExtensionError.cannotUninstallSystem(id) }
+        // Drop any granted system-tier privilege so a different extension reinstalled
+        // later under the SAME id can never inherit RCE access without an explicit
+        // re-grant. (In-place upgrades go through installLocal's overwrite, not here,
+        // so an update of a privileged extension keeps its privilege.)
+        clearPrivilege(id: id)
         try FileManager.default.removeItem(at: record.loaded.directory)
         discover()
     }
@@ -1023,6 +1028,10 @@ final class ExtensionRegistry: ObservableObject {
         ids.remove(id)
         persistTrusted(ids)
         record.trusted = false
+        // Privilege requires trust: revoking trust revokes the system tier too, so an
+        // extension is never privileged-but-untrusted and a later re-trust must be an
+        // explicit re-grant.
+        clearPrivilege(id: id)
         record.runtime = nil
         asyncRuntimes.invalidate(id: id)
         TimerScheduler.shared.cancelAll(extID: id)
@@ -1042,6 +1051,14 @@ final class ExtensionRegistry: ObservableObject {
     }
 
     func isPrivileged(id: String) -> Bool { record(id: id)?.privileged ?? false }
+
+    /// Drop any granted system-tier privilege for `id` (persisted set + live record).
+    /// No VM teardown here — callers (untrust/uninstall) already rebuild or discard.
+    private func clearPrivilege(id: String) {
+        var ids = privilegedIDs()
+        if ids.remove(id) != nil { persistPrivileged(ids) }
+        record(id: id)?.privileged = false
+    }
 
     /// Grant the SYSTEM tier to a user extension: host.shell, the coding-agent, and
     /// destructive host.files.act become available to its Lua. A deliberate, explicit

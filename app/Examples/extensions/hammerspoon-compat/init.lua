@@ -534,7 +534,14 @@ function make_app(name, bid, pid)
           allWindows = function()
               local n = host.apps.windows(bid or "") or 0
               local t = {}
-              for i = 1, n do t[i] = inert(nil) end
+              if n > 0 then
+                  -- Configs use `#app:allWindows()` to count; a window object would
+                  -- only ever be a no-op here, so reuse ONE shared inert window for
+                  -- every slot (O(1) allocation regardless of window count) — `#t`,
+                  -- ipairs, and any `w:method()` all still work.
+                  local w = inert(nil)
+                  for i = 1, n do t[i] = w end
+              end
               return t
           end,
           hide = function()

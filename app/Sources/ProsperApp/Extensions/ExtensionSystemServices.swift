@@ -205,9 +205,13 @@ enum AppControl {
     static func hide(bundleID: String) { match(bundleID)?.hide() }
 
     /// AX window count for the app. Requires Accessibility; 0 when unavailable.
+    /// Bounds the cross-process AX call to 0.25s: the default timeout is ~6s, and a
+    /// hung target app would otherwise stall the caller that long — fatal if a config
+    /// ever calls this from an eventtap (synchronous, on the CGEvent-tap main thread).
     static func windowCount(bundleID: String) -> Int {
         guard let app = match(bundleID) else { return 0 }
         let ax = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(ax, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement] else { return 0 }
