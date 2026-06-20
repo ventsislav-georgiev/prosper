@@ -180,6 +180,9 @@ final class AutocompleteEngine {
                     return swallow ? nil : Unmanaged.passUnretained(event)
                 }
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+                // OS key-autorepeat flag (held key). Double-tap rules must ignore
+                // these so a repeat doesn't masquerade as the second press.
+                let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
                 let optionHeld = event.flags.contains(.maskAlternate)
                 let controlHeld = event.flags.contains(.maskControl)
                 let commandHeld = event.flags.contains(.maskCommand)
@@ -205,7 +208,8 @@ final class AutocompleteEngine {
                     engine.handle(
                         type: type, keyCode: keyCode, optionHeld: optionHeld,
                         controlHeld: controlHeld, commandHeld: commandHeld,
-                        shiftHeld: shiftHeld, fnHeld: fnHeld, typed: typed
+                        shiftHeld: shiftHeld, fnHeld: fnHeld, typed: typed,
+                        isRepeat: isRepeat
                     )
                 }
                 return swallow ? nil : Unmanaged.passUnretained(event)
@@ -362,7 +366,8 @@ final class AutocompleteEngine {
     /// Handles a tap event on the main actor. Returns true to swallow the key.
     private func handle(
         type: CGEventType, keyCode: Int64, optionHeld: Bool,
-        controlHeld: Bool, commandHeld: Bool, shiftHeld: Bool, fnHeld: Bool, typed: String
+        controlHeld: Bool, commandHeld: Bool, shiftHeld: Bool, fnHeld: Bool, typed: String,
+        isRepeat: Bool = false
     ) -> Bool {
         // Re-enable if the system disabled the tap (timeout / user input).
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -397,7 +402,7 @@ final class AutocompleteEngine {
                 keyCode: keyCode, cmd: commandHeld, alt: optionHeld,
                 ctrl: controlHeld, shift: shiftHeld
             )
-            switch ExtensionKeyRules.shared.evaluate(chord: chord, bundleID: bundleId) {
+            switch ExtensionKeyRules.shared.evaluate(chord: chord, bundleID: bundleId, isRepeat: isRepeat) {
             case .passThrough:
                 break
             case .swallow:

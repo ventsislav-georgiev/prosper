@@ -179,6 +179,30 @@ final class ExtensionKeyRulesTests: XCTestCase {
         mgr.removeRules(extensionID: "t")
     }
 
+    /// Regression: OS key-autorepeats of a HELD key (which arrive ~0.5s after the
+    /// press, inside the double-tap window) must NOT consume/reset the pending
+    /// first press, else the real second tap looks like a fresh first and the user
+    /// has to mash the key. Repeats are swallowed without touching `pending`.
+    @MainActor
+    func testDoubleTapIgnoresKeyRepeats() {
+        let mgr = ExtensionKeyRules.shared
+        mgr.removeRules(extensionID: "t")
+        mgr.setRules(extensionID: "t", json: #"[{ "from": "cmd+q", "double_tap": "cmd+q" }]"#)
+        let q = KeyChord(spec: "cmd+q")!
+        let t0: UInt64 = 1_000_000_000
+        // Real first press swallowed, pending set.
+        XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, nowNanos: t0), .swallow)
+        // Autorepeats while holding ⌘Q — each swallowed, pending untouched.
+        let r1 = t0 + UInt64(0.45 * 1_000_000_000)
+        XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, isRepeat: true, nowNanos: r1), .swallow)
+        let r2 = t0 + UInt64(0.48 * 1_000_000_000)
+        XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, isRepeat: true, nowNanos: r2), .swallow)
+        // Real second press still within window of the ORIGINAL first → passThrough.
+        let within = t0 + UInt64(0.49 * 1_000_000_000)
+        XCTAssertEqual(mgr.evaluate(chord: q, bundleID: nil, nowNanos: within), .passThrough)
+        mgr.removeRules(extensionID: "t")
+    }
+
     /// A double-tap whose target differs from the pressed chord still injects the
     /// target on the second press (only same-chord taps pass through).
     @MainActor
