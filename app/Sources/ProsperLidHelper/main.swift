@@ -22,7 +22,9 @@ private let clientRequirement =
 // memory at zero cost. 10s is long enough to coalesce a quick toggle-off/on.
 private let idleExitSeconds = 10
 
-final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate {
+// @unchecked Sendable: every mutable member (`core`, `idleTimer`) is touched
+// only inside a `q.sync`/`q.async` block, so the serial queue is the lock.
+final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unchecked Sendable {
     // Single serial queue guards all mutable state — XPC delivers connection
     // events + method calls on arbitrary queues, and the idle timer runs here too,
     // so every `core` call is serialized without the core needing its own lock.
