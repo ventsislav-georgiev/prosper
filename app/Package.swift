@@ -87,6 +87,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "TOMLDecoder", package: "TOMLDecoder"),
                 "LuaRuntime",
+                "LidHelperProtocol",
             ],
             // NOTE: no `resources:` here on purpose. SwiftPM's generated
             // `Bundle.module` accessor resolves resources at
@@ -108,6 +109,21 @@ let package = Package(
                 .linkedFramework("ServiceManagement"), // SMAppService (launch at login)
                 .linkedFramework("UserNotifications"), // extension host.notify API
             ]
+        ),
+        // Shared XPC contract (protocol + identifiers) between ProsperApp and the
+        // privileged lid-sleep daemon. Tiny, no deps — its own target so both
+        // executables compile the exact same interface.
+        .target(
+            name: "LidHelperProtocol"
+        ),
+        // Privileged helper daemon behind "keep awake with the lid closed". Runs
+        // as root via launchd (installed by SMAppService.daemon), flips
+        // `pmset -a disablesleep` over XPC. Removes the old NOPASSWD sudoers hack.
+        // Embedded into the .app by scripts/bundle.sh; see that script + the
+        // LaunchDaemons plist it writes.
+        .executableTarget(
+            name: "ProsperLidHelper",
+            dependencies: ["LidHelperProtocol"]
         ),
         // Dummy GUI app driven by the e2e suites. A real external process so it
         // can be the frontmost app (xctest can't on macOS 14+); shows one

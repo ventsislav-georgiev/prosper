@@ -512,12 +512,19 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         ExtensionResources.shared.setAssertion(extID: extensionID, kind: kind, on: on)
     }
 
-    /// `pmset -a disablesleep` overrides lid-close sleep. Needs root — relies on the
-    /// user's NOPASSWD sudoers entry (same as the Hammerspoon openlid setup). Tracked
-    /// in ExtensionResources so it is reset on disable/quit (a crash can't wedge it).
+    /// `pmset -a disablesleep` overrides lid-close sleep, and that needs root. We
+    /// route it through the privileged `ProsperLidHelper` daemon (installed lazily
+    /// via SMAppService on first use) — NO sudoers entry, works out of the box.
+    /// Tracked in ExtensionResources so it is reset on disable/quit; the daemon
+    /// also resets it if the app crashes (the XPC connection drops). Only records
+    /// the override as held when the helper confirms it actually applied.
     func caffeinateSetDisableLidSleep(extensionID: String, on: Bool) async {
-        _ = await ShellRunner.run("/usr/bin/sudo /usr/bin/pmset -a disablesleep \(on ? 1 : 0)")
-        ExtensionResources.shared.setLidSleepDisabled(extID: extensionID, on: on)
+        let ok = await LidSleepHelper.setDisabled(on)
+        if ok || !on {
+            // On failure to turn ON, don't claim we hold it. Turning OFF always
+            // clears our bookkeeping regardless (best-effort release).
+            ExtensionResources.shared.setLidSleepDisabled(extID: extensionID, on: on && ok)
+        }
     }
 
     func caffeinateLockScreen() {
@@ -563,7 +570,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     func resetResources(extensionID: String) {
         let hadLid = ExtensionResources.shared.releaseAll(extID: extensionID)
         if hadLid {
-            Task.detached { _ = await ShellRunner.run("/usr/bin/sudo /usr/bin/pmset -a disablesleep 0") }
+            Task { await LidSleepHelper.setDisabled(false) }
         }
         Task { @MainActor in
             ExtensionMenuBar.shared.removeAll(extensionID: extensionID)

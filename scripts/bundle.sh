@@ -194,6 +194,52 @@ fi
 "$ROOT/scripts/bundle-bun.sh" "$APP" "$IDENTITY" || \
   echo "warn: bundle-bun.sh failed; JS plugins fall back to a runtime bun download." >&2
 
+# Privileged lid-sleep helper daemon (ProsperLidHelper) behind openlid's "keep
+# awake with the lid closed". It runs `pmset -a disablesleep` as root via launchd,
+# so the feature needs NO sudoers entry. The app installs it lazily through
+# SMAppService.daemon — only the first time the user actually disables lid sleep —
+# and it idle-exits when no client is connected, so it costs nothing until used.
+#
+# Two pieces must ship in the bundle and be sealed by the final signature:
+#   1. the executable at Contents/MacOS/ProsperLidHelper
+#   2. the launchd plist at Contents/Library/LaunchDaemons/<label>.plist whose
+#      BundleProgram points at (1) and whose MachServices advertises the XPC port.
+LID_HELPER_BIN="$ROOT/app/.build/$PROFILE/ProsperLidHelper"
+LID_HELPER_LABEL="eu.illegible.prosper.lidhelper"
+if [[ -x "$LID_HELPER_BIN" ]]; then
+  cp "$LID_HELPER_BIN" "$APP/Contents/MacOS/ProsperLidHelper"
+  mkdir -p "$APP/Contents/Library/LaunchDaemons"
+  cat > "$APP/Contents/Library/LaunchDaemons/$LID_HELPER_LABEL.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$LID_HELPER_LABEL</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/ProsperLidHelper</string>
+	<key>MachServices</key>
+	<dict>
+		<key>$LID_HELPER_LABEL</key>
+		<true/>
+	</dict>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>eu.illegible.prosper</string>
+	</array>
+</dict>
+</plist>
+PLIST
+  # Sign the helper explicitly (hardened runtime + timestamp when notarizing) so
+  # it carries the right identity before the final --deep reseal. The daemon
+  # accepts XPC only from a client matching this same Team's Developer ID
+  # requirement (see ProsperLidHelper/main.swift), so a stable identity matters.
+  codesign "${SIGN_FLAGS[@]}" "$APP/Contents/MacOS/ProsperLidHelper" >/dev/null 2>&1 || \
+    echo "warn: codesign ProsperLidHelper failed." >&2
+else
+  echo "warn: $LID_HELPER_BIN not found — lid-stay-awake (openlid) will be inert. Run scripts/build.sh $PROFILE first." >&2
+fi
+
 # Sign the app last (seals the whole bundle). A stable identity persists the TCC
 # grant; ad-hoc still works but resets permissions on each rebuild.
 if [[ "$NOTARIZE" == 1 ]]; then
