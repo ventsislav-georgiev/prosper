@@ -5,6 +5,17 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.96.1
+
+### Fixes
+- **Double-tap-to-quit (⌘Q) now fires on the first try.** A held key's OS
+  autorepeats arrive at ~the initial repeat delay (~0.5s) — right inside the
+  double-tap window — and were consuming/resetting the pending first press, so
+  the real second tap looked like a fresh first one and the chord kept getting
+  swallowed (users had to mash ⌘Q several times). The keystroke tap now reads the
+  autorepeat flag and ignores repeats in double-tap detection; ordinary
+  remap/swallow rules still act on repeats as before.
+
 ## v2.96.0
 
 ### Fixes
