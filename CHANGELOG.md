@@ -5,6 +5,19 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.96.0
+
+### OpenLid
+- **Keep awake with the lid closed now works out of the box — no `sudoers` edit.**
+  The clamshell-sleep override (`pmset disablesleep`) needs root, which previously
+  meant a manual `NOPASSWD` entry in `/etc/sudoers`. Prosper now ships a tiny
+  privileged helper daemon (`ProsperLidHelper`) that does it, installed lazily via
+  `SMAppService` the first time you actually disable lid sleep (one-time approval
+  in System Settings → Login Items). It idle-exits when unused (zero memory) and
+  resets the override automatically if the app quits or crashes, so the lid is
+  never left wedged awake. Nothing is installed unless you use the feature — if
+  the OpenLid extension is disabled, no background item is ever created.
+
 ## v2.95.0
 
 ### Fixes

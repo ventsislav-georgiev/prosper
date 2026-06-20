@@ -140,6 +140,18 @@ Saved URLs with `{query}` templates and saved directories with per-dir actions �
 
 ---
 
+## Snippets
+
+Insert saved text snippets with dynamic placeholders — type `sn`, pick one, and it expands at your caret in any app. Manage them inline: `sn add` opens a capture dialog, `sn rm` / `sn list` (an empty `sn` query lists everything).
+
+---
+
+## Bookmarks
+
+Search and open browser bookmarks from the palette — type `bm` and filter across **Chrome, Brave, Edge, Vivaldi, Opera, Arc, Safari, Firefox, and Zen** at once. Refresh with `bm import`; `bm browsers` lists what was found.
+
+---
+
 ## Browser router
 
 Make Prosper your default browser and every clicked link is routed to the right
@@ -150,6 +162,20 @@ Prosper the Default Browser* button, a fallback browser for unmatched links, and
 hardcoded; rules live in your config. A stateless port of [Finicky](https://github.com/johnste/finicky) /
 Hammerspoon URL routing — and the Hammerspoon facade runs an existing
 `hs.urlevent.httpCallback` config unmodified.
+
+---
+
+## OpenLid
+
+Keep your Mac awake with the lid closed — no external display or charger required. **Toggle Mac Awake** flips the clamshell-sleep override on/off, guarded by your battery, network, and AC-power state so it won't drain a disconnected laptop. **OpenLid Status** shows what's currently keeping it awake (read-only); **Toggle Display Awake** keeps the screen from sleeping / the screensaver from kicking in while the lid is open.
+
+Works **out of the box** — no `sudo`, no Terminal, no `sudoers` edit. The lid override needs root, so Prosper installs a tiny privileged helper the first time you enable it (one-time approval in **System Settings → Login Items**); it uses no memory when idle and auto-resets if the app quits or crashes. Nothing is installed unless you use the feature.
+
+---
+
+## Themes
+
+Re-skin the whole app — palette, menu-bar, and dock chrome — from a flat 12-token color palette, with instant redraw. Pick one in **Settings → Personalization**. Ships with the built-in neon-blue console theme and a warm **amber** theme; extensions can contribute their own (`[[contributes.themes]]` → `theme.json`). See [Writing extensions](extensions.md).
 
 ---
 
