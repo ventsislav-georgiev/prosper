@@ -65,6 +65,13 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
         q.async { self.armIdleExit_locked() }
     }
 
+    /// Clear any `disablesleep` left stuck by a prior unclean kill. Synchronous so
+    /// it completes before we accept the first connection (no race with an
+    /// incoming setOverride(true)). See LidHelperCore.reclaimAtStartup.
+    func reclaimAtStartup() {
+        q.sync { core.reclaimAtStartup() }
+    }
+
     // pmset is a one-shot toggle (not a hot path); shelling it matches openlid and
     // is trivially correct. Runs as root here, so no sudo. // ponytail: pmset over
     // raw IOKit IOPMSetSystemPowerSetting — switch only if spawn cost ever matters.
@@ -106,9 +113,12 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
 let delegate = LidHelper()
 let listener = NSXPCListener(machServiceName: lidHelperMachServiceName)
 listener.delegate = delegate
-// Arm BEFORE accepting connections: a daemon launchd spun up for a handshake
-// that never completes still exits instead of lingering. The first valid
-// connection cancels it.
+// Self-heal a `disablesleep` left stuck by an unclean kill, THEN arm the idle
+// exit, both BEFORE accepting connections: a daemon launchd spun up for a
+// handshake that never completes still exits instead of lingering, and the
+// first valid connection's setOverride can't race the reclaim. The first valid
+// connection cancels the idle timer.
+delegate.reclaimAtStartup()
 delegate.armIdleAtStartup()
 listener.resume()
 // Block on the run loop; launchd owns our lifecycle and the idle-exit above ends
