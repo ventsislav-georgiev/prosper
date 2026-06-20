@@ -85,8 +85,11 @@ final class SettingsWindow {
 /// the willClose observer then drops the window so it deallocates.
 private final class CommandWClosableWindow: NSWindow {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Match ⌘W by virtual keycode (kVK_ANSI_W), not character: under a non-Latin
+        // layout charactersIgnoringModifiers is the layout glyph ("в" on Bulgarian), so
+        // a char check misses our synthetic ⌘W. The W key's keycode is layout-independent.
         if event.modifierFlags.contains(.command),
-           event.charactersIgnoringModifiers?.lowercased() == "w" {
+           event.keyCode == 13 || event.charactersIgnoringModifiers?.lowercased() == "w" {
             performClose(nil)
             return true
         }
