@@ -511,7 +511,7 @@ function settings_render(section_id, state)
     -- Full Disk Access matters only when Safari is in the mix.
     if source_on("safari") then
         sections[#sections + 1] = s.section{
-            id = "perm", title = "Permission",
+            id = "permissions", title = "Permissions",
             rows = { s.row{ kind = "permission", name = "full-disk-access",
                 title = "Full Disk Access",
                 subtitle = "Required only for the Safari source; other browsers import without it." } },
