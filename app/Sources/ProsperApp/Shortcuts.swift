@@ -132,6 +132,15 @@ extension KeyCombo {
     private static let codeToName: [Int: String] =
         Dictionary(keyCodeTable.map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
 
+    /// Single printable ASCII char for a virtual keycode (layout-independent), or nil
+    /// for keys with no character (space, arrows, F-keys, return…). Lets a synthetic
+    /// key event be stamped with the char a menu key-equivalent matches on, so e.g. ⌘W
+    /// closes a window even under a non-Latin layout. See KeyInjector.stroke.
+    static func asciiChar(forKeyCode code: UInt32) -> String? {
+        guard let name = codeToName[Int(code)], name.count == 1 else { return nil }
+        return name
+    }
+
     private static let keyCodeTable: [String: Int] = [
         "a": kVK_ANSI_A, "b": kVK_ANSI_B, "c": kVK_ANSI_C, "d": kVK_ANSI_D,
         "e": kVK_ANSI_E, "f": kVK_ANSI_F, "g": kVK_ANSI_G, "h": kVK_ANSI_H,

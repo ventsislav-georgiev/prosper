@@ -5,6 +5,24 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.104.0
+
+### Hammerspoon Compat
+- **⌘-shortcuts work under any keyboard layout.** A bound chord that re-injected a
+  menu key-equivalent (e.g. `hs.eventtap.keyStroke({"cmd"}, "W")` to close a window)
+  did nothing while typing in a non-Latin layout like Bulgarian: the synthetic event
+  carried the layout's character (⌘W → "в"), so the app's "Close" item (key
+  equivalent `w`) never matched. Injected ⌘/⌃ chords now stamp the ASCII character
+  for the keycode — mirroring how macOS routes real command-key events — so menu
+  shortcuts fire regardless of the active input source. Pure-keycode binds (arrows,
+  F-keys, launches) were already layout-independent.
+- **Per-app keyboard input switching now works.** `hs.application.watcher.new(fn):start()`
+  fires on app activation, and `hs.keycodes.currentSourceID(id)` / `hs.keycodes.layouts()`
+  are shimmed onto the host keyboard API. An unmodified config that switches input
+  source per app (e.g. Bulgarian in Slack/Telegram, ABC elsewhere) runs as-is. The
+  app object from `frontmostApplication()` also tolerates unsupported window methods
+  (`allWindows`/`hide`) as harmless no-ops instead of erroring.
+
 ## v2.103.0
 
 ### Fixes

@@ -144,9 +144,29 @@ local function build_hs(ctx)
         get = function() return nil end,
         frontmostApplication = function()
             local f = host.apps.frontmost(); if not f then return nil end
-            return { name = function() return f.name end, bundleID = function() return f.bundleID end,
-                     pid = function() return f.pid end }
+            -- Unknown app methods (allWindows/hide/…) are harmless chainable no-ops:
+            -- window mgmt is inert by design, so a config calling them won't error.
+            return setmetatable(
+                { name = function() return f.name end, bundleID = function() return f.bundleID end,
+                  pid = function() return f.pid end },
+                { __index = function(_, k) warn_once("hs.application:" .. tostring(k)); return chainable() end })
         end,
+        -- App-activation watcher. new(fn):start() records fn; the host's app.activated
+        -- event re-fires it via hs_app_activated with (appName, "activated", appObject),
+        -- matching hs.application.watcher.new. `activated` is the only delivered event
+        -- (covers the common case: switch keyboard input source per app).
+        watcher = {
+            activated = "activated",
+            new = function(fn)
+                local w = { fn = fn, started = false }
+                ctx.appwatchers[#ctx.appwatchers + 1] = w
+                return setmetatable({}, { __index = function(_, k)
+                    if k == "start" then return function(s) w.started = true; return s end end
+                    if k == "stop" then return function(s) w.started = false; return s end end
+                    return function(s) return s end -- other chainable no-ops
+                end })
+            end,
+        },
     }
     hs.appfinder = chainable("hs.appfinder")
 
@@ -315,7 +335,26 @@ local function build_hs(ctx)
         mainScreen = function() return chainable() end,
     }
     -- Real code->name map; unlisted codes fall back to themselves (numeric compares).
-    hs.keycodes = { map = setmetatable(KEYCODE_MAP, { __index = function(_, k) return k end }) }
+    hs.keycodes = {
+        map = setmetatable(KEYCODE_MAP, { __index = function(_, k) return k end }),
+        -- Input source get/set (real hs.keycodes.currentSourceID). No arg -> current
+        -- source id; string arg -> switch to it (gated like any side effect).
+        currentSourceID = function(id)
+            if id ~= nil then
+                if allowed() then host.keyboard.set_source(tostring(id)) end
+                return tostring(id)
+            end
+            return host.keyboard.current_source()
+        end,
+        -- layouts([wantIDs]) -> list of layout names, or source ids when wantIDs truthy.
+        layouts = function(want_ids)
+            local out = {}
+            for _, l in ipairs(host.keyboard.layouts() or {}) do
+                out[#out + 1] = want_ids and l.id or l.name
+            end
+            return out
+        end,
+    }
 
     -- fnutils — pure helpers, no host needed.
     hs.fnutils = {
@@ -593,7 +632,7 @@ local function run_user_config(mode)
         return nil
     end
 
-    local ctx = { mode = mode, firing = false, binds = {}, timers = {}, native = {}, eventtaps = {} }
+    local ctx = { mode = mode, firing = false, binds = {}, timers = {}, native = {}, eventtaps = {}, appwatchers = {} }
     -- Sandbox the user's chunk in a fresh env: inject `hs`, expose stdlib + print.
     -- No `_G` passthrough -> the config can't reach Prosper's host.* directly.
     local osShim = {
@@ -759,6 +798,31 @@ function hs_url_open(payload)
     local ok, err = pcall(cb, scheme, host_, params, full)
     ctx.firing = false
     if not ok then host.log.error("hammerspoon-compat: httpCallback error: " .. tostring(err)) end
+end
+
+-- app.activated event -> fire every started hs.application.watcher callback with
+-- (appName, "activated", appObject). Same warm/cold contract as hs_dispatch. Common
+-- use: per-app keyboard input source switching via hs.keycodes.currentSourceID.
+function hs_app_activated(payload)
+    if not is_enabled() then return end
+    local data = payload and host.json.decode(payload) or nil
+    if type(data) ~= "table" then return end
+    if not (_HS and _HS.ctx) then run_user_config("rebuild") end
+    local ctx = _HS and _HS.ctx
+    local list = ctx and ctx.appwatchers
+    if not (list and #list > 0) then return end -- no watcher in this config
+    local appObj = setmetatable(
+        { name = function() return data.name end, bundleID = function() return data.bundleID end,
+          pid = function() return data.pid end },
+        { __index = function() return inert(nil) end }) -- unknown methods: no-op
+    ctx.firing = true -- side-effecting hs.* (currentSourceID set) allowed in callback
+    for _, w in ipairs(list) do
+        if w.started and w.fn then
+            local ok, err = pcall(w.fn, data.name, "activated", appObj)
+            if not ok then host.log.error("hammerspoon-compat: appwatcher error: " .. tostring(err)) end
+        end
+    end
+    ctx.firing = false
 end
 
 -- ============ raw eventtaps (resident VM, opt-in) ============
