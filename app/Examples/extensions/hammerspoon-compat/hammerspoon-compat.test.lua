@@ -343,6 +343,18 @@ window_count = 0; hidden = {}
 hs_dispatch(tostring(w_idx))
 check(#hidden == 1 and hidden[1] == "com.apple.finder", "no windows -> host.apps.hide(frontmost bundleID)")
 
+-- 9j. perf: cmd+W -> hideAppIfNoWindows warm dispatch. Measures SHIM overhead only
+--     (frontmostApplication + allWindows table build + hide gate). In production
+--     host.apps.windows is an AX cross-process query (~ms) that dominates; the shim
+--     wrapper around it must stay negligible. HOT-PATH REQUIREMENT: < 200us/press.
+window_count = 1; hidden = {} -- has a window: build list, no hide (steady state)
+local W = 5000
+local t0w = os.clock()
+for _ = 1, W do hs_dispatch(tostring(w_idx)) end
+local perw = (os.clock() - t0w) / W * 1e6
+print(string.format("perf: cmd+W hideAppIfNoWindows (warm) = %.2f us/press", perw))
+check(perw < 200, "warm window-check dispatch under 200us/press (shim overhead)")
+
 -- restore the URL-routing config for the perf tests below
 FAKE_INIT = [[
 hs.urlevent.httpCallback = function(scheme, host, params, fullURL)

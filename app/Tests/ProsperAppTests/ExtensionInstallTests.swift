@@ -159,6 +159,49 @@ final class ExtensionInstallTests: XCTestCase {
 
         // Unknown id throws rather than silently granting.
         XCTAssertThrowsError(try registry.grantPrivilege(id: "com.nope"))
+
+        // Revoking trust revokes privilege (privilege requires trust): no
+        // privileged-but-untrusted state can linger.
+        XCTAssertTrue(registry.isPrivileged(id: "com.test.hello"))
+        try registry.untrust(id: "com.test.hello")
+        XCTAssertFalse(registry.isPrivileged(id: "com.test.hello"))
+        // A fresh registry on the same defaults agrees — the set was persisted clear.
+        let registry3 = ExtensionRegistry(
+            systemDir: nil, userDir: userDir, hostVersion: "2.0.0",
+            defaults: defaults, services: NoopServices())
+        registry3.discover()
+        XCTAssertFalse(registry3.isPrivileged(id: "com.test.hello"))
+    }
+
+    func testUninstallClearsPrivilege() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let userDir = tmp.appendingPathComponent("user")
+        let source = tmp.appendingPathComponent("source")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try writeSource(into: source, id: "com.test.hello")
+
+        let defaults = UserDefaults(suiteName: "test.\(UUID().uuidString)")!
+        func freshRegistry() -> ExtensionRegistry {
+            ExtensionRegistry(systemDir: nil, userDir: userDir, hostVersion: "2.0.0",
+                              defaults: defaults, services: NoopServices())
+        }
+
+        let registry = freshRegistry()
+        registry.discover()
+        try registry.installLocal(from: source)
+        try registry.trust(id: "com.test.hello")
+        try registry.grantPrivilege(id: "com.test.hello")
+        XCTAssertTrue(registry.isPrivileged(id: "com.test.hello"))
+
+        // Uninstall must scrub the privilege grant so a DIFFERENT extension reinstalled
+        // under the same id is never silently privileged (RCE escalation guard).
+        try registry.uninstall(id: "com.test.hello")
+        try registry.installLocal(from: source)
+        XCTAssertFalse(registry.isPrivileged(id: "com.test.hello"))
+        // And a brand-new registry reading the persisted set agrees.
+        let registry2 = freshRegistry()
+        registry2.discover()
+        XCTAssertFalse(registry2.isPrivileged(id: "com.test.hello"))
     }
 
     func testSystemExtensionAlwaysTrusted() throws {
