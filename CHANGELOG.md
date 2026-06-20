@@ -5,6 +5,18 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.103.0
+
+### Fixes
+- **Releases sign and notarize again.** v2.100.0–v2.102.0 failed to build: the
+  Apple Events entitlement added in v2.100.0 came with an XML comment that
+  contained the literal `--deep`. A double hyphen is illegal inside an XML comment,
+  and codesign's entitlement parser (AMFI, stricter than `plutil`) rejected the
+  whole plist — `Failed to parse entitlements: AMFIUnserializeXML: syntax error` —
+  so `dist/Prosper.app` was left unsigned and notarization aborted. Removed the
+  comment from the signing entitlements (the note now lives in the build script),
+  so the Apple Events grant from v2.100.0 finally ships.
+
 ## v2.102.0
 
 ### Build
