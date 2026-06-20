@@ -208,6 +208,10 @@ enum AppControl {
     /// Bounds the cross-process AX call to 0.25s: the default timeout is ~6s, and a
     /// hung target app would otherwise stall the caller that long — fatal if a config
     /// ever calls this from an eventtap (synchronous, on the CGEvent-tap main thread).
+    // ponytail: kAXWindowsAttribute counts standard windows incl. minimized ones, so
+    // hideAppIfNoWindows treats a minimize-to-Dock like an open window. Matches the
+    // common Hammerspoon idiom; filter on AXMinimized per-window if that distinction
+    // ever matters.
     static func windowCount(bundleID: String) -> Int {
         guard let app = match(bundleID) else { return 0 }
         let ax = AXUIElementCreateApplication(app.processIdentifier)
