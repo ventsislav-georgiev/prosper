@@ -334,7 +334,21 @@ final class ExtensionSettingsTests: XCTestCase {
 
     func testPermissionsDispatchLabels() {
         XCTAssertEqual(PermissionsManager.label(forPermission: "full-disk-access"), "Full Disk Access")
+        XCTAssertEqual(PermissionsManager.label(forPermission: "accessibility"), "Accessibility")
         XCTAssertEqual(PermissionsManager.label(forPermission: "unknown"), "unknown")
         XCTAssertFalse(PermissionsManager.isGranted("unknown"))
+    }
+
+    /// Input Monitoring was removed app-wide: the autocomplete tap is an active
+    /// .cgSessionEventTap (.defaultTap) gated by Accessibility, never the
+    /// listen-only HID grant. "input-monitoring" must now be an UNKNOWN permission
+    /// — not granted, label passes through verbatim — so no extension can declare
+    /// it and no UI resurfaces it. Locks the removal against regressions.
+    func testInputMonitoringIsNoLongerAKnownPermission() {
+        XCTAssertFalse(PermissionsManager.isGranted("input-monitoring"),
+                       "input-monitoring must dispatch to the unknown/false branch")
+        XCTAssertEqual(PermissionsManager.label(forPermission: "input-monitoring"),
+                       "input-monitoring",
+                       "no special-cased label — it is no longer a recognized permission")
     }
 }

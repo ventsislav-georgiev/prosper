@@ -172,11 +172,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private var shouldShowSetup: Bool {
-        // Autocomplete's active session event tap is gated by Accessibility (it
-        // injects/swallows keys + reads the caret via AX). Input Monitoring is the
-        // listen-only HID grant, which this active tap doesn't need — so don't nag
-        // for it. See AutocompleteEngine.start() (guards Accessibility only).
-        Preferences.autocompleteEnabled && !PermissionsManager.isAccessibilityTrusted()
+        // "Re-run Setup…" runs the MODEL download (onRerunSetup -> runModelSetup),
+        // so it must gate on the model, not a TCC grant: show it only when inline
+        // autocomplete is on but the local model isn't on disk (completions can't
+        // run without it). The Accessibility grant is surfaced separately — as the
+        // inline warning in General settings (see GeneralPane.PermissionWarningRow),
+        // not here — so the two concerns don't cross-wire (the old gate showed a
+        // model-download item whenever Accessibility was missing, and hid it when
+        // the model was genuinely absent).
+        //
+        // Check the SELECTED completion model, not "any model on disk": a user who
+        // switched to an undownloaded model still needs setup even with another
+        // model cached. The id-keyed lookup also walks a single snapshots tree
+        // instead of enumerating every cached model — cheaper on this per-open
+        // menu-refresh path (the no-arg `isModelDownloaded` scans the whole hub).
+        Preferences.autocompleteEnabled && !ModelFiles.isModelDownloaded(Preferences.coreModel)
     }
 
     private func buildMenu() -> NSMenu {
