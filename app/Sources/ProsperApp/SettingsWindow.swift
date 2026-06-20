@@ -530,7 +530,6 @@ private struct SettingsRootView: View {
         case "apps": AppsPane(model: model)
         case "personalization": PersonalizationPane(model: model)
         case "shortcuts": ShortcutsPane(model: model)
-        case "window-mgmt": WindowShortcutsPane(model: model)
         case "agent": AgentPane(model: model)
         case "agent-mcp": MCPServersPane(model: model)
         case "agent-plugins": PluginsHooksPane(model: model)
@@ -1424,31 +1423,6 @@ private struct GlobalShortcutRow: View {
     }
 }
 
-/// Window-management shortcuts as their own settings page. Only added to the
-/// sidebar while the Window extension is enabled (see settingsSidebarGroups), so
-/// the rows vanish entirely when that extension is off.
-/// ponytail: hides the UI only — the hotkeys stay registered regardless of the
-/// extension's enabled state. Gate AppDelegate.registerHotKeys on it if that
-/// coupling is ever wanted.
-private struct WindowShortcutsPane: View {
-    @ObservedObject var model: SettingsModel
-
-    var body: some View {
-        NeonScroll {
-            PaneTitle(title: "Window Management", accent: "Window",
-                      subtitle: "Snap and resize the frontmost window with global shortcuts")
-            NeonSection("Shortcuts (click to rebind)",
-                        footer: "Snaps the frontmost window of whatever app is in front. Pressing the same half again toggles its size: half \u{2194} quarter.") {
-                let actions = ShortcutAction.allCases.filter { $0.isWindowManagement }
-                ForEach(Array(actions.enumerated()), id: \.element) { idx, action in
-                    if idx > 0 { NeonDivider() }
-                    GlobalShortcutRow(model: model, action: action)
-                }
-            }
-        }
-    }
-}
-
 /// One editable custom-shortcut row: command picker + recorder + delete.
 /// Factored out of `ShortcutsPane` to keep the SwiftUI type-checker fast.
 private struct CustomShortcutRow: View {
@@ -2083,13 +2057,6 @@ func settingsSidebarGroups(registry: ExtensionRegistry?) -> [(String, [SettingsT
                 title: section.title,
                 icon: section.icon ?? record.manifest.extension.icon ?? "puzzlepiece.extension.fill",
                 accent: section.accent))
-        }
-        // Window-management shortcuts are native, but belong to the Window
-        // extension — surface their settings page only while it's enabled.
-        if registry.record(id: "com.prosper.window")?.enabled == true {
-            extensionSections.append(SettingsTab(
-                id: "window-mgmt", title: "Window Management",
-                icon: "macwindow.on.rectangle", accent: "Window"))
         }
     }
     var result: [(String, [SettingsTab])] = [("General", general)]

@@ -239,6 +239,10 @@ enum SettingsControlKind: String, Codable, Sendable {
     case group, toggle, text, secret, number, stepper
     case enumeration = "enum"
     case path, info, permission, button, link
+    /// A global-shortcut recorder bound to a host `ShortcutAction` (the `name`
+    /// field carries the action's rawValue). Renders the same recorder/reset/clear
+    /// row as the native Shortcuts pane; persists via ShortcutStore.
+    case shortcut
 }
 
 struct SettingsControl: Codable, Sendable, Equatable {

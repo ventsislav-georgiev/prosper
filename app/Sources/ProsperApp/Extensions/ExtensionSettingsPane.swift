@@ -156,6 +156,7 @@ private struct SettingsRowView: View {
         case "path":       PathRow(row: row, onEvent: onEvent)
         case "info":       InfoRow(row: row)
         case "permission": PermissionRow(row: row, onEvent: onEvent).id("\(row.name ?? "")-\(permissionTick)")
+        case "shortcut":   ShortcutRow(row: row)
         case "button":     ButtonRow(row: row, onEvent: onEvent)
         case "link":       LinkRow(row: row, onEvent: onEvent)
         case "records":    RecordsRow(row: row, onEvent: onEvent)
@@ -313,6 +314,52 @@ private struct PermissionRow: View {
                 }
                 Button("Re-check") { onEvent(.recheck) }.buttonStyle(.neon)
             }
+        }
+    }
+}
+
+/// A global-shortcut recorder row, identical in look to the native
+/// `GlobalShortcutRow`. Self-contained: the keypress invokes a host
+/// `ShortcutAction` (window snapping, etc.), so it reads/writes `ShortcutStore`
+/// directly and pokes `SettingsHooks.shared.onShortcutsChanged` to re-register
+/// the Carbon hotkey — no SettingsModel/event plumbing needed. `row.name` is the
+/// action's rawValue; an unknown name degrades to a plain info row.
+private struct ShortcutRow: View {
+    let row: SettingsUIRow
+    @State private var combo: KeyCombo = unsetKeyCombo
+
+    private var action: ShortcutAction? { row.name.flatMap(ShortcutAction.init(rawValue:)) }
+
+    var body: some View {
+        if let action {
+            HStack {
+                Text(row.title ?? action.title).foregroundStyle(Neon.textPrimary)
+                Spacer()
+                ShortcutRecorder(combo: combo) { new in
+                    combo = new
+                    ShortcutStore.setCombo(new, for: action)
+                    SettingsHooks.shared.onShortcutsChanged?()
+                }
+                .frame(width: 110, height: 24)
+                .fixedSize()
+                Button {
+                    combo = action.defaultCombo
+                    ShortcutStore.reset(action)
+                    SettingsHooks.shared.onShortcutsChanged?()
+                } label: { Image(systemName: "arrow.uturn.backward") }
+                    .buttonStyle(.borderless)
+                    .help("Reset to default")
+                Button {
+                    combo = unsetKeyCombo
+                    ShortcutStore.setCombo(unsetKeyCombo, for: action)
+                    SettingsHooks.shared.onShortcutsChanged?()
+                } label: { Image(systemName: "xmark.circle") }
+                    .buttonStyle(.borderless)
+                    .help("Disable this shortcut")
+            }
+            .onAppear { combo = ShortcutStore.combo(for: action) }
+        } else {
+            InfoRow(row: row)
         }
     }
 }
