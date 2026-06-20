@@ -140,6 +140,19 @@ Saved URLs with `{query}` templates and saved directories with per-dir actions �
 
 ---
 
+## Browser router
+
+Make Prosper your default browser and every clicked link is routed to the right
+browser by domain — work links to Chrome, personal to Safari, a localhost rule to
+whatever you like. Set it up in **Settings → URL Dispatcher**: a one-click *Make
+Prosper the Default Browser* button, a fallback browser for unmatched links, and a
+**domain → browser** rule list (first match wins, plain substring). Nothing is
+hardcoded; rules live in your config. A stateless port of [Finicky](https://github.com/johnste/finicky) /
+Hammerspoon URL routing — and the Hammerspoon facade runs an existing
+`hs.urlevent.httpCallback` config unmodified.
+
+---
+
 ## Extensions
 
 Add commands without recompiling — small **Lua** scripts, auto-loaded, routed by regex. Manage in **Settings → Extensions**: enable/disable, edit live (everything lives in `~/.config/prosper/extensions`), reset bundled extensions to original, **install from GitHub** by pasting a repo URL, or browse the **Marketplace** to one-click-install (and publish) signed extensions — fresh installs stay untrusted until you grant trust.
