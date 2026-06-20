@@ -3,15 +3,12 @@ import SwiftUI
 
 /// Settings pane for managing extensions: list installed (system + user), toggle
 /// enable/disable, trust newly installed ones, reset system extensions, uninstall
-/// user ones, browse + install from the marketplace, publish your own, and install
-/// from a GitHub URL. See docs/ADR-002-extensibility.md (D8/D9) and the trust gate
+/// user ones, browse + install from the marketplace, and publish your own.
+/// See docs/ADR-002-extensibility.md (D8/D9) and the trust gate
 /// in ExtensionRegistry (installed-but-inert until the user clicks Trust).
 struct ExtensionsPane: View {
     @ObservedObject var registry: ExtensionRegistry
 
-    @State private var installURL = ""
-    @State private var installing = false
-    @State private var errorMessage: String?
     @State private var checkingUpdates = false
 
     // Per-section collapse state, persisted across opens (user > system > marketplace).
@@ -46,8 +43,10 @@ struct ExtensionsPane: View {
             }
             .padding(.bottom, 2)
 
-            // User-installed extensions first (what the user added / is publishing),
-            // then the bundled system ones. Two sections so the distinction is clear.
+            // Marketplace first (discovery), then user-installed (what the user added /
+            // is publishing), then the bundled system ones.
+            MarketBrowseSection(registry: registry, collapsed: $marketCollapsed)
+
             NeonSection("User Extensions", collapsed: $userCollapsed) {
                 HStack {
                     if let status = registry.updateStatus {
@@ -69,28 +68,6 @@ struct ExtensionsPane: View {
             NeonSection("System Extensions", collapsed: $systemCollapsed) {
                 installedList(systemRecords, emptyText: "No system extensions found.")
             }
-
-            MarketBrowseSection(registry: registry, collapsed: $marketCollapsed)
-
-            NeonSection("Install from GitHub",
-                        footer: "Point at a repository, or a sub-directory containing extension.toml.") {
-                HStack {
-                    TextField("https://github.com/owner/repo[/tree/branch/subdir]", text: $installURL)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(installing)
-                        .onSubmit(install)
-                    if installing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Button("Install", action: install)
-                            .buttonStyle(.neon)
-                            .disabled(installURL.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                }
-                if let errorMessage {
-                    Text(errorMessage).font(.caption).foregroundStyle(Neon.magenta)
-                }
-            }
         }
     }
 
@@ -99,27 +76,6 @@ struct ExtensionsPane: View {
         Task {
             await registry.checkForUpdates(force: true)
             await MainActor.run { checkingUpdates = false }
-        }
-    }
-
-    private func install() {
-        let url = installURL.trimmingCharacters(in: .whitespaces)
-        guard !url.isEmpty else { return }
-        errorMessage = nil
-        installing = true
-        Task {
-            do {
-                try await registry.installRemote(url: url)
-                await MainActor.run {
-                    installing = false
-                    installURL = ""
-                }
-            } catch {
-                await MainActor.run {
-                    installing = false
-                    errorMessage = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-                }
-            }
         }
     }
 }

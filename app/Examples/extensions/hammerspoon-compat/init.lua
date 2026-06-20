@@ -705,6 +705,21 @@ local function diagnostics_rows()
     info("Key remaps (hs.prosper)", #nat == 0 and "none"
         or (#nat .. " active:  " .. table.concat(nat, "   ·   ")))
 
+    -- URL routing (hs.urlevent.httpCallback) → url.open event. Only meaningful once
+    -- Prosper is the default browser, so report that too — a live callback with the
+    -- wrong default browser silently routes nothing.
+    if ctx.urlevent and type(ctx.urlevent.httpCallback) == "function" then
+        local is_def = host.url and host.url.default_browser
+            and host.url.default_browser() == PROSPER
+        info("URL routing (hs.urlevent)", is_def
+            and "httpCallback active — opened links route through your config."
+            or "httpCallback active, but Prosper is NOT the default browser — links "
+                .. "won't reach it. Call hs.urlevent.setDefaultHandler(\"http\") or set "
+                .. "it in System Settings.")
+    else
+        info("URL routing (hs.urlevent)", "none")
+    end
+
     -- Raw eventtaps (hs.eventtap.new) — these need the resident VM (event_taps).
     local taps, kd, sd, ignored = 0, false, false, false
     for _, t in ipairs(ctx.eventtaps or {}) do
