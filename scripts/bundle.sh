@@ -266,6 +266,14 @@ if [[ "$NOTARIZE" == 1 ]]; then
   # app shows "An error occurred while running the updater"). The --deep pass
   # therefore uses a profile-free, hardened-runtime-only entitlement set;
   # keychain-access-groups is added afterward to the top-level app executable alone.
+  # allow-jit: MLX JIT-compiles Metal kernels at runtime.
+  # automation.apple-events: osascript host API / Hammerspoon-compat URL routing
+  #   drives other apps via NSAppleScript ("tell application Safari ..."); without
+  #   it that is denied (errAEEventNotPermitted). Unrestricted, safe on the deep set.
+  # NOTE: keep this plist comment-free. AMFI's entitlement parser
+  # (AMFIUnserializeXML) is stricter than plutil and rejects an XML comment that
+  # contains a double hyphen (e.g. a literal "--deep"), failing the whole sign with
+  # "Failed to parse entitlements: syntax error". Put notes in bash, not the heredoc.
   BASE_ENT="$(mktemp -t prosper-base-ent).plist"
   cat > "$BASE_ENT" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -274,10 +282,6 @@ if [[ "$NOTARIZE" == 1 ]]; then
 <dict>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
-	<!-- Send Apple Events to other apps (osascript host API / Hammerspoon-compat
-	     `tell application "Safari"` URL routing). Unrestricted entitlement; safe on
-	     the --deep set. Without it NSAppleScript controlling another app is denied
-	     (errAEEventNotPermitted) and "nothing happens". -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
 </dict>
