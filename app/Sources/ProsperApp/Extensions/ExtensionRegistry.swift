@@ -14,13 +14,21 @@ final class ExtensionRecord {
     /// spawned until the user inspects it and clicks Trust. The only attack surface
     /// is the download/extract code — see `ExtensionRegistry.trust`.
     var trusted: Bool
+    /// Whether the user has granted this extension the SYSTEM tier (host.shell, the
+    /// coding-agent, destructive host.files.act) — an explicit, per-extension opt-in
+    /// SEPARATE from Trust. System extensions are always privileged. A user/market
+    /// extension is privileged ONLY if the user toggles it on (default off), so a
+    /// trusted-but-not-privileged extension keeps the automation-only surface (today's
+    /// behaviour). See `ExtensionRegistry.grantPrivilege`.
+    var privileged: Bool
     /// Created on first activation, torn down on disable/reset/reload.
     var runtime: LuaRuntime?
 
-    init(loaded: LoadedExtension, enabled: Bool, trusted: Bool) {
+    init(loaded: LoadedExtension, enabled: Bool, trusted: Bool, privileged: Bool = false) {
         self.loaded = loaded
         self.enabled = enabled
         self.trusted = trusted
+        self.privileged = privileged
     }
 
     var id: String { loaded.id }
@@ -159,6 +167,7 @@ final class ExtensionRegistry: ObservableObject {
 
     private static let disabledKey = "disabledExtensionIDs"
     private static let trustedKey = "trustedExtensionIDs"
+    private static let privilegedKey = "privilegedExtensionIDs"
 
     /// Command routing: id → record, plus an ordered list carrying compiled
     /// `match` regexes for query-prefix dispatch.
@@ -313,7 +322,13 @@ final class ExtensionRegistry: ObservableObject {
             persistTrusted(Set(found.filter { !$0.isSystem }.map(\.id)))
         }
         let trusted = trustedIDs()
-        for record in found { record.trusted = record.isSystem || trusted.contains(record.id) }
+        // No grandfather migration for privilege: it must be an explicit opt-in, so
+        // absence of the key = nothing privileged (only system extensions, via isSystem).
+        let privileged = privilegedIDs()
+        for record in found {
+            record.trusted = record.isSystem || trusted.contains(record.id)
+            record.privileged = record.isSystem || privileged.contains(record.id)
+        }
 
         records = found
         rebuildRoutes()
@@ -500,7 +515,7 @@ final class ExtensionRegistry: ObservableObject {
             entryURL: record.loaded.entryURL,
             handler: Self.handlerName(for: command.id),
             callTimeout: callTimeout,
-            privileged: record.isSystem, trusted: record.trusted
+            privileged: record.privileged, trusted: record.trusted
         )
         let result = await asyncRuntimes.invoke(spec, args: [query])
         if result != nil, record.isSystem { AnalyticsStore.bumpUsage(extensionID: record.id) }
@@ -533,7 +548,7 @@ final class ExtensionRegistry: ObservableObject {
             entryURL: record.loaded.entryURL,
             handler: Self.handlerName(for: command.id) + "_action",
             callTimeout: callTimeout,
-            privileged: record.isSystem, trusted: record.trusted
+            privileged: record.privileged, trusted: record.trusted
         )
         guard let json = await asyncRuntimes.invoke(spec, args: [actionID, value ?? "", formJSON]) else { return nil }
         return try? ExtensionViewNode.decode(json: json)
@@ -569,7 +584,7 @@ final class ExtensionRegistry: ObservableObject {
         guard let record = record(id: extensionID), record.isLive else { return nil }
         let spec = AsyncExtensionRuntimes.Spec(
             extensionID: record.id, entryURL: record.loaded.entryURL,
-            handler: "settings_render", callTimeout: callTimeout, privileged: record.isSystem, trusted: record.trusted)
+            handler: "settings_render", callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted)
         guard let json = await asyncRuntimes.invoke(spec, args: [sectionID, state]) else { return nil }
         return try? SettingsUI.decode(json: json)
     }
@@ -584,7 +599,7 @@ final class ExtensionRegistry: ObservableObject {
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let spec = AsyncExtensionRuntimes.Spec(
             extensionID: record.id, entryURL: record.loaded.entryURL,
-            handler: "settings_action", callTimeout: callTimeout, privileged: record.isSystem, trusted: record.trusted)
+            handler: "settings_action", callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted)
         guard let json = await asyncRuntimes.invoke(
             spec, args: [sectionID, actionID, value ?? "", formJSON]) else { return nil }
         return try? SettingsUI.decode(json: json)
@@ -657,7 +672,7 @@ final class ExtensionRegistry: ObservableObject {
             entryURL: record.loaded.entryURL,
             handler: function,
             callTimeout: callTimeout,
-            privileged: record.isSystem, trusted: record.trusted
+            privileged: record.privileged, trusted: record.trusted
         )
         guard let json = await asyncRuntimes.invoke(spec, args: args) else { return nil }
         return try? ExtensionViewNode.decode(json: json)
@@ -674,7 +689,7 @@ final class ExtensionRegistry: ObservableObject {
         guard let record = record(id: extensionID), record.isLive else { return }
         let spec = AsyncExtensionRuntimes.Spec(
             extensionID: record.id, entryURL: record.loaded.entryURL,
-            handler: handler, callTimeout: callTimeout, privileged: record.isSystem, trusted: record.trusted)
+            handler: handler, callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted)
         _ = await asyncRuntimes.invoke(spec, args: [payloadJSON])
     }
 
@@ -721,7 +736,7 @@ final class ExtensionRegistry: ObservableObject {
         if let rt = record.runtime { return rt }
         let rt = try LuaRuntime(allowLoad: record.isSystem || record.trusted)
         try ExtensionHost(extensionID: record.id, services: services, callTimeout: callTimeout,
-                          privileged: record.isSystem, trusted: record.trusted)
+                          privileged: record.privileged, trusted: record.trusted)
             .install(into: rt)
         let source = try String(contentsOf: record.loaded.entryURL, encoding: .utf8)
         try rt.run(source, name: "@\(record.id)")
@@ -1011,6 +1026,55 @@ final class ExtensionRegistry: ObservableObject {
         record.runtime = nil
         asyncRuntimes.invalidate(id: id)
         TimerScheduler.shared.cancelAll(extID: id)
+        rebuildRoutes()
+        objectWillChange.send()
+        onEnabledChanged?()
+    }
+
+    // MARK: - Privilege (system tier) gate
+
+    private func privilegedIDs() -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.privilegedKey) ?? [])
+    }
+
+    private func persistPrivileged(_ ids: Set<String>) {
+        defaults.set(ids.sorted(), forKey: Self.privilegedKey)
+    }
+
+    func isPrivileged(id: String) -> Bool { record(id: id)?.privileged ?? false }
+
+    /// Grant the SYSTEM tier to a user extension: host.shell, the coding-agent, and
+    /// destructive host.files.act become available to its Lua. A deliberate, explicit
+    /// escalation — the extension can now run arbitrary commands as the user, so this
+    /// is a user action distinct from Trust (the Settings toggle warns). Tears down any
+    /// live VM so the next call rebuilds with the privileged host table. No-op for
+    /// system extensions (always privileged). Takes effect only once the extension is
+    /// also trusted — an untrusted extension never spawns a VM.
+    func grantPrivilege(id: String) throws {
+        guard let record = record(id: id) else { throw ExtensionError.notFound(id) }
+        guard !record.isSystem else { return }
+        var ids = privilegedIDs()
+        ids.insert(id)
+        persistPrivileged(ids)
+        record.privileged = true
+        record.runtime = nil
+        asyncRuntimes.invalidate(id: id)
+        rebuildRoutes()
+        objectWillChange.send()
+        onEnabledChanged?()
+    }
+
+    /// Revoke the system tier: the extension drops back to the automation tier
+    /// (shell/agent/destructive fs refused). Tears down its VM so it rebuilds gated.
+    func revokePrivilege(id: String) throws {
+        guard let record = record(id: id) else { throw ExtensionError.notFound(id) }
+        guard !record.isSystem else { return }
+        var ids = privilegedIDs()
+        ids.remove(id)
+        persistPrivileged(ids)
+        record.privileged = false
+        record.runtime = nil
+        asyncRuntimes.invalidate(id: id)
         rebuildRoutes()
         objectWillChange.send()
         onEnabledChanged?()

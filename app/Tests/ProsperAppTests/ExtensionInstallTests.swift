@@ -122,6 +122,45 @@ final class ExtensionInstallTests: XCTestCase {
         XCTAssertNotNil(registry.command(id: "hello.run"))
     }
 
+    func testPrivilegeGate() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let userDir = tmp.appendingPathComponent("user")
+        let source = tmp.appendingPathComponent("source")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try writeSource(into: source, id: "com.test.hello")
+
+        let defaults = UserDefaults(suiteName: "test.\(UUID().uuidString)")!
+        let registry = ExtensionRegistry(
+            systemDir: nil, userDir: userDir, hostVersion: "2.0.0",
+            defaults: defaults, services: NoopServices())
+        registry.discover()
+        try registry.installLocal(from: source)
+        try registry.trust(id: "com.test.hello")
+
+        // Trusted but NOT privileged by default: automation tier only (today's behaviour).
+        XCTAssertFalse(registry.isPrivileged(id: "com.test.hello"))
+        XCTAssertFalse(registry.record(id: "com.test.hello")?.privileged ?? true)
+
+        // Explicit grant elevates to the system tier; revoke drops back.
+        try registry.grantPrivilege(id: "com.test.hello")
+        XCTAssertTrue(registry.isPrivileged(id: "com.test.hello"))
+        try registry.revokePrivilege(id: "com.test.hello")
+        XCTAssertFalse(registry.isPrivileged(id: "com.test.hello"))
+
+        // Privilege is its OWN opt-in, separate from Trust: trust alone never grants it.
+        try registry.grantPrivilege(id: "com.test.hello")
+
+        // Survives a rescan / fresh registry on the same defaults (UserDefaults-backed).
+        let registry2 = ExtensionRegistry(
+            systemDir: nil, userDir: userDir, hostVersion: "2.0.0",
+            defaults: defaults, services: NoopServices())
+        registry2.discover()
+        XCTAssertTrue(registry2.isPrivileged(id: "com.test.hello"))
+
+        // Unknown id throws rather than silently granting.
+        XCTAssertThrowsError(try registry.grantPrivilege(id: "com.nope"))
+    }
+
     func testSystemExtensionAlwaysTrusted() throws {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tmp) }

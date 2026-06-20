@@ -111,6 +111,9 @@ private struct ExtensionRow: View {
                         } else if !record.trusted {
                             badge("UNTRUSTED")
                         }
+                        if record.privileged && !record.isSystem {
+                            badge("PRIVILEGED")
+                        }
                         Text("v\(meta.version)").font(.caption).foregroundColor(.secondary)
                     }
                     Text(meta.description).font(.caption).foregroundColor(.secondary)
@@ -130,6 +133,11 @@ private struct ExtensionRow: View {
                     .font(.caption).foregroundStyle(Neon.magenta)
             }
 
+            if record.privileged && !record.isSystem {
+                Text("System access granted: this extension can run shell commands, the coding-agent, and delete files as you. Revoke if unsure.")
+                    .font(.caption).foregroundStyle(Neon.magenta)
+            }
+
             HStack(spacing: 12) {
                 Button("Reveal in Finder") {
                     if let dir = registry.directory(id: record.id) {
@@ -146,6 +154,15 @@ private struct ExtensionRow: View {
                         Button("Untrust", action: untrust)
                             .rowAction()
                             .help("Stop loading this extension until you trust it again")
+                        if record.privileged {
+                            Button("Revoke System Access", action: revokePrivilege)
+                                .rowAction()
+                                .help("Drop back to the automation tier — no shell, coding-agent, or file deletion")
+                        } else {
+                            Button("Grant System Access", action: grantPrivilege)
+                                .rowAction()
+                                .help("Allow host.shell, the coding-agent, and destructive file ops. This extension could run any command as you — only grant configs you have read.")
+                        }
                         publishButton
                     } else {
                         Button("Trust", action: trust)
@@ -237,6 +254,18 @@ private struct ExtensionRow: View {
     private func untrust() {
         rowError = nil
         do { try registry.untrust(id: record.id) }
+        catch { rowError = String(describing: error) }
+    }
+
+    private func grantPrivilege() {
+        rowError = nil
+        do { try registry.grantPrivilege(id: record.id) }
+        catch { rowError = String(describing: error) }
+    }
+
+    private func revokePrivilege() {
+        rowError = nil
+        do { try registry.revokePrivilege(id: record.id) }
         catch { rowError = String(describing: error) }
     }
 

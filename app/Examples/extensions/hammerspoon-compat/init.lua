@@ -144,12 +144,8 @@ local function build_hs(ctx)
         get = function() return nil end,
         frontmostApplication = function()
             local f = host.apps.frontmost(); if not f then return nil end
-            -- Unknown app methods (allWindows/hide/…) are harmless chainable no-ops:
-            -- window mgmt is inert by design, so a config calling them won't error.
-            return setmetatable(
-                { name = function() return f.name end, bundleID = function() return f.bundleID end,
-                  pid = function() return f.pid end },
-                { __index = function(_, k) warn_once("hs.application:" .. tostring(k)); return chainable() end })
+            -- Real allWindows()/hide() via make_app; other methods inert no-ops.
+            return make_app(f.name, f.bundleID, f.pid)
         end,
         -- App-activation watcher. new(fn):start() records fn; the host's app.activated
         -- event re-fires it via hs_app_activated with (appName, "activated", appObject),
@@ -519,6 +515,35 @@ local function inert(name)
     })
 end
 
+-- Build an hs.application object with REAL allWindows()/hide(), backed by host.apps
+-- (AX window list count + NSRunningApplication.hide). Used by frontmostApplication
+-- and the app.activated watcher so configs like hideAppIfNoWindows(app) work.
+-- allWindows() returns a list whose LENGTH equals the AX window count (configs use
+-- `#app:allWindows()`); each element is an inert window stub. hide() is a side
+-- effect, so it is gated like every other shim effect: only in register mode or
+-- while a callback fires. Unknown app methods stay inert no-ops.
+-- NOTE: AX window count needs Accessibility; without the grant host.apps.windows
+-- returns 0, so allWindows() reads empty (Prosper holds a11y in normal use).
+-- Global (not local) so build_hs's frontmostApplication closure — defined earlier
+-- in the file — resolves it at call time alongside hs_app_activated.
+function make_app(name, bid, pid)
+    return setmetatable(
+        { name = function() return name end,
+          bundleID = function() return bid end,
+          pid = function() return pid end,
+          allWindows = function()
+              local n = host.apps.windows(bid or "") or 0
+              local t = {}
+              for i = 1, n do t[i] = inert(nil) end
+              return t
+          end,
+          hide = function()
+              local c = _HS and _HS.ctx
+              if c and (c.mode == "register" or c.firing) then host.apps.hide(bid or "") end
+          end },
+        { __index = function() return inert(nil) end })
+end
+
 -- ============ Spoon shim (URLDispatcher only) ============
 -- Hammerspoon's URLDispatcher Spoon is the common way to do per-domain browser
 -- routing + URL rewriting from init.lua. We reproduce enough of it to run an
@@ -813,10 +838,7 @@ function hs_app_activated(payload)
     local ctx = _HS and _HS.ctx
     local list = ctx and ctx.appwatchers
     if not (list and #list > 0) then return end -- no watcher in this config
-    local appObj = setmetatable(
-        { name = function() return data.name end, bundleID = function() return data.bundleID end,
-          pid = function() return data.pid end },
-        { __index = function() return inert(nil) end }) -- unknown methods: no-op
+    local appObj = make_app(data.name, data.bundleID, data.pid)
     ctx.firing = true -- side-effecting hs.* (currentSourceID set) allowed in callback
     for _, w in ipairs(list) do
         if w.started and w.fn then
