@@ -1,7 +1,6 @@
 import AppKit
 import ApplicationServices
-import IOKit
-import IOKit.hidsystem
+import ServiceManagement
 import UserNotifications
 
 /// Accessibility trust + System Settings deep links.
@@ -10,19 +9,6 @@ enum PermissionsManager {
     /// Returns whether the process is currently trusted for Accessibility.
     static func isAccessibilityTrusted() -> Bool {
         return AXIsProcessTrusted()
-    }
-
-    /// Returns whether the process is granted Input Monitoring (CGEventTap /
-    /// keystroke listening). Uses the HID access API; `.granted` means allowed.
-    /// `.unknown`/`.denied` both read as not-yet-granted for the onboarding gate.
-    static func isInputMonitoringTrusted() -> Bool {
-        return IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
-    }
-
-    /// Prompts for Input Monitoring access (shows the system dialog once).
-    @discardableResult
-    static func requestInputMonitoring() -> Bool {
-        return IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
     }
 
     /// Whether the app currently holds Full Disk Access. There is no preflight API
@@ -61,7 +47,9 @@ enum PermissionsManager {
         switch permission {
         case "full-disk-access": return hasFullDiskAccess()
         case "accessibility": return isAccessibilityTrusted()
-        case "input-monitoring": return isInputMonitoringTrusted()
+        // openlid's privileged lid-sleep daemon: "granted" == the SMAppService
+        // background item is approved + enabled (System Settings → Login Items).
+        case "lid-helper": return LidSleepHelper.isEnabled
         default: return false
         }
     }
@@ -71,8 +59,12 @@ enum PermissionsManager {
         switch permission {
         case "full-disk-access": openFullDiskAccessSettings()
         case "accessibility": openAccessibilitySettings()
-        case "input-monitoring": openInputMonitoringSettings()
         case "screen-recording": openScreenRecordingSettings()
+        // Registers the daemon if needed (first time) and opens Login Items so the
+        // user can approve it. ensureRegistered() opens the pane itself when the
+        // status is .requiresApproval; do it unconditionally here too in case it
+        // is already registered but the user toggled it off.
+        case "lid-helper": LidSleepHelper.ensureRegistered(); SMAppService.openSystemSettingsLoginItems()
         default: break
         }
     }
@@ -82,8 +74,8 @@ enum PermissionsManager {
         switch permission {
         case "full-disk-access": return "Full Disk Access"
         case "accessibility": return "Accessibility"
-        case "input-monitoring": return "Input Monitoring"
         case "screen-recording": return "Screen Recording"
+        case "lid-helper": return "Background Helper"
         default: return permission
         }
     }
@@ -114,9 +106,9 @@ enum PermissionsManager {
     /// the app still isn't trusted" state: an ad-hoc-signed rebuild has a new
     /// code signature, so macOS's existing grant (keyed to the old signature)
     /// no longer matches the running binary. Resetting purges the stale entry
-    /// and a fresh grant binds to the current binary. `service` is the TCC key:
-    /// "Accessibility" or "ListenEvent" (Input Monitoring). No-op (returns
-    /// false) in unbundled CLI runs with no bundle identifier.
+    /// and a fresh grant binds to the current binary. `service` is the TCC key
+    /// (e.g. "Accessibility"). No-op (returns false) in unbundled CLI runs with
+    /// no bundle identifier.
     @discardableResult
     static func resetPrivacyGrant(service: String) -> Bool {
         guard Bundle.main.bundleIdentifier != nil else { return false }
@@ -135,11 +127,6 @@ enum PermissionsManager {
     /// Opens the Accessibility privacy pane in System Settings.
     static func openAccessibilitySettings() {
         openSettings("com.apple.preference.security?Privacy_Accessibility")
-    }
-
-    /// Opens the Input Monitoring privacy pane in System Settings.
-    static func openInputMonitoringSettings() {
-        openSettings("com.apple.preference.security?Privacy_ListenEvent")
     }
 
     /// Opens the Screen Recording privacy pane (needed for vision context).

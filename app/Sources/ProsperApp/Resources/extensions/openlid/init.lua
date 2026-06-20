@@ -469,19 +469,32 @@ function settings_render(section_id, state)
     local c = cfg()
     local st = load_state()
     -- Live on/off for both features (flip here = flip now), plus arm-at-launch.
+    local now_rows = {
+        s.row{ kind = "toggle", key = "lid_now", title = "Mac awake (lid closed)",
+               subtitle = st.active and awake_line(st) or "Off — Mac sleeps on lid close",
+               value = b2s(st.active) },
+        s.row{ kind = "toggle", key = "caffeine_now", title = "Display awake (no screensaver)",
+               subtitle = st.caffeine and caffeine_line(st) or "Off — display sleeps normally",
+               value = b2s(st.caffeine) },
+    }
+    -- Keeping the Mac awake with the lid closed needs a root-level sleep override,
+    -- which Prosper does through a privileged background helper (no sudo). macOS
+    -- asks you to approve it once in System Settings → Login Items. This permission
+    -- row reports that grant live + offers an Open button — same pattern as the
+    -- Accessibility/Input-Monitoring rows. Only shown when the lid-closed feature
+    -- is actually engaged (on now, or armed at launch), so it's silent otherwise.
+    if st.active or c.macAwakeMode == "on" or c.macAwakeMode == "power" then
+        now_rows[#now_rows + 1] = s.row{
+            kind = "permission", name = "lid-helper",
+            title = "Background helper (keep awake with lid closed)",
+        }
+    end
     local now = s.section{
         id = "now", title = "Right now",
         footer = "🔓 Mac awake keeps the whole Mac running when the lid is CLOSED. "
             .. "☕ Display awake keeps the screen and screensaver off while the lid is OPEN. "
             .. "Independent — use either or both.",
-        rows = {
-            s.row{ kind = "toggle", key = "lid_now", title = "Mac awake (lid closed)",
-                   subtitle = st.active and awake_line(st) or "Off — Mac sleeps on lid close",
-                   value = b2s(st.active) },
-            s.row{ kind = "toggle", key = "caffeine_now", title = "Display awake (no screensaver)",
-                   subtitle = st.caffeine and caffeine_line(st) or "Off — display sleeps normally",
-                   value = b2s(st.caffeine) },
-        },
+        rows = now_rows,
     }
     local general = s.section{
         id = "general", title = "At launch",

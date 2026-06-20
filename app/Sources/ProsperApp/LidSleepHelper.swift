@@ -21,16 +21,24 @@ enum LidSleepHelper {
     private static let log = Logger(subsystem: "eu.illegible.prosper", category: "lidhelper")
     private static var connection: NSXPCConnection?
 
-    private static var service: SMAppService {
+    // nonisolated: stateless (a fresh SMAppService each call, touches no shared
+    // mutable state), so PermissionsManager's settings-row check can read it
+    // without hopping to the main actor.
+    nonisolated private static var service: SMAppService {
         SMAppService.daemon(plistName: "\(lidHelperLabel).plist")
     }
 
+    /// Whether the background item is approved + enabled. Drives the openlid
+    /// settings "Background Helper" permission row.
+    nonisolated static var isEnabled: Bool { service.status == .enabled }
+
     /// Register the daemon if needed. Returns true once it is enabled. When macOS
     /// requires the user to OK the background item, opens the Login Items pane and
-    /// returns false (the caller surfaces a "approve, then retry" message). Only
-    /// ever called from `setDisabled(true)` — i.e. on explicit user action.
+    /// returns false (the caller surfaces a "approve, then retry" message). Called
+    /// from `setDisabled(true)` (first lid-disable) and from the settings permission
+    /// row's Open button — i.e. always on explicit user action.
     @discardableResult
-    private static func ensureRegistered() -> Bool {
+    nonisolated static func ensureRegistered() -> Bool {
         let svc = service
         switch svc.status {
         case .enabled:
