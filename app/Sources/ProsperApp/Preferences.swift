@@ -132,6 +132,9 @@ enum Preferences {
         // AgentModelRegistry.swift.
         static let agentModel = "agentModel"
         static let agentWorkingDirectory = "agentWorkingDirectory"
+        // Remote Terminal (DchTerm): serve dch sessions over Tailscale.
+        static let remoteTerminalEnabled = "remoteTerminalEnabled"
+        static let isolateRemoteSessions = "isolateRemoteSessions"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -366,6 +369,21 @@ enum Preferences {
     static var agentWorkingDirectory: String {
         get { defaults.string(forKey: Keys.agentWorkingDirectory) ?? NSHomeDirectory() }
         set { defaults.set(newValue, forKey: Keys.agentWorkingDirectory) }
+    }
+
+    /// Serve dch terminal sessions to the DchTerm app over Tailscale. Off by
+    /// default — the server only binds (to the Tailscale interface) when enabled.
+    static var remoteTerminalEnabled: Bool {
+        get { defaults.bool(forKey: Keys.remoteTerminalEnabled) }
+        set { defaults.set(newValue, forKey: Keys.remoteTerminalEnabled) }
+    }
+
+    /// Run app-served sessions in a private socket dir (DCH_SOCKET_DIR) so they
+    /// do NOT appear in / share with standalone `dch`. Off = shared (the default
+    /// the user asked for: terminal-started and app-started sessions intermix).
+    static var isolateRemoteSessions: Bool {
+        get { defaults.bool(forKey: Keys.isolateRemoteSessions) }
+        set { defaults.set(newValue, forKey: Keys.isolateRemoteSessions) }
     }
 
     /// MCP servers configured for the coding agent. Stored JSON-encoded; an unreadable

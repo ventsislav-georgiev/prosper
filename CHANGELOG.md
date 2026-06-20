@@ -5,6 +5,41 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.107.0
+
+### Remote Terminal
+- **Serve your terminal sessions to the DchTerm app over Tailscale.** A new
+  Settings → General → "Remote Terminal" toggle brings up a thin bridge that lets the
+  DchTerm app attach to your live `dch` sessions from another device. The bridge never
+  reimplements dch's protocol — it spawns the real `dch` binary as a pty-attached
+  client and shuttles bytes over TCP, so session survival, SIGWINCH redraw, and kitty
+  key replay keep working unchanged. Detaching (killing the pty child) leaves the
+  master daemon alive.
+- **Tailscale is the trust boundary — nothing else.** The listener binds *only* to the
+  host's Tailscale interface address (never `0.0.0.0`); with no Tailscale address it
+  refuses to start. Belt-and-suspenders: every accepted peer IP must also fall inside
+  the Tailscale CGNAT range `100.64.0.0/10` or it's dropped. No auth tokens, no TLS.
+  Off by default — the port only binds when you enable it.
+- **Isolate sessions (optional).** A second toggle runs app-served sessions in a
+  private socket dir so they don't intermix with standalone `dch`. Default off —
+  terminal-started and app-started sessions share, as requested.
+
+### Privacy
+- **Analytics only reports a feature's sub-settings when that feature is on.** A
+  disabled feature's detail settings carry no signal, so the snapshot now gates them:
+  the master toggle is always sent, the detail props (clipboard limits, completion
+  tuning, vision/OCR context, etc.) only when the feature is live. The inline model is
+  still reported when autocomplete *or* Translate is active, since they share it.
+
+### Hammerspoon Compat
+- **Per-app keyboard input switching works.** `hs.application.watcher` callbacks that
+  call `hs.keycodes.currentSourceID(...)` (the common "switch to Bulgarian in Slack,
+  back to ABC everywhere else" idiom) did nothing: the Carbon TIS input-source API
+  must run on the main thread, but app-activation events deliver on an off-main lane
+  where `TISSelectInputSource` silently no-ops. The keyboard host calls now funnel
+  through the main thread like every other system call. The hammerspoon-compat
+  diagnostics section also lists active app watchers and the current input source.
+
 ## v2.105.0
 
 ### Extensions

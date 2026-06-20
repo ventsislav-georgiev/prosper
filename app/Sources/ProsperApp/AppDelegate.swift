@@ -208,6 +208,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // One-shot startup event so a stateless extension can render its menubar /
         // restore its session at launch (the equivalent of openlid's M.start()).
         extensions.broadcastEvent("system.launch")
+        // Bring up the Remote Terminal (DchTerm) server if the user left it enabled.
+        // No-op + harmless when off or when Tailscale isn't running.
+        DchSessionServer.shared.syncToPreference()
         // Each configured quickdir contributes its own runtime mode prefix (e.g.
         // `p ` → browse ~/projects) on top of the static `qd ` trigger.
         extensions.dynamicModeProvider = { QuickdirStore.modeSpecs() }

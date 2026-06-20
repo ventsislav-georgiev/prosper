@@ -21,6 +21,13 @@ final class AnalyticsService {
     private var timer: Timer?
     private var sending = false
 
+    /// Source of the live extension registry. A daily snapshot is only complete once
+    /// the registry has loaded (its extension counts + per-system usage are part of
+    /// the payload). If it's still nil we DELAY the send rather than ship a partial
+    /// snapshot — the hourly tick retries, and `lastSent` isn't stamped, so no day is
+    /// skipped. Set on launch (`AppDelegate`); seam kept overridable for tests.
+    var registryProvider: () -> ExtensionRegistry? = { SettingsHooks.shared.extensionRegistry }
+
     private init() {}
 
     /// Call from `applicationDidFinishLaunching`. Idempotent — also re-callable when
@@ -54,17 +61,21 @@ final class AnalyticsService {
     @discardableResult
     func sendNow() async -> Bool {
         guard Preferences.analyticsEnabled, !sending else { return false }
+        // Registry not loaded yet → no confirmed data; the caller retries.
+        guard let registry = registryProvider() else { return false }
         sending = true
         defer { sending = false }
-        let ok = await Self.post(props: AnalyticsSnapshot.build())
+        let ok = await Self.post(props: AnalyticsSnapshot.build(registry: registry))
         if ok { AnalyticsStore.lastSent = Date() }
         return ok
     }
 
     private func send() {
         guard Preferences.analyticsEnabled, !sending else { return }
+        // Registry not loaded yet → delay; the hourly tick retries, lastSent unstamped.
+        guard let registry = registryProvider() else { return }
         sending = true
-        let props = AnalyticsSnapshot.build()
+        let props = AnalyticsSnapshot.build(registry: registry)
         Task { @MainActor in
             defer { sending = false }
             // Stamp only on confirmed delivery (2xx) or permanent rejection (4xx —

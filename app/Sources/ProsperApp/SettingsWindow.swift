@@ -175,6 +175,21 @@ final class SettingsModel: ObservableObject {
     /// changing it never disturbs the resident inline model — no live-switch hook.
     @Published var agentModel: String { didSet { Preferences.agentModel = agentModel } }
 
+    /// Remote Terminal (DchTerm). Set via the methods below so the server start/stop
+    /// side-effect runs only on user action, not during init.
+    @Published var remoteTerminalEnabled: Bool
+    @Published var isolateRemoteSessions: Bool
+
+    func setRemoteTerminal(_ on: Bool) {
+        remoteTerminalEnabled = on
+        Preferences.remoteTerminalEnabled = on
+        DchSessionServer.shared.syncToPreference()
+    }
+    func setIsolateRemoteSessions(_ on: Bool) {
+        isolateRemoteSessions = on
+        Preferences.isolateRemoteSessions = on
+    }
+
     /// MCP servers for the coding agent. Persisted on every mutation; rendered into
     /// codex config.toml on the next harness spawn (changes apply to new runs).
     @Published var mcpServers: [MCPServer] {
@@ -249,6 +264,8 @@ final class SettingsModel: ObservableObject {
         trailingSpaceAfterWordAccept = Preferences.trailingSpaceAfterWordAccept
         coreModel = Preferences.coreModel
         agentModel = Preferences.agentModel
+        remoteTerminalEnabled = Preferences.remoteTerminalEnabled
+        isolateRemoteSessions = Preferences.isolateRemoteSessions
         mcpServers = Preferences.mcpServers
         hooks = Preferences.hooks
         collectTypingHistory = Preferences.collectTypingHistory
@@ -665,6 +682,18 @@ private struct GeneralPane: View {
             NeonSection("Coding Agent",
                         footer: "Off hides the whole Coding Agent settings category and the menu-bar entry.") {
                 Toggle("Enable coding agent", isOn: $model.agentEnabled)
+            }
+
+            NeonSection("Remote Terminal",
+                        footer: "Serves your terminal sessions to the DchTerm app over Tailscale. The port binds only to your Tailscale address — never the public internet. Requires Tailscale to be running.") {
+                Toggle("Serve sessions over Tailscale", isOn: Binding(
+                    get: { model.remoteTerminalEnabled },
+                    set: { model.setRemoteTerminal($0) }))
+                NeonDivider()
+                Toggle("Isolate sessions", isOn: Binding(
+                    get: { model.isolateRemoteSessions },
+                    set: { model.setIsolateRemoteSessions($0) }))
+                    .disabled(!model.remoteTerminalEnabled)
             }
 
             NeonSection("Clipboard",
