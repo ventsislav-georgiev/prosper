@@ -5,6 +5,15 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.107.1
+
+### Remote Terminal
+- **The `dch` binary now actually ships in the release.** v2.107.0's bundle step ran
+  on a CI runner with no `dch` to embed, so Remote Terminal only worked for users who
+  already had `dch` on their PATH. The release pipeline now builds `dch` from source
+  and embeds it into the app (and fails the build if it's missing), so Remote Terminal
+  works with zero install as intended.
+
 ## v2.107.0
 
 ### Remote Terminal
