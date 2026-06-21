@@ -19,6 +19,7 @@ enum DchFrame {
     static let list: UInt8    = 0x03  // (empty)
     static let kill: UInt8    = 0x04  // {name}
     static let resize: UInt8  = 0x05  // {cols, rows}  (on an attached conn)
+    static let rename: UInt8  = 0x06  // {name, alias}  (alias "" clears)
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -112,12 +113,20 @@ final class DchConnection: @unchecked Sendable {
     private func handle(type: UInt8, payload: Data) {
         switch type {
         case DchFrame.list:
-            let names = DchCommand.listSessions()
-            send(DchFrame.encode(DchFrame.listResp, json: names.map { ["name": $0] }))
+            let rows = DchCommand.listSessions().map { row -> [String: Any] in
+                row.alias.isEmpty ? ["name": row.name] : ["name": row.name, "alias": row.alias]
+            }
+            send(DchFrame.encode(DchFrame.listResp, json: rows))
         case DchFrame.kill:
-            if let name = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
-               let n = name["name"] as? String {
+            if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
+               let n = o["name"] as? String {
                 DchCommand.kill(n)
+            }
+            send(DchFrame.encode(DchFrame.ok, []))
+        case DchFrame.rename:
+            if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
+               let n = o["name"] as? String {
+                DchCommand.setAlias(n, alias: o["alias"] as? String ?? "")
             }
             send(DchFrame.encode(DchFrame.ok, []))
         case DchFrame.attach, DchFrame.create:
@@ -215,13 +224,25 @@ enum DchCommand {
         return env
     }
 
-    static func listSessions() -> [String] {
-        runCapturing(args: ["-ls"])
-            .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+    /// Parse `dch -lj` (one `name\talias` per line; alias may be empty).
+    static func listSessions() -> [(name: String, alias: String)] {
+        runCapturing(args: ["-lj"])
+            .split(separator: "\n")
+            .compactMap { line in
+                let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                guard let name = parts.first, !name.isEmpty else { return nil }
+                let alias = parts.count > 1 ? String(parts[1]) : ""
+                return (String(name), alias)
+            }
     }
 
     static func kill(_ name: String) {
         _ = runCapturing(args: ["-k", name])
+    }
+
+    /// Set (or clear, when empty) a session's display alias.
+    static func setAlias(_ name: String, alias: String) {
+        _ = runCapturing(args: ["-m", name, alias])
     }
 
     /// Run dch for a short control command and capture stdout. Not used for attach

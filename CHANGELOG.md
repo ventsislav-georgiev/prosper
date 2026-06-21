@@ -5,6 +5,15 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.109.0
+
+### Remote Terminal
+- **Rename your `dch` sessions from DchTerm.** The bridge now speaks a `rename`
+  frame, so the app can set or clear a per-session display alias without touching
+  the session itself. List responses carry the alias alongside the real name, and
+  the bridge drives the existing `dch -m` / `-lj` commands rather than reimplementing
+  anything.
+
 ## v2.107.1
 
 ### Remote Terminal
