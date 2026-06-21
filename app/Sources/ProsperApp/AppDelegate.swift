@@ -29,6 +29,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Native watchers (battery / network / wake / lid) → extension events.
     private let systemEventWatchers = SystemEventWatchers()
 
+    /// Re-assert the accessory (Dock-less) policy here, not just in main.swift.
+    /// With no static LSUIElement (dropped so we appear in the default-browser
+    /// picker), AppKit promotes the app to `.regular` while finishing launch,
+    /// overriding the early `setActivationPolicy(.accessory)` set before `app.run()`
+    /// (which lands before AppKit wires up to the Dock, so it doesn't stick). This
+    /// runs inside `finishLaunching` after that wiring, so it holds — and before any
+    /// window appears, so no Dock flash. DockPolicy flips back to `.regular` only
+    /// while a window is open.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Writing to a pipe whose reader died (a crashed codex/bun subprocess) raises
         // SIGPIPE, whose default action terminates the app. Ignore it process-wide so
@@ -357,6 +369,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             FileHandle.standardError.write(Data(
                 "PROSPER_E2E_READY accessibility=\(trusted) tap=\(autocomplete.isRunning)\n".utf8))
         }
+
+        // Force the Dock-less policy once the launch settles. With no static
+        // LSUIElement (dropped so we appear in the default-browser picker), AppKit
+        // derives `.regular` from the bundle and promotes us to it at the TAIL of
+        // launch — after both `main.swift` and `applicationWillFinishLaunching` set
+        // `.accessory` — leaving a Dock icon with no window open. The promotion is a
+        // one-shot, so re-asserting `.accessory` on the next run-loop tick (after it
+        // lands) sticks. Routed through DockPolicy so it respects an already-open
+        // window (none at launch ⇒ `.accessory`). Re-evaluated on every window
+        // show/hide thereafter.
+        DispatchQueue.main.async { DockPolicy.preferenceChanged() }
     }
 
     /// Reconcile live subsystems with preferences/files that a settings-sync pull
