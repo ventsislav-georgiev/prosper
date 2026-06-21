@@ -165,12 +165,26 @@ jobs:
           echo "${PROFILE_B64}" | base64 --decode > scripts/embedded.provisionprofile
           echo "Staged scripts/embedded.provisionprofile ($(wc -c < scripts/embedded.provisionprofile) bytes)."
 
+      - name: Build dch (Remote Terminal binary to embed)
+        # bundle.sh embeds $ROOT/../dch/dch into Resources so Remote Terminal works
+        # with zero user install. The runner has no sibling clone, so fetch + build
+        # it here. dch is a public C/autotools repo. Build fails loudly (bundle.sh
+        # only warns), and we pin the same tag-less HEAD of main.
+        run: |
+          git clone --depth 1 https://github.com/ventsislav-georgiev/dch.git "$GITHUB_WORKSPACE/../dch"
+          ( cd "$GITHUB_WORKSPACE/../dch" && ./configure && make )
+          test -x "$GITHUB_WORKSPACE/../dch/dch" || { echo "::error::dch did not build"; exit 1; }
+
       - name: Bundle Prosper.app
         env:
           PROSPER_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           ./scripts/bundle.sh release
-          echo "Bundle succeeded → dist/Prosper.app"
+          # bundle.sh only warns (to suppressed stderr) if dch is missing — assert
+          # it actually embedded so a broken Remote Terminal can't ship silently.
+          test -x dist/Prosper.app/Contents/Resources/dch \
+            || { echo "::error::dch was not embedded into the bundle"; exit 1; }
+          echo "Bundle succeeded → dist/Prosper.app (dch embedded)"
 
       - name: Notarize + staple
         # Submit the Developer ID-signed bundle to Apple's notary service, then
