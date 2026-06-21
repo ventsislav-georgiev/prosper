@@ -102,6 +102,17 @@ final class PtyChild: @unchecked Sendable {
         _ = ioctl(masterFD, TIOCSWINSZ, &ws)
     }
 
+    /// Force a remote repaint without reattaching: SIGUSR2 makes the dch client
+    /// send MSG_REDRAW(REDRAW_WINCH), so the master raises SIGWINCH at the inner
+    /// program and it repaints — recovers DchTerm after a soft-keyboard relayout.
+    func redraw() {
+        lock.lock()
+        let alreadyDone = done
+        let p = pid
+        lock.unlock()
+        if !alreadyDone && p > 0 { kill(p, SIGUSR2) }
+    }
+
     /// Detach: SIGHUP the dch client so it exits; its master daemon keeps running.
     func terminate() {
         lock.lock()
