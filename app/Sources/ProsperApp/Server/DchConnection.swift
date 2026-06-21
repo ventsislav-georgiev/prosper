@@ -20,6 +20,7 @@ enum DchFrame {
     static let kill: UInt8    = 0x04  // {name}
     static let resize: UInt8  = 0x05  // {cols, rows}  (on an attached conn)
     static let rename: UInt8  = 0x06  // {name, alias}  (alias "" clears)
+    static let redraw: UInt8  = 0x07  // (empty) force remote repaint (on an attached conn)
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -139,6 +140,8 @@ final class DchConnection: @unchecked Sendable {
                 let rows = (o["rows"] as? Int) ?? 24
                 pty?.resize(cols: cols, rows: rows)
             }
+        case DchFrame.redraw:
+            pty?.redraw()
         default:
             break
         }

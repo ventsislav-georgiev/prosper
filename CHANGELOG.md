@@ -5,6 +5,15 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.111.0
+
+### Remote Terminal
+- **Force a remote repaint without reattaching.** The bridge speaks a new `redraw`
+  frame on an attached connection: it raises `SIGUSR2` at the dch client, which sends
+  `MSG_REDRAW(REDRAW_WINCH)` so the master fires `SIGWINCH` at the inner program and it
+  repaints. This recovers DchTerm after a soft-keyboard relayout — no detach/reattach,
+  no lost scrollback. No-op once the pty child has exited.
+
 ## v2.109.0
 
 ### Remote Terminal
