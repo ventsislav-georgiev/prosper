@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import CoreServices
 import UserNotifications
 
 /// Owns the app's long-lived objects and wires them together on launch.
@@ -29,18 +30,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Native watchers (battery / network / wake / lid) → extension events.
     private let systemEventWatchers = SystemEventWatchers()
 
-    /// Re-assert the accessory (Dock-less) policy here, not just in main.swift.
-    /// With no static LSUIElement (dropped so we appear in the default-browser
-    /// picker), AppKit promotes the app to `.regular` while finishing launch,
-    /// overriding the early `setActivationPolicy(.accessory)` set before `app.run()`
-    /// (which lands before AppKit wires up to the Dock, so it doesn't stick). This
-    /// runs inside `finishLaunching` after that wiring, so it holds — and before any
-    /// window appears, so no Dock flash. DockPolicy flips back to `.regular` only
-    /// while a window is open.
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Writing to a pipe whose reader died (a crashed codex/bun subprocess) raises
         // SIGPIPE, whose default action terminates the app. Ignore it process-wide so
@@ -51,6 +40,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // launch after the first) skip the Gatekeeper "unidentified developer"
         // dialog. No-op in dev (.build) and when already clean. See README.
         QuarantineStripper.stripSelf()
+
+        // Refresh our LaunchServices registration for the CURRENT bundle path so the
+        // http/https URL-scheme declaration (CFBundleURLTypes) is indexed and Prosper
+        // shows up in System Settings → Default web browser. A bundle that moved /
+        // updated / was renamed can leave a stale handler record keyed to the old path
+        // (see ExtensionSystemServices.defaultBrowserBundleID's dangling-id note); a
+        // self-register on launch heals it. Skipped for bare-binary dev runs so we
+        // never index a throwaway .build/ or /tmp path.
+        registerAsURLHandler()
 
         // Install a standard Edit menu so Cut/Copy/Paste/Select All/Undo/Redo
         // work in every text field across the app. We're an accessory (no menu
@@ -369,17 +367,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             FileHandle.standardError.write(Data(
                 "PROSPER_E2E_READY accessibility=\(trusted) tap=\(autocomplete.isRunning)\n".utf8))
         }
-
-        // Force the Dock-less policy once the launch settles. With no static
-        // LSUIElement (dropped so we appear in the default-browser picker), AppKit
-        // derives `.regular` from the bundle and promotes us to it at the TAIL of
-        // launch — after both `main.swift` and `applicationWillFinishLaunching` set
-        // `.accessory` — leaving a Dock icon with no window open. The promotion is a
-        // one-shot, so re-asserting `.accessory` on the next run-loop tick (after it
-        // lands) sticks. Routed through DockPolicy so it respects an already-open
-        // window (none at launch ⇒ `.accessory`). Re-evaluated on every window
-        // show/hide thereafter.
-        DispatchQueue.main.async { DockPolicy.preferenceChanged() }
     }
 
     /// Reconcile live subsystems with preferences/files that a settings-sync pull
@@ -457,6 +444,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let data = try? JSONSerialization.data(withJSONObject: ["url": urlString]),
               let payload = String(data: data, encoding: .utf8) else { return }
         extensions.broadcastEvent("url.open", payloadJSON: payload)
+    }
+
+    /// Re-register this bundle with LaunchServices so its declared http/https
+    /// URL-scheme handling is enumerated in the Default-web-browser picker.
+    /// LSUIElement does NOT exclude us from that list (it gates Dock/Cmd-Tab
+    /// presentation only) — picker membership is driven purely by CFBundleURLTypes
+    /// + a live registration, so a stale/missing record is the real cause of
+    /// "Prosper doesn't appear". No-op unless we're running from a real `.app`
+    /// wrapper (a bare-binary dev run would otherwise register a throwaway path).
+    private func registerAsURLHandler() {
+        let bundleURL = Bundle.main.bundleURL
+        guard bundleURL.pathExtension == "app" else { return }
+        LSRegisterURL(bundleURL as CFURL, true)
     }
 
     /// Re-skin the AppKit-only surfaces for the active theme. SwiftUI windows
