@@ -99,6 +99,24 @@ for b in "$ROOT/app/.build/$PROFILE"/*.bundle; do
 done
 shopt -u nullglob
 
+# Bundle the `dch` terminal binary into Resources so DchSessionServer can spawn
+# it with zero user install ("user installs nothing" goal). DchCommand.dchPath
+# probes Resources/dch first. Build it fresh from the sibling dch clone when
+# present (canonical fork, version-locked to this build); otherwise fall back to
+# a dch already on PATH. The final --deep reseal signs it as part of the bundle.
+DCH_SRC="${DCH_SRC:-$ROOT/../dch}"
+if [[ -x "$DCH_SRC/dch" || -f "$DCH_SRC/Makefile.in" ]]; then
+  ( cd "$DCH_SRC" && ./configure >/dev/null 2>&1 && make >/dev/null 2>&1 ) \
+    || echo "warn: dch build failed — falling back to PATH copy." >&2
+fi
+if [[ -x "$DCH_SRC/dch" ]]; then
+  cp "$DCH_SRC/dch" "$APP/Contents/Resources/dch"
+elif command -v dch >/dev/null 2>&1; then
+  cp "$(command -v dch)" "$APP/Contents/Resources/dch"
+else
+  echo "warn: dch not found ($DCH_SRC or PATH) — Remote Terminal won't spawn sessions." >&2
+fi
+
 # Apple MLX loads its GPU kernels from default.metallib inside
 # mlx-swift_Cmlx.bundle (staged by scripts/build.sh via xcodebuild — plain
 # `swift build` can't compile Metal shaders). Without it the app aborts on the
@@ -238,6 +256,14 @@ PLIST
     echo "warn: codesign ProsperLidHelper failed." >&2
 else
   echo "warn: $LID_HELPER_BIN not found — lid-stay-awake (openlid) will be inert. Run scripts/build.sh $PROFILE first." >&2
+fi
+
+# Sign the bundled dch binary. It lives in Resources (not a --deep standard
+# code location), and DchSessionServer posix_spawns it — under hardened runtime
+# an unsigned/foreign-signed spawn is killed, so it needs this Team's signature.
+if [[ -f "$APP/Contents/Resources/dch" ]]; then
+  codesign "${SIGN_FLAGS[@]}" "$APP/Contents/Resources/dch" >/dev/null 2>&1 || \
+    echo "warn: codesign dch failed." >&2
 fi
 
 # Sign the app last (seals the whole bundle). A stable identity persists the TCC
