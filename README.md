@@ -171,6 +171,8 @@ Keep your Mac awake with the lid closed — no external display or charger requi
 
 Works **out of the box** — no `sudo`, no Terminal, no `sudoers` edit. The lid override needs root, so Prosper installs a tiny privileged helper the first time you enable it (one-time approval in **System Settings → Login Items**); it uses no memory when idle and auto-resets if the app quits or crashes. Nothing is installed unless you use the feature.
 
+Inspired by: https://github.com/openlid/openlid
+
 ---
 
 ## Themes
