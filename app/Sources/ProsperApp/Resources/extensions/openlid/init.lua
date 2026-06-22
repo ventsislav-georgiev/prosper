@@ -1,4 +1,4 @@
--- openlid — system extension. Stateless port of the Hammerspoon openlid spoon.
+-- openlid — system extension. Stateless port of the Hammerspoon openlid spoon and original implementation by https://github.com/openlid/openlid.
 --
 -- Keeps the Mac awake with the lid closed (system idle-sleep assertion + the
 -- `pmset disablesleep` lid-close override), guarded by battery / network / AC.
