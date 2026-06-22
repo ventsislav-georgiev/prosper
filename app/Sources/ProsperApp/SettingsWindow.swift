@@ -2172,7 +2172,7 @@ private struct WindowManagementPane: View {
             .disabled(!model.dragSnapEnabled)
 
             NeonSection("Preview",
-                        footer: "The default flat preview is a simple translucent fill. Turn on vibrancy to blur the snap area and tint it with your accent color (flat is forced while Reduce Transparency is on).") {
+                        footer: "Vibrancy (the default) blurs the snap area and tints it with your accent color. Turn it off for a simple flat translucent fill (flat is forced while Reduce Transparency is on).") {
                 Toggle("Use vibrancy preview", isOn: $model.dragSnapStyleVibrancy)
             }
             .disabled(!model.dragSnapEnabled)

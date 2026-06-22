@@ -160,8 +160,11 @@ final class FootprintWindow {
     private func applyStyle(_ style: Style, accent: NSColor) {
         switch style {
         case .vibrancy:
+            // Accent tint sits over the system blur. Kept strong (0.32) so the
+            // frosted preview reads as clearly accent-tinted, not a washed-out
+            // gray that looks flatter than the flat style.
             effect.isHidden = false
-            tint.layer?.backgroundColor = accent.withAlphaComponent(0.18).cgColor
+            tint.layer?.backgroundColor = accent.withAlphaComponent(0.32).cgColor
             container.layer?.backgroundColor = NSColor.clear.cgColor
             container.layer?.borderColor = accent.withAlphaComponent(0.9).cgColor
         case .flat:
