@@ -550,13 +550,17 @@ private struct SettingsRootView: View {
         // Window Management is merged here: the native drag-snap pane rides in as
         // the header above this extension's own (Tier-A) shortcut binds, so there's
         // ONE Window Management section instead of a native tab + an ext section.
-        let header: AnyView?
+        var header: AnyView?
+        var footer: AnyView?
         switch extID {
         case "com.prosper.translate": header = AnyView(AIModelSection(model: model))
-        case "com.prosper.window": header = AnyView(WindowManagementPane(model: model))
-        default: header = nil
+        // Window: drag-snap config rides in as the FOOTER so the manifest's
+        // Permissions + window-move shortcut binds read first on the page.
+        case "com.prosper.window": footer = AnyView(WindowManagementPane(model: model))
+        default: break
         }
-        return ExtensionSettingsPane(registry: registry, record: record, section: section, header: header)
+        return ExtensionSettingsPane(registry: registry, record: record, section: section,
+                                     header: header, footer: footer)
     }
 
     var body: some View {
@@ -2140,11 +2144,10 @@ private struct WindowManagementPane: View {
     @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
     @State private var newIgnored = ""
 
+    // Rendered as the footer of the window extension's settings pane (inside its
+    // NeonScroll), so no own scroll/title — the page header already names it.
     var body: some View {
-        NeonScroll {
-            PaneTitle(title: "Window Management",
-                      subtitle: "Snap windows by dragging them to a screen edge or corner")
-
+        VStack(alignment: .leading, spacing: sz(16)) {
             NeonSection("Drag to Snap",
                         footer: "Drag a window so the pointer reaches a screen edge or corner; a live preview shows where it will land, and it snaps there when you let go. Left/right/bottom edges give halves, the top edge maximizes, and corners give quarters.") {
                 Toggle("Enable drag-to-snap", isOn: Binding(
