@@ -248,8 +248,13 @@ local function build_hs(ctx)
     -- read in any mode. Not a full RFC 3986 parser, but covers the fields HS exposes:
     -- scheme/host/port/path/query/fragment/user/password.
     hs.http = {
+        -- Match Foundation's CharacterSet.urlQueryAllowed (what real hs.http uses):
+        -- leave RFC-3986 query-safe punctuation unescaped. The old unreserved-only set
+        -- (%w-_.~) mangled :// ? & = into %3A%2F%2F... so a decoder that encodeForQuery's
+        -- a whole rebuilt URL (finicky removeTrackingParams idiom) produced a garbage
+        -- address -> blank browser tab.
         encodeForQuery = function(s)
-            return (tostring(s):gsub("[^%w%-_%.~]", function(c)
+            return (tostring(s):gsub("[^%w!$&'()*+,%-./:;=?@_~]", function(c)
                 return string.format("%%%02X", string.byte(c))
             end))
         end,
@@ -337,7 +342,25 @@ local function build_hs(ctx)
         -- source id; string arg -> switch to it (gated like any side effect).
         currentSourceID = function(id)
             if id ~= nil then
-                if allowed() then host.keyboard.set_source(tostring(id)) end
+                if allowed() then
+                    local want = tostring(id)
+                    local prev = host.keyboard.current_source()
+                    local ok = host.keyboard.set_source(want)
+                    -- DIAGNOSTICS: only record an ACTUAL change (watchers re-assert the
+                    -- same layout on every focus — logging those would be pure noise).
+                    if prev ~= want then
+                        local who = ctx.activatingApp or "?"
+                        host.log.info(string.format(
+                            "hammerspoon-compat: input source [%s] %s -> %s%s",
+                            who, tostring(prev), want, ok == false and "  (FAILED — id not found)" or ""))
+                        -- Persist so the diagnostics panel can surface it (VM is stateless
+                        -- across rebuilds; prefs survive). Lets the user see WHICH app
+                        -- triggered an unexpected layout change.
+                        host.prefs.set("hs._lastInputSwitch", host.json.encode({
+                            app = who, from = tostring(prev), to = want, ok = ok ~= false,
+                            at = (host.time and host.time()) or 0 }))
+                    end
+                end
                 return tostring(id)
             end
             return host.keyboard.current_source()
@@ -656,6 +679,15 @@ local function build_spoon(hs, ctx)
         end })
 end
 
+-- mtime of the user's init.lua (or nil if unreadable). Stamped into `_HS` at build
+-- so a warm VM can tell the file changed under it and rebuild — without it, editing
+-- ~/.hammerspoon/init.lua (e.g. removing a per-app input-source watcher) would have
+-- no effect until a manual re-read, and the STALE watcher keeps firing.
+local function config_mtime()
+    local a = host.fs.attributes and host.fs.attributes(HS_INIT)
+    return a and a.mtime or nil
+end
+
 local function run_user_config(mode)
     local source = host.fs.read(HS_INIT)
     if not source then
@@ -703,8 +735,20 @@ local function run_user_config(mode)
         host.log.error("hammerspoon-compat: init.lua error: " .. tostring(rerr))
         -- partial bindings may still be usable; fall through
     end
-    _HS = { ctx = ctx }
+    _HS = { ctx = ctx, mtime = config_mtime() }
     return ctx
+end
+
+-- Warm-VM guard for the async event lane: it caches this extension's VM across
+-- deliveries, so `_HS` holds the ctx built from the LAST read of init.lua. Rebuild
+-- when COLD (no ctx) OR when the file changed on disk since — so an edit (commenting
+-- out / retargeting an hs.application.watcher) takes effect on the next event
+-- without a manual re-read, instead of the stale closure glitch-switching the layout.
+local function ensure_ctx()
+    if not (_HS and _HS.ctx) or _HS.mtime ~= config_mtime() then
+        run_user_config("rebuild")
+    end
+    return _HS and _HS.ctx
 end
 
 -- Fire bound closure #idx. Returns false if it isn't there (caller may rebuild).
@@ -778,7 +822,7 @@ function hs_dispatch(arg)
     if not is_enabled() then return end
     local idx = tonumber(arg)
     if not idx then return end
-    if not (_HS and _HS.ctx) then run_user_config("rebuild") end
+    ensure_ctx()
     fire(idx)
 end
 
@@ -791,7 +835,7 @@ function hs_timer_fired(payload)
     if type(id) ~= "string" then return end
     local idx = tonumber(id:match("^hst_(%d+)$"))
     if not idx then return end
-    if not (_HS and _HS.ctx) then run_user_config("rebuild") end
+    ensure_ctx()
     fire_timer(idx)
 end
 
@@ -821,8 +865,7 @@ function hs_url_open(payload)
     if type(data) ~= "table" then return end
     local full = data.url
     if type(full) ~= "string" or #full == 0 then return end
-    if not (_HS and _HS.ctx) then run_user_config("rebuild") end
-    local ctx = _HS and _HS.ctx
+    local ctx = ensure_ctx()
     local cb = ctx and ctx.urlevent and ctx.urlevent.httpCallback
     if type(cb) ~= "function" then return end -- this config does no URL routing
     local scheme, host_, params = parse_url(full)
@@ -841,11 +884,11 @@ function hs_app_activated(payload)
     if type(data) ~= "table" then return end
     local name = data.name
     if type(name) ~= "string" or #name == 0 then return end -- no app name => ignore
-    if not (_HS and _HS.ctx) then run_user_config("rebuild") end
-    local ctx = _HS and _HS.ctx
+    local ctx = ensure_ctx()
     local list = ctx and ctx.appwatchers
     if not (list and #list > 0) then return end -- no watcher in this config
     local appObj = make_app(data.name, data.bundleID, data.pid)
+    ctx.activatingApp = name -- tag input-source switches with the app that triggered them (diagnostics)
     ctx.firing = true -- side-effecting hs.* (currentSourceID set) allowed in callback
     for _, w in ipairs(list) do
         if w.started and w.fn then
@@ -1029,6 +1072,27 @@ local function diagnostics_rows()
         info("App watchers (hs.application.watcher)",
             watching .. " active — fire on app focus (e.g. per-app input switching)."
             .. (cur and ("   Current input source: " .. tostring(cur)) or ""))
+
+        -- Input languages the host parsed (TIS) — what a config can switch BETWEEN.
+        -- Shows the exact source IDs to use in hs.keycodes.currentSourceID(id).
+        local langs = {}
+        for _, l in ipairs((host.keyboard and host.keyboard.layouts and host.keyboard.layouts()) or {}) do
+            langs[#langs + 1] = string.format("%s (%s)", tostring(l.name), tostring(l.id))
+        end
+        info("Input languages parsed", #langs == 0 and "none detected"
+            or (#langs .. ":  " .. table.concat(langs, "   ·   ")))
+
+        -- Last switch this extension actually performed (app → source id). Lets the
+        -- user see WHICH app triggered an unexpected layout change ("random Bulgarian").
+        local raw = host.prefs.get("hs._lastInputSwitch")
+        local last = (raw and raw ~= "") and host.json.decode(raw) or nil
+        if type(last) == "table" then
+            info("Last input switch", string.format("[%s]  %s -> %s%s",
+                tostring(last.app), tostring(last.from), tostring(last.to),
+                last.ok == false and "  (FAILED)" or ""))
+        else
+            info("Last input switch", "none recorded this session")
+        end
     end
 
     -- Timers (hs.timer.doAfter / doEvery).
