@@ -23,7 +23,7 @@ struct ExtensionsPane: View {
     @ViewBuilder
     private func installedList(_ records: [ExtensionRecord], emptyText: String) -> some View {
         if records.isEmpty {
-            Text(emptyText).foregroundStyle(Neon.textSecondary).font(.caption)
+            Text(emptyText).foregroundStyle(Neon.textSecondary).font(Neon.font(.caption))
         } else {
             ForEach(Array(records.enumerated()), id: \.element.id) { idx, record in
                 if idx > 0 { NeonDivider() }
@@ -34,14 +34,14 @@ struct ExtensionsPane: View {
 
     var body: some View {
         NeonScroll {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: sz(3)) {
                 Text("Extensions")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(Neon.font(22, weight: .bold, design: .rounded))
                     .foregroundStyle(Neon.textPrimary)
                 Text("Install and manage Lua extensions")
-                    .font(.system(size: 12)).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
             }
-            .padding(.bottom, 2)
+            .padding(.bottom, sz(2))
 
             // Marketplace first (discovery), then user-installed (what the user added /
             // is publishing), then the bundled system ones.
@@ -50,7 +50,7 @@ struct ExtensionsPane: View {
             NeonSection("User Extensions", collapsed: $userCollapsed) {
                 HStack {
                     if let status = registry.updateStatus {
-                        Text(status).font(.caption).foregroundStyle(Neon.textSecondary)
+                        Text(status).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     }
                     Spacer()
                     if checkingUpdates {
@@ -98,14 +98,14 @@ private struct ExtensionRow: View {
     private var meta: ExtensionMeta { record.manifest.extension }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: sz(6)) {
             HStack(alignment: .top) {
                 Image(systemName: meta.icon ?? "puzzlepiece.extension")
                     .foregroundColor(.accentColor)
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(meta.title).font(.body).bold()
+                    .frame(width: sz(22))
+                VStack(alignment: .leading, spacing: sz(2)) {
+                    HStack(spacing: sz(6)) {
+                        Text(meta.title).font(Neon.font(.body)).bold()
                         if record.isSystem {
                             badge("SYSTEM")
                         } else if !record.trusted {
@@ -114,10 +114,10 @@ private struct ExtensionRow: View {
                         if record.privileged && !record.isSystem {
                             badge("PRIVILEGED")
                         }
-                        Text("v\(meta.version)").font(.caption).foregroundColor(.secondary)
+                        Text("v\(meta.version)").font(Neon.font(.caption)).foregroundColor(.secondary)
                     }
-                    Text(meta.description).font(.caption).foregroundColor(.secondary)
-                    Text("by \(meta.author)").font(.caption2).foregroundColor(.secondary)
+                    Text(meta.description).font(Neon.font(.caption)).foregroundColor(.secondary)
+                    Text("by \(meta.author)").font(Neon.font(.caption2)).foregroundColor(.secondary)
                 }
                 Spacer()
                 Toggle("", isOn: Binding(
@@ -130,15 +130,15 @@ private struct ExtensionRow: View {
 
             if !record.isSystem && !record.trusted {
                 Text("Not loaded. Review the files, then Trust to load its commands.")
-                    .font(.caption).foregroundStyle(Neon.magenta)
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
             }
 
             if record.privileged && !record.isSystem {
                 Text("System access granted: this extension can run shell commands, the coding-agent, and delete files as you. Revoke if unsure.")
-                    .font(.caption).foregroundStyle(Neon.magenta)
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: sz(12)) {
                 Button("Reveal in Finder") {
                     if let dir = registry.directory(id: record.id) {
                         NSWorkspace.shared.activateFileViewerSelecting([dir])
@@ -174,10 +174,10 @@ private struct ExtensionRow: View {
             }
 
             if let rowError {
-                Text(rowError).font(.caption).foregroundStyle(Neon.magenta)
+                Text(rowError).font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, sz(4))
         .task(id: record.id) { await refreshPublishedVersion() }
     }
 
@@ -231,8 +231,8 @@ private struct ExtensionRow: View {
     }
 
     private func badge(_ text: String) -> some View {
-        Text(text).font(.caption2).bold()
-            .padding(.horizontal, 5).padding(.vertical, 1)
+        Text(text).font(Neon.font(.caption2)).bold()
+            .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
             .background(Color.secondary.opacity(0.2))
             .clipShape(Capsule())
     }
@@ -317,7 +317,7 @@ private struct RowActionStyle: ButtonStyle {
     var prominent = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.caption)
+            .font(Neon.font(.caption))
             .fontWeight(prominent ? .bold : .regular)
             .foregroundStyle(configuration.role == .destructive ? Neon.magenta : Color.accentColor)
             .opacity(configuration.isPressed ? 0.5 : 1)
@@ -384,44 +384,44 @@ private struct MarketBrowseSection: View {
                 }
             }
             if let error {
-                Text(error).font(.caption).foregroundStyle(Neon.magenta)
+                Text(error).font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
             }
             ForEach(packages) { pkg in
                 NeonDivider()
                 row(pkg)
             }
             if packages.isEmpty && !loading {
-                Text("No packages.").font(.caption).foregroundStyle(Neon.textSecondary)
+                Text("No packages.").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             }
         }
         .onAppear { if packages.isEmpty { load() } }
     }
 
     private func row(_ pkg: MarketClient.Package) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: sz(6)) {
             HStack(alignment: .top) {
                 Image(systemName: pkg.icon ?? (pkg.isTheme ? "paintpalette" : "puzzlepiece.extension"))
-                    .foregroundColor(.accentColor).frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(pkg.title).font(.body).bold()
+                    .foregroundColor(.accentColor).frame(width: sz(22))
+                VStack(alignment: .leading, spacing: sz(2)) {
+                    HStack(spacing: sz(6)) {
+                        Text(pkg.title).font(Neon.font(.body)).bold()
                         if pkg.isTheme {
-                            Text("THEME").font(.caption2).bold()
-                                .padding(.horizontal, 5).padding(.vertical, 1)
+                            Text("THEME").font(Neon.font(.caption2)).bold()
+                                .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
                                 .background(Color.accentColor.opacity(0.25))
                                 .clipShape(Capsule())
                         }
-                        Text("v\(pkg.latestVersion)").font(.caption).foregroundColor(.secondary)
+                        Text("v\(pkg.latestVersion)").font(Neon.font(.caption)).foregroundColor(.secondary)
                     }
-                    Text(pkg.description).font(.caption).foregroundColor(.secondary)
+                    Text(pkg.description).font(Neon.font(.caption)).foregroundColor(.secondary)
                     Text("by \(pkg.author) · \(pkg.downloads) downloads")
-                        .font(.caption2).foregroundColor(.secondary)
+                        .font(Neon.font(.caption2)).foregroundColor(.secondary)
                 }
                 Spacer()
                 if installingID == pkg.id {
                     ProgressView().controlSize(.small)
                 } else if installedIDs.contains(pkg.id) {
-                    Text("Installed").font(.caption).foregroundStyle(Neon.textSecondary)
+                    Text("Installed").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 } else {
                     Button("Install") { install(pkg) }.buttonStyle(.neon)
                 }
@@ -432,7 +432,7 @@ private struct MarketBrowseSection: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, sz(4))
     }
 
     private func load() {
@@ -476,34 +476,34 @@ private struct ThemePreviewStrip: View {
     var body: some View {
         HStack(spacing: 0) {
             // Sidebar.
-            c("sidebar").frame(width: 16)
+            c("sidebar").frame(width: sz(16))
             // Content: card with two "text" lines over the window background.
             ZStack {
                 LinearGradient(colors: [c("bgTop"), c("bgBottom")],
                                startPoint: .top, endPoint: .bottom)
-                HStack(spacing: 8) {
-                    RoundedRectangle(cornerRadius: 4)
+                HStack(spacing: sz(8)) {
+                    RoundedRectangle(cornerRadius: sz(4))
                         .fill(c("card"))
                         .overlay(
-                            VStack(alignment: .leading, spacing: 3) {
-                                Capsule().fill(c("textPrimary")).frame(width: 46, height: 4)
-                                Capsule().fill(c("textSecondary")).frame(width: 30, height: 3)
+                            VStack(alignment: .leading, spacing: sz(3)) {
+                                Capsule().fill(c("textPrimary")).frame(width: sz(46), height: sz(4))
+                                Capsule().fill(c("textSecondary")).frame(width: sz(30), height: sz(3))
                             }, alignment: .topLeading)
-                        .padding(6)
+                        .padding(sz(6))
                     Spacer(minLength: 0)
                     // Accent dots.
-                    HStack(spacing: 4) {
+                    HStack(spacing: sz(4)) {
                         ForEach(["blue", "indigo", "magenta", "terminal"], id: \.self) { tok in
-                            Circle().fill(c(tok)).frame(width: 7, height: 7)
+                            Circle().fill(c(tok)).frame(width: sz(7), height: sz(7))
                         }
                     }
-                    .padding(.trailing, 8)
+                    .padding(.trailing, sz(8))
                 }
             }
         }
-        .frame(height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.08)))
+        .frame(height: sz(44))
+        .clipShape(RoundedRectangle(cornerRadius: sz(6)))
+        .overlay(RoundedRectangle(cornerRadius: sz(6)).strokeBorder(.white.opacity(0.08)))
         .help("\(swatch.title) · \(swatch.appearance ?? "dark")")
     }
 }

@@ -26,6 +26,10 @@ final class AppIndex {
     static let shared = AppIndex()
 
     private(set) var apps: [AppEntry] = []
+    /// Lowercased display names, parallel to `apps`. Precomputed once per index
+    /// build so the per-keystroke unified search never re-lowercases ~hundreds of
+    /// names (hot path: see `CommandRouter.unifiedSearch`).
+    private(set) var appsLower: [String] = []
     private var built = false
     private var lastBuild = Date.distantPast
 
@@ -93,6 +97,7 @@ final class AppIndex {
     func ensureBuilt(maxAge: TimeInterval = 300) -> [AppEntry] {
         if built, Date().timeIntervalSince(lastBuild) < maxAge { return apps }
         apps = Self.scan()
+        appsLower = apps.map { $0.name.lowercased() }
         built = true
         lastBuild = Date()
         return apps
@@ -105,6 +110,21 @@ final class AppIndex {
 
     /// The single best match for `query`, or nil.
     func best(_ query: String) -> AppEntry? { search(query, limit: 1).first }
+
+    /// The full built index plus its parallel lowercased-name array, for callers
+    /// that score apps themselves (the unified launcher search merges apps with
+    /// quicklinks/bookmarks on one ladder). Both arrays are COW snapshots — cheap
+    /// to hand off to an off-main scorer — and the lowercasing is already done.
+    func entriesWithLower() -> (apps: [AppEntry], lower: [String]) {
+        _ = ensureBuilt()
+        return (apps, appsLower)
+    }
+
+    /// The canonical app name an alias resolves to (lowercased query in, lowercased
+    /// name out), or nil. Lets the unified scorer keep alias hits at the top tier.
+    nonisolated static func aliasTarget(for query: String) -> String? {
+        aliases[query.trimmingCharacters(in: .whitespaces).lowercased()]?.lowercased()
+    }
 
     // MARK: - Pure helpers (no shared state → unit-testable)
 

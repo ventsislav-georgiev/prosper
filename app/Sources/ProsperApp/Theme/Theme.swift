@@ -122,6 +122,18 @@ enum ThemeRuntime {
     // a few main-thread AppKit setups. Value-type assignment is atomic enough for
     // that. If a background reader ever appears, switch to an os_unfair_lock box.
     nonisolated(unsafe) static var palette: ThemePalette = .default
+
+    /// Global UI size multiplier. Every scalable dimension (font sizes, paddings,
+    /// spacing, frames, corner radii, window widths) is read as `N * scale`, so
+    /// `scale == 1.0` reproduces the original layout byte-for-byte. ThemeStore is
+    /// the single writer; readers re-read on the `generation` rebuild, same as
+    /// `palette`. See `Neon.font` / `sz` in SettingsTheme.swift.
+    nonisolated(unsafe) static var scale: CGFloat = 1.0
+
+    /// Global window opacity (0…1). Backdrops multiply their fill alpha by this so
+    /// the desktop shows through below 1.0; `opacity == 1.0` is the original opaque
+    /// look. AppKit windows flip `isOpaque` off below 1.0 via the onChange hook.
+    nonisolated(unsafe) static var opacity: CGFloat = 1.0
 }
 
 // MARK: - Appearance

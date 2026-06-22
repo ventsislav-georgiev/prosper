@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// Max length band for inline completions, mapped to a token budget.
 enum CompletionLength: String, CaseIterable {
@@ -35,6 +36,56 @@ enum CompletionLength: String, CaseIterable {
         case .medium: return "Medium (3-5 words)"
         case .long: return "Long (5-7 words)"
         }
+    }
+}
+
+/// Modifier key for the numbered quick-select shortcuts — clipboard history
+/// rows (⌘1…⌘0) and the top runner results (⌘1…⌘5). User-configurable.
+enum QuickSelectModifier: String, CaseIterable {
+    case command
+    case control
+
+    var glyph: String { self == .command ? "\u{2318}" : "\u{2303}" }   // ⌘ / ⌃
+    var title: String { self == .command ? "Command (⌘)" : "Control (⌃)" }
+}
+
+/// Pure, keyboard-layout-coupled mapping for the numbered quick-select shortcuts.
+/// Lives here (not in the AppKit panels) so it is unit-testable without an event
+/// loop, and so the clipboard panel (⌘1…⌘0) and the runner (⌘1…⌘5) share ONE
+/// keycode table instead of duplicating it. Hot path: called once per keyDown
+/// while a panel is open — keep it a branch-only switch (no allocation, no I/O).
+enum QuickSelect {
+    /// How many of the top runner results get a numbered shortcut + badge. The
+    /// handler guard and both badge views read this so they can't drift apart.
+    /// (The clipboard panel exposes all ten visible slots and caps in `visibleSlots`.)
+    static let runnerTopCount = 5
+
+    /// ANSI US top-row digit key codes → 0-based slot: 1→0 … 9→8, 0→9.
+    /// Returns nil for non-digit keys. Callers cap the range (clipboard keeps all
+    /// ten; the runner ignores slots ≥ 5).
+    static func slot(forKeyCode keyCode: UInt16) -> Int? {
+        switch keyCode {
+        case 18: return 0  // 1
+        case 19: return 1  // 2
+        case 20: return 2  // 3
+        case 21: return 3  // 4
+        case 23: return 4  // 5
+        case 22: return 5  // 6
+        case 26: return 6  // 7
+        case 28: return 7  // 8
+        case 25: return 8  // 9
+        case 29: return 9  // 0
+        default: return nil
+        }
+    }
+
+    /// True when `flags` carry exactly `expected` among the real modifiers
+    /// (command/control/option/shift) — so ⌘1 matches but ⌘⌥1 does not — while
+    /// ignoring Caps Lock / fn / numeric-pad bits (those must not block the
+    /// shortcut). Used by both panels' keyDown paths.
+    static func modifierMatches(_ flags: NSEvent.ModifierFlags,
+                                expected: NSEvent.ModifierFlags) -> Bool {
+        flags.intersection([.command, .control, .option, .shift]) == expected
     }
 }
 
@@ -86,6 +137,14 @@ enum Preferences {
     private enum Keys {
         static let autocompleteEnabled = "autocompleteEnabled"
         static let agentEnabled = "agentEnabled"
+        static let dragSnapEnabled = "dragSnapEnabled"
+        static let dragSnapStyle = "dragSnapStyle"
+        static let dragSnapModifier = "dragSnapModifier"
+        static let dragSnapEdgeMargin = "dragSnapEdgeMargin"
+        static let dragSnapCornerSize = "dragSnapCornerSize"
+        static let dragSnapIgnoredBundleIds = "dragSnapIgnoredBundleIds"
+        static let uiScale = "prosper.uiScale"
+        static let uiOpacity = "prosper.uiOpacity"
         static let coreModel = "coreModel"
         static let launchAtLogin = "launchAtLogin"
         static let completionLength = "completionLength"
@@ -95,6 +154,7 @@ enum Preferences {
         static let voiceStyle = "voiceStyle"
         static let disabledBundleIds = "disabledBundleIds"
         static let disableTabBundleIds = "disableTabBundleIds"
+        static let quickSelectModifier = "quickSelectModifier"
         static let clipboardHistoryEnabled = "clipboardHistoryEnabled"
         static let clipboardHistoryMaxItems = "clipboardHistoryMaxItems"
         static let completionsEnabledByDefault = "completionsEnabledByDefault"
@@ -300,6 +360,85 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.draftModelId) }
     }
 
+    // MARK: - Drag-to-snap window management
+
+    /// Master switch for Rectangle-style drag-to-edge window snapping. Defaults ON —
+    /// it's a headline feature and still gated by Accessibility trust before any
+    /// monitor starts. Absent key → treated as on.
+    static var dragSnapEnabled: Bool {
+        get { defaults.object(forKey: Keys.dragSnapEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.dragSnapEnabled) }
+    }
+
+    /// Footprint preview look: vibrancy (default, blur + theme accent) or flat
+    /// (Rectangle-parity translucent fill). Stored as a raw string.
+    static var dragSnapStyle: FootprintWindow.Style {
+        get { defaults.string(forKey: Keys.dragSnapStyle) == "flat" ? .flat : .vibrancy }
+        set { defaults.set(newValue == .flat ? "flat" : "vibrancy", forKey: Keys.dragSnapStyle) }
+    }
+
+    /// Global UI size multiplier (Appearance → UI Size). Default 1.0 = unchanged.
+    /// Clamped so a stale/garbage default can never blow the layout up or collapse it.
+    static let uiScaleRange: ClosedRange<Double> = 0.8...1.4
+    static var uiScale: Double {
+        get {
+            // `object(forKey:)` so an unset default reads as 1.0, not 0.0.
+            guard defaults.object(forKey: Keys.uiScale) != nil else { return 1.0 }
+            return min(max(defaults.double(forKey: Keys.uiScale), uiScaleRange.lowerBound), uiScaleRange.upperBound)
+        }
+        set { defaults.set(min(max(newValue, uiScaleRange.lowerBound), uiScaleRange.upperBound), forKey: Keys.uiScale) }
+    }
+
+    /// Global window opacity (Appearance → Transparency). Default 1.0 = fully opaque.
+    static let uiOpacityRange: ClosedRange<Double> = 0.6...1.0
+    static var uiOpacity: Double {
+        get {
+            guard defaults.object(forKey: Keys.uiOpacity) != nil else { return 1.0 }
+            return min(max(defaults.double(forKey: Keys.uiOpacity), uiOpacityRange.lowerBound), uiOpacityRange.upperBound)
+        }
+        set { defaults.set(min(max(newValue, uiOpacityRange.lowerBound), uiOpacityRange.upperBound), forKey: Keys.uiOpacity) }
+    }
+
+    /// Optional modifier required during a drag before it will snap. Default `.none`.
+    static var dragSnapModifier: DragSnapModifier {
+        get { DragSnapModifier(rawValue: defaults.string(forKey: Keys.dragSnapModifier) ?? "") ?? .none }
+        set { defaults.set(newValue.rawValue, forKey: Keys.dragSnapModifier) }
+    }
+
+    static let dragSnapEdgeMarginRange: ClosedRange<Double> = 4...40
+    static let dragSnapCornerSizeRange: ClosedRange<Double> = 30...160
+
+    /// How far in from a screen edge (px) the cursor triggers an edge snap. Default 8.
+    static var dragSnapEdgeMargin: CGFloat {
+        get {
+            let v = defaults.object(forKey: Keys.dragSnapEdgeMargin) as? Double ?? 8
+            return CGFloat(min(max(v, dragSnapEdgeMarginRange.lowerBound), dragSnapEdgeMarginRange.upperBound))
+        }
+        set { defaults.set(Double(newValue), forKey: Keys.dragSnapEdgeMargin) }
+    }
+
+    /// Side length (px) of the corner squares that snap to quarters. Default 70.
+    static var dragSnapCornerSize: CGFloat {
+        get {
+            let v = defaults.object(forKey: Keys.dragSnapCornerSize) as? Double ?? 70
+            return CGFloat(min(max(v, dragSnapCornerSizeRange.lowerBound), dragSnapCornerSizeRange.upperBound))
+        }
+        set { defaults.set(Double(newValue), forKey: Keys.dragSnapCornerSize) }
+    }
+
+    /// Bundle ids of apps that misbehave with AX-driven resize; drag-snap skips them.
+    /// Seeded with the usual offenders; user-editable in Settings.
+    static let dragSnapDefaultIgnoredBundleIds = [
+        "com.mathworks.matlab",
+        "com.adobe.illustrator",
+        "com.adobe.AfterEffects",
+        "com.adobe.Photoshop",
+    ]
+    static var dragSnapIgnoredBundleIds: [String] {
+        get { defaults.object(forKey: Keys.dragSnapIgnoredBundleIds) as? [String] ?? dragSnapDefaultIgnoredBundleIds }
+        set { defaults.set(newValue, forKey: Keys.dragSnapIgnoredBundleIds) }
+    }
+
     /// Number of tokens the draft model proposes per speculation round. Library
     /// default is 2; small values suit short inline completions where the per-round
     /// verify overhead dominates. `<= 0` falls back to the library default (2).
@@ -503,6 +642,16 @@ enum Preferences {
             return value
         }
         set { defaults.set(newValue.rawValue, forKey: Keys.completionLength) }
+    }
+
+    /// Modifier for the numbered quick-select shortcuts. Defaults to Command.
+    static var quickSelectModifier: QuickSelectModifier {
+        get {
+            guard let raw = defaults.string(forKey: Keys.quickSelectModifier),
+                  let value = QuickSelectModifier(rawValue: raw) else { return .command }
+            return value
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.quickSelectModifier) }
     }
 
     /// Free-form user instructions appended to the completion system prompt

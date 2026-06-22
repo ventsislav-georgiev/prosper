@@ -138,7 +138,7 @@ struct SettingsUIView: View {
             }
             if busy {
                 HStack { ProgressView().controlSize(.small)
-                    Text("Working…").font(.caption).foregroundStyle(Neon.textSecondary) }
+                    Text("Working…").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary) }
             }
         }
     }
@@ -179,11 +179,11 @@ private struct ToggleRow: View {
     let onEvent: (SettingsEvent) -> Void
     var body: some View {
         NeonRow(row.title ?? row.key ?? "", subtitle: row.subtitle) {
-            HStack(spacing: 8) {
+            HStack(spacing: sz(8)) {
                 if let badge = row.badge, !badge.isEmpty {
                     Text(badge)
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .font(Neon.font(11, weight: .semibold))
+                        .padding(.horizontal, sz(7)).padding(.vertical, sz(2))
                         .background(Capsule().fill(Neon.blue.opacity(0.18)))
                         .foregroundStyle(Neon.blue)
                 }
@@ -230,7 +230,7 @@ private struct NumberRow: View {
         NeonRow(row.title ?? row.key ?? "", subtitle: row.subtitle) {
             TextField(row.placeholder ?? "", text: $text)
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 120)
+                .frame(maxWidth: sz(120))
                 .onAppear { text = row.value ?? "" }
                 .onSubmit { commit() }
         }
@@ -259,7 +259,7 @@ private struct ScalarFieldRow: View {
                 }
             }
             .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 260)
+            .frame(maxWidth: sz(260))
             .onAppear { text = row.value ?? "" }
         }
     }
@@ -272,13 +272,13 @@ private struct PathRow: View {
     @State private var text: String = ""
     var body: some View {
         NeonRow(row.title ?? row.key ?? "", subtitle: row.subtitle) {
-            HStack(spacing: 6) {
+            HStack(spacing: sz(6)) {
                 TextField(row.placeholder ?? "~/folder", text: $text)
                     .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 220)
+                    .frame(maxWidth: sz(220))
                     .onAppear { text = row.value ?? "" }
                     .onSubmit { onEvent(.setValue(key: row.key ?? "", value: text)) }
-                Button("Choose…", action: choose).buttonStyle(.borderless).font(.caption)
+                Button("Choose…", action: choose).buttonStyle(.borderless).font(Neon.font(.caption))
             }
         }
     }
@@ -311,10 +311,10 @@ private struct PermissionRow: View {
     var body: some View {
         NeonRow(row.title ?? PermissionsManager.label(forPermission: name),
                 subtitle: row.subtitle ?? PermissionsManager.reason(forPermission: name)) {
-            HStack(spacing: 10) {
+            HStack(spacing: sz(10)) {
                 Label(granted ? "Granted" : "Not granted",
                       systemImage: granted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Neon.font(12, weight: .semibold))
                     .foregroundStyle(granted ? Neon.blue : Neon.magenta)
                 if !granted {
                     Button("Open") { onEvent(.permissionOpen(name: name)) }.buttonStyle(.neon)
@@ -347,7 +347,7 @@ private struct ShortcutRow: View {
                     ShortcutStore.setCombo(new, for: action)
                     SettingsHooks.shared.onShortcutsChanged?()
                 }
-                .frame(width: 110, height: 24)
+                .frame(width: sz(110), height: sz(24))
                 .fixedSize()
                 Button {
                     combo = action.defaultCombo
@@ -379,7 +379,7 @@ private struct ButtonRow: View {
             Button(row.title ?? "Run", action: fire)
                 .buttonStyle(row.controlStyle == "destructive" ? .neonDestructive : .neon)
             if let subtitle = row.subtitle {
-                Text(subtitle).font(.caption).foregroundStyle(Neon.textSecondary)
+                Text(subtitle).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             }
             Spacer()
         }
@@ -401,7 +401,7 @@ private struct LinkRow: View {
             Button("Open") {
                 if let u = row.url { onEvent(.openURL(u)) }
                 else if let f = row.file { onEvent(.reveal(path: f)) }
-            }.buttonStyle(.borderless).font(.caption)
+            }.buttonStyle(.borderless).font(Neon.font(.caption))
         }
     }
 }
@@ -423,10 +423,10 @@ private struct RecordsRow: View {
     private var template: [SettingsUIField] { row.fields ?? [] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: sz(12)) {
             if records.isEmpty, editingID != Self.newID {
                 Text(row.emptyText ?? "Nothing here yet. Add one below.")
-                    .font(.system(size: 12)).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
             } else {
                 ForEach(Array(records.enumerated()), id: \.element.id) { idx, rec in
                     if idx > 0 { NeonDivider() }
@@ -471,16 +471,16 @@ private struct RecordsRow: View {
 
     @ViewBuilder
     private func editor(fields: [SettingsUIField], onSave: @escaping () -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: sz(6)) {
             ForEach(fields) { field in fieldEditor(field) }
-            HStack(spacing: 8) {
+            HStack(spacing: sz(8)) {
                 Button("Save", action: onSave).buttonStyle(.neon)
                 Button("Cancel") { editingID = nil; working = [:] }
                     .buttonStyle(.borderless).foregroundStyle(Neon.textSecondary)
                 Spacer()
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, sz(4))
     }
 
     @ViewBuilder
@@ -488,14 +488,14 @@ private struct RecordsRow: View {
         if editingID == rec.id {
             editor(fields: rec.fields ?? [], onSave: { save(rec) })
         } else {
-            HStack(spacing: 10) {
+            HStack(spacing: sz(10)) {
                 Image(systemName: rec.icon ?? "circle.fill")
-                    .foregroundStyle(Neon.blue).frame(width: 16)
-                VStack(alignment: .leading, spacing: 2) {
+                    .foregroundStyle(Neon.blue).frame(width: sz(16))
+                VStack(alignment: .leading, spacing: sz(2)) {
                     Text(rec.title ?? "(unnamed)")
-                        .font(.system(size: 13, weight: .medium)).foregroundStyle(Neon.textPrimary)
+                        .font(Neon.font(13, weight: .medium)).foregroundStyle(Neon.textPrimary)
                     if let sub = rec.subtitle {
-                        Text(sub).font(.system(size: 11)).foregroundStyle(Neon.textSecondary)
+                        Text(sub).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
                             .lineLimit(1).truncationMode(.middle)
                     }
                 }
@@ -506,7 +506,7 @@ private struct RecordsRow: View {
                     onEvent(.recordDelete(recordsID: recordsID, recordID: rec.id))
                 } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, sz(4))
         }
     }
 
@@ -527,13 +527,13 @@ private struct RecordsRow: View {
                 get: { (working[field.id] ?? field.value ?? "false") == "true" },
                 set: { working[field.id] = $0 ? "true" : "false" }))
         case "textarea":
-            NeonTextEditor(text: binding, minHeight: 84)
+            NeonTextEditor(text: binding, minHeight: sz(84))
         case "richtext":
             // RTF editor, unless a sibling toggle says this body is plain text.
             if let tk = field.toggleKey, (working[tk] ?? "false") != "true" {
-                NeonTextEditor(text: binding, minHeight: 84)
+                NeonTextEditor(text: binding, minHeight: sz(84))
             } else {
-                NeonRichTextEditor(rtf: binding, minHeight: 84)
+                NeonRichTextEditor(rtf: binding, minHeight: sz(84))
             }
         default:
             TextField(field.placeholder ?? field.label ?? field.id, text: binding)

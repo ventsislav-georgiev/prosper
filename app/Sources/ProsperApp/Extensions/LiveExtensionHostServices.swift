@@ -642,6 +642,22 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     func urlDefaultBrowser() -> String { URLServices.defaultBrowserBundleID() }
     func urlSetDefaultBrowser(_ bundleID: String) -> Bool { URLServices.setDefaultBrowser(bundleID) }
 
+    // Fallback web-search providers. The store is @MainActor; funnel through mainSync
+    // like the other AppKit/main-actor reads above.
+    func fallbackList() -> String { mainSync { FallbackSearchStore.shared.providersJSON() } }
+    func fallbackSave(_ json: String) { mainSync { FallbackSearchStore.shared.setProvidersJSON(json) } }
+    func fallbackMode() -> Bool { mainSync { FallbackSearchStore.shared.appendMode } }
+    func fallbackSetMode(_ on: Bool) { mainSync { FallbackSearchStore.shared.appendMode = on } }
+    func fallbackImport() -> Int {
+        // The browser-DB read (file copy + SQLite parse, multi-MB) is the heavy part —
+        // do it OFF the main thread, then hop to the @MainActor store only for the
+        // cheap dedupe-merge. settings_action already runs off-main, so `bundleID`
+        // (a LaunchServices read) and the importer run on this lane; never on main.
+        let bundleID = URLServices.defaultBrowserBundleID()
+        let discovered = BrowserSearchImporter.providers(forDefaultBrowser: bundleID)
+        return mainSync { FallbackSearchStore.shared.merge(discovered) }
+    }
+
     func fsExists(_ path: String) -> Bool { FSReads.exists(path) }
     func fsAttributesJSON(_ path: String) -> String { FSReads.attributesJSON(path) }
     func fsRead(_ path: String) -> String? { FSReads.read(path) }

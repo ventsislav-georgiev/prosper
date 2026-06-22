@@ -113,6 +113,10 @@ enum RunnerOutcome: Sendable {
     /// Ranked application matches for a query — the Raycast-style launcher list.
     /// Enter on a row launches that app (handled in the UI, not via copyText).
     case apps([AppEntry])
+    /// Unified launcher results: apps + quicklinks + bookmarks merged and ranked
+    /// on one ladder (see `SearchHit`/`SearchScore`). Enter behavior is per-row
+    /// (launch app / open target), handled in the UI, not via copyText.
+    case search([SearchHit])
     /// Nothing matched in universal mode. Carries the query so the UI can hint
     /// (e.g. "press l to translate"). Non-actionable.
     case noResults(query: String)
@@ -167,6 +171,7 @@ enum RunnerOutcome: Sendable {
         case .currency(let value, _): return value
         case .app(let name, _): return name
         case .apps: return ""
+        case .search: return ""
         case .noResults: return ""
         case .shell(_, let output): return output
         case .emoji(_, let emoji): return emoji
@@ -460,47 +465,138 @@ enum CommandRouter {
             return .ext(kind: e.kind, value: e.value, detail: e.detail)
         }
 
-        // 3.6 Bare-name quicklink: a query (≥2 chars) whose text appears in a saved
-        //     quicklink name surfaces it as a row, so users can open links by name
-        //     without the `ql` verb (Raycast parity). Uses the same case-insensitive
-        //     CONTAINS match as `ql <text>` (so "meeting" finds "notion-meeting-notes"),
-        //     not a strict prefix. Placed before app search so a named link isn't
-        //     shadowed; app search still wins when nothing matches.
-        if trimmed.count >= 2 {
-            var named = QuicklinkStore.nameMatches(trimmed)
-            // "gh some/repo": typing arguments after a link name must not make
-            // the row vanish — fall back to an EXACT name match on the first
-            // token (exact, so two-word app searches aren't shadowed).
-            if named.isEmpty, trimmed.contains(" "),
-               let first = trimmed.split(separator: " ").first {
-                let token = String(first).lowercased()
-                named = QuicklinkStore.all().filter { $0.name.lowercased() == token }
-            }
-            if !named.isEmpty { return .quicklinks(named, launchers: []) }
-        }
-
-        // 4. App search — the Raycast launcher behavior. Type a few letters of an
-        //    app name and it appears. No match → noResults (translation is NOT a
-        //    fallback here; it lives behind the `l ` prefix / translate mode).
-        let apps = await MainActor.run { AppIndex.shared.search(trimmed) }
-        if !apps.isEmpty { return .apps(apps) }
-
-        // 5. Inline bookmarks (opt-in). Below apps/quicklinks: only when nothing
-        //    higher matched. Gated by the bookmarks extension's `show_in_launcher`
-        //    pref (default off → no VM spin on the hot path); the Lua handler reuses
-        //    the same search/render as `bm` and returns "" (→ nil) when no match.
-        let bmID = "com.prosper.bookmarks"
-        let bmInline = await MainActor.run { () -> Bool in
-            registry?.prefValue(extensionID: bmID, key: "show_in_launcher") == "true"
-        }
-        if trimmed.count >= 2, bmInline,
-           let registry = await MainActor.run(body: { registry }),
-           let node = await registry.callExtensionViewAsync(
-               extensionID: bmID, function: "bookmarks_inline", args: [trimmed]) {
-            return .extView(node)
+        // 4. Unified launcher search — apps + quicklinks + bookmarks scored on ONE
+        //    ladder and merged (Alfred-style), replacing the old exclusive chain
+        //    (quicklink-name → apps → inline-bookmarks) where the first non-empty
+        //    source won. That chain let a stray fuzzy app match shadow an exact
+        //    bookmark, so "pods" and "pods)" returned different results. Merging
+        //    fixes that: a real substring/prefix hit in any source outranks a fuzzy
+        //    hit in another. No match → noResults (translation lives behind `l `).
+        if let merged = await unifiedSearch(trimmed) {
+            return merged
         }
 
         return .noResults(query: trimmed)
+    }
+
+    /// The merged, ranked launcher result for a bare query, or nil when nothing
+    /// matched. Gathers apps + quicklinks (always) and bookmarks (opt-in via the
+    /// bookmarks extension's `show_in_launcher`), scores every candidate on the
+    /// shared `SearchScore` ladder, and returns the top slice as `.search`.
+    ///
+    /// Hot path. Called per query change (after a 0.25s debounce). Budget design:
+    ///   • main thread: ONE actor hop for cheap COW snapshots — no scoring on main.
+    ///   • CPU scoring runs off-main (this func is nonisolated) and is allocation-
+    ///     light (lowercased names precomputed in AppIndex; bookmark haystacks
+    ///     precomputed in Lua). Measured ~1ms release / ~10ms debug for a 4800-
+    ///     candidate worst case (see `SearchScoreTests.testScoringLargeSetIsFast`).
+    ///   • the bookmark Lua call overlaps app/quicklink scoring via `async let`.
+    private static func unifiedSearch(_ trimmed: String) async -> RunnerOutcome? {
+        let q = trimmed.lowercased()
+        let tokens = q.split(whereSeparator: { $0 == " " }).map(String.init)
+        guard !tokens.isEmpty else { return nil }
+
+        // ONE main-actor hop snapshots every source's data (COW arrays — cheap to
+        // hand to the off-main scorer below) plus the bookmark opt-in. Scoring then
+        // runs on the cooperative pool (this func is nonisolated), never blocking
+        // the main thread on the per-keystroke hot path.
+        let snap = await MainActor.run { () -> Snapshot in
+            let (apps, lower) = AppIndex.shared.entriesWithLower()
+            let reg = registry
+            let bmOn = reg?.prefValue(extensionID: Self.bookmarksID, key: "show_in_launcher") == "true"
+            return Snapshot(apps: apps, lower: lower, links: QuicklinkStore.all(),
+                            registry: reg, bookmarksEnabled: bmOn)
+        }
+        let alias = AppIndex.aliasTarget(for: q) // nonisolated static — no hop
+
+        // Overlap the bookmark Lua call (off-main lane + JSON decode) with the CPU
+        // scoring of apps/quicklinks below, instead of serializing after them.
+        async let bookmarkRows = fetchBookmarkRows(snap.registry, query: trimmed,
+                                                    enabled: snap.bookmarksEnabled)
+
+        var hits: [SearchHit] = []
+
+        // Apps (alias support — "settings" → System Settings). Lowercased names are
+        // precomputed in AppIndex, so this loop allocates no per-app strings.
+        for (app, lower) in zip(snap.apps, snap.lower) {
+            if let s = SearchScore.score(q: q, tokens: tokens, matchText: lower,
+                                         tieLen: lower.count, isAlias: alias == lower) {
+                hits.append(SearchHit(kind: .app, title: app.name, subtitle: "",
+                                      score: s, appURL: app.url))
+            }
+        }
+
+        // Quicklinks — matched on NAME (same predictability as the old bare path).
+        // "gh some/repo": a templated link takes trailing args, so when the full
+        // query doesn't match the name we fall back to an EXACT first-token match
+        // (exact, so two-word app searches aren't shadowed) — Enter opens the link
+        // with the rest as its argument.
+        let firstToken = tokens.first
+        for link in snap.links {
+            let name = link.name.lowercased()
+            var s = SearchScore.score(q: q, tokens: tokens, matchText: name, tieLen: name.count)
+            if s == nil, tokens.count > 1, name == firstToken {
+                s = SearchScore.score(q: name, tokens: [name], matchText: name, tieLen: name.count)
+            }
+            if let s {
+                let sub = link.description.isEmpty ? link.target : link.description
+                hits.append(SearchHit(kind: .quicklink, title: link.name, subtitle: sub,
+                                      score: s, openTarget: link.target, quicklink: link))
+            }
+        }
+
+        // Bookmarks (opt-in). Scored over the precomputed lowercased haystack
+        // (`hay`) the Lua matcher already built, tie-broken on title length so a
+        // long URL doesn't penalize ranking.
+        for b in await bookmarkRows {
+            if let s = SearchScore.score(q: q, tokens: tokens, matchText: b.hay,
+                                         tieLen: b.title.count) {
+                let sub = b.folder.isEmpty ? b.browser : "\(b.browser) · \(b.folder)"
+                hits.append(SearchHit(kind: .bookmark, title: b.title, subtitle: sub,
+                                      score: s, openTarget: b.url))
+            }
+        }
+
+        guard !hits.isEmpty else { return nil }
+        hits.sort(by: SearchScore.before)
+        return .search(Array(hits.prefix(12)))
+    }
+
+    /// Bookmark extension id, shared by the snapshot + fetch.
+    private static let bookmarksID = "com.prosper.bookmarks"
+    /// Reused across keystrokes — `JSONDecoder()` is cheap but not free to spin up.
+    private static let bookmarkDecoder = JSONDecoder()
+
+    /// A single main-actor snapshot of the data the unified scorer needs.
+    private struct Snapshot {
+        let apps: [AppEntry]
+        let lower: [String]
+        let links: [QuicklinkHit]
+        let registry: ExtensionRegistry?
+        let bookmarksEnabled: Bool
+    }
+
+    /// Ranked bookmark rows (off-main Lua lane + decode), or [] when bookmarks are
+    /// disabled / the query is too short / the cache is empty / JSON is malformed.
+    private static func fetchBookmarkRows(_ registry: ExtensionRegistry?, query: String,
+                                          enabled: Bool) async -> [BookmarkRow] {
+        guard enabled, query.count >= 2, let registry else { return [] }
+        guard let json = await registry.callExtensionStringAsync(
+                  extensionID: bookmarksID, function: "bookmarks_search", args: [query, "200"]),
+              let data = json.data(using: .utf8),
+              let rows = try? bookmarkDecoder.decode([BookmarkRow].self, from: data)
+        else { return [] }
+        return rows
+    }
+
+    /// One bookmark row as returned by the bookmarks extension's `bookmarks_search`.
+    /// `hay` is the precomputed lowercased "title url folder" used for scoring.
+    private struct BookmarkRow: Decodable {
+        let title: String
+        let url: String
+        let folder: String
+        let browser: String
+        let hay: String
     }
 
     /// Returns a `.quicklinks` outcome when `trimmed` is the `ql` verb. `ql` alone

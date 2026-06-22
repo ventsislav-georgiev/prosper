@@ -31,12 +31,19 @@ final class ThemeStore: ObservableObject {
     /// `setAvailable` so the selector never reads theme.json from a view body.
     @Published private(set) var previews: [String: ThemePalette] = [:]
 
+    /// Global UI size + window opacity. Persisted via Preferences; mirrored into
+    /// `ThemeRuntime` so the non-isolated `Neon.font`/`sz`/`op` helpers read them.
+    /// Changing either bumps `generation` (same live-rebuild path as a theme swap).
+    @Published private(set) var scale: CGFloat = 1.0
+    @Published private(set) var opacity: CGFloat = 1.0
+
     /// Invoked after each apply (and after async assets land) so AppKit can
     /// re-skin non-SwiftUI surfaces. Set by AppDelegate.
     var onChange: (() -> Void)?
 
     private let defaults: UserDefaults
     private let cacheDir: URL
+    private var reduceTransparencyObserver: NSObjectProtocol?
     private var assetTask: Task<Void, Never>?
     private var lastAssets: [String: String] = [:]
     private let log = Logger(subsystem: "com.prosper", category: "theme")
@@ -52,6 +59,65 @@ final class ThemeStore: ObservableObject {
          cacheDir: URL = ThemeStore.defaultCacheDir) {
         self.defaults = defaults
         self.cacheDir = cacheDir
+        // Seed the display metrics from the persisted prefs and publish them into
+        // ThemeRuntime BEFORE any view renders, so the first frame already honours
+        // the user's size/opacity (no flash of default-sized UI on launch).
+        let s = CGFloat(Preferences.uiScale)
+        let o = CGFloat(Preferences.uiOpacity)
+        scale = s
+        opacity = o
+        ThemeRuntime.scale = s
+        ThemeRuntime.opacity = Self.effectiveOpacity(o)
+        // Re-evaluate transparency live when the user toggles the system "Reduce
+        // transparency" accessibility setting while Prosper is running (otherwise the
+        // downgrade only applies on next setOpacity/launch).
+        reduceTransparencyObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let effective = Self.effectiveOpacity(self.opacity)
+                guard effective != ThemeRuntime.opacity else { return }
+                ThemeRuntime.opacity = effective
+                self.generation &+= 1
+                self.onChange?()
+            }
+        }
+    }
+
+    /// System "Reduce transparency" wins: when it's on, windows render fully opaque
+    /// regardless of the user's stored preference (the preference is kept so it
+    /// takes effect again if the accessibility setting is turned off). Mirrors
+    /// FootprintWindow's downgrade.
+    static func effectiveOpacity(_ stored: CGFloat) -> CGFloat {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 1.0 : stored
+    }
+
+    // MARK: - Display metrics (size + opacity)
+
+    /// User changed the UI size multiplier. Persists, mirrors into `ThemeRuntime`,
+    /// and bumps `generation` so every window rebuilds at the new size. `onChange`
+    /// lets AppKit-only surfaces (window content sizes, opacity) re-apply.
+    func setScale(_ value: CGFloat) {
+        Preferences.uiScale = Double(value)
+        let clamped = CGFloat(Preferences.uiScale)
+        guard clamped != scale else { return }
+        scale = clamped
+        ThemeRuntime.scale = clamped
+        generation &+= 1
+        onChange?()
+    }
+
+    /// User changed the window opacity. Same live-rebuild path as `setScale`.
+    func setOpacity(_ value: CGFloat) {
+        Preferences.uiOpacity = Double(value)
+        let clamped = CGFloat(Preferences.uiOpacity)
+        guard clamped != opacity else { return }
+        opacity = clamped
+        ThemeRuntime.opacity = Self.effectiveOpacity(clamped)
+        generation &+= 1
+        onChange?()
     }
 
     static var defaultCacheDir: URL {

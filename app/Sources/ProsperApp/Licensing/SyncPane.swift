@@ -28,7 +28,7 @@ struct SyncPane: View {
                 NeonDivider()
                 NeonRow("Encryption key", subtitle: keyDetail) {
                     Text(coordinator.keyMode == .icloud ? "iCLOUD" : "LOCAL")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .font(Neon.font(10, weight: .bold, design: .monospaced))
                         .foregroundStyle(coordinator.keyMode == .icloud ? Neon.terminal : Neon.textSecondary)
                 }
 
@@ -44,7 +44,7 @@ struct SyncPane: View {
 
                 if let error = coordinator.lastError {
                     NeonDivider()
-                    Text(error).font(.system(size: 12)).foregroundStyle(Neon.magenta)
+                    Text(error).font(Neon.font(12)).foregroundStyle(Neon.magenta)
                 }
             }
 

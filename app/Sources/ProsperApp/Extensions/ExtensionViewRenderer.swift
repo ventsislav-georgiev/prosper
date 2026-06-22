@@ -37,12 +37,12 @@ struct ExtensionRenderedView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let title = node.title {
                     Text(title)
-                        .font(.system(size: 11, weight: .bold))
+                        .font(Neon.font(11, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(1.2)
                         .foregroundColor(Neon.textSecondary)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 14)
+                        .padding(.horizontal, sz(16))
+                        .padding(.top, sz(14))
                 }
                 switch node {
                 case .list(let n):   ListRender(node: n, onAction: onAction)
@@ -62,16 +62,16 @@ private struct LoadingRender: View {
     let node: LoadingNode
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: sz(14)) {
             if let p = node.clampedProgress {
                 // Progressive / determinate.
                 ProgressView(value: p)
                     .progressViewStyle(.linear)
                     .tint(Neon.blue)
-                    .frame(width: 240)
+                    .frame(width: sz(240))
                     .animation(.easeInOut(duration: 0.25), value: p)
                 Text("\(Int((p * 100).rounded()))%")
-                    .font(.system(.caption, design: .rounded).monospacedDigit())
+                    .font(Neon.font(.caption, design: .rounded).monospacedDigit())
                     .foregroundColor(Neon.textSecondary)
             } else {
                 // Infinite / indeterminate.
@@ -81,17 +81,17 @@ private struct LoadingRender: View {
                     .tint(Neon.blue)
             }
             if let title = node.title {
-                Text(title).font(.headline).foregroundColor(Neon.textPrimary)
+                Text(title).font(Neon.font(.headline)).foregroundColor(Neon.textPrimary)
             }
             if let sub = node.subtitle {
                 Text(sub)
-                    .font(.subheadline)
+                    .font(Neon.font(.subheadline))
                     .foregroundColor(Neon.textSecondary)
                     .multilineTextAlignment(.center)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(32)
+        .padding(sz(32))
         .transition(.opacity)
     }
 }
@@ -114,36 +114,36 @@ private struct ListRender: View {
     var body: some View {
         VStack(spacing: 0) {
             if node.isSearchable {
-                HStack(spacing: 8) {
+                HStack(spacing: sz(8)) {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 12))
+                        .font(Neon.font(12))
                         .foregroundColor(Neon.blue)
                     TextField("Search…", text: $query)
                         .textFieldStyle(.plain)
                         .foregroundColor(Neon.textPrimary)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.horizontal, sz(10))
+                .padding(.vertical, sz(7))
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                         .fill(Neon.card)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                                 .strokeBorder(Neon.stroke, lineWidth: 1)))
-                .padding(12)
+                .padding(sz(12))
             }
             List(items) { item in
-                HStack(spacing: 8) {
+                HStack(spacing: sz(8)) {
                     if let icon = item.icon { Image(systemName: icon).foregroundColor(Neon.blue) }
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: sz(2)) {
                         Text(item.title).foregroundColor(Neon.textPrimary)
                         if let sub = item.subtitle {
-                            Text(sub).font(.caption).foregroundColor(Neon.textSecondary)
+                            Text(sub).font(Neon.font(.caption)).foregroundColor(Neon.textSecondary)
                         }
                     }
                     Spacer()
                     if let acc = item.accessory {
-                        Text(acc).font(.caption).foregroundColor(Neon.textSecondary)
+                        Text(acc).font(Neon.font(.caption)).foregroundColor(Neon.textSecondary)
                     }
                     ForEach(item.allActions) { action in
                         Button(action.title) { onAction(action.id, action.value ?? item.id, [:]) }
@@ -171,13 +171,13 @@ private struct DetailRender: View {
     let onAction: (String, String?, [String: String]) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: sz(12)) {
             ScrollView {
                 Text(markdown)
                     .foregroundColor(Neon.textPrimary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
-                    .padding(12)
+                    .padding(sz(12))
             }
             if !node.allActions.isEmpty {
                 ActionBar(actions: node.allActions) { id, value in onAction(id, value, [:]) }
@@ -202,29 +202,29 @@ private struct GridRender: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: node.columnCount), spacing: 12) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: node.columnCount), spacing: sz(12)) {
                 ForEach(node.items) { item in
-                    VStack(spacing: 6) {
+                    VStack(spacing: sz(6)) {
                         if let icon = item.icon {
                             Image(systemName: icon)
-                                .font(.system(size: 28))
+                                .font(Neon.font(28))
                                 .foregroundColor(Neon.blue)
-                                .shadow(color: Neon.blue.opacity(0.5), radius: 6)
+                                .shadow(color: Neon.blue.opacity(0.5), radius: sz(6))
                         }
                         Text(item.title)
-                            .font(.caption)
+                            .font(Neon.font(.caption))
                             .foregroundColor(Neon.textPrimary)
                             .multilineTextAlignment(.center)
                         if let sub = item.subtitle {
-                            Text(sub).font(.caption2).foregroundColor(Neon.textSecondary)
+                            Text(sub).font(Neon.font(.caption2)).foregroundColor(Neon.textSecondary)
                         }
                     }
-                    .frame(maxWidth: .infinity).padding(8)
+                    .frame(maxWidth: .infinity).padding(sz(8))
                     .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                             .fill(Neon.card)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                                     .strokeBorder(Neon.stroke, lineWidth: 1)))
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -234,7 +234,7 @@ private struct GridRender: View {
                     }
                 }
             }
-            .padding(12)
+            .padding(sz(12))
         }
     }
 }
@@ -250,12 +250,12 @@ private struct FormRender: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: sz(14)) {
                     ForEach(node.fields) { field in
                         fieldView(field)
                     }
                 }
-                .padding(16)
+                .padding(sz(16))
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             // Return anywhere in the form submits via the first (primary) action.
@@ -307,8 +307,8 @@ private struct FormRender: View {
             labeledField(field.label) {
                 TextEditor(text: binding)
                     .scrollContentBackground(.hidden)
-                    .font(.system(size: 13, design: .monospaced))
-                    .frame(minHeight: 84)
+                    .font(Neon.font(13, design: .monospaced))
+                    .frame(minHeight: sz(84))
                     .focused($focusedField, equals: field.id)
                     .foregroundColor(Neon.textPrimary)
                     .neonFieldChrome()
@@ -324,7 +324,7 @@ private struct FormRender: View {
         case .toggle:
             HStack {
                 Text(field.label)
-                    .font(.system(size: 13))
+                    .font(Neon.font(13))
                     .foregroundColor(Neon.textPrimary)
                 Spacer()
                 Toggle("", isOn: Binding(
@@ -356,9 +356,9 @@ private struct FormRender: View {
 
     /// Converter-style uppercase tracked label above the input control.
     private func labeledField<C: View>(_ label: String, @ViewBuilder control: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: sz(6)) {
             Text(label.uppercased())
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .font(Neon.font(10, weight: .semibold, design: .rounded))
                 .tracking(0.8)
                 .foregroundColor(Neon.blueBright.opacity(0.85))
             control()
@@ -371,14 +371,14 @@ private struct FormRender: View {
 private struct NeonFieldChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, sz(10))
+            .padding(.vertical, sz(8))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                     .fill(Neon.card)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                             .strokeBorder(Neon.stroke, lineWidth: 1)))
     }
 }
@@ -414,7 +414,7 @@ private struct ConverterRender: View {
                  placeholder: node.right.placeholder,
                  text: $rightText)
         }
-        .frame(minWidth: 480, maxWidth: .infinity, minHeight: 280, maxHeight: .infinity)
+        .frame(minWidth: sz(480), maxWidth: .infinity, minHeight: sz(280), maxHeight: .infinity)
         .background(
             LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
                            startPoint: .top, endPoint: .bottom))
@@ -449,13 +449,13 @@ private struct ConverterRender: View {
     @ViewBuilder
     private func pane(label: String, placeholder: String?, text: Binding<String>) -> some View {
         let editorFont: Font = node.isMonospaced ? .system(.body, design: .monospaced) : .body
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: sz(6)) {
             Text(label.uppercased())
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .font(Neon.font(10, weight: .semibold, design: .rounded))
                 .tracking(0.8)
                 .foregroundColor(Neon.blueBright.opacity(0.85))
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
+                .padding(.horizontal, sz(14))
+                .padding(.top, sz(12))
             ZStack(alignment: .topLeading) {
                 if text.wrappedValue.isEmpty, let placeholder {
                     Text(placeholder)
@@ -464,9 +464,9 @@ private struct ConverterRender: View {
                         // Match the TextEditor's text origin: its own 8/10 padding
                         // PLUS the NSTextView's ~5pt internal text-container inset,
                         // so the placeholder sits exactly under the caret.
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 10)
-                        .padding(.leading, 5)
+                        .padding(.vertical, sz(8))
+                        .padding(.horizontal, sz(10))
+                        .padding(.leading, sz(5))
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: text)
@@ -474,8 +474,8 @@ private struct ConverterRender: View {
                     .foregroundColor(Neon.textPrimary)
                     .tint(Neon.blue)
                     .scrollContentBackground(.hidden)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 10)
+                    .padding(.vertical, sz(8))
+                    .padding(.horizontal, sz(10))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -501,7 +501,7 @@ private struct ActionBar: View {
                 .buttonStyle(.neon)
             }
         }
-        .padding(12)
+        .padding(sz(12))
         .background(Neon.bgBottom.opacity(0.55))
         .overlay(alignment: .top) {
             Rectangle().fill(Neon.stroke).frame(height: 1)

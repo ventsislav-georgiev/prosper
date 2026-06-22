@@ -439,6 +439,38 @@ function bookmarks_inline(query)
     return host.ui.render(host.ui.list{ title = "Bookmarks", style = "rows", items = items })
 end
 
+-- Raw ranked rows for the unified launcher search. Unlike `bookmarks_inline`,
+-- this returns DATA (a JSON array of {title,url,folder,browser}), not a rendered
+-- view — Swift scores these on the same ladder as apps/quicklinks and merges
+-- them into one ranked list (so a bookmark substring hit can't be shadowed by a
+-- stray fuzzy app match). Returns "" when disabled / no cache / no match so the
+-- caller skips bookmarks cleanly. Same opt-in gate + hot-path discipline as
+-- `bookmarks_inline` (no auto-import).
+function bookmarks_search(query, limit)
+    if host.prefs.get("show_in_launcher") ~= "true" then return "" end
+    query = trim(query or "")
+    if #query < 2 then return "" end
+    local cache = load_cache()
+    if #cache == 0 then return "" end
+    local terms = {}
+    for w in query:lower():gmatch("%S+") do terms[#terms + 1] = w end
+    local cap = tonumber(limit) or 200
+    local out = {}
+    for _, b in ipairs(cache) do
+        if matches(b, terms) then
+            -- `hay` is the precomputed lowercased "title url folder" the matcher
+            -- already built; hand it to Swift so the scorer matches on it directly
+            -- without rebuilding + re-lowercasing the haystack per row (hot path).
+            out[#out + 1] = { title = b.title or b.url, url = b.url,
+                              folder = b.folder or "", browser = b.browser or "",
+                              hay = b.hay or "" }
+            if #out >= cap then break end
+        end
+    end
+    if #out == 0 then return "" end
+    return host.json.encode(out)
+end
+
 -- MARK: Command handler
 
 function bookmarks_run(query)

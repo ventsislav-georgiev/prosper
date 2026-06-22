@@ -327,19 +327,19 @@ private struct ClipboardView: View {
     var body: some View {
         VStack(spacing: 0) {
             // ── Search + filter bar ──────────────────────────────────────────
-            HStack(spacing: 8) {
+            HStack(spacing: sz(8)) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(Neon.blue)
-                    .font(.system(size: 14))
+                    .font(Neon.font(14))
                 TextField("Type to filter entries\u{2026}", text: $model.query)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 14))
+                    .font(Neon.font(14))
                     .focused($searchFocused)
                 Spacer()
                 typeFilterMenu
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, sz(14))
+            .padding(.vertical, sz(10))
 
             Divider()
 
@@ -410,22 +410,22 @@ private struct ClipboardView: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: sz(4)) {
                 if let kind = model.typeFilter {
-                    Image(systemName: icon(for: kind)).font(.caption2)
-                    Text(kind.rawValue.capitalized).font(.caption)
+                    Image(systemName: icon(for: kind)).font(Neon.font(.caption2))
+                    Text(kind.rawValue.capitalized).font(Neon.font(.caption))
                 } else {
-                    Text("All Types").font(.caption)
+                    Text("All Types").font(Neon.font(.caption))
                 }
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                Image(systemName: "chevron.down").font(Neon.font(9, weight: .semibold))
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, sz(8))
+            .padding(.vertical, sz(4))
             .background(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: sz(6))
                     .fill(model.typeFilter != nil ? Neon.blue.opacity(0.16) : Neon.card)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: sz(6))
                             .strokeBorder(Neon.blue.opacity(model.typeFilter != nil ? 0.5 : 0.15), lineWidth: 1))
             )
             .foregroundColor(model.typeFilter != nil ? Neon.blueBright : Neon.textSecondary)
@@ -438,15 +438,15 @@ private struct ClipboardView: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: sz(10)) {
             Image(systemName: "clipboard")
-                .font(.system(size: 36, weight: .light))
+                .font(Neon.font(36, weight: .light))
                 .foregroundColor(Neon.blue.opacity(0.6))
             Text("No clipboard history yet")
-                .font(.headline)
+                .font(Neon.font(.headline))
                 .foregroundColor(Neon.textPrimary)
             Text("Copy text, images, or files and they'll appear here.")
-                .font(.caption)
+                .font(Neon.font(.caption))
                 .foregroundColor(Neon.textSecondary)
         }
         .frame(maxWidth: .infinity, minHeight: Self.listViewportH,
@@ -482,7 +482,7 @@ private struct ClipboardView: View {
                 }
                 .scrollTargetLayout()
                 // Top padding 0 (grid phase 0); small bottom pad for scroll comfort.
-                .padding(.bottom, 4)
+                .padding(.bottom, sz(4))
             }
             // Snap rows onto the badge grid at rest: a free trackpad fling settles
             // with rows aligned to the fixed ⌃-digit ladder (transient offset only
@@ -529,7 +529,7 @@ private struct ClipboardView: View {
                 slotOverlay(frames)
             }
         }
-        .frame(width: 300)
+        .frame(width: sz(300))
     }
 
     private func slotOverlay(_ frames: [UUID: RowSpan]) -> some View {
@@ -565,11 +565,11 @@ private struct ClipboardView: View {
 
     private func sectionHeader(_ section: ClipboardSection) -> some View {
         Text(section.rawValue)
-            .font(.system(size: 11, weight: .bold))
+            .font(Neon.font(11, weight: .bold))
             .textCase(.uppercase)
             .tracking(1.2)
             .foregroundColor(Neon.textSecondary)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, sz(14))
             // Header occupies exactly one grid cell so rows below it stay on the
             // fixed ⌃-digit grid (a sub-pitch header would shove them off-ladder).
             .frame(maxWidth: .infinity, minHeight: Self.rowPitch, maxHeight: Self.rowPitch,
@@ -588,36 +588,36 @@ private struct ClipboardView: View {
 
     private func listRow(_ item: ClipboardItem) -> some View {
         let selected = item.id == model.selectedId
-        return HStack(spacing: 8) {
+        return HStack(spacing: sz(8)) {
             // Leading thumbnail / icon / swatch — 28×28
             rowLeading(item)
-                .frame(width: 28, height: 28)
+                .frame(width: sz(28), height: sz(28))
 
             Text(rowTitle(item))
                 .lineLimit(1)
-                .font(.system(size: 13))
+                .font(Neon.font(13))
                 .foregroundColor(selected ? Neon.textPrimary : Neon.textSecondary)
 
             Spacer(minLength: 0)
             if item.pinned {
                 Image(systemName: "pin.fill")
-                    .font(.system(size: 9))
+                    .font(Neon.font(9))
                     .foregroundColor(Neon.blue)
             }
             // ⌃-digit badge is drawn by the fixed `slotOverlay`, not per-row, so it
             // stays anchored to a screen position while rows scroll underneath.
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, sz(8))
         // Selection card is inset inside the cell so it floats with a gap above
         // and below instead of filling the full pitch. Without this the card butts
         // flush against the pinned header (and the next row), making the first item
         // look tucked under TODAY.
         .frame(height: Self.rowPitch - 8)
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: sz(6))
                 .fill(selected ? Neon.blue.opacity(0.16) : Color.clear)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: sz(6))
                         .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1))
         )
         // Outer frame keeps the uniform pitch so every row stays on the fixed
@@ -625,8 +625,8 @@ private struct ClipboardView: View {
         .frame(height: Self.rowPitch)
         // Leave a right gutter so the ⌃-digit badge (drawn by `slotOverlay`) sits
         // outside the selection card, not on top of its highlight.
-        .padding(.leading, 4)
-        .padding(.trailing, 52)
+        .padding(.leading, sz(4))
+        .padding(.trailing, sz(52))
         .contentShape(Rectangle())
         .onTapGesture {
             model.selectedId = item.id
@@ -637,10 +637,10 @@ private struct ClipboardView: View {
     private func rowLeading(_ item: ClipboardItem) -> some View {
         switch item.kind {
         case .color:
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: sz(5))
                 .fill(ClipboardView.swatch(item.preview).map(Color.init) ?? Color.gray.opacity(0.3))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 5)
+                    RoundedRectangle(cornerRadius: sz(5))
                         .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
                 )
         case .image:
@@ -652,12 +652,12 @@ private struct ClipboardView: View {
                     .scaledToFit()
             } else {
                 Image(systemName: icon(for: item.kind))
-                    .font(.system(size: 14))
+                    .font(Neon.font(14))
                     .foregroundColor(Neon.textSecondary)
             }
         default:
             Image(systemName: icon(for: item.kind))
-                .font(.system(size: 14))
+                .font(Neon.font(14))
                 .foregroundColor(.secondary)
         }
     }
@@ -678,7 +678,7 @@ private struct ClipboardView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         contentPreview(item)
-                            .padding(16)
+                            .padding(sz(16))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -710,25 +710,25 @@ private struct ClipboardView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity)
-                    .cornerRadius(8)
+                    .cornerRadius(sz(8))
             } else {
                 imagePlaceholder
             }
 
         case .file:
-            HStack(spacing: 12) {
+            HStack(spacing: sz(12)) {
                 if let path = item.sourcePath {
                     Image(nsImage: NSWorkspace.shared.icon(forFile: path))
                         .resizable()
-                        .frame(width: 40, height: 40)
+                        .frame(width: sz(40), height: sz(40))
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: sz(4)) {
                     Text(item.fileName ?? item.preview)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(Neon.font(14, weight: .medium))
                         .foregroundColor(Neon.textPrimary)
                     if let path = item.sourcePath {
                         Text(path)
-                            .font(.caption2)
+                            .font(Neon.font(.caption2))
                             .foregroundColor(Neon.textSecondary)
                             .lineLimit(2)
                     }
@@ -741,26 +741,26 @@ private struct ClipboardView: View {
     @ViewBuilder
     private func colorPreviewContent(_ item: ClipboardItem) -> some View {
         let value = store.text(for: item) ?? item.preview
-        VStack(alignment: .leading, spacing: 10) {
-            RoundedRectangle(cornerRadius: 10)
+        VStack(alignment: .leading, spacing: sz(10)) {
+            RoundedRectangle(cornerRadius: sz(10))
                 .fill(ClipboardView.swatch(value).map(Color.init) ?? Color.gray.opacity(0.2))
-                .frame(height: 100)
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.2)))
+                .frame(height: sz(100))
+                .overlay(RoundedRectangle(cornerRadius: sz(10)).strokeBorder(Color.secondary.opacity(0.2)))
             Text(value)
-                .font(.system(size: 13, design: .monospaced))
+                .font(Neon.font(13, design: .monospaced))
                 .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var imagePlaceholder: some View {
-        RoundedRectangle(cornerRadius: 8)
+        RoundedRectangle(cornerRadius: sz(8))
             .fill(Color.secondary.opacity(0.1))
-            .frame(height: 80)
+            .frame(height: sz(80))
             .overlay(
                 Image(systemName: "photo")
                     .foregroundColor(.secondary.opacity(0.4))
-                    .font(.system(size: 24))
+                    .font(Neon.font(24))
             )
     }
 
@@ -770,15 +770,15 @@ private struct ClipboardView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Information")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(Neon.font(11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(1.2)
                     .foregroundColor(Neon.textSecondary)
                 Spacer()
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
+            .padding(.horizontal, sz(14))
+            .padding(.top, sz(10))
+            .padding(.bottom, sz(6))
 
             VStack(spacing: 0) {
                 infoRow("Content Type", value: item.kind.rawValue.capitalized)
@@ -794,25 +794,25 @@ private struct ClipboardView: View {
                 infoRow("Date Copied", value: formattedDate(item.createdAt))
                 infoRow("Pinned", value: item.pinned ? "Yes" : "No")
             }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 10)
+            .padding(.horizontal, sz(14))
+            .padding(.bottom, sz(10))
         }
         .background(Neon.bgBottom.opacity(0.5))
     }
 
     private func infoRow(_ label: String, value: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: sz(8)) {
             Text(label)
-                .font(.system(size: 11))
+                .font(Neon.font(11))
                 .foregroundColor(Neon.textSecondary)
-                .frame(width: 90, alignment: .trailing)
+                .frame(width: sz(90), alignment: .trailing)
             Text(value)
-                .font(.system(size: 11))
+                .font(Neon.font(11))
                 .foregroundColor(Neon.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, sz(3))
     }
 
     // MARK: - Action bar
@@ -820,13 +820,13 @@ private struct ClipboardView: View {
     private var actionBar: some View {
         HStack(spacing: 0) {
             // LEFT: app icon + "Clipboard History" label
-            HStack(spacing: 6) {
+            HStack(spacing: sz(6)) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
-                    .frame(width: 16, height: 16)
-                    .cornerRadius(3)
+                    .frame(width: sz(16), height: sz(16))
+                    .cornerRadius(sz(3))
                 Text("Clipboard History")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Neon.font(11, weight: .medium))
                     .foregroundColor(Neon.textSecondary)
             }
 
@@ -836,20 +836,20 @@ private struct ClipboardView: View {
             HStack(spacing: 0) {
                 // Paste button
                 Button(action: { commitSelected() }) {
-                    HStack(spacing: 5) {
+                    HStack(spacing: sz(5)) {
                         Text("Paste")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(Neon.font(11, weight: .medium))
                             .foregroundColor(Neon.blueBright)
                         Text("↩")
-                            .font(.system(size: 11))
+                            .font(Neon.font(11))
                             .foregroundColor(Neon.textSecondary)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, sz(8))
+                    .padding(.vertical, sz(4))
                     .background(
-                        RoundedRectangle(cornerRadius: 5)
+                        RoundedRectangle(cornerRadius: sz(5))
                             .fill(Neon.blue.opacity(0.14))
-                            .overlay(RoundedRectangle(cornerRadius: 5)
+                            .overlay(RoundedRectangle(cornerRadius: sz(5))
                                 .strokeBorder(Neon.blue.opacity(0.4), lineWidth: 1)))
                 }
                 .buttonStyle(.plain)
@@ -857,8 +857,8 @@ private struct ClipboardView: View {
                 // Divider
                 Rectangle()
                     .fill(Neon.stroke)
-                    .frame(width: 1, height: 14)
-                    .padding(.horizontal, 6)
+                    .frame(width: 1, height: sz(14))
+                    .padding(.horizontal, sz(6))
 
                 // Actions ⌘K menu
                 if let item = filtered.first(where: { $0.id == model.selectedId }) ?? filtered.first {
@@ -879,20 +879,20 @@ private struct ClipboardView: View {
                             Label("Delete", systemImage: "trash")
                         }
                     } label: {
-                        HStack(spacing: 5) {
+                        HStack(spacing: sz(5)) {
                             Text("Actions")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(Neon.font(11, weight: .medium))
                                 .foregroundColor(Neon.blueBright)
                             Text("⌘K")
-                                .font(.system(size: 11))
+                                .font(Neon.font(11))
                                 .foregroundColor(Neon.textSecondary)
                         }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, sz(8))
+                        .padding(.vertical, sz(4))
                         .background(
-                            RoundedRectangle(cornerRadius: 5)
+                            RoundedRectangle(cornerRadius: sz(5))
                                 .fill(Neon.blue.opacity(0.14))
-                                .overlay(RoundedRectangle(cornerRadius: 5)
+                                .overlay(RoundedRectangle(cornerRadius: sz(5))
                                     .strokeBorder(Neon.blue.opacity(0.4), lineWidth: 1)))
                     }
                     .menuStyle(.borderlessButton)
@@ -900,8 +900,8 @@ private struct ClipboardView: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, sz(14))
+        .padding(.vertical, sz(8))
     }
 
     // MARK: - Helpers
@@ -1056,7 +1056,7 @@ private struct SlotLadderOverlay: View {
                 PositionKeyCap(digit: idx == 9 ? "0" : "\(idx + 1)",
                                active: slot.id != nil && slot.id == selectedId)
                     // Left of the always-visible scrollbar, with a small gap.
-                    .position(x: width - 34, y: slot.centerY)
+                    .position(x: width - sz(34), y: slot.centerY)
                     .allowsHitTesting(false)
             }
         }
@@ -1068,22 +1068,22 @@ private struct PositionKeyCap: View {
     let active: Bool
 
     var body: some View {
-        HStack(spacing: 1) {
-            Text("\u{2303}")  // ⌃ control glyph
+        HStack(spacing: sz(1)) {
+            Text(Preferences.quickSelectModifier.glyph)  // ⌘ / ⌃ per Preferences
             Text(digit)
         }
-        .font(.system(size: 10, weight: .bold, design: .rounded))
+        .font(Neon.font(10, weight: .bold, design: .rounded))
         // Solid, higher-contrast chip: filled blue when its row is selected (dark
         // glyph), otherwise a dark slate fill with a bright cyan glyph + border, so
         // the badge reads clearly against any thumbnail underneath.
         .foregroundColor(active ? Neon.bgTop : Neon.blueBright)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
+        .padding(.horizontal, sz(5))
+        .padding(.vertical, sz(2))
         .background(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: sz(4))
                 .fill(active ? Neon.blueBright : Neon.bgBottom)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: sz(4))
                         .strokeBorder(Neon.blue.opacity(active ? 0.9 : 0.6), lineWidth: 1))
         )
     }
@@ -1104,23 +1104,23 @@ private struct ImageThumbnail: View {
                 Image(nsImage: thumb)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 28, height: 28)
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .frame(width: sz(28), height: sz(28))
+                    .clipShape(RoundedRectangle(cornerRadius: sz(5)))
             } else {
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: sz(5))
                     .fill(Color.secondary.opacity(0.15))
                     .overlay(
                         Image(systemName: "photo")
-                            .font(.system(size: 11))
+                            .font(Neon.font(11))
                             .foregroundColor(.secondary.opacity(0.5))
                     )
-                    .frame(width: 28, height: 28)
+                    .frame(width: sz(28), height: sz(28))
             }
         }
         // Hairline border so dark / low-contrast thumbnails don't blend into the
         // panel background.
         .overlay(
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: sz(5))
                 .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
         .task(id: data) {
             guard let data else { return }
@@ -1175,7 +1175,7 @@ private struct SelectableText: NSViewRepresentable {
         tv.isEditable = false
         tv.isSelectable = true
         tv.drawsBackground = false
-        tv.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        tv.font = .monospacedSystemFont(ofSize: 13 * ThemeRuntime.scale, weight: .regular)
         tv.textColor = .labelColor
         tv.textContainerInset = .zero
         tv.isAutomaticLinkDetectionEnabled = false
@@ -1306,9 +1306,14 @@ private struct ClipboardKeyHandling: NSViewRepresentable {
             if mods == .control, e.keyCode == 8 {  // C
                 h.clear(); return nil
             }
-            // ⌃1…⌃0 paste by visual position. Plain digits are NOT intercepted so
-            // they keep filtering the search field.
-            if e.modifierFlags.contains(.control), let pos = Self.digitPosition(e.keyCode) {
+            // ⌘1…⌘0 (or ⌃1…⌃0, per Preferences) paste by visual position. Match the
+            // chosen modifier exactly among the real modifiers (so ⌘⌥1 / ⌃⇧1 fall
+            // through) but ignore Caps Lock / fn; plain digits are NOT intercepted
+            // so they keep filtering the search field.
+            let quickFlag: NSEvent.ModifierFlags =
+                Preferences.quickSelectModifier == .command ? .command : .control
+            if QuickSelect.modifierMatches(e.modifierFlags, expected: quickFlag),
+               let pos = QuickSelect.slot(forKeyCode: e.keyCode) {
                 h.number(pos); return nil
             }
             switch e.keyCode {
@@ -1329,24 +1334,6 @@ private struct ClipboardKeyHandling: NSViewRepresentable {
             case 14 where cmd: h.rename(); return nil // ⌘E
             case 35 where cmd: h.filter(); return nil // ⌘P
             default: return e
-            }
-        }
-
-        /// Maps a top-row digit key code to a 0-based list position: 1→0 … 9→8,
-        /// 0→9. Returns nil for non-digit keys. ANSI US layout key codes.
-        private static func digitPosition(_ keyCode: UInt16) -> Int? {
-            switch keyCode {
-            case 18: return 0  // 1
-            case 19: return 1  // 2
-            case 20: return 2  // 3
-            case 21: return 3  // 4
-            case 23: return 4  // 5
-            case 22: return 5  // 6
-            case 26: return 6  // 7
-            case 28: return 7  // 8
-            case 25: return 8  // 9
-            case 29: return 9  // 0
-            default: return nil
             }
         }
 

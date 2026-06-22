@@ -10,6 +10,10 @@ import SwiftUI
 @MainActor
 final class ChatWindow {
     static let shared = ChatWindow()
+    /// Marks the window as theme-driven so AppDelegate refreshes its opacity/size
+    /// when the appearance settings change live. Distinct from Settings because the
+    /// minimum content size differs.
+    static let themedIdentifier = NSUserInterfaceItemIdentifier("prosper.chatWindow")
 
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
@@ -41,12 +45,16 @@ final class ChatWindow {
         // text could never be selected/copied (dragging the body moved the window).
         // The transparent title bar still drags the window.
         win.isMovableByWindowBackground = false
-        win.backgroundColor = NSColor(Neon.bgTop)
+        win.identifier = ChatWindow.themedIdentifier
         win.appearance = NSAppearance(named: .darkAqua)
-        win.setContentSize(NSSize(width: 760, height: 720))
+        let s = ThemeRuntime.scale
+        win.setContentSize(NSSize(width: 760 * s, height: 720 * s))
         // Min height keeps room above the input field for the full 8-row slash-command
         // suggestion popup (~210pt) plus the composer + header.
-        win.contentMinSize = NSSize(width: 560, height: 520)
+        win.contentMinSize = NSSize(width: 560 * s, height: 520 * s)
+        // Sets backgroundColor + isOpaque from the live opacity (replaces the old
+        // hardcoded opaque bgTop; identical at opacity 1.0).
+        SettingsWindow.applyWindowOpacity(win)
         win.isReleasedWhenClosed = false
         win.setFrameAutosaveName("ProsperChatWindow")
         if !win.setFrameUsingName("ProsperChatWindow") { win.center() }
@@ -185,27 +193,27 @@ private struct SlashSuggestPopup: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(suggest.matches.enumerated()).reversed(), id: \.element.id) { idx, cmd in
                 let isSel = idx == suggest.selected
-                HStack(spacing: 8) {
+                HStack(spacing: sz(8)) {
                     Text("/\(cmd.name)")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .font(Neon.font(12, weight: .medium, design: .monospaced))
                         .foregroundStyle(Neon.blue)
                     Text(preview(cmd.body))
-                        .font(.system(size: 11))
+                        .font(Neon.font(11))
                         .foregroundStyle(Neon.textSecondary)
                         .lineLimit(1).truncationMode(.tail)
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 5)
+                .padding(.horizontal, sz(10)).padding(.vertical, sz(5))
                 .background(isSel ? Neon.blue.opacity(0.18) : .clear)
                 .contentShape(Rectangle())
                 .onTapGesture { suggest.acceptByClick(idx) }
             }
         }
-        .padding(.vertical, 4)
-        .frame(minWidth: 260, maxWidth: 460, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Neon.card)
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Neon.stroke)))
-        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        .padding(.vertical, sz(4))
+        .frame(minWidth: sz(260), maxWidth: sz(460), alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.card)
+            .overlay(RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke)))
+        .shadow(color: .black.opacity(0.35), radius: sz(10), y: sz(4))
         .fixedSize()
     }
 
@@ -254,7 +262,8 @@ struct ChatRootView: View {
             ComposerBarView(suggest: suggest)
         }
         .background(LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
-                                   startPoint: .top, endPoint: .bottom))
+                                   startPoint: .top, endPoint: .bottom)
+            .opacity(ThemeRuntime.opacity))
         .foregroundStyle(Neon.textPrimary)
         .animation(.easeInOut(duration: 0.2), value: isWorking)
         // Float the suggestions above the input field without affecting layout. The
@@ -285,13 +294,13 @@ struct ChatRootView: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
+        HStack(spacing: sz(8)) {
+            VStack(alignment: .leading, spacing: sz(1)) {
                 SessionTitleField()
                 Text(AgentModelRegistry.model(for: Preferences.agentModel).label)
-                    .font(.caption2).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: sz(8))
             phaseIndicator
             // New conversation — only when the current one has content to leave behind.
             if !controller.items.isEmpty && !controller.isActive {
@@ -313,7 +322,7 @@ struct ChatRootView: View {
             }
         }
         .controlSize(.small)
-        .padding(.horizontal, 12).padding(.vertical, 7)
+        .padding(.horizontal, sz(12)).padding(.vertical, sz(7))
     }
 
     // Running / model-loading progress now renders inline below the last message
@@ -322,9 +331,9 @@ struct ChatRootView: View {
     @ViewBuilder private var phaseIndicator: some View {
         switch controller.phase {
         case .awaitingApproval:
-            Text("Waiting for approval").font(.caption).foregroundStyle(Neon.magenta)
+            Text("Waiting for approval").font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
         case .error(let msg):
-            Text(msg).font(.caption).foregroundStyle(Neon.magenta).lineLimit(1)
+            Text(msg).font(Neon.font(.caption)).foregroundStyle(Neon.magenta).lineLimit(1)
         default:
             EmptyView()
         }
@@ -336,7 +345,7 @@ struct ChatRootView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: sz(10)) {
                     ForEach(controller.items) { ItemView(item: $0) }
                     // Processing indicator sits right below the last message so it's
                     // clear where we are in the round-trip.
@@ -355,7 +364,7 @@ struct ChatRootView: View {
                         .onAppear { atBottom = true }
                         .onDisappear { atBottom = false }
                 }
-                .padding(16)
+                .padding(sz(16))
             }
             // O(1) revision counter instead of diffing the whole items array each
             // token: it bumps on every mutation (incl. in-place streamed deltas).
@@ -391,15 +400,15 @@ struct ChatRootView: View {
             withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
         } label: {
             Label("Jump to latest", systemImage: "arrow.down")
-                .font(.caption.bold())
-                .padding(.horizontal, 12).padding(.vertical, 6)
+                .font(Neon.font(.caption).bold())
+                .padding(.horizontal, sz(12)).padding(.vertical, sz(6))
                 .background(Capsule().fill(Neon.card)
                     .overlay(Capsule().stroke(Neon.stroke)))
         }
         .buttonStyle(.plain)
         .foregroundStyle(Neon.blue)
-        .padding(.bottom, 10)
-        .shadow(radius: 4)
+        .padding(.bottom, sz(10))
+        .shadow(radius: sz(4))
     }
 
     @ViewBuilder private var processingRow: some View {
@@ -423,19 +432,19 @@ struct ChatRootView: View {
     }
 
     private func processingLabel(_ text: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: sz(8)) {
             ProgressView().controlSize(.small)
-            Text(text).font(.caption).foregroundStyle(Neon.textSecondary)
+            Text(text).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             Spacer()
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, sz(2))
     }
 
     private func queuedBubble(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 5) {
-                Image(systemName: "clock").font(.caption2)
-                Text("Queued — press ↑ to edit").font(.caption2)
+        VStack(alignment: .leading, spacing: sz(3)) {
+            HStack(spacing: sz(5)) {
+                Image(systemName: "clock").font(Neon.font(.caption2))
+                Text("Queued — press ↑ to edit").font(Neon.font(.caption2))
             }
             .foregroundStyle(Neon.textSecondary)
             Text(text).textSelection(.enabled)
@@ -447,9 +456,9 @@ struct ChatRootView: View {
     // MARK: Approval
 
     private func approvalBar(_ req: ApprovalRequest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Approve \(approvalNoun(req.kind))?").font(.subheadline.bold())
-            Text(req.summary).font(.system(.caption, design: .monospaced))
+        VStack(alignment: .leading, spacing: sz(8)) {
+            Text("Approve \(approvalNoun(req.kind))?").font(Neon.font(.subheadline).bold())
+            Text(req.summary).font(Neon.font(.caption, design: .monospaced))
                 .foregroundStyle(Neon.textSecondary).lineLimit(3)
             HStack {
                 Button("Approve") { controller.respond(to: req, decision: .accept) }
@@ -461,10 +470,10 @@ struct ChatRootView: View {
                 Spacer()
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Neon.card).overlay(
-            RoundedRectangle(cornerRadius: 10).stroke(Neon.magenta.opacity(0.5))))
-        .padding(.horizontal, 16).padding(.bottom, 8)
+        .padding(sz(12))
+        .background(RoundedRectangle(cornerRadius: sz(10)).fill(Neon.card).overlay(
+            RoundedRectangle(cornerRadius: sz(10)).stroke(Neon.magenta.opacity(0.5))))
+        .padding(.horizontal, sz(16)).padding(.bottom, sz(8))
     }
 
     private func approvalNoun(_ kind: ApprovalRequest.Kind) -> String {
@@ -492,23 +501,23 @@ private struct ComposerBarView: View {
     @State private var personas: [AgentPersona] = AgentPersonaStore.builtIns
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: sz(6)) {
             // Working directory + persona live here, next to the prompt they scope.
-            HStack(spacing: 8) {
+            HStack(spacing: sz(8)) {
                 Button(action: chooseDirectory) {
                     Label(dirLabel, systemImage: "folder")
-                        .font(.caption2).lineLimit(1).truncationMode(.middle)
+                        .font(Neon.font(.caption2)).lineLimit(1).truncationMode(.middle)
                         .foregroundStyle(Neon.textSecondary)
                 }
                 .buttonStyle(.plain)
                 .help("Change working directory")
-                Spacer(minLength: 8)
+                Spacer(minLength: sz(8))
                 PersonaPicker(persona: $persona, personas: personas)
             }
 
             inputRow
         }
-        .padding(12)
+        .padding(sz(12))
         .onChange(of: persona) { _, _ in controller.applyAgentConfigChange() }
         .onAppear { personas = AgentPersonaStore.all() }
     }
@@ -518,11 +527,11 @@ private struct ComposerBarView: View {
     }
 
     private var inputRow: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: sz(8)) {
             ZStack(alignment: .leading) {
                 if composer.draft.isEmpty {
                     Text("Describe a goal — ⏎ to send, ⇧⏎ for a new line")
-                        .font(.system(size: NSFont.systemFontSize))
+                        .font(Neon.font(NSFont.systemFontSize))
                         .foregroundStyle(Neon.textSecondary)
                         .allowsHitTesting(false)
                 }
@@ -530,12 +539,12 @@ private struct ComposerBarView: View {
                              suggest: suggest, onSubmit: send, onRecall: recall)
                     .frame(height: composerHeight)
             }
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Neon.card)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Neon.stroke)))
+            .padding(.horizontal, sz(12)).padding(.vertical, sz(6))
+            .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.card)
+                .overlay(RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke)))
             // Publish the field's bounds so the root overlay can float the popup above it.
             .anchorPreference(key: ComposerFieldAnchorKey.self, value: .bounds) { $0 }
-            Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.title2) }
+            Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(Neon.font(.title2)) }
                 .buttonStyle(.plain)
                 .foregroundStyle(canSend ? Neon.blue : Neon.textSecondary)
                 .disabled(!canSend)
@@ -598,7 +607,7 @@ private struct WorkingBar: View {
                     view.offset(x: atRight ? travel : 0)
                 } animation: { _ in .easeInOut(duration: 1.0) }
         }
-        .frame(height: 2)
+        .frame(height: sz(2))
         .background(Neon.blue.opacity(0.07))
     }
 }
@@ -626,10 +635,10 @@ private struct SessionTitleField: View {
                     .focused($focused)
                     .foregroundStyle(Neon.textPrimary)
                     // Edit mode reads as an input: subtle filled, outlined slot.
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(RoundedRectangle(cornerRadius: 5)
+                    .padding(.horizontal, sz(6)).padding(.vertical, sz(1))
+                    .background(RoundedRectangle(cornerRadius: sz(5))
                         .fill(Neon.card)
-                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Neon.blue.opacity(0.5))))
+                        .overlay(RoundedRectangle(cornerRadius: sz(5)).stroke(Neon.blue.opacity(0.5))))
                     .onSubmit { commit() }
                     // Click away → commit. Ignore the initial false (focus lands a tick
                     // after appear); only a true→false transition is a real blur.
@@ -647,7 +656,7 @@ private struct SessionTitleField: View {
                     .onTapGesture { text = controller.sessionTitle; editing = true }
             }
         }
-        .font(.system(size: 13, weight: .semibold))
+        .font(Neon.font(13, weight: .semibold))
         .lineLimit(1)
         .onAppear { text = controller.sessionTitle }
         .onChange(of: controller.sessionTitle) { _, new in text = new }
@@ -715,24 +724,24 @@ private struct HistoryMenu: View {
     private var popoverBody: some View {
         VStack(spacing: 0) {
             // Search bar
-            HStack(spacing: 8) {
+            HStack(spacing: sz(8)) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12)).foregroundColor(Neon.blue)
+                    .font(Neon.font(12)).foregroundColor(Neon.blue)
                 TextField("Search sessions\u{2026}", text: $query)
                     .textFieldStyle(.plain)
                     .foregroundColor(Neon.textPrimary)
             }
-            .padding(.horizontal, 12).padding(.vertical, 9)
+            .padding(.horizontal, sz(12)).padding(.vertical, sz(9))
 
             Rectangle().fill(Neon.stroke).frame(height: 1)
 
             // Session list
             ScrollView {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: sz(2)) {
                     if filtered.isEmpty {
                         Text(sessions.isEmpty ? "No saved sessions" : "No matches")
-                            .font(.caption).foregroundColor(Neon.textSecondary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 24)
+                            .font(Neon.font(.caption)).foregroundColor(Neon.textSecondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, sz(24))
                     } else {
                         ForEach(filtered) { s in
                             SessionRow(summary: s, disabled: controller.isActive,
@@ -750,23 +759,23 @@ private struct HistoryMenu: View {
                         }
                     }
                 }
-                .padding(6)
+                .padding(sz(6))
             }
-            .frame(maxHeight: 360)
+            .frame(maxHeight: sz(360))
 
             Rectangle().fill(Neon.stroke).frame(height: 1)
 
             // Footer: session count
             HStack {
                 Image(systemName: "tray.full")
-                    .font(.system(size: 10)).foregroundColor(Neon.textSecondary)
+                    .font(Neon.font(10)).foregroundColor(Neon.textSecondary)
                 Text(footerText)
-                    .font(.system(size: 11)).foregroundColor(Neon.textSecondary)
+                    .font(Neon.font(11)).foregroundColor(Neon.textSecondary)
                 Spacer()
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .padding(.horizontal, sz(12)).padding(.vertical, sz(8))
         }
-        .frame(width: 460)
+        .frame(width: sz(460))
         .background(LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
                                    startPoint: .top, endPoint: .bottom))
         .preferredColorScheme(.dark)
@@ -792,21 +801,21 @@ private struct SessionRow: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: sz(4)) {
             Button(action: onSelect) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: sz(4)) {
+                    HStack(alignment: .top, spacing: sz(8)) {
                         Text(summary.title)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(Neon.font(13, weight: .medium))
                             .foregroundColor(Neon.textPrimary)
                             .lineLimit(2)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text(Self.relative.localizedString(for: summary.updatedAt, relativeTo: Self.now))
-                            .font(.system(size: 11))
+                            .font(Neon.font(11))
                             .foregroundColor(Neon.textSecondary)
                             .fixedSize()
                     }
-                    HStack(spacing: 6) {
+                    HStack(spacing: sz(6)) {
                         badge(systemImage: "folder", URL(fileURLWithPath: summary.cwd).lastPathComponent)
                         badge(systemImage: "cpu", summary.model)
                         if isCurrent { badge(systemImage: "dot.radiowaves.left.and.right", "open") }
@@ -822,7 +831,7 @@ private struct SessionRow: View {
             // Delete from disk. Hidden until hover; never offered for the open session.
             Button(action: onDelete) {
                 Image(systemName: "trash")
-                    .font(.system(size: 12))
+                    .font(Neon.font(12))
                     .foregroundColor(Neon.magenta)
             }
             .buttonStyle(.plain)
@@ -836,26 +845,26 @@ private struct SessionRow: View {
             .help(isCurrent ? "Can't delete the open session" : "Delete session")
             // Reserve a fixed slot so the row width is stable and the trailing edge
             // stays clear of the scroller (where hover used to be swallowed).
-            .frame(width: 20)
+            .frame(width: sz(20))
         }
-        .padding(.horizontal, 10).padding(.vertical, 8)
-        .padding(.trailing, 6)
+        .padding(.horizontal, sz(10)).padding(.vertical, sz(8))
+        .padding(.trailing, sz(6))
         .contentShape(Rectangle())
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                 .fill(hovering ? Neon.blue.opacity(0.12) : Color.clear)
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .overlay(RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                     .strokeBorder(Neon.blue.opacity(hovering ? 0.4 : 0), lineWidth: 1)))
         .onHover { hovering = $0 }
     }
 
     private func badge(systemImage: String, _ text: String) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: systemImage).font(.system(size: 8))
-            Text(text).font(.system(size: 10)).lineLimit(1)
+        HStack(spacing: sz(3)) {
+            Image(systemName: systemImage).font(Neon.font(8))
+            Text(text).font(Neon.font(10)).lineLimit(1)
         }
         .foregroundColor(Neon.blueBright.opacity(0.85))
-        .padding(.horizontal, 6).padding(.vertical, 2)
+        .padding(.horizontal, sz(6)).padding(.vertical, sz(2))
         .background(Capsule().fill(Neon.blue.opacity(0.10))
             .overlay(Capsule().strokeBorder(Neon.blue.opacity(0.22), lineWidth: 0.5)))
     }
@@ -881,11 +890,11 @@ private struct ItemView: View {
         case .assistant(_, let text, let reasoning):
             if reasoning {
                 DisclosureGroup("Reasoning") {
-                    Text(text).font(.system(.caption, design: .monospaced))
+                    Text(text).font(Neon.font(.caption, design: .monospaced))
                         .foregroundStyle(Neon.textSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .font(.caption).tint(Neon.textSecondary)
+                .font(Neon.font(.caption)).tint(Neon.textSecondary)
             } else {
                 // Agent body in robotic terminal-green — distinct from the cyan-blue
                 // actor labels (You / Agent) so the machine voice reads apart at a glance.
@@ -898,18 +907,18 @@ private struct ItemView: View {
         case .plan(_, let steps):
             planCard(steps)
         case .error(_, let message):
-            Text(message).font(.callout).foregroundStyle(Neon.magenta)
+            Text(message).font(Neon.font(.callout)).foregroundStyle(Neon.magenta)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .note(_, let text):
-            Text(text).font(.caption2).foregroundStyle(Neon.textSecondary)
+            Text(text).font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
     private func bubble(_ text: String, role: String, color: Color, textColor: Color) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(role).font(.caption2.bold()).foregroundStyle(color)
+        VStack(alignment: .leading, spacing: sz(3)) {
+            Text(role).font(Neon.font(.caption2).bold()).foregroundStyle(color)
             Text(text).textSelection(.enabled)
                 .foregroundStyle(textColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -917,54 +926,54 @@ private struct ItemView: View {
     }
 
     private func toolCard(name: String, args: String, status: ToolCall.Status, output: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: sz(4)) {
+            HStack(spacing: sz(6)) {
                 Image(systemName: statusIcon(status)).foregroundStyle(statusColor(status))
-                Text(name).font(.caption.bold())
-                Text(args).font(.system(.caption2, design: .monospaced))
+                Text(name).font(Neon.font(.caption).bold())
+                Text(args).font(Neon.font(.caption2, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary).lineLimit(1)
             }
             if !output.isEmpty {
-                Text(output).font(.system(.caption2, design: .monospaced))
+                Text(output).font(Neon.font(.caption2, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
         }
-        .padding(8)
+        .padding(sz(8))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Neon.card).overlay(
-            RoundedRectangle(cornerRadius: 8).stroke(Neon.stroke)))
+        .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.card).overlay(
+            RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke)))
     }
 
     private func diffCard(path: String, diff: String, change: FileDiff.Change) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("\(changeVerb(change)) \(path)").font(.caption.bold())
-            Text(diff).font(.system(.caption2, design: .monospaced))
+        VStack(alignment: .leading, spacing: sz(4)) {
+            Text("\(changeVerb(change)) \(path)").font(Neon.font(.caption).bold())
+            Text(diff).font(Neon.font(.caption2, design: .monospaced))
                 .foregroundStyle(Neon.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
         }
-        .padding(8)
+        .padding(sz(8))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Neon.card).overlay(
-            RoundedRectangle(cornerRadius: 8).stroke(Neon.stroke)))
+        .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.card).overlay(
+            RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke)))
     }
 
     private func planCard(_ steps: [PlanStep]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Plan").font(.caption.bold())
+        VStack(alignment: .leading, spacing: sz(4)) {
+            Text("Plan").font(Neon.font(.caption).bold())
             ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                HStack(spacing: 6) {
+                HStack(spacing: sz(6)) {
                     Image(systemName: planIcon(step.state)).foregroundStyle(planColor(step.state))
-                    Text(step.title).font(.caption).strikethrough(step.state == .done)
+                    Text(step.title).font(Neon.font(.caption)).strikethrough(step.state == .done)
                 }
             }
         }
-        .padding(8)
+        .padding(sz(8))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Neon.card).overlay(
-            RoundedRectangle(cornerRadius: 8).stroke(Neon.stroke)))
+        .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.card).overlay(
+            RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke)))
     }
 
     private func statusIcon(_ s: ToolCall.Status) -> String {
@@ -1002,7 +1011,7 @@ private struct PersonaPicker: View {
         return Button { showing.toggle() } label: {
             Label(title, systemImage: "person.crop.circle")
                 .labelStyle(.titleAndIcon)
-                .font(.caption2)
+                .font(Neon.font(.caption2))
         }
         .buttonStyle(.neon)
         .controlSize(.small)
@@ -1015,11 +1024,11 @@ private struct PersonaPicker: View {
         let others = personas.filter { $0.id != persona }
         return VStack(spacing: 0) {
             ScrollView {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: sz(2)) {
                     if others.isEmpty {
                         Text("No other personas")
-                            .font(.caption).foregroundColor(Neon.textSecondary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 24)
+                            .font(Neon.font(.caption)).foregroundColor(Neon.textSecondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, sz(24))
                     } else {
                         ForEach(others) { p in
                             Button {
@@ -1027,16 +1036,16 @@ private struct PersonaPicker: View {
                                 Preferences.agentPersona = p.id
                                 showing = false
                             } label: {
-                                HStack(alignment: .top, spacing: 8) {
+                                HStack(alignment: .top, spacing: sz(8)) {
                                     Image(systemName: "person.crop.circle")
-                                        .font(.system(size: 13)).foregroundColor(Neon.blue)
-                                    VStack(alignment: .leading, spacing: 2) {
+                                        .font(Neon.font(13)).foregroundColor(Neon.blue)
+                                    VStack(alignment: .leading, spacing: sz(2)) {
                                         Text(p.title)
-                                            .font(.system(size: 13, weight: .medium))
+                                            .font(Neon.font(13, weight: .medium))
                                             .foregroundColor(Neon.textPrimary)
                                         if p.isBuiltIn {
                                             Text("Built-in")
-                                                .font(.system(size: 10))
+                                                .font(Neon.font(10))
                                                 .foregroundColor(Neon.textSecondary)
                                         }
                                     }
@@ -1044,17 +1053,17 @@ private struct PersonaPicker: View {
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
-                                .padding(.horizontal, 10).padding(.vertical, 8)
+                                .padding(.horizontal, sz(10)).padding(.vertical, sz(8))
                             }
                             .buttonStyle(.plain)
                         }
                     }
                 }
-                .padding(6)
+                .padding(sz(6))
             }
-            .frame(maxHeight: 280)
+            .frame(maxHeight: sz(280))
         }
-        .frame(width: 240)
+        .frame(width: sz(240))
         .background(LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
                                    startPoint: .top, endPoint: .bottom))
         .preferredColorScheme(.dark)
@@ -1084,7 +1093,7 @@ private struct ChatComposer: NSViewRepresentable {
         tv.delegate = context.coordinator
         tv.isRichText = false
         tv.allowsUndo = true
-        tv.font = .systemFont(ofSize: NSFont.systemFontSize)
+        tv.font = .systemFont(ofSize: NSFont.systemFontSize * ThemeRuntime.scale)
         tv.drawsBackground = false
         tv.textColor = NSColor(Neon.textPrimary)
         tv.insertionPointColor = NSColor(Neon.blue)
