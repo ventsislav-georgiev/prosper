@@ -425,6 +425,13 @@ final class RunnerModel: ObservableObject {
     /// Index into the flattened row list; always 0 when outcome is non-nil.
     @Published var selectedIndex: Int = 0
 
+    /// Measured row y-spans + scroll-viewport height for the ⌘-digit quick-select
+    /// ladder (issue: badges must stay fixed in the viewport and map to whichever
+    /// rows are currently scrolled under them). NOT @Published: written from the
+    /// scroll overlay every frame, so publishing would rebuild the list on scroll.
+    var rowFrames: [Int: RowSpan] = [:]
+    var viewportHeight: CGFloat = 0
+
     private var debounceWorkItem: DispatchWorkItem?
     private var requestToken: UInt64 = 0
     private let debounceInterval: TimeInterval = 0.25
@@ -1072,12 +1079,11 @@ private struct RunnerView: View {
                 onSecondary: { performActionAtOffset(1) },
                 onTertiary: { performActionAtOffset(2) },
                 onQuickLook: { quickLookSelected() },
-                // ⌘1…⌘5 (or ⌃, per Preferences) — jump to and activate a top result.
-                onNumber: { idx in
-                    guard idx < rows.count else { return }
-                    let row = rows[idx]
-                    model.selectedIndex = row.id
-                    activateRow(row)
+                // ⌘1… (or ⌃, per Preferences) — activate the Nth VISIBLE result,
+                // matching the fixed badge ladder (works after scrolling, like the
+                // clipboard history), not an absolute row index.
+                onNumber: { position in
+                    activateQuickSelect(position: position)
                 }
             )
         )
@@ -1085,32 +1091,109 @@ private struct RunnerView: View {
 
     // MARK: - Result row list
 
+    /// Coordinate space the row-frame reporter measures in (for the badge ladder).
+    static let scrollSpace = "runnerResultsScroll"
+
     @ViewBuilder
     private func resultRowList(rows: [ResultRow]) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: sz(2)) {
-                    sectionHeader("Results")
-                    ForEach(rows) { row in
-                        ResultRowView(
-                            row: row,
-                            isSelected: model.selectedIndex == row.id
-                        ) {
-                            activateRow(row)
-                        }
-                        .id(row.id)
-                    }
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            // Header is OUTSIDE the scroll area (fixed), so the scroll viewport is a
+            // pure uniform grid of `rowPitch` rows — its height is an exact multiple,
+            // so it never shows a partial/cut-off row (issue #3) and the ⌘-digit
+            // badge ladder lines up on every row.
+            sectionHeader("Results")
                 .padding(.horizontal, sz(8))
-                .padding(.vertical, sz(6))
-            }
-            .frame(maxHeight: sz(360))
-            // Keep the keyboard-selected row visible while arrowing through a
-            // long list (e.g. all quicklinks), which would otherwise run off-screen.
-            .onChange(of: model.selectedIndex) { _, idx in
-                withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(idx, anchor: .center) }
+                .padding(.top, sz(6))
+                .padding(.bottom, sz(2))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(rows) { row in
+                            ResultRowView(
+                                row: row,
+                                isSelected: model.selectedIndex == row.id
+                            ) {
+                                activateRow(row)
+                            }
+                            .frame(height: RunnerRowGrid.rowPitch)
+                            .id(row.id)
+                            .background(rowFrameReporter(row.id))
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, sz(8))
+                }
+                // Pinned to an exact pitch multiple AND fewer rows than that shrink to
+                // fit — so the list shows N full rows, never a sliver of N+1.
+                .frame(height: min(CGFloat(rows.count), CGFloat(RunnerRowGrid.visibleRows))
+                               * RunnerRowGrid.rowPitch)
+                // Snap a fling onto the badge grid at rest; arrow-nav lands row-by-row.
+                .scrollTargetBehavior(.viewAligned)
+                .coordinateSpace(name: Self.scrollSpace)
+                // Keep the keyboard-selected row visible; uniform pitch + viewAligned
+                // keep it resting on the grid so badges stay aligned.
+                .onChange(of: model.selectedIndex) { _, idx in
+                    withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(idx) }
+                }
+                // Fixed ⌘-digit badge ladder: constant viewport Y, rows slide beneath.
+                .overlayPreferenceValue(RunnerRowFrameKey.self) { frames in
+                    slotOverlay(frames)
+                }
             }
         }
+        // Bound the captured geometry to THIS list's lifetime. Switching to a card
+        // list / detail / loading view removes the ladder but would otherwise leave
+        // stale frames behind, so the ⌘-digit handler's no-grid fallback (absolute
+        // index) never engaged and could activate the wrong row. Clearing on
+        // disappear makes `viewportHeight == 0` → fallback path taken correctly.
+        .onDisappear {
+            model.rowFrames = [:]
+            model.viewportHeight = 0
+        }
+    }
+
+    /// Reports a row's y-span in the scroll coordinate space for badge resolution.
+    private func rowFrameReporter(_ id: Int) -> some View {
+        GeometryReader { geo in
+            let f = geo.frame(in: .named(Self.scrollSpace))
+            Color.clear.preference(key: RunnerRowFrameKey.self,
+                                   value: [id: RowSpan(minY: f.minY, maxY: f.maxY)])
+        }
+    }
+
+    private func slotOverlay(_ frames: [Int: RowSpan]) -> some View {
+        GeometryReader { geo in
+            RunnerSlotLadderOverlay(
+                slots: RunnerRowGrid.visibleSlots(frames, height: geo.size.height),
+                width: geo.size.width,
+                selectedId: model.selectedIndex)
+            // Capture frames + viewport height for the ⌘-digit key handler. Non-
+            // published store → no list rebuild on scroll. `initial: true` so the
+            // capture happens before the first scroll (else handler is a no-op).
+            Color.clear.onChange(of: frames, initial: true) { _, f in
+                model.rowFrames = f
+                model.viewportHeight = geo.size.height
+            }
+        }
+    }
+
+    /// ⌘1…: activate the `position`-th visible row (top-to-bottom), matching the
+    /// badge ladder's row resolution exactly. The card-list path (Translate) doesn't
+    /// run the ladder, so when no slots are measured fall back to an absolute index
+    /// (capped at the top-N that show a per-card badge there).
+    private func activateQuickSelect(position: Int) {
+        let slots = RunnerRowGrid.visibleSlots(model.rowFrames, height: model.viewportHeight)
+        if slots.isEmpty {
+            guard position < QuickSelect.runnerTopCount, position < rows.count else { return }
+            let row = rows[position]
+            model.selectedIndex = row.id
+            activateRow(row)
+            return
+        }
+        guard position < slots.count, let id = slots[position].id,
+              let row = rows.first(where: { $0.id == id }) else { return }
+        model.selectedIndex = id
+        activateRow(row)
     }
 
     // MARK: - Inline extension view (rich declarative result)
@@ -1411,15 +1494,13 @@ private struct ResultRowView: View {
 
                 Spacer(minLength: sz(8))
 
-                // Type label — right aligned, plain dimmed text (no pill)
+                // Type label — right aligned, plain dimmed text (no pill). A right
+                // gutter leaves room for the fixed ⌘-digit badge (drawn by the
+                // overlay ladder, not per-row, so it stays put on scroll).
                 Text(row.category)
                     .font(Neon.font(13))
                     .foregroundColor(Neon.textSecondary)
-
-                // Quick-select keycap on the top rows: ⌘1…⌘5 (or ⌃, per Prefs).
-                if row.id < QuickSelect.runnerTopCount {
-                    KeyCap("\(Preferences.quickSelectModifier.glyph)\(row.id + 1)")
-                }
+                    .padding(.trailing, sz(34))
             }
             .padding(.horizontal, sz(10))
             .padding(.vertical, sz(6))
@@ -1830,21 +1911,97 @@ private struct ActionMenuButton: View {
 /// Small rounded key-cap chip used in the action bar (Raycast footer style).
 private struct KeyCap: View {
     let text: String
-    init(_ text: String) { self.text = text }
+    let active: Bool
+    init(_ text: String, active: Bool = false) { self.text = text; self.active = active }
 
     var body: some View {
         Text(text)
             .font(Neon.font(11, weight: .medium))
-            .foregroundColor(Neon.blue)
+            .foregroundColor(active ? Neon.bgTop : Neon.blue)
             .padding(.horizontal, sz(5))
             .padding(.vertical, sz(2))
             .background(
                 RoundedRectangle(cornerRadius: sz(4))
-                    .fill(Neon.blue.opacity(0.12))
+                    .fill(active ? Neon.blue : Neon.blue.opacity(0.12))
                     .overlay(
                         RoundedRectangle(cornerRadius: sz(4))
-                            .strokeBorder(Neon.blue.opacity(0.3), lineWidth: 0.5))
+                            .strokeBorder(Neon.blue.opacity(active ? 0.9 : 0.3), lineWidth: active ? 1 : 0.5))
             )
+    }
+}
+
+// MARK: - Quick-select badge ladder (fixed grid)
+
+/// Collects each visible result row's y-span, keyed by row index, so the fixed
+/// ⌘-digit ladder can map each badge slot to the row currently under it.
+private struct RunnerRowFrameKey: PreferenceKey {
+    static var defaultValue: [Int: RowSpan] { [:] }
+    static func reduce(value: inout [Int: RowSpan], nextValue: () -> [Int: RowSpan]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// Fixed uniform-pitch grid the result list and its badge ladder share. Rows are
+/// pinned to `rowPitch` and the viewport is an exact multiple, so the list shows
+/// whole rows only (no cut-off sliver) and badges sit on a constant ladder.
+///
+/// Hot-path contract: `visibleSlots` runs in the badge overlay's GeometryReader
+/// body — once per scroll frame (≤120 Hz) while the runner is open. It must stay
+/// allocation-light and well under one frame's budget. Measured target: < 20 µs
+/// per call for a full viewport (see RunnerRowGridTests.test_visibleSlots_perf).
+/// Cost is O(cells × measuredRows) ≤ 10 × ~10 — no I/O, no view rebuild (the
+/// frames it reads come from a non-`@Published` store).
+enum RunnerRowGrid {
+    static var rowPitch: CGFloat { sz(40) }
+    /// Max full rows shown before scrolling — also the max number of badges.
+    static let visibleRows = 9
+    /// Hardware digit row caps the ladder at ten (⌘1…⌘0).
+    static let maxSlots = 10
+
+    /// Fixed badge slots top-to-bottom. Each `centerY` is a constant grid cell (not
+    /// the scrolled row position) matched to the row whose measured center falls in
+    /// its ±pitch/2 band, so badges hold their viewport Y while rows scroll beneath.
+    static func visibleSlots(_ frames: [Int: RowSpan], height: CGFloat)
+        -> [(id: Int?, centerY: CGFloat)] {
+        guard height > 0, !frames.isEmpty else { return [] }
+        let pitch = rowPitch
+        let half = pitch / 2
+        var slots: [(id: Int?, centerY: CGFloat)] = []
+        slots.reserveCapacity(maxSlots)
+        var cell = 0
+        while true {
+            let cellCenter = half + CGFloat(cell) * pitch
+            if cellCenter > height - 4 { break }
+            cell += 1
+            // The row whose measured center falls in this cell's band owns the slot.
+            // Rows are non-overlapping fixed pitch, so at most one matches — iterate
+            // the dict directly (no intermediate `centers` array allocation).
+            for (id, span) in frames where abs((span.minY + span.maxY) / 2 - cellCenter) <= half {
+                slots.append((id: id, centerY: cellCenter))
+                break
+            }
+            if slots.count == maxSlots { break }   // ⌘1…⌘0
+        }
+        return slots
+    }
+}
+
+/// Fixed ladder of ⌘-digit badges — positions are constant; only the labeled row
+/// and the active highlight change as rows scroll beneath.
+private struct RunnerSlotLadderOverlay: View {
+    let slots: [(id: Int?, centerY: CGFloat)]
+    let width: CGFloat
+    let selectedId: Int
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(slots.enumerated()), id: \.offset) { idx, slot in
+                KeyCap("\(Preferences.quickSelectModifier.glyph)\(idx == 9 ? "0" : "\(idx + 1)")",
+                       active: slot.id != nil && slot.id == selectedId)
+                    .position(x: width - sz(28), y: slot.centerY)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }
 
@@ -1958,14 +2115,14 @@ private struct KeyHandling: NSViewRepresentable {
             if mods == .control, e.keyCode == 8 {  // C
                 h.clear(); return nil
             }
-            // ⌘1…⌘5 (or ⌃1…⌃5, per Preferences) — activate one of the top 5
-            // results. Match the chosen modifier exactly among the real modifiers
-            // (larger combos fall through) but ignore Caps Lock / fn; slots ≥ 5 are
-            // ignored (only the top five get a shortcut).
+            // ⌘1…⌘0 (or ⌃, per Preferences) — activate the Nth VISIBLE result. Match
+            // the chosen modifier exactly among the real modifiers (larger combos
+            // fall through) but ignore Caps Lock / fn. The handler caps to the rows
+            // actually on screen via the badge ladder, so any unfilled digit no-ops.
             let quickFlag: NSEvent.ModifierFlags =
                 Preferences.quickSelectModifier == .command ? .command : .control
             if QuickSelect.modifierMatches(e.modifierFlags, expected: quickFlag),
-               let idx = QuickSelect.slot(forKeyCode: e.keyCode), idx < QuickSelect.runnerTopCount {
+               let idx = QuickSelect.slot(forKeyCode: e.keyCode) {
                 h.number(idx); return nil
             }
             // Row-action accelerators (Alfred/Raycast file actions). ⌘⏎ / ⌥⏎ run

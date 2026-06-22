@@ -253,6 +253,12 @@ reset()
 hs_url_open(payload("https://example.com/p?a=1&b=2"))
 check(last() and last().url == "https://example.com/p?a=1&b=2",
       "encodeForQuery: query-safe URL passes through unmangled (" .. tostring(last() and last().url) .. ")")
+-- 9d3. existing %XX escapes must survive re-encode: %20 must stay %20, not become
+--      %2520, else the browser search box shows literal "how%20to%20clean".
+reset()
+hs_url_open(payload("https://google.com/search?q=how%20to%20clean"))
+check(last() and last().url == "https://google.com/search?q=how%20to%20clean",
+      "encodeForQuery: existing %XX not double-encoded (" .. tostring(last() and last().url) .. ")")
 -- diagnostics row should show the live route/rewriter counts
 default_browser = "eu.illegible.prosper"
 env._HS = nil

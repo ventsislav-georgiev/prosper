@@ -254,9 +254,17 @@ local function build_hs(ctx)
         -- a whole rebuilt URL (finicky removeTrackingParams idiom) produced a garbage
         -- address -> blank browser tab.
         encodeForQuery = function(s)
-            return (tostring(s):gsub("[^%w!$&'()*+,%-./:;=?@_~]", function(c)
-                return string.format("%%%02X", string.byte(c))
-            end))
+            -- Preserve EXISTING %XX escapes so re-encoding an already-encoded URL
+            -- (the removeTrackingParams idiom: urlParts -> rebuild -> encodeForQuery)
+            -- doesn't turn %20 into %2520, which reached the browser as a literal
+            -- "how%20to%20clean" in the search box. \1 is a transient sentinel
+            -- (never in a URL): hide valid escapes, encode the rest, restore.
+            return (tostring(s)
+                :gsub("%%(%x%x)", "\1%1")
+                :gsub("[^%w!$&'()*+,%-./:;=?@_~\1]", function(c)
+                    return string.format("%%%02X", string.byte(c))
+                end)
+                :gsub("\1(%x%x)", "%%%1"))
         end,
         urlParts = function(url)
             url = tostring(url or "")

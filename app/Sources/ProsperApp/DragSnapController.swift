@@ -115,9 +115,16 @@ final class DragSnapController {
 
     // MARK: - Lifecycle
 
-    /// Reconcile monitors against the enable pref + Accessibility trust. Idempotent.
+    /// Whether the window extension (com.prosper.window) is live. Drag-snap is now
+    /// a feature of that extension, so disabling it disables drag-snap too. Set by
+    /// AppDelegate from the registry (boot + onEnabledChanged). Defaults true so a
+    /// reconcile before the registry wires up doesn't wrongly suppress the feature.
+    var windowExtLive = true
+
+    /// Reconcile monitors against the enable pref + extension-live + Accessibility
+    /// trust. Idempotent.
     func reconcile() {
-        if Preferences.dragSnapEnabled && PermissionsManager.isAccessibilityTrusted() {
+        if Preferences.dragSnapEnabled && windowExtLive && PermissionsManager.isAccessibilityTrusted() {
             start()
         } else {
             stop()
