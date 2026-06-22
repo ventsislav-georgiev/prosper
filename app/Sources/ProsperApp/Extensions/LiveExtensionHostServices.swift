@@ -356,6 +356,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         if let v = obj["autoExpand"] as? Bool { Preferences.snippetsAutoExpand = v }
         if let v = obj["wordBoundary"] as? Bool { Preferences.snippetsExpandOnWordBoundary = v }
         if let v = obj["restoreClipboard"] as? Bool { Preferences.snippetsRestoreClipboard = v }
+        if let cb = snippetConfigChanged { Task { @MainActor in cb() } }
     }
 
     func snippetCollections() -> String {
@@ -466,6 +467,11 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// sidebar id ("ext:<extID>|<sectionID>") the window restores on open. Injected
     /// by `AppDelegate`; nil before wiring / in headless runs (`openSettings` no-ops).
     var settingsOpener: (@MainActor (_ selection: String) -> Void)?
+
+    /// Fired after snippet settings change so the app can reconcile the keystroke
+    /// tap — snippet auto-expansion needs the tap up even when inline autocomplete
+    /// is off (see `AppDelegate.reconcileKeyTap`).
+    var snippetConfigChanged: (@MainActor () -> Void)?
 
     func openSettings(extensionID: String, sectionID: String?) {
         mainSync {

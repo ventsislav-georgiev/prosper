@@ -154,6 +154,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(selection, forKey: "settingsSelectedPane")
             self?.openSettings()
         }
+        // Snippet auto-expand toggling on (with inline autocomplete off) must bring
+        // the keystroke tap up — it's the surface snippet expansion rides.
+        LiveExtensionHostServices.shared.snippetConfigChanged = { [weak self] in
+            self?.reconcileKeyTap()
+        }
         // Durable timers: deliver a fired timer's "timer.fired" event into the
         // owning extension's serialized invoke lane, then re-arm persisted timers
         // (overdue one-shots fire once — openlid's expiry depends on it).
@@ -662,13 +667,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// trusted key-rule extension works even with inline autocomplete switched off
     /// (the previous coupling left the tap down and silently killed all key rules).
     /// Idempotent: start()/stop() no-op when already in the desired state.
-    /// Pure rule for whether the shared CGEvent keystroke tap must run. Three
+    /// Pure rule for whether the shared CGEvent keystroke tap must run. Four
     /// independent consumers ride it — inline autocomplete, native `ExtensionKeyRules`,
-    /// and resident `hs.eventtap` callbacks — and it runs if ANY needs it. Extracted +
-    /// unit-tested precisely because the "every shortcut dead" bug was a dropped term
-    /// here (`eventTaps`), which silently kept the tap down for pure-eventtap configs.
-    static func needKeyTap(autocomplete: Bool, extRules: Bool, eventTaps: Bool) -> Bool {
-        autocomplete || extRules || eventTaps
+    /// resident `hs.eventtap` callbacks, and snippet auto-expansion — and it runs if
+    /// ANY needs it. Extracted + unit-tested precisely because the "every shortcut
+    /// dead" bug was a dropped term here (`eventTaps`), which silently kept the tap
+    /// down for pure-eventtap configs; the `snippets` term has the same failure mode
+    /// (snippets dead whenever inline autocomplete is off).
+    static func needKeyTap(autocomplete: Bool, extRules: Bool, eventTaps: Bool, snippets: Bool) -> Bool {
+        autocomplete || extRules || eventTaps || snippets
     }
 
     func reconcileKeyTap() {
@@ -678,10 +685,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the surface those raw callbacks ride. Without this term the tap stays down
         // when autocomplete is off and the only consumer is a resident eventtap.
         let eventTaps = EventTapHost.shared.isActive
-        let needTap = Self.needKeyTap(autocomplete: acEnabled, extRules: extRules, eventTaps: eventTaps)
+        // Snippet auto-expansion rides the same tap. Without this term the tap stays
+        // down when autocomplete is off and snippets are the only consumer.
+        let snippets = Preferences.snippetsEnabled && Preferences.snippetsAutoExpand
+        let needTap = Self.needKeyTap(autocomplete: acEnabled, extRules: extRules, eventTaps: eventTaps, snippets: snippets)
         let trusted = PermissionsManager.isAccessibilityTrusted()
-        NSLog("prosper: reconcileKeyTap autocomplete=%d extRules=%d eventTaps=%d needTap=%d axTrusted=%d",
-              acEnabled, extRules, eventTaps, needTap, trusted)
+        NSLog("prosper: reconcileKeyTap autocomplete=%d extRules=%d eventTaps=%d snippets=%d needTap=%d axTrusted=%d",
+              acEnabled, extRules, eventTaps, snippets, needTap, trusted)
         if needTap {
             if trusted { _ = autocomplete.start() }
             else { NSLog("prosper: key tap needed but Accessibility not trusted — tap not started") }
