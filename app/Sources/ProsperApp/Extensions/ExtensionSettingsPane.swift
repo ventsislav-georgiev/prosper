@@ -14,6 +14,10 @@ struct ExtensionSettingsPane: View {
     /// own sections). Used to surface the shared AI Model picker inside the Translate
     /// extension's settings — see SettingsRootView.content.
     var header: AnyView? = nil
+    /// Optional native section rendered at the BOTTOM (after the extension's own
+    /// sections). Used for the window extension's drag-snap config, so the manifest's
+    /// Permissions + shortcut binds read first.
+    var footer: AnyView? = nil
 
     @State private var ui: SettingsUI?
     @State private var busy = false
@@ -24,13 +28,15 @@ struct ExtensionSettingsPane: View {
         Group {
             if let ui {
                 SettingsUIView(ui: ui, section: section, busy: busy,
-                               permissionTick: permissionTick, header: header, onEvent: handle)
+                               permissionTick: permissionTick, header: header,
+                               footer: footer, onEvent: handle)
             } else {
                 NeonScroll {
                     PaneTitle(title: section.title, accent: section.accent,
                               subtitle: section.subtitle ?? "")
                     if let header { header }
                     ProgressView().controlSize(.small)
+                    if let footer { footer }
                 }
             }
         }
@@ -118,6 +124,7 @@ struct SettingsUIView: View {
     let busy: Bool
     let permissionTick: Int
     var header: AnyView? = nil
+    var footer: AnyView? = nil
     let onEvent: (SettingsEvent) -> Void
 
     var body: some View {
@@ -140,6 +147,7 @@ struct SettingsUIView: View {
                 HStack { ProgressView().controlSize(.small)
                     Text("Working…").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary) }
             }
+            if let footer { footer }
         }
     }
 

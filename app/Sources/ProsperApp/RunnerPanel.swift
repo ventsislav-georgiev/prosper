@@ -903,6 +903,22 @@ private struct RunnerView: View {
                             store: FallbackSearchStore.shared)
     }
 
+    /// Move the result selection up/down (wrapping). Driven by `.onKeyPress` on the
+    /// input field — NOT the NSEvent monitor: the field is `axis: .vertical`
+    /// (multi-line), and a multi-line SwiftUI TextField acts on ↑/↓ itself (moving
+    /// the caret to the start/end of the text) even when the monitor returns nil.
+    /// `.onKeyPress` intercepts at the field and returns `.handled`, so the caret
+    /// never moves and arrows only switch results.
+    private func selectPrev() {
+        guard !rows.isEmpty else { return }
+        model.selectedIndex = (model.selectedIndex - 1 + rows.count) % rows.count
+    }
+
+    private func selectNext() {
+        guard !rows.isEmpty else { return }
+        model.selectedIndex = (model.selectedIndex + 1) % rows.count
+    }
+
     private var selectedRow: ResultRow? {
         guard !rows.isEmpty,
               model.selectedIndex >= 0,
@@ -982,6 +998,11 @@ private struct RunnerView: View {
                     .focused($inputFocused)
                     .onSubmit { commitSelected() }
                     .onChange(of: model.input) { _, _ in model.inputChanged() }
+                    // ↑/↓ switch results only — never move the caret. Handled here
+                    // (not the NSEvent monitor) because a multi-line TextField acts
+                    // on the arrows itself; `.handled` suppresses that default.
+                    .onKeyPress(.upArrow) { selectPrev(); return .handled }
+                    .onKeyPress(.downArrow) { selectNext(); return .handled }
             }
             .padding(.horizontal, sz(16))
             .padding(.vertical, sz(16))
@@ -1051,14 +1072,6 @@ private struct RunnerView: View {
                     } else {
                         onCancel()
                     }
-                },
-                onUp: {
-                    guard !rows.isEmpty else { return }
-                    model.selectedIndex = (model.selectedIndex - 1 + rows.count) % rows.count
-                },
-                onDown: {
-                    guard !rows.isEmpty else { return }
-                    model.selectedIndex = (model.selectedIndex + 1) % rows.count
                 },
                 onCommit: { commitSelected() },
                 onDeleteWhenEmpty: {
@@ -2016,8 +2029,6 @@ private struct RunnerSlotLadderOverlay: View {
 /// nil to consume) and lets typing fall through. Scoped to this panel's window.
 private struct KeyHandling: NSViewRepresentable {
     let onCancel: () -> Void
-    let onUp: () -> Void
-    let onDown: () -> Void
     let onCommit: () -> Void
     /// Returns true if Backspace was handled (consumed) — used to leave a locked
     /// mode when the field is empty; false lets the keystroke edit text normally.
@@ -2053,7 +2064,7 @@ private struct KeyHandling: NSViewRepresentable {
     }
 
     private var handlers: Coordinator.Handlers {
-        .init(cancel: onCancel, up: onUp, down: onDown, commit: onCommit,
+        .init(cancel: onCancel, commit: onCommit,
               deleteWhenEmpty: onDeleteWhenEmpty, clear: onClear,
               secondary: onSecondary, tertiary: onTertiary, quickLook: onQuickLook,
               number: onNumber)
@@ -2062,8 +2073,6 @@ private struct KeyHandling: NSViewRepresentable {
     final class Coordinator {
         struct Handlers {
             let cancel: () -> Void
-            let up: () -> Void
-            let down: () -> Void
             let commit: () -> Void
             let deleteWhenEmpty: () -> Bool
             let clear: () -> Void
@@ -2138,10 +2147,11 @@ private struct KeyHandling: NSViewRepresentable {
             if mods == .command, e.keyCode == 16 {  // ⌘Y (system Quick Look)
                 h.quickLook(); return nil
             }
+            // ↑/↓ are deliberately NOT handled here — they're intercepted by
+            // `.onKeyPress` on the input field (a multi-line TextField acts on the
+            // arrows itself, which the monitor's nil-return can't suppress).
             switch e.keyCode {
             case 53: h.cancel(); return nil       // Esc
-            case 125: h.down(); return nil        // ↓
-            case 126: h.up(); return nil          // ↑
             case 36, 76: h.commit(); return nil   // Return / keypad Enter
             case 51: return h.deleteWhenEmpty() ? nil : e  // ⌫ exits a locked mode
             default: return e
