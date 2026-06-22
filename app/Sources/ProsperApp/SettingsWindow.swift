@@ -17,13 +17,19 @@ final class SettingsWindow {
     static let themedIdentifier = NSUserInterfaceItemIdentifier("prosper.themedWindow")
 
     /// Apply the current `ThemeRuntime.opacity` to a window: below 1.0 it goes
-    /// non-opaque with a clear background so the SwiftUI backdrop's faded fill lets
-    /// the desktop through; at 1.0 it stays the original opaque neon console.
+    /// non-opaque so the SwiftUI backdrop's faded fill lets the desktop through;
+    /// at 1.0 it stays the original opaque neon console.
     /// Idempotent — safe to call repeatedly from the theme onChange hook.
     static func applyWindowOpacity(_ win: NSWindow) {
         let opaque = ThemeRuntime.opacity >= 0.999
         win.isOpaque = opaque
-        win.backgroundColor = opaque ? NSColor(Neon.bgTop) : .clear
+        // The titlebar strip is painted ONLY by the window background (content view
+        // doesn't extend under it — no .fullSizeContentView). A `.clear` bg made the
+        // titlebar vanish entirely below 1.0; fill it with bgTop at the live opacity
+        // so it stays slightly translucent, matching the faded content backdrop.
+        win.backgroundColor = opaque
+            ? NSColor(Neon.bgTop)
+            : NSColor(Neon.bgTop).withAlphaComponent(ThemeRuntime.opacity)
         win.invalidateShadow()
     }
 
@@ -247,7 +253,7 @@ final class SettingsModel: ObservableObject {
     // Drag-to-snap window management. `dragSnapEnabled` is set via `setDragSnap`
     // (side effect: reconcile the monitors); the rest persist directly on change.
     @Published var dragSnapEnabled: Bool
-    @Published var dragSnapStyleFlat: Bool { didSet { Preferences.dragSnapStyle = dragSnapStyleFlat ? .flat : .vibrancy } }
+    @Published var dragSnapStyleVibrancy: Bool { didSet { Preferences.dragSnapStyle = dragSnapStyleVibrancy ? .vibrancy : .flat } }
     @Published var dragSnapModifier: DragSnapModifier { didSet { Preferences.dragSnapModifier = dragSnapModifier } }
     @Published var dragSnapEdgeMargin: Double { didSet { Preferences.dragSnapEdgeMargin = CGFloat(dragSnapEdgeMargin) } }
     @Published var dragSnapCornerSize: Double { didSet { Preferences.dragSnapCornerSize = CGFloat(dragSnapCornerSize) } }
@@ -312,7 +318,7 @@ final class SettingsModel: ObservableObject {
         showMenuBarIcon = Preferences.showMenuBarIcon
         showDockIcon = Preferences.showDockIcon
         dragSnapEnabled = Preferences.dragSnapEnabled
-        dragSnapStyleFlat = Preferences.dragSnapStyle == .flat
+        dragSnapStyleVibrancy = Preferences.dragSnapStyle == .vibrancy
         dragSnapModifier = Preferences.dragSnapModifier
         dragSnapEdgeMargin = Double(Preferences.dragSnapEdgeMargin)
         dragSnapCornerSize = Double(Preferences.dragSnapCornerSize)
@@ -541,8 +547,15 @@ private struct SettingsRootView: View {
         // Translate uses the same local model as inline completions; surface the shared
         // AI Model picker at the top of its settings so the model is changeable even
         // when inline autocomplete is off (its Completions tab is then hidden).
-        let header: AnyView? = extID == "com.prosper.translate"
-            ? AnyView(AIModelSection(model: model)) : nil
+        // Window Management is merged here: the native drag-snap pane rides in as
+        // the header above this extension's own (Tier-A) shortcut binds, so there's
+        // ONE Window Management section instead of a native tab + an ext section.
+        let header: AnyView?
+        switch extID {
+        case "com.prosper.translate": header = AnyView(AIModelSection(model: model))
+        case "com.prosper.window": header = AnyView(WindowManagementPane(model: model))
+        default: header = nil
+        }
         return ExtensionSettingsPane(registry: registry, record: record, section: section, header: header)
     }
 
@@ -600,7 +613,6 @@ private struct SettingsRootView: View {
         case "apps": AppsPane(model: model)
         case "personalization": PersonalizationPane(model: model)
         case "shortcuts": ShortcutsPane(model: model)
-        case "windows": WindowManagementPane(model: model)
         case "agent": AgentPane(model: model)
         case "agent-mcp": MCPServersPane(model: model)
         case "agent-plugins": PluginsHooksPane(model: model)
@@ -765,7 +777,10 @@ private struct GeneralPane: View {
                 NeonDivider()
                 Toggle("Use clipboard text as completion context",
                        isOn: $model.useClipboardContext)
-                NeonDivider()
+            }
+
+            // Own group: the modifier drives BOTH runner results and clipboard rows.
+            NeonSection("Quick-select") {
                 NeonRow("Quick-select modifier",
                         subtitle: "Paste a clipboard row (1…0) or pick a top runner result (1…5).") {
                     Picker("", selection: $model.quickSelectModifier) {
@@ -2154,8 +2169,8 @@ private struct WindowManagementPane: View {
             .disabled(!model.dragSnapEnabled)
 
             NeonSection("Preview",
-                        footer: "The vibrancy preview blurs the snap area and tints it with your accent color; the flat preview is a simple translucent fill (used automatically while Reduce Transparency is on).") {
-                Toggle("Use flat translucent preview", isOn: $model.dragSnapStyleFlat)
+                        footer: "The default flat preview is a simple translucent fill. Turn on vibrancy to blur the snap area and tint it with your accent color (flat is forced while Reduce Transparency is on).") {
+                Toggle("Use vibrancy preview", isOn: $model.dragSnapStyleVibrancy)
             }
             .disabled(!model.dragSnapEnabled)
 
@@ -2239,7 +2254,10 @@ func settingsSidebarGroups(registry: ExtensionRegistry?) -> [(String, [SettingsT
     var general: [SettingsTab] = [
         SettingsTab(id: "general", title: "General", icon: "gearshape.fill"),
         SettingsTab(id: "shortcuts", title: "Shortcuts", icon: "command"),
-        SettingsTab(id: "windows", title: "Window Management", icon: "macwindow.on.rectangle"),
+        // Window Management is no longer a static tab — it merged into the single
+        // window extension's settings section (drag-snap config rides in as that
+        // pane's header). Disabling the extension hides the whole section AND, via
+        // DragSnapController.windowExtLive, disables the drag-snap feature too.
         SettingsTab(id: "appearance", title: "Appearance", icon: "paintpalette.fill"),
     ]
     if registry != nil {

@@ -242,6 +242,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // theme appears in the selector immediately (no relaunch). setAvailable
             // re-applies the persisted selection and suppresses no-op rebuilds.
             ThemeStore.shared.setAvailable(self.extensions.contributedThemes())
+            // Drag-snap is a window-extension feature: enabling/disabling that ext
+            // must start/stop its passive monitors.
+            DragSnapController.shared.windowExtLive = self.windowExtLive
+            DragSnapController.shared.reconcile()
         }
 
         // Reconcile quicklinks with their human-editable file
@@ -367,7 +371,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         startAutocompleteIfReady()
         // Drag-to-snap rides its own passive monitors (NOT the keystroke tap); start
-        // them if enabled and Accessibility is already trusted.
+        // them if enabled, the window extension is live, and Accessibility is trusted.
+        DragSnapController.shared.windowExtLive = windowExtLive
         DragSnapController.shared.reconcile()
 
         // E2E handshake (gated by PROSPER_E2E=1): tell the launching test process
@@ -771,10 +776,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Whether the window extension is enabled + trusted. Drag-snap is one of its
+    /// features, so it only runs while the extension is live.
+    private var windowExtLive: Bool {
+        extensions.record(id: "com.prosper.window")?.isLive ?? false
+    }
+
     private func setDragSnap(enabled: Bool) {
         Preferences.dragSnapEnabled = enabled
         // Prompt for Accessibility on enable so the monitors can read/move windows.
         if enabled { _ = PermissionsManager.ensureAccessibilityTrust(prompt: true) }
+        DragSnapController.shared.windowExtLive = windowExtLive
         DragSnapController.shared.reconcile()
     }
 

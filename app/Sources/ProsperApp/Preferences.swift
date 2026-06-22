@@ -370,11 +370,12 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.dragSnapEnabled) }
     }
 
-    /// Footprint preview look: vibrancy (default, blur + theme accent) or flat
-    /// (Rectangle-parity translucent fill). Stored as a raw string.
+    /// Footprint preview look: flat (default, Rectangle-parity translucent fill —
+    /// lighter to draw) or vibrancy (opt-in blur + theme accent). Stored as a raw
+    /// string; absence ⇒ flat.
     static var dragSnapStyle: FootprintWindow.Style {
-        get { defaults.string(forKey: Keys.dragSnapStyle) == "flat" ? .flat : .vibrancy }
-        set { defaults.set(newValue == .flat ? "flat" : "vibrancy", forKey: Keys.dragSnapStyle) }
+        get { defaults.string(forKey: Keys.dragSnapStyle) == "vibrancy" ? .vibrancy : .flat }
+        set { defaults.set(newValue == .vibrancy ? "vibrancy" : "flat", forKey: Keys.dragSnapStyle) }
     }
 
     /// Global UI size multiplier (Appearance → UI Size). Default 1.0 = unchanged.

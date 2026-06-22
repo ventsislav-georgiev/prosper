@@ -50,10 +50,16 @@ final class FootprintWindow {
         panel.hidesOnDeactivate = false
         panel.alphaValue = 0
 
+        let radius = Self.cornerRadius
         container = NSView(frame: initial)
         container.wantsLayer = true
-        container.layer?.cornerRadius = Self.cornerRadius
-        container.layer?.masksToBounds = true
+        container.layer?.cornerRadius = radius
+        // masksToBounds is deliberately OFF: clipping the blur through the parent
+        // layer forces offscreen compositing, which kills the .behindWindow backdrop
+        // sampling and made vibrancy render as nothing (looked permanently flat).
+        // The border stroke still rounds from cornerRadius; the blur/tint round
+        // themselves below.
+        container.layer?.masksToBounds = false
         container.layer?.borderWidth = 2
 
         effect = NSVisualEffectView(frame: initial)
@@ -61,10 +67,15 @@ final class FootprintWindow {
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.autoresizingMask = [.width, .height]
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = radius
+        effect.layer?.masksToBounds = true
 
         tint = NSView(frame: initial)
         tint.wantsLayer = true
         tint.autoresizingMask = [.width, .height]
+        tint.layer?.cornerRadius = radius
+        tint.layer?.masksToBounds = true
 
         container.addSubview(effect)
         container.addSubview(tint)
