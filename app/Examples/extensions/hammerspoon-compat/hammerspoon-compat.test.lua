@@ -14,6 +14,7 @@ local prefs = { enabled = "true" }
 local opened = {}
 local set_default_calls = {}
 local kbd_set = {} -- host.keyboard.set_source calls (per-app input switching)
+local fake_mtime = 1 -- ~/.hammerspoon/init.lua mtime the fs.attributes mock reports
 local scheduled, alerts, confirms, osascripts = {}, {}, {}, {}
 local confirm_result = true -- what host.dialog.confirm returns (OK vs Cancel)
 local hidden = {}           -- host.apps.hide calls (bundleID) — window API
@@ -48,7 +49,9 @@ local function id_ui(o) o = o or {}; return o end
 host = {
     prefs = { get = function(k) return prefs[k] end, set = function(k, v) prefs[k] = v end },
     json = { decode = json_decode, encode = json_encode },
-    fs = { read = function() return FAKE_INIT end },
+    fs = { read = function() return FAKE_INIT end,
+           -- mtime drives ensure_ctx's warm-VM staleness check; tests mutate fake_mtime.
+           attributes = function() return { exists = true, mtime = fake_mtime } end },
     perms = { has = function() return true end },
     url = {
         open = function(u, b) opened[#opened + 1] = { url = u, browser = b } end,
@@ -229,6 +232,27 @@ hs_url_open(payload("https://example.com/p?utm_source=x&id=5"))
 check(last() and last().browser == "com.apple.Safari", "URLDispatcher: unmatched -> default_handler (Safari)")
 check(last() and not last().url:find("utm_source") and last().url:find("id=5") ~= nil,
       "URLDispatcher: decoder stripped utm, kept id (" .. tostring(last() and last().url) .. ")")
+-- 9d2. encodeForQuery must match Foundation urlQueryAllowed: a decoder that
+--      encodeForQuery's a whole rebuilt URL (finicky removeTrackingParams idiom)
+--      must NOT %-mangle :// ? & = -- else the opened address is garbage -> blank tab.
+FAKE_INIT = [[
+hs.loadSpoon("SpoonInstall")
+local function reencode(scheme, host, params, fullURL)
+    return hs.http.encodeForQuery(fullURL)
+end
+spoon.SpoonInstall:andUse("URLDispatcher", {
+    config = { default_handler = "com.apple.Safari" },
+    start = true,
+})
+spoon.URLDispatcher.url_redir_decoders = {
+    { "reencode", reencode, nil, true },
+}
+]]
+env._HS = nil
+reset()
+hs_url_open(payload("https://example.com/p?a=1&b=2"))
+check(last() and last().url == "https://example.com/p?a=1&b=2",
+      "encodeForQuery: query-safe URL passes through unmangled (" .. tostring(last() and last().url) .. ")")
 -- diagnostics row should show the live route/rewriter counts
 default_browser = "eu.illegible.prosper"
 env._HS = nil
@@ -284,6 +308,33 @@ env._HS = nil; kbd_set = {}
 on_launch(nil)
 hs_app_activated('{"name":"X"}')
 check(kbd_set[1] == "id.BG", "hs.keycodes.layouts(true) returns source ids")
+
+-- 9g2. STALENESS FIX: the async lane caches the VM, so a warm VM held a stale
+--      appwatcher closure built from an OLD init.lua — editing/commenting out the
+--      watcher kept firing it ("random Bulgarian" with code commented out). ensure_ctx
+--      rebuilds when the file mtime moves, with NO manual re-read.
+FAKE_INIT = [[
+appWatcher = hs.application.watcher.new(function(app, event)
+    if event == hs.application.watcher.activated then
+        hs.keycodes.currentSourceID("com.apple.keylayout.Bulgarian-Phonetic")
+    end
+end)
+appWatcher:start()
+]]
+env._HS = nil; kbd_set = {}; fake_mtime = 100
+on_launch(nil)
+hs_app_activated('{"name":"Slack"}') -- builds + caches the watcher (warm VM)
+check(kbd_set[#kbd_set] == "com.apple.keylayout.Bulgarian-Phonetic", "stale-fix: live watcher switches")
+-- user comments the watcher out and SAVES (mtime bumps) — no toggle / re-read
+FAKE_INIT = "-- watcher removed\n"
+fake_mtime = 200; kbd_set = {}
+hs_app_activated('{"name":"Slack"}')
+check(#kbd_set == 0, "stale-fix: edited init.lua (mtime bump) rebuilds warm VM -> no stale switch")
+-- unchanged mtime keeps the warm ctx (the per-event rebuild stays gated on a real edit)
+FAKE_INIT = [[appWatcher = hs.application.watcher.new(function() end); appWatcher:start()]]
+kbd_set = {}
+hs_app_activated('{"name":"Slack"}') -- mtime still 200 -> reuses the no-watcher build
+check(#kbd_set == 0, "stale-fix: unchanged mtime reuses warm ctx (no rebuild per event)")
 
 -- 9h. hs.dialog.blockAlert + deferred work: the Empty-Trash idiom. A hotkey shows a
 --     modal confirm; on OK it schedules an osascript via hs.timer.doAfter (NOT run
