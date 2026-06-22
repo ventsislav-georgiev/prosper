@@ -467,13 +467,20 @@ private struct ClipboardView: View {
                     ForEach(sectioned.groups) { group in
                         Section {
                             ForEach(group.items) { item in
-                                listRow(item)
-                                    .id(item.id)
-                                    .background(rowFrameReporter(item.id))
-                                    .onTapGesture {
-                                        model.selectedId = item.id
-                                        onCommit(item)
-                                    }
+                                // A dedicated struct (NOT an inline `listRow(item)`
+                                // method) so SwiftUI tracks `isSelected` as a per-row
+                                // dependency and re-renders the row when selection
+                                // moves. With a method-returned view the LazyVStack
+                                // keeps the realized row (keyed by `.id(item.id)`) and
+                                // the captured highlight went stale — the previously
+                                // selected row kept its card while selection moved on.
+                                ClipRowView(store: store, item: item,
+                                            isSelected: item.id == model.selectedId) {
+                                    model.selectedId = item.id
+                                    onCommit(item)
+                                }
+                                .id(item.id)
+                                .background(rowFrameReporter(item.id))
                             }
                         } header: {
                             sectionHeader(group.section)
@@ -586,87 +593,6 @@ private struct ClipboardView: View {
             }
     }
 
-    private func listRow(_ item: ClipboardItem) -> some View {
-        let selected = item.id == model.selectedId
-        return HStack(spacing: sz(8)) {
-            // Leading thumbnail / icon / swatch — 28×28
-            rowLeading(item)
-                .frame(width: sz(28), height: sz(28))
-
-            Text(rowTitle(item))
-                .lineLimit(1)
-                .font(Neon.font(13))
-                .foregroundColor(selected ? Neon.textPrimary : Neon.textSecondary)
-
-            Spacer(minLength: 0)
-            if item.pinned {
-                Image(systemName: "pin.fill")
-                    .font(Neon.font(9))
-                    .foregroundColor(Neon.blue)
-            }
-            // ⌃-digit badge is drawn by the fixed `slotOverlay`, not per-row, so it
-            // stays anchored to a screen position while rows scroll underneath.
-        }
-        .padding(.horizontal, sz(8))
-        // Selection card is inset inside the cell so it floats with a gap above
-        // and below instead of filling the full pitch. Without this the card butts
-        // flush against the pinned header (and the next row), making the first item
-        // look tucked under TODAY.
-        .frame(height: Self.rowPitch - 8)
-        .background(
-            RoundedRectangle(cornerRadius: sz(6))
-                .fill(selected ? Neon.blue.opacity(0.16) : Color.clear)
-                .overlay(
-                    RoundedRectangle(cornerRadius: sz(6))
-                        .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1))
-        )
-        // Outer frame keeps the uniform pitch so every row stays on the fixed
-        // ⌃-digit grid; the inset card is centred within it.
-        .frame(height: Self.rowPitch)
-        // Leave a right gutter so the ⌃-digit badge (drawn by `slotOverlay`) sits
-        // outside the selection card, not on top of its highlight.
-        .padding(.leading, sz(4))
-        .padding(.trailing, sz(52))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            model.selectedId = item.id
-        }
-    }
-
-    @ViewBuilder
-    private func rowLeading(_ item: ClipboardItem) -> some View {
-        switch item.kind {
-        case .color:
-            RoundedRectangle(cornerRadius: sz(5))
-                .fill(ClipboardView.swatch(item.preview).map(Color.init) ?? Color.gray.opacity(0.3))
-                .overlay(
-                    RoundedRectangle(cornerRadius: sz(5))
-                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
-                )
-        case .image:
-            ImageThumbnail(data: store.imageData(for: item))
-        case .file:
-            if let path = item.sourcePath {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: path))
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                Image(systemName: icon(for: item.kind))
-                    .font(Neon.font(14))
-                    .foregroundColor(Neon.textSecondary)
-            }
-        default:
-            Image(systemName: icon(for: item.kind))
-                .font(Neon.font(14))
-                .foregroundColor(.secondary)
-        }
-    }
-
-    private func rowTitle(_ item: ClipboardItem) -> String {
-        // For images: prefer the "Image WxH" preview which is set at capture time
-        // For everything else: displayTitle (user rename > preview snippet)
-        return item.displayTitle
-    }
 
     // MARK: - Preview pane (right)
 
@@ -906,16 +832,7 @@ private struct ClipboardView: View {
 
     // MARK: - Helpers
 
-    private func icon(for kind: ClipboardKind) -> String {
-        switch kind {
-        case .text: return "doc.plaintext"
-        case .image: return "photo"
-        case .file: return "doc"
-        case .link: return "link"
-        case .email: return "envelope"
-        case .color: return "paintpalette"
-        }
-    }
+    private func icon(for kind: ClipboardKind) -> String { clipboardKindIcon(kind) }
 
     private func formattedSize(_ item: ClipboardItem) -> String {
         if item.kind.isTextual {
@@ -1025,7 +942,10 @@ private struct ClipboardView: View {
     }
 
     private func move(_ delta: Int) {
-        let ids = filtered.map(\.id)
+        // Visual order (pinned first, then date buckets) — same order the rows and
+        // the ⌃-digit ladder use, so ↑/↓ step through rows exactly as shown rather
+        // than recency order (which diverges once any item is pinned).
+        let ids = orderedItems.map(\.id)
         guard !ids.isEmpty else { return }
         let current = ids.firstIndex(where: { $0 == model.selectedId }) ?? 0
         let next = min(max(current + delta, 0), ids.count - 1)
@@ -1042,6 +962,107 @@ private struct ClipboardView: View {
 /// highlight marks whichever fixed slot currently sits over the selected row —
 /// since scrolling no longer re-centers the selection, the active badge simply
 /// stays put (and tracks the selected row across slots) without any animation.
+/// SF Symbol for a clipboard kind. Free function so both `ClipboardView` and the
+/// extracted `ClipRowView` share one definition.
+func clipboardKindIcon(_ kind: ClipboardKind) -> String {
+    switch kind {
+    case .text: return "doc.plaintext"
+    case .image: return "photo"
+    case .file: return "doc"
+    case .link: return "link"
+    case .email: return "envelope"
+    case .color: return "paintpalette"
+    }
+}
+
+// MARK: - List row
+
+/// One clipboard row. A standalone `View` struct (not a method on `ClipboardView`)
+/// on purpose: `isSelected` is a stored property, so SwiftUI tracks it as a per-row
+/// dependency and re-renders exactly the rows whose selection changed. When the row
+/// was an inline method-returned view, the `LazyVStack` reused the realized row
+/// (keyed by `.id(item.id)`) without re-invoking the builder on a selection change,
+/// so a previously-selected row kept its highlight card while selection moved away.
+private struct ClipRowView: View {
+    @ObservedObject var store: ClipboardStore
+    let item: ClipboardItem
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        HStack(spacing: sz(8)) {
+            // Leading thumbnail / icon / swatch — 28×28
+            leading
+                .frame(width: sz(28), height: sz(28))
+
+            Text(item.displayTitle)
+                .lineLimit(1)
+                .font(Neon.font(13))
+                .foregroundColor(isSelected ? Neon.textPrimary : Neon.textSecondary)
+
+            Spacer(minLength: 0)
+            if item.pinned {
+                Image(systemName: "pin.fill")
+                    .font(Neon.font(9))
+                    .foregroundColor(Neon.blue)
+            }
+            // ⌃-digit badge is drawn by the fixed `slotOverlay`, not per-row, so it
+            // stays anchored to a screen position while rows scroll underneath.
+        }
+        .padding(.horizontal, sz(8))
+        // Selection card is inset inside the cell so it floats with a gap above
+        // and below instead of filling the full pitch. Without this the card butts
+        // flush against the pinned header (and the next row), making the first item
+        // look tucked under TODAY.
+        .frame(height: ClipboardView.rowPitch - 8)
+        .background(
+            RoundedRectangle(cornerRadius: sz(6))
+                .fill(isSelected ? Neon.blue.opacity(0.16) : Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: sz(6))
+                        .strokeBorder(Neon.blue.opacity(isSelected ? 0.45 : 0), lineWidth: 1))
+        )
+        // Outer frame keeps the uniform pitch so every row stays on the fixed
+        // ⌃-digit grid; the inset card is centred within it.
+        .frame(height: ClipboardView.rowPitch)
+        // Leave a right gutter so the ⌃-digit badge (drawn by `slotOverlay`) sits
+        // outside the selection card, not on top of its highlight.
+        .padding(.leading, sz(4))
+        .padding(.trailing, sz(52))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+    }
+
+    @ViewBuilder
+    private var leading: some View {
+        switch item.kind {
+        case .color:
+            RoundedRectangle(cornerRadius: sz(5))
+                .fill(ClipboardView.swatch(item.preview).map(Color.init) ?? Color.gray.opacity(0.3))
+                .overlay(
+                    RoundedRectangle(cornerRadius: sz(5))
+                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
+                )
+        case .image:
+            ImageThumbnail(data: store.imageData(for: item))
+        case .file:
+            if let path = item.sourcePath {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: clipboardKindIcon(item.kind))
+                    .font(Neon.font(14))
+                    .foregroundColor(Neon.textSecondary)
+            }
+        default:
+            Image(systemName: clipboardKindIcon(item.kind))
+                .font(Neon.font(14))
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
 private struct SlotLadderOverlay: View {
     let slots: [(id: UUID?, centerY: CGFloat)]
     let width: CGFloat
