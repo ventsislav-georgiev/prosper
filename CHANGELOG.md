@@ -5,6 +5,18 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.111.1
+
+### Snippets
+- **System-wide snippet expansion now works with inline autocomplete off.** Snippets
+  ride the autocomplete engine's single shared keystroke tap, but were coupled to the
+  `autocompleteEnabled` pref in two places: the tap's run-gate (`needKeyTap`) had no
+  snippet term, so the tap never started when autocomplete was off and nothing else
+  needed it; and the tap handler bailed on an `autocompleteEnabled` guard before ever
+  forwarding the keystroke to the expander. Snippets are now a first-class consumer of
+  the shared tap (gated only by their own `snippetsEnabled`/`snippetsAutoExpand`), and
+  toggling snippet auto-expand at runtime reconciles the tap live.
+
 ## v2.111.0
 
 ### Remote Terminal

@@ -434,19 +434,16 @@ final class AutocompleteEngine {
             return true
         }
 
-        // The tap may be running SOLELY for extension key rules (handled above)
-        // while inline autocomplete is switched off. In that case do no
-        // suggestion/snippet work — just pass the key through untouched.
-        guard Preferences.autocompleteEnabled else { return false }
-
         // Inline snippet expansion shares this single tap. Forward the keystroke to
         // the expander first; it maintains its own trigger buffer and performs its
         // own backspace+inject (events tagged with the same magic this tap skips).
-        // It runs ahead of autocomplete's per-app denylist/accept logic so snippets
-        // expand even in apps where completions are disabled. When it fires we
-        // SWALLOW the trigger key (it is still in-flight to the app; the expander
-        // backspaces only the already-delivered keyword chars and injects the
-        // snippet), exactly like the accept-key path.
+        // It runs ahead of autocomplete's per-app denylist/accept logic — and ahead
+        // of the autocomplete-enabled gate below — so snippets expand even when
+        // inline autocomplete is switched off (the expander has its own
+        // snippetsEnabled/snippetsAutoExpand gating). When it fires we SWALLOW the
+        // trigger key (it is still in-flight to the app; the expander backspaces
+        // only the already-delivered keyword chars and injects the snippet),
+        // exactly like the accept-key path.
         if SnippetExpander.shared.handle(
             keyCode: keyCode, typed: typed, controlHeld: controlHeld,
             optionHeld: optionHeld, commandHeld: commandHeld, bundleId: bundleId
@@ -456,6 +453,11 @@ final class AutocompleteEngine {
             dismissOverlays()
             return true
         }
+
+        // The tap may be running SOLELY for extension key rules / snippets (handled
+        // above) while inline autocomplete is switched off. In that case do no
+        // suggestion work — just pass the key through untouched.
+        guard Preferences.autocompleteEnabled else { return false }
 
         // Ctrl+`: force-activate. Overrides the idle heuristics (small field, too
         // little context) and any Esc suppression for the current field, then

@@ -259,11 +259,13 @@ final class EventTapHostTests: XCTestCase {
     /// left the tap down. Each consumer alone must keep it up; all-off keeps it down.
     @MainActor
     func testNeedKeyTapIsOrOfAllConsumers() {
-        XCTAssertFalse(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false),
+        XCTAssertFalse(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false, snippets: false),
                        "tap must be DOWN when no consumer needs it")
-        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: true,  extRules: false, eventTaps: false))
-        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: true,  eventTaps: false))
-        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: true),
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: true,  extRules: false, eventTaps: false, snippets: false))
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: true,  eventTaps: false, snippets: false))
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: true,  snippets: false),
                       "the eventTaps term is the one that regressed — must keep the tap up alone")
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false, snippets: true),
+                      "snippet auto-expand rides the tap too — must keep it up with autocomplete off")
     }
 }
