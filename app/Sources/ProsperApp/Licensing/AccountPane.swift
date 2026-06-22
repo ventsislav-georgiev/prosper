@@ -53,7 +53,7 @@ struct AccountPane: View {
             }
             if let status = loginStatus {
                 NeonDivider()
-                Text(status).foregroundStyle(Neon.textSecondary).font(.system(size: 12))
+                Text(status).foregroundStyle(Neon.textSecondary).font(Neon.font(12))
             }
         }
     }
@@ -89,7 +89,7 @@ struct AccountPane: View {
             NeonSection("Status") {
                 NeonRow("Status", subtitle: ent.email ?? "") {
                     Text(planLabel)
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .font(Neon.font(11, weight: .bold, design: .monospaced))
                         .foregroundStyle(ent.isSupporter ? Neon.terminal : Neon.textSecondary)
                 }
                 if let expiry = ent.expiry {
@@ -112,7 +112,7 @@ struct AccountPane: View {
                                 subtitle: "Last seen \(Self.stamp.string(from: Date(timeIntervalSince1970: TimeInterval(device.last_seen))))") {
                             if device.device_id == SupporterStore.deviceID() {
                                 Text("THIS MAC")
-                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    .font(Neon.font(10, weight: .bold, design: .monospaced))
                                     .foregroundStyle(Neon.blue)
                             } else {
                                 Button("Remove") { Task { await client.deactivate(deviceID: device.device_id) } }

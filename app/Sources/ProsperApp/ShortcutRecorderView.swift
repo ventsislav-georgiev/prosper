@@ -40,7 +40,7 @@ final class RecorderView: NSView {
         layer?.cornerRadius = 6
         layer?.borderWidth = 1
         label.alignment = .center
-        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.font = .systemFont(ofSize: 12 * ThemeRuntime.scale, weight: .medium)
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([

@@ -331,6 +331,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // once: enabling it shows the icon if a window is already open, disabling
         // it drops back to a pure accessory agent.
         SettingsHooks.shared.onDockIconChanged = { _ in DockPolicy.preferenceChanged() }
+        // Drag-to-snap window management: toggling reconciles its passive mouse
+        // monitors (prompting for Accessibility on enable, like autocomplete).
+        SettingsHooks.shared.onDragSnapChanged = { [weak self] on in self?.setDragSnap(enabled: on) }
 
         // Accessory button (opt-in) refreshes the ghost suggestion — same as ⌥.
         // (a fresh completion for the focused field, lifting any Esc suppression).
@@ -363,6 +366,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runModelSetup(force: false)
         }
         startAutocompleteIfReady()
+        // Drag-to-snap rides its own passive monitors (NOT the keystroke tap); start
+        // them if enabled and Accessibility is already trusted.
+        DragSnapController.shared.reconcile()
 
         // E2E handshake (gated by PROSPER_E2E=1): tell the launching test process
         // whether the keystroke tap is live so it can proceed — or skip with a
@@ -479,6 +485,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let bg = NSColor(Neon.bgTop)
         for win in NSApp.windows where win.backgroundColor.alphaComponent > 0.9 {
             win.backgroundColor = bg
+        }
+        // Themed windows (Settings) also follow the live opacity + UI-size settings:
+        // flip opaque/clear for transparency and rescale the minimum content size so
+        // the scaled sidebar + content column always fit. Borderless floating panels
+        // (runner/clipboard) are already transparent and redraw themselves via SwiftUI.
+        let scale = ThemeRuntime.scale
+        for win in NSApp.windows {
+            switch win.identifier {
+            case SettingsWindow.themedIdentifier:
+                SettingsWindow.applyWindowOpacity(win)
+                win.contentMinSize = NSSize(width: 820 * scale, height: 480 * scale)
+            case ChatWindow.themedIdentifier:
+                SettingsWindow.applyWindowOpacity(win)
+                win.contentMinSize = NSSize(width: 560 * scale, height: 520 * scale)
+            default:
+                break
+            }
         }
     }
 
@@ -746,6 +769,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             ClipboardMonitor.shared.stop()
         }
+    }
+
+    private func setDragSnap(enabled: Bool) {
+        Preferences.dragSnapEnabled = enabled
+        // Prompt for Accessibility on enable so the monitors can read/move windows.
+        if enabled { _ = PermissionsManager.ensureAccessibilityTrust(prompt: true) }
+        DragSnapController.shared.reconcile()
     }
 
     private func setAutocomplete(enabled: Bool) {

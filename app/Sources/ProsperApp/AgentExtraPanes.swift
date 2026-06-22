@@ -18,16 +18,16 @@ struct CommandsPane: View {
             NeonSection("Slash Commands",
                         footer: "Type /name in the chat composer to expand a command. Use $ARGUMENTS in the body for the text after the name (otherwise it's appended). Stored in ~/.config/prosper/commands.") {
                 if commands.isEmpty {
-                    Text("No commands defined.").font(.callout).foregroundStyle(Neon.textSecondary)
+                    Text("No commands defined.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 }
                 ForEach(commands) { cmd in
                     HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("/\(cmd.name)").font(.system(.body, design: .monospaced))
+                        VStack(alignment: .leading, spacing: sz(2)) {
+                            Text("/\(cmd.name)").font(Neon.font(.body, design: .monospaced))
                                 .foregroundStyle(Neon.textPrimary)
-                            Text(cmd.body).font(.caption).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                            Text(cmd.body).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary).lineLimit(1)
                         }
-                        Spacer(minLength: 12)
+                        Spacer(minLength: sz(12))
                         Button("Edit") { isNew = false; editing = cmd }.buttonStyle(.neon)
                         Button { delete(cmd) } label: { Image(systemName: "trash") }.buttonStyle(.neon)
                     }
@@ -80,17 +80,17 @@ private struct CommandEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: sz(14)) {
             Text(isNew ? "Add Command" : "Edit Command")
-                .font(.headline).foregroundStyle(Neon.textPrimary)
+                .font(Neon.font(.headline)).foregroundStyle(Neon.textPrimary)
             NeonRow("Name", subtitle: "Invoked as /name (lowercased, no spaces)") {
-                TextField("review", text: $name).frame(width: 220).disabled(!isNew)
+                TextField("review", text: $name).frame(width: sz(220)).disabled(!isNew)
             }
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: sz(4)) {
                 Text("Prompt template ($ARGUMENTS for trailing text)")
-                    .font(.caption).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 TextEditor(text: $body0)
-                    .frame(height: 160).font(.system(.body, design: .monospaced))
+                    .frame(height: sz(160)).font(Neon.font(.body, design: .monospaced))
                     .scrollContentBackground(.hidden).background(Neon.blue.opacity(0.06))
             }
             HStack {
@@ -100,7 +100,7 @@ private struct CommandEditor: View {
                     .buttonStyle(.neon).disabled(!canSave)
             }
         }
-        .padding(20).frame(width: 520).background(SettingsBackground())
+        .padding(sz(20)).frame(width: sz(520)).background(SettingsBackground())
     }
 }
 
@@ -134,21 +134,21 @@ struct AgentsPane: View {
                         footer: "Pick the active persona from the chat header. Built-in personas can't be edited. Custom ones live in ~/.config/prosper/agents.") {
                 ForEach(personas) { p in
                     HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: sz(2)) {
+                            HStack(spacing: sz(6)) {
                                 Text(p.title).foregroundStyle(Neon.textPrimary)
                                 if p.isBuiltIn {
-                                    Text("BUILT-IN").font(.caption2).bold()
-                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                    Text("BUILT-IN").font(Neon.font(.caption2)).bold()
+                                        .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
                                         .background(Color.secondary.opacity(0.2))
                                         .clipShape(Capsule())
                                 }
                             }
                             if !p.prompt.isEmpty {
-                                Text(p.prompt).font(.caption).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                                Text(p.prompt).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary).lineLimit(1)
                             }
                         }
-                        Spacer(minLength: 12)
+                        Spacer(minLength: sz(12))
                         if !p.isBuiltIn {
                             Button("Edit") { isNew = false; editing = p }.buttonStyle(.neon)
                             Button { delete(p) } label: { Image(systemName: "trash") }.buttonStyle(.neon)
@@ -210,16 +210,16 @@ private struct PersonaEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: sz(14)) {
             Text(isNew ? "Add Persona" : "Edit Persona")
-                .font(.headline).foregroundStyle(Neon.textPrimary)
+                .font(Neon.font(.headline)).foregroundStyle(Neon.textPrimary)
             NeonRow("Title") {
-                TextField("Reviewer", text: $title).frame(width: 220)
+                TextField("Reviewer", text: $title).frame(width: sz(220))
             }
-            VStack(alignment: .leading, spacing: 4) {
-                Text("System prompt").font(.caption).foregroundStyle(Neon.textSecondary)
+            VStack(alignment: .leading, spacing: sz(4)) {
+                Text("System prompt").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 TextEditor(text: $prompt)
-                    .frame(height: 200).font(.system(.body, design: .monospaced))
+                    .frame(height: sz(200)).font(Neon.font(.body, design: .monospaced))
                     .scrollContentBackground(.hidden).background(Neon.blue.opacity(0.06))
             }
             HStack {
@@ -229,7 +229,7 @@ private struct PersonaEditor: View {
                     .buttonStyle(.neon).disabled(!canSave)
             }
         }
-        .padding(20).frame(width: 520).background(SettingsBackground())
+        .padding(sz(20)).frame(width: sz(520)).background(SettingsBackground())
     }
 }
 
@@ -283,13 +283,13 @@ struct PermissionsPane: View {
                 NeonSection("Writable Folders",
                             footer: "The working directory is always writable. Add extra folders the agent may modify without leaving the sandbox.") {
                     if roots.isEmpty {
-                        Text("No extra folders.").font(.callout).foregroundStyle(Neon.textSecondary)
+                        Text("No extra folders.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                     }
                     ForEach(roots, id: \.self) { path in
                         HStack {
-                            Text(path).font(.system(.caption, design: .monospaced))
+                            Text(path).font(Neon.font(.caption, design: .monospaced))
                                 .foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.head)
-                            Spacer(minLength: 12)
+                            Spacer(minLength: sz(12))
                             Button { removeRoot(path) } label: { Image(systemName: "trash") }.buttonStyle(.neon)
                         }
                         if path != roots.last { NeonDivider() }

@@ -683,6 +683,21 @@ final class ExtensionRegistry: ObservableObject {
         return try? ExtensionViewNode.decode(json: json)
     }
 
+    /// Call a global Lua function on the OFF-MAIN async lane and return its RAW
+    /// string result (no view decoding). Used by the unified launcher search to
+    /// pull ranked bookmark rows as JSON without building a component tree.
+    func callExtensionStringAsync(extensionID: String, function: String, args: [String]) async -> String? {
+        guard let record = record(id: extensionID), record.isLive else { return nil }
+        let spec = AsyncExtensionRuntimes.Spec(
+            extensionID: record.id,
+            entryURL: record.loaded.entryURL,
+            handler: function,
+            callTimeout: callTimeout,
+            privileged: record.privileged, trusted: record.trusted
+        )
+        return await asyncRuntimes.invoke(spec, args: args)
+    }
+
     // MARK: - Native events (stateless per-event handler delivery)
 
     /// Deliver a native event to a named Lua handler on the OFF-MAIN async lane.

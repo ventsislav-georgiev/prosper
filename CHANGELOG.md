@@ -5,6 +5,110 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.112.0-beta.1
+
+### Clipboard & Runner
+- **Numbered quick-select shortcuts now use a configurable modifier, defaulting to
+  Command.** The clipboard history panel's `⌃1…⌃0` paste-by-position shortcuts are now
+  `⌘1…⌘0` by default, switchable back to Control from a new Settings → General →
+  Clipboard → "Quick-select modifier" dropdown. The badge glyph on each row follows the
+  setting. Modifier matching is exact among the real modifiers (so `⌘⌥1` falls through to
+  normal editing) while tolerating Caps Lock / fn.
+- **The command runner now mirrors the same shortcut on its top results.** The first five
+  results carry a `⌘1…⌘5` keycap badge (on both the list rows and the reading-focused
+  cards), and pressing the shortcut activates that result directly. Capped at five — only
+  the top results get a shortcut. The clipboard and runner share one keycode table and one
+  modifier preference, so the two stay in lock-step.
+
+### Launcher Search
+- **Fixed a launcher freeze when changing the search query quickly.** The runner window
+  self-sizes by feeding its SwiftUI content height back into an AppKit `setFrame`, but it
+  did so synchronously from inside SwiftUI's preference-commit phase — reentering Auto
+  Layout and a Core Animation transaction commit (a render-server round-trip) on every
+  measured height. Under rapid query changes this could serialize into a long main-thread
+  stall blocked on that IPC. Resizes are now coalesced to the next runloop tick
+  (latest-wins, one `setFrame` per tick), decoupling them from the commit.
+- **Search results are now ranked across all sources together, so matching is consistent.**
+  The launcher used to run apps, quicklinks and bookmarks as an exclusive priority chain —
+  the first source with any hit won and the rest never ran. A stray fuzzy app match could
+  shadow an exact bookmark, so e.g. "pods" and "pods)" returned different things. Every
+  source is now scored on one shared relevance ladder (alias › exact › prefix ›
+  word-prefix › contains › all-tokens-present › fuzzy) and merged Alfred-style, with apps
+  winning ties. Fuzzy subsequence is the lowest tier and only for single-token queries, so
+  a real substring hit always outranks it. All whitespace tokens must match (AND).
+- **Bookmarks participate in the unified launcher list.** With "show in launcher" enabled,
+  bookmarks are scored and merged alongside apps and quicklinks instead of only appearing
+  via their own fallback, each row opening its URL natively (with favicon).
+- **Search stays off the main thread and within budget.** Scoring runs off-main after a
+  single cheap main-actor snapshot; lowercased app names and bookmark haystacks are
+  precomputed, and the bookmark lookup overlaps app/quicklink scoring. Worst case ~1ms for
+  a large catalog, far under the search debounce.
+
+### Fallback Search
+- **Web-search "default results" when a query has no local match.** When the runner can't
+  confidently answer a query locally, it now offers web-search rows — "Search Google for
+  '…'", Perplexity, Wikipedia, Amazon — the way Alfred and Raycast do. Press Enter (or the
+  `⌘1…⌘5` keycap) to open the search in your default browser; each row shows the engine's
+  favicon.
+- **Shown as low-priority results by default, not only on empty.** In the default "smart
+  append" mode the web searches sit at the END of a result list, below real matches, so
+  they never get in the way but are always one keystroke away. A Settings toggle switches
+  to "empty-only", where they appear solely when a query has no local result. Fallbacks are
+  scoped to free-text queries — they never clutter calculator/unit/currency answers, the
+  emoji picker, shell output, or extension UI.
+- **Import the search engines you already use.** One button pulls the keyword search
+  engines from your default browser — Chromium "Web Data" (Chrome, Brave, Edge, Arc,
+  Vivaldi) or Safari's default engine — so you don't retype templates you already have.
+- **Fully configurable under Settings → Fallback Search.** Add, edit, enable/disable, or
+  remove providers; each is a name plus a search URL with a `{query}` placeholder
+  (`{query+}` for `+`-separated terms). The query is always percent-encoded, and only
+  `http(s)` engines are accepted.
+- **Native on the hot path.** All per-keystroke row building is native (no scripting on the
+  query path); the settings UI and browser import are a system extension that talks to the
+  native store through a host API, keeping the runner fast and the configuration flexible.
+
+### Window Management
+- **Drag a window to a screen edge to snap it — Rectangle-style, built in.** Dragging any
+  window so the pointer reaches a screen edge or corner shows a live preview of where it
+  will land, and it snaps there on release. Left/right/bottom edges give halves, the top
+  edge maximizes, and the four corners give quarters. Multi-display aware, and fixed-size
+  dialogs are skipped automatically.
+- **A premium snap preview.** The default "footprint" preview is a vibrancy blur tinted
+  with your theme accent that grows and morphs between zones with an alignment haptic; a
+  flat translucent style is available as an option (and used automatically when Reduce
+  Transparency is on). Reduce Motion collapses the animation to an instant move.
+- **Fully configurable under Settings → Window Management.** Toggle the feature, pick the
+  preview style, optionally require a modifier key (Control / Option / Command) while
+  dragging to avoid accidental snaps, tune the edge sensitivity and corner size, and
+  exclude specific apps (add by bundle id or pick an app — its windows never snap).
+- **Engineered to stay out of the way.** Snapping watches the mouse with passive event
+  monitors, never the keystroke path that powers autocomplete. The per-drag work is pure
+  geometry with no Accessibility round-trips once a window move is confirmed; a window's
+  position is read at most a handful of times while detecting the drag, and a hung target
+  app can't stall the UI (Accessibility calls are time-bounded). Window moves temporarily
+  suspend the Accessibility "enhanced UI" mode so frames land exactly, then restore it.
+
+### Appearance
+- **UI size and transparency are now adjustable under Settings → Appearance.** Alongside
+  the existing theme picker, two new segmented controls scale the whole interface (85% /
+  100% / 115% / 130%) and let the desktop show through Prosper's windows (100% / 90% / 80%
+  / 70% opaque). Both apply live to every window — Settings, the command runner, clipboard
+  history, the chat agent and the snap preview — and persist across launches.
+- **The default look is unchanged, by construction.** At 100% size / 100% opacity the UI
+  is pixel-identical to before: every scaled dimension and font is a multiply-by-1.0
+  identity, and at the default size text resolves to the exact same system font as a plain
+  `.font(.body)` rather than an approximation. Enlarging switches fonts to an explicit
+  scaled point size so text and layout grow together.
+- **Respects system accessibility.** When macOS "Reduce transparency" is on, windows stay
+  fully opaque regardless of the setting (live-observed, so toggling the system setting
+  updates Prosper immediately), and the transparency control is disabled with an
+  explanatory note. Hairline rules and the host-overlay autocomplete fonts (which must
+  match the target app's caret) deliberately don't scale.
+- **Built to stay off the hot path.** Size and opacity are global multipliers read through
+  a tiny inlined accessor (~140 ns for a large bundle of lookups); changing a setting bumps
+  a generation counter that rebuilds the SwiftUI tree once via `.id()` — segmented presets,
+  not sliders, so a rebuild can't tear out a drag gesture mid-change.
+
 ## v2.111.1
 
 ### Snippets

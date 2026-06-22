@@ -70,6 +70,16 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func urlOpen(_ url: String, bundleID: String?) -> Bool
     func urlDefaultBrowser() -> String
     func urlSetDefaultBrowser(_ bundleID: String) -> Bool
+    // Fallback web-search providers (the runner's Alfred-style "default results").
+    // Reads/writes the native FallbackSearchStore; system-only since it edits the
+    // launcher's behaviour. `list` → providers JSON array, `save` ← providers JSON,
+    // `getMode`/`setMode` toggle always-append vs empty-only, `importBrowser` pulls
+    // engines from the default browser and returns the count added.
+    func fallbackList() -> String
+    func fallbackSave(_ json: String)
+    func fallbackMode() -> Bool
+    func fallbackSetMode(_ on: Bool)
+    func fallbackImport() -> Int
     // Filesystem reads (open) + path watching (privileged, §Q). A watch fires a named
     // handler with payload { paths }. The host owns the FSEventStream; it is released
     // on disable/reset.
@@ -265,6 +275,11 @@ extension ExtensionHostServices {
     func urlOpen(_ url: String, bundleID: String?) -> Bool { false }
     func urlDefaultBrowser() -> String { "" }
     func urlSetDefaultBrowser(_ bundleID: String) -> Bool { false }
+    func fallbackList() -> String { "[]" }
+    func fallbackSave(_ json: String) {}
+    func fallbackMode() -> Bool { true }
+    func fallbackSetMode(_ on: Bool) {}
+    func fallbackImport() -> Int { 0 }
     func fsExists(_ path: String) -> Bool { false }
     func fsAttributesJSON(_ path: String) -> String { #"{"exists":false}"# }
     func fsRead(_ path: String) -> String? { nil }
@@ -726,6 +741,21 @@ struct ExtensionHost {
         lua.register("__h_fs_exists") { rt in rt.push(services.fsExists(rt.stringArgument(1) ?? "")); return 1 }
         lua.register("__h_fs_attrs") { rt in rt.push(services.fsAttributesJSON(rt.stringArgument(1) ?? "")); return 1 }
 
+        // --- fallback web-search store (system extensions only; edits the runner) ---
+        if privileged {
+            lua.register("__h_fallback_list") { rt in rt.push(services.fallbackList()); return 1 }
+            lua.register("__h_fallback_save") { rt in services.fallbackSave(rt.stringArgument(1) ?? "[]"); return 0 }
+            lua.register("__h_fallback_mode_get") { rt in rt.push(services.fallbackMode()); return 1 }
+            lua.register("__h_fallback_mode_set") { rt in services.fallbackSetMode(rt.boolArgument(1) ?? true); return 0 }
+            lua.register("__h_fallback_import") { rt in rt.push(Double(services.fallbackImport())); return 1 }
+        } else {
+            lua.register("__h_fallback_list") { rt in rt.push("[]"); return 1 }
+            lua.register("__h_fallback_save") { _ in 0 }
+            lua.register("__h_fallback_mode_get") { rt in rt.push(true); return 1 }
+            lua.register("__h_fallback_mode_set") { _ in 0 }
+            lua.register("__h_fallback_import") { rt in rt.push(Double(0)); return 1 }
+        }
+
         // --- app control / scripting / keyboard set (automation) ---
         if automation {
             lua.register("__h_app_launch") { rt in
@@ -788,9 +818,11 @@ struct ExtensionHost {
     private static let bootstrap = """
     -- Capture the raw bindings that the wrappers below reference by name, so they
     -- keep working after the globals are nil'd at the end of this chunk.
-    local _timer_schedule = __h_timer_schedule
-    local _timer_cancel   = __h_timer_cancel
-    local _log            = __h_log
+    local _timer_schedule   = __h_timer_schedule
+    local _timer_cancel     = __h_timer_cancel
+    local _log              = __h_log
+    local _fallback_save    = __h_fallback_save
+    local _fallback_mode_set = __h_fallback_mode_set
     host = {
         clipboard = {
             read    = __h_clip_read,
@@ -827,10 +859,24 @@ struct ExtensionHost {
             error = function(m) _log("error", m or "") end,
         },
         env = { get = __h_env_get },
+        -- Fallback web-search providers shown in the runner when a query has no
+        -- local match (system-only; stubbed for non-system exts). list()/save(json)
+        -- round-trip the provider array; get_mode()/set_mode(bool) toggle always-
+        -- append vs empty-only; import_browser() pulls engines from the default
+        -- browser and returns the count added.
+        fallback = {
+            list          = __h_fallback_list,
+            save          = function(json) _fallback_save(json or "[]") end,
+            get_mode      = __h_fallback_mode_get,
+            set_mode      = function(on) _fallback_mode_set(on and true or false) end,
+            import_browser = __h_fallback_import,
+        },
     }
     __h_clip_read = nil; __h_clip_write = nil; __h_clip_history = nil
     __h_llm_complete = nil; __h_llm_translate = nil
     __h_shell_run = nil
+    __h_fallback_list = nil; __h_fallback_save = nil
+    __h_fallback_mode_get = nil; __h_fallback_mode_set = nil; __h_fallback_import = nil
     __h_pref_get = nil; __h_pref_set = nil
     __h_perms_has = nil
     __h_notify = nil

@@ -91,4 +91,25 @@ do
     h.eq(#node.items, 1, "only the matching bookmark")
 end
 
+-- ── bookmarks_search: raw JSON rows for the unified launcher (opt-in) ─────────
+do
+    local g, e = fresh()
+    g.bookmarks_run("bm import")
+    h.eq(g.bookmarks_search("github", "200"), "", "off by default → empty")
+    e.prefs.show_in_launcher = "true"
+    h.eq(g.bookmarks_search("g", "200"), "", "single char → empty")
+    h.eq(g.bookmarks_search("zzzz", "200"), "", "no match → empty")
+
+    local rows = e.host.json.decode(g.bookmarks_search("github", "200"))
+    h.eq(#rows, 1, "one matching row")
+    h.eq(rows[1].title, "GitHub", "title present")
+    h.eq(rows[1].url, "https://github.com", "url present for native open")
+    h.eq(rows[1].hay ~= nil and #rows[1].hay > 0, true, "precomputed hay present for Swift scorer")
+    h.eq(rows[1].hay:find("github", 1, true) ~= nil, true, "hay is lowercased + matchable")
+
+    -- limit arg caps the row count
+    local capped = e.host.json.decode(g.bookmarks_search("https", "1"))
+    h.eq(#capped <= 1, true, "limit arg caps rows")
+end
+
 print("ok bookmarks")

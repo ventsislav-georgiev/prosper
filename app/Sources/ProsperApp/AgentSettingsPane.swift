@@ -26,26 +26,26 @@ struct AgentPane: View {
     @ViewBuilder private var modelDownloadControls: some View {
         let id = model.agentModel
         if downloads.isDownloading(id) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: sz(6)) {
                 NeonProgressBar(progress: downloads.progress)
                 HStack {
-                    Text(downloads.status).font(.caption).foregroundStyle(Neon.textSecondary)
+                    Text(downloads.status).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     Spacer()
                     Button("Stop") { downloads.cancel() }.buttonStyle(.neon)
                 }
             }
         } else if ModelFiles.isModelDownloaded(id) {
             HStack {
-                Text("Downloaded.").font(.callout).foregroundStyle(Neon.textSecondary)
+                Text("Downloaded.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 Spacer()
                 Button("Delete") { downloads.delete(id) }.buttonStyle(.neonDestructive)
             }
         } else {
             HStack {
                 if let err = downloads.errorMessage {
-                    Text(err).font(.caption).foregroundStyle(Neon.magenta).lineLimit(2)
+                    Text(err).font(Neon.font(.caption)).foregroundStyle(Neon.magenta).lineLimit(2)
                 } else {
-                    Text("Not downloaded.").font(.callout).foregroundStyle(Neon.textSecondary)
+                    Text("Not downloaded.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 }
                 Spacer()
                 Button("Download") { downloads.start(id) }.buttonStyle(.neon)
@@ -72,31 +72,31 @@ struct AgentPane: View {
                 modelDownloadControls
                 if let warning = agentRAMWarning {
                     NeonDivider()
-                    Text(warning).font(.callout).foregroundStyle(Neon.magenta)
+                    Text(warning).font(Neon.font(.callout)).foregroundStyle(Neon.magenta)
                 }
             }
 
             NeonSection("Sampling",
                         footer: "How the model picks tokens. Lower temperature = more focused and repeatable; higher = more varied. Read per request, so changes apply on the next turn — no restart.") {
                 NeonRow("Temperature", subtitle: "0 = deterministic · 0.7 = balanced · higher = more creative") {
-                    HStack(spacing: 10) {
+                    HStack(spacing: sz(10)) {
                         Slider(value: $temperature, in: 0 ... 2, step: 0.05)
-                            .frame(width: 160)
+                            .frame(width: sz(160))
                             .onChange(of: temperature) { _, new in Preferences.agentTemperature = new }
                         Text(String(format: "%.2f", temperature))
-                            .font(.system(.body, design: .monospaced)).foregroundStyle(Neon.textPrimary)
-                            .frame(width: 44, alignment: .trailing)
+                            .font(Neon.font(.body, design: .monospaced)).foregroundStyle(Neon.textPrimary)
+                            .frame(width: sz(44), alignment: .trailing)
                     }
                 }
                 NeonDivider()
                 NeonRow("Top-p", subtitle: "Nucleus sampling. 1.0 = off; lower trims the unlikely tail") {
-                    HStack(spacing: 10) {
+                    HStack(spacing: sz(10)) {
                         Slider(value: $topP, in: 0.1 ... 1, step: 0.05)
-                            .frame(width: 160)
+                            .frame(width: sz(160))
                             .onChange(of: topP) { _, new in Preferences.agentTopP = new }
                         Text(String(format: "%.2f", topP))
-                            .font(.system(.body, design: .monospaced)).foregroundStyle(Neon.textPrimary)
-                            .frame(width: 44, alignment: .trailing)
+                            .font(Neon.font(.body, design: .monospaced)).foregroundStyle(Neon.textPrimary)
+                            .frame(width: sz(44), alignment: .trailing)
                     }
                 }
             }
@@ -128,7 +128,7 @@ struct MCPServersPane: View {
             NeonSection("Configured",
                         footer: "Stored in ~/.config/prosper/mcp.json (Claude Code schema) — changes apply to the next agent run.") {
                 if model.mcpServers.isEmpty {
-                    Text("No MCP servers configured.").font(.callout).foregroundStyle(Neon.textSecondary)
+                    Text("No MCP servers configured.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 }
                 ForEach(model.mcpServers) { server in
                     MCPServerRow(server: server,
@@ -151,18 +151,18 @@ struct MCPServersPane: View {
                             footer: "MCP servers configured by other coding tools. Add the ones you want.") {
                     ForEach(freshDiscovered) { found in
                         HStack(alignment: .firstTextBaseline) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
+                            VStack(alignment: .leading, spacing: sz(2)) {
+                                HStack(spacing: sz(6)) {
                                     Text(found.server.id).foregroundStyle(Neon.textPrimary)
-                                    Text(found.source).font(.caption2)
-                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                    Text(found.source).font(Neon.font(.caption2))
+                                        .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
                                         .background(Neon.magenta.opacity(0.18))
                                         .clipShape(Capsule()).foregroundStyle(Neon.magenta)
                                 }
                                 Text(serverSummary(found.server))
-                                    .font(.caption).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary).lineLimit(1)
                             }
-                            Spacer(minLength: 12)
+                            Spacer(minLength: sz(12))
                             Button("Add") { add(found.server) }.buttonStyle(.neon)
                         }
                         if found.id != freshDiscovered.last?.id { NeonDivider() }
@@ -279,12 +279,12 @@ struct PluginsHooksPane: View {
             NeonSection("Plugins",
                         footer: "opencode JS/TS plugins in ~/.config/prosper/plugins, bridged into the agent via Bun. Applied on the next agent run.") {
                 if plugins.isEmpty {
-                    Text("No plugins installed.").font(.callout).foregroundStyle(Neon.textSecondary)
+                    Text("No plugins installed.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 }
                 ForEach(plugins, id: \.self) { name in
                     HStack {
-                        Text(name).font(.system(.body, design: .monospaced)).foregroundStyle(Neon.textPrimary)
-                        Spacer(minLength: 12)
+                        Text(name).font(Neon.font(.body, design: .monospaced)).foregroundStyle(Neon.textPrimary)
+                        Spacer(minLength: sz(12))
                         Button { deletePlugin(name) } label: { Image(systemName: "trash") }.buttonStyle(.neon)
                     }
                     if name != plugins.last { NeonDivider() }
@@ -301,22 +301,22 @@ struct PluginsHooksPane: View {
                             footer: "Plugins configured by other tools. opencode plugins run via the Bun bridge; Claude Code plugins contribute their slash commands.") {
                     ForEach(freshDiscovered) { found in
                         HStack(alignment: .firstTextBaseline) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
+                            VStack(alignment: .leading, spacing: sz(2)) {
+                                HStack(spacing: sz(6)) {
                                     Text(found.name)
-                                        .font(.system(.body, design: .monospaced))
+                                        .font(Neon.font(.body, design: .monospaced))
                                         .foregroundStyle(Neon.textPrimary)
-                                    Text(found.source).font(.caption2)
-                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                    Text(found.source).font(Neon.font(.caption2))
+                                        .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
                                         .background(Neon.magenta.opacity(0.18))
                                         .clipShape(Capsule()).foregroundStyle(Neon.magenta)
                                 }
-                                Text(found.detail).font(.caption2).foregroundStyle(Neon.textSecondary)
+                                Text(found.detail).font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
                             }
-                            Spacer(minLength: 12)
+                            Spacer(minLength: sz(12))
                             if isImported(found) {
                                 Label("Imported", systemImage: "checkmark")
-                                    .font(.caption2).foregroundStyle(Neon.textSecondary)
+                                    .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
                             } else if found.opencodeFile != nil || !found.commandFiles.isEmpty {
                                 Button("Add") { addFound(found) }.buttonStyle(.neon)
                             }
@@ -329,7 +329,7 @@ struct PluginsHooksPane: View {
             NeonSection("Hooks",
                         footer: "Shell commands the agent runs on lifecycle events (the Claude Code hooks contract). Stored in ~/.config/prosper/hooks.json. Applies on the next agent run.") {
                 if model.hooks.isEmpty {
-                    Text("No hooks configured.").font(.callout).foregroundStyle(Neon.textSecondary)
+                    Text("No hooks configured.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 }
                 ForEach(model.hooks) { hook in
                     HookRuleRow(hook: hook, onToggle: { toggleHook(hook) }, onDelete: { deleteHook(hook) })
@@ -478,24 +478,24 @@ private struct HookRuleRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: sz(2)) {
+                HStack(spacing: sz(6)) {
                     Text(hook.event.rawValue)
-                        .font(.caption2)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .font(Neon.font(.caption2))
+                        .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
                         .background(Neon.blue.opacity(0.18))
                         .clipShape(Capsule())
                         .foregroundStyle(Neon.blue)
                     if hook.event.usesMatcher && !hook.matcher.isEmpty {
                         Text(hook.matcher)
-                            .font(.caption).foregroundStyle(Neon.textSecondary)
+                            .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     }
                 }
                 Text(hook.command.isEmpty ? "(no command)" : hook.command)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(Neon.font(.caption, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary).lineLimit(1)
             }
-            Spacer(minLength: 12)
+            Spacer(minLength: sz(12))
             Toggle("", isOn: Binding(get: { hook.enabled }, set: { _ in onToggle() }))
                 .labelsHidden()
             Button { onDelete() } label: { Image(systemName: "trash") }.buttonStyle(.neon)
@@ -520,21 +520,21 @@ private struct MCPServerRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: sz(2)) {
+                HStack(spacing: sz(6)) {
                     Text(server.id.isEmpty ? "(unnamed)" : server.id)
                         .foregroundStyle(Neon.textPrimary)
                     Text(server.transport.rawValue)
-                        .font(.caption2)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .font(Neon.font(.caption2))
+                        .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
                         .background(Neon.blue.opacity(0.18))
                         .clipShape(Capsule())
                         .foregroundStyle(Neon.blue)
                 }
                 Text(summary)
-                    .font(.caption).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary).lineLimit(1)
             }
-            Spacer(minLength: 12)
+            Spacer(minLength: sz(12))
             Toggle("", isOn: Binding(get: { server.enabled }, set: { _ in onToggle() }))
                 .labelsHidden()
             Button("Edit") { onEdit() }.buttonStyle(.neon)
@@ -583,12 +583,12 @@ private struct MCPServerEditor: View {
     private var canSave: Bool { assembled().isValid }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: sz(14)) {
             Text(isNew ? "Add MCP Server" : "Edit MCP Server")
-                .font(.headline).foregroundStyle(Neon.textPrimary)
+                .font(Neon.font(.headline)).foregroundStyle(Neon.textPrimary)
 
             NeonRow("Name", subtitle: "Unique id, used as the config key") {
-                TextField("context7", text: $draft.id).frame(width: 220)
+                TextField("context7", text: $draft.id).frame(width: sz(220))
             }
 
             Picker("Transport", selection: $draft.transport) {
@@ -598,30 +598,30 @@ private struct MCPServerEditor: View {
 
             if draft.transport == .stdio {
                 NeonRow("Command") {
-                    TextField("npx", text: $draft.command).frame(width: 220)
+                    TextField("npx", text: $draft.command).frame(width: sz(220))
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: sz(4)) {
                     Text("Arguments (one per line)")
-                        .font(.caption).foregroundStyle(Neon.textSecondary)
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     TextEditor(text: $argsText)
-                        .frame(height: 64).font(.system(.body, design: .monospaced))
+                        .frame(height: sz(64)).font(Neon.font(.body, design: .monospaced))
                         .scrollContentBackground(.hidden)
                         .background(Neon.blue.opacity(0.06))
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: sz(4)) {
                     Text("Environment (KEY=VALUE, one per line)")
-                        .font(.caption).foregroundStyle(Neon.textSecondary)
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     TextEditor(text: $envText)
-                        .frame(height: 64).font(.system(.body, design: .monospaced))
+                        .frame(height: sz(64)).font(Neon.font(.body, design: .monospaced))
                         .scrollContentBackground(.hidden)
                         .background(Neon.blue.opacity(0.06))
                 }
             } else {
                 NeonRow("URL") {
-                    TextField("https://mcp.example.com/mcp", text: $draft.url).frame(width: 260)
+                    TextField("https://mcp.example.com/mcp", text: $draft.url).frame(width: sz(260))
                 }
                 NeonRow("Bearer token env var", subtitle: "Name of an env var holding the token (optional)") {
-                    TextField("MY_TOKEN", text: $draft.bearerTokenEnvVar).frame(width: 220)
+                    TextField("MY_TOKEN", text: $draft.bearerTokenEnvVar).frame(width: sz(220))
                 }
             }
 
@@ -637,8 +637,8 @@ private struct MCPServerEditor: View {
                 Button("Save") { onSave(assembled()) }.buttonStyle(.neon).disabled(!canSave)
             }
         }
-        .padding(20)
-        .frame(width: 460)
+        .padding(sz(20))
+        .frame(width: sz(460))
         .background(SettingsBackground())
     }
 }

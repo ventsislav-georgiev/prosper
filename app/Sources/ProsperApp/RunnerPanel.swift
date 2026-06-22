@@ -20,6 +20,11 @@ final class RunnerPanel {
     private var isProgrammaticMove = false
     private var moveObserver: NSObjectProtocol?
     private var resignObserver: NSObjectProtocol?
+    /// Latest content height reported by SwiftUI, pending an applied resize.
+    /// Coalesces a burst of preference updates into one setFrame per runloop tick.
+    private var pendingHeight: CGFloat?
+    /// True between scheduling and applying a coalesced resize (dedup the async hop).
+    private var resizeScheduled = false
 
     /// UserDefaults key for the remembered top-left corner of the runner.
     private static let originKey = "RunnerPanelTopLeft"
@@ -63,7 +68,7 @@ final class RunnerPanel {
             onCommit: { [weak self] text in self?.commit(text) },
             onMeta: { [weak self] cmd in self?.performMeta(cmd) },
             onCancel: { [weak self] in self?.dismiss() },
-            onResize: { [weak self] height in self?.resize(toHeight: height) },
+            onResize: { [weak self] height in self?.scheduleResize(toHeight: height) },
             onLaunch: { [weak self] url in self?.launchApp(url) },
             onOpenLink: { [weak self] hit in self?.openQuicklink(hit) },
             onOpenURL: { [weak self] target in self?.openURLString(target) },
@@ -105,6 +110,28 @@ final class RunnerPanel {
                     self.dismiss()
                 }
             }
+        }
+    }
+
+    /// Records the latest SwiftUI content height and applies it on the next
+    /// runloop tick, coalescing a burst of preference updates into one setFrame.
+    ///
+    /// Why: `onResize` fires from SwiftUI's preference-commit phase. Calling
+    /// `setFrame(display: true)` synchronously there reenters layout + a
+    /// CoreAnimation transaction commit (render-server IPC) inside the SwiftUI
+    /// update, which under rapid query changes serializes into a long main-thread
+    /// stall (observed 105s hang, low CPU = blocked on IPC). Deferring breaks the
+    /// resize out of the commit and collapses N height reports into one apply.
+    private func scheduleResize(toHeight height: CGFloat) {
+        pendingHeight = height
+        guard !resizeScheduled else { return }
+        resizeScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.resizeScheduled = false
+            guard let h = self.pendingHeight else { return }
+            self.pendingHeight = nil
+            self.resize(toHeight: h)
         }
     }
 
@@ -546,15 +573,17 @@ final class RunnerModel: ObservableObject {
 /// any extension-declared action). `id` is a reserved `file.*` id the runner runs
 /// natively, or a custom id dispatched back to the extension; `value` overrides
 /// the row's `filePath` payload when set.
-private struct RowAction: Identifiable {
+struct RowAction: Identifiable {
     let id: String
     let title: String
     let icon: String?
     let value: String?
 }
 
-/// A flat, indexable representation of a result row shown in the list.
-private struct ResultRow: Identifiable {
+/// A flat, indexable representation of a result row shown in the list. `internal`
+/// (not `private`) so the pure `fallbackRows` helper can be unit-tested via
+/// `@testable import`; it remains file-local in practice.
+struct ResultRow: Identifiable {
     let id: Int
     let icon: String          // SF Symbol name (used when iconImage is nil)
     let primary: String       // main text
@@ -588,6 +617,46 @@ private func launcherRows(_ hits: [ExtLaunchHit], startID: Int) -> [ResultRow] {
     }
 }
 
+/// Append web-search fallback rows to `base` per the Alfred/Raycast "default
+/// results" rule. Pure (no SwiftUI) so it can be unit-tested directly:
+///   - Only the universal launcher with a non-empty query gets fallbacks.
+///   - Allow-list: only free-text outcomes (`.search`, `.apps`, `.noResults`) get
+///     them. Confident scalars (calc/unit/currency), direct launches, shell output,
+///     the emoji picker, and extension-owned UI (ext/quicklinks/extView/…) never do —
+///     a web-search row under an emoji picker or shell result is noise, not a fallback.
+///   - Empty-only mode (`store.appendMode == false`) skips fallbacks when there
+///     are real results; a pure no-results outcome replaces its placeholder row.
+///   - Append mode (default) always tacks enabled providers on at the end.
+///
+/// HOT PATH: runs inside the SwiftUI `rows` getter, which re-evaluates on every
+/// keystroke AND every selection change (arrow keys), and is read several times per
+/// body pass. Budget: < 45µs/call, warm ~10–15µs (FallbackSearchTests). All it does is read the
+/// cached provider list + string-substitute the query — no I/O, no allocation beyond
+/// the result rows. Keep it that way; if it ever regresses, memoize on (query,
+/// provider revision) rather than adding work here.
+@MainActor
+func fallbackRows(base: [ResultRow], outcome: RunnerOutcome?, query: String,
+                  mode: RunnerMode, store: FallbackSearchStore) -> [ResultRow] {
+    guard mode == .universal, !query.isEmpty else { return base }
+    switch outcome {
+    case .search, .apps, .noResults: break
+    default: return base
+    }
+    // A pure no-results outcome carries a single placeholder row; fallbacks replace it.
+    let isNoResults: Bool = { if case .noResults = outcome { return true }; return false }()
+    let hasReal = !isNoResults && !base.isEmpty
+    if !store.appendMode && hasReal { return base }
+    let rows = isNoResults ? [] : base
+    let fb = store.providers.filter { $0.enabled }.enumerated().map { i, p -> ResultRow in
+        let target = store.expand(template: p.urlTemplate, query: query)
+        return ResultRow(id: rows.count + i, icon: "magnifyingglass",
+                         primary: store.title(for: p, query: query), secondary: "",
+                         category: "Web Search", copyValue: target, isMeta: false,
+                         openTarget: target)
+    }
+    return rows + fb
+}
+
 private func buildRows(from outcome: RunnerOutcome) -> [ResultRow] {
     switch outcome {
     case .calc(let expression, let value):
@@ -619,6 +688,25 @@ private func buildRows(from outcome: RunnerOutcome) -> [ResultRow] {
                       category: "Application", copyValue: app.name, isMeta: false,
                       appURL: app.url,
                       iconImage: NSWorkspace.shared.icon(forFile: app.url.path))
+        }
+
+    case .search(let hits):
+        return hits.enumerated().map { i, hit in
+            switch hit.kind {
+            case .app:
+                return ResultRow(id: i, icon: "app.dashed", primary: hit.title, secondary: hit.subtitle,
+                                 category: "Application", copyValue: hit.title, isMeta: false,
+                                 appURL: hit.appURL,
+                                 iconImage: hit.appURL.map { NSWorkspace.shared.icon(forFile: $0.path) })
+            case .quicklink:
+                return ResultRow(id: i, icon: "link", primary: hit.title, secondary: hit.subtitle,
+                                 category: "Quicklink", copyValue: hit.title, isMeta: false,
+                                 openTarget: hit.openTarget, quicklink: hit.quicklink)
+            case .bookmark:
+                return ResultRow(id: i, icon: "bookmark", primary: hit.title, secondary: hit.subtitle,
+                                 category: "Bookmark", copyValue: hit.openTarget ?? hit.title, isMeta: false,
+                                 openTarget: hit.openTarget)
+            }
         }
 
     case .noResults(let query):
@@ -750,6 +838,7 @@ private func actionVerb(for outcome: RunnerOutcome?) -> String {
     switch outcome {
     case .app:         return "Open"
     case .apps:        return "Open"
+    case .search:      return "Open"
     case .quicklinks:  return "Open"
     case .quickdirs:   return "Run Action"
     case .quickdirsMenu: return "Browse"
@@ -796,9 +885,15 @@ private struct RunnerView: View {
 
     @FocusState private var inputFocused: Bool
 
-    // Derived rows from current outcome.
+    // Derived rows from current outcome. The universal launcher appends low-priority
+    // web-search "fallback" rows (Google, …) when the query has no confident local
+    // match — Alfred/Raycast "default results". The decision is a pure helper so it
+    // is unit-testable without SwiftUI; see `fallbackRows`.
     private var rows: [ResultRow] {
-        model.outcome.map(buildRows) ?? []
+        let base = model.outcome.map(buildRows) ?? []
+        let q = model.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        return fallbackRows(base: base, outcome: model.outcome, query: q, mode: model.mode,
+                            store: FallbackSearchStore.shared)
     }
 
     private var selectedRow: ResultRow? {
@@ -855,11 +950,11 @@ private struct RunnerView: View {
     var body: some View {
         VStack(spacing: 0) {
             // ── Search field ──────────────────────────────────────────────
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .center, spacing: sz(10)) {
                 Group {
                     if model.mode == .universal {
                         Image(systemName: model.isLoading ? "arrow.triangle.2.circlepath" : "magnifyingglass")
-                            .font(.system(size: 18, weight: .regular))
+                            .font(Neon.font(18, weight: .regular))
                             .foregroundColor(Neon.blue)
                             .symbolEffect(.pulse, isActive: model.isLoading)
                     } else {
@@ -875,21 +970,21 @@ private struct RunnerView: View {
                 // field scrolls internally.
                 TextField(model.mode.placeholder, text: $model.input, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 20, weight: .regular))
+                    .font(Neon.font(20, weight: .regular))
                     .lineLimit(1 ... 5)
                     .focused($inputFocused)
                     .onSubmit { commitSelected() }
                     .onChange(of: model.input) { _, _ in model.inputChanged() }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 16)
+            .padding(.horizontal, sz(16))
+            .padding(.vertical, sz(16))
 
             // ── Result list or loading (empty input → single line, nothing here)
             if model.isLoading && model.outcome == nil {
                 Divider()
                 ProgressView()
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 20)
+                    .padding(.vertical, sz(20))
             } else if case .extView(let node) = model.outcome {
                 Divider()
                 extViewInline(node: node, rows: rows)
@@ -902,8 +997,8 @@ private struct RunnerView: View {
                 if let card = calcCard(for: outcome) {
                     // Calc / unit / currency: big two-column Raycast calculator card.
                     CalcCardView(card: card)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, sz(8))
+                        .padding(.vertical, sz(6))
                 } else {
                     // All other outcomes: Raycast-style row list.
                     resultRowList(rows: rows)
@@ -976,7 +1071,14 @@ private struct RunnerView: View {
                 // Quick Look. ⌘K itself stays a native SwiftUI Menu (ActionMenuButton).
                 onSecondary: { performActionAtOffset(1) },
                 onTertiary: { performActionAtOffset(2) },
-                onQuickLook: { quickLookSelected() }
+                onQuickLook: { quickLookSelected() },
+                // ⌘1…⌘5 (or ⌃, per Preferences) — jump to and activate a top result.
+                onNumber: { idx in
+                    guard idx < rows.count else { return }
+                    let row = rows[idx]
+                    model.selectedIndex = row.id
+                    activateRow(row)
+                }
             )
         )
     }
@@ -987,7 +1089,7 @@ private struct RunnerView: View {
     private func resultRowList(rows: [ResultRow]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
+                LazyVStack(alignment: .leading, spacing: sz(2)) {
                     sectionHeader("Results")
                     ForEach(rows) { row in
                         ResultRowView(
@@ -999,10 +1101,10 @@ private struct RunnerView: View {
                         .id(row.id)
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.horizontal, sz(8))
+                .padding(.vertical, sz(6))
             }
-            .frame(maxHeight: 360)
+            .frame(maxHeight: sz(360))
             // Keep the keyboard-selected row visible while arrowing through a
             // long list (e.g. all quicklinks), which would otherwise run off-screen.
             .onChange(of: model.selectedIndex) { _, idx in
@@ -1021,16 +1123,16 @@ private struct RunnerView: View {
     private func extViewInline(node: ExtensionViewNode, rows: [ResultRow]) -> some View {
         switch node {
         case .loading(let n):
-            VStack(spacing: 12) {
+            VStack(spacing: sz(12)) {
                 ProgressView().controlSize(.large)
                 if let t = n.title {
-                    Text(t).font(.system(size: 14, weight: .medium)).foregroundColor(Neon.textPrimary)
+                    Text(t).font(Neon.font(14, weight: .medium)).foregroundColor(Neon.textPrimary)
                 }
                 if let s = n.subtitle {
-                    Text(s).font(.system(size: 12)).foregroundColor(Neon.textSecondary)
+                    Text(s).font(Neon.font(12)).foregroundColor(Neon.textSecondary)
                 }
             }
-            .frame(maxWidth: .infinity).padding(.vertical, 28)
+            .frame(maxWidth: .infinity).padding(.vertical, sz(28))
 
         case .detail(let n):
             ScrollView {
@@ -1038,9 +1140,9 @@ private struct RunnerView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
                     .foregroundColor(Neon.textPrimary)
-                    .padding(12)
+                    .padding(sz(12))
             }
-            .frame(maxHeight: 360)
+            .frame(maxHeight: sz(360))
 
         case .list(let n):
             // Compact launcher rows (e.g. the `open` app list) render exactly like
@@ -1061,15 +1163,15 @@ private struct RunnerView: View {
     private func cardList(header: String?, accessory: String?, rows: [ResultRow]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: sz(8)) {
                     HStack {
                         sectionHeader(header ?? "Result")
                         Spacer()
                         if let a = accessory, !a.isEmpty {
                             Text(a)
-                                .font(.system(size: 11))
+                                .font(Neon.font(11))
                                 .foregroundColor(Neon.blue)
-                                .padding(.trailing, 12)
+                                .padding(.trailing, sz(12))
                         }
                     }
                     ForEach(rows) { row in
@@ -1079,10 +1181,10 @@ private struct RunnerView: View {
                         .id(row.id)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, sz(10))
+                .padding(.vertical, sz(6))
             }
-            .frame(maxHeight: 360)
+            .frame(maxHeight: sz(360))
             .onChange(of: model.selectedIndex) { _, idx in
                 withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(idx, anchor: .center) }
             }
@@ -1101,36 +1203,36 @@ private struct RunnerView: View {
     @ViewBuilder
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 11, weight: .bold))
+            .font(Neon.font(11, weight: .bold))
             .textCase(.uppercase)
             .tracking(1.2)
             .foregroundColor(Neon.textSecondary)
-            .padding(.horizontal, 10)
-            .padding(.top, 4)
-            .padding(.bottom, 2)
+            .padding(.horizontal, sz(10))
+            .padding(.top, sz(4))
+            .padding(.bottom, sz(2))
     }
 
     // MARK: - Action bar
 
     @ViewBuilder
     private func actionBar(outcome: RunnerOutcome) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: sz(10)) {
             // App glyph — far left (Raycast logo position)
             Image(systemName: "command")
-                .font(.system(size: 13, weight: .semibold))
+                .font(Neon.font(13, weight: .semibold))
                 .foregroundColor(Neon.blue.opacity(0.8))
 
             Spacer()
 
             // Primary action — right side, with keycap
-            HStack(spacing: 6) {
+            HStack(spacing: sz(6)) {
                 Text(commitVerb)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(Neon.font(12, weight: .medium))
                     .foregroundColor(Neon.textSecondary)
                 KeyCap("\u{21A9}")
             }
 
-            Divider().frame(height: 14)
+            Divider().frame(height: sz(14))
 
             // Actions menu — right side (⌘K). Lists the selected row's file
             // actions when it has them (the `files` finder), then Copy / quicklink.
@@ -1151,8 +1253,8 @@ private struct RunnerView: View {
                 onDelete: { hit in onDeleteQuicklink(hit) }
             )
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, sz(14))
+        .padding(.vertical, sz(8))
         .background(Neon.bgBottom.opacity(0.55))
     }
 
@@ -1246,25 +1348,25 @@ private struct ModeChip: View {
     let isLoading: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: sz(6)) {
             Image(systemName: isLoading ? "arrow.triangle.2.circlepath" : mode.icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(Neon.font(13, weight: .semibold))
                 .symbolEffect(.pulse, isActive: isLoading)
             Text(mode.title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(Neon.font(13, weight: .semibold))
                 .lineLimit(1)
         }
         .foregroundColor(Neon.blueBright)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, sz(10))
+        .padding(.vertical, sz(6))
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: sz(8))
                 .fill(Neon.blue.opacity(0.16))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: sz(8))
                         .strokeBorder(Neon.blue.opacity(0.5), lineWidth: 1))
         )
-        .shadow(color: Neon.blue.opacity(0.3), radius: 5)
+        .shadow(color: Neon.blue.opacity(0.3), radius: sz(5))
         .fixedSize()
     }
 }
@@ -1278,14 +1380,14 @@ private struct ResultRowView: View {
 
     var body: some View {
         Button(action: onActivate) {
-            HStack(spacing: 12) {
+            HStack(spacing: sz(12)) {
                 // Leading icon — a real app icon when available, the page favicon
                 // for a quicklink, else a tinted rounded-square SF-symbol tile.
                 if let image = row.iconImage {
                     Image(nsImage: image)
                         .resizable()
                         .interpolation(.high)
-                        .frame(width: 26, height: 26)
+                        .frame(width: sz(26), height: sz(26))
                 } else if let host = FaviconLoader.host(for: row.openTarget ?? row.quicklink?.target) {
                     FaviconView(host: host, fallbackSymbol: row.icon)
                 } else {
@@ -1293,35 +1395,40 @@ private struct ResultRowView: View {
                 }
 
                 // Primary + secondary inline (Raycast shows subtitle in dimmed gray)
-                HStack(spacing: 8) {
+                HStack(spacing: sz(8)) {
                     Text(row.primary)
-                        .font(.system(size: 14, weight: .regular))
+                        .font(Neon.font(14, weight: .regular))
                         .foregroundColor(Neon.textPrimary)
                         .lineLimit(1)
 
                     if !row.secondary.isEmpty {
                         Text(row.secondary)
-                            .font(.system(size: 13))
+                            .font(Neon.font(13))
                             .foregroundColor(Neon.textSecondary)
                             .lineLimit(1)
                     }
                 }
 
-                Spacer(minLength: 8)
+                Spacer(minLength: sz(8))
 
                 // Type label — right aligned, plain dimmed text (no pill)
                 Text(row.category)
-                    .font(.system(size: 13))
+                    .font(Neon.font(13))
                     .foregroundColor(Neon.textSecondary)
+
+                // Quick-select keycap on the top rows: ⌘1…⌘5 (or ⌃, per Prefs).
+                if row.id < QuickSelect.runnerTopCount {
+                    KeyCap("\(Preferences.quickSelectModifier.glyph)\(row.id + 1)")
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, sz(10))
+            .padding(.vertical, sz(6))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: sz(8))
                     .fill(isSelected ? Neon.blue.opacity(0.16) : Color.clear)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8)
+                        RoundedRectangle(cornerRadius: sz(8))
                             .strokeBorder(Neon.blue.opacity(isSelected ? 0.45 : 0), lineWidth: 1))
             )
             .contentShape(Rectangle())
@@ -1333,13 +1440,13 @@ private struct ResultRowView: View {
     /// no real icon or favicon is available.
     private var symbolTile: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: sz(6))
                 .fill(Neon.blue.opacity(0.18))
             Image(systemName: row.icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(Neon.font(13, weight: .semibold))
                 .foregroundColor(Neon.blue)
         }
-        .frame(width: 26, height: 26)
+        .frame(width: sz(26), height: sz(26))
     }
 }
 
@@ -1358,16 +1465,16 @@ private struct FaviconView: View {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: 26, height: 26)
+                    .frame(width: sz(26), height: sz(26))
             } else {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: sz(6))
                         .fill(Neon.blue.opacity(0.18))
                     Image(systemName: fallbackSymbol)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(Neon.font(13, weight: .semibold))
                         .foregroundColor(.accentColor)
                 }
-                .frame(width: 26, height: 26)
+                .frame(width: sz(26), height: sz(26))
             }
         }
         .task(id: host) { image = await FaviconLoader.shared.icon(for: host) }
@@ -1441,31 +1548,31 @@ private struct ExtCardRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: sz(5)) {
             // No .textSelection here: these cards are click-to-open (onTapGesture
             // below), and SwiftUI's text-selection machinery swallows the FIRST
             // click to place a cursor, so the first tap on a fresh list did nothing
             // and only the second opened the row (the bookmark "first click dead" bug).
             Text(row.primary)
-                .font(.system(size: 17, weight: .medium))
+                .font(Neon.font(17, weight: .medium))
                 .foregroundColor(Neon.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if (row.label?.isEmpty == false) || !row.secondary.isEmpty {
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .top, spacing: sz(6)) {
                     if let label = row.label, !label.isEmpty {
                         Text(label)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(Neon.font(11, weight: .medium))
                             .foregroundColor(Neon.blue)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
+                            .padding(.horizontal, sz(6))
+                            .padding(.vertical, sz(2))
                             .background(Neon.blue.opacity(0.14))
                             .clipShape(Capsule())
                     }
                     if !row.secondary.isEmpty {
                         Text(row.secondary)
-                            .font(.system(size: 13))
+                            .font(Neon.font(13))
                             .foregroundColor(Neon.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1473,19 +1580,26 @@ private struct ExtCardRow: View {
                 }
             }
         }
-        .padding(12)
+        .padding(sz(12))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: sz(10))
                 .fill(isSelected ? Neon.blue.opacity(0.12) : Neon.card)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: sz(10))
                 .strokeBorder(isSelected ? Neon.blue.opacity(0.55) : Neon.stroke,
                               lineWidth: isSelected ? 1.5 : 1)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        // Quick-select keycap on the top cards: ⌘1…⌘5 (or ⌃, per Prefs).
+        .overlay(alignment: .topTrailing) {
+            if row.id < QuickSelect.runnerTopCount {
+                KeyCap("\(Preferences.quickSelectModifier.glyph)\(row.id + 1)")
+                    .padding(sz(8))
+            }
+        }
     }
 }
 
@@ -1493,15 +1607,15 @@ private struct CalcCardView: View {
     let card: CalcCard
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: sz(2)) {
             Text("Calculator")
-                .font(.system(size: 11, weight: .bold))
+                .font(Neon.font(11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.2)
                 .foregroundColor(Neon.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.top, 4)
-                .padding(.bottom, 4)
+                .padding(.horizontal, sz(10))
+                .padding(.top, sz(4))
+                .padding(.bottom, sz(4))
 
             VStack(spacing: 0) {
                 ZStack {
@@ -1510,7 +1624,7 @@ private struct CalcCardView: View {
                         .fill(Neon.stroke)
                         .frame(width: 1)
                         .frame(maxHeight: .infinity)
-                        .padding(.vertical, 14)
+                        .padding(.vertical, sz(14))
 
                     HStack(spacing: 0) {
                         column(text: card.leftText, label: card.leftLabel)
@@ -1519,48 +1633,48 @@ private struct CalcCardView: View {
 
                     // Arrow centered over the hairline.
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(Neon.font(18, weight: .semibold))
                         .foregroundColor(Neon.blue)
-                        .shadow(color: Neon.blue.opacity(0.5), radius: 5)
+                        .shadow(color: Neon.blue.opacity(0.5), radius: sz(5))
                 }
-                .padding(.top, 22)
-                .padding(.bottom, card.subtitle == nil ? 22 : 12)
+                .padding(.top, sz(22))
+                .padding(.bottom, card.subtitle == nil ? sz(22) : sz(12))
 
                 // Subtitle as a full-width footer — long values can reach the
                 // card's center, so it must never share the space between the
                 // columns (it used to overlap the input-side value there).
                 if let subtitle = card.subtitle {
                     Text(subtitle)
-                        .font(.system(size: 10))
+                        .font(Neon.font(10))
                         .foregroundColor(Neon.textSecondary)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
-                        .padding(.bottom, 10)
+                        .padding(.bottom, sz(10))
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, sz(8))
             .neonCard()
         }
     }
 
     @ViewBuilder
     private func column(text: String, label: String) -> some View {
-        VStack(spacing: 14) {
+        VStack(spacing: sz(14)) {
             Text(text)
-                .font(.system(size: 28, weight: .semibold))
+                .font(Neon.font(28, weight: .semibold))
                 .foregroundColor(Neon.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.4)
-                .padding(.horizontal, 36)
+                .padding(.horizontal, sz(36))
             if !label.isEmpty {
                 Text(label)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(Neon.font(12, weight: .medium))
                     .foregroundColor(Neon.blue)
                     .lineLimit(1)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
+                    .padding(.horizontal, sz(8))
+                    .padding(.vertical, sz(3))
                     .background(
-                        RoundedRectangle(cornerRadius: 5)
+                        RoundedRectangle(cornerRadius: sz(5))
                             .fill(Neon.blue.opacity(0.12))
                     )
             }
@@ -1691,9 +1805,9 @@ private struct ActionMenuButton: View {
                 Button("Delete Quicklink", role: .destructive) { onDelete(hit) }
             }
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: sz(6)) {
                 Text("Actions")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(Neon.font(12, weight: .medium))
                     .foregroundColor(Neon.textSecondary)
                 KeyCap("\u{2318}K")
             }
@@ -1720,15 +1834,15 @@ private struct KeyCap: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .medium))
+            .font(Neon.font(11, weight: .medium))
             .foregroundColor(Neon.blue)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
+            .padding(.horizontal, sz(5))
+            .padding(.vertical, sz(2))
             .background(
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: sz(4))
                     .fill(Neon.blue.opacity(0.12))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: sz(4))
                             .strokeBorder(Neon.blue.opacity(0.3), lineWidth: 0.5))
             )
     }
@@ -1759,6 +1873,8 @@ private struct KeyHandling: NSViewRepresentable {
     let onTertiary: () -> Void
     /// ⌘Y — Quick Look the selected row's file.
     let onQuickLook: () -> Void
+    /// ⌘1…⌘5 — activate the result at this 0-based index.
+    let onNumber: (Int) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -1782,7 +1898,8 @@ private struct KeyHandling: NSViewRepresentable {
     private var handlers: Coordinator.Handlers {
         .init(cancel: onCancel, up: onUp, down: onDown, commit: onCommit,
               deleteWhenEmpty: onDeleteWhenEmpty, clear: onClear,
-              secondary: onSecondary, tertiary: onTertiary, quickLook: onQuickLook)
+              secondary: onSecondary, tertiary: onTertiary, quickLook: onQuickLook,
+              number: onNumber)
     }
 
     final class Coordinator {
@@ -1796,6 +1913,7 @@ private struct KeyHandling: NSViewRepresentable {
             let secondary: () -> Void
             let tertiary: () -> Void
             let quickLook: () -> Void
+            let number: (Int) -> Void
         }
         var handlers: Handlers?
         weak var window: NSWindow?
@@ -1839,6 +1957,16 @@ private struct KeyHandling: NSViewRepresentable {
             // ⌃C → clear the input (expected "wipe the field" gesture here).
             if mods == .control, e.keyCode == 8 {  // C
                 h.clear(); return nil
+            }
+            // ⌘1…⌘5 (or ⌃1…⌃5, per Preferences) — activate one of the top 5
+            // results. Match the chosen modifier exactly among the real modifiers
+            // (larger combos fall through) but ignore Caps Lock / fn; slots ≥ 5 are
+            // ignored (only the top five get a shortcut).
+            let quickFlag: NSEvent.ModifierFlags =
+                Preferences.quickSelectModifier == .command ? .command : .control
+            if QuickSelect.modifierMatches(e.modifierFlags, expected: quickFlag),
+               let idx = QuickSelect.slot(forKeyCode: e.keyCode), idx < QuickSelect.runnerTopCount {
+                h.number(idx); return nil
             }
             // Row-action accelerators (Alfred/Raycast file actions). ⌘⏎ / ⌥⏎ run
             // the selected row's secondary / tertiary action; ⌘Y Quick Looks it.

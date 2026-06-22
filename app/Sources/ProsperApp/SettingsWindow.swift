@@ -13,6 +13,20 @@ final class SettingsWindow {
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
 
+    /// Identifies the Settings window so the theme onChange hook can re-skin it.
+    static let themedIdentifier = NSUserInterfaceItemIdentifier("prosper.themedWindow")
+
+    /// Apply the current `ThemeRuntime.opacity` to a window: below 1.0 it goes
+    /// non-opaque with a clear background so the SwiftUI backdrop's faded fill lets
+    /// the desktop through; at 1.0 it stays the original opaque neon console.
+    /// Idempotent — safe to call repeatedly from the theme onChange hook.
+    static func applyWindowOpacity(_ win: NSWindow) {
+        let opaque = ThemeRuntime.opacity >= 0.999
+        win.isOpaque = opaque
+        win.backgroundColor = opaque ? NSColor(Neon.bgTop) : .clear
+        win.invalidateShadow()
+    }
+
     func show() {
         if let window {
             DockPolicy.windowDidShow(window)
@@ -33,13 +47,17 @@ final class SettingsWindow {
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
         win.isMovableByWindowBackground = true
-        win.backgroundColor = NSColor(Neon.bgTop)
         win.appearance = NSAppearance(named: .darkAqua)
-        win.setContentSize(NSSize(width: 900, height: 640))
-        // The sidebar (218) plus the content column need ~820 minimum; height is
-        // free so the window can grow to show more rows. Width is now resizable
-        // (the sidebar + scrolling cards reflow), unlike the old pinned tab strip.
-        win.contentMinSize = NSSize(width: 820, height: 480)
+        // Tagged so the theme onChange hook (AppDelegate) can find this window to
+        // re-apply opacity + scaled min-size live when the user changes them.
+        win.identifier = SettingsWindow.themedIdentifier
+        let scale = ThemeRuntime.scale
+        win.setContentSize(NSSize(width: 900 * scale, height: 640 * scale))
+        // The sidebar (218·scale) plus the content column need ~820·scale minimum;
+        // height is free so the window can grow to show more rows. Width is now
+        // resizable (the sidebar + scrolling cards reflow).
+        win.contentMinSize = NSSize(width: 820 * scale, height: 480 * scale)
+        SettingsWindow.applyWindowOpacity(win)
         win.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                     height: CGFloat.greatestFiniteMagnitude)
         win.isReleasedWhenClosed = false
@@ -144,6 +162,7 @@ final class SettingsModel: ObservableObject {
         }
     }
     @Published var useClipboardContext: Bool { didSet { Preferences.useClipboardContext = useClipboardContext } }
+    @Published var quickSelectModifier: QuickSelectModifier { didSet { Preferences.quickSelectModifier = quickSelectModifier } }
     @Published var midlineCompletionsEnabled: Bool { didSet { Preferences.midlineCompletionsEnabled = midlineCompletionsEnabled } }
     @Published var emojiSuggestionsEnabled: Bool { didSet { Preferences.emojiSuggestionsEnabled = emojiSuggestionsEnabled } }
     @Published var suppressOnTypo: Bool { didSet { Preferences.suppressOnTypo = suppressOnTypo } }
@@ -225,6 +244,15 @@ final class SettingsModel: ObservableObject {
     @Published var showDockIcon: Bool
     @Published var improveCompatBundleIds: [String]
 
+    // Drag-to-snap window management. `dragSnapEnabled` is set via `setDragSnap`
+    // (side effect: reconcile the monitors); the rest persist directly on change.
+    @Published var dragSnapEnabled: Bool
+    @Published var dragSnapStyleFlat: Bool { didSet { Preferences.dragSnapStyle = dragSnapStyleFlat ? .flat : .vibrancy } }
+    @Published var dragSnapModifier: DragSnapModifier { didSet { Preferences.dragSnapModifier = dragSnapModifier } }
+    @Published var dragSnapEdgeMargin: Double { didSet { Preferences.dragSnapEdgeMargin = CGFloat(dragSnapEdgeMargin) } }
+    @Published var dragSnapCornerSize: Double { didSet { Preferences.dragSnapCornerSize = CGFloat(dragSnapCornerSize) } }
+    @Published var dragSnapIgnoredBundleIds: [String]
+
     @Published var disabledBundleIds: [String]
     @Published var disableTabBundleIds: [String]
     @Published var enabledBundleIds: [String]
@@ -244,6 +272,7 @@ final class SettingsModel: ObservableObject {
     var onShortcutsChanged: (() -> Void)?
     var onMenuBarIconChanged: ((Bool) -> Void)?
     var onDockIconChanged: ((Bool) -> Void)?
+    var onDragSnapChanged: ((Bool) -> Void)?
 
     init() {
         autocompleteEnabled = Preferences.autocompleteEnabled
@@ -258,6 +287,7 @@ final class SettingsModel: ObservableObject {
         clipboardHistoryEnabled = Preferences.clipboardHistoryEnabled
         clipboardHistoryMaxItems = Preferences.clipboardHistoryMaxItems
         useClipboardContext = Preferences.useClipboardContext
+        quickSelectModifier = Preferences.quickSelectModifier
         midlineCompletionsEnabled = Preferences.midlineCompletionsEnabled
         emojiSuggestionsEnabled = Preferences.emojiSuggestionsEnabled
         suppressOnTypo = Preferences.suppressOnTypo
@@ -281,6 +311,12 @@ final class SettingsModel: ObservableObject {
         emojiGender = Preferences.emojiGender
         showMenuBarIcon = Preferences.showMenuBarIcon
         showDockIcon = Preferences.showDockIcon
+        dragSnapEnabled = Preferences.dragSnapEnabled
+        dragSnapStyleFlat = Preferences.dragSnapStyle == .flat
+        dragSnapModifier = Preferences.dragSnapModifier
+        dragSnapEdgeMargin = Double(Preferences.dragSnapEdgeMargin)
+        dragSnapCornerSize = Double(Preferences.dragSnapCornerSize)
+        dragSnapIgnoredBundleIds = Preferences.dragSnapIgnoredBundleIds.sorted()
         improveCompatBundleIds = Preferences.improveCompatBundleIds.sorted()
         disabledBundleIds = Preferences.disabledBundleIds.sorted()
         disableTabBundleIds = Preferences.disableTabBundleIds.sorted()
@@ -400,6 +436,12 @@ final class SettingsModel: ObservableObject {
         onAutocompleteChanged?(on)
     }
 
+    func setDragSnap(_ on: Bool) {
+        dragSnapEnabled = on
+        Preferences.dragSnapEnabled = on
+        onDragSnapChanged?(on)
+    }
+
     func setLaunchAtLogin(_ on: Bool) {
         launchAtLogin = on
         onLaunchAtLoginChanged?(on)
@@ -443,6 +485,8 @@ final class SettingsModel: ObservableObject {
     func removeDisableTab(_ id: String) { mutate(\.disableTabBundleIds, remove: id) { Preferences.disableTabBundleIds = Set($0) } }
     func addEnabled(_ id: String) { mutate(\.enabledBundleIds, add: id) { Preferences.enabledBundleIds = Set($0) } }
     func removeEnabled(_ id: String) { mutate(\.enabledBundleIds, remove: id) { Preferences.enabledBundleIds = Set($0) } }
+    func addDragSnapIgnored(_ id: String) { mutate(\.dragSnapIgnoredBundleIds, add: id) { Preferences.dragSnapIgnoredBundleIds = $0 } }
+    func removeDragSnapIgnored(_ id: String) { mutate(\.dragSnapIgnoredBundleIds, remove: id) { Preferences.dragSnapIgnoredBundleIds = $0 } }
 
     func resetCustomInstructions() { customInstructions = "" }
 
@@ -509,7 +553,7 @@ private struct SettingsRootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(SettingsBackground())
         }
-        .frame(minWidth: 820, minHeight: 480)
+        .frame(minWidth: sz(820), minHeight: sz(480))
         .preferredColorScheme(.dark)
         .onAppear {
             let shared = SettingsHooks.shared
@@ -520,6 +564,7 @@ private struct SettingsRootView: View {
             model.onShortcutsChanged = shared.onShortcutsChanged
             model.onMenuBarIconChanged = shared.onMenuBarIconChanged
             model.onDockIconChanged = shared.onDockIconChanged
+            model.onDragSnapChanged = shared.onDragSnapChanged
         }
         .onReceive(NotificationCenter.default.publisher(for: .prosperSettingsCycleSection)) { note in
             let ids = groups.flatMap { $0.1.map(\.id) }
@@ -555,6 +600,7 @@ private struct SettingsRootView: View {
         case "apps": AppsPane(model: model)
         case "personalization": PersonalizationPane(model: model)
         case "shortcuts": ShortcutsPane(model: model)
+        case "windows": WindowManagementPane(model: model)
         case "agent": AgentPane(model: model)
         case "agent-mcp": MCPServersPane(model: model)
         case "agent-plugins": PluginsHooksPane(model: model)
@@ -595,6 +641,7 @@ final class SettingsHooks {
     var onCheckForUpdates: (() -> Void)?
     var onMenuBarIconChanged: ((Bool) -> Void)?
     var onDockIconChanged: ((Bool) -> Void)?
+    var onDragSnapChanged: ((Bool) -> Void)?
     /// Fired when the user picks a different AI model. AppDelegate drives a live switch
     /// (download-if-needed + reload) via `CoreBridge.switchModel` — no restart needed.
     var onModelChanged: ((String) -> Void)?
@@ -615,15 +662,15 @@ struct PaneTitle: View {
     var accent: String? = nil
     let subtitle: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: sz(3)) {
             neonAccentedText(title, accent: accent)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .font(Neon.font(22, weight: .bold, design: .rounded))
                 .foregroundStyle(Neon.textPrimary)
             Text(subtitle)
-                .font(.system(size: 12))
+                .font(Neon.font(12))
                 .foregroundStyle(Neon.textSecondary)
         }
-        .padding(.bottom, 2)
+        .padding(.bottom, sz(2))
     }
 }
 
@@ -704,11 +751,11 @@ private struct GeneralPane: View {
                 NeonDivider()
                 NeonRow("History size",
                         subtitle: "Most recent entries kept (\(Preferences.clipboardHistoryMaxRange.lowerBound)–\(Preferences.clipboardHistoryMaxRange.upperBound)).") {
-                    HStack(spacing: 10) {
+                    HStack(spacing: sz(10)) {
                         Text("\(model.clipboardHistoryMaxItems)")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .font(Neon.font(13, weight: .semibold, design: .rounded))
                             .foregroundStyle(Neon.textPrimary)
-                            .frame(minWidth: 44, alignment: .trailing)
+                            .frame(minWidth: sz(44), alignment: .trailing)
                         Stepper("", value: $model.clipboardHistoryMaxItems,
                                 in: Preferences.clipboardHistoryMaxRange, step: 50)
                             .labelsHidden()
@@ -718,6 +765,17 @@ private struct GeneralPane: View {
                 NeonDivider()
                 Toggle("Use clipboard text as completion context",
                        isOn: $model.useClipboardContext)
+                NeonDivider()
+                NeonRow("Quick-select modifier",
+                        subtitle: "Paste a clipboard row (1…0) or pick a top runner result (1…5).") {
+                    Picker("", selection: $model.quickSelectModifier) {
+                        ForEach(QuickSelectModifier.allCases, id: \.self) { mod in
+                            Text(mod.title).tag(mod)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: sz(150))
+                }
             }
         }
         .onAppear { hasAccessibility = PermissionsManager.isAccessibilityTrusted() }
@@ -733,15 +791,15 @@ private struct PermissionWarningRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: sz(10)) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(Neon.magenta)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: sz(2)) {
                     Text(title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(Neon.font(13, weight: .semibold))
                         .foregroundStyle(Neon.textPrimary)
                     Text(message)
-                        .font(.system(size: 12))
+                        .font(Neon.font(12))
                         .foregroundStyle(Neon.textSecondary)
                 }
                 Spacer()
@@ -836,7 +894,7 @@ private struct CompletionsPane: View {
             AIModelSection(model: model)
 
             NeonSection("Length") {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: sz(8)) {
                     Text("Maximum completion length").foregroundStyle(Neon.textPrimary)
                     Picker("", selection: $model.completionLength) {
                         ForEach(CompletionLength.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -852,7 +910,7 @@ private struct CompletionsPane: View {
                     HStack {
                         Text(row.0).foregroundStyle(Neon.textPrimary)
                         Spacer()
-                        Text(row.1).font(.system(.body, design: .monospaced))
+                        Text(row.1).font(Neon.font(.body, design: .monospaced))
                             .foregroundStyle(Neon.blue)
                     }
                 }
@@ -899,7 +957,7 @@ private struct CompletionsPane: View {
 
             NeonSection("Custom AI Instructions",
                         footer: "Appended to the completion system prompt (tone, languages, style).") {
-                NeonTextEditor(text: $model.customInstructions, minHeight: 140)
+                NeonTextEditor(text: $model.customInstructions, minHeight: sz(140))
                 HStack {
                     Spacer()
                     Button("Reset to Default") { model.resetCustomInstructions() }
@@ -1016,10 +1074,10 @@ private struct PermissionStatusRow: View {
 
     var body: some View {
         NeonRow(title, subtitle: subtitle) {
-            HStack(spacing: 10) {
+            HStack(spacing: sz(10)) {
                 Label(granted ? "Granted" : "Not granted",
                       systemImage: granted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Neon.font(12, weight: .semibold))
                     .foregroundStyle(granted ? Neon.blue : Neon.magenta)
                 Button("Open") { action() }.buttonStyle(.neon)
             }
@@ -1087,7 +1145,7 @@ private struct AppsPane: View {
                         footer: "Supplements the global instructions for the given app only.") {
                 TextField("Bundle id", text: $perAppBundle)
                     .textFieldStyle(.roundedBorder)
-                NeonTextEditor(text: $perAppText, minHeight: 80)
+                NeonTextEditor(text: $perAppText, minHeight: sz(80))
                 HStack {
                     Button("Load") {
                         perAppText = model.perAppInstruction(perAppBundle.trimmingCharacters(in: .whitespaces))
@@ -1104,16 +1162,16 @@ private struct AppsPane: View {
             NeonSection("Collected inputs per app") {
                 if bundleCounts.isEmpty {
                     Text("No per-app history yet (enable Typing History to collect).")
-                        .font(.caption).foregroundStyle(Neon.textSecondary)
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 } else {
                     ForEach(Array(bundleCounts.enumerated()), id: \.element.bundleId) { idx, row in
                         if idx > 0 { NeonDivider() }
                         HStack {
-                            Text(row.bundleId).font(.system(.body, design: .monospaced))
+                            Text(row.bundleId).font(Neon.font(.body, design: .monospaced))
                                 .foregroundStyle(Neon.textPrimary)
                             Spacer()
                             Text("\(row.count)")
-                                .font(.system(.body, design: .monospaced))
+                                .font(Neon.font(.body, design: .monospaced))
                                 .foregroundStyle(Neon.blue)
                         }
                     }
@@ -1138,12 +1196,12 @@ private struct AppsPane: View {
     @ViewBuilder
     private func bundleList(_ ids: [String], remove: @escaping (String) -> Void) -> some View {
         if ids.isEmpty {
-            Text("None").foregroundStyle(Neon.textSecondary).font(.caption)
+            Text("None").foregroundStyle(Neon.textSecondary).font(Neon.font(.caption))
         } else {
             ForEach(Array(ids.enumerated()), id: \.element) { idx, id in
                 if idx > 0 { NeonDivider() }
                 HStack {
-                    Text(id).font(.system(.body, design: .monospaced))
+                    Text(id).font(Neon.font(.body, design: .monospaced))
                         .foregroundStyle(Neon.textPrimary)
                     Spacer()
                     Button(role: .destructive) { remove(id) } label: {
@@ -1201,7 +1259,7 @@ private struct StatisticsPane: View {
             PaneTitle(title: "Statistics", subtitle: "Local usage — stored on-device, never transmitted")
 
             // Headline metric tiles (Raycast-style dashboard).
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 3), spacing: 14) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: sz(14)), count: 3), spacing: sz(14)) {
                 NeonStatTile(value: "\(today)", label: "Today", icon: "bolt.fill")
                 NeonStatTile(value: "\(total)", label: "Completions", icon: "checkmark.circle.fill")
                 NeonStatTile(value: String(format: "%.1f", average), label: "Daily avg", icon: "chart.line.uptrend.xyaxis")
@@ -1211,7 +1269,7 @@ private struct StatisticsPane: View {
             }
 
             NeonSection("Activity") {
-                HStack(spacing: 16) {
+                HStack(spacing: sz(16)) {
                     Picker("", selection: $metric) {
                         ForEach(CompletionStats.Metric.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
@@ -1220,7 +1278,7 @@ private struct StatisticsPane: View {
                         ForEach(ranges, id: \.0) { Text($0.1).tag($0.0) }
                     }
                     .pickerStyle(.segmented).labelsHidden()
-                    .frame(width: 150)
+                    .frame(width: sz(150))
                 }
                 chart
             }
@@ -1245,13 +1303,13 @@ private struct StatisticsPane: View {
     @ViewBuilder
     private var chart: some View {
         if points.allSatisfy({ $0.value == 0 }) {
-            VStack(spacing: 6) {
+            VStack(spacing: sz(6)) {
                 Image(systemName: "chart.bar.xaxis")
-                    .font(.system(size: 26)).foregroundStyle(Neon.textSecondary.opacity(0.5))
+                    .font(Neon.font(26)).foregroundStyle(Neon.textSecondary.opacity(0.5))
                 Text("No activity in this range yet.")
-                    .font(.caption).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             }
-            .frame(maxWidth: .infinity, minHeight: 180)
+            .frame(maxWidth: .infinity, minHeight: sz(180))
         } else {
             Chart(points, id: \.date) { point in
                 BarMark(
@@ -1274,7 +1332,7 @@ private struct StatisticsPane: View {
                     AxisValueLabel().foregroundStyle(Neon.textSecondary)
                 }
             }
-            .frame(height: 200)
+            .frame(height: sz(200))
         }
     }
 
@@ -1311,9 +1369,9 @@ private struct PersonalizationPane: View {
             NeonSection("Word-choice personalization",
                         footer: "Biases completions toward words you write often.") {
                 HStack {
-                    Text("Off").font(.caption).foregroundStyle(Neon.textSecondary)
+                    Text("Off").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     Slider(value: $model.personalizeWordChoice, in: 0...1)
-                    Text("Max").font(.caption).foregroundStyle(Neon.textSecondary)
+                    Text("Max").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 }
                 .disabled(!model.collectTypingHistory)
             }
@@ -1321,7 +1379,7 @@ private struct PersonalizationPane: View {
             NeonSection("Existing data") {
                 NeonRow("Stored entries") {
                     Text("\(entryCount)")
-                        .font(.system(.body, design: .monospaced))
+                        .font(Neon.font(.body, design: .monospaced))
                         .foregroundStyle(Neon.blue)
                 }
                 NeonDivider()
@@ -1427,14 +1485,14 @@ private struct ExtensionActivatorRow: View {
     let trigger: ExtensionRegistry.ModeTriggerSpec
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: sz(10)) {
             Image(systemName: trigger.icon)
                 .foregroundStyle(Neon.textSecondary)
-                .frame(width: 18)
+                .frame(width: sz(18))
             Text(trigger.prefix)
-                .font(.system(.body, design: .monospaced))
+                .font(Neon.font(.body, design: .monospaced))
                 .foregroundStyle(Neon.textPrimary)
-                .padding(.horizontal, 8).padding(.vertical, 2)
+                .padding(.horizontal, sz(8)).padding(.vertical, sz(2))
                 .neonCard()
             Text(trigger.title).foregroundStyle(Neon.textPrimary)
             Spacer()
@@ -1458,7 +1516,7 @@ private struct GlobalShortcutRow: View {
             ShortcutRecorder(combo: model.shortcutCombos[action] ?? action.defaultCombo) { combo in
                 model.setShortcut(combo, for: action)
             }
-            .frame(width: 110, height: 24)
+            .frame(width: sz(110), height: sz(24))
             .fixedSize()
             Button {
                 model.resetShortcut(action)
@@ -1516,7 +1574,7 @@ private struct CustomShortcutRow: View {
             ShortcutRecorder(combo: shortcut.combo) { combo in
                 model.updateCustomShortcutCombo(id: shortcut.id, combo: combo)
             }
-            .frame(width: 110, height: 24)
+            .frame(width: sz(110), height: sz(24))
             .fixedSize()
 
             Button {
@@ -1546,7 +1604,7 @@ private struct KeyMappingRow: View {
     private var triggerCombo: KeyCombo { KeyCombo.parse(rule.trigger) ?? unsetKeyCombo }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: sz(8)) {
             triggerEditor
             Image(systemName: "arrow.right").foregroundStyle(Neon.textSecondary)
             Picker("", selection: Binding(
@@ -1568,15 +1626,15 @@ private struct KeyMappingRow: View {
     }
 
     @ViewBuilder private var triggerEditor: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: sz(2)) {
             if triggerIsMedia {
                 Text(String(rule.trigger.dropFirst("media:".count)))
-                    .foregroundStyle(Neon.textPrimary).frame(width: 96, alignment: .leading)
+                    .foregroundStyle(Neon.textPrimary).frame(width: sz(96), alignment: .leading)
             } else {
                 ShortcutRecorder(combo: triggerCombo) { combo in
                     if let s = combo.specString { update { $0.trigger = s } }
                 }
-                .frame(width: 96, height: 24).fixedSize()
+                .frame(width: sz(96), height: sz(24)).fixedSize()
             }
             Menu {
                 Button("Record Key…") { update { $0.trigger = "" } }
@@ -1633,7 +1691,7 @@ private struct KeyMappingRow: View {
             ShortcutRecorder(combo: KeyCombo.parse(rule.target) ?? unsetKeyCombo) { combo in
                 if let s = combo.specString { update { $0.target = s } }
             }
-            .frame(width: 96, height: 24).fixedSize()
+            .frame(width: sz(96), height: sz(24)).fixedSize()
         case .sendMedia:
             Picker("", selection: Binding(
                 get: { rule.target.isEmpty ? Self.mediaNames.first! : rule.target.uppercased() },
@@ -1744,7 +1802,7 @@ private struct AnalyticsPane: View {
                             ? "This is the live payload for the next daily send."
                             : "Analytics are off — nothing is sent.") {
                 Text(payload.isEmpty ? "{}" : payload)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(Neon.font(11, design: .monospaced))
                     .foregroundStyle(Neon.textPrimary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1804,31 +1862,31 @@ private struct AboutPane: View {
             Image(nsImage: icon)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: 96, height: 96)
-                .shadow(color: Neon.blue.opacity(0.5), radius: 18)
+                .frame(width: sz(96), height: sz(96))
+                .shadow(color: Neon.blue.opacity(0.5), radius: sz(18))
         } else {
             Image(systemName: "character.bubble")
-                .font(.system(size: 56))
+                .font(Neon.font(56))
                 .foregroundStyle(Neon.blue)
-                .shadow(color: Neon.blue.opacity(0.6), radius: 14)
+                .shadow(color: Neon.blue.opacity(0.6), radius: sz(14))
         }
     }
 
     var body: some View {
         NeonScroll {
-            VStack(spacing: 14) {
+            VStack(spacing: sz(14)) {
                 appIcon
                 Text("PROSPER")
-                    .font(.system(size: 26, weight: .heavy, design: .rounded))
+                    .font(Neon.font(26, weight: .heavy, design: .rounded))
                     .tracking(4)
                     .foregroundStyle(Neon.textPrimary)
                 Text("Version \(AppInfo.displayVersion)")
-                    .font(.callout).foregroundStyle(Neon.blue)
+                    .font(Neon.font(.callout)).foregroundStyle(Neon.blue)
                 Text("System-wide inline autocomplete, command runner, and clipboard history.")
                     .multilineTextAlignment(.center).foregroundStyle(Neon.textSecondary)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
+            .padding(.vertical, sz(8))
 
             // TimelineView's periodic schedule pauses while the view is offscreen.
             // The settings window outlives close (isReleasedWhenClosed = false), so
@@ -1855,7 +1913,7 @@ private struct AboutPane: View {
                     if downloading {
                         NeonProgressBar(progress: AppUpdater.shared.downloadProgress)
                         Text("Downloading the new version — it will install and relaunch automatically.")
-                            .font(.caption).foregroundStyle(Neon.textSecondary)
+                            .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     }
                     NeonDivider()
                     Toggle("Automatically check for updates", isOn: Binding(
@@ -1867,36 +1925,36 @@ private struct AboutPane: View {
                        let next = AppUpdater.shared.nextCheckDate {
                         let remaining = max(0, next.timeIntervalSince(now))
                         Text("Next check in \(Self.fmtCountdown(remaining))")
-                            .font(.caption).foregroundStyle(Neon.textSecondary)
+                            .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     }
                     NeonDivider()
                     Toggle("Receive beta (pre-release) updates", isOn: Binding(
                         get: { AppUpdater.shared.allowBetaUpdates },
                         set: { AppUpdater.shared.allowBetaUpdates = $0 }))
                     Text("Get early builds before they're promoted to everyone. Beta builds are tested but may be less stable.")
-                        .font(.caption2).foregroundStyle(Neon.textSecondary)
+                        .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
                 }
             }
 
             NeonSection("Engine") {
                 Text("Inline completions — local inference via Apple MLX (mlx-swift-lm), running a model of your choice (such as Gemma) selectable in Completions.")
-                    .font(.caption).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 NeonDivider()
                 Text("Coding agent — OpenAI's Codex harness over a local OpenAI-compatible server, running a selectable coding model (such as Qwen). Extensible with MCP servers, lifecycle hooks, and JS/TS plugins.")
-                    .font(.caption).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 NeonDivider()
                 Text("Extensions — vendored Lua 5.4 runtime · JS/TS plugins run on Bun.")
-                    .font(.caption).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 NeonDivider()
                 Text("Acknowledgments: mlx-swift, swift-transformers, GRDB.swift (encrypted store), Sparkle (auto-update), TOMLDecoder, Aptabase (anonymous analytics), and Apple's Vision / ScreenCaptureKit for screen context.")
-                    .font(.caption2).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
             }
 
             if !supporters.names.isEmpty {
                 NeonSection("Supporters ♥",
                             footer: "People who chipped in to keep Prosper free for everyone. Thank you.") {
                     Text(supporters.names.joined(separator: " · "))
-                        .font(.system(size: 12))
+                        .font(Neon.font(12))
                         .foregroundStyle(Neon.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1928,11 +1986,11 @@ struct NeonProgressBar: View {
                                          startPoint: .leading, endPoint: .trailing))
                     .frame(width: max(8, geo.size.width * (progress ?? 1)))
                     .opacity(progress == nil ? (pulsing ? 0.35 : 0.9) : 1)
-                    .shadow(color: Neon.blue.opacity(0.5), radius: 4)
+                    .shadow(color: Neon.blue.opacity(0.5), radius: sz(4))
                     .animation(.easeInOut(duration: 0.3), value: progress)
             }
         }
-        .frame(height: 6)
+        .frame(height: sz(6))
         .onAppear {
             withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
                 pulsing = true
@@ -1952,16 +2010,16 @@ struct NeonTextEditor: View {
 
     var body: some View {
         TextEditor(text: $text)
-            .font(.system(.body, design: .monospaced))
+            .font(Neon.font(.body, design: .monospaced))
             .foregroundStyle(Neon.textPrimary)
             .scrollContentBackground(.hidden)
-            .padding(8)
+            .padding(sz(8))
             .frame(minHeight: minHeight)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                     .fill(Neon.bgBottom))
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                     .strokeBorder(Neon.stroke, lineWidth: 1))
     }
 }
@@ -1976,9 +2034,9 @@ struct NeonRichTextEditor: View {
         RichTextEditorRepresentable(rtf: $rtf)
             .frame(minHeight: minHeight)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Neon.bgBottom))
+                RoundedRectangle(cornerRadius: sz(8), style: .continuous).fill(Neon.bgBottom))
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                     .strokeBorder(Neon.stroke, lineWidth: 1))
     }
 }
@@ -1997,7 +2055,7 @@ private struct RichTextEditorRepresentable: NSViewRepresentable {
         textView.isRichText = true
         textView.allowsUndo = true
         textView.drawsBackground = false
-        textView.font = .systemFont(ofSize: 13)
+        textView.font = .systemFont(ofSize: 13 * ThemeRuntime.scale)
         textView.textColor = NSColor(Neon.textPrimary)
         textView.insertionPointColor = NSColor(Neon.blue)
         textView.textContainerInset = NSSize(width: 6, height: 8)
@@ -2059,6 +2117,115 @@ private struct RichTextEditorRepresentable: NSViewRepresentable {
 
 // MARK: - Sidebar group ordering
 
+// MARK: - Window Management
+
+private struct WindowManagementPane: View {
+    @ObservedObject var model: SettingsModel
+    @AppStorage("settingsSelectedPane") private var selection = "general"
+    @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+    @State private var newIgnored = ""
+
+    var body: some View {
+        NeonScroll {
+            PaneTitle(title: "Window Management",
+                      subtitle: "Snap windows by dragging them to a screen edge or corner")
+
+            NeonSection("Drag to Snap",
+                        footer: "Drag a window so the pointer reaches a screen edge or corner; a live preview shows where it will land, and it snaps there when you let go. Left/right/bottom edges give halves, the top edge maximizes, and corners give quarters.") {
+                Toggle("Enable drag-to-snap", isOn: Binding(
+                    get: { model.dragSnapEnabled },
+                    set: { model.setDragSnap($0) }))
+                if model.dragSnapEnabled && !hasAccessibility {
+                    NeonDivider()
+                    PermissionWarningRow(
+                        title: "Accessibility permission needed",
+                        message: "Snapping can't move windows until you grant it. Open Context to fix.") {
+                            selection = "context"
+                        }
+                }
+            }
+
+            NeonSection("Trigger",
+                        footer: "Require a modifier key to be held while dragging, to avoid accidental snaps. With no modifier, any drag to an edge snaps.") {
+                Picker("Snap when dragging", selection: $model.dragSnapModifier) {
+                    ForEach(DragSnapModifier.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+            }
+            .disabled(!model.dragSnapEnabled)
+
+            NeonSection("Preview",
+                        footer: "The vibrancy preview blurs the snap area and tints it with your accent color; the flat preview is a simple translucent fill (used automatically while Reduce Transparency is on).") {
+                Toggle("Use flat translucent preview", isOn: $model.dragSnapStyleFlat)
+            }
+            .disabled(!model.dragSnapEnabled)
+
+            NeonSection("Zones",
+                        footer: "Edge sensitivity is how close to a screen edge the pointer must reach to trigger a snap; corner size is how large the quarter-snap corner squares are.") {
+                NeonRow("Edge sensitivity", subtitle: "\(Int(model.dragSnapEdgeMargin)) px") {
+                    Slider(value: $model.dragSnapEdgeMargin,
+                           in: Preferences.dragSnapEdgeMarginRange, step: 1)
+                        .frame(width: sz(200))
+                }
+                NeonDivider()
+                NeonRow("Corner size", subtitle: "\(Int(model.dragSnapCornerSize)) px") {
+                    Slider(value: $model.dragSnapCornerSize,
+                           in: Preferences.dragSnapCornerSizeRange, step: 5)
+                        .frame(width: sz(200))
+                }
+            }
+            .disabled(!model.dragSnapEnabled)
+
+            NeonSection("Excluded apps",
+                        footer: "Windows of these apps never snap (use for apps that manage their own layout). Fixed-size dialogs are skipped automatically.") {
+                if model.dragSnapIgnoredBundleIds.isEmpty {
+                    Text("None").foregroundStyle(Neon.textSecondary).font(Neon.font(.caption))
+                } else {
+                    ForEach(Array(model.dragSnapIgnoredBundleIds.enumerated()), id: \.element) { idx, id in
+                        if idx > 0 { NeonDivider() }
+                        HStack {
+                            Text(id).font(Neon.font(.body, design: .monospaced))
+                                .foregroundStyle(Neon.textPrimary)
+                            Spacer()
+                            Button(role: .destructive) { model.removeDragSnapIgnored(id) } label: {
+                                Image(systemName: "minus.circle.fill").foregroundStyle(Neon.magenta)
+                            }.buttonStyle(.borderless)
+                        }
+                    }
+                }
+                NeonDivider()
+                HStack {
+                    TextField("com.example.app", text: $newIgnored)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(addManual)
+                    Button("Add", action: addManual).buttonStyle(.neon)
+                        .disabled(newIgnored.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button("Choose App…", action: pickApp).buttonStyle(.neon)
+                }
+            }
+            .disabled(!model.dragSnapEnabled)
+        }
+        .onAppear { hasAccessibility = PermissionsManager.isAccessibilityTrusted() }
+    }
+
+    private func addManual() {
+        let id = newIgnored.trimmingCharacters(in: .whitespaces)
+        guard !id.isEmpty else { return }
+        model.addDragSnapIgnored(id)
+        newIgnored = ""
+    }
+
+    /// Pick a .app and resolve its bundle id — friendlier than typing a reverse-DNS id.
+    private func pickApp() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        guard panel.runModal() == .OK, let url = panel.url,
+              let id = Bundle(url: url)?.bundleIdentifier else { return }
+        model.addDragSnapIgnored(id)
+    }
+}
+
 /// The Settings sidebar's grouped navigation, derived from the live registry.
 /// Extracted from the view so launch-time verification can assert ordering
 /// without opening a window. "Extension Settings" sits above "More" so user
@@ -2072,6 +2239,7 @@ func settingsSidebarGroups(registry: ExtensionRegistry?) -> [(String, [SettingsT
     var general: [SettingsTab] = [
         SettingsTab(id: "general", title: "General", icon: "gearshape.fill"),
         SettingsTab(id: "shortcuts", title: "Shortcuts", icon: "command"),
+        SettingsTab(id: "windows", title: "Window Management", icon: "macwindow.on.rectangle"),
         SettingsTab(id: "appearance", title: "Appearance", icon: "paintpalette.fill"),
     ]
     if registry != nil {
@@ -2277,6 +2445,33 @@ enum ProsperVerify {
         print("part4 quicklinks-tab disabled: \(hasTab(qlTab))  (expect: false)")
         try? registry.setEnabled(true, id: "com.prosper.quicklinks")
         print("part4 quicklinks-tab re-enabled: \(hasTab(qlTab))  (expect: true)")
+
+        // ── Part 6: drag-snap geometry is pure + screen-relative. SnapZone.at
+        // classifies cursor → zone; WindowManager.targetFrame turns zone → frame.
+        // Both must be exact since the footprint preview and the final placement
+        // share this code (a mismatch = preview lies). AX top-left coords. ──
+        let scr = CGRect(x: 0, y: 0, width: 1440, height: 900)      // full frame
+        let vis = CGRect(x: 0, y: 25, width: 1440, height: 875)     // minus menu bar
+        let m: CGFloat = 8, c: CGFloat = 70
+        func zone(_ x: CGFloat, _ y: CGFloat) -> SnapZone? {
+            SnapZone.at(cursorAX: CGPoint(x: x, y: y), screenAX: scr, edgeMargin: m, cornerSize: c)
+        }
+        let z1 = zone(4, 450), z2 = zone(720, 4), z3 = zone(4, 4), z4 = zone(720, 450)
+        print("part6 zones: left=\(z1.map { "\($0)" } ?? "nil") top=\(z2.map { "\($0)" } ?? "nil") tl=\(z3.map { "\($0)" } ?? "nil") center=\(z4.map { "\($0)" } ?? "nil")")
+        let okZones = z1 == .left && z2 == .top && z3 == .topLeft && z4 == nil
+        print("part6 zones-ok: \(okZones)  (expect: true)")
+        assert(okZones, "SnapZone.at classification regressed")
+
+        let cur = CGRect(x: 300, y: 300, width: 400, height: 300)   // arbitrary window
+        let leftHalf = WindowManager.targetFrame(for: .leftHalf, visible: vis, current: cur)
+        let tlQuarter = WindowManager.targetFrame(for: .topLeftQuarter, visible: vis, current: cur)
+        let maxF = WindowManager.targetFrame(for: .maximize, visible: vis, current: cur)
+        let okFrames = leftHalf == CGRect(x: 0, y: 25, width: 720, height: 875)
+            && tlQuarter == CGRect(x: 0, y: 25, width: 720, height: 438)
+            && maxF == vis
+        print("part6 frames: leftHalf=\(leftHalf) tlQuarter=\(tlQuarter) max=\(maxF)")
+        print("part6 frames-ok: \(okFrames)  (expect: true)")
+        assert(okFrames, "WindowManager.targetFrame geometry regressed")
 
         print("=== END PROSPER_VERIFY ===")
     }

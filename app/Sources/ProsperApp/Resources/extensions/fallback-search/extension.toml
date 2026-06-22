@@ -1,0 +1,31 @@
+# Fallback Search — web-search "default results" shown in the runner when a query
+# has no confident local match (Alfred/Raycast "fallback search"). The per-keystroke
+# row building is NATIVE (FallbackSearchStore + RunnerPanel); this extension owns ONLY
+# the settings UI + browser import, talking to native via host.fallback.* (system-only).
+[extension]
+id          = "com.prosper.fallback-search"
+name        = "fallback-search"
+title       = "Fallback Search"
+description = "Web-search results shown when your query has no local match (Google, Perplexity, …)."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Dynamic (Tier-B) settings: its own sidebar section. Append-mode toggle, an editable
+# provider list (records over host.fallback.list/save), and an "Import from default
+# browser" button. `accent = "Links"` tints the trailing word neon.
+[[contributes.settings_sections]]
+id        = "fallback-search"
+title     = "Fallback Search"
+icon      = "magnifyingglass"
+accent    = "Links"
+subtitle  = "Web searches shown when a query has no local match"
+dynamic   = true
