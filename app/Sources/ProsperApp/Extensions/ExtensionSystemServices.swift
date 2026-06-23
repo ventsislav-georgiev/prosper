@@ -5,6 +5,7 @@ import Foundation
 import IOKit
 import IOKit.ps
 import IOKit.pwr_mgt
+import notify
 import SystemConfiguration
 import os
 
@@ -343,6 +344,7 @@ final class SystemEventWatchers {
     var shouldEmit: ((String) -> Bool)?
 
     private var runLoopSource: CFRunLoopSource?
+    private var powerNotifyToken: Int32 = -1  // NOTIFY_TOKEN_INVALID
     private var reachability: SCNetworkReachability?
     private var wakeObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
@@ -393,6 +395,16 @@ final class SystemEventWatchers {
         }, ctx)?.takeRetainedValue() else { return }
         runLoopSource = src
         CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
+
+        // IOPSNotificationCreateRunLoopSource is coalesced with battery
+        // time-remaining recompute, so AC plug/unplug can arrive seconds late.
+        // This notify(3) key fires the instant the adapter state flips — first
+        // source to fire wins; fireBattery is idempotent (Lua dedups unchanged
+        // source). ponytail: leak the token for app lifetime if no teardown runs.
+        notify_register_dispatch("com.apple.system.powersources.source",
+                                 &powerNotifyToken, .main) { [weak self] _ in
+            self?.fireBattery()
+        }
     }
 
     private func fireBattery() {
