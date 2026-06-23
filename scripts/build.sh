@@ -30,8 +30,16 @@ fi
 # The metallib is AIR (arch-portable, config-independent), so a Release build of
 # it serves every PROFILE.
 METALLIB_BUNDLE="$ROOT/app/.build/$PROFILE/mlx-swift_Cmlx.bundle"
-if [[ -f "$METALLIB_BUNDLE/Contents/Resources/default.metallib" ]]; then
-  echo "==> MLX metallib already staged: $METALLIB_BUNDLE"
+# The metallib is MLX's compiled shaders, so it's only valid for the MLX version
+# the build resolved. Stamp the staged bundle with Package.resolved's hash and
+# rebuild when it changes — otherwise a metallib restored from a stale SwiftPM
+# cache (CI restore-keys can fall back to an older cache after a dep bump) would
+# be skipped here and shipped against the wrong MLX → crash on first model load.
+RESOLVED_HASH=$(/usr/bin/shasum -a 256 "$ROOT/app/Package.resolved" | cut -d' ' -f1)
+METALLIB_STAMP="$METALLIB_BUNDLE/.prosper-resolved-hash"
+if [[ -f "$METALLIB_BUNDLE/Contents/Resources/default.metallib" \
+   && "$(cat "$METALLIB_STAMP" 2>/dev/null)" == "$RESOLVED_HASH" ]]; then
+  echo "==> MLX metallib already staged (matches Package.resolved): $METALLIB_BUNDLE"
 else
   echo "==> Compiling MLX Metal shaders via xcodebuild (swift build cannot)"
   if ! /usr/bin/xcrun -f metal >/dev/null 2>&1; then
@@ -53,6 +61,7 @@ else
   fi
   rm -rf "$METALLIB_BUNDLE"
   cp -R "$SRC" "$METALLIB_BUNDLE"
+  printf '%s' "$RESOLVED_HASH" > "$METALLIB_STAMP"
   echo "==> Staged MLX metallib: $METALLIB_BUNDLE"
 fi
 

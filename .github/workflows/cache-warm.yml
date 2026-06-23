@@ -58,5 +58,11 @@ jobs:
             spm-${{ runner.os }}-
 
       - name: Build (release) to warm cache
-        working-directory: app
-        run: swift build -c release
+        # Run the full build.sh (not bare `swift build`) so the warmed cache also
+        # captures the MLX `default.metallib` bundle in app/.build/release. That
+        # bundle comes from a ~6-minute one-shot xcodebuild that `swift build` can't
+        # do; it's dependency-derived (arch-portable, config-independent, unaffected
+        # by app source) so once cached it stays valid until Package.resolved changes
+        # — which re-triggers this warmer. release.yml's Build step then finds it
+        # already staged ("metallib already staged") and skips the xcodebuild compile.
+        run: ./scripts/build.sh release
