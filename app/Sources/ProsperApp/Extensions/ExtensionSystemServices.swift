@@ -5,6 +5,7 @@ import Foundation
 import IOKit
 import IOKit.ps
 import IOKit.pwr_mgt
+import notify
 import SystemConfiguration
 import os
 
@@ -343,6 +344,10 @@ final class SystemEventWatchers {
     var shouldEmit: ((String) -> Bool)?
 
     private var runLoopSource: CFRunLoopSource?
+    private var powerNotifyToken: Int32 = -1  // NOTIFY_TOKEN_INVALID
+    // Last broadcast power reading, for edge-dedup in fireBattery.
+    private var lastEmittedSource: String?
+    private var lastEmittedPct: Int?
     private var reachability: SCNetworkReachability?
     private var wakeObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
@@ -393,14 +398,30 @@ final class SystemEventWatchers {
         }, ctx)?.takeRetainedValue() else { return }
         runLoopSource = src
         CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
+
+        // IOPSNotificationCreateRunLoopSource is coalesced with the battery
+        // time-remaining recompute, so AC plug/unplug edges arrive seconds late.
+        // This notify(3) key fires the instant the adapter state flips. Both
+        // sources funnel into fireBattery, which edge-dedups — so a chatty key
+        // can never flood the Lua VM (the bug that sank the first attempt).
+        // ponytail: token leaked for app lifetime (singleton, like the other
+        // watchers here); add a teardown only if this class ever gets a stop().
+        notify_register_dispatch("com.apple.system.powersources.source",
+                                 &powerNotifyToken, .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.fireBattery() }
+        }
     }
 
     private func fireBattery() {
-        let payload: [String: Any] = [
-            "powerSource": SystemInfo.powerSource(),
-            "percentage": SystemInfo.batteryPercentage() ?? -1,
-        ]
-        emit?("battery.changed", Self.json(payload))
+        let source = SystemInfo.powerSource()
+        let pct = SystemInfo.batteryPercentage() ?? -1
+        // Edge-dedup: only broadcast when the source flipped or the % moved.
+        // Both the IOPS source and the notify key fire repeatedly with identical
+        // readings; without this an instant key floods openlid's Lua handler.
+        guard source != lastEmittedSource || pct != lastEmittedPct else { return }
+        lastEmittedSource = source
+        lastEmittedPct = pct
+        emit?("battery.changed", Self.json(["powerSource": source, "percentage": pct]))
     }
 
     // Network reachability for a general route (0.0.0.0).

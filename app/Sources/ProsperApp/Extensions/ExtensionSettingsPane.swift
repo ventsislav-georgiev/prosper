@@ -315,20 +315,34 @@ private struct PermissionRow: View {
     let row: SettingsUIRow
     let onEvent: (SettingsEvent) -> Void
     private var name: String { row.name ?? "" }
-    private var granted: Bool { PermissionsManager.isGranted(name) }
+    // nil = not yet checked. The status probe (e.g. lid-helper's SMAppService.status)
+    // does synchronous IPC that can stall for seconds, so it must NOT run in `body`
+    // on the main thread — it froze the whole settings section. Fetch it off-main in
+    // `.task` and publish via @State. The parent's `.id(name-permissionTick)` recreates
+    // this row on Re-check, which re-runs the task.
+    @State private var granted: Bool?
     var body: some View {
         NeonRow(row.title ?? PermissionsManager.label(forPermission: name),
                 subtitle: row.subtitle ?? PermissionsManager.reason(forPermission: name)) {
             HStack(spacing: sz(10)) {
-                Label(granted ? "Granted" : "Not granted",
-                      systemImage: granted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .font(Neon.font(12, weight: .semibold))
-                    .foregroundStyle(granted ? Neon.blue : Neon.magenta)
-                if !granted {
+                switch granted {
+                case .some(true):
+                    Label("Granted", systemImage: "checkmark.seal.fill")
+                        .font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.blue)
+                case .some(false):
+                    Label("Not granted", systemImage: "exclamationmark.triangle.fill")
+                        .font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.magenta)
                     Button("Open") { onEvent(.permissionOpen(name: name)) }.buttonStyle(.neon)
+                case .none:
+                    Label("Checking…", systemImage: "ellipsis.circle")
+                        .font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.textSecondary)
                 }
                 Button("Re-check") { onEvent(.recheck) }.buttonStyle(.neon)
             }
+        }
+        .task {
+            let n = name
+            granted = await Task.detached { PermissionsManager.isGranted(n) }.value
         }
     }
 }
