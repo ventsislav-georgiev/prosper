@@ -52,10 +52,18 @@ jobs:
             app/.build
             ~/Library/Caches/org.swift.swiftpm
             ~/Library/org.swift.swiftpm
-          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
+          # `v2` salt: the cache now also carries the MLX metallib bundle staged by
+          # build.sh. Bumping the prefix forces a one-time miss so this warmer re-saves
+          # WITH the metallib (actions/cache skips saving on an exact-key hit, so the
+          # old metallib-less v1 cache would otherwise stay frozen at the same key).
+          # The trailing v1 restore-key keeps the swift build incremental on that first
+          # miss; only the metallib recompiles once. MUST stay byte-identical to
+          # release.yml's cache step.
+          key: spm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: |
+            spm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
+            spm-v2-${{ runner.os }}-
             spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
-            spm-${{ runner.os }}-
 
       - name: Build (release) to warm cache
         # Run the full build.sh (not bare `swift build`) so the warmed cache also
