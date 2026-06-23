@@ -1,3 +1,4 @@
+import AppKit
 import Carbon
 import Foundation
 
@@ -139,6 +140,26 @@ extension KeyCombo {
     static func asciiChar(forKeyCode code: UInt32) -> String? {
         guard let name = codeToName[Int(code)], name.count == 1 else { return nil }
         return name
+    }
+
+    /// Menu key-equivalent for this combo: the printable char NSMenuItem matches/
+    /// displays. nil for an unset combo or a key with no single char (so the caller
+    /// clears the equivalent rather than show a bogus one). Space maps to " " so the
+    /// menu renders it; AppKit shows it as the ␣ glyph.
+    var menuKeyEquivalent: String? {
+        guard self != unsetKeyCombo else { return nil }
+        if keyCode == UInt32(kVK_Space) { return " " }
+        return KeyCombo.asciiChar(forKeyCode: keyCode)
+    }
+
+    /// Carbon modifier mask translated to AppKit flags for `keyEquivalentModifierMask`.
+    var menuModifierMask: NSEvent.ModifierFlags {
+        var mask: NSEvent.ModifierFlags = []
+        if carbonModifiers & UInt32(cmdKey) != 0 { mask.insert(.command) }
+        if carbonModifiers & UInt32(optionKey) != 0 { mask.insert(.option) }
+        if carbonModifiers & UInt32(controlKey) != 0 { mask.insert(.control) }
+        if carbonModifiers & UInt32(shiftKey) != 0 { mask.insert(.shift) }
+        return mask
     }
 
     private static let keyCodeTable: [String: Int] = [

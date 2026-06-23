@@ -9,6 +9,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let secureInputItem: NSMenuItem
     private let agentStatusItem: NSMenuItem
     private let agentItem: NSMenuItem
+    private let runnerItem: NSMenuItem
+    private let clipboardOpenItem: NSMenuItem
+    private let settingsItem: NSMenuItem
     private let focusedAppItem: NSMenuItem
     private let setupItem: NSMenuItem
     private let updateItem: NSMenuItem
@@ -54,9 +57,23 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         agentItem = NSMenuItem(
             title: "Coding Agent\u{2026}",
             action: nil,
-            keyEquivalent: "g"
+            keyEquivalent: ""
         )
-        agentItem.keyEquivalentModifierMask = [.option]
+        runnerItem = NSMenuItem(
+            title: "Command Runner\u{2026}",
+            action: nil,
+            keyEquivalent: ""
+        )
+        clipboardOpenItem = NSMenuItem(
+            title: "Clipboard History\u{2026}",
+            action: nil,
+            keyEquivalent: ""
+        )
+        settingsItem = NSMenuItem(
+            title: "Settings\u{2026}",
+            action: nil,
+            keyEquivalent: ""
+        )
         focusedAppItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         focusedAppItem.isHidden = true
         setupItem = NSMenuItem(
@@ -199,21 +216,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(agentStatusItem)
         menu.addItem(.separator())
 
-        let runnerItem = NSMenuItem(
-            title: "Command Runner\u{2026}",
-            action: #selector(openRunnerSelected),
-            keyEquivalent: "l"
-        )
-        runnerItem.keyEquivalentModifierMask = [.option]
+        runnerItem.action = #selector(openRunnerSelected)
         runnerItem.target = self
         menu.addItem(runnerItem)
 
-        let clipboardOpenItem = NSMenuItem(
-            title: "Clipboard History\u{2026}",
-            action: #selector(openClipboardSelected),
-            keyEquivalent: "a"
-        )
-        clipboardOpenItem.keyEquivalentModifierMask = [.option, .shift]
+        clipboardOpenItem.action = #selector(openClipboardSelected)
         clipboardOpenItem.target = self
         menu.addItem(clipboardOpenItem)
 
@@ -233,12 +240,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let settingsItem = NSMenuItem(
-            title: "Settings\u{2026}",
-            action: #selector(openSettingsSelected),
-            keyEquivalent: ","
-        )
-        settingsItem.keyEquivalentModifierMask = [.command]
+        settingsItem.action = #selector(openSettingsSelected)
         settingsItem.target = self
         menu.addItem(settingsItem)
 
@@ -261,7 +263,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
+        syncShortcutKeyEquivalents()
         return menu
+    }
+
+    /// Mirrors the menu rows' key equivalents onto the *configured* global
+    /// shortcuts (Settings → Shortcuts), instead of the old hardcoded glyphs that
+    /// drifted from the real bindings. Re-run on every menu open so a rebind shows
+    /// immediately. An unset combo clears the equivalent (no bogus glyph).
+    private func syncShortcutKeyEquivalents() {
+        func apply(_ item: NSMenuItem, _ action: ShortcutAction) {
+            let combo = ShortcutStore.combo(for: action)
+            item.keyEquivalent = combo.menuKeyEquivalent ?? ""
+            item.keyEquivalentModifierMask = combo.menuModifierMask
+        }
+        apply(runnerItem, .runner)
+        apply(clipboardOpenItem, .clipboard)
+        apply(agentItem, .agent)
+        apply(settingsItem, .settings)
     }
 
     // MARK: - NSMenuDelegate
@@ -293,6 +312,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             agentStatusItem.isHidden = false
         }
         agentItem.isHidden = !Preferences.agentEnabled
+        syncShortcutKeyEquivalents()
         refreshFocusedAppItem()
         setupItem.isHidden = !shouldShowSetup
         // Live label: a manual check in flight reads "Checking…" until Sparkle
