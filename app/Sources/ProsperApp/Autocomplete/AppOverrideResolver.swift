@@ -79,9 +79,12 @@ enum AppOverrideResolver {
         if let s = seed(for: bundleId), let on = s.enabled {
             return on
         }
-        // 3. Structural: secure apps (password managers) NEVER complete, regardless
-        //    of any list — preserves the hard suppression in `AppProfile.Kind.secure`.
-        if AppProfile.profile(for: bundleId).suppressesCompletion {
+        // 3. Structural: apps with no working inline-completion path NEVER complete,
+        //    regardless of any list — terminals (no AX-editable text) and secure
+        //    password managers (leak secrets). This is the same flag the menu bar
+        //    uses to show the "not supported" row, so the engine and the UI agree:
+        //    no request is scheduled and no ghost is shown for those apps.
+        if !AppProfile.profile(for: bundleId).supportsInlineCompletion {
             return false
         }
         // 4. Preferences fallback — identical to the pre-WS3 gate.
