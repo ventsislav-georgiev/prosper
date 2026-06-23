@@ -64,7 +64,14 @@ enum PermissionsManager {
         // user can approve it. ensureRegistered() opens the pane itself when the
         // status is .requiresApproval; do it unconditionally here too in case it
         // is already registered but the user toggled it off.
-        case "lid-helper": LidSleepHelper.ensureRegistered(); SMAppService.openSystemSettingsLoginItems()
+        case "lid-helper":
+            // ensureRegistered runs the blocking SMAppService work off-main and
+            // opens Login Items itself when approval is needed; always surface the
+            // pane so the user can manage it even when already registered.
+            Task { @MainActor in
+                _ = await LidSleepHelper.ensureRegistered()
+                SMAppService.openSystemSettingsLoginItems()
+            }
         default: break
         }
     }

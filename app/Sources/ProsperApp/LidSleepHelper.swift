@@ -16,49 +16,142 @@ import os
 /// connection down, the daemon resets the setting and idle-exits → zero resident
 /// memory when unused. A crash drops the connection, so the daemon never leaves
 /// the lid wedged awake.
+///
+/// THREADING: every `SMAppService` call here (`.status`, `.register()`) is a
+/// SYNCHRONOUS IPC to `smd` that can block for many seconds when the service
+/// database is busy or the item awaits approval. Those calls must NEVER run on
+/// the main thread or the Lua VM thread — doing so froze the whole app (settings
+/// spinner stuck, openlid toast/shortcut dead). So: status reads are served from
+/// a persisted cache (`isEnabled`, instant + non-blocking, refreshed off-main),
+/// and registration runs on a detached background task.
 @MainActor
 enum LidSleepHelper {
     nonisolated private static let log = Logger(subsystem: "eu.illegible.prosper", category: "lidhelper")
     private static var connection: NSXPCConnection?
 
     // nonisolated: stateless (a fresh SMAppService each call, touches no shared
-    // mutable state), so PermissionsManager's settings-row check can read it
-    // without hopping to the main actor.
+    // mutable state), so it can run on any background thread.
     nonisolated private static var service: SMAppService {
         SMAppService.daemon(plistName: "\(lidHelperLabel).plist")
     }
 
+    // MARK: - Cached status (never blocks the caller)
+
+    nonisolated private static let cacheKey = "prosper.lidHelper.enabled"
+    nonisolated private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var cacheLoaded = false
+    nonisolated(unsafe) private static var cachedEnabled = false
+    nonisolated(unsafe) private static var refreshInFlight = false
+
     /// Whether the background item is approved + enabled. Drives the openlid
     /// settings "Background Helper" permission row.
-    nonisolated static var isEnabled: Bool { service.status == .enabled }
+    ///
+    /// Returns the last-known value INSTANTLY (persisted across launches) and kicks
+    /// a single background refresh of the real `smd` status. It never blocks — the
+    /// `.status` IPC that used to stall the settings row for ~a minute now happens
+    /// off-main, and the row reads the cache. A first-ever launch reads `false`
+    /// until the first refresh lands; the Re-check button forces a fresh read.
+    nonisolated static var isEnabled: Bool {
+        cacheLock.lock()
+        if !cacheLoaded {
+            cachedEnabled = UserDefaults.standard.bool(forKey: cacheKey)
+            cacheLoaded = true
+        }
+        let value = cachedEnabled
+        let kick = !refreshInFlight
+        if kick { refreshInFlight = true }
+        cacheLock.unlock()
+        if kick { Task.detached(priority: .utility) { _ = refreshEnabled() } }
+        return value
+    }
 
-    /// Register the daemon if needed. Returns true once it is enabled. When macOS
-    /// requires the user to OK the background item, opens the Login Items pane and
-    /// returns false (the caller surfaces a "approve, then retry" message). Called
-    /// from `setDisabled(true)` (first lid-disable) and from the settings permission
-    /// row's Open button — i.e. always on explicit user action.
+    /// Blocking `SMAppService.status` read. OFF-MAIN ONLY. Updates + persists the
+    /// cache. Returns the fresh value.
     @discardableResult
-    nonisolated static func ensureRegistered() -> Bool {
+    nonisolated static func refreshEnabled() -> Bool {
+        let v = (service.status == .enabled)
+        storeCache(v)
+        return v
+    }
+
+    nonisolated private static func storeCache(_ v: Bool) {
+        cacheLock.lock()
+        cachedEnabled = v
+        cacheLoaded = true
+        refreshInFlight = false
+        cacheLock.unlock()
+        UserDefaults.standard.set(v, forKey: cacheKey)
+    }
+
+    // MARK: - Registration (off-main)
+
+    private enum RegisterOutcome { case enabled, needsApproval, failed }
+
+    /// The blocking SMAppService registration logic. OFF-MAIN ONLY (run via the
+    /// detached task in `ensureRegistered`). Pure status/register IPC — no UI.
+    nonisolated private static func registerIfNeeded() -> RegisterOutcome {
         let svc = service
         switch svc.status {
         case .enabled:
-            return true
+            return .enabled
         case .requiresApproval:
-            SMAppService.openSystemSettingsLoginItems()
-            return false
+            return .needsApproval
         default:
             do {
                 try svc.register()
             } catch {
                 log.error("lid helper register failed: \(error.localizedDescription, privacy: .public)")
-                return false
+                return .failed
             }
-            if svc.status == .requiresApproval {
-                SMAppService.openSystemSettingsLoginItems()
-                return false
+            switch svc.status {
+            case .enabled: return .enabled
+            case .requiresApproval: return .needsApproval
+            default: return .failed
             }
-            return svc.status == .enabled
         }
+    }
+
+    /// Register the daemon if needed, running the blocking SMAppService work on a
+    /// background task so a slow `smd` cannot freeze the app. Returns true once
+    /// enabled. When macOS needs the user to OK the background item, opens the
+    /// Login Items pane (on main) and returns false. Called from `setDisabled(true)`
+    /// and the settings permission row's Open button — always on explicit action.
+    @discardableResult
+    static func ensureRegistered() async -> Bool {
+        let outcome = await Task.detached(priority: .userInitiated) { registerIfNeeded() }.value
+        switch outcome {
+        case .enabled:
+            storeCache(true)
+            return true
+        case .needsApproval:
+            storeCache(false)
+            SMAppService.openSystemSettingsLoginItems()
+            return false
+        case .failed:
+            storeCache(false)
+            return false
+        }
+    }
+
+    // MARK: - Coalesced apply (last-writer-wins, ordered on the VM thread)
+
+    nonisolated private static let genLock = NSLock()
+    nonisolated(unsafe) private static var generation = 0
+
+    /// Bump and return the request generation. Called SYNCHRONOUSLY on the Lua VM
+    /// thread (single-threaded → strictly ordered) before dispatching the apply, so
+    /// a later request always wins over an earlier one even though the applies run
+    /// as independent main-actor tasks with no scheduling order guarantee.
+    nonisolated static func nextGeneration() -> Int {
+        genLock.lock(); defer { genLock.unlock() }
+        generation += 1
+        return generation
+    }
+
+    /// True iff `gen` is still the most recent request (no later one superseded it).
+    nonisolated static func isCurrentGeneration(_ gen: Int) -> Bool {
+        genLock.lock(); defer { genLock.unlock() }
+        return gen == generation
     }
 
     private static func makeConnection() -> NSXPCConnection {
@@ -77,7 +170,7 @@ enum LidSleepHelper {
     @discardableResult
     static func setDisabled(_ on: Bool) async -> Bool {
         if on {
-            guard ensureRegistered() else { return false }
+            guard await ensureRegistered() else { return false }
             let c = connection ?? makeConnection()
             connection = c
             let ok = await call(c, on: true)
