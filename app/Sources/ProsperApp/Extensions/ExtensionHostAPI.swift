@@ -677,7 +677,15 @@ struct ExtensionHost {
             }
             lua.register("__h_caf_lidsleep") { rt in
                 let on = rt.boolArgument(1) ?? false
-                _ = ExtensionHost.awaitSync(timeout: timeout) {
+                // Fire-and-forget: the Lua caller ignores the result, and the work
+                // does privileged XPC + SMAppService IPC that must NEVER block the
+                // single-threaded VM (awaitSync here used to freeze openlid for the
+                // whole IPC — no toast, dead shortcut). Capture the request order on
+                // the VM thread (synchronous, single-threaded) and coalesce to the
+                // latest so the independently-scheduled applies can't land reversed.
+                let gen = LidSleepHelper.nextGeneration()
+                Task { @MainActor in
+                    guard LidSleepHelper.isCurrentGeneration(gen) else { return }
                     await services.caffeinateSetDisableLidSleep(extensionID: extID, on: on)
                 }
                 return 0

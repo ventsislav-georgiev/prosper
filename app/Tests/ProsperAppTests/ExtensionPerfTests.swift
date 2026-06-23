@@ -668,6 +668,40 @@ final class ExtensionPerfTests: XCTestCase {
         XCTAssertLessThan(perCall, 500, "PowerEdgeFilter.shouldEmit exceeded its 500 ns hot-path budget")
     }
 
+    // MARK: LidSleepHelper — request coalescing (last-writer-wins)
+
+    /// The lid override is applied by independent main-actor tasks with no
+    /// scheduling-order guarantee. Ordering is preserved by capturing a generation
+    /// SYNCHRONOUSLY on the VM thread before dispatch; only the latest applies. If
+    /// this regresses, a stale set(true) can land after a newer set(false) and wedge
+    /// the lid awake (or vice-versa). Static state is process-global → assert
+    /// relatively, never against an absolute value.
+    func testLidGenerationIsMonotonic() {
+        let a = LidSleepHelper.nextGeneration()
+        let b = LidSleepHelper.nextGeneration()
+        let c = LidSleepHelper.nextGeneration()
+        XCTAssertEqual(b, a + 1, "generation must increment by one")
+        XCTAssertEqual(c, b + 1, "generation must increment by one")
+    }
+
+    func testLidGenerationLatestWins() {
+        let older = LidSleepHelper.nextGeneration()
+        let newer = LidSleepHelper.nextGeneration()
+        XCTAssertFalse(LidSleepHelper.isCurrentGeneration(older),
+                       "a superseded request must be dropped — this is what stops reversed applies")
+        XCTAssertTrue(LidSleepHelper.isCurrentGeneration(newer),
+                      "the most recent request must apply")
+    }
+
+    func testLidGenerationCurrentUntilSuperseded() {
+        let g = LidSleepHelper.nextGeneration()
+        XCTAssertTrue(LidSleepHelper.isCurrentGeneration(g),
+                      "a request stays current until a newer one is issued")
+        _ = LidSleepHelper.nextGeneration()
+        XCTAssertFalse(LidSleepHelper.isCurrentGeneration(g),
+                       "once superseded it must no longer be current")
+    }
+
     /// HOT-PATH REQUIREMENT: `powerSnapshot()` is the one IOKit read per power event.
     /// It copies a single IOPS blob (down from two in the old powerSource() +
     /// batteryPercentage() pair). IOKit dominates and varies by hardware, so the
