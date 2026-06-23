@@ -603,4 +603,83 @@ final class ExtensionPerfTests: XCTestCase {
         let result = ExtensionHost.awaitSync(timeout: 1.0) { "ok" }
         XCTAssertEqual(result, "ok", "awaitSync must return the op's value when it finishes in time")
     }
+
+    // MARK: PowerEdgeFilter — correctness
+
+    /// The filter is the guard that makes a chatty notify(3) key safe: every
+    /// power event funnels through `fireBattery` → `shouldEmit`, and only a real
+    /// (source, pct) edge is forwarded to the Lua VM. If this regresses, an
+    /// adapter-state key that fires repeatedly with identical readings floods
+    /// openlid's handler — the storm that hung the app in v2.114.0.
+    func testPowerEdgeFilterEmitsFirstReading() {
+        var f = PowerEdgeFilter()
+        XCTAssertTrue(f.shouldEmit(source: "AC Power", pct: 80),
+                      "first reading must always emit — no prior state to dedup against")
+    }
+
+    func testPowerEdgeFilterSuppressesIdenticalRepeat() {
+        var f = PowerEdgeFilter()
+        _ = f.shouldEmit(source: "AC Power", pct: 80)
+        XCTAssertFalse(f.shouldEmit(source: "AC Power", pct: 80),
+                       "identical repeat must be suppressed — this is what stops the storm")
+        XCTAssertFalse(f.shouldEmit(source: "AC Power", pct: 80),
+                       "still suppressed on a third identical reading")
+    }
+
+    func testPowerEdgeFilterEmitsOnSourceFlip() {
+        var f = PowerEdgeFilter()
+        _ = f.shouldEmit(source: "AC Power", pct: 80)
+        XCTAssertTrue(f.shouldEmit(source: "Battery Power", pct: 80),
+                      "unplug at same % must emit — the toast depends on this edge")
+    }
+
+    func testPowerEdgeFilterEmitsOnPercentChange() {
+        var f = PowerEdgeFilter()
+        _ = f.shouldEmit(source: "Battery Power", pct: 80)
+        XCTAssertTrue(f.shouldEmit(source: "Battery Power", pct: 79),
+                      "%-drop at same source must emit — battery-threshold extensions need it")
+    }
+
+    func testPowerEdgeFilterEmitsOnFlipBack() {
+        var f = PowerEdgeFilter()
+        _ = f.shouldEmit(source: "AC Power", pct: 80)
+        _ = f.shouldEmit(source: "Battery Power", pct: 80)
+        XCTAssertTrue(f.shouldEmit(source: "AC Power", pct: 80),
+                      "replug must emit — last accepted state was Battery, so AC is a real edge")
+    }
+
+    // MARK: PowerEdgeFilter — performance (hot path: battery callback guard)
+
+    /// HOT-PATH REQUIREMENT: `shouldEmit` runs on EVERY power notification (run-loop
+    /// source + notify key, both chatty) before any emit. It is two comparisons and
+    /// two assignments — ceiling **< 500 ns/call**, typically single-digit ns.
+    func testPowerEdgeFilterPerformance() {
+        var f = PowerEdgeFilter()
+        let iters = 1_000_000
+        // Warmup.
+        for i in 0..<10_000 { _ = f.shouldEmit(source: "AC Power", pct: i & 1) }
+        let start = DispatchTime.now().uptimeNanoseconds
+        var emits = 0
+        for i in 0..<iters where f.shouldEmit(source: "AC Power", pct: i & 1) { emits += 1 }
+        let elapsed = DispatchTime.now().uptimeNanoseconds - start
+        let perCall = Double(elapsed) / Double(iters)
+        print("PowerEdgeFilter.shouldEmit: \(String(format: "%.1f", perCall)) ns/call over \(iters) iters")
+        XCTAssertGreaterThan(emits, 0, "alternating input must produce emits — sanity on the loop")
+        XCTAssertLessThan(perCall, 500, "PowerEdgeFilter.shouldEmit exceeded its 500 ns hot-path budget")
+    }
+
+    /// HOT-PATH REQUIREMENT: `powerSnapshot()` is the one IOKit read per power event.
+    /// It copies a single IOPS blob (down from two in the old powerSource() +
+    /// batteryPercentage() pair). IOKit dominates and varies by hardware, so the
+    /// ceiling is generous — **< 2 ms/call** — and the real number is printed.
+    func testPowerSnapshotPerformance() {
+        let iters = 200
+        for _ in 0..<10 { _ = SystemInfo.powerSnapshot() }  // warmup
+        let start = DispatchTime.now().uptimeNanoseconds
+        for _ in 0..<iters { _ = SystemInfo.powerSnapshot() }
+        let elapsed = DispatchTime.now().uptimeNanoseconds - start
+        let perCall = Double(elapsed) / Double(iters) / 1_000_000
+        print("SystemInfo.powerSnapshot: \(String(format: "%.3f", perCall)) ms/call over \(iters) iters")
+        XCTAssertLessThan(perCall, 2.0, "powerSnapshot exceeded its 2 ms ceiling — IOKit read regressed")
+    }
 }

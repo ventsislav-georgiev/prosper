@@ -121,6 +121,33 @@ enum SystemInfo {
         return nil
     }
 
+    /// One-shot read of (source, percentage) from a SINGLE IOPS blob copy. The
+    /// battery hot path (fireBattery) uses this instead of powerSource() +
+    /// batteryPercentage(), which would copy the IOPS info blob twice per
+    /// notification. pct is -1 when there is no battery (desktop / AC-only).
+    static func powerSnapshot() -> (source: String, pct: Int) {
+        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return ("", -1) }
+        let raw = IOPSGetProvidingPowerSourceType(blob)?.takeRetainedValue() as String?
+        let source: String
+        switch raw {
+        case kIOPMACPowerKey: source = "AC Power"
+        case kIOPMBatteryPowerKey: source = "Battery Power"
+        default: source = raw ?? ""
+        }
+        var pct = -1
+        if let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] {
+            for src in sources {
+                guard let desc = IOPSGetPowerSourceDescription(blob, src)?.takeUnretainedValue() as? [String: Any],
+                      let cur = desc[kIOPSCurrentCapacityKey] as? Int,
+                      let max = desc[kIOPSMaxCapacityKey] as? Int, max > 0
+                else { continue }
+                pct = Int((Double(cur) / Double(max) * 100).rounded())
+                break
+            }
+        }
+        return (source, pct)
+    }
+
     /// All screens as top-left global frames; `main` flags the primary.
     static func screensJSON() -> String {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
@@ -325,6 +352,28 @@ enum URLServices {
     }
 }
 
+// MARK: - Power edge dedup
+
+/// Collapses repeated, identical power readings to a single edge. Both the IOPS
+/// run-loop source and the notify(3) `…powersources.source` key fire repeatedly
+/// with unchanged readings; without this an instant key floods openlid's Lua
+/// handler (the storm that hung the app in v2.114.0). Pure value type → unit
+/// tested in isolation, no IOKit needed. The decision is the battery hot path's
+/// guard, so it must stay sub-µs.
+struct PowerEdgeFilter {
+    private var lastSource: String?
+    private var lastPct: Int?
+
+    /// True exactly when (source, pct) differs from the last accepted reading.
+    /// Mutates the stored last-reading on a true result.
+    mutating func shouldEmit(source: String, pct: Int) -> Bool {
+        guard source != lastSource || pct != lastPct else { return false }
+        lastSource = source
+        lastPct = pct
+        return true
+    }
+}
+
 // MARK: - Native watchers → registry events
 
 /// Owns the live native watchers (battery, network, wake, lid) and forwards each
@@ -345,9 +394,7 @@ final class SystemEventWatchers {
 
     private var runLoopSource: CFRunLoopSource?
     private var powerNotifyToken: Int32 = -1  // NOTIFY_TOKEN_INVALID
-    // Last broadcast power reading, for edge-dedup in fireBattery.
-    private var lastEmittedSource: String?
-    private var lastEmittedPct: Int?
+    private var powerEdge = PowerEdgeFilter()
     private var reachability: SCNetworkReachability?
     private var wakeObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
@@ -394,7 +441,9 @@ final class SystemEventWatchers {
         guard let src = IOPSNotificationCreateRunLoopSource({ ctx in
             guard let ctx else { return }
             let me = Unmanaged<SystemEventWatchers>.fromOpaque(ctx).takeUnretainedValue()
-            Task { @MainActor in me.fireBattery() }
+            // Source is added to the MAIN run loop → callback is already on the
+            // main thread; assumeIsolated avoids a per-event Task allocation.
+            MainActor.assumeIsolated { me.fireBattery() }
         }, ctx)?.takeRetainedValue() else { return }
         runLoopSource = src
         CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
@@ -413,15 +462,10 @@ final class SystemEventWatchers {
     }
 
     private func fireBattery() {
-        let source = SystemInfo.powerSource()
-        let pct = SystemInfo.batteryPercentage() ?? -1
-        // Edge-dedup: only broadcast when the source flipped or the % moved.
-        // Both the IOPS source and the notify key fire repeatedly with identical
-        // readings; without this an instant key floods openlid's Lua handler.
-        guard source != lastEmittedSource || pct != lastEmittedPct else { return }
-        lastEmittedSource = source
-        lastEmittedPct = pct
-        emit?("battery.changed", Self.json(["powerSource": source, "percentage": pct]))
+        let snap = SystemInfo.powerSnapshot()  // one IOPS blob copy, not two
+        // Only broadcast on a real edge; a chatty notify key cannot flood the VM.
+        guard powerEdge.shouldEmit(source: snap.source, pct: snap.pct) else { return }
+        emit?("battery.changed", Self.json(["powerSource": snap.source, "percentage": snap.pct]))
     }
 
     // Network reachability for a general route (0.0.0.0).
