@@ -668,38 +668,34 @@ final class ExtensionPerfTests: XCTestCase {
         XCTAssertLessThan(perCall, 500, "PowerEdgeFilter.shouldEmit exceeded its 500 ns hot-path budget")
     }
 
-    // MARK: LidSleepHelper — request coalescing (last-writer-wins)
+    // MARK: LidSleepHelper — serial apply chain (order-preserving, drops nothing)
 
-    /// The lid override is applied by independent main-actor tasks with no
-    /// scheduling-order guarantee. Ordering is preserved by capturing a generation
-    /// SYNCHRONOUSLY on the VM thread before dispatch; only the latest applies. If
-    /// this regresses, a stale set(true) can land after a newer set(false) and wedge
-    /// the lid awake (or vice-versa). Static state is process-global → assert
-    /// relatively, never against an absolute value.
-    func testLidGenerationIsMonotonic() {
-        let a = LidSleepHelper.nextGeneration()
-        let b = LidSleepHelper.nextGeneration()
-        let c = LidSleepHelper.nextGeneration()
-        XCTAssertEqual(b, a + 1, "generation must increment by one")
-        XCTAssertEqual(c, b + 1, "generation must increment by one")
+    /// The lid override applies run as async ops off the VM thread. They MUST land
+    /// in the order issued and NONE may be dropped — otherwise a trailing set(false)
+    /// can kill a pending set(true) and the Mac sleeps on lid close despite the
+    /// override being on (the exact regression a last-writer-wins coalescer caused).
+    /// `enqueueApply` appends to a serial chain synchronously in call order; this
+    /// verifies a true→false→true burst executes 1,2,3 with the last write (true)
+    /// landing last.
+    func testLidApplyChainPreservesOrderAndDropsNothing() {
+        let recorder = OrderRecorder()
+        let done = expectation(description: "all three applies ran")
+        // Issue synchronously, mirroring the VM thread firing set(true/false/true).
+        LidSleepHelper.enqueueApply { await recorder.append(1) }
+        LidSleepHelper.enqueueApply { await recorder.append(2) }
+        LidSleepHelper.enqueueApply {
+            await recorder.append(3)
+            await MainActor.run { done.fulfill() }
+        }
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(recorder.values, [1, 2, 3],
+                       "applies must run in submission order with none dropped — a trailing op must not cancel a prior one")
     }
 
-    func testLidGenerationLatestWins() {
-        let older = LidSleepHelper.nextGeneration()
-        let newer = LidSleepHelper.nextGeneration()
-        XCTAssertFalse(LidSleepHelper.isCurrentGeneration(older),
-                       "a superseded request must be dropped — this is what stops reversed applies")
-        XCTAssertTrue(LidSleepHelper.isCurrentGeneration(newer),
-                      "the most recent request must apply")
-    }
-
-    func testLidGenerationCurrentUntilSuperseded() {
-        let g = LidSleepHelper.nextGeneration()
-        XCTAssertTrue(LidSleepHelper.isCurrentGeneration(g),
-                      "a request stays current until a newer one is issued")
-        _ = LidSleepHelper.nextGeneration()
-        XCTAssertFalse(LidSleepHelper.isCurrentGeneration(g),
-                       "once superseded it must no longer be current")
+    /// Serial recorder for the chain-order test.
+    private actor OrderRecorder {
+        private(set) nonisolated(unsafe) var values: [Int] = []
+        func append(_ v: Int) { values.append(v) }
     }
 
     /// HOT-PATH REQUIREMENT: `powerSnapshot()` is the one IOKit read per power event.

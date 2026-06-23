@@ -576,7 +576,11 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     func resetResources(extensionID: String) {
         let hadLid = ExtensionResources.shared.releaseAll(extID: extensionID)
         if hadLid {
-            Task { await LidSleepHelper.setDisabled(false) }
+            // Route through the SAME serial chain as set_disable_lid_sleep so this
+            // teardown release is ordered against the extension's own applies. On a
+            // settings-Apply reload (teardown then re-enable) a direct release could
+            // otherwise land AFTER the re-enable's set(true) and wedge sleep back on.
+            LidSleepHelper.enqueueApply { _ = await LidSleepHelper.setDisabled(false) }
         }
         Task { @MainActor in
             ExtensionMenuBar.shared.removeAll(extensionID: extensionID)
