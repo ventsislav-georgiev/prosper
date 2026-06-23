@@ -133,25 +133,24 @@ enum LidSleepHelper {
         }
     }
 
-    // MARK: - Coalesced apply (last-writer-wins, ordered on the VM thread)
+    // MARK: - Serial apply chain (order-preserving, non-blocking, drops nothing)
 
-    nonisolated private static let genLock = NSLock()
-    nonisolated(unsafe) private static var generation = 0
+    nonisolated private static let chainLock = NSLock()
+    nonisolated(unsafe) private static var applyChain: Task<Void, Never> = Task {}
 
-    /// Bump and return the request generation. Called SYNCHRONOUSLY on the Lua VM
-    /// thread (single-threaded → strictly ordered) before dispatching the apply, so
-    /// a later request always wins over an earlier one even though the applies run
-    /// as independent main-actor tasks with no scheduling order guarantee.
-    nonisolated static func nextGeneration() -> Int {
-        genLock.lock(); defer { genLock.unlock() }
-        generation += 1
-        return generation
-    }
-
-    /// True iff `gen` is still the most recent request (no later one superseded it).
-    nonisolated static func isCurrentGeneration(_ gen: Int) -> Bool {
-        genLock.lock(); defer { genLock.unlock() }
-        return gen == generation
+    /// Enqueue a lid-override apply. The chain is appended SYNCHRONOUSLY on the
+    /// caller's thread (the single-threaded Lua VM → strict call order), and each op
+    /// awaits the previous one, so set(true)/set(false) apply in exactly the order
+    /// issued and NONE are dropped. This replaced a last-writer-wins coalescer that
+    /// could silently drop a pending set(true) when any set(false) followed it
+    /// (launch stale-reset, teardown, a quick unplug/replug) — which left the Mac
+    /// sleeping on lid close despite the override being "on". Returns immediately;
+    /// the VM never blocks on the privileged XPC / SMAppService IPC.
+    nonisolated static func enqueueApply(_ op: @escaping @Sendable () async -> Void) {
+        chainLock.lock()
+        let prev = applyChain
+        applyChain = Task { await prev.value; await op() }
+        chainLock.unlock()
     }
 
     private static func makeConnection() -> NSXPCConnection {
