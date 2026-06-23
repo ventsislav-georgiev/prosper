@@ -54,6 +54,18 @@ enum PermissionsManager {
         }
     }
 
+    /// Authoritative re-read of a permission, bypassing any cache. OFF-MAIN ONLY —
+    /// for lid-helper this does the blocking `SMAppService.status` IPC (and refreshes
+    /// the cache `isGranted` serves). Other permissions are already direct checks, so
+    /// this just forwards. The settings row calls this after showing the cached value
+    /// so a stale cache self-heals.
+    static func refreshGranted(_ permission: String) -> Bool {
+        switch permission {
+        case "lid-helper": return LidSleepHelper.refreshEnabled()
+        default: return isGranted(permission)
+        }
+    }
+
     /// Opens System Settings to the pane for a named extension permission.
     static func openSettings(forPermission permission: String) {
         switch permission {

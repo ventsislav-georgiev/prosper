@@ -321,6 +321,10 @@ private struct PermissionRow: View {
     // `.task` and publish via @State. The parent's `.id(name-permissionTick)` recreates
     // this row on Re-check, which re-runs the task.
     @State private var granted: Bool?
+    // True while the authoritative off-main re-read is in flight. The cached value
+    // (lid-helper's persisted status) is shown INSTANTLY; this drives a small inline
+    // spinner so a stale cache that's being verified reads as "verifying", not final.
+    @State private var verifying = false
     var body: some View {
         NeonRow(row.title ?? PermissionsManager.label(forPermission: name),
                 subtitle: row.subtitle ?? PermissionsManager.reason(forPermission: name)) {
@@ -337,12 +341,22 @@ private struct PermissionRow: View {
                     Label("Checking…", systemImage: "ellipsis.circle")
                         .font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.textSecondary)
                 }
+                if verifying && granted != nil {
+                    ProgressView().controlSize(.small).help("Verifying…")
+                }
                 Button("Re-check") { onEvent(.recheck) }.buttonStyle(.neon)
             }
         }
         .task {
             let n = name
+            // 1. Instant: cached / fast check — no spinner-of-doom on open.
             granted = await Task.detached { PermissionsManager.isGranted(n) }.value
+            // 2. Authoritative: force a fresh off-main probe and flip if it differs,
+            //    so the row self-heals a stale cache without needing Re-check.
+            verifying = true
+            let fresh = await Task.detached { PermissionsManager.refreshGranted(n) }.value
+            verifying = false
+            if fresh != granted { granted = fresh }
         }
     }
 }
