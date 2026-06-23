@@ -5,6 +5,23 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.114.0
+
+### Menu bar
+- **Menu bar shortcuts now reflect the shortcuts you actually configured.** The status
+  menu rows (Command Runner, Clipboard History, Coding Agent, Settings) hardcoded key
+  equivalents that had drifted from the real bindings — "Command Runner" showed ⌥L (the
+  Translate shortcut) and "Settings" showed ⌘, while the configured shortcut was ⌥\.
+  Each row now reads its combo from Settings → Shortcuts and refreshes on every open, so
+  rebinds show immediately; an unset shortcut renders no glyph instead of a stale one.
+
+### System events
+- **AC plug/unplug events now fire instantly.** The battery/power watcher relied on
+  `IOPSNotificationCreateRunLoopSource`, which is coalesced with the time-remaining
+  recompute and could arrive seconds after the adapter state flipped. It now also
+  listens on the `com.apple.system.powersources.source` notify(3) key, so extensions
+  reacting to power-source changes see them the moment they happen.
+
 ## v2.113.0
 
 ### Autocomplete
