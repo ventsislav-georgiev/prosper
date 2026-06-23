@@ -73,6 +73,15 @@ final class AppOverrideResolverTests: XCTestCase {
         XCTAssertTrue(AppOverrideResolver.isEnabled(forBundleId: "com.1password.1password"))
     }
 
+    /// Terminals have no working inline-completion path (no AX-editable text), so the
+    /// structural layer suppresses them too — the engine must schedule no request and
+    /// show no ghost, matching the menu bar's "not supported" row.
+    func testStructuralTerminalSuppression() {
+        AppOverrideCache.shared.replace(with: [])
+        XCTAssertFalse(AppOverrideResolver.isEnabled(forBundleId: "com.googlecode.iterm2"))
+        XCTAssertTrue(AppOverrideResolver.isAutocompleteDisabled(forBundleId: "com.apple.terminal"))
+    }
+
     /// An app in no seed and no structural list falls through to the `Preferences`
     /// fallback, which (with completions-on-by-default) enables it — reproducing the
     /// pre-WS3 outcome exactly.

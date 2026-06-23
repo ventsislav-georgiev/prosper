@@ -5,6 +5,18 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.113.0
+
+### Autocomplete
+- **Unsupported apps now fully disable inline autocomplete instead of only hiding the
+  menu row.** Apps with no working completion path — terminals (iTerm2, Terminal,
+  Ghostty, …) and password managers — already showed an "<App> not supported" row in
+  the menu bar, but the engine could still schedule completion requests and flash the
+  inline ghost there. The per-app gate (`AppOverrideResolver.isEnabled`) now keys on
+  `AppProfile.supportsInlineCompletion`, so the engine and the UI agree: no request is
+  scheduled and no ghost is shown for an unsupported app, exactly as if completions
+  were disabled.
+
 ## v2.112.0-beta.1
 
 ### Clipboard & Runner
