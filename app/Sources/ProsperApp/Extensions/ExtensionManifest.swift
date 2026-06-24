@@ -194,8 +194,24 @@ struct CommandContribution: Codable, Sendable, Equatable {
     /// no-view command like Translate, which has nothing to show for empty input).
     let list_on_empty: Bool?
 
+    /// When true, picking this command from the launcher's discovery list (matched
+    /// by extension/command name or keyword) RUNS the handler immediately rather
+    /// than entering its locked input mode. Set it on parameterless actions — a
+    /// toggle/status command that takes no typed argument (e.g. OpenLid's "Toggle
+    /// Mac Awake"). The safe default (false) enters the mode so an input command
+    /// like Translate lets the user type first. The handler runs only on an
+    /// explicit Enter on the selected row — never auto-fires on a keystroke — but
+    /// note the row itself can surface via a fuzzy/subsequence match, so reserve
+    /// this flag for non-destructive actions (toggles, status). Window-launching
+    /// commands ignore this (they always open their window on select).
+    let runs_on_select: Bool?
+
     /// True when this command depends on the local AI model (`host.llm`).
     var requiresModel: Bool { (requires ?? []).contains("model") }
+
+    /// True when discovery-list selection should run the handler immediately
+    /// instead of entering the locked input mode (see `runs_on_select`).
+    var runsOnSelect: Bool { runs_on_select ?? false }
 
     /// True when the locked mode should invoke the handler on an empty query to list
     /// all entries (see `list_on_empty`).

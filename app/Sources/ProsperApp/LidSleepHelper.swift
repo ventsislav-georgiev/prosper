@@ -173,7 +173,9 @@ enum LidSleepHelper {
             let c = connection ?? makeConnection()
             connection = c
             let ok = await call(c, on: true)
-            if !ok {
+            if ok {
+                holdsLidOverride = true
+            } else {
                 // XPC error: the connection may be dead. Drop it so the next
                 // attempt builds a fresh one instead of reusing a corpse (the
                 // invalidation handler may not have fired yet).
@@ -182,10 +184,14 @@ enum LidSleepHelper {
             }
             return ok
         } else {
+            holdsLidOverride = false
             guard let c = connection else { return true } // already off
             let ok = await call(c, on: false)
-            c.invalidate()
-            connection = nil
+            // Keep the connection alive if remote-wake still needs the daemon.
+            if !remoteWakeEnabled {
+                c.invalidate()
+                connection = nil
+            }
             return ok
         }
     }
@@ -198,6 +204,47 @@ enum LidSleepHelper {
             } as? LidHelperProtocol
             guard let proxy else { cont.resume(returning: false); return }
             proxy.setLidSleepDisabled(on) { ok in cont.resume(returning: ok) }
+        }
+    }
+
+    // MARK: - Remote wake
+
+    /// Push the remote-wake config to the daemon (JSON of a sanitized
+    /// `RemoteWakeConfig`). Enabling lazily registers + launches the daemon exactly
+    /// like the lid override; disabling sends the disabled config so the daemon
+    /// stops polling and idle-exits (no connection teardown needed — the daemon owns
+    /// its own residency). Returns whether remote-wake is now resident.
+    @discardableResult
+    static func setRemoteWake(_ config: RemoteWakeConfig) async -> Bool {
+        if config.enabled {
+            guard await ensureRegistered() else { return false }
+        }
+        let c = connection ?? makeConnection()
+        connection = c
+        let resident = await callRemoteWake(c, json: config.jsonString())
+        remoteWakeEnabled = resident
+        // When remote-wake is off AND no lid override holds the connection, drop it
+        // so we don't pin a corpse; the daemon idle-exits on its side.
+        if !resident && !holdsLidOverride {
+            c.invalidate()
+            if connection === c { connection = nil }
+        }
+        return resident
+    }
+
+    /// Connection-lifetime bookkeeping: the daemon stays resident if EITHER feature
+    /// needs it, so turning one off must not tear down a connection the other uses.
+    nonisolated(unsafe) private static var holdsLidOverride = false
+    nonisolated(unsafe) private static var remoteWakeEnabled = false
+
+    private static func callRemoteWake(_ c: NSXPCConnection, json: String) async -> Bool {
+        await withCheckedContinuation { cont in
+            let proxy = c.remoteObjectProxyWithErrorHandler { err in
+                Self.log.error("remote wake set failed: \(err.localizedDescription, privacy: .public)")
+                cont.resume(returning: false)
+            } as? LidHelperProtocol
+            guard let proxy else { cont.resume(returning: false); return }
+            proxy.setRemoteWake(json) { resident in cont.resume(returning: resident) }
         }
     }
 }

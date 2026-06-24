@@ -23,6 +23,11 @@ local DEFAULTS = {
     network_timeout_min   = 2,     -- in-transit: auto-off after this many min with no network (0 disables)
     busy_cmd              = "",    -- on AC-unplug: non-empty stdout keeps awake (e.g. `dch -ls`)
     caffeine_at_launch    = false, -- arm display-awake (☕) on every launch
+    remote_wake           = false, -- opt-in: dark-wake + poll the server to wake this Mac remotely
+    rw_interval_batt_min  = 5,     -- dark-wake check cadence on battery (minutes); dropdown 2..1440
+    rw_interval_ac_sec    = 30,    -- dark-wake check cadence on charger (seconds; cost ~free)
+    rw_battery_floor_pct  = 20,    -- refuse to wake-promote on battery below this %
+    rw_device_id          = "",    -- wake handle (LAN/Tailscale IP, hostname); "" = host auto-detects
 }
 
 local STATE_KEY = "state"
@@ -75,6 +80,22 @@ local function cfg()
         networkAutoOffSeconds  = (nt > 0) and (nt * 60) or nil,
         busyCmd                = pref_str("busy_cmd", DEFAULTS.busy_cmd),
         caffeineAtLaunch       = pref_bool("caffeine_at_launch", DEFAULTS.caffeine_at_launch),
+        remoteWake             = pref_bool("remote_wake", DEFAULTS.remote_wake),
+        rwIntervalBattMin      = pref_num("rw_interval_batt_min", DEFAULTS.rw_interval_batt_min),
+        rwBatteryFloor         = pref_num("rw_battery_floor_pct", DEFAULTS.rw_battery_floor_pct),
+        rwDeviceId             = pref_str("rw_device_id", DEFAULTS.rw_device_id),
+    }
+end
+
+-- Push the current remote-wake settings to the daemon (arm if on, disarm if off).
+-- The host injects the wake id + server URL; we send only cadence + battery floor.
+local function apply_remote_wake()
+    host.caffeinate.set_remote_wake{
+        enabled       = pref_bool("remote_wake", DEFAULTS.remote_wake),
+        interval_ac   = pref_num("rw_interval_ac_sec", DEFAULTS.rw_interval_ac_sec),
+        interval_batt = pref_num("rw_interval_batt_min", DEFAULTS.rw_interval_batt_min) * 60,
+        battery_floor = pref_num("rw_battery_floor_pct", DEFAULTS.rw_battery_floor_pct),
+        device_id     = pref_str("rw_device_id", DEFAULTS.rw_device_id),
     }
 end
 
@@ -484,7 +505,7 @@ function settings_render(section_id, state)
     -- Accessibility/Input-Monitoring rows. Only shown when the lid-closed feature
     -- is actually engaged (on now, or armed at launch), so it's silent otherwise.
     local permissions = nil
-    if st.active or c.macAwakeMode == "on" or c.macAwakeMode == "power" then
+    if st.active or c.macAwakeMode == "on" or c.macAwakeMode == "power" or c.remoteWake then
         permissions = s.section{
             id = "permissions", title = "Permissions",
             rows = { s.row{
@@ -541,12 +562,90 @@ function settings_render(section_id, state)
                    placeholder = "dch -ls" },
         },
     }
+    -- Remote wake (opt-in, default off). The ⓘ button expands a detail section
+    -- with how-it-works + every caveat — a "pops up on click" affordance built from
+    -- the existing button + section primitives (no new control kind).
+    local rw_open = pref_bool("rw_info_open", false)
+    -- Wake-address dropdown: host auto-detects this Mac's reachable addresses
+    -- (Tailscale/LAN IPs + hostname). The user picks one or types any address in
+    -- the field below; the SAME handle is what the remote app uses to wake + reach
+    -- this Mac. Empty = "Auto" (host picks the hostname). Build with appends (no nil
+    -- holes — those truncate ipairs).
+    local addr_opts, addr_labels, seen = { "" }, { "Auto-detect (hostname)" }, { [""] = true }
+    for _, a in ipairs(host.network.addresses()) do
+        if a.address and not seen[a.address] then
+            seen[a.address] = true
+            local tag = a.kind == "tailscale" and " — Tailscale (recommended)"
+                     or a.kind == "lan" and " — local network"
+                     or " — hostname"
+            addr_opts[#addr_opts + 1] = a.address
+            addr_labels[#addr_labels + 1] = a.address .. tag
+        end
+    end
+    if c.rwDeviceId ~= "" and not seen[c.rwDeviceId] then  -- keep a typed custom value selectable
+        addr_opts[#addr_opts + 1] = c.rwDeviceId
+        addr_labels[#addr_labels + 1] = c.rwDeviceId .. " — custom"
+    end
+    local remotewake = s.section{
+        id = "remotewake", title = "Remote wake",
+        footer = "Off by default. Lets you wake this Mac from another device while it sleeps. "
+            .. "Pick or type the address the remote app uses to reach this Mac (Tailscale recommended; "
+            .. "a local-network IP works if you only ever wake it from the same network). Tap ⓘ for "
+            .. "how it works and its limits.",
+        rows = {
+            s.row{ kind = "toggle", key = "remote_wake", title = "Wake this Mac remotely",
+                   subtitle = c.remoteWake and "On — dark-wakes on a timer to check for a wake request"
+                                            or "Off — Mac is unreachable while asleep",
+                   value = b2s(c.remoteWake) },
+            s.row{ kind = "enum", key = "rw_interval_batt_min", title = "Check every (on battery)",
+                   subtitle = "Less often = less battery, slower wake. On charger it checks every 30s.",
+                   value = tostring(c.rwIntervalBattMin),
+                   options      = { "2", "5", "10", "30", "60", "1440" },
+                   optionLabels = { "2 minutes", "5 minutes", "10 minutes", "30 minutes", "1 hour", "1 day" } },
+            s.row{ kind = "enum", key = "rw_device_pick", title = "Wake address",
+                   subtitle = "How the remote app reaches this Mac",
+                   value = c.rwDeviceId, options = addr_opts, optionLabels = addr_labels },
+            s.row{ kind = "text", key = "rw_device_id", title = "…or type an address",
+                   value = c.rwDeviceId, placeholder = "e.g. 100.92.1.4 or 192.168.1.5 or my-mac.local" },
+            s.row{ kind = "number", key = "rw_battery_floor_pct", title = "Don't wake below battery %",
+                   value = tostring(c.rwBatteryFloor), min = 0, max = 100, step = 5 },
+            s.row{ kind = "button", key = "rw_info",
+                   title = rw_open and "ⓘ Hide details" or "ⓘ How it works & limitations" },
+        },
+    }
+    local rw_details = nil
+    if rw_open then
+        rw_details = s.section{
+            id = "remotewake_info", title = "Remote wake — how it works & limits",
+            footer =
+                "While asleep your Mac briefly dark-wakes on a timer (~5 min on battery, ~30s on charger), "
+                .. "makes ONE tiny encrypted check to Prosper's server, and either wakes fully (if you "
+                .. "asked it to remotely) or goes right back to sleep. The CPU is up only a few seconds "
+                .. "per check.\n\n"
+                .. "Limitations:\n"
+                .. "• Latency: up to one interval (~5 min on battery) before it wakes after you request it.\n"
+                .. "• macOS may stretch the interval in deep standby (occasionally ~20–25 min after hours "
+                .. "idle); each macOS update can shift this.\n"
+                .. "• Needs Wi-Fi reachable on wake; if the network isn't ready in a few seconds the check "
+                .. "is skipped (stays asleep) and retries next interval.\n"
+                .. "• Won't wake below your battery floor, to protect against drain.\n"
+                .. "• The Mac must be asleep — not shut down or out of battery. Lid-closed on battery works.\n"
+                .. "• Only someone signed into YOUR Prosper account can trigger a wake (the request is "
+                .. "rejected otherwise), and it exposes only what dch already gates (whois). Checking "
+                .. "for a request needs no sign-in and only ever reads (it can't change or cancel anything). "
+                .. "Your Mac acts on each request once, never repeatedly (a ~25h backstop expires an unseen request).\n"
+                .. "• Drain is negligible in testing (≈0 over a full night) but not zero in theory.",
+            rows = {},
+        }
+    end
     local sections = {}
     if permissions then sections[#sections + 1] = permissions end
     sections[#sections + 1] = now
     sections[#sections + 1] = general
     sections[#sections + 1] = safeguards
     sections[#sections + 1] = busy
+    sections[#sections + 1] = remotewake
+    if rw_details then sections[#sections + 1] = rw_details end
     return s.render(s.ui{
         title = "OpenLid", subtitle = "Keep your Mac awake with the lid closed",
         sections = sections,
@@ -554,14 +653,27 @@ function settings_render(section_id, state)
 end
 
 function settings_action(section_id, action, value, form_json)
+    -- Button (no "set:" prefix): the ⓘ details expander toggles its own pref.
+    if action == "rw_info" then
+        host.prefs.set("rw_info_open", b2s(not pref_bool("rw_info_open", false)))
+        return settings_render(section_id, "{}")
+    end
     local key = action:match("^set:(.+)$")
     if key == "lid_now" then
         if value == "true" then activate(nil, false) else deactivate("manual") end
     elseif key == "caffeine_now" then
         if value == "true" then caffeine_on(nil) else caffeine_off("manual") end
+    elseif key == "rw_device_pick" then
+        -- The dropdown is just a picker for the canonical rw_device_id pref.
+        host.prefs.set("rw_device_id", value)
+        apply_remote_wake()
     elseif key then
         host.prefs.set(key, value)  -- toggle "true"/"false", number = string
-        render(load_state())        -- apply live (menu-icon show/hide, title)
+        if key == "remote_wake" or key:match("^rw_") then
+            apply_remote_wake()     -- arm/disarm/re-tune the daemon poll loop
+        else
+            render(load_state())    -- apply live (menu-icon show/hide, title)
+        end
     end
     return settings_render(section_id, "{}")
 end

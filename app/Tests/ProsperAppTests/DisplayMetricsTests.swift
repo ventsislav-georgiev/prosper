@@ -11,22 +11,28 @@ final class DisplayMetricsTests: XCTestCase {
     // singletons, so each test restores them to the 1.0 identity on exit.
     private var savedScale: CGFloat = 1.0
     private var savedOpacity: CGFloat = 1.0
+    private var savedFrost = false
     private var savedPrefScale: Double = 1.0
     private var savedPrefOpacity: Double = 1.0
+    private var savedPrefFrost = false
 
     override func setUp() {
         super.setUp()
         savedScale = ThemeRuntime.scale
         savedOpacity = ThemeRuntime.opacity
+        savedFrost = ThemeRuntime.frost
         savedPrefScale = Preferences.uiScale
         savedPrefOpacity = Preferences.uiOpacity
+        savedPrefFrost = Preferences.uiFrost
     }
 
     override func tearDown() {
         ThemeRuntime.scale = savedScale
         ThemeRuntime.opacity = savedOpacity
+        ThemeRuntime.frost = savedFrost
         Preferences.uiScale = savedPrefScale
         Preferences.uiOpacity = savedPrefOpacity
+        Preferences.uiFrost = savedPrefFrost
         super.tearDown()
     }
 
@@ -102,6 +108,55 @@ final class DisplayMetricsTests: XCTestCase {
         XCTAssertEqual(ThemeStore.effectiveOpacity(1.0), 1.0)
     }
 
+    // MARK: Frost — preference + precedence
+
+    /// Unset Frost key reads false: a fresh install gets the original opaque look,
+    /// not surprise frosted glass. tearDown restores the saved value.
+    func testFrostPreferenceDefaultsFalse() {
+        UserDefaults.standard.removeObject(forKey: "prosper.uiFrost")
+        XCTAssertFalse(Preferences.uiFrost)
+    }
+
+    func testFrostPreferenceRoundTrips() {
+        Preferences.uiFrost = true
+        XCTAssertTrue(Preferences.uiFrost)
+        Preferences.uiFrost = false
+        XCTAssertFalse(Preferences.uiFrost)
+    }
+
+    /// The full precedence truth table (pure overload, deterministic regardless of
+    /// the test machine's accessibility setting): frost is on iff the user enabled
+    /// it AND system Reduce-transparency is off.
+    @MainActor
+    func testEffectiveFrostPrecedence() {
+        XCTAssertTrue(ThemeStore.effectiveFrost(true, reduceTransparency: false))
+        XCTAssertFalse(ThemeStore.effectiveFrost(true, reduceTransparency: true),
+                       "Reduce transparency must force frost off even when the user enabled it")
+        XCTAssertFalse(ThemeStore.effectiveFrost(false, reduceTransparency: false))
+        XCTAssertFalse(ThemeStore.effectiveFrost(false, reduceTransparency: true))
+    }
+
+    @MainActor
+    func testSetFrostMirrorsBumpsGenerationAndDedups() {
+        let store = ThemeStore(defaults: UserDefaults(suiteName: "dm-\(UUID())")!, cacheDir: tmpCache())
+        var hookFired = 0
+        store.onChange = { hookFired += 1 }
+        let g0 = store.generation
+        store.setFrost(true)
+        XCTAssertTrue(store.frost)
+        XCTAssertTrue(Preferences.uiFrost, "must persist to the preference")
+        XCTAssertEqual(ThemeRuntime.frost, ThemeStore.effectiveFrost(true),
+                       "must mirror the effective value into the render-thread global")
+        XCTAssertGreaterThan(store.generation, g0, "frost change must bump generation for full rebuild")
+        XCTAssertEqual(hookFired, 1, "AppKit reconcile hook (flips window isOpaque) must fire once")
+
+        // Redundant set is a no-op: no extra rebuild, no extra hook.
+        let g1 = store.generation
+        store.setFrost(true)
+        XCTAssertEqual(store.generation, g1)
+        XCTAssertEqual(hookFired, 1)
+    }
+
     // MARK: ThemeStore live-apply wiring
 
     @MainActor
@@ -156,6 +211,83 @@ final class DisplayMetricsTests: XCTestCase {
         // sz is a read+multiply; Neon.font builds a Font. Generous ceiling — the point
         // is to catch a regression that puts disk/lock work on the render path.
         XCTAssertLessThan(ns, 20_000, "sz/Neon.font bundle must stay well under 20µs/iter")
+    }
+
+    // MARK: hot path — Frost backdrop fill decision runs on every render
+    //
+    // The launcher/clipboard/chat/settings backdrops re-evaluate this exact ternary
+    // on every SwiftUI invalidation, which for the runner is per keystroke (typing
+    // mutates results → RunnerView body → neonPanelSurface body). REQUIREMENT:
+    // `backdropFillOpacity` is pure arithmetic over static vars (a frost-branch read
+    // plus, under frost, a multiply of two more) — inlined into a render its cost is
+    // single-digit ns; measured here through the @inline(never) barrier it is ~tens of
+    // ns (call + static-accessor overhead dominates). It must never grow disk/lock
+    // work. Ceiling is generous to absorb CI noise — the point is to catch a
+    // regression that moves real work onto it, not to police a few ns of jitter.
+    func testFrostBackdropFillHotPathBudget() {
+        ThemeRuntime.frost = true
+        ThemeRuntime.opacity = 0.8
+        let iters = 500_000
+        var sink: CGFloat = 0
+        for _ in 0..<10_000 { sink += Self.readFill() }   // warm
+        let start = DispatchTime.now().uptimeNanoseconds
+        for _ in 0..<iters { sink += Self.readFill() }
+        let perCall = Double(DispatchTime.now().uptimeNanoseconds - start) / Double(iters)
+        print("frost backdrop fill decision hot path: \(String(format: "%.1f", perCall)) ns/call over \(iters) iters (sink=\(sink))")
+        XCTAssertLessThan(perCall, 200, "frost backdrop fill decision exceeded the 200ns hot-path budget")
+    }
+
+    /// Reads the REAL backdrop-fill property (not a copy) through an `@inline(never)`
+    /// barrier so the optimizer can't hoist the static reads out of the loop and
+    /// report a fake ~0ns. Exercises the same code path every render uses.
+    @inline(never)
+    private static func readFill() -> CGFloat { ThemeRuntime.backdropFillOpacity }
+
+    // MARK: Frost — backdrop fill composition
+
+    /// `backdropFillOpacity` is the single source every backdrop fades to. Non-frost
+    /// returns the plain transparency; frost composes the glass tint WITH transparency
+    /// so the Transparency control still tunes the glass (honouring the settings copy).
+    func testBackdropFillComposesFrostWithOpacity() {
+        ThemeRuntime.frost = false
+        ThemeRuntime.opacity = 0.7
+        XCTAssertEqual(ThemeRuntime.backdropFillOpacity, 0.7, accuracy: 0.0001,
+                       "non-frost backdrop = plain opacity")
+
+        ThemeRuntime.frost = true
+        ThemeRuntime.opacity = 1.0
+        XCTAssertEqual(ThemeRuntime.backdropFillOpacity, ThemeRuntime.frostSurfaceOpacity, accuracy: 0.0001,
+                       "frost at full opacity = the glass tint")
+
+        ThemeRuntime.opacity = 0.7
+        XCTAssertEqual(ThemeRuntime.backdropFillOpacity, ThemeRuntime.frostSurfaceOpacity * 0.7, accuracy: 0.0001,
+                       "frost composes with transparency so the slider still has effect")
+    }
+
+    // MARK: Frost — window isOpaque wiring (Chat/Settings)
+
+    /// The invariant that makes Frost actually work on titled windows: the
+    /// `.behindWindow` blur can only sample the desktop through a NON-opaque window,
+    /// so Frost must force `isOpaque = false` even at full opacity (where a non-frost
+    /// window stays opaque). Runs on a real NSWindow.
+    @MainActor
+    func testApplyWindowOpacityForcesNonOpaqueUnderFrost() {
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+                           styleMask: [.titled], backing: .buffered, defer: true)
+
+        ThemeRuntime.frost = false
+        ThemeRuntime.opacity = 1.0
+        SettingsWindow.applyWindowOpacity(win)
+        XCTAssertTrue(win.isOpaque, "no frost + full opacity = opaque (original look)")
+
+        ThemeRuntime.frost = true
+        SettingsWindow.applyWindowOpacity(win)
+        XCTAssertFalse(win.isOpaque, "frost must force non-opaque even at full opacity (blur needs it)")
+
+        ThemeRuntime.frost = false
+        ThemeRuntime.opacity = 0.8
+        SettingsWindow.applyWindowOpacity(win)
+        XCTAssertFalse(win.isOpaque, "transparency below 1.0 is non-opaque regardless of frost")
     }
 
     // MARK: helpers

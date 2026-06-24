@@ -123,7 +123,16 @@ let package = Package(
         // LaunchDaemons plist it writes.
         .executableTarget(
             name: "ProsperLidHelper",
-            dependencies: ["LidHelperProtocol"]
+            dependencies: ["LidHelperProtocol"],
+            // RemoteWakeSPI.h re-declares the IOPMConnection dark-wake observer
+            // family (SPI, exported from IOKit but absent from the SDK headers).
+            // No entitlement; passes notarization. See the header for why.
+            swiftSettings: [
+                .unsafeFlags(["-import-objc-header", "Sources/ProsperLidHelper/include/RemoteWakeSPI.h"])
+            ],
+            linkerSettings: [
+                .linkedFramework("IOKit")
+            ]
         ),
         // Dummy GUI app driven by the e2e suites. A real external process so it
         // can be the frontmost app (xctest can't on macOS 14+); shows one

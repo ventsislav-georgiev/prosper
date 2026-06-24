@@ -105,23 +105,45 @@ func sz(_ v: CGFloat) -> CGFloat { v * ThemeRuntime.scale }
 
 // MARK: - Backdrop
 
+/// `.behindWindow` blur of the desktop sitting behind the window — the frosted
+/// glass backdrop, gated by Appearance → Frost. Same material/blend as
+/// FootprintWindow's proven vibrancy preview. The window must be non-opaque with a
+/// clear/translucent background (handled by `applyWindowOpacity` / the panels'
+/// `isOpaque = false`) for the blur to sample through.
+struct VisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .hudWindow
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = .behindWindow
+        v.state = .active
+        return v
+    }
+    func updateNSView(_ v: NSVisualEffectView, context: Context) { v.material = material }
+}
+
 /// Cyberpunk console backdrop: a deep blue-black vertical gradient lit by two
 /// faint neon glows (cyan top-left, indigo bottom-right) plus a hairline scanline
 /// veil. Painted behind every Settings surface.
 struct SettingsBackground: View {
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
-                           startPoint: .top, endPoint: .bottom)
-            RadialGradient(colors: [Neon.blue.opacity(0.14), .clear],
-                           center: .topLeading, startRadius: 0, endRadius: sz(520))
-            RadialGradient(colors: [Neon.indigo.opacity(0.12), .clear],
-                           center: .bottomTrailing, startRadius: 0, endRadius: sz(560))
+            // Frost: blurred desktop sits at the back; the neon gradient drops to a
+            // translucent tint on top so the palette still reads through the glass.
+            if ThemeRuntime.frost { VisualEffectBackground() }
+            ZStack {
+                LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
+                               startPoint: .top, endPoint: .bottom)
+                RadialGradient(colors: [Neon.blue.opacity(0.14), .clear],
+                               center: .topLeading, startRadius: 0, endRadius: sz(520))
+                RadialGradient(colors: [Neon.indigo.opacity(0.12), .clear],
+                               center: .bottomTrailing, startRadius: 0, endRadius: sz(560))
+            }
+            // The window backdrop is the transparency surface: fading it lets the
+            // desktop show through (the window flips to non-opaque below 1.0, or
+            // whenever Frost is on). Content cards/text sit above and stay opaque.
+            .opacity(ThemeRuntime.backdropFillOpacity)
         }
-        // The window backdrop is the transparency surface: fading it lets the
-        // desktop show through (the window flips to non-opaque below 1.0). Content
-        // cards/text sit above and stay fully opaque.
-        .opacity(ThemeRuntime.opacity)
         .ignoresSafeArea()
     }
 }
@@ -372,16 +394,20 @@ private struct NeonPanelSurface: ViewModifier {
         return content
             .background(
                 ZStack {
-                    LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
-                                   startPoint: .top, endPoint: .bottom)
-                    RadialGradient(colors: [Neon.blue.opacity(0.10), .clear],
-                                   center: .topLeading, startRadius: 0, endRadius: sz(460))
-                    RadialGradient(colors: [Neon.indigo.opacity(0.08), .clear],
-                                   center: .bottomTrailing, startRadius: 0, endRadius: sz(480))
+                    // Frost: blurred desktop behind the translucent neon tint.
+                    if ThemeRuntime.frost { VisualEffectBackground() }
+                    ZStack {
+                        LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
+                                       startPoint: .top, endPoint: .bottom)
+                        RadialGradient(colors: [Neon.blue.opacity(0.10), .clear],
+                                       center: .topLeading, startRadius: 0, endRadius: sz(460))
+                        RadialGradient(colors: [Neon.indigo.opacity(0.08), .clear],
+                                       center: .bottomTrailing, startRadius: 0, endRadius: sz(480))
+                    }
+                    // Fade only the surface fill, never the panel's content rows, so a
+                    // translucent runner/clipboard panel still has crisp text.
+                    .opacity(ThemeRuntime.backdropFillOpacity)
                 }
-                // Fade only the surface fill, never the panel's content rows, so a
-                // translucent runner/clipboard panel still has crisp text.
-                .opacity(ThemeRuntime.opacity)
             )
             .clipShape(RoundedRectangle(cornerRadius: c, style: .continuous))
             .overlay(
@@ -443,11 +469,17 @@ struct SettingsSidebar: View {
         .frame(width: sz(218))
         .background(
             ZStack {
-                Neon.sidebar
-                LinearGradient(colors: [Neon.blue.opacity(0.06), .clear],
-                               startPoint: .top, endPoint: .bottom)
-            }
-            .opacity(ThemeRuntime.opacity))
+                // Frost: the sidebar is a distinct surface from the content column —
+                // it needs its own blur or the window reads half-frosted (solid rail,
+                // glass body). Same recipe as SettingsBackground / NeonPanelSurface.
+                if ThemeRuntime.frost { VisualEffectBackground() }
+                ZStack {
+                    Neon.sidebar
+                    LinearGradient(colors: [Neon.blue.opacity(0.06), .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+                .opacity(ThemeRuntime.backdropFillOpacity)
+            })
         .overlay(alignment: .trailing) {
             Rectangle().fill(Neon.stroke).frame(width: 1)
         }

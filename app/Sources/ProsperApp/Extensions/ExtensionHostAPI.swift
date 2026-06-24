@@ -155,6 +155,13 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     // "display" | "system". Lid-sleep override goes through privileged pmset.
     func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool)
     func caffeinateSetDisableLidSleep(extensionID: String, on: Bool) async
+    // Remote-wake: arm/disarm the daemon's dark-wake poll loop. The host injects
+    // the derived wake id + worker URL; the extension supplies only enabled +
+    // cadence + battery floor. `enabled == false` disarms.
+    func caffeinateSetRemoteWake(extensionID: String, enabled: Bool, deviceID: String, intervalAC: Double, intervalBatt: Double, batteryFloor: Int) async
+    /// Detected reachable addresses for this Mac (Tailscale/LAN IPs + hostname),
+    /// best first, as a JSON array of strings — candidates for the wake handle.
+    func networkAddressesJSON() -> String
     func caffeinateLockScreen()
     func caffeinateStartScreensaver()
     // Battery (read-only, open). powerSource() = "AC Power"|"Battery Power"|"".
@@ -239,11 +246,13 @@ extension ExtensionHostServices {
     /// Default: no power/battery/network/screen backing (test / minimal hosts).
     func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool) {}
     func caffeinateSetDisableLidSleep(extensionID: String, on: Bool) async {}
+    func caffeinateSetRemoteWake(extensionID: String, enabled: Bool, deviceID: String, intervalAC: Double, intervalBatt: Double, batteryFloor: Int) async {}
     func caffeinateLockScreen() {}
     func caffeinateStartScreensaver() {}
     func batteryPowerSource() -> String { "" }
     func batteryPercentage() -> Int { -1 }
     func networkIsReachable() -> Bool { true }
+    func networkAddressesJSON() -> String { "[]" }
     func screenAllJSON() -> String { "[]" }
     func screenLidClosed() -> Int { -1 }
 
@@ -664,6 +673,7 @@ struct ExtensionHost {
         lua.register("__h_battery_source") { rt in rt.push(services.batteryPowerSource()); return 1 }
         lua.register("__h_battery_pct") { rt in rt.push(Double(services.batteryPercentage())); return 1 }
         lua.register("__h_network_reachable") { rt in rt.push(services.networkIsReachable()); return 1 }
+        lua.register("__h_network_addresses") { rt in rt.push(services.networkAddressesJSON()); return 1 }
         lua.register("__h_screen_all") { rt in rt.push(services.screenAllJSON()); return 1 }
         lua.register("__h_screen_lid") { rt in rt.push(Double(services.screenLidClosed())); return 1 }
 
@@ -689,10 +699,25 @@ struct ExtensionHost {
                 }
                 return 0
             }
+            lua.register("__h_caf_remotewake") { rt in
+                let enabled = rt.boolArgument(1) ?? false
+                let ac = rt.numberArgument(2) ?? 30
+                let batt = rt.numberArgument(3) ?? 300
+                let floor = Int(rt.numberArgument(4) ?? 20)
+                let devID = rt.stringArgument(5) ?? ""
+                // Same fire-and-forget serial chain as lidsleep — privileged XPC must
+                // never block the VM, and order must hold (enable/disable in sequence).
+                LidSleepHelper.enqueueApply {
+                    await services.caffeinateSetRemoteWake(
+                        extensionID: extID, enabled: enabled, deviceID: devID,
+                        intervalAC: ac, intervalBatt: batt, batteryFloor: floor)
+                }
+                return 0
+            }
             lua.register("__h_caf_lock") { _ in services.caffeinateLockScreen(); return 0 }
             lua.register("__h_caf_screensaver") { _ in services.caffeinateStartScreensaver(); return 0 }
         } else {
-            for name in ["__h_caf_idle", "__h_caf_lidsleep", "__h_caf_lock", "__h_caf_screensaver"] {
+            for name in ["__h_caf_idle", "__h_caf_lidsleep", "__h_caf_remotewake", "__h_caf_lock", "__h_caf_screensaver"] {
                 lua.register(name) { _ in 0 }
             }
         }
@@ -1154,16 +1179,26 @@ struct ExtensionHost {
     -- as upvalues before the globals are cleared, like http / fs above.
     local raw_caf_idle        = __h_caf_idle
     local raw_caf_lidsleep    = __h_caf_lidsleep
+    local raw_caf_remotewake  = __h_caf_remotewake
     local raw_caf_lock        = __h_caf_lock
     local raw_caf_screensaver = __h_caf_screensaver
     host.caffeinate = {
         -- prevent_idle_sleep(kind, on): kind = "display" | "system".
         prevent_idle_sleep    = function(kind, on) raw_caf_idle(kind or "display", on and true or false) end,
         set_disable_lid_sleep = function(on) raw_caf_lidsleep(on and true or false) end,
+        -- set_remote_wake{enabled=, interval_ac=, interval_batt=, battery_floor=}:
+        -- arm/disarm the daemon dark-wake poll. The host injects the wake id + URL;
+        -- only cadence + floor come from here. enabled=false disarms.
+        set_remote_wake       = function(t)
+            t = t or {}
+            raw_caf_remotewake(t.enabled and true or false,
+                               t.interval_ac or 30, t.interval_batt or 300,
+                               t.battery_floor or 20, t.device_id or "")
+        end,
         lock_screen           = function() raw_caf_lock() end,
         start_screensaver     = function() raw_caf_screensaver() end,
     }
-    __h_caf_idle = nil; __h_caf_lidsleep = nil; __h_caf_lock = nil; __h_caf_screensaver = nil
+    __h_caf_idle = nil; __h_caf_lidsleep = nil; __h_caf_remotewake = nil; __h_caf_lock = nil; __h_caf_screensaver = nil
 
     local raw_bat_source = __h_battery_source
     local raw_bat_pct    = __h_battery_pct
@@ -1175,8 +1210,13 @@ struct ExtensionHost {
     __h_battery_source = nil; __h_battery_pct = nil
 
     local raw_net_reach = __h_network_reachable
-    host.network = { is_reachable = function() return raw_net_reach() end }
-    __h_network_reachable = nil
+    local raw_net_addrs = __h_network_addresses
+    host.network = {
+        is_reachable = function() return raw_net_reach() end,
+        -- detected reachable addresses (Tailscale/LAN IPs + hostname), best first.
+        addresses    = function() return json_decode(raw_net_addrs()) or {} end,
+    }
+    __h_network_reachable = nil; __h_network_addresses = nil
 
     local raw_screen_all = __h_screen_all
     local raw_screen_lid = __h_screen_lid

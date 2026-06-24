@@ -8,7 +8,10 @@ import Foundation
 struct SearchHit: Sendable, Equatable {
     enum Kind: Int, Sendable, Equatable {
         // Lower rawValue wins an exact score tie → apps feel primary in a launcher.
-        case app = 0, quicklink = 1, bookmark = 2
+        // Extension commands rank last on a tie so a real app/link/bookmark target
+        // isn't shadowed by a same-scored command, but an exact name match (score
+        // 900) still floats a command to the top of its own results.
+        case app = 0, quicklink = 1, bookmark = 2, command = 3
     }
     let kind: Kind
     let title: String
@@ -17,6 +20,10 @@ struct SearchHit: Sendable, Equatable {
     var appURL: URL? = nil          // app rows: Enter launches
     var openTarget: String? = nil   // quicklink/bookmark rows: Enter opens the target
     var quicklink: QuicklinkHit? = nil // backing link for edit/delete on quicklink rows
+    // Extension-command rows (kind == .command): how Enter activates the command.
+    var commandID: String? = nil       // the command to invoke / lock into
+    var commandIcon: String? = nil     // SF Symbol for the row
+    var commandLaunchesWindow: Bool = false // opens its own window on Enter (vs enter mode)
 }
 
 /// Pure, source-agnostic relevance scorer. Same ladder for apps, quicklinks and

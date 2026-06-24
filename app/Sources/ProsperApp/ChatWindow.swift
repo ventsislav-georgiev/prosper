@@ -261,9 +261,14 @@ struct ChatRootView: View {
             // streaming), so `@Observable` skips its body while `items` churns.
             ComposerBarView(suggest: suggest)
         }
-        .background(LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
-                                   startPoint: .top, endPoint: .bottom)
-            .opacity(ThemeRuntime.opacity))
+        .background(
+            ZStack {
+                // Frost: blurred desktop behind the translucent neon gradient.
+                if ThemeRuntime.frost { VisualEffectBackground() }
+                LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
+                               startPoint: .top, endPoint: .bottom)
+                    .opacity(ThemeRuntime.backdropFillOpacity)
+            })
         .foregroundStyle(Neon.textPrimary)
         .animation(.easeInOut(duration: 0.2), value: isWorking)
         // Float the suggestions above the input field without affecting layout. The

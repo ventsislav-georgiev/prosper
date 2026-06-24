@@ -1,6 +1,8 @@
 import AppKit
 import ApplicationServices
+import CryptoKit
 import Foundation
+import LidHelperProtocol
 import SystemConfiguration
 import UniformTypeIdentifiers
 import UserNotifications
@@ -533,6 +535,122 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         }
     }
 
+    /// Arm/disarm the daemon's remote-wake poll. The host owns the sensitive bits:
+    /// the poll URL is built here from the worker base + a wake id DERIVED from the
+    /// device id (`SHA256(deviceID ‖ ":wake")`, never the raw device key/id on the
+    /// wire) so the extension can't redirect the root poll. The extension supplies
+    /// only the cadence + battery floor; `enabled == false` disarms.
+    func caffeinateSetRemoteWake(extensionID: String, enabled: Bool, deviceID: String, intervalAC: Double, intervalBatt: Double, batteryFloor: Int) async {
+        // Remote-wake REQUIRES a signed-in account: the poll URL's acctTag is derived
+        // from the session email, and only an authenticated session can POST a matching
+        // wake. With no account the daemon would poll a URL nothing can ever trigger —
+        // pure battery waste. Force-disable here so enabling while signed out can't arm
+        // it (complements the disarm-on-signOut: this also covers the steady-state
+        // signed-out case and any future re-apply path, e.g. on_launch).
+        let signedIn = !(SupporterStore.load()?.email ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let cfg = RemoteWakeConfig(
+            enabled: enabled && signedIn,
+            pollURL: Self.wakePollURL(deviceTag: deviceID),
+            intervalAC: intervalAC,
+            intervalBatt: intervalBatt,
+            batteryFloor: batteryFloor)
+        // NOT tracked in ExtensionResources / reset on quit — unlike the idle/lid
+        // assertions, remote-wake MUST keep running after the app quits or sleeps
+        // (that is the whole point). The daemon owns its residency via its config
+        // file; turning it off is an explicit user action that sends enabled=false.
+        _ = await LidSleepHelper.setRemoteWake(cfg)
+        // Remember the meta URL whenever signed in (the device has a meta row on the
+        // server whether enabled or not) so `signOut` can DELETE it even though it lacks
+        // the device tag to rebuild the URL. Set synchronously, before the report task,
+        // so signOut can't read a half-written key.
+        if signedIn {
+            UserDefaults.standard.set(cfg.pollURL + "/meta", forKey: Self.wakeMetaURLKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.wakeMetaURLKey)
+        }
+        // Report state so a paired device knows whether this Mac can be woken (enabled)
+        // and the ETA. The daemon config above is the real state and is set first; this
+        // is the advertisement of it. Fire off the chain — never block lid/daemon ops on
+        // a network call.
+        // ponytail: last-write-wins; a fast enable/disable toggle could leave a stale
+        //   advertised state. Sequence server-side only if it ever matters — toggles are
+        //   human-paced, the window is ~one RTT.
+        Task.detached { await Self.reportWakeMeta(cfg) }
+    }
+
+    /// UserDefaults key holding the last meta URL (`<pollURL>/meta`) so
+    /// `SupporterClient.signOut` can DELETE the server-side wake metadata (it lacks the
+    /// device tag to rebuild the URL).
+    static let wakeMetaURLKey = "prosper.remoteWake.metaURL"
+
+    /// Best-effort, fail-open: POST this device's remote-wake state (enabled + cadence)
+    /// to `<pollURL>/meta` on every toggle, so a paired device can tell whether the Mac
+    /// is wakeable. Authenticated (the server's ownership gate matches the poll id); a
+    /// disable posts `enabled:false` (not a delete) so "off" stays distinct from "never
+    /// set up". Removal happens only on signOut.
+    private static func reportWakeMeta(_ cfg: RemoteWakeConfig) async {
+        guard let session = SupporterStore.load()?.session,
+              let url = URL(string: cfg.pollURL + "/meta") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        req.setValue("Bearer \(session)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "enabled": cfg.enabled, "intervalAC": cfg.intervalAC, "intervalBatt": cfg.intervalBatt,
+            "batteryFloor": cfg.batteryFloor,
+        ])
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    /// `<worker-base>/wake/<acctTag>-<devTag>`. Two halves, two jobs:
+    ///
+    /// - `acctTag = sha256(email)[:16]` — OWNERSHIP. The server re-derives it from
+    ///   the authenticated session on POST and rejects a mismatch, so only the
+    ///   owning account can set the flag. Not a secret; it's a namespace tag. If not
+    ///   signed in the email is "", giving a tag no real session can match —
+    ///   fail-safe: the device can't be woken until an account signs in.
+    /// - `devTag` — the user-chosen device handle (a LAN IP, Tailscale IP/MagicDNS,
+    ///   or hostname). It's the SAME string the remote app uses to wake AND to
+    ///   connect to this Mac. Readable on purpose; POST-auth makes that safe. Falls
+    ///   back to the hostname, then an opaque device hash, if none was set.
+    ///
+    /// The extension supplies only `deviceTag` (+ cadence/floor); the host owns the
+    /// worker URL and the ownership tag, so an extension can't redirect the poll or
+    /// forge another account.
+    /// Ownership namespace tag = sha256(normalized email)[:16 hex]. MUST stay
+    /// byte-identical to the server's `acctTag` (wakeId.mjs) or every wake POST 403s
+    /// against this device's URL, silently. Normalizes (trim + lowercase) to mirror
+    /// the server's normalizeEmail. Pinned by a golden-value test against the JS impl.
+    static func wakeAcctTag(_ rawEmail: String) -> String {
+        let email = rawEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return String(SHA256.hash(data: Data(email.utf8))
+            .map { String(format: "%02x", $0) }.joined().prefix(16))
+    }
+
+    private static func wakePollURL(deviceTag: String) -> String {
+        let acctTag = wakeAcctTag(SupporterStore.load()?.email ?? "")
+        var dev = normalizeTag(deviceTag)
+        if dev.isEmpty { dev = normalizeTag(ProcessInfo.processInfo.hostName) }
+        if dev.isEmpty {
+            dev = String(SHA256.hash(data: Data("\(SupporterStore.deviceID()):wake".utf8))
+                .map { String(format: "%02x", $0) }.joined().prefix(32))
+        }
+        return ProsperServer.baseURL.appending(path: "/wake/\(acctTag)-\(dev)").absoluteString
+    }
+
+    /// Lowercase, strip to URL-safe `[a-z0-9.\-_:]`, cap 63 chars. The remote app
+    /// MUST normalize identically or the flag keys won't match (no fuzzy match by
+    /// design — the handle is an exact key). ponytail: IPv6 colons survive here but
+    /// `URL.appending(path:)` may percent-encode them; IPv4/DNS/hostname (the common
+    /// case) pass through untouched. Hash the handle both sides if that ever bites.
+    private static func normalizeTag(_ s: String) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789.-_:")
+        let lower = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return String(lower.filter { allowed.contains($0) }.prefix(63))
+    }
+
     func caffeinateLockScreen() {
         // User-space lock (no entitlement): the CGSession menu-extra suspends the
         // session. Fire-and-forget off-main.
@@ -561,6 +679,43 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         var flags = SCNetworkReachabilityFlags()
         guard SCNetworkReachabilityGetFlags(reach, &flags) else { return true }
         return flags.contains(.reachable) && !flags.contains(.connectionRequired)
+    }
+
+    /// Candidate wake handles for this Mac, best first: Tailscale IPs (100.64/10),
+    /// then private LAN IPv4, then the hostname. Tailscale + LAN IPs come free as
+    /// interface addresses via `getifaddrs` — no Tailscale CLI / path guessing. JSON
+    /// array of `{address, kind}`; the UI labels them and the user can also type any
+    /// address by hand.
+    func networkAddressesJSON() -> String {
+        var ts: [String] = [], lan: [String] = []
+        var ifap: UnsafeMutablePointer<ifaddrs>?
+        if getifaddrs(&ifap) == 0 {
+            var p = ifap
+            while let cur = p {
+                let f = cur.pointee
+                let flags = f.ifa_flags  // UInt32 on Darwin — Int32() cast traps if high bit set
+                if let sa = f.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET),
+                   (flags & UInt32(IFF_UP)) != 0, (flags & UInt32(IFF_LOOPBACK)) == 0 {
+                    var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if getnameinfo(sa, socklen_t(sa.pointee.sa_len), &buf, socklen_t(buf.count),
+                                   nil, 0, NI_NUMERICHOST) == 0 {
+                        let ip = String(cString: buf)
+                        let o = ip.split(separator: ".")
+                        let isTS = o.count == 4 && o[0] == "100" && (Int(o[1]).map { $0 >= 64 && $0 <= 127 } ?? false)
+                        if isTS { ts.append(ip) }
+                        else if !ip.hasPrefix("169.254") { lan.append(ip) }  // skip link-local
+                    }
+                }
+                p = f.ifa_next
+            }
+            freeifaddrs(ifap)
+        }
+        var out = ts.map { ["address": $0, "kind": "tailscale"] }
+        out += lan.map { ["address": $0, "kind": "lan"] }
+        let hn = ProcessInfo.processInfo.hostName
+        if !hn.isEmpty { out.append(["address": hn, "kind": "hostname"]) }
+        return (try? JSONSerialization.data(withJSONObject: out))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
     }
 
     func screenAllJSON() -> String { mainSync { SystemInfo.screensJSON() } }

@@ -9,6 +9,7 @@
     "db:migrate": "wrangler d1 migrations apply prosper --remote",
     "db:migrate:local": "wrangler d1 migrations apply prosper --local",
     "gen:keys": "node scripts/gen-keys.mjs",
+    "test": "node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

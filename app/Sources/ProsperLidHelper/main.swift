@@ -31,6 +31,11 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
     private let q = DispatchQueue(label: "\(lidHelperLabel).state")
     private var idleTimer: DispatchSourceTimer?
     private let core = LidHelperCore(apply: LidHelper.applyPmset, onIdle: { exit(0) })
+    // Remote-wake lives in its own observer with its own state machine — zero
+    // shared mutable state with `core` (the only coupling is the idle-exit guard
+    // below, which keeps the daemon resident while remote-wake is armed). Uses the
+    // same serial queue `q` so a setRemoteWake never races a lid op.
+    private lazy var remoteWake = RemoteWakeObserver(queue: q)
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
         // The OS invalidates the connection automatically if the peer fails this
@@ -56,6 +61,17 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
 
     func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) {
         q.async { reply(self.core.setOverride(on)) }
+    }
+
+    func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void) {
+        // RemoteWakeObserver persists the config + arms/disarms its own loop. If it
+        // just went disabled, arm the idle exit so the now-purposeless daemon shuts
+        // down (unless a lid client still holds a connection).
+        q.async {
+            let resident = self.remoteWake.apply(json: json)
+            if !resident && self.core.connections == 0 { self.armIdleExit_locked() }
+            reply(resident)
+        }
     }
 
     /// Arm the idle exit immediately at startup so a daemon that launchd spins up
@@ -98,6 +114,9 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
         t.schedule(deadline: .now() + .seconds(idleExitSeconds))
         t.setEventHandler { [weak self] in
             guard let self else { exit(0) }
+            // Remote-wake keeps the daemon resident with zero clients; never exit
+            // while it's armed. Otherwise defer to the lid core's idle rule.
+            if self.remoteWake.isResident { return }
             self.core.idleFired()
         }
         t.resume()
@@ -107,6 +126,15 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
     private func cancelIdleExit_locked() {
         idleTimer?.cancel()
         idleTimer = nil
+    }
+
+    /// Cold launch (RunAtLoad): read the persisted remote-wake config. Enabled →
+    /// register the powerd observer on THIS runloop + arm; the idle-exit guard then
+    /// keeps us resident. Disabled → nothing happens and the idle timer exits us in
+    /// 10s, preserving "costs nothing until used". Must run on the main thread
+    /// before RunLoop.run so the IOPMConnection schedules on the right runloop.
+    func startRemoteWakeAtStartup() {
+        remoteWake.startFromDisk()
     }
 }
 
@@ -120,6 +148,9 @@ listener.delegate = delegate
 // connection cancels the idle timer.
 delegate.reclaimAtStartup()
 delegate.armIdleAtStartup()
+// Read the persisted remote-wake config and, if enabled, go resident + arm the
+// dark-wake poll. Disabled (the default) → the idle timer above exits us in 10s.
+delegate.startRemoteWakeAtStartup()
 listener.resume()
 // Block on the run loop; launchd owns our lifecycle and the idle-exit above ends
 // the process when no client remains.

@@ -21,15 +21,18 @@ final class SettingsWindow {
     /// at 1.0 it stays the original opaque neon console.
     /// Idempotent — safe to call repeatedly from the theme onChange hook.
     static func applyWindowOpacity(_ win: NSWindow) {
-        let opaque = ThemeRuntime.opacity >= 0.999
+        // Frost forces non-opaque even at full opacity: the SwiftUI backdrop's
+        // `.behindWindow` blur can only sample the desktop through a non-opaque window.
+        let frost = ThemeRuntime.frost
+        let opaque = !frost && ThemeRuntime.opacity >= 0.999
         win.isOpaque = opaque
         // The titlebar strip is painted ONLY by the window background (content view
         // doesn't extend under it — no .fullSizeContentView). A `.clear` bg made the
         // titlebar vanish entirely below 1.0; fill it with bgTop at the live opacity
-        // so it stays slightly translucent, matching the faded content backdrop.
+        // (or the frost tint) so it stays slightly translucent, matching the backdrop.
         win.backgroundColor = opaque
             ? NSColor(Neon.bgTop)
-            : NSColor(Neon.bgTop).withAlphaComponent(ThemeRuntime.opacity)
+            : NSColor(Neon.bgTop).withAlphaComponent(ThemeRuntime.backdropFillOpacity)
         win.invalidateShadow()
     }
 
@@ -258,6 +261,31 @@ final class SettingsModel: ObservableObject {
     @Published var dragSnapEdgeMargin: Double { didSet { Preferences.dragSnapEdgeMargin = CGFloat(dragSnapEdgeMargin) } }
     @Published var dragSnapCornerSize: Double { didSet { Preferences.dragSnapCornerSize = CGFloat(dragSnapCornerSize) } }
     @Published var dragSnapIgnoredBundleIds: [String]
+    // Window layouts (drag-into-zone). Mode + gap persist directly; the store holds
+    // groups/layouts and the active selection.
+    @Published var snapMode: SnapMode { didSet { Preferences.snapMode = snapMode } }
+    @Published var layoutGap: Double { didSet { Preferences.layoutGap = CGFloat(layoutGap) } }
+    // Coalesce the store write to the next runloop tick: a single CRUD action
+    // (duplicate, delete) mutates the store several times in one pass, and this
+    // collapses that burst into one encode+UserDefaults write.
+    // ponytail: per-keystroke name edits land on separate ticks so still write
+    // once each — acceptable at µs/KB scale; add a debounce timer only if a
+    // profiler ever shows it matters.
+    @Published var layoutStore: LayoutStore { didSet { scheduleLayoutStorePersist() } }
+    private var layoutStorePersistScheduled = false
+    private func scheduleLayoutStorePersist() {
+        guard !layoutStorePersistScheduled else { return }
+        layoutStorePersistScheduled = true
+        // Strong self capture, NOT weak: this write must outlive the view. With
+        // [weak self] a settings-window close in the same runloop turn as the final
+        // edit would dealloc the model before the block runs and silently drop the
+        // last layout change. The closure isn't stored, so GCD releases it (and self)
+        // right after it runs — no retain cycle, no leak.
+        DispatchQueue.main.async { [self] in
+            layoutStorePersistScheduled = false
+            Preferences.layoutStore = layoutStore
+        }
+    }
 
     @Published var disabledBundleIds: [String]
     @Published var disableTabBundleIds: [String]
@@ -323,6 +351,9 @@ final class SettingsModel: ObservableObject {
         dragSnapEdgeMargin = Double(Preferences.dragSnapEdgeMargin)
         dragSnapCornerSize = Double(Preferences.dragSnapCornerSize)
         dragSnapIgnoredBundleIds = Preferences.dragSnapIgnoredBundleIds.sorted()
+        snapMode = Preferences.snapMode
+        layoutGap = Double(Preferences.layoutGap)
+        layoutStore = Preferences.layoutStore
         improveCompatBundleIds = Preferences.improveCompatBundleIds.sorted()
         disabledBundleIds = Preferences.disabledBundleIds.sorted()
         disableTabBundleIds = Preferences.disableTabBundleIds.sorted()
@@ -1478,23 +1509,49 @@ private struct ShortcutsPane: View {
                 }
             }
 
-            // Read-only guide: launcher prefixes contributed by enabled extensions.
-            // Sourced live from modeTriggers() (already filtered to enabled+trusted).
-            // arg == nil drops dynamic per-item triggers (e.g. each quickdir dir),
-            // keeping just the manifest activators like "sn ", "bm ", "ql ".
-            let activators = (SettingsHooks.shared.extensionRegistry?.modeTriggers() ?? [])
-                .filter { $0.arg == nil }
-                .sorted { $0.prefix.localizedCaseInsensitiveCompare($1.prefix) == .orderedAscending }
-            if !activators.isEmpty {
+            // Read-only guide: launcher prefixes contributed by enabled extensions,
+            // GROUPED per extension. Sourced live from modeTriggers() (already
+            // filtered to enabled+trusted). arg == nil drops dynamic per-item
+            // triggers (e.g. each quickdir dir), keeping just the manifest
+            // activators like "sn ", "bm ", "ql ". Beyond these prefixes, every
+            // command is also reachable by typing its extension's name or any of
+            // its keywords (see UnifiedSearch command discovery) — the footer says so.
+            let activatorGroups = Self.activatorGroups(
+                SettingsHooks.shared.extensionRegistry?.modeTriggers() ?? [])
+            if !activatorGroups.isEmpty {
                 NeonSection("Extension Activators",
-                            footer: "Type one of these prefixes in the launcher to jump straight to that command. Read-only \u{2014} updates as you enable or disable extensions.") {
-                    ForEach(Array(activators.enumerated()), id: \.offset) { idx, t in
-                        if idx > 0 { NeonDivider() }
-                        ExtensionActivatorRow(trigger: t)
+                            footer: "Type a prefix to jump straight to a command \u{2014} or just type the extension's name or a keyword to see its commands in the launcher. Read-only; updates as you enable or disable extensions.") {
+                    ForEach(Array(activatorGroups.enumerated()), id: \.element.title) { gi, group in
+                        if gi > 0 { NeonDivider() }
+                        Text(group.title)
+                            .font(Neon.font(.callout, weight: .semibold))
+                            .foregroundStyle(Neon.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        ForEach(Array(group.triggers.enumerated()), id: \.offset) { _, t in
+                            ExtensionActivatorRow(trigger: t)
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Groups manifest activators per contributing extension for the read-only
+    /// guide: drops dynamic per-item triggers (arg != nil), buckets by extension
+    /// title, sorts groups alphabetically and triggers within each by prefix.
+    static func activatorGroups(_ specs: [ExtensionRegistry.ModeTriggerSpec])
+        -> [(title: String, triggers: [ExtensionRegistry.ModeTriggerSpec])] {
+        var buckets: [String: [ExtensionRegistry.ModeTriggerSpec]] = [:]
+        for s in specs where s.arg == nil {
+            let key = s.extensionTitle.isEmpty ? "Other" : s.extensionTitle
+            buckets[key, default: []].append(s)
+        }
+        return buckets
+            .map { (title: $0.key,
+                    triggers: $0.value.sorted {
+                        $0.prefix.localizedCaseInsensitiveCompare($1.prefix) == .orderedAscending
+                    }) }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 }
 
@@ -2143,6 +2200,7 @@ private struct WindowManagementPane: View {
     @AppStorage("settingsSelectedPane") private var selection = "general"
     @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
     @State private var newIgnored = ""
+    @State private var showLayoutEditor = false
 
     // Rendered as the footer of the window extension's settings pane (inside its
     // NeonScroll), so no own scroll/title — the page header already names it.
@@ -2193,6 +2251,29 @@ private struct WindowManagementPane: View {
             }
             .disabled(!model.dragSnapEnabled)
 
+            NeonSection("Layouts",
+                        footer: "“Edges & corners” gives the classic half/quarter snaps. “Layout zones” shows your active custom layout’s tiles on screen while dragging, and drops the window into whichever tile the pointer is over.") {
+                Picker("Snap into", selection: $model.snapMode) {
+                    ForEach(SnapMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                if model.snapMode == .layouts {
+                    NeonDivider()
+                    Picker("Active layout", selection: Binding(
+                        get: { model.layoutStore.activeLayout?.id },
+                        set: { model.layoutStore.activeLayoutId = $0 })) {
+                        ForEach(model.layoutStore.allLayouts) { Text($0.name).tag(Optional($0.id)) }
+                    }
+                    NeonDivider()
+                    NeonRow("Gap", subtitle: "\(Int(model.layoutGap)) px") {
+                        Slider(value: $model.layoutGap, in: Preferences.layoutGapRange, step: 1)
+                            .frame(width: sz(200))
+                    }
+                    NeonDivider()
+                    Button("Edit Layouts…") { showLayoutEditor = true }.buttonStyle(.neon)
+                }
+            }
+            .disabled(!model.dragSnapEnabled)
+
             NeonSection("Excluded apps",
                         footer: "Windows of these apps never snap (use for apps that manage their own layout). Fixed-size dialogs are skipped automatically.") {
                 if model.dragSnapIgnoredBundleIds.isEmpty {
@@ -2223,6 +2304,9 @@ private struct WindowManagementPane: View {
             .disabled(!model.dragSnapEnabled)
         }
         .onAppear { hasAccessibility = PermissionsManager.isAccessibilityTrusted() }
+        .sheet(isPresented: $showLayoutEditor) {
+            LayoutEditorView(store: $model.layoutStore)
+        }
     }
 
     private func addManual() {

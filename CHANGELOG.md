@@ -5,6 +5,92 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.115.0-beta.1
+
+### Launcher Search
+- **Extension commands are now discoverable by name or keyword, not just memorized
+  prefixes.** Typing an extension's name ("translate", "openlid") or any keyword from
+  one of its commands ("lid", "awake", "status") now surfaces that extension's commands
+  as ranked rows in the command runner, so you can pick the action instead of
+  remembering its prefix (e.g. that `lid?` means "OpenLid Status"). Every live
+  extension's commands are flattened into the unified search and scored on the same
+  ladder as apps/quicklinks/bookmarks; command rows rank last on a score tie so they
+  never shadow a real launch target, while an exact name match still floats to the top.
+- **Picking a command does the right thing per command.** Window-launching commands open
+  their window; parameterless actions that opt in (`runs_on_select`, e.g. OpenLid's
+  "Toggle Mac Awake" / "OpenLid Status") run immediately on Enter; input commands enter
+  their locked mode and wait for you to type. The handler only ever runs on an explicit
+  Enter — never auto-fires on a keystroke.
+- **The discovery list is built once and memoized.** It rides the per-keystroke search
+  hot path, so its haystacks are cached and rebuilt only when the live extension set
+  changes (install/enable/trust) — a 300-command set went from ~300µs to ~0.1µs per
+  keystroke on the main thread.
+
+### Settings
+- **Settings → Shortcuts now groups extension activators per extension.** Triggers were
+  listed flat and unsorted; they are now bucketed under each extension's name and sorted,
+  and the section explains that names and keywords also activate commands.
+
+### Window Layouts
+- **Drag a window onto on-screen layout zones to snap it there (opt-in).** A Mosaic-style
+  layer on top of the existing edge drag-snap: pick "Layout zones" in Settings → Windows,
+  choose an active layout, and dragging a window now paints that layout's tiles on the
+  target screen and drops the window into whichever zone the cursor is over. Ships with
+  Halves, Thirds, Grid 2×2, and Main + side built-ins; the overlay preview is the exact
+  frame the window lands in (single geometry source, no preview/drop drift).
+- **A grid editor for custom layouts and groups.** Settings → Windows → Edit Layouts lets
+  you paint zones on a cell grid (drag to add a multi-cell zone, tap a cell to add or
+  remove a single zone), organize layouts into groups, set the active layout, and toggle
+  "Move only" so a layout repositions a window without resizing it (useful for fixed-size
+  dialogs). Layouts persist across launches and survive a downgrade without data loss.
+- **Equal-fraction zones get equal pixel widths.** The gap model insets the visible frame
+  by half a gap, places each zone, then insets again by half — so equal fractions yield
+  equal widths and the outer margin matches the inter-window gap, with no off-by-half
+  narrowing of the outer tiles.
+- **The drag hot path is allocation-free.** At ~120 Hz the per-event work is just a cursor
+  normalize plus a zone hit-test; tile frames are recomputed and the overlay rebuilt only
+  when the display or layout actually changes, and a hover moving between zones only
+  recolors the existing tiles. Multi-monitor uses the stable display ID for screen
+  identity. Pinned by hit-test and full-layout perf budgets.
+
+### Appearance
+- **A new frosted-glass look (opt-in).** Settings → Appearance adds a "Frosted glass"
+  toggle (off by default): the launcher, chat, clipboard, and settings surfaces blur the
+  desktop behind them instead of using a flat tint, in the spirit of Alfred's translucent
+  panels. The neon tint rides on top of the blur so readability is unchanged; the blur is
+  fully behind the content. Off by default, so nothing changes until you turn it on, and
+  the hot path stays gated when it's off.
+
+### Remote Wake
+- **Wake your Mac from another signed-in device, even from sleep (opt-in, off by
+  default).** Settings → OpenLid adds a Remote Wake section: when enabled, the Mac wakes
+  briefly on a schedule, checks whether one of your other signed-in devices has asked it
+  to wake, and if so promotes itself to a full wake — so you can reach it over the network
+  before it's awake. It is outbound-only (the Mac polls; nothing connects inwards), works
+  behind any NAT/CGNAT without Wake-on-LAN, and only someone signed into *your* account can
+  trigger it.
+- **Battery-aware and conservative by design.** The wake cadence is configurable (more
+  frequent on AC, less on battery, down to once a day), and a battery floor stops it from
+  waking below a set charge. Everything fails safe: any ambiguity (no network, a captive
+  portal, low battery, signed out) means it stays asleep rather than burning power. The
+  feature can't even arm unless you're signed in.
+- **Paired devices can tell whether — and roughly when — it'll wake.** The Mac reports its
+  own wake schedule so another of your devices can show whether the Mac is reachable at
+  all and an estimated time-to-wake before asking, including a warning when a low battery
+  floor would prevent the wake.
+
+### Account & Security
+- **Deleting your account now also clears remote-wake data.** Account deletion already
+  removed your sessions, devices, and synced settings; it now also purges the remote-wake
+  flag and the reported wake schedule from the server, so nothing tied to your devices is
+  left behind. (Supporter records are retained as financial records, and the account email
+  is tombstoned rather than reused.)
+- **Signing out now revokes the session on the server.** Previously signing out only
+  cleared local credentials while the session stayed valid server-side until it expired;
+  it is now invalidated on the server at sign-out.
+- **Remote-wake triggers are rate-limited** so a leaked session can't be used to repeatedly
+  wake a Mac and drain its battery.
+
 ## v2.114.0
 
 ### Menu bar

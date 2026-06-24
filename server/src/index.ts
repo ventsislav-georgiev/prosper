@@ -8,6 +8,7 @@ import { getSettings, putSettings } from "./sync";
 import { lemonSqueezyWebhook } from "./payment";
 import { listSupporters } from "./supporters";
 import { market } from "./market";
+import { wake } from "./wake";
 import { nowSec } from "./util";
 
 const app = new Hono<Env>();
@@ -35,6 +36,9 @@ app.put("/sync", requireSession, putSettings);
 
 // Extension marketplace: public browse/download + authenticated publish/yank.
 app.route("/market", market);
+
+// Remote wake: public poll (the sleeping Mac) + authenticated set.
+app.route("/wake", wake);
 
 export default {
   fetch: app.fetch,
