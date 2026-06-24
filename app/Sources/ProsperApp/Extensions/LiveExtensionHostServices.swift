@@ -547,7 +547,13 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         // pure battery waste. Force-disable here so enabling while signed out can't arm
         // it (complements the disarm-on-signOut: this also covers the steady-state
         // signed-out case and any future re-apply path, e.g. on_launch).
-        let loaded = SupporterStore.load()
+        // Load creds on the main actor: this runs from a detached serial executor
+        // (LidSleepHelper.enqueueApply), and decrypting supporter.dat needs the
+        // iCloud-synced keychain key, which the UI reads reliably on main but a
+        // background context can momentarily fail to fetch → load() nil → falsely
+        // "signed out" → metaURL never written → no wakeId in the handshake → no
+        // badge. Main-actor hop makes the gate match what the UI already sees.
+        let loaded = await MainActor.run { SupporterStore.load() }
         let signedIn = !(loaded?.email ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         os_log("remoteWake.apply enabled=%{public}d loadedNil=%{public}d emailEmpty=%{public}d signedIn=%{public}d device=%{public}@",
@@ -584,7 +590,10 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         // ponytail: last-write-wins; a fast enable/disable toggle could leave a stale
         //   advertised state. Sequence server-side only if it ever matters — toggles are
         //   human-paced, the window is ~one RTT.
-        Task.detached { await Self.reportWakeMeta(cfg) }
+        // Pass the session captured above (main-actor load) — re-loading inside the
+        // detached task would hit the same background-keychain flakiness and silently
+        // skip the POST, leaving the server with no meta row (phone sees known:false).
+        Task.detached { await Self.reportWakeMeta(cfg, session: loaded?.session) }
     }
 
     /// UserDefaults key holding the last meta URL (`<pollURL>/meta`) so
@@ -610,8 +619,8 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// is wakeable. Authenticated (the server's ownership gate matches the poll id); a
     /// disable posts `enabled:false` (not a delete) so "off" stays distinct from "never
     /// set up". Removal happens only on signOut.
-    private static func reportWakeMeta(_ cfg: RemoteWakeConfig) async {
-        guard let session = SupporterStore.load()?.session,
+    private static func reportWakeMeta(_ cfg: RemoteWakeConfig, session: String?) async {
+        guard let session, !session.isEmpty,
               let url = URL(string: cfg.pollURL + "/meta") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
