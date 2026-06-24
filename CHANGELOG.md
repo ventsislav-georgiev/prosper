@@ -5,6 +5,19 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.115.0-beta.4
+
+### Remote Wake
+- **Enabling wake now reliably arms it and shows on your phone.** Turning on "Wake this Mac
+  remotely" could finish without recording the device's wake address or telling the server it
+  was armed, so the paired phone never showed the wake-ready badge and couldn't actually wake
+  the Mac. The toggle read your sign-in from a background task that could come back empty even
+  while the app showed you signed in; it now reads it on the main thread and reuses that
+  session when publishing state to the server, so a single toggle both arms the daemon and
+  advertises the cadence the phone displays.
+- Adds temporary diagnostic logging around the wake toggle (visible in Console) to confirm the
+  fix on real hardware; it will be removed once verified.
+
 ## v2.115.0-beta.3
 
 ### Appearance
