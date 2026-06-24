@@ -584,6 +584,19 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// device tag to rebuild the URL).
     static let wakeMetaURLKey = "prosper.remoteWake.metaURL"
 
+    /// The wake id (`<acctTag>-<devTag>`) this Mac polls, or nil if remote-wake was
+    /// never configured while signed in. Derived from the stored meta URL
+    /// (`<base>/wake/<wakeId>/meta`) so it reflects exactly what the server knows —
+    /// the identity handshake hands it to the paired app so it can wake this Mac.
+    static var currentWakeId: String? {
+        guard let meta = UserDefaults.standard.string(forKey: wakeMetaURLKey),
+              let url = URL(string: meta) else { return nil }
+        let parts = url.pathComponents            // ["/", "wake", "<wakeId>", "meta"]
+        guard let i = parts.firstIndex(of: "wake"), i + 1 < parts.count else { return nil }
+        let id = parts[i + 1]
+        return id.isEmpty ? nil : id
+    }
+
     /// Best-effort, fail-open: POST this device's remote-wake state (enabled + cadence)
     /// to `<pollURL>/meta` on every toggle, so a paired device can tell whether the Mac
     /// is wakeable. Authenticated (the server's ownership gate matches the poll id); a

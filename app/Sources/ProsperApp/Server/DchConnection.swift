@@ -21,6 +21,7 @@ enum DchFrame {
     static let resize: UInt8  = 0x05  // {cols, rows}  (on an attached conn)
     static let rename: UInt8  = 0x06  // {name, alias}  (alias "" clears)
     static let redraw: UInt8  = 0x07  // (empty) force remote repaint (on an attached conn)
+    static let machineInfo: UInt8 = 0x08 // (empty) → machineInfoResp; identity handshake
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -28,6 +29,7 @@ enum DchFrame {
     static let exit: UInt8     = 0x12 // {code}
     static let error: UInt8    = 0x13 // {message}
     static let ok: UInt8       = 0x14 // (empty) ack for kill
+    static let machineInfoResp: UInt8 = 0x18 // {device_id, hostname, wakeId?}
 
     /// Encode one frame. DATA payloads can be large; control payloads are tiny.
     static func encode(_ type: UInt8, _ payload: [UInt8]) -> Data {
@@ -142,6 +144,19 @@ final class DchConnection: @unchecked Sendable {
             }
         case DchFrame.redraw:
             pty?.redraw()
+        case DchFrame.machineInfo:
+            // Identity-only handshake (read-only, no side effects). Lets the paired
+            // app bind this connection to a stable machine + its wake id, so it can
+            // wake the right Mac later regardless of which address was dialed. The
+            // wake config itself (enabled/cadence) is fetched authenticated from the
+            // server; only non-secret identity goes over the tailnet. wakeId is nil
+            // until remote-wake was configured while signed in.
+            var info: [String: Any] = [
+                "device_id": SupporterStore.deviceID(),
+                "hostname": SupporterStore.deviceName(),
+            ]
+            if let wakeId = LiveExtensionHostServices.currentWakeId { info["wakeId"] = wakeId }
+            send(DchFrame.encode(DchFrame.machineInfoResp, json: info))
         default:
             break
         }
