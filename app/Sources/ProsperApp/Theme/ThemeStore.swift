@@ -40,6 +40,13 @@ final class ThemeStore: ObservableObject {
     /// `ThemeRuntime.frost`. Forced off while system "Reduce transparency" is on.
     @Published private(set) var frost = false
 
+    /// Bumped on opacity/frost changes. Unlike `generation` (which keys `Themed`'s
+    /// `.id()` and tears the whole window subtree down — needed for scale/palette
+    /// swaps that touch every view), these only affect the few backdrop views. They
+    /// observe this tick so they re-render in place: no teardown, no lost scroll or
+    /// focus, no main-thread hitch from rebuilding the entire pane on a slider tap.
+    @Published private(set) var backdropTick: Int = 0
+
     /// Invoked after each apply (and after async assets land) so AppKit can
     /// re-skin non-SwiftUI surfaces. Set by AppDelegate.
     var onChange: (() -> Void)?
@@ -88,7 +95,7 @@ final class ThemeStore: ObservableObject {
                 guard op != ThemeRuntime.opacity || fr != ThemeRuntime.frost else { return }
                 ThemeRuntime.opacity = op
                 ThemeRuntime.frost = fr
-                self.generation &+= 1
+                self.backdropTick &+= 1
                 self.onChange?()
             }
         }
@@ -128,25 +135,27 @@ final class ThemeStore: ObservableObject {
         onChange?()
     }
 
-    /// User changed the window opacity. Same live-rebuild path as `setScale`.
+    /// User changed the window opacity. Only the backdrop views care, so bump the
+    /// light `backdropTick` (re-render in place) instead of `generation` (full
+    /// teardown). `onChange` re-applies the AppKit window `isOpaque`/background.
     func setOpacity(_ value: CGFloat) {
         Preferences.uiOpacity = Double(value)
         let clamped = CGFloat(Preferences.uiOpacity)
         guard clamped != opacity else { return }
         opacity = clamped
         ThemeRuntime.opacity = Self.effectiveOpacity(clamped)
-        generation &+= 1
+        backdropTick &+= 1
         onChange?()
     }
 
-    /// User toggled Frost. Same live-rebuild path as `setOpacity`; `onChange` flips
-    /// the windows' `isOpaque` (the blur needs a non-opaque window).
+    /// User toggled Frost. Backdrop-only, same light path as `setOpacity`; `onChange`
+    /// flips the windows' `isOpaque` (the blur needs a non-opaque window).
     func setFrost(_ value: Bool) {
         Preferences.uiFrost = value
         guard value != frost else { return }
         frost = value
         ThemeRuntime.frost = Self.effectiveFrost(value)
-        generation &+= 1
+        backdropTick &+= 1
         onChange?()
     }
 

@@ -261,14 +261,7 @@ struct ChatRootView: View {
             // streaming), so `@Observable` skips its body while `items` churns.
             ComposerBarView(suggest: suggest)
         }
-        .background(
-            ZStack {
-                // Frost: blurred desktop behind the translucent neon gradient.
-                if ThemeRuntime.frost { VisualEffectBackground() }
-                LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
-                               startPoint: .top, endPoint: .bottom)
-                    .opacity(ThemeRuntime.backdropFillOpacity)
-            })
+        .background(ChatBackdrop())
         .foregroundStyle(Neon.textPrimary)
         .animation(.easeInOut(duration: 0.2), value: isWorking)
         // Float the suggestions above the input field without affecting layout. The
@@ -485,6 +478,24 @@ struct ChatRootView: View {
         switch kind { case .command: return "command"; case .fileChange: return "file changes"; case .permission: return "permission" }
     }
 
+}
+
+// MARK: - Backdrop
+
+/// The chat window's gradient/frost backdrop as its own view, so an opacity/frost
+/// change (backdropTick) re-renders only this — not the whole chat root — and
+/// without `Themed`'s `.id()` teardown. See SettingsBackground.
+private struct ChatBackdrop: View {
+    @ObservedObject private var theme = ThemeStore.shared
+    var body: some View {
+        ZStack {
+            // Frost: blurred desktop behind the translucent neon gradient.
+            if ThemeRuntime.frost { VisualEffectBackground() }
+            LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
+                           startPoint: .top, endPoint: .bottom)
+                .opacity(ThemeRuntime.backdropFillOpacity)
+        }
+    }
 }
 
 // MARK: - Composer bar

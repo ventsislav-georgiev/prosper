@@ -42,7 +42,9 @@ struct AppearanceSettingsPane: View {
             NeonSection("Transparency", accent: "Transparency",
                         footer: reduceTransparency
                             ? "System “Reduce transparency” is on, so windows stay opaque."
-                            : "Lets the desktop show through Prosper’s windows.") {
+                            : theme.frost
+                                ? "Tunes the frosted glass: lower shows more of the blurred desktop through it."
+                                : "Lets the desktop show through Prosper’s windows.") {
                 Picker("", selection: Binding(
                     get: { Self.nearest(theme.opacity, in: Self.opacityPresets) },
                     set: { theme.setOpacity($0) })) {
@@ -58,7 +60,7 @@ struct AppearanceSettingsPane: View {
             NeonSection("Frost", accent: "Frost",
                         footer: reduceTransparency
                             ? "System “Reduce transparency” is on, so Frost is unavailable."
-                            : "Frosted glass: blurs the desktop behind Prosper’s windows. Pairs with Transparency.") {
+                            : "Frosted glass: blurs the desktop behind Prosper’s windows. Use Transparency to tune the glass.") {
                 Toggle(isOn: Binding(
                     get: { theme.frost },
                     set: { theme.setFrost($0) })) {
@@ -75,8 +77,8 @@ struct AppearanceSettingsPane: View {
     // `generation`, which rebuilds the whole window via `.id()`. A continuous
     // slider drag would get its gesture state torn out from under it on every
     // step; segmented taps rebuild once per change, cleanly.
-    static let sizePresets: [CGFloat] = [0.85, 1.0, 1.15, 1.3]
-    static let opacityPresets: [CGFloat] = [1.0, 0.9, 0.8, 0.7]
+    static let sizePresets: [CGFloat] = [0.7, 0.85, 1.0, 1.15, 1.3, 1.45]
+    static let opacityPresets: [CGFloat] = [1.0, 0.8, 0.65, 0.5, 0.35]
 
     private var reduceTransparency: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency

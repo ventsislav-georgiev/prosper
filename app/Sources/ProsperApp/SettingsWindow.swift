@@ -45,6 +45,14 @@ final class SettingsWindow {
         }
         let root = SettingsRootView()
         let hosting = NSHostingController(rootView: Themed { root })
+        // Don't let SwiftUI drive the window size. On macOS 13+ NSHostingController
+        // defaults to growing the window to the view's intrinsic height, so a tall
+        // pane (the openlid Remote Wake section with its help expanded) stretched the
+        // window past the screen — its bottom rows drew offscreen and the NeonScroll
+        // never scrolled because it was handed all the height it asked for. The frame
+        // is managed manually below (explicit size + min/max + autosave); an empty
+        // sizingOptions keeps it that way and lets the inner ScrollView do the work.
+        hosting.sizingOptions = []
         let win = CommandWClosableWindow(contentViewController: hosting)
         win.title = "Prosper Settings"
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]

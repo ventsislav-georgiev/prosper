@@ -91,8 +91,8 @@ final class DisplayMetricsTests: XCTestCase {
         let s = AppearanceSettingsPane.sizePresets
         XCTAssertEqual(AppearanceSettingsPane.nearest(1.0, in: s), 1.0)
         XCTAssertEqual(AppearanceSettingsPane.nearest(1.14, in: s), 1.15)
-        XCTAssertEqual(AppearanceSettingsPane.nearest(0.5, in: s), 0.85, "below-range snaps to lowest preset")
-        XCTAssertEqual(AppearanceSettingsPane.nearest(9.0, in: s), 1.3, "above-range snaps to highest preset")
+        XCTAssertEqual(AppearanceSettingsPane.nearest(0.0, in: s), s.first, "below-range snaps to lowest preset")
+        XCTAssertEqual(AppearanceSettingsPane.nearest(9.0, in: s), s.max(), "above-range snaps to highest preset")
     }
 
     func testPercentFormat() {
@@ -137,23 +137,25 @@ final class DisplayMetricsTests: XCTestCase {
     }
 
     @MainActor
-    func testSetFrostMirrorsBumpsGenerationAndDedups() {
+    func testSetFrostMirrorsBumpsBackdropTickAndDedups() {
         let store = ThemeStore(defaults: UserDefaults(suiteName: "dm-\(UUID())")!, cacheDir: tmpCache())
         var hookFired = 0
         store.onChange = { hookFired += 1 }
         let g0 = store.generation
+        let t0 = store.backdropTick
         store.setFrost(true)
         XCTAssertTrue(store.frost)
         XCTAssertTrue(Preferences.uiFrost, "must persist to the preference")
         XCTAssertEqual(ThemeRuntime.frost, ThemeStore.effectiveFrost(true),
                        "must mirror the effective value into the render-thread global")
-        XCTAssertGreaterThan(store.generation, g0, "frost change must bump generation for full rebuild")
+        XCTAssertGreaterThan(store.backdropTick, t0, "frost change must bump backdropTick to re-render backdrops")
+        XCTAssertEqual(store.generation, g0, "frost is backdrop-only — must NOT bump generation (no full teardown)")
         XCTAssertEqual(hookFired, 1, "AppKit reconcile hook (flips window isOpaque) must fire once")
 
-        // Redundant set is a no-op: no extra rebuild, no extra hook.
-        let g1 = store.generation
+        // Redundant set is a no-op: no extra re-render, no extra hook.
+        let t1 = store.backdropTick
         store.setFrost(true)
-        XCTAssertEqual(store.generation, g1)
+        XCTAssertEqual(store.backdropTick, t1)
         XCTAssertEqual(hookFired, 1)
     }
 
@@ -182,12 +184,14 @@ final class DisplayMetricsTests: XCTestCase {
     func testSetOpacityMirrorsAndClamps() {
         let store = ThemeStore(defaults: UserDefaults(suiteName: "dm-\(UUID())")!, cacheDir: tmpCache())
         let g0 = store.generation
+        let t0 = store.backdropTick
         store.setOpacity(0.7)
         XCTAssertEqual(store.opacity, 0.7, accuracy: 0.0001)
         // ThemeRuntime gets the *effective* opacity (downgraded to 1.0 only when the
         // system Reduce-transparency setting is on).
         XCTAssertEqual(ThemeRuntime.opacity, ThemeStore.effectiveOpacity(0.7), accuracy: 0.0001)
-        XCTAssertGreaterThan(store.generation, g0)
+        XCTAssertGreaterThan(store.backdropTick, t0, "opacity is backdrop-only — bumps backdropTick, not generation")
+        XCTAssertEqual(store.generation, g0, "opacity change must NOT trigger a full-window teardown")
 
         // Out-of-range request is clamped by the preference, then a redundant clamp
         // lands on the same stored value → no second bump.
@@ -243,12 +247,14 @@ final class DisplayMetricsTests: XCTestCase {
     @inline(never)
     private static func readFill() -> CGFloat { ThemeRuntime.backdropFillOpacity }
 
-    // MARK: Frost — backdrop fill composition
+    // MARK: Frost — backdrop fill (Transparency tunes the glass density)
 
     /// `backdropFillOpacity` is the single source every backdrop fades to. Non-frost
-    /// returns the plain transparency; frost composes the glass tint WITH transparency
-    /// so the Transparency control still tunes the glass (honouring the settings copy).
-    func testBackdropFillComposesFrostWithOpacity() {
+    /// returns the plain transparency. Frost maps the Transparency presets (1.0…0.7)
+    /// onto a wide, visible glass-tint range (frostSurfaceOpacity…frostTintMin): 100%
+    /// preserves the original frost look, lower presets thin the tint so more blurred
+    /// desktop shows. Monotonic and clamped at both ends.
+    func testBackdropFillFrostTracksTransparency() {
         ThemeRuntime.frost = false
         ThemeRuntime.opacity = 0.7
         XCTAssertEqual(ThemeRuntime.backdropFillOpacity, 0.7, accuracy: 0.0001,
@@ -257,11 +263,20 @@ final class DisplayMetricsTests: XCTestCase {
         ThemeRuntime.frost = true
         ThemeRuntime.opacity = 1.0
         XCTAssertEqual(ThemeRuntime.backdropFillOpacity, ThemeRuntime.frostSurfaceOpacity, accuracy: 0.0001,
-                       "frost at full opacity = the glass tint")
+                       "frost at 100% = the densest glass tint (original look preserved)")
 
-        ThemeRuntime.opacity = 0.7
-        XCTAssertEqual(ThemeRuntime.backdropFillOpacity, ThemeRuntime.frostSurfaceOpacity * 0.7, accuracy: 0.0001,
-                       "frost composes with transparency so the slider still has effect")
+        ThemeRuntime.opacity = CGFloat(Preferences.uiOpacityRange.lowerBound)
+        XCTAssertEqual(ThemeRuntime.backdropFillOpacity, ThemeRuntime.frostTintMin, accuracy: 0.0001,
+                       "frost at the lowest preset = the thinnest glass tint")
+
+        // The Transparency control has a real, perceptible effect under frost: each
+        // step down thins the glass. The mid presets must be strictly between the ends.
+        ThemeRuntime.opacity = 0.9
+        let mid = ThemeRuntime.backdropFillOpacity
+        XCTAssertGreaterThan(mid, ThemeRuntime.frostTintMin)
+        XCTAssertLessThan(mid, ThemeRuntime.frostSurfaceOpacity)
+        XCTAssertGreaterThan(ThemeRuntime.frostSurfaceOpacity - ThemeRuntime.frostTintMin, 0.3,
+                             "the tint range must be wide enough to actually see")
     }
 
     // MARK: Frost — window isOpaque wiring (Chat/Settings)
