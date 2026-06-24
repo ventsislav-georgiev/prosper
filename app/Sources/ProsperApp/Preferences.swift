@@ -385,7 +385,7 @@ enum Preferences {
 
     /// Global UI size multiplier (Appearance → UI Size). Default 1.0 = unchanged.
     /// Clamped so a stale/garbage default can never blow the layout up or collapse it.
-    static let uiScaleRange: ClosedRange<Double> = 0.8...1.4
+    static let uiScaleRange: ClosedRange<Double> = 0.7...1.45
     static var uiScale: Double {
         get {
             // `object(forKey:)` so an unset default reads as 1.0, not 0.0.
@@ -396,7 +396,7 @@ enum Preferences {
     }
 
     /// Global window opacity (Appearance → Transparency). Default 1.0 = fully opaque.
-    static let uiOpacityRange: ClosedRange<Double> = 0.6...1.0
+    static let uiOpacityRange: ClosedRange<Double> = 0.35...1.0
     static var uiOpacity: Double {
         get {
             guard defaults.object(forKey: Keys.uiOpacity) != nil else { return 1.0 }

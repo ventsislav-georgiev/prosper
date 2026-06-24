@@ -126,6 +126,9 @@ struct VisualEffectBackground: NSViewRepresentable {
 /// faint neon glows (cyan top-left, indigo bottom-right) plus a hairline scanline
 /// veil. Painted behind every Settings surface.
 struct SettingsBackground: View {
+    // Observe the store so an opacity/frost change (backdropTick) re-renders just
+    // this backdrop in place — no `Themed` `.id()` teardown of the whole pane.
+    @ObservedObject private var theme = ThemeStore.shared
     var body: some View {
         ZStack {
             // Frost: blurred desktop sits at the back; the neon gradient drops to a
@@ -389,6 +392,8 @@ extension ButtonStyle where Self == NeonButtonStyle {
 
 private struct NeonPanelSurface: ViewModifier {
     var corner: CGFloat = 12
+    // See SettingsBackground: re-render the surface on opacity/frost without a teardown.
+    @ObservedObject private var theme = ThemeStore.shared
     func body(content: Content) -> some View {
         let c = sz(corner)
         return content
@@ -443,6 +448,8 @@ struct SettingsTab: Identifiable, Hashable {
 struct SettingsSidebar: View {
     let groups: [(String, [SettingsTab])]
     @Binding var selection: String
+    // Re-render the sidebar backdrop on opacity/frost without a teardown (see SettingsBackground).
+    @ObservedObject private var theme = ThemeStore.shared
 
     var body: some View {
         ScrollView {

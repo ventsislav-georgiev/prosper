@@ -142,20 +142,29 @@ enum ThemeRuntime {
     /// needs a non-opaque window), same onChange hook as `opacity`.
     nonisolated(unsafe) static var frost = false
 
-    /// Tint alpha of the theme gradient over the frost blur AT full opacity, so the
-    /// neon palette still reads while the blurred desktop shows through. Composed with
-    /// `opacity` below — never read this raw on a render path; use `backdropFillOpacity`.
+    /// Densest glass tint — the alpha of the theme gradient over the frost blur at
+    /// the 100% Transparency preset (preserves the original frost look). Lower presets
+    /// thin it toward `frostTintMin` so more blurred desktop shows through. Never read
+    /// raw on a render path; use `backdropFillOpacity`.
     nonisolated(unsafe) static let frostSurfaceOpacity: CGFloat = 0.6
+    /// Thinnest glass tint, at the lowest Transparency preset. Floored above 0 so the
+    /// neon palette never fully vanishes into the bare blur.
+    nonisolated(unsafe) static let frostTintMin: CGFloat = 0.15
 
-    /// Single source of truth for the alpha every window/panel backdrop fades its
-    /// fill to. Non-frost: the plain transparency setting. Frost: the glass tint
-    /// composed with transparency (`frostSurfaceOpacity × opacity`) so the
-    /// Transparency control still tunes how much blurred desktop shows through the
-    /// glass. Content/text drawn ON TOP stays fully opaque either way, so lowering
-    /// this never hurts readability. Read on every backdrop render (per keystroke in
-    /// the launcher) — keep it a pure arithmetic read, no disk/lock work.
+    /// Single source of truth for the alpha every window/panel backdrop fades its fill
+    /// to. Non-frost: the plain transparency setting. Frost: the Transparency control
+    /// tunes the glass density — it maps the opacity presets (1.0…0.7) onto a wide,
+    /// visibly-distinct tint range (`frostSurfaceOpacity`…`frostTintMin`). The blur is
+    /// dominant, so a narrow range reads as "no effect"; this spans enough that each
+    /// preset clearly changes how much desktop shows. Content/text drawn ON TOP stays
+    /// fully opaque either way. Read on every backdrop render — keep it pure arithmetic.
     static var backdropFillOpacity: CGFloat {
-        frost ? frostSurfaceOpacity * opacity : opacity
+        guard frost else { return opacity }
+        // Map the full Transparency range (lowest preset…1.0) onto the glass-tint range.
+        // Floor comes from the one clamp definition so adding presets never desyncs it.
+        let lo = CGFloat(Preferences.uiOpacityRange.lowerBound)
+        let t = max(0, min(1, (opacity - lo) / (1 - lo)))
+        return frostTintMin + t * (frostSurfaceOpacity - frostTintMin)
     }
 }
 

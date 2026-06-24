@@ -5,6 +5,27 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.115.0-beta.2
+
+### Appearance
+- **Frost now has a working transparency dial.** Enabling Frost and changing Transparency
+  did nothing before — the glass tint moved over a range too narrow to see under the blur.
+  Transparency now maps onto the full glass-density range, so lower values genuinely show
+  more of the blurred desktop through the frosted panel. The control stays enabled while
+  Frost is on (it tunes the glass) and is only forced off by the system "Reduce
+  transparency" setting.
+- **Changing Transparency or Frost no longer micro-freezes the window.** These used to bump
+  the theme generation and rebuild the entire window subtree on every step; they now drive
+  a backdrop-only tick that re-renders just the background views in place — no teardown, no
+  hitch, scroll/focus preserved. (UI Size still rebuilds, since it touches every sized site.)
+- **Wider Transparency and UI Size ranges.** Transparency now goes down to 35% (was 60%);
+  UI Size now spans 70%–145% (was 85%–130%). The frost glass floor tracks the lowest
+  Transparency preset from a single clamp definition, so the two never desync.
+
+### Remote Wake
+- **machineInfo handshake (0x08/0x18) for remote-wake identity.** Adds the device-identity
+  exchange so a remote wake can be matched to the right machine.
+
 ## v2.115.0-beta.1
 
 ### Launcher Search
