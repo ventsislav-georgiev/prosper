@@ -10,6 +10,7 @@
 #   scripts/release.sh patch      # patch bump (vX.Y.Z → vX.Y.(Z+1))
 #   scripts/release.sh major      # major bump (vX.Y.Z → v(X+1).0.0)
 #   scripts/release.sh beta       # next minor as a beta: vX.(Y+1).0-beta.N
+#   scripts/release.sh promote    # promote the latest -beta.N to its stable version
 #   scripts/release.sh v3.0.0     # explicit version (incl. -beta.N pre-releases)
 #
 # A "-beta.N" tag publishes a GitHub *pre-release*; release.yml tags its appcast
@@ -37,8 +38,16 @@ elif [[ "$ARG" == beta ]]; then
   if [[ -n "$LASTB" ]]; then N=$(( ${LASTB##*.} + 1 )); else N=1; fi
   NEXT="${BASE}-beta.${N}"
   LATEST="$STABLE"
+elif [[ "$ARG" == promote ]]; then
+  # Promote the highest -beta.N tag to its stable version (strip the suffix).
+  LASTB=$(git tag -l 'v*-beta.*' | sort -V | tail -n1)
+  [[ -n "$LASTB" ]] || { echo "error: no -beta.N tag to promote" >&2; exit 1; }
+  NEXT="${LASTB%-beta.*}"
+  LATEST="$LASTB"
 else
-  LATEST=$(git tag -l 'v*' | sort -V | tail -n1)
+  # Stable bumps base off the latest STABLE tag (ignore -beta.N, whose suffix
+  # would corrupt the PATCH field and skip a minor).
+  LATEST=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
   LATEST="${LATEST:-v0.0.0}"
   IFS=. read -r MAJ MIN PAT <<< "${LATEST#v}"
   case "$ARG" in

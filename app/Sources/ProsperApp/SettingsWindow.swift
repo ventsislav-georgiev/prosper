@@ -2260,16 +2260,18 @@ private struct WindowManagementPane: View {
             .disabled(!model.dragSnapEnabled)
 
             NeonSection("Layouts",
-                        footer: "“Edges & corners” gives the classic half/quarter snaps. “Layout zones” shows your active custom layout’s tiles on screen while dragging, and drops the window into whichever tile the pointer is over.") {
+                        footer: "“Edges & corners” gives the classic half/quarter snaps. “Layout zones” shows your active custom layout’s tiles on screen while dragging, and drops the window into whichever tile the pointer is over. “Layout palette” shows all your layouts as small templates near the top of the screen — drag onto a cell to send the window to that spot.") {
                 Picker("Snap into", selection: $model.snapMode) {
                     ForEach(SnapMode.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
-                if model.snapMode == .layouts {
-                    NeonDivider()
-                    Picker("Active layout", selection: Binding(
-                        get: { model.layoutStore.activeLayout?.id },
-                        set: { model.layoutStore.activeLayoutId = $0 })) {
-                        ForEach(model.layoutStore.allLayouts) { Text($0.name).tag(Optional($0.id)) }
+                if model.snapMode != .edges {
+                    if model.snapMode == .layouts {
+                        NeonDivider()
+                        Picker("Active layout", selection: Binding(
+                            get: { model.layoutStore.activeLayout?.id },
+                            set: { model.layoutStore.activeLayoutId = $0 })) {
+                            ForEach(model.layoutStore.allLayouts) { Text($0.name).tag(Optional($0.id)) }
+                        }
                     }
                     NeonDivider()
                     NeonRow("Gap", subtitle: "\(Int(model.layoutGap)) px") {
