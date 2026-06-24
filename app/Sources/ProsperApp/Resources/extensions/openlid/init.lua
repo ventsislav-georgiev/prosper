@@ -414,6 +414,12 @@ function on_launch(payload)
         end
     end
     if not s.caffeine and c.caffeineAtLaunch then caffeine_on(nil) end
+    -- Re-arm remote wake every launch. It's otherwise applied only on a settings
+    -- toggle, so enabling it before signing in (or any restart since) left the host
+    -- side never run while signed-in: no meta URL written, no wakeId in the identity
+    -- handshake, daemon polling an empty-acctTag URL. Re-applying here picks up the
+    -- now-signed-in account and reports fresh meta so a paired device sees the badge.
+    apply_remote_wake()
 end
 
 function on_battery(payload)

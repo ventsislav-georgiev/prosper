@@ -5,6 +5,12 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.115.0-beta.3
+
+### Appearance
+- **More Transparency presets.** Added 90% and 75% to the Transparency dial, so the
+  range is now 100% / 90% / 80% / 75% / 65% / 50% / 35%.
+
 ## v2.115.0-beta.2
 
 ### Appearance
