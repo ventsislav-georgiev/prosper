@@ -5,6 +5,18 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.115.0-beta.5
+
+### Remote Wake
+- **Fixed: enabling wake silently did nothing (no phone badge, no arming).** The toggle
+  pushed the config to the privileged helper daemon over XPC *before* recording the wake
+  identity. When that daemon had idle-exited (its normal resting state), the call got no
+  reply and no error — it hung forever, so the wake identity was never written and the
+  paired phone never learned this Mac's wake id. Worse, the stalled call sat on a serial
+  queue, so every later toggle was dead until the app was relaunched. Now the wake identity
+  is written and advertised to the server first, and the daemon call is hard-timed-out
+  (6s) so an idle or slow daemon can never wedge the toggle again.
+
 ## v2.115.0-beta.4
 
 ### Remote Wake
