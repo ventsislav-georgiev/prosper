@@ -1,4 +1,5 @@
 import Foundation
+import LidHelperProtocol
 
 /// Drives auth + supporter status against the Prosper backend (`server/`).
 ///
@@ -127,10 +128,55 @@ final class SupporterClient: ObservableObject {
 
     func signOut() {
         pollTask?.cancel()
+        // Clear the server-side wake ETA before dropping creds: we're disarming the
+        // daemon below, so the machine must stop advertising a wake time, or a paired
+        // device shows a wakeable ETA for a Mac that won't wake. Snapshot the session
+        // NOW — it stays valid server-side until expiry, so the detached DELETE works
+        // even after SupporterStore.clear() wipes it locally.
+        if let session = SupporterStore.load()?.session {
+            let metaURL = UserDefaults.standard.string(forKey: LiveExtensionHostServices.wakeMetaURLKey)
+                .flatMap(URL.init(string:))
+            let logoutURL = URL(string: ProsperServer.baseURL.appending(path: "/auth/logout").absoluteString)
+            // Best-effort, detached: the session stays valid server-side until expiry,
+            // so these run fine after the local clear below. Revoke the session server-side
+            // (a leaked 365-day token must die at sign-out, not live to TTL) and clear the
+            // wake ETA (paired device shouldn't show a wakeable Mac that just disarmed).
+            Task.detached {
+                if let logoutURL {
+                    var req = URLRequest(url: logoutURL)
+                    req.httpMethod = "POST"
+                    req.timeoutInterval = 10
+                    req.setValue("Bearer \(session)", forHTTPHeaderField: "Authorization")
+                    _ = try? await URLSession.shared.data(for: req)
+                }
+                if let metaURL {
+                    var req = URLRequest(url: metaURL)
+                    req.httpMethod = "DELETE"
+                    req.timeoutInterval = 10
+                    req.setValue("Bearer \(session)", forHTTPHeaderField: "Authorization")
+                    _ = try? await URLSession.shared.data(for: req)
+                }
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: LiveExtensionHostServices.wakeMetaURLKey)
         SupporterStore.clear()
         Entitlements.shared.reset()
         devices = []
         loginState = .idle
+        // Remote-wake is account-scoped: its persisted poll URL embeds this account's
+        // acctTag. Signed out, the daemon would poll a dead URL forever (battery) and
+        // couldn't be woken anyway (no session can POST a matching acctTag). Always
+        // disarm — the daemon survives app restarts (RunAtLoad), so a fresh process
+        // can't tell from in-memory state whether it's still armed on the old account.
+        // ponytail: user re-enables after signing in, which re-derives the URL for the
+        // new account. Login can't swap accounts without signOut (AccountPane gates it).
+        //
+        // Route through enqueueApply, NOT a bare Task: setRemoteWake/setDisabled are
+        // @MainActor with await points, so a bare disarm could run between an in-flight
+        // setDisabled(true)'s awaits and invalidate the shared connection (holdsLidOverride
+        // isn't set until after that op's await) — tearing down a lid override mid-apply.
+        // The serial chain orders it after any in-flight daemon op.
+        LidSleepHelper.enqueueApply { _ = await LidSleepHelper.setRemoteWake(.disabled) }
     }
 
     // MARK: - Unauthenticated auth endpoints

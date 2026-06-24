@@ -1,5 +1,26 @@
 import type { Ctx } from "./types";
 import { intEnv, nowSec } from "./util";
+import { acctTag } from "./wakeId.mjs";
+
+/**
+ * Delete every wake key in this account's namespace. The remote-wake flag
+ * (`wake:<id>`, 7d) and reported cadence (`wakemeta:<id>`, 1yr) live in KV keyed
+ * by `<acctTag>-<devTag>`; account deletion must purge them or they orphan for up
+ * to a year — disclosed PII. We only know the acctTag (from the email), not each
+ * devTag, so list-by-prefix and delete. ponytail: paginates via cursor; a typical
+ * account has a handful of devices, so this is one or two list pages.
+ */
+async function sweepWakeKeys(c: Ctx, email: string) {
+  const tag = await acctTag(email);
+  for (const prefix of [`wake:${tag}-`, `wakemeta:${tag}-`]) {
+    let cursor: string | undefined;
+    do {
+      const page = await c.env.KV.list({ prefix, cursor });
+      await Promise.all(page.keys.map((k) => c.env.KV.delete(k.name)));
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+  }
+}
 
 type DeviceRow = {
   device_id: string;
@@ -88,5 +109,6 @@ export async function deleteAccount(c: Ctx) {
     c.env.DB.prepare(`DELETE FROM settings WHERE email = ?1`).bind(email),
     c.env.DB.prepare(`UPDATE users SET deleted_at = ?2 WHERE email = ?1`).bind(email, now),
   ]);
+  await sweepWakeKeys(c, email);
   return c.json({ ok: true });
 }

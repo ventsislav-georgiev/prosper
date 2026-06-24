@@ -341,6 +341,7 @@ final class ExtensionRegistry: ObservableObject {
     }
 
     private func rebuildRoutes() {
+        cachedCommandEntries = nil   // live command set changed → drop discovery memo
         commandByID.removeAll(keepingCapacity: true)
         matchRoutes.removeAll(keepingCapacity: true)
         for record in records where record.isLive {
@@ -462,6 +463,69 @@ final class ExtensionRegistry: ObservableObject {
         }
         out.append(contentsOf: dynamicModeProvider?() ?? [])
         return out.sorted { $0.prefix.count > $1.prefix.count }
+    }
+
+    /// A live extension command, flattened for the launcher's discovery search.
+    /// `haystack` is the precomputed lowercased text the scorer matches against —
+    /// the command title, its keywords, AND the contributing extension's name +
+    /// title — so typing an extension's name ("translate", "openlid") or any
+    /// keyword ("lid", "awake") surfaces all of its commands as ranked rows, not
+    /// just the ones whose `prefix`/`match` the user happens to remember.
+    struct CommandSearchEntry: Sendable, Equatable {
+        let commandID: String
+        let title: String
+        let icon: String
+        let extensionTitle: String
+        /// Opens its own window on select (vs entering an inline mode). The
+        /// run-immediately-vs-wait-for-input choice for inline commands is re-read
+        /// from the command (`runs_on_select`) in the runner, not carried here.
+        let launchesWindow: Bool
+        /// Lowercased match text (title + keywords + extension name/title).
+        let haystack: String
+        /// Tie-break length (command title), so a long keyword list doesn't sink it.
+        let tieLen: Int
+    }
+
+    /// Built-in commands answered by dedicated `RunnerOutcome` cases — never
+    /// surfaced as discovery rows (you don't "open" the calc engine) and never
+    /// re-dispatched by the generic extension step. Single source of truth shared
+    /// with `CommandRouter`'s generic-dispatch guard.
+    nonisolated static let dedicatedCommandIDs: Set<String> =
+        ["calc.eval", "unit.convert", "currency.convert"]
+
+    /// All live extension commands flattened for the discovery search (see
+    /// `CommandSearchEntry`). Pure manifest data — no Lua VM. Called on the
+    /// per-keystroke launcher hot path; cost is O(commands) over a handful of
+    /// dozen commands (string joins precomputed here), negligible next to the
+    /// app-name scan it rides alongside.
+    /// Memoized: the result only changes when the live command set does, and every
+    /// such mutation routes through `rebuildRoutes()` (discover/enable/trust/…),
+    /// which drops the cache. So per-keystroke calls are an O(1) hit after the
+    /// first build — no repeated string-join + lowercase allocation on the main
+    /// actor. Measured: 300 commands rebuild in ~0.3ms (debug); cache hit is free.
+    private var cachedCommandEntries: [CommandSearchEntry]?
+    func commandSearchEntries() -> [CommandSearchEntry] {
+        if let cachedCommandEntries { return cachedCommandEntries }
+        var out: [CommandSearchEntry] = []
+        for record in records where record.isLive {
+            let ext = record.manifest.extension
+            for command in record.manifest.contributes?.allCommands ?? []
+            where !Self.dedicatedCommandIDs.contains(command.id) {
+                let parts = [command.title]
+                    + (command.keywords ?? [])
+                    + [ext.title, ext.name]
+                out.append(CommandSearchEntry(
+                    commandID: command.id,
+                    title: command.title,
+                    icon: command.icon ?? "puzzlepiece.extension",
+                    extensionTitle: ext.title,
+                    launchesWindow: command.launchesWindow,
+                    haystack: parts.joined(separator: " ").lowercased(),
+                    tieLen: command.title.count))
+            }
+        }
+        cachedCommandEntries = out
+        return out
     }
 
     /// Resolves a custom dynamic placeholder `{name …}` contributed by an enabled

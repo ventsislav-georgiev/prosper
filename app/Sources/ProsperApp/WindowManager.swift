@@ -122,6 +122,70 @@ enum WindowManager {
         }
     }
 
+    // MARK: - Layout zone geometry (drag-into-zone window layouts)
+
+    /// AX top-left rect a normalized zone (0…1 over the visible frame) maps to
+    /// inside `v`, with `gap` breathing room. Gap model: shrink the visible frame
+    /// by gap/2 on every side, place the zone in it, then inset the placed rect by
+    /// gap/2. Net result — equal-fraction zones get EQUAL pixel widths (±1px from
+    /// independent rounding), the gap between adjacent windows is `gap`, and the
+    /// margin to the screen edge is also `gap`. The older "outer full gap, interior
+    /// half" model made outer windows 0.5·gap narrower; that was a model artifact,
+    /// not rounding, so it isn't fixable by sharing integer edges.
+    static func targetFrame(zone normRect: CGRect, visible v: CGRect, gap: CGFloat) -> CGRect {
+        let half = max(0, gap) / 2
+        let vp = v.insetBy(dx: half, dy: half)
+        let raw = CGRect(x: vp.minX + normRect.minX * vp.width,
+                         y: vp.minY + normRect.minY * vp.height,
+                         width: normRect.width * vp.width,
+                         height: normRect.height * vp.height)
+        // Clamp the inset per-axis so a zone narrower/shorter than the gap doesn't
+        // invert (negative size → a 1px sliver shoved to an arbitrary x). For normal
+        // zones (gap ≪ zone) this is a no-op; only degenerate thin zones degrade — to
+        // a small centered rect rather than an off-position sliver.
+        let hx = min(half, max(0, raw.width) / 2)
+        let hy = min(half, max(0, raw.height) / 2)
+        let placed = raw.insetBy(dx: hx, dy: hy)
+        // ponytail: independent per-rect rounding can drift adjacent equal zones by
+        // ≤1px; a shared integer-edge table would kill even that, not worth it.
+        return CGRect(x: placed.minX.rounded(), y: placed.minY.rounded(),
+                      width: max(1, placed.width.rounded()),
+                      height: max(1, placed.height.rounded()))
+    }
+
+    /// All zone target rects for a layout. The overlay tiles AND the drop placement
+    /// both come from here, so the preview is exactly where the window lands.
+    static func targetFrames(layout zones: [LayoutZone], visible v: CGRect, gap: CGFloat) -> [CGRect] {
+        zones.map { targetFrame(zone: $0.rect, visible: v, gap: gap) }
+    }
+
+    /// Snap a window into a layout zone (normalized AX rect) on a screen — the
+    /// layout-mode analogue of `snap(_:to:onScreen:)`. When `moveOnly` is set
+    /// (Quick Positions), the window keeps its current size and only its origin
+    /// moves to the zone anchor, clamped to the visible frame.
+    static func snap(_ win: AXUIElement, toZone normRect: CGRect, onScreen screen: NSScreen,
+                     gap: CGFloat, moveOnly: Bool = false) {
+        let v = visibleFrameAX(for: screen)
+        let zoneRect = targetFrame(zone: normRect, visible: v, gap: gap)
+        var target = zoneRect
+        if moveOnly, let current = axFrame(win) {
+            target = CGRect(origin: moveOnlyOrigin(zoneOrigin: zoneRect.origin,
+                                                   size: current.size, visible: v),
+                            size: current.size)
+        }
+        setFrame(win, target, within: v)
+        lastAction = nil
+        lastWindow = nil
+    }
+
+    /// moveOnly drop origin: pin the zone anchor inside the visible frame. A window
+    /// WIDER/TALLER than the visible frame clamps to the top-left edge (`v.minX`/
+    /// `v.minY`) — the outer `max(v.minX, …)` wins when `v.maxX - width < v.minX`.
+    static func moveOnlyOrigin(zoneOrigin: CGPoint, size: CGSize, visible v: CGRect) -> CGPoint {
+        CGPoint(x: min(max(v.minX, zoneOrigin.x), max(v.minX, v.maxX - size.width)),
+                y: min(max(v.minY, zoneOrigin.y), max(v.minY, v.maxY - size.height)))
+    }
+
     // MARK: - AX plumbing
 
     /// The Accessibility element for the frontmost app's focused window, or nil.
@@ -303,6 +367,14 @@ enum WindowManager {
         toAX(screen.visibleFrame)
     }
 
+    /// Stable per-display id (`CGDirectDisplayID`) for caching tile geometry across
+    /// drag events. `NSScreen.hashValue` is the default object hash and AppKit may
+    /// vend a fresh `NSScreen` for the same physical display between event ticks, so
+    /// it is neither stable nor collision-free; the screen number is. 0 if missing.
+    static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
+
     /// The screen whose full frame contains the AX-space point (top-left coords), or
     /// nil when the point is on no screen. Returns nil (not a fallback to main) on
     /// purpose: the caller classifies snap zones against the returned screen's frame,
@@ -316,6 +388,11 @@ enum WindowManager {
     }
 
     /// Flip an AppKit (bottom-left) rect into the AX top-left global space.
+    /// Anchored to `NSScreen.screens.first` (the primary/menu-bar screen) — NOT
+    /// `.main` (the key-window screen, which moves). The AX global space is anchored
+    /// to the primary's top-left for ALL screens, so the primary height is the only
+    /// one that matters; secondary displays extend into ±Y and round-trip exactly.
+    /// Do NOT "fix" this to `.main` — it would break every multi-monitor placement.
     static func toAX(_ r: CGRect) -> CGRect {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         return CGRect(x: r.origin.x, y: primaryHeight - r.origin.y - r.height,

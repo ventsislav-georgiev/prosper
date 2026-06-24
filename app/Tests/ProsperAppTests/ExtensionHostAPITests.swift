@@ -866,4 +866,28 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertTrue(svc.setDefaults.isEmpty)
         XCTAssertTrue(svc.watches.isEmpty)
     }
+
+    /// Cross-language contract: the Swift wake acctTag MUST equal the server's
+    /// (wakeId.mjs `acctTag`) byte-for-byte, else every wake POST 403s against this
+    /// device's URL silently. Golden value computed from the JS impl for the same
+    /// email; the casing/whitespace variants prove the trim+lowercase normalization.
+    func testWakeAcctTagMatchesServerGolden() {
+        let golden = "ff8d9819fc0e12bf"  // node: acctTag("alice@example.com")
+        XCTAssertEqual(LiveExtensionHostServices.wakeAcctTag("alice@example.com"), golden)
+        XCTAssertEqual(LiveExtensionHostServices.wakeAcctTag("  Alice@Example.COM "), golden)
+    }
+
+    /// The acctTag is account-scoped: distinct accounts get distinct tags, and a
+    /// signed-out config (email "") gets a tag no real account can match. This is the
+    /// premise behind disarming remote-wake on signOut — a stale config armed for one
+    /// account can never be woken by another, and a signed-out daemon polls a dead URL.
+    func testWakeAcctTagIsAccountScoped() {
+        let a = LiveExtensionHostServices.wakeAcctTag("alice@example.com")
+        let b = LiveExtensionHostServices.wakeAcctTag("bob@example.com")
+        let none = LiveExtensionHostServices.wakeAcctTag("")
+        XCTAssertNotEqual(a, b)            // different accounts never collide
+        XCTAssertNotEqual(a, none)         // a real account is never the signed-out tag
+        XCTAssertEqual(none, LiveExtensionHostServices.wakeAcctTag("   "))  // empty == whitespace
+        XCTAssertEqual(none.count, 16)     // still a well-formed tag, just unmatchable
+    }
 }

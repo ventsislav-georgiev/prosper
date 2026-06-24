@@ -93,6 +93,7 @@ final class DragSnapController {
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private let footprint = FootprintWindow()
+    private let layoutOverlay = LayoutOverlayWindow()
 
     // Drag state.
     private var mouseDownAX: CGPoint?
@@ -104,6 +105,18 @@ final class DragSnapController {
     private var preConfirmPolls = 0
     private var currentZone: SnapZone?
     private var currentScreen: NSScreen?
+    // Layout-mode drag state (snapMode == .layouts). Mode + layout are snapshotted
+    // at drag start so a mid-drag settings change can't swap them under the user.
+    private var dragMode: SnapMode = .edges
+    private var dragLayout: WindowLayout?
+    private var dragGap: CGFloat = 8
+    private var currentZoneIdx: Int?
+    // (display, layout) the overlay tiles are currently built for. A value-type
+    // struct, not a String — comparing it on the ~120 Hz path must not allocate.
+    // gap is intentionally omitted: it's snapshotted immutable at drag start, so a
+    // given drag's tiles always match the gap they'll drop with.
+    private struct LayoutSig: Equatable { var display: CGDirectDisplayID; var layout: UUID }
+    private var layoutSig: LayoutSig?
 
     /// Cursor travel (px) before a press is treated as a drag — filters plain clicks.
     private static let dragThreshold: CGFloat = 6
@@ -149,6 +162,7 @@ final class DragSnapController {
         if let m = localMonitor { NSEvent.removeMonitor(m); localMonitor = nil }
         resetDrag()
         footprint.hide()
+        layoutOverlay.hide()
     }
 
     // MARK: - Event handling
@@ -177,9 +191,21 @@ final class DragSnapController {
             // A drag is starting — decide once whether it's eligible to snap.
             guard Preferences.dragSnapModifier.isSatisfied(by: ev.modifierFlags) else { aborted = true; return }
             guard let (el, pid) = WindowManager.windowUnderCursor(), pid != getpid() else { aborted = true; return }
-            guard WindowManager.isResizable(el) else { aborted = true; return }  // skip fixed-size dialogs
             if let bid = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
                Preferences.dragSnapIgnoredBundleIds.contains(bid) { aborted = true; return }
+            dragMode = Preferences.snapMode
+            dragLayout = dragMode == .layouts ? Preferences.layoutStore.activeLayout : nil
+            dragGap = Preferences.layoutGap
+            // No usable active layout → fall back to classic edge snapping rather
+            // than silently no-op'ing the whole drag.
+            if dragMode == .layouts && (dragLayout?.zones.isEmpty ?? true) {
+                dragMode = .edges; dragLayout = nil
+            }
+            // Fixed-size dialogs can't be resized into a zone — but a moveOnly (Quick
+            // Positions) drop only repositions them, so allow those. Abort only when
+            // the drop would actually resize.
+            let willResize = !(dragMode == .layouts && (dragLayout?.isMoveOnly ?? false))
+            if willResize, !WindowManager.isResizable(el) { aborted = true; return }
             dragging = true
             win = el
             winInitialOrigin = WindowManager.axFrame(el)?.origin
@@ -203,13 +229,66 @@ final class DragSnapController {
             }
         }
 
-        guard let screen = WindowManager.screenContaining(axPoint: cur) else {
-            setZone(nil, screen: nil); return
+        let screen = WindowManager.screenContaining(axPoint: cur)
+        switch dragMode {
+        case .edges:
+            guard let screen else { setZone(nil, screen: nil); return }
+            let zone = SnapZone.at(cursorAX: cur, screenAX: WindowManager.toAX(screen.frame),
+                                   edgeMargin: Preferences.dragSnapEdgeMargin,
+                                   cornerSize: Preferences.dragSnapCornerSize)
+            setZone(zone, screen: screen)
+        case .layouts:
+            updateLayoutDrag(cur: cur, screen: screen)
         }
-        let zone = SnapZone.at(cursorAX: cur, screenAX: WindowManager.toAX(screen.frame),
-                               edgeMargin: Preferences.dragSnapEdgeMargin,
-                               cornerSize: Preferences.dragSnapCornerSize)
-        setZone(zone, screen: screen)
+    }
+
+    /// Layout-mode hot path: normalize the cursor over the screen's VISIBLE frame
+    /// (NOT the full frame — zones are defined over the visible frame, so anything
+    /// else makes the preview disagree with the drop), hit-test it against the
+    /// snapshotted layout, and update the overlay highlight.
+    private func updateLayoutDrag(cur: CGPoint, screen: NSScreen?) {
+        guard let screen, let layout = dragLayout, !layout.zones.isEmpty else {
+            setLayoutZone(nil, screen: nil); return
+        }
+        let v = WindowManager.visibleFrameAX(for: screen)
+        guard v.width > 0, v.height > 0 else { setLayoutZone(nil, screen: screen); return }
+        let p = CGPoint(x: (cur.x - v.minX) / v.width, y: (cur.y - v.minY) / v.height)
+        setLayoutZone(LayoutStore.hitZone(layout.zones, normCursor: p), screen: screen)
+    }
+
+    private func setLayoutZone(_ idx: Int?, screen: NSScreen?) {
+        currentScreen = screen
+        let changed = idx != currentZoneIdx
+        currentZoneIdx = idx
+
+        guard moveConfirmed else { return }
+        guard let layout = dragLayout, !layout.zones.isEmpty else {
+            layoutOverlay.hide(); layoutSig = nil; return
+        }
+        guard let screen else {
+            // Cursor in the dead gap between mismatched displays (screenContaining
+            // → nil). Keep the preview on its last screen and just dim the highlight
+            // — tearing the overlay down here fade-churns + rebuilds tiles on every
+            // gap crossing mid-drag. currentZoneIdx is already nil, so a release in
+            // the gap won't snap; real teardown happens in endDrag/resetDrag.
+            layoutOverlay.setHighlight(nil)
+            return
+        }
+        // Tile geometry depends only on (display, layout, gap) — not the hovered
+        // zone. Recompute frames + rebuild the overlay ONLY when that signature
+        // changes (or the overlay isn't up yet); a plain hover change on the
+        // ~120 Hz flood takes the cheap recolor path with zero allocation.
+        let sig = LayoutSig(display: WindowManager.displayID(of: screen), layout: layout.id)
+        if sig != layoutSig || !layoutOverlay.isShowing {
+            layoutSig = sig
+            let v = WindowManager.visibleFrameAX(for: screen)
+            let framesAX = WindowManager.targetFrames(layout: layout.zones, visible: v, gap: dragGap)
+            layoutOverlay.show(zones: layout.zones, framesAX: framesAX, highlight: idx,
+                               screen: screen, accent: NSColor(ThemeRuntime.palette.blue))
+            return
+        }
+        guard changed else { return }
+        layoutOverlay.setHighlight(idx)
     }
 
     private func setZone(_ zone: SnapZone?, screen: NSScreen?) {
@@ -237,10 +316,19 @@ final class DragSnapController {
     }
 
     private func endDrag() {
-        defer { resetDrag(); footprint.hide() }
+        defer { resetDrag(); footprint.hide(); layoutOverlay.hide() }
         guard dragging, !aborted, moveConfirmed,
-              let zone = currentZone, let el = win, let screen = currentScreen else { return }
-        WindowManager.snap(el, to: zone.action, onScreen: screen)
+              let el = win, let screen = currentScreen else { return }
+        switch dragMode {
+        case .edges:
+            guard let zone = currentZone else { return }
+            WindowManager.snap(el, to: zone.action, onScreen: screen)
+        case .layouts:
+            guard let layout = dragLayout, let idx = currentZoneIdx,
+                  layout.zones.indices.contains(idx) else { return }
+            WindowManager.snap(el, toZone: layout.zones[idx].rect, onScreen: screen,
+                               gap: dragGap, moveOnly: layout.isMoveOnly)
+        }
     }
 
     private func resetDrag() {
@@ -253,6 +341,12 @@ final class DragSnapController {
         preConfirmPolls = 0
         currentZone = nil
         currentScreen = nil
+        dragMode = .edges
+        dragLayout = nil
+        dragGap = 8
+        currentZoneIdx = nil
+        layoutSig = nil
+        layoutOverlay.hide()   // keep overlay visibility in lockstep with layoutSig
     }
 
     /// Current cursor in the AX top-left global space (NSEvent is bottom-left).

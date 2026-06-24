@@ -49,7 +49,10 @@ final class ClipboardPanel {
         hosting.autoresizingMask = [.width, .height]
         hosting.wantsLayer = true
         hosting.layer?.cornerRadius = 12
-        hosting.layer?.masksToBounds = true
+        // masksToBounds OFF: clipping the host layer forces offscreen compositing,
+        // which kills the Frost backdrop's `.behindWindow` sampling (same lesson as
+        // FootprintWindow). `neonPanelSurface().clipShape` already rounds the content.
+        hosting.layer?.masksToBounds = false
         panel.contentView = hosting
     }
 

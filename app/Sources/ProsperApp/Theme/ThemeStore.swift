@@ -36,6 +36,9 @@ final class ThemeStore: ObservableObject {
     /// Changing either bumps `generation` (same live-rebuild path as a theme swap).
     @Published private(set) var scale: CGFloat = 1.0
     @Published private(set) var opacity: CGFloat = 1.0
+    /// Frosted-glass backgrounds. Persisted via Preferences; mirrored into
+    /// `ThemeRuntime.frost`. Forced off while system "Reduce transparency" is on.
+    @Published private(set) var frost = false
 
     /// Invoked after each apply (and after async assets land) so AppKit can
     /// re-skin non-SwiftUI surfaces. Set by AppDelegate.
@@ -64,10 +67,13 @@ final class ThemeStore: ObservableObject {
         // the user's size/opacity (no flash of default-sized UI on launch).
         let s = CGFloat(Preferences.uiScale)
         let o = CGFloat(Preferences.uiOpacity)
+        let f = Preferences.uiFrost
         scale = s
         opacity = o
+        frost = f
         ThemeRuntime.scale = s
         ThemeRuntime.opacity = Self.effectiveOpacity(o)
+        ThemeRuntime.frost = Self.effectiveFrost(f)
         // Re-evaluate transparency live when the user toggles the system "Reduce
         // transparency" accessibility setting while Prosper is running (otherwise the
         // downgrade only applies on next setOpacity/launch).
@@ -77,9 +83,11 @@ final class ThemeStore: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let effective = Self.effectiveOpacity(self.opacity)
-                guard effective != ThemeRuntime.opacity else { return }
-                ThemeRuntime.opacity = effective
+                let op = Self.effectiveOpacity(self.opacity)
+                let fr = Self.effectiveFrost(self.frost)
+                guard op != ThemeRuntime.opacity || fr != ThemeRuntime.frost else { return }
+                ThemeRuntime.opacity = op
+                ThemeRuntime.frost = fr
                 self.generation &+= 1
                 self.onChange?()
             }
@@ -92,6 +100,17 @@ final class ThemeStore: ObservableObject {
     /// FootprintWindow's downgrade.
     static func effectiveOpacity(_ stored: CGFloat) -> CGFloat {
         NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 1.0 : stored
+    }
+
+    /// Same precedence for Frost: system "Reduce transparency" forces it off (the
+    /// stored preference is kept and re-applies when the accessibility setting is
+    /// turned off). The `reduceTransparency` overload is the pure decision (unit-
+    /// testable); the convenience reads the live accessibility flag.
+    static func effectiveFrost(_ stored: Bool, reduceTransparency: Bool) -> Bool {
+        !reduceTransparency && stored
+    }
+    static func effectiveFrost(_ stored: Bool) -> Bool {
+        effectiveFrost(stored, reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)
     }
 
     // MARK: - Display metrics (size + opacity)
@@ -116,6 +135,17 @@ final class ThemeStore: ObservableObject {
         guard clamped != opacity else { return }
         opacity = clamped
         ThemeRuntime.opacity = Self.effectiveOpacity(clamped)
+        generation &+= 1
+        onChange?()
+    }
+
+    /// User toggled Frost. Same live-rebuild path as `setOpacity`; `onChange` flips
+    /// the windows' `isOpaque` (the blur needs a non-opaque window).
+    func setFrost(_ value: Bool) {
+        Preferences.uiFrost = value
+        guard value != frost else { return }
+        frost = value
+        ThemeRuntime.frost = Self.effectiveFrost(value)
         generation &+= 1
         onChange?()
     }

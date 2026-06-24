@@ -128,4 +128,17 @@ auth.post("/poll", async (c) => {
   });
 });
 
+// Server-side logout: revoke this one session so a leaked Bearer token can't
+// outlive the device's sign-out (sessions otherwise live up to SESSION_TTL_DAYS).
+// Deletes by token_hash, not email, so other devices' sessions survive. Idempotent
+// — an already-gone session still returns ok.
+auth.post("/logout", async (c) => {
+  const m = (c.req.header("Authorization") ?? "").match(/^Bearer\s+(.+)$/i);
+  if (!m) return c.json({ error: "unauthorized" }, 401);
+  await c.env.DB.prepare(`DELETE FROM sessions WHERE token_hash = ?1`)
+    .bind(await sha256Hex(m[1]))
+    .run();
+  return c.json({ ok: true });
+});
+
 export default auth;

@@ -3,7 +3,7 @@ id          = "com.prosper.openlid"
 name        = "openlid"
 title       = "OpenLid"
 description = "Keep the Mac awake with the lid closed (sleep / lid-close override), guarded by battery, network, and AC-power state."
-version     = "1.9.1"
+version     = "1.10.2"
 author      = "prosper"
 license     = "MIT"
 icon        = "bolt.circle"
@@ -31,6 +31,7 @@ mode        = "no-view"
 icon        = "bolt.circle"
 keywords    = ["openlid", "lid", "mac awake", "awake", "sleep", "keep awake"]
 prefix      = "lid "
+runs_on_select = true
 
 [[contributes.commands]]
 id          = "openlid.status"
@@ -40,6 +41,7 @@ mode        = "no-view"
 icon        = "info.circle"
 keywords    = ["openlid", "lid", "status", "caffeine", "awake"]
 prefix      = "lid? "
+runs_on_select = true
 
 [[contributes.commands]]
 id          = "openlid.caffeine"
@@ -49,6 +51,7 @@ mode        = "no-view"
 icon        = "cup.and.saucer"
 keywords    = ["openlid", "caffeine", "display", "screensaver", "awake", "keep awake"]
 prefix      = "caffeine "
+runs_on_select = true
 
 [[contributes.keybindings]]
 command = "openlid.toggle"

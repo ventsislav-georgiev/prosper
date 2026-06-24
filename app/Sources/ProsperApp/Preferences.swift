@@ -143,8 +143,13 @@ enum Preferences {
         static let dragSnapEdgeMargin = "dragSnapEdgeMargin"
         static let dragSnapCornerSize = "dragSnapCornerSize"
         static let dragSnapIgnoredBundleIds = "dragSnapIgnoredBundleIds"
+        static let snapMode = "snapMode"
+        static let layoutGap = "layoutGap"
+        static let layoutStoreJSON = "layoutStoreJSON"
+        static let layoutStoreBackupJSON = "layoutStoreBackupJSON"   // newer-schema blob preserved on downgrade
         static let uiScale = "prosper.uiScale"
         static let uiOpacity = "prosper.uiOpacity"
+        static let uiFrost = "prosper.uiFrost"
         static let coreModel = "coreModel"
         static let launchAtLogin = "launchAtLogin"
         static let completionLength = "completionLength"
@@ -400,6 +405,15 @@ enum Preferences {
         set { defaults.set(min(max(newValue, uiOpacityRange.lowerBound), uiOpacityRange.upperBound), forKey: Keys.uiOpacity) }
     }
 
+    /// Frosted-glass window backgrounds (Appearance → Frost). When on, panels and
+    /// windows blur the desktop behind them (`.behindWindow` visual effect) instead
+    /// of just fading. Default false. Disabled at runtime when system "Reduce
+    /// transparency" is on (see `ThemeStore.effectiveFrost`).
+    static var uiFrost: Bool {
+        get { defaults.bool(forKey: Keys.uiFrost) }
+        set { defaults.set(newValue, forKey: Keys.uiFrost) }
+    }
+
     /// Optional modifier required during a drag before it will snap. Default `.none`.
     static var dragSnapModifier: DragSnapModifier {
         get { DragSnapModifier(rawValue: defaults.string(forKey: Keys.dragSnapModifier) ?? "") ?? .none }
@@ -439,6 +453,56 @@ enum Preferences {
         get { defaults.object(forKey: Keys.dragSnapIgnoredBundleIds) as? [String] ?? dragSnapDefaultIgnoredBundleIds }
         set { defaults.set(newValue, forKey: Keys.dragSnapIgnoredBundleIds) }
     }
+
+    /// Drag-to-snap behavior: classic edges/corners (default) or drop-into-zone of
+    /// the active custom layout. Absence ⇒ `.edges` (unchanged shipping behavior).
+    static var snapMode: SnapMode {
+        get { SnapMode(rawValue: defaults.string(forKey: Keys.snapMode) ?? "") ?? .edges }
+        set { defaults.set(newValue.rawValue, forKey: Keys.snapMode) }
+    }
+
+    static let layoutGapRange: ClosedRange<Double> = 0...40
+
+    /// Breathing room (px) between layout zones and the screen edge. Default 8.
+    static var layoutGap: CGFloat {
+        get {
+            let v = defaults.object(forKey: Keys.layoutGap) as? Double ?? 8
+            return CGFloat(min(max(v, layoutGapRange.lowerBound), layoutGapRange.upperBound))
+        }
+        set { defaults.set(Double(newValue), forKey: Keys.layoutGap) }
+    }
+
+    /// Persisted custom-layout store. Decode failure or a schema mismatch
+    /// (corrupt blob, future version) falls back to built-ins rather than wiping
+    /// the feature — a bad read resets to defaults until the next save.
+    static var layoutStore: LayoutStore {
+        get {
+            guard let data = defaults.data(forKey: Keys.layoutStoreJSON),
+                  let store = try? JSONDecoder().decode(LayoutStore.self, from: data),
+                  store.schemaVersion == LayoutStore.currentSchema else {
+                return .builtins
+            }
+            return store
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            // Data-loss guard: if the stored blob is from a NEWER schema (e.g. a beta
+            // build that ran on this machine), this build can't read it and the read
+            // path silently falls back to built-ins — overwriting it here would
+            // destroy layouts a future/other build owns. Stash the raw bytes once so
+            // it can be migrated back, then overwrite. Same-schema saves skip this.
+            if let old = defaults.data(forKey: Keys.layoutStoreJSON),
+               let v = try? JSONDecoder().decode(SchemaProbe.self, from: old),
+               v.schemaVersion > LayoutStore.currentSchema {
+                defaults.set(old, forKey: Keys.layoutStoreBackupJSON)
+            }
+            defaults.set(data, forKey: Keys.layoutStoreJSON)
+        }
+    }
+
+    /// Minimal envelope to read just `schemaVersion` from a stored blob without
+    /// decoding the whole (possibly newer, unknown-shaped) store.
+    private struct SchemaProbe: Decodable { var schemaVersion: Int }
 
     /// Number of tokens the draft model proposes per speculation round. Library
     /// default is 2; small values suit short inline completions where the per-round

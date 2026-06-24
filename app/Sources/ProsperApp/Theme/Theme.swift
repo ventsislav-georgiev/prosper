@@ -134,6 +134,29 @@ enum ThemeRuntime {
     /// the desktop shows through below 1.0; `opacity == 1.0` is the original opaque
     /// look. AppKit windows flip `isOpaque` off below 1.0 via the onChange hook.
     nonisolated(unsafe) static var opacity: CGFloat = 1.0
+
+    /// Frosted glass: when on, backdrops drop a `.behindWindow` blur of the desktop
+    /// behind a translucent theme tint instead of fading. ThemeStore is the single
+    /// writer; mirrors `Preferences.uiFrost`, forced off while system "Reduce
+    /// transparency" is on. AppKit windows flip `isOpaque` off when set (the blur
+    /// needs a non-opaque window), same onChange hook as `opacity`.
+    nonisolated(unsafe) static var frost = false
+
+    /// Tint alpha of the theme gradient over the frost blur AT full opacity, so the
+    /// neon palette still reads while the blurred desktop shows through. Composed with
+    /// `opacity` below — never read this raw on a render path; use `backdropFillOpacity`.
+    nonisolated(unsafe) static let frostSurfaceOpacity: CGFloat = 0.6
+
+    /// Single source of truth for the alpha every window/panel backdrop fades its
+    /// fill to. Non-frost: the plain transparency setting. Frost: the glass tint
+    /// composed with transparency (`frostSurfaceOpacity × opacity`) so the
+    /// Transparency control still tunes how much blurred desktop shows through the
+    /// glass. Content/text drawn ON TOP stays fully opaque either way, so lowering
+    /// this never hurts readability. Read on every backdrop render (per keystroke in
+    /// the launcher) — keep it a pure arithmetic read, no disk/lock work.
+    static var backdropFillOpacity: CGFloat {
+        frost ? frostSurfaceOpacity * opacity : opacity
+    }
 }
 
 // MARK: - Appearance

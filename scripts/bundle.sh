@@ -241,6 +241,25 @@ if [[ -x "$LID_HELPER_BIN" ]]; then
 		<key>$LID_HELPER_LABEL</key>
 		<true/>
 	</dict>
+	<!-- RunAtLoad: launch on every boot/login so the daemon can read its
+	     remote-wake config and, if enabled, go resident + hold the IOPMConnection
+	     dark-wake observer (a launchd job is DEFERRED in dark wake, so it MUST
+	     already be running). Disabled (the default) → it idle-exits in ~10s, so
+	     lid-only users pay almost nothing. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- KeepAlive ONLY on abnormal exit. The daemon idle-exits with a clean
+	     exit(0) (SuccessfulExit=true) → launchd leaves it down, preserving "costs
+	     nothing when disabled". But a CRASH while remote-wake is armed would
+	     otherwise kill the feature silently until the next reboot (the dark-wake
+	     observer is resident-only; nothing re-launches it while asleep). So restart
+	     only on a non-zero/signal exit, where RunAtLoad-equivalent re-init reads the
+	     config and re-arms. A crash while disabled just re-idle-exits cleanly. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
 	<key>AssociatedBundleIdentifiers</key>
 	<array>
 		<string>eu.illegible.prosper</string>

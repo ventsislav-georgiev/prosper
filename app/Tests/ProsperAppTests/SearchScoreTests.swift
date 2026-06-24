@@ -76,12 +76,15 @@ final class SearchScoreTests: XCTestCase {
     }
 
     func testTieBreakAndKindOrder() {
-        // Equal score → app sorts before quicklink before bookmark.
+        // Equal score → app before quicklink before bookmark before command. A
+        // discovery command must never shadow a real target (app/link/bookmark) on
+        // a score tie; an exact name match (tier 900) still floats it to the top.
         let app = SearchHit(kind: .app, title: "X", subtitle: "", score: 600)
         let link = SearchHit(kind: .quicklink, title: "X", subtitle: "", score: 600)
         let bm = SearchHit(kind: .bookmark, title: "X", subtitle: "", score: 600)
-        let sorted = [bm, link, app].sorted(by: SearchScore.before)
-        XCTAssertEqual(sorted.map(\.kind), [.app, .quicklink, .bookmark])
+        let cmd = SearchHit(kind: .command, title: "X", subtitle: "", score: 600)
+        let sorted = [cmd, bm, link, app].sorted(by: SearchScore.before)
+        XCTAssertEqual(sorted.map(\.kind), [.app, .quicklink, .bookmark, .command])
     }
 
     // MARK: - Hot-path performance gate

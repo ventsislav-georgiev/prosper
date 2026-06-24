@@ -20,4 +20,11 @@ public let lidHelperMachServiceName = "eu.illegible.prosper.lidhelper"
 /// the app needs no sudoers entry. `reply(true)` on success.
 @objc public protocol LidHelperProtocol {
     func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void)
+
+    /// Push the remote-wake config (a sanitized `RemoteWakeConfig` JSON string).
+    /// The daemon persists it to its root-owned file and arms/disarms the dark-wake
+    /// poll loop. `reply(true)` when remote-wake is now resident (enabled). Strictly
+    /// separate from the lid-sleep override above — different state machine, no
+    /// shared assertion (protects the v2.114.3 lid FIFO).
+    func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void)
 }

@@ -54,6 +54,20 @@ struct AppearanceSettingsPane: View {
                 .labelsHidden()
                 .disabled(reduceTransparency)
             }
+
+            NeonSection("Frost", accent: "Frost",
+                        footer: reduceTransparency
+                            ? "System “Reduce transparency” is on, so Frost is unavailable."
+                            : "Frosted glass: blurs the desktop behind Prosper’s windows. Pairs with Transparency.") {
+                Toggle(isOn: Binding(
+                    get: { theme.frost },
+                    set: { theme.setFrost($0) })) {
+                    Text("Frosted glass background").foregroundStyle(Neon.textPrimary)
+                }
+                .toggleStyle(.switch)
+                .tint(Neon.blue)
+                .disabled(reduceTransparency)
+            }
         }
     }
 

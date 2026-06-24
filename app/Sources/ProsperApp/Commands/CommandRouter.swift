@@ -256,8 +256,9 @@ enum CommandRouter {
 
     /// Built-in system commands handled by their own dedicated `RunnerOutcome`
     /// cases above; the generic extension step must not re-dispatch them.
-    private static let dedicatedCommandIDs: Set<String> =
-        ["calc.eval", "unit.convert", "currency.convert"]
+    /// Single source of truth lives on `ExtensionRegistry` (also used to keep
+    /// these out of discovery rows).
+    private static let dedicatedCommandIDs = ExtensionRegistry.dedicatedCommandIDs
 
     /// Generic dispatch for any installed extension whose `match` regex accepts
     /// the query and which isn't one of the dedicated built-ins. Runs on the
@@ -505,7 +506,8 @@ enum CommandRouter {
             let reg = registry
             let bmOn = reg?.prefValue(extensionID: Self.bookmarksID, key: "show_in_launcher") == "true"
             return Snapshot(apps: apps, lower: lower, links: QuicklinkStore.all(),
-                            registry: reg, bookmarksEnabled: bmOn)
+                            registry: reg, bookmarksEnabled: bmOn,
+                            commands: reg?.commandSearchEntries() ?? [])
         }
         let alias = AppIndex.aliasTarget(for: q) // nonisolated static — no hop
 
@@ -557,6 +559,21 @@ enum CommandRouter {
             }
         }
 
+        // Extension commands — discoverable by the contributing extension's name or
+        // any command keyword (haystack precomputed in the snapshot), so "translate"
+        // or "lid" surfaces the matching commands as selectable rows even when the
+        // user never typed the `l `/`lid ` prefix. Enter behavior (run vs enter the
+        // command's input mode) is carried per hit and resolved in the UI.
+        for c in snap.commands {
+            if let s = SearchScore.score(q: q, tokens: tokens, matchText: c.haystack,
+                                         tieLen: c.tieLen) {
+                hits.append(SearchHit(kind: .command, title: c.title,
+                                      subtitle: c.extensionTitle, score: s,
+                                      commandID: c.commandID, commandIcon: c.icon,
+                                      commandLaunchesWindow: c.launchesWindow))
+            }
+        }
+
         guard !hits.isEmpty else { return nil }
         hits.sort(by: SearchScore.before)
         return .search(Array(hits.prefix(12)))
@@ -574,6 +591,7 @@ enum CommandRouter {
         let links: [QuicklinkHit]
         let registry: ExtensionRegistry?
         let bookmarksEnabled: Bool
+        let commands: [ExtensionRegistry.CommandSearchEntry]
     }
 
     /// Ranked bookmark rows (off-main Lua lane + decode), or [] when bookmarks are

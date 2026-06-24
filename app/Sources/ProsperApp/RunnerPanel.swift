@@ -83,7 +83,11 @@ final class RunnerPanel {
         hosting.autoresizingMask = [.width, .height]
         hosting.wantsLayer = true
         hosting.layer?.cornerRadius = 12
-        hosting.layer?.masksToBounds = true
+        // masksToBounds OFF: clipping the host layer forces offscreen compositing,
+        // which kills the Frost backdrop's `.behindWindow` sampling (same lesson as
+        // FootprintWindow). The SwiftUI `neonPanelSurface().clipShape` already rounds
+        // the visible content, so corners stay rounded with or without Frost.
+        hosting.layer?.masksToBounds = false
         panel.contentView = hosting
 
         // Remember where the user drags the runner; restored on next present().
@@ -480,6 +484,18 @@ final class RunnerModel: ObservableObject {
         inputChanged()
     }
 
+    /// Locks the runner into a command's input mode, chosen from the discovery
+    /// list (e.g. picking "Translate" → translate mode, empty field, ready to
+    /// type). Mirrors typing the command's prefix; `inputChanged()` recomputes so
+    /// a `list_on_empty` command lists its entries immediately.
+    func enterCommandMode(_ mode: RunnerMode) {
+        self.mode = mode
+        input = ""
+        outcome = nil
+        selectedIndex = 0
+        inputChanged()
+    }
+
     /// Re-runs the current query immediately (no debounce). Used after a quicklink
     /// edit/delete so the list reflects the change without retyping.
     func rerun() {
@@ -515,8 +531,10 @@ final class RunnerModel: ObservableObject {
                 if id == "quicklinks.run" || id == "quickdirs.run" { return true }
                 let cmd = CommandRouter.registry?.command(id: id)?.command
                 // A view command always runs on empty; a no-view command opts in via
-                // `list_on_empty` (e.g. Bookmarks lists all, then filters on type).
-                return cmd?.mode == .view || cmd?.listsOnEmpty == true
+                // `list_on_empty` (e.g. Bookmarks lists all, then filters on type) or
+                // `runs_on_select` (a parameterless action picked from the discovery
+                // list — e.g. "Toggle Mac Awake" — runs at once and shows its result).
+                return cmd?.mode == .view || cmd?.listsOnEmpty == true || cmd?.runsOnSelect == true
             }
             return false
         }()
@@ -607,6 +625,7 @@ struct ResultRow: Identifiable {
     var label: String? = nil  // short category chip (e.g. translation register: formal/casual)
     var launchCommandID: String? = nil // when set, Enter invokes this extension command (opens its window)
     var launchQuery: String = ""       // raw query fed to the launched command's handler
+    var enterMode: RunnerMode? = nil   // when set, Enter locks the runner into this command's input mode
     var actions: [RowAction] = []      // file/extension actions; when non-empty, Enter runs actions[0]
     var filePath: String? = nil        // backing file path for the row's actions (Quick Look, default payload)
 }
@@ -713,6 +732,19 @@ private func buildRows(from outcome: RunnerOutcome) -> [ResultRow] {
                 return ResultRow(id: i, icon: "bookmark", primary: hit.title, secondary: hit.subtitle,
                                  category: "Bookmark", copyValue: hit.openTarget ?? hit.title, isMeta: false,
                                  openTarget: hit.openTarget)
+            case .command:
+                // Window-launching commands open their window on Enter (dismiss +
+                // invoke). Everything else enters the command's locked mode: a
+                // parameterless action (`runs_on_select`) runs immediately and shows
+                // its result inline (the mode's `extRunsEmpty` path), an input
+                // command (Translate) waits for the user to type.
+                let icon = hit.commandIcon ?? "puzzlepiece.extension"
+                let mode = RunnerMode.ext(id: hit.commandID ?? "", title: hit.title, icon: icon)
+                return ResultRow(id: i, icon: icon,
+                                 primary: hit.title, secondary: hit.subtitle,
+                                 category: "Command", copyValue: "", isMeta: false,
+                                 launchCommandID: hit.commandLaunchesWindow ? hit.commandID : nil,
+                                 enterMode: hit.commandLaunchesWindow ? nil : mode)
             }
         }
 
@@ -933,6 +965,7 @@ private struct RunnerView: View {
         if let row = selectedRow {
             if let primary = row.actions.first { return primary.title }
             if row.appURL != nil || row.openTarget != nil { return "Open" }
+            if row.enterMode != nil { return "Open" }
             if row.quickdir != nil { return "Run Action" }
             if row.quickdirMenu != nil { return "Browse" }
         }
@@ -1374,6 +1407,10 @@ private struct RunnerView: View {
     private func activateRow(_ row: ResultRow) {
         if let primary = row.actions.first {
             performRowAction(primary, on: row)
+            return
+        }
+        if let mode = row.enterMode {
+            model.enterCommandMode(mode)
             return
         }
         if let commandID = row.launchCommandID {
