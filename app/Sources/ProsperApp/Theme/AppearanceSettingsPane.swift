@@ -78,7 +78,7 @@ struct AppearanceSettingsPane: View {
     // slider drag would get its gesture state torn out from under it on every
     // step; segmented taps rebuild once per change, cleanly.
     static let sizePresets: [CGFloat] = [0.7, 0.85, 1.0, 1.15, 1.3, 1.45]
-    static let opacityPresets: [CGFloat] = [1.0, 0.8, 0.65, 0.5, 0.35]
+    static let opacityPresets: [CGFloat] = [1.0, 0.9, 0.8, 0.75, 0.65, 0.5, 0.35]
 
     private var reduceTransparency: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
