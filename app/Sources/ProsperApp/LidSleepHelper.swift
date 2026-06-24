@@ -199,13 +199,18 @@ enum LidSleepHelper {
     private static func call(_ c: NSXPCConnection, on: Bool) async -> Bool {
         await withCheckedContinuation { cont in
             let once = ResumeOnce(cont)
-            let proxy = c.remoteObjectProxyWithErrorHandler { err in
+            // @Sendable strips @MainActor isolation from these handlers. They run on
+            // NSXPCConnection's private dispatch queue; without it they'd inherit the
+            // enum's @MainActor isolation and SIGTRAP on Swift's executor check
+            // (`dispatch_assert_queue`) when XPC calls them off-main. `once` is the
+            // only captured state and is thread-safe.
+            let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
                 Self.log.error("lid helper set(\(on)) failed: \(err.localizedDescription, privacy: .public)")
                 once.resume(false)
             } as? LidHelperProtocol
             guard let proxy else { once.resume(false); return }
             once.armTimeout()
-            proxy.setLidSleepDisabled(on) { ok in once.resume(ok) }
+            proxy.setLidSleepDisabled(on) { @Sendable ok in once.resume(ok) }
         }
     }
 
@@ -262,13 +267,15 @@ enum LidSleepHelper {
     private static func callRemoteWake(_ c: NSXPCConnection, json: String) async -> Bool {
         await withCheckedContinuation { cont in
             let once = ResumeOnce(cont)
-            let proxy = c.remoteObjectProxyWithErrorHandler { err in
+            // @Sendable: same reason as `call(_:on:)` — these fire on the connection's
+            // own queue and must not inherit @MainActor isolation.
+            let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
                 Self.log.error("remote wake set failed: \(err.localizedDescription, privacy: .public)")
                 once.resume(false)
             } as? LidHelperProtocol
             guard let proxy else { once.resume(false); return }
             once.armTimeout()
-            proxy.setRemoteWake(json) { resident in once.resume(resident) }
+            proxy.setRemoteWake(json) { @Sendable resident in once.resume(resident) }
         }
     }
 }

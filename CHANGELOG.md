@@ -5,6 +5,14 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.115.0-beta.6
+
+### Remote Wake
+- **Fixed: app crashed when toggling Remote Wake.** The XPC reply/error handlers from the
+  privileged helper run on a background queue, but inherited main-thread isolation, so Swift's
+  concurrency runtime trapped (SIGTRAP) the moment the daemon replied off-main. The handlers are
+  now correctly marked as background-safe, so the toggle completes without crashing.
+
 ## v2.115.0-beta.5
 
 ### Remote Wake
