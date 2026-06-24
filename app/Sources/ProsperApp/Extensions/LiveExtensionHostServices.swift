@@ -567,15 +567,17 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             intervalAC: intervalAC,
             intervalBatt: intervalBatt,
             batteryFloor: batteryFloor)
-        // NOT tracked in ExtensionResources / reset on quit — unlike the idle/lid
-        // assertions, remote-wake MUST keep running after the app quits or sleeps
-        // (that is the whole point). The daemon owns its residency via its config
-        // file; turning it off is an explicit user action that sends enabled=false.
-        _ = await LidSleepHelper.setRemoteWake(cfg)
         // Remember the meta URL whenever signed in (the device has a meta row on the
         // server whether enabled or not) so `signOut` can DELETE it even though it lacks
         // the device tag to rebuild the URL. Set synchronously, before the report task,
         // so signOut can't read a half-written key.
+        //
+        // ORDER MATTERS: write the meta URL + fire the server report BEFORE poking the
+        // daemon. The daemon call is a privileged XPC round-trip that can stall (idle-
+        // exited / relaunching daemon) — if the meta write sat behind it, a slow daemon
+        // would leave `currentWakeId` nil, so the dch handshake omits the wakeId and the
+        // paired phone never shows the wake badge. The phone-facing identity must not
+        // depend on the daemon being reachable this instant.
         if signedIn {
             UserDefaults.standard.set(cfg.pollURL + "/meta", forKey: Self.wakeMetaURLKey)
             os_log("remoteWake.apply wrote metaURL=%{public}@", log: .default, type: .info, cfg.pollURL + "/meta")
@@ -584,9 +586,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             os_log("remoteWake.apply cleared metaURL (signed out)", log: .default, type: .info)
         }
         // Report state so a paired device knows whether this Mac can be woken (enabled)
-        // and the ETA. The daemon config above is the real state and is set first; this
-        // is the advertisement of it. Fire off the chain — never block lid/daemon ops on
-        // a network call.
+        // and the ETA. Fire off the chain — never block lid/daemon ops on a network call.
         // ponytail: last-write-wins; a fast enable/disable toggle could leave a stale
         //   advertised state. Sequence server-side only if it ever matters — toggles are
         //   human-paced, the window is ~one RTT.
@@ -594,6 +594,13 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         // detached task would hit the same background-keychain flakiness and silently
         // skip the POST, leaving the server with no meta row (phone sees known:false).
         Task.detached { await Self.reportWakeMeta(cfg, session: loaded?.session) }
+        // NOT tracked in ExtensionResources / reset on quit — unlike the idle/lid
+        // assertions, remote-wake MUST keep running after the app quits or sleeps
+        // (that is the whole point). The daemon owns its residency via its config
+        // file; turning it off is an explicit user action that sends enabled=false.
+        // Last, and time-bounded (ResumeOnce) so a stalled daemon can't wedge the
+        // serial apply chain or block a later re-toggle.
+        _ = await LidSleepHelper.setRemoteWake(cfg)
     }
 
     /// UserDefaults key holding the last meta URL (`<pollURL>/meta`) so

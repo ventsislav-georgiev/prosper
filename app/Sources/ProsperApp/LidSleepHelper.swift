@@ -198,12 +198,34 @@ enum LidSleepHelper {
 
     private static func call(_ c: NSXPCConnection, on: Bool) async -> Bool {
         await withCheckedContinuation { cont in
+            let once = ResumeOnce(cont)
             let proxy = c.remoteObjectProxyWithErrorHandler { err in
                 Self.log.error("lid helper set(\(on)) failed: \(err.localizedDescription, privacy: .public)")
-                cont.resume(returning: false)
+                once.resume(false)
             } as? LidHelperProtocol
-            guard let proxy else { cont.resume(returning: false); return }
-            proxy.setLidSleepDisabled(on) { ok in cont.resume(returning: ok) }
+            guard let proxy else { once.resume(false); return }
+            once.armTimeout()
+            proxy.setLidSleepDisabled(on) { ok in once.resume(ok) }
+        }
+    }
+
+    /// Resume a checked continuation exactly once, with a hard timeout. A daemon that
+    /// has idle-exited (or is mid-relaunch, or speaks an older protocol missing the
+    /// called selector) may invoke NEITHER the reply block NOR the error handler — the
+    /// `await` would then hang forever and, because these calls run on the serial
+    /// `enqueueApply` chain, wedge every later op (re-toggle dead, meta never written).
+    /// ponytail: 6s ceiling; bump only if a real daemon legitimately replies slower.
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        private var cont: CheckedContinuation<Bool, Never>?
+        init(_ c: CheckedContinuation<Bool, Never>) { cont = c }
+        func resume(_ v: Bool) {
+            lock.lock(); let c = done ? nil : cont; done = true; cont = nil; lock.unlock()
+            c?.resume(returning: v)
+        }
+        func armTimeout() {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 6) { [weak self] in self?.resume(false) }
         }
     }
 
@@ -239,12 +261,14 @@ enum LidSleepHelper {
 
     private static func callRemoteWake(_ c: NSXPCConnection, json: String) async -> Bool {
         await withCheckedContinuation { cont in
+            let once = ResumeOnce(cont)
             let proxy = c.remoteObjectProxyWithErrorHandler { err in
                 Self.log.error("remote wake set failed: \(err.localizedDescription, privacy: .public)")
-                cont.resume(returning: false)
+                once.resume(false)
             } as? LidHelperProtocol
-            guard let proxy else { cont.resume(returning: false); return }
-            proxy.setRemoteWake(json) { resident in cont.resume(returning: resident) }
+            guard let proxy else { once.resume(false); return }
+            once.armTimeout()
+            proxy.setRemoteWake(json) { resident in once.resume(resident) }
         }
     }
 }
