@@ -410,10 +410,24 @@ private struct ShortcutRow: View {
 private struct ButtonRow: View {
     let row: SettingsUIRow
     let onEvent: (SettingsEvent) -> Void
+    @State private var showHelp = false
     var body: some View {
         HStack {
-            Button(row.title ?? "Run", action: fire)
+            Button(row.title ?? "Run", action: { if row.help != nil { showHelp.toggle() } else { fire() } })
                 .buttonStyle(row.controlStyle == "destructive" ? .neonDestructive : .neon)
+                .popover(isPresented: $showHelp, arrowEdge: .bottom) {
+                    if let help = row.help {
+                        ScrollView {
+                            Text(help)
+                                .font(Neon.font(.caption))
+                                .foregroundStyle(Neon.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(sz(16))
+                        }
+                        .frame(width: sz(340))
+                        .frame(maxHeight: sz(420))
+                    }
+                }
             if let subtitle = row.subtitle {
                 Text(subtitle).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             }

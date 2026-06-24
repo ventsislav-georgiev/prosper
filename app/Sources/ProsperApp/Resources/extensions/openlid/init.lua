@@ -414,12 +414,6 @@ function on_launch(payload)
         end
     end
     if not s.caffeine and c.caffeineAtLaunch then caffeine_on(nil) end
-    -- Re-arm remote wake every launch. It's otherwise applied only on a settings
-    -- toggle, so enabling it before signing in (or any restart since) left the host
-    -- side never run while signed-in: no meta URL written, no wakeId in the identity
-    -- handshake, daemon polling an empty-acctTag URL. Re-applying here picks up the
-    -- now-signed-in account and reports fresh meta so a paired device sees the badge.
-    apply_remote_wake()
 end
 
 function on_battery(payload)
@@ -568,10 +562,8 @@ function settings_render(section_id, state)
                    placeholder = "dch -ls" },
         },
     }
-    -- Remote wake (opt-in, default off). The ⓘ button expands a detail section
-    -- with how-it-works + every caveat — a "pops up on click" affordance built from
-    -- the existing button + section primitives (no new control kind).
-    local rw_open = pref_bool("rw_info_open", false)
+    -- Remote wake (opt-in, default off). The ⓘ button pops a native help popover
+    -- (button `help` field; dismissed on outside click) — no appended section.
     -- Wake-address dropdown: host auto-detects this Mac's reachable addresses
     -- (Tailscale/LAN IPs + hostname). The user picks one or types any address in
     -- the field below; the SAME handle is what the remote app uses to wake + reach
@@ -616,14 +608,8 @@ function settings_render(section_id, state)
             s.row{ kind = "number", key = "rw_battery_floor_pct", title = "Don't wake below battery %",
                    value = tostring(c.rwBatteryFloor), min = 0, max = 100, step = 5 },
             s.row{ kind = "button", key = "rw_info",
-                   title = rw_open and "ⓘ Hide details" or "ⓘ How it works & limitations" },
-        },
-    }
-    local rw_details = nil
-    if rw_open then
-        rw_details = s.section{
-            id = "remotewake_info", title = "Remote wake — how it works & limits",
-            footer =
+                   title = "ⓘ How it works & limitations",
+                   help =
                 "While asleep your Mac briefly dark-wakes on a timer (~5 min on battery, ~30s on charger), "
                 .. "makes ONE tiny encrypted check to Prosper's server, and either wakes fully (if you "
                 .. "asked it to remotely) or goes right back to sleep. The CPU is up only a few seconds "
@@ -640,10 +626,9 @@ function settings_render(section_id, state)
                 .. "rejected otherwise), and it exposes only what dch already gates (whois). Checking "
                 .. "for a request needs no sign-in and only ever reads (it can't change or cancel anything). "
                 .. "Your Mac acts on each request once, never repeatedly (a ~25h backstop expires an unseen request).\n"
-                .. "• Drain is negligible in testing (≈0 over a full night) but not zero in theory.",
-            rows = {},
-        }
-    end
+                .. "• Drain is negligible in testing (≈0 over a full night) but not zero in theory." },
+        },
+    }
     local sections = {}
     if permissions then sections[#sections + 1] = permissions end
     sections[#sections + 1] = now
@@ -651,7 +636,6 @@ function settings_render(section_id, state)
     sections[#sections + 1] = safeguards
     sections[#sections + 1] = busy
     sections[#sections + 1] = remotewake
-    if rw_details then sections[#sections + 1] = rw_details end
     return s.render(s.ui{
         title = "OpenLid", subtitle = "Keep your Mac awake with the lid closed",
         sections = sections,
@@ -659,11 +643,6 @@ function settings_render(section_id, state)
 end
 
 function settings_action(section_id, action, value, form_json)
-    -- Button (no "set:" prefix): the ⓘ details expander toggles its own pref.
-    if action == "rw_info" then
-        host.prefs.set("rw_info_open", b2s(not pref_bool("rw_info_open", false)))
-        return settings_render(section_id, "{}")
-    end
     local key = action:match("^set:(.+)$")
     if key == "lid_now" then
         if value == "true" then activate(nil, false) else deactivate("manual") end
