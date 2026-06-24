@@ -102,6 +102,9 @@ struct SettingsUIRow: Decodable, Equatable, Identifiable {
     /// Records control only: empty-state text and the reveal button's label.
     var emptyText: String?
     var revealLabel: String?
+    /// Button only: when set, the button opens a popover showing this text
+    /// (dismissed on outside click) instead of firing an action.
+    var help: String?
 
     var controlStyle: String { style ?? "neon" }
 
@@ -112,7 +115,7 @@ struct SettingsUIRow: Decodable, Equatable, Identifiable {
          min: Double? = nil, max: Double? = nil, step: Double? = nil,
          records: [SettingsUIRecord]? = nil, addLabel: String? = nil, revealFile: String? = nil,
          fields: [SettingsUIField]? = nil, emptyText: String? = nil, revealLabel: String? = nil,
-         badge: String? = nil) {
+         badge: String? = nil, help: String? = nil) {
         self.id = id; self.kind = kind; self.key = key; self.title = title; self.subtitle = subtitle
         self.value = value; self.placeholder = placeholder; self.options = options
         self.optionLabels = optionLabels; self.name = name; self.url = url; self.file = file
@@ -120,13 +123,13 @@ struct SettingsUIRow: Decodable, Equatable, Identifiable {
         self.min = min; self.max = max; self.step = step
         self.records = records; self.addLabel = addLabel; self.revealFile = revealFile
         self.fields = fields; self.emptyText = emptyText; self.revealLabel = revealLabel
-        self.badge = badge
+        self.badge = badge; self.help = help
     }
 
     enum K: String, CodingKey {
         case id, kind, key, title, subtitle, value, placeholder, options, optionLabels
         case name, url, file, action, actionID, style, min, max, step, records, addLabel, revealFile
-        case fields, emptyText, revealLabel, badge
+        case fields, emptyText, revealLabel, badge, help
     }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
@@ -150,7 +153,7 @@ struct SettingsUIRow: Decodable, Equatable, Identifiable {
         let tmpl: [SettingsUIField] = c.array(.fields)
         fields = tmpl.isEmpty ? nil : tmpl
         emptyText = c.str(.emptyText); revealLabel = c.str(.revealLabel)
-        badge = c.str(.badge)
+        badge = c.str(.badge); help = c.str(.help)
     }
 }
 

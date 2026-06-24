@@ -547,8 +547,14 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         // pure battery waste. Force-disable here so enabling while signed out can't arm
         // it (complements the disarm-on-signOut: this also covers the steady-state
         // signed-out case and any future re-apply path, e.g. on_launch).
-        let signedIn = !(SupporterStore.load()?.email ?? "")
+        let loaded = SupporterStore.load()
+        let signedIn = !(loaded?.email ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        os_log("remoteWake.apply enabled=%{public}d loadedNil=%{public}d emailEmpty=%{public}d signedIn=%{public}d device=%{public}@",
+               log: .default, type: .info,
+               enabled ? 1 : 0, loaded == nil ? 1 : 0,
+               (loaded?.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) ? 1 : 0,
+               signedIn ? 1 : 0, deviceID)
         let cfg = RemoteWakeConfig(
             enabled: enabled && signedIn,
             pollURL: Self.wakePollURL(deviceTag: deviceID),
@@ -566,8 +572,10 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         // so signOut can't read a half-written key.
         if signedIn {
             UserDefaults.standard.set(cfg.pollURL + "/meta", forKey: Self.wakeMetaURLKey)
+            os_log("remoteWake.apply wrote metaURL=%{public}@", log: .default, type: .info, cfg.pollURL + "/meta")
         } else {
             UserDefaults.standard.removeObject(forKey: Self.wakeMetaURLKey)
+            os_log("remoteWake.apply cleared metaURL (signed out)", log: .default, type: .info)
         }
         // Report state so a paired device knows whether this Mac can be woken (enabled)
         // and the ETA. The daemon config above is the real state and is set first; this

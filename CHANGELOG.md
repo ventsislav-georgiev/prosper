@@ -11,6 +11,12 @@ below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 - **More Transparency presets.** Added 90% and 75% to the Transparency dial, so the
   range is now 100% / 90% / 80% / 75% / 65% / 50% / 35%.
 
+### Remote Wake
+- **"How it works & limitations" is now a popover.** The ⓘ button used to append a whole
+  extra settings section below the page (and could draw partly offscreen). It now opens a
+  compact native popover that dismisses when you click away. Also fixed the Settings window
+  stretching past the screen when a tall pane asked for more height than the display had.
+
 ## v2.115.0-beta.2
 
 ### Appearance
