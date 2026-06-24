@@ -4,12 +4,13 @@ import Foundation
 /// What a drag-to-edge does: classic edge/corner halves (`edges`, the default,
 /// unchanged behavior) or drop-into-zone of the active custom layout (`layouts`).
 enum SnapMode: String, CaseIterable, Sendable {
-    case edges, layouts
+    case edges, layouts, palette
 
     var title: String {
         switch self {
         case .edges: return "Edges & corners"
         case .layouts: return "Layout zones"
+        case .palette: return "Layout palette"
         }
     }
 }

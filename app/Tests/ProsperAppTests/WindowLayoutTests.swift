@@ -166,6 +166,21 @@ final class WindowLayoutTests: XCTestCase {
         XCTAssertEqual(o.y, 500)   // 800 - 300
     }
 
+    // MARK: - Palette position labels
+
+    func testPalettePositionNames() {
+        func name(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> String {
+            LayoutPaletteWindow.positionName(CGRect(x: x, y: y, width: w, height: h))
+        }
+        XCTAssertEqual(name(0, 0, 1, 1), "Full")
+        XCTAssertEqual(name(0, 0, 0.5, 1), "Left Half")
+        XCTAssertEqual(name(0.5, 0, 0.5, 1), "Right Half")
+        XCTAssertEqual(name(0, 0, 1, 0.5), "Top Half")
+        XCTAssertEqual(name(0, 0.5, 1, 0.5), "Bottom Half")
+        XCTAssertEqual(name(0.5, 0.5, 0.5, 0.5), "Bottom Right")
+        XCTAssertEqual(name(0, 0, 0.5, 0.5), "Top Left")
+    }
+
     // MARK: - Hot-path budget
     //
     // Layout drag hot path (~120 Hz while a window is dragged in .layouts mode):

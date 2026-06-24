@@ -94,6 +94,7 @@ final class DragSnapController {
     private var localMonitor: Any?
     private let footprint = FootprintWindow()
     private let layoutOverlay = LayoutOverlayWindow()
+    private let palette = LayoutPaletteWindow()
 
     // Drag state.
     private var mouseDownAX: CGPoint?
@@ -111,6 +112,11 @@ final class DragSnapController {
     private var dragLayout: WindowLayout?
     private var dragGap: CGFloat = 8
     private var currentZoneIdx: Int?
+    // Palette-mode drag state (snapMode == .palette). All layouts are snapshotted at
+    // drag start (palette shows every template); the chosen cell decides the drop.
+    private var dragLayouts: [WindowLayout] = []
+    private var currentCell: Int?
+    private var paletteDisplay: CGDirectDisplayID?
     // (display, layout) the overlay tiles are currently built for. A value-type
     // struct, not a String — comparing it on the ~120 Hz path must not allocate.
     // gap is intentionally omitted: it's snapshotted immutable at drag start, so a
@@ -163,6 +169,7 @@ final class DragSnapController {
         resetDrag()
         footprint.hide()
         layoutOverlay.hide()
+        palette.hide()
     }
 
     // MARK: - Event handling
@@ -195,16 +202,21 @@ final class DragSnapController {
                Preferences.dragSnapIgnoredBundleIds.contains(bid) { aborted = true; return }
             dragMode = Preferences.snapMode
             dragLayout = dragMode == .layouts ? Preferences.layoutStore.activeLayout : nil
+            dragLayouts = dragMode == .palette ? Preferences.layoutStore.allLayouts.filter { !$0.zones.isEmpty } : []
             dragGap = Preferences.layoutGap
-            // No usable active layout → fall back to classic edge snapping rather
-            // than silently no-op'ing the whole drag.
+            // No usable layout(s) → fall back to classic edge snapping rather than
+            // silently no-op'ing the whole drag.
             if dragMode == .layouts && (dragLayout?.zones.isEmpty ?? true) {
                 dragMode = .edges; dragLayout = nil
             }
+            if dragMode == .palette && dragLayouts.isEmpty { dragMode = .edges }
             // Fixed-size dialogs can't be resized into a zone — but a moveOnly (Quick
-            // Positions) drop only repositions them, so allow those. Abort only when
-            // the drop would actually resize.
-            let willResize = !(dragMode == .layouts && (dragLayout?.isMoveOnly ?? false))
+            // Positions) drop only repositions them, so allow those. Palette mode also
+            // never aborts: the picked template decides resize-vs-move at drop, and a
+            // resize against a fixed-size window simply no-ops (its position still
+            // applies). Abort only in edges/layouts when the drop would surely resize.
+            let willResize = dragMode == .edges
+                || (dragMode == .layouts && !(dragLayout?.isMoveOnly ?? false))
             if willResize, !WindowManager.isResizable(el) { aborted = true; return }
             dragging = true
             win = el
@@ -239,7 +251,50 @@ final class DragSnapController {
             setZone(zone, screen: screen)
         case .layouts:
             updateLayoutDrag(cur: cur, screen: screen)
+        case .palette:
+            updatePaletteDrag(cur: cur, screen: screen)
         }
+    }
+
+    /// Palette-mode hot path: keep the template strip on the screen the drag is over
+    /// (top-center), hit-test the cursor against the template cells, and preview the
+    /// real drop frame for the hovered cell. The window lands on the PALETTE's screen
+    /// (where the cells live), not under the cursor — so `currentScreen` tracks it.
+    private func updatePaletteDrag(cur: CGPoint, screen: NSScreen?) {
+        guard moveConfirmed, !dragLayouts.isEmpty else { return }
+        if let screen {
+            let disp = WindowManager.displayID(of: screen)
+            if disp != paletteDisplay || !palette.isShowing {
+                paletteDisplay = disp
+                currentScreen = screen
+                palette.show(layouts: dragLayouts, screen: screen,
+                             accent: NSColor(ThemeRuntime.palette.blue))
+            }
+        }
+        // Cursor in a dead gap between displays (screen nil): keep the last palette up.
+        let cell = palette.hitTest(cursorAX: cur)
+        guard cell != currentCell else { return }
+        currentCell = cell
+        palette.setHighlight(cell)
+        previewPaletteCell(cell)
+    }
+
+    /// Ghost the actual frame the window will land in for the hovered palette cell, on
+    /// the palette's screen — the cursor is up at the strip, so without this the user
+    /// has no on-screen cue where the window goes.
+    private func previewPaletteCell(_ cell: Int?) {
+        guard let cell, let screen = currentScreen,
+              palette.cells.indices.contains(cell) else { footprint.hide(); return }
+        let c = palette.cells[cell]
+        guard dragLayouts.indices.contains(c.layout),
+              dragLayouts[c.layout].zones.indices.contains(c.zone) else { footprint.hide(); return }
+        let v = WindowManager.visibleFrameAX(for: screen)
+        let targetAX = WindowManager.targetFrame(zone: dragLayouts[c.layout].zones[c.zone].rect,
+                                                 visible: v, gap: dragGap)
+        footprint.show(frameAppKit: WindowManager.axToAppKit(targetAX),
+                       style: Preferences.dragSnapStyle,
+                       accent: NSColor(ThemeRuntime.palette.blue),
+                       zoneChanged: true)
     }
 
     /// Layout-mode hot path: normalize the cursor over the screen's VISIBLE frame
@@ -316,7 +371,7 @@ final class DragSnapController {
     }
 
     private func endDrag() {
-        defer { resetDrag(); footprint.hide(); layoutOverlay.hide() }
+        defer { resetDrag(); footprint.hide(); layoutOverlay.hide(); palette.hide() }
         guard dragging, !aborted, moveConfirmed,
               let el = win, let screen = currentScreen else { return }
         switch dragMode {
@@ -327,6 +382,14 @@ final class DragSnapController {
             guard let layout = dragLayout, let idx = currentZoneIdx,
                   layout.zones.indices.contains(idx) else { return }
             WindowManager.snap(el, toZone: layout.zones[idx].rect, onScreen: screen,
+                               gap: dragGap, moveOnly: layout.isMoveOnly)
+        case .palette:
+            guard let cell = currentCell, palette.cells.indices.contains(cell) else { return }
+            let c = palette.cells[cell]
+            guard dragLayouts.indices.contains(c.layout),
+                  dragLayouts[c.layout].zones.indices.contains(c.zone) else { return }
+            let layout = dragLayouts[c.layout]
+            WindowManager.snap(el, toZone: layout.zones[c.zone].rect, onScreen: screen,
                                gap: dragGap, moveOnly: layout.isMoveOnly)
         }
     }
@@ -343,10 +406,14 @@ final class DragSnapController {
         currentScreen = nil
         dragMode = .edges
         dragLayout = nil
+        dragLayouts = []
         dragGap = 8
         currentZoneIdx = nil
+        currentCell = nil
+        paletteDisplay = nil
         layoutSig = nil
         layoutOverlay.hide()   // keep overlay visibility in lockstep with layoutSig
+        palette.hide()
     }
 
     /// Current cursor in the AX top-left global space (NSEvent is bottom-left).

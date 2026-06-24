@@ -5,73 +5,7 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
-## v2.115.0-beta.6
-
-### Remote Wake
-- **Fixed: app crashed when toggling Remote Wake.** The XPC reply/error handlers from the
-  privileged helper run on a background queue, but inherited main-thread isolation, so Swift's
-  concurrency runtime trapped (SIGTRAP) the moment the daemon replied off-main. The handlers are
-  now correctly marked as background-safe, so the toggle completes without crashing.
-
-## v2.115.0-beta.5
-
-### Remote Wake
-- **Fixed: enabling wake silently did nothing (no phone badge, no arming).** The toggle
-  pushed the config to the privileged helper daemon over XPC *before* recording the wake
-  identity. When that daemon had idle-exited (its normal resting state), the call got no
-  reply and no error — it hung forever, so the wake identity was never written and the
-  paired phone never learned this Mac's wake id. Worse, the stalled call sat on a serial
-  queue, so every later toggle was dead until the app was relaunched. Now the wake identity
-  is written and advertised to the server first, and the daemon call is hard-timed-out
-  (6s) so an idle or slow daemon can never wedge the toggle again.
-
-## v2.115.0-beta.4
-
-### Remote Wake
-- **Enabling wake now reliably arms it and shows on your phone.** Turning on "Wake this Mac
-  remotely" could finish without recording the device's wake address or telling the server it
-  was armed, so the paired phone never showed the wake-ready badge and couldn't actually wake
-  the Mac. The toggle read your sign-in from a background task that could come back empty even
-  while the app showed you signed in; it now reads it on the main thread and reuses that
-  session when publishing state to the server, so a single toggle both arms the daemon and
-  advertises the cadence the phone displays.
-- Adds temporary diagnostic logging around the wake toggle (visible in Console) to confirm the
-  fix on real hardware; it will be removed once verified.
-
-## v2.115.0-beta.3
-
-### Appearance
-- **More Transparency presets.** Added 90% and 75% to the Transparency dial, so the
-  range is now 100% / 90% / 80% / 75% / 65% / 50% / 35%.
-
-### Remote Wake
-- **"How it works & limitations" is now a popover.** The ⓘ button used to append a whole
-  extra settings section below the page (and could draw partly offscreen). It now opens a
-  compact native popover that dismisses when you click away. Also fixed the Settings window
-  stretching past the screen when a tall pane asked for more height than the display had.
-
-## v2.115.0-beta.2
-
-### Appearance
-- **Frost now has a working transparency dial.** Enabling Frost and changing Transparency
-  did nothing before — the glass tint moved over a range too narrow to see under the blur.
-  Transparency now maps onto the full glass-density range, so lower values genuinely show
-  more of the blurred desktop through the frosted panel. The control stays enabled while
-  Frost is on (it tunes the glass) and is only forced off by the system "Reduce
-  transparency" setting.
-- **Changing Transparency or Frost no longer micro-freezes the window.** These used to bump
-  the theme generation and rebuild the entire window subtree on every step; they now drive
-  a backdrop-only tick that re-renders just the background views in place — no teardown, no
-  hitch, scroll/focus preserved. (UI Size still rebuilds, since it touches every sized site.)
-- **Wider Transparency and UI Size ranges.** Transparency now goes down to 35% (was 60%);
-  UI Size now spans 70%–145% (was 85%–130%). The frost glass floor tracks the lowest
-  Transparency preset from a single clamp definition, so the two never desync.
-
-### Remote Wake
-- **machineInfo handshake (0x08/0x18) for remote-wake identity.** Adds the device-identity
-  exchange so a remote wake can be matched to the right machine.
-
-## v2.115.0-beta.1
+## v2.115.0
 
 ### Launcher Search
 - **Extension commands are now discoverable by name or keyword, not just memorized
@@ -96,6 +30,9 @@ below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 - **Settings → Shortcuts now groups extension activators per extension.** Triggers were
   listed flat and unsorted; they are now bucketed under each extension's name and sorted,
   and the section explains that names and keywords also activate commands.
+- **The Settings window no longer stretches past the screen.** A tall pane asking for more
+  height than the display had could push the window partly offscreen; its height is now
+  clamped to the visible screen.
 
 ### Window Layouts
 - **Drag a window onto on-screen layout zones to snap it there (opt-in).** A Mosaic-style
@@ -104,6 +41,14 @@ below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
   target screen and drops the window into whichever zone the cursor is over. Ships with
   Halves, Thirds, Grid 2×2, and Main + side built-ins; the overlay preview is the exact
   frame the window lands in (single geometry source, no preview/drop drift).
+- **A "Layout palette" mode (Mosaic-style) shows all your layouts as templates while
+  dragging.** Pick "Layout palette" in Settings → Windows and a strip of small layout
+  thumbnails appears near the top of the screen the moment you drag a window; each
+  thumbnail's cells are individual drop targets, the hovered cell is named ("Bottom
+  Right", "Left Half", …) and previewed on screen, and releasing over a cell snaps the
+  window into that cell's real frame — the cursor stays at the strip, the window lands
+  where the cell points. Reuses your existing layouts and the same editor; works across
+  monitors (the palette follows the screen you drag on, and the window lands there).
 - **A grid editor for custom layouts and groups.** Settings → Windows → Edit Layouts lets
   you paint zones on a cell grid (drag to add a multi-cell zone, tap a cell to add or
   remove a single zone), organize layouts into groups, set the active layout, and toggle
@@ -126,6 +71,18 @@ below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
   panels. The neon tint rides on top of the blur so readability is unchanged; the blur is
   fully behind the content. Off by default, so nothing changes until you turn it on, and
   the hot path stays gated when it's off.
+- **Frost has a working Transparency dial.** Lowering Transparency genuinely shows more of
+  the blurred desktop through the frosted panel — the control maps onto the full glass-density
+  range and stays enabled while Frost is on (it tunes the glass), forced off only by the system
+  "Reduce transparency" setting.
+- **Wider Transparency and UI Size ranges.** Transparency now spans 100% / 90% / 80% / 75% /
+  65% / 50% / 35% (down from a 60% floor); UI Size now spans 70%–145% (was 85%–130%). The
+  frost glass floor tracks the lowest Transparency preset from a single clamp, so the two
+  never desync.
+- **Changing Transparency or Frost no longer micro-freezes the window.** They now drive a
+  backdrop-only re-render of just the background views in place — no subtree teardown, no
+  hitch, scroll and focus preserved. (UI Size still rebuilds, since it touches every sized
+  site.)
 
 ### Remote Wake
 - **Wake your Mac from another signed-in device, even from sleep (opt-in, off by
@@ -144,6 +101,8 @@ below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
   own wake schedule so another of your devices can show whether the Mac is reachable at
   all and an estimated time-to-wake before asking, including a warning when a low battery
   floor would prevent the wake.
+- **A "How it works & limitations" popover** explains the trade-offs (battery, timing,
+  outbound-only design) in a compact native popover that dismisses when you click away.
 
 ### Account & Security
 - **Deleting your account now also clears remote-wake data.** Account deletion already
