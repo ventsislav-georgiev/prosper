@@ -5,6 +5,18 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.117.0
+
+### Clipboard History
+- **Pasting from Clipboard History no longer silently fails without Accessibility.**
+  The auto-paste posts a synthetic ⌘V, which macOS drops unless the app holds
+  Accessibility trust — and a clipboard-only user is never asked for it (only inline
+  autocomplete and drag-snap request it), so ⏎ / the **Paste** button looked broken.
+  The clip is still copied to the pasteboard (manual ⌘V always worked); now, when the
+  grant is missing, Prosper opens Settings → Context to the same Accessibility
+  permission UI every other Accessibility-gated feature uses, so you can grant it and
+  paste works immediately. Fixes #1.
+
 ## v2.115.0
 
 ### Launcher Search

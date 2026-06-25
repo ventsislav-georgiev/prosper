@@ -12,10 +12,14 @@ final class ClipboardPanel {
     private let store = ClipboardStore.shared
     private let model = ClipboardPanelModel()
     private var previousApp: NSRunningApplication?
+    /// Opens the Settings window so the user can grant the Accessibility permission
+    /// the auto-paste needs. Wired by AppDelegate to its shared settings opener.
+    private let onOpenSettings: () -> Void
 
     var isShown: Bool { panel.isVisible }
 
-    init() {
+    init(onOpenSettings: @escaping () -> Void = {}) {
+        self.onOpenSettings = onOpenSettings
         panel = KeyablePanel(
             contentRect: NSRect(x: 0, y: 0, width: 750, height: 480),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
@@ -103,6 +107,16 @@ final class ClipboardPanel {
     private func commit(_ item: ClipboardItem) {
         store.copyToPasteboard(item)
         dismiss()
+        // Auto-paste posts a synthetic ⌘V, which macOS silently drops unless the app
+        // holds Accessibility trust. A clipboard-only user is never asked for it (only
+        // autocomplete/drag-snap request it), so the paste looks broken. Route to the
+        // same Settings → Context permissions UI every other Accessibility-gated
+        // feature uses. The clip is already on the pasteboard, so manual ⌘V still works.
+        guard PermissionsManager.isAccessibilityTrusted() else {
+            UserDefaults.standard.set("context", forKey: "settingsSelectedPane")
+            onOpenSettings()
+            return
+        }
         let target = previousApp
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             target?.activate(options: [])
