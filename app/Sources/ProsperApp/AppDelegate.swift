@@ -761,7 +761,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.dismiss()
             return
         }
-        let panel = clipboardPanel ?? ClipboardPanel()
+        let panel = clipboardPanel ?? ClipboardPanel(onOpenSettings: { [weak self] in self?.openSettings() })
         clipboardPanel = panel
         panel.present()
     }
