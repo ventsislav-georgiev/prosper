@@ -114,6 +114,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AnalyticsService.shared.start()
         // Apply any cached supporter status (fail-open to free) and refresh it best-effort.
         SupporterClient.shared.startup()
+        // Self-heal a stale privileged-helper registration left by a Sparkle in-place
+        // update (SMAppService pins the daemon to the bundle version at register()
+        // time → launchd refuses the updated binary, EX_CONFIG crash-loop, lid sleep
+        // + remote wake silently dead). No-op unless the helper is already enabled.
+        LidSleepHelper.healStaleRegistrationOnLaunch()
         // Cross-device settings sync (no-op unless signed in + enabled).
         SyncCoordinator.shared.startup()
         // After a pulled snapshot is written to disk, reconcile live subsystems
