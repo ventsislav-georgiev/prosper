@@ -87,27 +87,73 @@ enum LidSleepHelper {
 
     private enum RegisterOutcome { case enabled, needsApproval, failed }
 
+    // SMAppService pins the daemon registration to the bundle version present at
+    // register() time. A Sparkle in-place update swaps the binary but NOT the
+    // registration → launchd refuses to spawn the new daemon (exits EX_CONFIG 78,
+    // KeepAlive crash-loops it) and every XPC call dies silently. status stays
+    // .enabled, so we'd otherwise never re-register. Track the version we last
+    // registered and force a fresh unregister+register on drift.
+    nonisolated private static let registeredVersionKey = "prosper.lidHelper.registeredVersion"
+    nonisolated private static var currentVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? ""
+    }
+    // Serialize registration: launch-heal, openlid on_launch re-arm, the settings
+    // Re-check button, and a feature toggle can all call registerIfNeeded() on
+    // separate detached tasks at once. Without this they'd race unregister()+
+    // register() on the same item — the loser's register() throws "already
+    // registered" → .failed → spurious Login Items popup + cache flicker. The lock
+    // makes the second caller re-read the now-healed status (version already stored)
+    // and no-op. ponytail: held across the blocking smd IPC (rare, off-main).
+    nonisolated private static let registerLock = NSLock()
+
     /// The blocking SMAppService registration logic. OFF-MAIN ONLY (run via the
     /// detached task in `ensureRegistered`). Pure status/register IPC — no UI.
     nonisolated private static func registerIfNeeded() -> RegisterOutcome {
+        registerLock.lock()
+        defer { registerLock.unlock() }
         let svc = service
+        // Stale-registration self-heal: enabled but registered under a different app
+        // version means a Sparkle in-place update swapped the daemon binary out from
+        // under launchd's pinned registration → EX_CONFIG crash-loop, both features
+        // dead. Drop it and force a fresh register so launchd re-pins to this binary.
+        // We do NOT re-read status after unregister() to route — SMAppService status
+        // can lag the unregister, and a stale .enabled read would make us record the
+        // new version + return enabled WITHOUT re-registering, killing the daemon for
+        // good. So the drift path always calls forceRegister.
+        if svc.status == .enabled,
+           UserDefaults.standard.string(forKey: registeredVersionKey) != currentVersion {
+            try? svc.unregister()
+            return forceRegister(svc)
+        }
         switch svc.status {
         case .enabled:
+            UserDefaults.standard.set(currentVersion, forKey: registeredVersionKey)
             return .enabled
         case .requiresApproval:
             return .needsApproval
         default:
-            do {
-                try svc.register()
-            } catch {
-                log.error("lid helper register failed: \(error.localizedDescription, privacy: .public)")
-                return .failed
-            }
-            switch svc.status {
-            case .enabled: return .enabled
-            case .requiresApproval: return .needsApproval
-            default: return .failed
-            }
+            return forceRegister(svc)
+        }
+    }
+
+    /// register() + classify the resulting status. Records the registered version on
+    /// success so the drift check above stays quiet until the next update.
+    nonisolated private static func forceRegister(_ svc: SMAppService) -> RegisterOutcome {
+        do {
+            try svc.register()
+        } catch {
+            // ponytail: a drift unregister that hasn't landed yet can make this throw
+            // "already registered"; we return .failed and retry on the next launch/toggle
+            // rather than thrash. The daemon stays as-is (crash-looping but registered).
+            log.error("lid helper register failed: \(error.localizedDescription, privacy: .public)")
+            return .failed
+        }
+        switch svc.status {
+        case .enabled:
+            UserDefaults.standard.set(currentVersion, forKey: registeredVersionKey)
+            return .enabled
+        case .requiresApproval: return .needsApproval
+        default: return .failed
         }
     }
 
@@ -130,6 +176,29 @@ enum LidSleepHelper {
         case .failed:
             storeCache(false)
             return false
+        }
+    }
+
+    /// Heal a stale post-update daemon registration at app launch, regardless of
+    /// which (if any) feature is re-applied this session. on_launch re-arms lid
+    /// sleep — which heals via `ensureRegistered` — but NOT remote-wake, so a
+    /// remote-wake-only user would otherwise never self-heal after a Sparkle update
+    /// (stale registration → launchd EX_CONFIG crash-loop, both features dead).
+    ///
+    /// NEVER registers anything for a user who hasn't enabled lid-sleep or
+    /// remote-wake: the cached `isEnabled` flag is false for them (instant, no smd
+    /// IPC) so we return before touching SMAppService. We only ever re-pin an item
+    /// that is ALREADY registered (`.enabled`); an enabled-then-disabled user keeps
+    /// their registration (disable doesn't unregister) so it's re-pinned harmlessly
+    /// and the daemon just idle-exits. A `.requiresApproval` item is left for the
+    /// explicit toggle path to surface. This call never opens Login Items — it
+    /// drives `registerIfNeeded` directly, not `ensureRegistered`, so the rare
+    /// re-approval case stays silent at launch and surfaces on next settings/toggle.
+    nonisolated static func healStaleRegistrationOnLaunch() {
+        guard isEnabled else { return }   // cached: false for never-enabled → no IPC, no registration
+        Task.detached(priority: .utility) {
+            guard service.status == .enabled else { return }   // real status; skip pending-approval / removed
+            _ = registerIfNeeded()   // version match → no-op; drift → unregister+register
         }
     }
 
