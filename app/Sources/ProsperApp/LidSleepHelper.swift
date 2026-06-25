@@ -256,8 +256,8 @@ enum LidSleepHelper {
             holdsLidOverride = false
             guard let c = connection else { return true } // already off
             let ok = await call(c, on: false)
-            // Keep the connection alive if remote-wake still needs the daemon.
-            if !remoteWakeEnabled {
+            // Keep the connection alive if remote-wake or a live session still needs it.
+            if !remoteWakeEnabled && !holdsRemoteSession {
                 c.invalidate()
                 connection = nil
             }
@@ -321,7 +321,7 @@ enum LidSleepHelper {
         remoteWakeEnabled = resident
         // When remote-wake is off AND no lid override holds the connection, drop it
         // so we don't pin a corpse; the daemon idle-exits on its side.
-        if !resident && !holdsLidOverride {
+        if !resident && !holdsLidOverride && !holdsRemoteSession {
             c.invalidate()
             if connection === c { connection = nil }
         }
@@ -332,6 +332,39 @@ enum LidSleepHelper {
     /// needs it, so turning one off must not tear down a connection the other uses.
     nonisolated(unsafe) private static var holdsLidOverride = false
     nonisolated(unsafe) private static var remoteWakeEnabled = false
+    nonisolated(unsafe) private static var holdsRemoteSession = false
+
+    /// Hold/release the remote-session keep-awake while a dch session is live. Reuses
+    /// the connection remote-wake already keeps open — if no daemon connection exists
+    /// (remote-wake off), this is a no-op: keep-awake only matters once the wake path
+    /// is in use, and we never spin up the privileged daemon just for this. The
+    /// daemon auto-expires the hold, so `true` must be re-sent as a heartbeat by the
+    /// caller; `false` releases at once.
+    @discardableResult
+    static func setRemoteSessionActive(_ on: Bool) async -> Bool {
+        guard let c = connection else { return false }
+        holdsRemoteSession = on
+        let ok = await callRemoteSession(c, on: on)
+        // Releasing: drop the connection only if nothing else needs the daemon.
+        if !on && !remoteWakeEnabled && !holdsLidOverride {
+            c.invalidate()
+            if connection === c { connection = nil }
+        }
+        return ok
+    }
+
+    private static func callRemoteSession(_ c: NSXPCConnection, on: Bool) async -> Bool {
+        await withCheckedContinuation { cont in
+            let once = ResumeOnce(cont)
+            let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
+                Self.log.error("remote session set(\(on)) failed: \(err.localizedDescription, privacy: .public)")
+                once.resume(false)
+            } as? LidHelperProtocol
+            guard let proxy else { once.resume(false); return }
+            once.armTimeout()
+            proxy.setRemoteSessionActive(on) { @Sendable ok in once.resume(ok) }
+        }
+    }
 
     private static func callRemoteWake(_ c: NSXPCConnection, json: String) async -> Bool {
         await withCheckedContinuation { cont in

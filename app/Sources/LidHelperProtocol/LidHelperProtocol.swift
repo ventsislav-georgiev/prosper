@@ -27,4 +27,14 @@ public let lidHelperMachServiceName = "eu.illegible.prosper.lidhelper"
     /// separate from the lid-sleep override above — different state machine, no
     /// shared assertion (protects the v2.114.3 lid FIFO).
     func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void)
+
+    /// Hold (or release) `disablesleep` while a remote dch session is live, so a Mac
+    /// woken by remote-wake stays awake for the session instead of idle/clamshell
+    /// sleeping mid-command. OR'd with the lid override at the pmset layer (either
+    /// source keeps sleep disabled). Unlike the lid override this hold is NOT pinned
+    /// to the XPC connection — the daemon is resident with zero clients while remote-
+    /// wake is armed — so it auto-expires ~120s after the last `true` unless the app
+    /// re-asserts it (the heartbeat). That timeout is the crash-safety: if the app
+    /// dies the hold lapses and the Mac sleeps. `reply(true)` on a successful apply.
+    func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void)
 }

@@ -39,6 +39,9 @@ final class RemoteWakeObserver: @unchecked Sendable {
     private let q: DispatchQueue
     private var core: RemoteWakeCore!
     private var connection: IOPMConnection?
+    /// Set by the daemon: invoked on `q` right after a wake promotes, so it can hold
+    /// `disablesleep` open for the session that's about to connect. nil = no hook.
+    var onPromote: (() -> Void)?
 
     init(queue: DispatchQueue) {
         self.q = queue
@@ -130,6 +133,10 @@ final class RemoteWakeObserver: @unchecked Sendable {
         var id: IOPMAssertionID = 0
         IOPMAssertionDeclareUserActivity("ProsperRemoteWake" as CFString, kIOPMUserActiveLocal, &id)
         NSLog("RemoteWake: promoted to full wake")
+        // DeclareUserActivity only pokes the idle timer — it holds nothing. Hand off
+        // to the daemon's keep-awake hold so the Mac stays up for the session instead
+        // of idle/clamshell sleeping mid-command. Runs on `q` (we're inside onWake).
+        onPromote?()
     }
 
     /// Bounded GET, 10s timeout + 1 retry. Returns the request token on a clean 200

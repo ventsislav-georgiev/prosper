@@ -28,6 +28,15 @@ enum ProsperServer {
            let url = URL(string: override) {
             return url
         }
-        return URL(string: "https://getprosper.lemonsqueezy.com/checkout/buy/7452e3cc-d14d-4c14-b795-d9d95b4a5ba9?discount=0&logo=0")!
+        return URL(string: "https://getprosper.lemonsqueezy.com/checkout/buy/57a9d7e3-f288-43ad-ae0c-a089e71b75d1?discount=0")!
+    }
+
+    /// GitHub Sponsors page (0% fee, recurring tiers). Override with `PROSPER_SPONSORS_URL`.
+    static var sponsorsURL: URL {
+        if let override = ProcessInfo.processInfo.environment["PROSPER_SPONSORS_URL"],
+           let url = URL(string: override) {
+            return url
+        }
+        return URL(string: "https://github.com/sponsors/ventsislav-georgiev")!
     }
 }

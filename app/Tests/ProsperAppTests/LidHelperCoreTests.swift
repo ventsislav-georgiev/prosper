@@ -97,6 +97,54 @@ final class LidHelperCoreTests: XCTestCase {
         XCTAssertEqual(core.connections, 0)
     }
 
+    // MARK: - remote-session hold (OR'd with the lid override at the pmset layer)
+
+    func testRemoteHoldKeepsSleepDisabledWithoutLidOverride() {
+        let spy = Spy()
+        let core = make(spy)
+        XCTAssertTrue(core.setRemoteHold(true))
+        XCTAssertTrue(core.remoteHoldOn)
+        XCTAssertFalse(core.overrideOn)
+        XCTAssertEqual(spy.calls, [true])               // remote alone disables sleep
+    }
+
+    func testRemoteHoldSurvivesConnectionClose() {
+        let spy = Spy()
+        let core = make(spy)
+        _ = core.setRemoteHold(true)                    // [true]
+        core.connectionOpened()
+        _ = core.setOverride(true)                      // still true (OR), [true,true]
+
+        XCTAssertTrue(core.connectionClosed())          // last lid client drops
+        XCTAssertFalse(core.overrideOn)                 // lid override cleared
+        XCTAssertTrue(core.remoteHoldOn)                // remote hold untouched
+        // connectionClosed re-applies OR(false, true)=true, not false → Mac stays awake.
+        XCTAssertEqual(spy.calls, [true, true, true])
+        XCTAssertEqual(spy.calls.last, true)
+    }
+
+    func testReleasingOneSourceKeepsOtherHeld() {
+        let spy = Spy()
+        let core = make(spy)
+        core.connectionOpened()
+        _ = core.setOverride(true)                      // [true]
+        _ = core.setRemoteHold(true)                    // OR still true, [true,true]
+        _ = core.setRemoteHold(false)                   // lid still holds → OR true, [..,true]
+        XCTAssertTrue(core.overrideOn)
+        XCTAssertFalse(core.remoteHoldOn)
+        XCTAssertEqual(spy.calls.last, true)            // never re-enabled sleep
+    }
+
+    func testReclaimAtStartupClearsRemoteHold() {
+        let spy = Spy()
+        let core = make(spy)
+        _ = core.setRemoteHold(true)
+        core.reclaimAtStartup()
+        XCTAssertFalse(core.remoteHoldOn)
+        XCTAssertFalse(core.overrideOn)
+        XCTAssertEqual(spy.calls.last, false)
+    }
+
     /// Hot-path budget: the daemon serializes every connection/method event
     /// through the core, so a transition must be effectively free — no allocation,
     /// no locking. 1M open+set+close cycles under 500ms is ~500ns/cycle, a

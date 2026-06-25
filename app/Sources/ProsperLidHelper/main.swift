@@ -22,6 +22,14 @@ private let clientRequirement =
 // memory at zero cost. 10s is long enough to coalesce a quick toggle-off/on.
 private let idleExitSeconds = 10
 
+// How long a remote-session keep-awake hold survives without a refresh. The app
+// heartbeats well inside this (~45s) while a session is live; if the app crashes
+// or the network drops, the hold lapses within this window and the Mac sleeps —
+// the crash-safety for a hold that (unlike the lid override) has no client to drop.
+// Also the bootstrap window after a remote-wake promote: long enough for DchTerm
+// to dial back in over Tailscale and start its own heartbeat.
+private let remoteHoldTTLSeconds = 120
+
 // @unchecked Sendable: every mutable member (`core`, `idleTimer`) is touched
 // only inside a `q.sync`/`q.async` block, so the serial queue is the lock.
 final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unchecked Sendable {
@@ -30,6 +38,8 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
     // so every `core` call is serialized without the core needing its own lock.
     private let q = DispatchQueue(label: "\(lidHelperLabel).state")
     private var idleTimer: DispatchSourceTimer?
+    // Auto-expiry for the remote-session keep-awake hold (see remoteHoldTTLSeconds).
+    private var remoteHoldTimer: DispatchSourceTimer?
     private let core = LidHelperCore(apply: LidHelper.applyPmset, onIdle: { exit(0) })
     // Remote-wake lives in its own observer with its own state machine — zero
     // shared mutable state with `core` (the only coupling is the idle-exit guard
@@ -72,6 +82,50 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
             if !resident && self.core.connections == 0 { self.armIdleExit_locked() }
             reply(resident)
         }
+    }
+
+    func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void) {
+        // Hold/release the remote-session source of `disablesleep` and (re)arm its
+        // expiry. `true` refreshes the TTL — the app sends it as a heartbeat while a
+        // session is live; `false` releases immediately. The expiry guarantees the
+        // hold never outlives the app: no refresh → lapse → Mac sleeps.
+        q.async {
+            if on {
+                let ok = self.core.setRemoteHold(true)
+                self.armRemoteHoldExpiry_locked()
+                reply(ok)
+            } else {
+                self.cancelRemoteHoldExpiry_locked()
+                reply(self.core.setRemoteHold(false))
+            }
+        }
+    }
+
+    /// Called on the wake-promote path (within `q`): a remote wake just fired, so
+    /// hold sleep open for the bootstrap window even before any client connects,
+    /// giving DchTerm time to dial back in. If nothing connects + heartbeats, the
+    /// expiry releases it and the Mac re-sleeps next cadence.
+    private func bootstrapRemoteHoldFromPromote() {
+        _ = core.setRemoteHold(true)
+        armRemoteHoldExpiry_locked()
+    }
+
+    private func armRemoteHoldExpiry_locked() {
+        cancelRemoteHoldExpiry_locked()
+        let t = DispatchSource.makeTimerSource(queue: q)
+        t.schedule(deadline: .now() + .seconds(remoteHoldTTLSeconds))
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            _ = self.core.setRemoteHold(false)
+            self.remoteHoldTimer = nil
+        }
+        t.resume()
+        remoteHoldTimer = t
+    }
+
+    private func cancelRemoteHoldExpiry_locked() {
+        remoteHoldTimer?.cancel()
+        remoteHoldTimer = nil
     }
 
     /// Arm the idle exit immediately at startup so a daemon that launchd spins up
@@ -134,6 +188,10 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
     /// 10s, preserving "costs nothing until used". Must run on the main thread
     /// before RunLoop.run so the IOPMConnection schedules on the right runloop.
     func startRemoteWakeAtStartup() {
+        // Bootstrap a keep-awake hold the instant a wake promotes, so the Mac stays
+        // up for the client to reconnect (runs inside the observer's `q.sync` wake
+        // path, so it's already serialized on `q`).
+        remoteWake.onPromote = { [weak self] in self?.bootstrapRemoteHoldFromPromote() }
         remoteWake.startFromDisk()
     }
 }

@@ -158,6 +158,13 @@ struct AccountPane: View {
                 }
                 .buttonStyle(.neon)
             }
+            NeonDivider()
+            NeonRow("GitHub Sponsors", subtitle: "Recurring monthly support") {
+                Button("Sponsor ♥") {
+                    NSWorkspace.shared.open(ProsperServer.sponsorsURL)
+                }
+                .buttonStyle(.neon)
+            }
         }
     }
 

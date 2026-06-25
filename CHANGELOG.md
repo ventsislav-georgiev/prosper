@@ -5,6 +5,22 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.120.0
+
+### Remote Wake
+- **A remotely-woken Mac now stays awake while you actually use it.** Previously the
+  wake only nudged the idle timer — nothing held the system up — so the Mac would
+  re-sleep mid-session, dropping commands partway through. Now Prosper holds sleep
+  open (via the privileged helper, the same mechanism as lid-stay-awake) for as long
+  as a remote terminal client is connected, and for ~60s after it disconnects.
+- **Detached sessions keep the Mac awake while they work.** Even with no client
+  connected, if a `dch` session is still producing output the Mac stays up so the
+  command can finish; once a session has been silent for ~10s (and no client is
+  connected) the hold is released and the Mac may sleep on the next cycle. A
+  long-running command that prints nothing at all is treated as idle — an accepted
+  limitation. The hold auto-expires if Prosper crashes, so the Mac is never wedged
+  awake.
+
 ## v2.119.0
 
 ### Remote Wake
