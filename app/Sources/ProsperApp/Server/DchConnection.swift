@@ -242,16 +242,49 @@ enum DchCommand {
         return env
     }
 
-    /// Parse `dch -lj` (one `name\talias` per line; alias may be empty).
-    static func listSessions() -> [(name: String, alias: String)] {
+    /// Parse `dch -lj` (one `name\talias\tactivityEpoch` per line; alias may be
+    /// empty, epoch 0 when the session has produced no output yet).
+    static func listSessions() -> [(name: String, alias: String, activityEpoch: Int)] {
         runCapturing(args: ["-lj"])
             .split(separator: "\n")
             .compactMap { line in
-                let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
                 guard let name = parts.first, !name.isEmpty else { return nil }
                 let alias = parts.count > 1 ? String(parts[1]) : ""
-                return (String(name), alias)
+                let epoch = parts.count > 2 ? Int(parts[2]) ?? 0 : 0
+                return (String(name), alias, epoch)
             }
+    }
+
+    /// The dch socket directory the spawned client/master use, resolved exactly as
+    /// dch's `compute_sock_dir` does from the SAME env we hand it: `$DCH_SOCKET_DIR`,
+    /// else `$XDG_RUNTIME_DIR/dch-$UID`, else `/tmp/dch-$UID`. Authoritative in every
+    /// isolation mode (no guessing, no subprocess).
+    static var socketDir: String {
+        let env = childEnv()
+        if let d = env["DCH_SOCKET_DIR"], !d.isEmpty { return d }
+        if let x = env["XDG_RUNTIME_DIR"], !x.isEmpty { return "\(x)/dch-\(getuid())" }
+        return "/tmp/dch-\(getuid())"
+    }
+
+    /// True if any detached session produced pty output within `seconds`. Lets the
+    /// keep-awake hold survive a client disconnect while a session is still working:
+    /// the master stamps `<name>.sock.act`'s mtime on each output, so we just scan
+    /// those sidecars directly — no `dch` fork on the (possibly hours-long) poll
+    /// loop. A long-running command that prints nothing reads as idle — an accepted
+    /// limitation (per the design).
+    static func anySessionActive(within seconds: Int) -> Bool {
+        let dir = socketDir
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: dir) else { return false }
+        let cutoff = Date().addingTimeInterval(-Double(seconds))
+        for n in names where n.hasSuffix(".sock.act") {
+            if let m = (try? fm.attributesOfItem(atPath: "\(dir)/\(n)"))?[.modificationDate] as? Date,
+               m >= cutoff {
+                return true
+            }
+        }
+        return false
     }
 
     static func kill(_ name: String) {

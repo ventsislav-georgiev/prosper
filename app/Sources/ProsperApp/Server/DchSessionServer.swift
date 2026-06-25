@@ -18,6 +18,36 @@ import os.log
 ///   2. Belt-and-suspenders: every accepted connection's peer IP must also fall in
 ///      the Tailscale CGNAT range 100.64.0.0/10, else it's dropped.
 /// No auth tokens, no TLS — Tailscale is the trust boundary.
+/// Pure keep-awake decision, extracted from `DchSessionServer` so the grace /
+/// activity branching is unit-testable without an `NWListener` or live XPC. The
+/// server feeds it the current world (client attached? session active?) plus the
+/// running idle-tick count and applies the result. No I/O, no state of its own.
+enum KeepAwakePolicy {
+    /// A detached session counts as "active" if it produced output within this many
+    /// seconds (the design's "frozen >10s ⇒ not active" threshold).
+    static let activeWindowSeconds = 10
+    /// Consecutive idle ticks (each `tickSeconds` ≈ this many seconds) before
+    /// releasing the hold — a ~60s grace covering a brief reconnect or output lull.
+    static let graceTicks = 6
+
+    struct Step: Equatable {
+        let hold: Bool      // send/refresh the keep-awake hold this tick
+        let release: Bool   // tear the hold down (idle grace elapsed)
+        let idleTicks: Int  // carry forward
+    }
+
+    static func step(clientConnected: Bool, sessionActive: Bool, idleTicks: Int) -> Step {
+        if clientConnected || sessionActive {
+            return Step(hold: true, release: false, idleTicks: 0)
+        }
+        let n = idleTicks + 1
+        if n >= graceTicks {
+            return Step(hold: false, release: true, idleTicks: n)
+        }
+        return Step(hold: true, release: false, idleTicks: n)
+    }
+}
+
 final class DchSessionServer: @unchecked Sendable {
     static let shared = DchSessionServer()
 
@@ -29,6 +59,20 @@ final class DchSessionServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.prosper.dchserver")
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: DchConnection] = [:]
+
+    // Keep-awake: while any client is attached — OR a detached session is still
+    // producing output — the Mac must not sleep mid-command. A single repeating
+    // tick re-evaluates and heartbeats the daemon's remote-session hold (TTL ~120s).
+    // When nothing wants it awake for `graceTicks` consecutive ticks, we release.
+    // All touched only on `queue`.
+    private var keepAwakeActive = false
+    private var holdTimer: DispatchSourceTimer?
+    private var idleTicks = 0
+    /// Tick cadence; also the hold heartbeat (well inside the daemon's 120s TTL).
+    /// Kept equal to `activeWindowSeconds` so the "silent >10s ⇒ inactive" rule
+    /// actually holds — a coarser tick would mis-read a session that prints between
+    /// ticks as idle. Each tick re-evaluates AND refreshes the TTL.
+    private static let tickSeconds = KeepAwakePolicy.activeWindowSeconds
 
     private init() {}
 
@@ -74,8 +118,10 @@ final class DchSessionServer: @unchecked Sendable {
         listener?.cancel()
         listener = nil
         queue.async { [weak self] in
-            self?.connections.values.forEach { $0.close() }
-            self?.connections.removeAll()
+            guard let self else { return }
+            self.connections.values.forEach { $0.close() }
+            self.connections.removeAll()
+            self.stopKeepAwake()
         }
     }
 
@@ -99,9 +145,56 @@ final class DchSessionServer: @unchecked Sendable {
         }
         let handler = DchConnection(conn: conn, queue: queue, log: log) { [weak self] id in
             self?.connections.removeValue(forKey: id)
+            // No immediate release: the tick re-evaluates and the grace covers a
+            // detached session still working or a quick reconnect.
         }
         connections[ObjectIdentifier(handler)] = handler
         handler.start()
+        startKeepAwake()
+    }
+
+    // MARK: - Keep-awake (drives the daemon's remote-session hold)
+
+    /// A client attached: ensure the hold is held now and the tick is running. The
+    /// tick is what later releases it once neither a client nor an active detached
+    /// session wants the Mac awake.
+    private func startKeepAwake() {
+        idleTicks = 0
+        sendKeepAwake(true)
+        if keepAwakeActive { return }
+        keepAwakeActive = true
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + .seconds(Self.tickSeconds), repeating: .seconds(Self.tickSeconds))
+        t.setEventHandler { [weak self] in self?.tick() }
+        t.resume()
+        holdTimer = t
+    }
+
+    /// One evaluation, delegating the branching to the pure `KeepAwakePolicy`. The
+    /// `||` short-circuits so the sidecar scan runs only while no client is attached.
+    private func tick() {
+        let active = connections.isEmpty
+            && DchCommand.anySessionActive(within: KeepAwakePolicy.activeWindowSeconds)
+        let step = KeepAwakePolicy.step(
+            clientConnected: !connections.isEmpty, sessionActive: active, idleTicks: idleTicks)
+        idleTicks = step.idleTicks
+        if step.release {
+            stopKeepAwake()
+        } else if step.hold {
+            sendKeepAwake(true)        // hold / refresh the TTL (incl. grace window)
+        }
+    }
+
+    private func stopKeepAwake() {
+        holdTimer?.cancel(); holdTimer = nil
+        guard keepAwakeActive else { return }
+        keepAwakeActive = false
+        idleTicks = 0
+        sendKeepAwake(false)
+    }
+
+    private func sendKeepAwake(_ on: Bool) {
+        Task { @MainActor in await LidSleepHelper.setRemoteSessionActive(on) }
     }
 
     // MARK: - Tailscale interface resolution (variant-independent)
