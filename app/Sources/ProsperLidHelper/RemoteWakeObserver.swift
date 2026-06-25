@@ -132,13 +132,19 @@ final class RemoteWakeObserver: @unchecked Sendable {
         NSLog("RemoteWake: promoted to full wake")
     }
 
-    /// Bounded GET, 3s timeout + 1 retry. Returns the request token on a clean 200
+    /// Bounded GET, 10s timeout + 1 retry. Returns the request token on a clean 200
     /// (the body, unless it's "0" = no request), else `nil` (non-200, timeout,
     /// parse-fail). The core edge-triggers on a *change* in this token.
+    ///
+    /// The 10s budget is deliberate: on a battery dark wake the Wi-Fi radio needs a
+    /// few seconds to re-associate AND the worker round-trip alone measures ~3s, so a
+    /// tight 3s timeout (the original) ALWAYS timed out → never promoted. The
+    /// PreventSystemSleep assertion in handleWake holds the wake window across this, so
+    /// the only cost of waiting is a little radio-on time, paid once per pending wake.
     private func doPoll() -> String? {
         guard let url = URL(string: core.config.pollURL) else { return nil }
         for attempt in 0..<2 {
-            var req = URLRequest(url: url, timeoutInterval: 3)
+            var req = URLRequest(url: url, timeoutInterval: 10)
             req.httpMethod = "GET"
             req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             // The semaphore serializes the completion against the read below, but
@@ -151,7 +157,7 @@ final class RemoteWakeObserver: @unchecked Sendable {
                 sem.signal()
             }
             task.resume()
-            if sem.wait(timeout: .now() + 4) == .timedOut {
+            if sem.wait(timeout: .now() + 11) == .timedOut {
                 task.cancel()   // NEVER read `out` here: no signal => no happens-before, so the
                 continue        // cancelled completion's late write would race the read. Retry/end.
             }

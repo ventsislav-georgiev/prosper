@@ -198,7 +198,7 @@ public final class RemoteWakeCore {
     /// *decision* (everything except the injected network `poll`) must be near-free
     /// to keep the wake window short and the radio/CPU on-time minimal. Budget:
     /// **< 1 µs/call** decision-only (the real `poll` GET dominates wall time and is
-    /// bounded separately at 3 s + 1 retry). Guarded by `RemoteWakeCorePerfTests`.
+    /// bounded separately at 10 s + 1 retry). Guarded by `RemoteWakeCorePerfTests`.
     public func onWake(onAC: Bool, battPct: Int) -> WakeOutcome {
         guard pinned else { return .ignored }
         let t = now()

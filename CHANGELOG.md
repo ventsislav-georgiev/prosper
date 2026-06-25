@@ -5,6 +5,17 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.119.0
+
+### Remote Wake
+- **Remote wake now actually wakes the Mac.** The daemon’s wake-check poll used a
+  3-second timeout, but the round-trip to the wake server takes ~3s on its own and a
+  battery dark wake needs a few more seconds for Wi-Fi to re-associate — so the poll
+  always timed out, the daemon never saw the pending wake request, and the Mac went
+  straight back to sleep every cycle. The poll timeout is now 10 seconds (still a
+  bounded GET with one retry, held open by the existing wake-window assertion), so a
+  dark wake has time to fetch the request and promote to a full wake.
+
 ## v2.118.0
 
 ### Permissions
