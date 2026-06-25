@@ -5,7 +5,7 @@ import { requireSession } from "./middleware";
 import { getSupporterToken } from "./supporter";
 import { activateDevice, deleteAccount, deleteDevice, listDevices } from "./account";
 import { getSettings, putSettings } from "./sync";
-import { lemonSqueezyWebhook } from "./payment";
+import { lemonSqueezyWebhook, githubSponsorsWebhook } from "./payment";
 import { listSupporters } from "./supporters";
 import { market } from "./market";
 import { wake } from "./wake";
@@ -21,6 +21,7 @@ app.route("/auth", auth);
 
 // Public: payment provider webhook (verified via HMAC inside the handler).
 app.post("/payment/lemonsqueezy", lemonSqueezyWebhook);
+app.post("/payment/github", githubSponsorsWebhook);
 
 // Public: recent supporter display names for the app's About list.
 app.get("/supporters", listSupporters);

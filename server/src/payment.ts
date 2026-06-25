@@ -58,3 +58,72 @@ export async function lemonSqueezyWebhook(c: Ctx) {
 
   return c.json({ ok: true });
 }
+
+/**
+ * GitHub Sponsors webhook. Verifies the HMAC-SHA256 signature (sent as the
+ * `X-Hub-Signature-256: sha256=<hex>` header) over the raw body, then records
+ * a supporter on `created` and revokes it on `cancelled`.
+ *
+ * GitHub sponsors have no Prosper email, so we store a synthetic noreply
+ * address (no `users` row is created — they are not account holders). This
+ * means the sponsor's login feeds the public About list but does NOT light the
+ * in-app badge, which is keyed to the signed-in account email. The GitHub
+ * profile Sponsor badge is granted by GitHub automatically.
+ *
+ * Private sponsors (`privacy_level !== "public"`) are still recorded as active
+ * supporters but with no display name, so they never appear in the About list.
+ *
+ * Configure the webhook in the Sponsors dashboard to POST here with the signing
+ * secret stored as GITHUB_WEBHOOK_SECRET. Subscribe to the "sponsorship" event.
+ */
+export async function githubSponsorsWebhook(c: Ctx) {
+  const body = await c.req.text();
+  const header = c.req.header("X-Hub-Signature-256") ?? "";
+  const signature = header.startsWith("sha256=") ? header.slice(7) : header;
+  const expected = await hmacSha256Hex(c.env.GITHUB_WEBHOOK_SECRET, body);
+  if (!signature || !timingSafeEqual(signature, expected)) {
+    return c.json({ error: "bad_signature" }, 401);
+  }
+
+  let evt: any;
+  try {
+    evt = JSON.parse(body);
+  } catch {
+    return c.json({ error: "invalid_json" }, 400);
+  }
+
+  const action: string = evt?.action ?? "";
+  const sponsorship = evt?.sponsorship ?? {};
+  const sponsor = sponsorship?.sponsor ?? {};
+  const login = String(sponsor.login ?? "").trim();
+  const sponsorId = String(sponsor.id ?? login);
+  const isPublic = sponsorship?.privacy_level === "public";
+  const now = nowSec();
+
+  if (!login) return c.json({ ok: true, skipped: "missing_fields" });
+
+  const tokenId = `gh_${sponsorId}`;
+
+  if (action === "created") {
+    // Synthetic, never-delivered address — satisfies the NOT NULL email column
+    // without creating a real account. Private sponsors store no name.
+    const email = `${login.toLowerCase()}@users.noreply.github.com`;
+    const name = isPublic ? login.slice(0, 60) : "";
+    await c.env.DB.prepare(
+      `INSERT INTO supporter_tokens (id, email, type, status, source, order_id, name, issued_at, expires_at)
+       VALUES (?1, ?2, 'supporter', 'active', 'github', ?3, ?4, ?5, NULL)
+       ON CONFLICT(id) DO UPDATE SET status = 'active', name = ?4, issued_at = ?5`,
+    )
+      .bind(tokenId, email, login, name, now)
+      .run();
+  } else if (action === "cancelled") {
+    await c.env.DB.prepare(
+      `UPDATE supporter_tokens SET status = 'revoked'
+       WHERE id = ?1 AND source = 'github'`,
+    )
+      .bind(tokenId)
+      .run();
+  }
+
+  return c.json({ ok: true });
+}

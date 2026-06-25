@@ -8,6 +8,7 @@ export type Bindings = {
   RESEND_API_KEY: string;
   SUPPORTER_SIGNING_JWK: string; // Ed25519 private key as a JWK JSON string
   LEMONSQUEEZY_WEBHOOK_SECRET: string;
+  GITHUB_WEBHOOK_SECRET: string;
 
   // Vars (wrangler.jsonc)
   EMAIL_FROM: string;
