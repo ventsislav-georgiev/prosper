@@ -746,6 +746,31 @@ private struct GeneralPane: View {
         NeonScroll {
             PaneTitle(title: "General", subtitle: "Startup, menu bar and clipboard")
 
+            // Always-visible Accessibility grant. The Context pane has the full
+            // permissions list, but it lives under the Inline Autocomplete category
+            // and is hidden when that's off — so a clipboard-only user never sees it.
+            // Accessibility underpins clipboard paste, autocomplete, drag-snap and
+            // shortcuts, so surface it here on the always-present General pane.
+            NeonSection("Permissions",
+                        footer: "Accessibility lets Prosper paste from Clipboard History, run system-wide autocomplete, snap windows and fire shortcuts. Use “Open” to grant it in System Settings, then “Re-check”.") {
+                PermissionStatusRow(
+                    title: "Accessibility",
+                    subtitle: "Paste clipboard entries, watch keystrokes, move windows, run shortcuts",
+                    granted: hasAccessibility) {
+                        // Prompt only nudges when NOT yet trusted (no dialog when
+                        // granted); always open the pane so "Open" works either way.
+                        _ = PermissionsManager.ensureAccessibilityTrust(prompt: !hasAccessibility)
+                        PermissionsManager.openAccessibilitySettings()
+                        hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+                    }
+                NeonDivider()
+                HStack {
+                    Button("Re-check") { hasAccessibility = PermissionsManager.isAccessibilityTrusted() }
+                        .buttonStyle(.neon)
+                    Spacer()
+                }
+            }
+
             NeonSection("Startup") {
                 Toggle("Launch at login", isOn: Binding(
                     get: { model.launchAtLogin },
@@ -1067,9 +1092,10 @@ private struct ContextPane: View {
                     title: "Accessibility",
                     subtitle: "Watch keystrokes, read focused text fields, and insert completions",
                     granted: hasAccessibility) {
-                        if !PermissionsManager.ensureAccessibilityTrust(prompt: true) {
-                            PermissionsManager.openAccessibilitySettings()
-                        }
+                        // Prompt only nudges when NOT yet trusted (no dialog when
+                        // granted); always open the pane so "Open" works either way.
+                        _ = PermissionsManager.ensureAccessibilityTrust(prompt: !hasAccessibility)
+                        PermissionsManager.openAccessibilitySettings()
                         hasAccessibility = PermissionsManager.isAccessibilityTrusted()
                     }
                 // Recovery for the ad-hoc-signing "toggle on, still not trusted"
@@ -1093,9 +1119,10 @@ private struct ContextPane: View {
                     title: "Screen Recording",
                     subtitle: "Capture on-screen text for screenshot / OCR context",
                     granted: hasScreenPermission) {
-                        if !VisionContext.requestScreenRecordingPermission() {
-                            PermissionsManager.openScreenRecordingSettings()
-                        }
+                        // Request only nudges when NOT yet granted; always open the
+                        // pane so "Open" works even once the grant is in place.
+                        if !hasScreenPermission { _ = VisionContext.requestScreenRecordingPermission() }
+                        PermissionsManager.openScreenRecordingSettings()
                         hasScreenPermission = VisionContext.hasScreenRecordingPermission()
                     }
                 NeonDivider()

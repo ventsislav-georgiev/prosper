@@ -113,7 +113,10 @@ final class ClipboardPanel {
         // same Settings → Context permissions UI every other Accessibility-gated
         // feature uses. The clip is already on the pasteboard, so manual ⌘V still works.
         guard PermissionsManager.isAccessibilityTrusted() else {
-            UserDefaults.standard.set("context", forKey: "settingsSelectedPane")
+            // Land on General — it's always present and now hosts the Accessibility
+            // grant. (Context has the same row but is hidden when autocomplete is off,
+            // which is exactly the clipboard-only case that hits this path.)
+            UserDefaults.standard.set("general", forKey: "settingsSelectedPane")
             onOpenSettings()
             return
         }
@@ -544,6 +547,16 @@ private struct ClipboardView: View {
                     proxy.scrollTo(id)
                 }
                 // Else fully visible → leave the list put (no recentering).
+            }
+            .onChange(of: model.focusRequested) { _, req in
+                // Reopen re-selects the first item (see `present`), but `selectedId`
+                // is often unchanged from last time (still the first row) so the
+                // handler above won't fire — and the ScrollView retains its old
+                // offset across order-out/in, leaving the selected first row parked
+                // off-screen above the fold. The reopen signal fires every present,
+                // so snap the top back into view here. (Selection is always the
+                // first item on present, so the top anchor == the selection reveal.)
+                if req { proxy.scrollTo(Self.topAnchorId, anchor: .top) }
             }
             // ⌃-digit overlay: a fixed ladder of badges at constant viewport Y —
             // they don't move on scroll; rows slide beneath. Reads frames from the
