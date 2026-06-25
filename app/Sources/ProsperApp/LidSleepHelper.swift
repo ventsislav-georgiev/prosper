@@ -342,8 +342,25 @@ enum LidSleepHelper {
     /// caller; `false` releases at once.
     @discardableResult
     static func setRemoteSessionActive(_ on: Bool) async -> Bool {
-        guard let c = connection else { return false }
-        holdsRemoteSession = on
+        // Release always clears the flag, even if the daemon is unreachable, so a
+        // later teardown isn't pinned open by a stale hold we can't actually release.
+        if !on { holdsRemoteSession = false }
+        // Reuse the daemon connection remote-wake / lid already keeps open. Rebuild it
+        // if it dropped — an XPC connection can be interrupted across a sleep/wake, so
+        // after a remote wake the heartbeat would otherwise find `connection == nil`,
+        // no-op, and let the daemon's bootstrap hold lapse → Mac sleeps mid-session.
+        // Gate the rebuild on another feature keeping the daemon resident so keep-awake
+        // never launches (or registers) the privileged daemon on its own.
+        let c: NSXPCConnection
+        if let existing = connection {
+            c = existing
+        } else if on && (remoteWakeEnabled || holdsLidOverride) {
+            c = makeConnection()
+            connection = c
+        } else {
+            return false
+        }
+        if on { holdsRemoteSession = true }
         let ok = await callRemoteSession(c, on: on)
         // Releasing: drop the connection only if nothing else needs the daemon.
         if !on && !remoteWakeEnabled && !holdsLidOverride {

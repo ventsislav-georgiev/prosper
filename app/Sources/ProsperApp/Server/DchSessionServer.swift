@@ -194,7 +194,12 @@ final class DchSessionServer: @unchecked Sendable {
     }
 
     private func sendKeepAwake(_ on: Bool) {
-        Task { @MainActor in await LidSleepHelper.setRemoteSessionActive(on) }
+        // Route through LidSleepHelper's order-preserving apply chain (NOT a bare
+        // Task) so a true/false heartbeat pair can't reorder on the MainActor, and so
+        // a heartbeat can't invalidate the shared XPC connection out from under an
+        // in-flight lid / remote-wake op between its awaits. enqueueApply appends
+        // synchronously on this queue thread; the op crosses to @MainActor itself.
+        LidSleepHelper.enqueueApply { await LidSleepHelper.setRemoteSessionActive(on) }
     }
 
     // MARK: - Tailscale interface resolution (variant-independent)

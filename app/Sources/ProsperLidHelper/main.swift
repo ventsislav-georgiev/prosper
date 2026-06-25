@@ -23,9 +23,10 @@ private let clientRequirement =
 private let idleExitSeconds = 10
 
 // How long a remote-session keep-awake hold survives without a refresh. The app
-// heartbeats well inside this (~45s) while a session is live; if the app crashes
-// or the network drops, the hold lapses within this window and the Mac sleeps —
-// the crash-safety for a hold that (unlike the lid override) has no client to drop.
+// heartbeats every ~10s (the keep-awake tick) while a session is live — a 12×
+// margin that absorbs an App-Nap-throttled timer; if the app crashes or the
+// network drops, the hold lapses within this window and the Mac sleeps — the
+// crash-safety for a hold that (unlike the lid override) has no client to drop.
 // Also the bootstrap window after a remote-wake promote: long enough for DchTerm
 // to dial back in over Tailscale and start its own heartbeat.
 private let remoteHoldTTLSeconds = 120

@@ -320,13 +320,26 @@ enum URLServices {
     /// malformed URL or when the target app can't be resolved.
     @discardableResult
     static func open(_ urlString: String, bundleID: String?) -> Bool {
-        guard let url = URL(string: urlString) else { return false }
+        guard let url = URL(string: normalizeScheme(urlString)) else { return false }
         let ws = NSWorkspace.shared
         if let bundleID, let appURL = ws.urlForApplication(withBundleIdentifier: bundleID) {
             ws.open([url], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration())
             return true
         }
         return ws.open(url)
+    }
+
+    /// A scheme-less link (e.g. "github.com") parses into a URL with `scheme == nil`,
+    /// which NSWorkspace silently refuses to open. Prepend https:// so bare domains
+    /// behave like every browser's address bar.
+    /// ponytail: only the no-scheme case is rewritten; "localhost:3000" parses
+    /// "localhost" AS a scheme and is left as-is. Widen if that bites someone.
+    static func normalizeScheme(_ urlString: String) -> String {
+        let trimmed = urlString.trimmingCharacters(in: .whitespaces)
+        if URL(string: trimmed)?.scheme == nil, !trimmed.isEmpty {
+            return "https://" + trimmed
+        }
+        return urlString
     }
 
     /// Bundle id of the browser macOS would ACTUALLY launch for an http(s) URL, "" if
