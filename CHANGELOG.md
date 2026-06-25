@@ -5,6 +5,24 @@ reads the section whose heading matches the version being tagged (e.g. `## v2.91
 and uses it as the GitHub Release body, with the auto-generated commit list appended
 below it. Add a new `## vX.Y.Z` section at the top before cutting a release.
 
+## v2.118.0
+
+### Permissions
+- **The “Open” button on every permission row now always opens System Settings.**
+  Previously, once a permission was *granted*, its “Open” button did nothing — the
+  open call was gated behind the not-granted branch (only Notifications, which opened
+  unconditionally, worked). Now Accessibility, Screen Recording and every extension
+  permission (Full Disk Access, the lid helper, …) open their System Settings pane
+  whether or not the grant is already in place, so you can always jump in to review or
+  revoke. The system permission prompt still only appears when the grant is missing.
+- **Accessibility now has an always-visible grant on the General pane.** The full
+  permissions list lives on the Context pane, but that pane is hidden when Inline
+  Autocomplete is off — so a clipboard-only user never saw it. General (always present)
+  now carries an Accessibility row with the same Granted / Open / Re-check controls, and
+  Clipboard History’s paste prompt routes there when the permission is missing.
+- **Extension permission rows keep “Open” available when granted**, matching the native
+  rows for a single, consistent permissions UX everywhere.
+
 ## v2.117.0
 
 ### Clipboard History

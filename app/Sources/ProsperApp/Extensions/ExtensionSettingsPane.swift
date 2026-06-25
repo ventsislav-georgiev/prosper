@@ -333,6 +333,10 @@ private struct PermissionRow: View {
                 case .some(true):
                     Label("Granted", systemImage: "checkmark.seal.fill")
                         .font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.blue)
+                    // Keep "Open" available even when granted, so the user can jump to
+                    // the System Settings pane to review/revoke — matches the native
+                    // permission rows (which always offer Open).
+                    Button("Open") { onEvent(.permissionOpen(name: name)) }.buttonStyle(.neon)
                 case .some(false):
                     Label("Not granted", systemImage: "exclamationmark.triangle.fill")
                         .font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.magenta)
