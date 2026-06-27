@@ -15,21 +15,15 @@ enum SleepControl {
         // Stop the remote-terminal server from re-asserting its keep-awake hold
         // (sessions are NOT killed — they survive sleep and reconnect on wake).
         DchSessionServer.shared.releaseForSleep()
-        // Release both daemon writers in issue order on the shared apply chain, THEN
-        // sleep: pmset is refused / instantly re-woken while disablesleep is still
-        // held, so the sleep must come after the releases land.
+        // Hand the whole release-then-sleep to the root daemon: it clears BOTH
+        // disablesleep writers synchronously (so the setting is committed) and only
+        // then issues `pmset sleepnow`. Doing it app-side was the bug — pmset run
+        // while disablesleep is still 1 only sleeps the display, and the app-side
+        // release no-ops whenever its XPC connection has dropped, so the Mac stayed
+        // awake + reachable. On the shared apply chain to keep order with any pending
+        // lid op.
         LidSleepHelper.enqueueApply {
-            _ = await LidSleepHelper.setRemoteSessionActive(false)
-            _ = await LidSleepHelper.setDisabled(false)
-            systemSleep()
+            _ = await LidSleepHelper.sleepNow()
         }
-    }
-
-    private static func systemSleep() {
-        // `pmset sleepnow` needs no privilege for an on-demand sleep.
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
-        p.arguments = ["sleepnow"]
-        try? p.run()
     }
 }

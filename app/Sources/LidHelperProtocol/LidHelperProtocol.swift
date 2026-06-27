@@ -37,4 +37,15 @@ public let lidHelperMachServiceName = "eu.illegible.prosper.lidhelper"
     /// re-asserts it (the heartbeat). That timeout is the crash-safety: if the app
     /// dies the hold lapses and the Mac sleeps. `reply(true)` on a successful apply.
     func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void)
+
+    /// Sleep the Mac now, as root. Clears BOTH `disablesleep` writers (lid override
+    /// + remote-session hold) FIRST — synchronously, so the setting is committed —
+    /// then `pmset sleepnow`. Doing it in the daemon is the whole point: a
+    /// `pmset sleepnow` issued while `disablesleep` is still 1 only sleeps the
+    /// display (the Mac stays awake + network-reachable), and the app can't reliably
+    /// clear the daemon's remote hold over XPC when its connection has dropped. The
+    /// daemon owns both writers and runs as root, so it can release-then-sleep
+    /// atomically and the sleep actually sticks. `reply(true)` once the sleep is
+    /// issued.
+    func sleepNow(withReply reply: @escaping (Bool) -> Void)
 }

@@ -105,6 +105,37 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
         }
     }
 
+    func sleepNow(withReply reply: @escaping (Bool) -> Void) {
+        // Explicit user "sleep now". Force EVERY disablesleep writer off first
+        // (reclaim = lid override + remote hold → pmset disablesleep 0, synchronous
+        // waitUntilExit) so the sleep below actually sticks instead of dropping only
+        // the display, THEN issue the immediate sleep. Both run as root on `q`, in
+        // order — no app-side XPC race can leave a hold dangling.
+        q.async {
+            self.cancelRemoteHoldExpiry_locked()
+            self.core.reclaimAtStartup()
+            let ok = LidHelper.sleepNowPmset()
+            dtrace("sleepNow: writers cleared, pmset sleepnow ok=\(ok)")
+            reply(ok)
+        }
+    }
+
+    private static func sleepNowPmset() -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+        p.arguments = ["sleepnow"]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do {
+            try p.run()
+            p.waitUntilExit()
+            return p.terminationStatus == 0
+        } catch {
+            dtrace("pmset sleepnow spawn FAILED: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     /// Called on the wake-promote path (within `q`): a remote wake just fired, so
     /// hold sleep open for the bootstrap window even before any client connects,
     /// giving DchTerm time to dial back in. If nothing connects + heartbeats, the

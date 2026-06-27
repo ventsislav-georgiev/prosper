@@ -143,6 +143,14 @@ tag from the now-released section and put it on the new top draft.
   inside your remote `dch` session) does the same thing — releases the holds and puts
   it to sleep — so you can wake it, do your work, and send it back to sleep without
   touching it. Tip: add `alias prosper-sleep='open prosper://sleep'` to your shell.
+- **"Sleep this Mac now" actually sleeps the Mac.** The first beta of this button
+  only slept the *display* — the Mac stayed awake and network-reachable — and often
+  did nothing on the first click. Cause: the keep-awake holds were released from the
+  app over a connection that may have already dropped (so the release silently
+  no-op'd), and `pmset sleepnow` run while sleep was still disabled only sleeps the
+  screen. The release-then-sleep now happens inside the privileged helper as root:
+  it clears every hold first (committed synchronously) and only then sleeps, so the
+  Mac goes down on the first click and stays down.
 
 ### Troubleshooting
 - **New verbose trace mode (Settings → About → Troubleshooting), off by default.**
