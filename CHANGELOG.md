@@ -115,7 +115,9 @@ tag from the now-released section and put it on the new top draft.
   together. While the charger is connected and this rule is on, the manual switch
   locks (with the reason shown) so an accidental toggle — or the keyboard shortcut —
   can't sleep the Mac out from under you; unplug, or turn the rule off, to release it.
-  Existing settings migrate automatically.
+  The menu bar matches: while the plugged-in rule owns the state, the menu shows
+  "kept awake while plugged in" with no "let sleep" action, so it can't fight the
+  lock either. Existing settings migrate automatically.
 
 ### Troubleshooting
 - **New verbose trace mode (Settings → About → Troubleshooting), off by default.**

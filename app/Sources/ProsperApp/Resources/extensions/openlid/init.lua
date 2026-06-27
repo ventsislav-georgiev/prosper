@@ -196,9 +196,13 @@ end
 
 -- True when the plugged-in rule currently OWNS the awake state, so manual "off"
 -- (settings switch + shortcut) is refused with a reason instead of fighting it.
+-- `autoActivated` is set ONLY by the on-AC rule (activate(_, true)) and any unplug
+-- clears it (on_battery demotes to manual or deactivates), so an active auto session
+-- ⟹ the plugged-in rule owns it and we're still on AC. That's the whole lock — pure
+-- state, zero prefs/battery reads, so the hot menu render stays cheap.
 local function rule_lock_active(st)
     st = st or load_state()
-    return rule_on_ac() and (not running_on_battery()) and st.active and st.autoActivated
+    return st.active == true and st.autoActivated == true
 end
 
 -- Run the 60s menu-countdown ticker ONLY while a timed session is live. The
@@ -244,8 +248,15 @@ local function build_menu(s)
 
     -- ── 🔓 Mac awake — whole Mac stays awake when the lid is CLOSED ──
     if s.active then
-        items[#items + 1] = { title = "\u{1F513} Mac awake with lid closed" .. (s.endTime and (" \u{00B7} " .. fmt_remaining(s.endTime)) or " \u{00B7} no limit"), enabled = false }
-        items[#items + 1] = { title = "Let Mac sleep on lid close", handler = "on_menu_off" }
+        if rule_lock_active(s) then
+            -- Plugged-in rule owns the state: match the settings pane + shortcut —
+            -- no "let sleep" action, same reason shown, so the menu can't fight it.
+            items[#items + 1] = { title = "\u{1F513} Mac awake \u{00B7} kept awake while plugged in", enabled = false }
+            items[#items + 1] = { title = "Unplug to let it sleep", enabled = false }
+        else
+            items[#items + 1] = { title = "\u{1F513} Mac awake with lid closed" .. (s.endTime and (" \u{00B7} " .. fmt_remaining(s.endTime)) or " \u{00B7} no limit"), enabled = false }
+            items[#items + 1] = { title = "Let Mac sleep on lid close", handler = "on_menu_off" }
+        end
     else
         items[#items + 1] = { title = "Mac sleeps on lid close", enabled = false }
         items[#items + 1] = { title = "Keep Mac awake with lid closed", handler = "on_menu_on" }
@@ -414,7 +425,14 @@ function on_netoff(payload) deactivate("no network (in transit)") end
 function on_caffeine_expiry(payload) caffeine_off("timer expired") end
 
 -- ============ Menu handlers ============
-function on_menu_off(payload) deactivate("menu") end
+function on_menu_off(payload)
+    -- Guard a stale menu (plugged in between render and click): respect the lock.
+    if rule_lock_active() then
+        host.alert.show("\u{1F513} Kept awake while plugged in \u{2014} unplug, or turn off the rule in Settings, to allow sleep")
+        return
+    end
+    deactivate("menu")
+end
 function on_caff_off(payload) caffeine_off("menu") end
 
 function on_caff_on(payload)
