@@ -181,17 +181,25 @@ local function real_disablesleep()
     return out:match("SleepDisabled%s+(%d)") == "1"
 end
 
--- Human "who owns it" line for the Status row, reconciling our stored intent with
--- the real system state so a hold we didn't set (or a stale one) is named, not hidden.
+-- Is the lid-close override ON? Our stored intent (st.active, synchronous so the
+-- Status pill flips live the instant a manual toggle lands) OR a real system hold
+-- we didn't set. Drives the ON/OFF pill.
+local function mac_awake_on(st, real)
+    return st.active == true or real == true
+end
+
+-- "Who owns it" detail line for the Status row (the ON/OFF itself is the pill, so
+-- this carries only the reason). Reconciles our stored intent with the real system
+-- state so a hold we didn't set (or a stale one) is named, not hidden.
 local function mac_awake_status(st, real)
-    if not real then return "Off \u{2014} Mac sleeps when the lid closes" end
     if st.active then
-        if st.autoActivated then return "On \u{2014} kept awake while plugged in" end
+        if st.autoActivated then return "Kept awake while plugged in" end
         if st.endTime then return "On for " .. fmt_remaining(st.endTime) .. " \u{2014} turned on manually" end
-        return "On \u{2014} turned on manually"
-    end
-    if pref_bool("remote_wake", DEFAULTS.remote_wake) then return "On \u{2014} held by a remote session" end
-    return "On \u{2014} held by another app or a stale override"
+        return "Turned on manually" end
+    if real then
+        if pref_bool("remote_wake", DEFAULTS.remote_wake) then return "Held by a remote session" end
+        return "Held by another app or a stale override" end
+    return "Mac sleeps when the lid closes"
 end
 
 -- True when the plugged-in rule currently OWNS the awake state, so manual "off"
@@ -575,9 +583,15 @@ function settings_render(section_id, state)
         footer = "What's happening right now. Use the controls below to change it.",
         rows = {
             s.row{ kind = "info", title = "\u{1F513} Mac awake (lid closed)",
+                   value = mac_awake_on(st, real) and "on" or "off",
                    subtitle = mac_awake_status(st, real) },
             s.row{ kind = "info", title = "\u{2615} Display awake (no screensaver)",
-                   subtitle = st.caffeine and caffeine_line(st) or "Off \u{2014} display sleeps normally" },
+                   value = st.caffeine and "on" or "off",
+                   subtitle = st.caffeine and caffeine_line(st) or "Display sleeps normally" },
+            s.row{ kind = "info", title = "\u{1F4E1} Remote wake",
+                   value = c.remoteWake and "on" or "off",
+                   subtitle = c.remoteWake and "Armed \u{2014} dark-wakes on a timer to check for wake requests"
+                        or "This Mac can't be woken remotely" },
             s.row{ kind = "info", title = "Power",
                    subtitle = string.format("Battery %d%% \u{00B7} %s \u{00B7} External display: %s",
                         battery_pct(), on_ac and "on charger" or "on battery",

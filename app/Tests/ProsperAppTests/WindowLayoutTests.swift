@@ -224,4 +224,61 @@ final class WindowLayoutTests: XCTestCase {
         XCTAssertEqual(sink, iterations * zones.count)
         XCTAssertLessThan(elapsedMs, 200, "targetFrames too slow: \(elapsedMs) ms for \(iterations) iters")
     }
+
+    // MARK: - Drag move-confirm (DragSnapController.didMove)
+
+    func testDidMoveNilOperandsNeverMove() {
+        let p = CGPoint(x: 10, y: 10)
+        XCTAssertFalse(DragSnapController.didMove(from: nil, to: p))   // origin unreadable at start
+        XCTAssertFalse(DragSnapController.didMove(from: p, to: nil))   // poll failed this event
+        XCTAssertFalse(DragSnapController.didMove(from: nil, to: nil))
+    }
+
+    func testDidMoveEpsilonBoundary() {
+        let e = DragSnapController.moveConfirmEpsilon
+        let o = CGPoint(x: 100, y: 100)
+        // Exactly epsilon on either axis is NOT a move (strict >), so rounding jitter
+        // up to epsilon on a stationary window can't false-confirm.
+        XCTAssertFalse(DragSnapController.didMove(from: o, to: CGPoint(x: 100 + e, y: 100)))
+        XCTAssertFalse(DragSnapController.didMove(from: o, to: CGPoint(x: 100, y: 100 + e)))
+        XCTAssertFalse(DragSnapController.didMove(from: o, to: CGPoint(x: 100 - e, y: 100 - e)))
+        // Just past epsilon on either axis (either direction) IS a move.
+        XCTAssertTrue(DragSnapController.didMove(from: o, to: CGPoint(x: 100 + e + 0.01, y: 100)))
+        XCTAssertTrue(DragSnapController.didMove(from: o, to: CGPoint(x: 100, y: 100 - e - 0.01)))
+    }
+
+    // The controller confirms on EITHER source: app AX origin OR window-server origin.
+    // These two scenarios are the whole reason the OR exists.
+    func testMoveConfirmOrSemantics() {
+        let start = CGPoint(x: 200, y: 200)
+        let moved = CGPoint(x: 260, y: 200)
+        // Telegram/Qt: AX origin stays pinned during the drag, window server tracks it.
+        let telegram = DragSnapController.didMove(from: start, to: start)        // AX pinned
+            || DragSnapController.didMove(from: start, to: moved)                // server moved
+        XCTAssertTrue(telegram, "window-server movement must confirm even when AX is pinned")
+        // Ghostty text selection: neither the AX origin nor the server origin moves.
+        let ghostty = DragSnapController.didMove(from: start, to: start)
+            || DragSnapController.didMove(from: start, to: start)
+        XCTAssertFalse(ghostty, "a non-moving drag must never confirm")
+    }
+
+    // Hot-path requirement: the move-confirm decision runs at most once per drag
+    // event while pre-confirm (≤ ~12 events per drag total — it stops the instant the
+    // window moves or the no-move cap aborts), so it must be effectively free. Ceiling
+    // is sized for an unoptimized test build (~100 ns/call); the point isn't the
+    // absolute number but to fail loudly if didMove ever regresses into allocation or
+    // real work (which would push it to µs/call → seconds here).
+    func testDidMoveBudget() {
+        let start = CGPoint(x: 0, y: 0)
+        let iterations = 1_000_000
+        var hits = 0
+        let t0 = DispatchTime.now()
+        for i in 0..<iterations {
+            let now = CGPoint(x: CGFloat(i % 5), y: 0)   // straddles the epsilon
+            if DragSnapController.didMove(from: start, to: now) { hits += 1 }
+        }
+        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+        XCTAssertGreaterThan(hits, 0)
+        XCTAssertLessThan(elapsedMs, 200, "didMove too slow: \(elapsedMs) ms for \(iterations) iters")
+    }
 }

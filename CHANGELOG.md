@@ -70,17 +70,21 @@ tag from the now-released section and put it on the new top draft.
   matches the actual selection.
 
 ### Window Layouts
-- **The layout/palette overlay now appears the instant you start dragging a window.**
-  Previously it waited on a move-confirm poll that gave up — and aborted the whole
-  gesture — after ~10 samples with no window movement. A slow or hesitant drag
-  expired that poll before macOS had begun moving the window, so the overlay never
-  showed for that gesture (the "click, nothing; release, retry, then it appears"
-  flakiness, and the feeling that only a fast drag toward the top worked). The
-  palette and layout-zone overlays no longer wait on move-confirm; they show
-  immediately. Edges and corners keep their original gating, so a corner still only
-  previews once you reach it, and a text-selection drag never flashes the edge
-  footprint. Snapping on release still requires a real window move, so selecting
-  text won't reposition anything.
+- **The layout/palette overlay now appears the instant a window actually starts
+  moving — reliably, and only for real window drags.** It used to wait on a poll
+  that gave up after ~10 samples with no movement, so a slow or hesitant drag
+  expired the poll before macOS had begun moving the window and the overlay never
+  showed (the "click, nothing; release, retry, then it appears" flakiness). That
+  poll no longer aborts the gesture, so the overlay shows the moment the window
+  moves. Just as important, it shows *only* when the window moves: a text-selection
+  drag in a terminal or editor (e.g. Ghostty) no longer pops the palette, since the
+  window never moves.
+- **Window movement is now detected even for apps that hide it from accessibility.**
+  Some apps (e.g. Telegram and other Qt-based windows) don't report their live
+  position while you drag them, so the overlay never appeared for those windows. The
+  drag now also reads the position straight from the window server, which always
+  knows where a window really is — so the palette shows for those apps too, while a
+  non-moving drag (text selection, a scrollbar) still triggers nothing.
 - **The palette drop preview no longer promises a resize that won't happen.** For a
   "Move only" layout (reposition, keep size) the preview footprint showed the full
   resized zone instead of where the window would actually land. It now matches the
@@ -118,6 +122,12 @@ tag from the now-released section and put it on the new top draft.
   The menu bar matches: while the plugged-in rule owns the state, the menu shows
   "kept awake while plugged in" with no "let sleep" action, so it can't fight the
   lock either. Existing settings migrate automatically.
+- **Status is clearer at a glance.** Each item shows a bold ON/OFF badge instead of
+  burying the state in fine print, the Status section now lists Remote Wake too, and
+  flipping a control updates the status immediately. The Permissions group is
+  collapsible and sits at the top of every settings page — folded away once granted,
+  opened automatically when something still needs your approval — and toggling a
+  checkbox no longer jumps the scroll position.
 
 ### Troubleshooting
 - **New verbose trace mode (Settings → About → Troubleshooting), off by default.**

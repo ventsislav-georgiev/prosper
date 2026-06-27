@@ -101,7 +101,9 @@ final class DragSnapController {
     private var dragging = false
     private var aborted = false
     private var win: AXUIElement?
+    private var winID: CGWindowID?
     private var winInitialOrigin: CGPoint?
+    private var winInitialServerOrigin: CGPoint?
     private var moveConfirmed = false
     private var preConfirmPolls = 0
     private var currentZone: SnapZone?
@@ -221,25 +223,38 @@ final class DragSnapController {
             dragging = true
             win = el
             winInitialOrigin = WindowManager.axFrame(el)?.origin
+            winID = WindowManager.windowID(el)
+            winInitialServerOrigin = winID.flatMap { WindowManager.serverFrame(of: $0)?.origin }
         }
 
         // Only treat this as a window move once the window's origin has actually
         // changed — distinguishes dragging the window from a text/scrollbar/select
-        // drag that merely sweeps the cursor toward an edge. This is the one AX poll
-        // per event, and it runs ONLY pre-confirm. A non-window drag never confirms,
-        // so cap the polls: after maxPreConfirmPolls events with no origin change we
-        // give up and abort, rather than hammering AX at ~120 Hz for the whole drag.
-        if !moveConfirmed, let el = win, let o0 = winInitialOrigin {
-            if let now = WindowManager.axFrame(el)?.origin,
-               abs(now.x - o0.x) > 2 || abs(now.y - o0.y) > 2 {
+        // drag that merely sweeps the cursor toward an edge. These are the only AX/
+        // window-server polls on the drag path, and they run ONLY pre-confirm: a
+        // confirmed drag and a capped (non-window) drag both stop polling, so the
+        // ~120 Hz steady state is pure geometry with zero IPC.
+        if !moveConfirmed {
+            // Confirm from EITHER the app's AX origin or the window server's origin.
+            // Telegram (and other Qt apps) don't push AXPosition updates during a
+            // live drag, so axFrame stays pinned at the start — but the window server
+            // always knows the real on-screen position, so serverFrame catches the
+            // move. A text/scrollbar drag moves neither, so it still never confirms.
+            // Window server first: it tracks every app's live position, so on the
+            // common path it confirms and `||` short-circuits past the AX poll. The AX
+            // origin is the fallback for when no window id is available (winID nil).
+            let moved = Self.didMove(from: winInitialServerOrigin, to: winID.flatMap { WindowManager.serverFrame(of: $0)?.origin })
+                || Self.didMove(from: winInitialOrigin, to: win.flatMap { WindowManager.axFrame($0)?.origin })
+            if moved {
                 moveConfirmed = true
             } else if preConfirmPolls >= Self.maxPreConfirmPolls {
-                // Cap AX polling on a never-moving drag. For edges, abort so a text/
-                // scrollbar drag can't flash the footprint. For layouts/palette the
-                // overlay shows on drag-start regardless (the immediate feedback the
-                // user expects) — just stop polling. The drop stays gated on
-                // moveConfirmed, so an unconfirmed (non-window) drag still won't snap.
-                if dragMode == .edges { aborted = true; return }
+                // Capped: ~10 events (~80–160 ms) with no movement → not a window
+                // drag (text selection, scrollbar). Abort for ALL modes — the
+                // overlays are gated on moveConfirmed so none has shown yet, and
+                // aborting stops the per-event polling for the rest of the gesture
+                // (otherwise a never-moving drag would re-poll AX + the window server
+                // every event at ~120 Hz). The drop is gated on moveConfirmed too, so
+                // an aborted drag never snaps.
+                aborted = true; return
             } else {
                 preConfirmPolls += 1
             }
@@ -420,7 +435,9 @@ final class DragSnapController {
         dragging = false
         aborted = false
         win = nil
+        winID = nil
         winInitialOrigin = nil
+        winInitialServerOrigin = nil
         moveConfirmed = false
         preConfirmPolls = 0
         currentZone = nil
@@ -435,6 +452,20 @@ final class DragSnapController {
         layoutSig = nil
         layoutOverlay.hide()   // keep overlay visibility in lockstep with layoutSig
         palette.hide()
+    }
+
+    /// Px of origin travel (either axis) before a drag counts as a real window move.
+    /// Small enough to confirm on the first moving event, large enough that AX/window-
+    /// server rounding jitter on a stationary window doesn't false-positive.
+    static let moveConfirmEpsilon: CGFloat = 2
+
+    /// True when `now` exists and differs from the captured `start` by more than
+    /// `moveConfirmEpsilon` on either axis. A nil `start` (origin unreadable at drag
+    /// begin) or nil `now` → not moved yet. Pure → unit-tested; compares one source
+    /// against its own initial sample, never crossing AX and window-server spaces.
+    static func didMove(from start: CGPoint?, to now: CGPoint?) -> Bool {
+        guard let start, let now else { return false }
+        return abs(now.x - start.x) > moveConfirmEpsilon || abs(now.y - start.y) > moveConfirmEpsilon
     }
 
     /// Current cursor in the AX top-left global space (NSEvent is bottom-left).
