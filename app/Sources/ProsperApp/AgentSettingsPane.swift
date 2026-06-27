@@ -61,8 +61,9 @@ struct AgentPane: View {
             NeonSection("Model",
                         footer: "Sizes shown are the on-disk download; expect it to use somewhat more RAM than that once loaded. Loaded only while an agent task runs — the inline model unloads to free RAM, then reloads after. Switching downloads the model if needed; no restart required.") {
                 Picker("Agent model", selection: $model.agentModel) {
-                    ForEach(AgentModelRegistry.models, id: \.id) {
-                        let base = "\($0.label) — \($0.note)"
+                    ForEach(AgentModelRegistry.all(), id: \.id) {
+                        let name = CustomModelStore.label(for: $0.id, fallback: $0.label)
+                        let base = "\(name) — \($0.note)"
                         Text(ModelFiles.pickerLabel(for: $0.id, base: base)).tag($0.id)
                     }
                 }

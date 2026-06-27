@@ -234,8 +234,12 @@ final class DragSnapController {
                abs(now.x - o0.x) > 2 || abs(now.y - o0.y) > 2 {
                 moveConfirmed = true
             } else if preConfirmPolls >= Self.maxPreConfirmPolls {
-                aborted = true
-                return
+                // Cap AX polling on a never-moving drag. For edges, abort so a text/
+                // scrollbar drag can't flash the footprint. For layouts/palette the
+                // overlay shows on drag-start regardless (the immediate feedback the
+                // user expects) — just stop polling. The drop stays gated on
+                // moveConfirmed, so an unconfirmed (non-window) drag still won't snap.
+                if dragMode == .edges { aborted = true; return }
             } else {
                 preConfirmPolls += 1
             }
@@ -261,7 +265,10 @@ final class DragSnapController {
     /// real drop frame for the hovered cell. The window lands on the PALETTE's screen
     /// (where the cells live), not under the cursor — so `currentScreen` tracks it.
     private func updatePaletteDrag(cur: CGPoint, screen: NSScreen?) {
-        guard moveConfirmed, !dragLayouts.isEmpty else { return }
+        // Not gated on moveConfirmed: the palette must appear the moment a window
+        // drag starts in this mode. The drop (endDrag) is still gated, so a drag
+        // that never moves the window (text selection) shows the strip but won't snap.
+        guard !dragLayouts.isEmpty else { return }
         if let screen {
             let disp = WindowManager.displayID(of: screen)
             if disp != paletteDisplay || !palette.isShowing {
@@ -288,9 +295,17 @@ final class DragSnapController {
         let c = palette.cells[cell]
         guard dragLayouts.indices.contains(c.layout),
               dragLayouts[c.layout].zones.indices.contains(c.zone) else { footprint.hide(); return }
+        let layout = dragLayouts[c.layout]
         let v = WindowManager.visibleFrameAX(for: screen)
-        let targetAX = WindowManager.targetFrame(zone: dragLayouts[c.layout].zones[c.zone].rect,
+        var targetAX = WindowManager.targetFrame(zone: layout.zones[c.zone].rect,
                                                  visible: v, gap: dragGap)
+        // moveOnly layouts keep the window's size and only reposition — preview that,
+        // not the full zone, so the footprint matches where the window actually lands.
+        if layout.isMoveOnly, let el = win, let cur = WindowManager.axFrame(el) {
+            targetAX = CGRect(origin: WindowManager.moveOnlyOrigin(zoneOrigin: targetAX.origin,
+                                                                   size: cur.size, visible: v),
+                              size: cur.size)
+        }
         footprint.show(frameAppKit: WindowManager.axToAppKit(targetAX),
                        style: Preferences.dragSnapStyle,
                        accent: NSColor(ThemeRuntime.palette.blue),
@@ -316,7 +331,9 @@ final class DragSnapController {
         let changed = idx != currentZoneIdx
         currentZoneIdx = idx
 
-        guard moveConfirmed else { return }
+        // Not gated on moveConfirmed: the zone overlay must appear the moment a
+        // window drag starts. The drop (endDrag) stays gated, so an unconfirmed
+        // (non-window) drag shows the overlay but won't snap on release.
         guard let layout = dragLayout, !layout.zones.isEmpty else {
             layoutOverlay.hide(); layoutSig = nil; return
         }

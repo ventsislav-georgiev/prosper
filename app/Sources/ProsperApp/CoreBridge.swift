@@ -548,6 +548,7 @@ enum CoreBridge {
         // agent run is active (ModelResidencyCoordinator). Skip silently rather than
         // trigger a multi-GB reload that would fight the agent for memory.
         if ModelResidencyCoordinator.isAgentActive {
+            TraceLog.emit("complete: skipped — coding agent owns the GPU")
             return Task { await MainActor.run { completion(nil) } }
         }
         let length = Preferences.completionLength
@@ -640,6 +641,15 @@ enum CoreBridge {
             // Superseded before we reached the model? Drop without touching the
             // engine — the next keystroke already scheduled a fresh request.
             if Task.isCancelled { return }
+            // Cold-start guard (P0.4): unlike translate/generate, this path never
+            // explicitly loaded the model — on the rare genuinely-cold case
+            // (autocomplete just toggled on, model still warming) the first
+            // generation would race the next keystroke's cancel and silently drop.
+            // load() is idempotent and coalesced (no-op once resident), so the warm
+            // path pays nothing; the accessory stays `.thinking` meanwhile.
+            do { try await MLXEngine.shared.load { _, _ in } }
+            catch { if Task.isCancelled { return } }
+            if Task.isCancelled { return }
             // Always-suggest contract: whether the text is "enough" is the USER's
             // decision, never the model's. If a generation comes back empty (or
             // sanitization eats it as an echo), retry up the ladder: first resample
@@ -663,8 +673,10 @@ enum CoreBridge {
                 (1.0, true),   // last try: maximum diversity + directive
             ]
             var result: String?
+            var rungsRun = 0
             for attempt in attempts {
                 if Task.isCancelled { return }
+                rungsRun += 1
                 do {
                     // Always the text path: a fast single-line completion. Visual
                     // context arrives as cheap cached OCR text in the prompt, never
@@ -694,6 +706,7 @@ enum CoreBridge {
                           attempt.temperature, String(describing: error))
                 }
             }
+            TraceLog.emit("complete: \(result == nil ? "EMPTY" : "ok(\(result!.count)ch)") after \(rungsRun) rung(s), lang=\(language ?? "auto")")
             await MainActor.run { completion(result) }
         }
     }

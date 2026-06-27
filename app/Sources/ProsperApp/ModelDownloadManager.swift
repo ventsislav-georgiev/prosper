@@ -67,13 +67,17 @@ final class ModelDownloadManager: ObservableObject {
     }
 
     /// Remove a downloaded model's files from disk. Cancels first if it's downloading.
+    /// The unlink runs off-main — a multi-GB checkpoint tree can take a noticeable
+    /// moment, and blocking the main thread would freeze the UI.
     func delete(_ modelId: String) {
         guard !modelId.isEmpty else { return }
         if activeModelId == modelId { cancel() }
         let dir = ModelPaths.hubURL.appendingPathComponent(
             "models--" + modelId.replacingOccurrences(of: "/", with: "--"))
-        try? FileManager.default.removeItem(at: dir)
-        revision += 1
+        Task { [weak self] in
+            await Task.detached { try? FileManager.default.removeItem(at: dir) }.value
+            self?.revision += 1   // back on @MainActor → triggers the pane's disk rebuild
+        }
     }
 
     private func reset() {

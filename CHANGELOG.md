@@ -20,6 +20,39 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.121.0 *(unreleased)*
 
+### Inline Autocomplete
+- **Ghost text no longer vanishes while you type fast.** The biggest cause of
+  "sometimes no suggestion appears" was that a completion arriving a moment after
+  you'd typed a few more characters was thrown away as stale, leaving a blank.
+  Late responses are now reconciled against your current text: the part you've
+  already typed is trimmed off and the rest is shown, so the suggestion keeps up
+  with your typing instead of disappearing. (Inspired by VS Code's inline-completion
+  handling.)
+- **Accepting a suggestion can never insert the wrong text.** When you press Tab or
+  →, the suggestion is re-checked against the field's live text at that instant; if
+  the context has drifted (a click, a paste, an app that updated its text behind the
+  scenes), the keypress refreshes instead of typing something stale into the app.
+- **The suggestion delay now adapts to how fast the model is responding.** A snappy
+  model stays near-instant; a slower one waits a touch longer so it isn't spammed
+  with requests. A one-off slow first response (e.g. the model loading) no longer
+  drags the delay up for the rest of the session.
+- **No more error flash when a still-valid suggestion is on screen.** If the model
+  returns nothing but a good suggestion is already showing, it's kept rather than
+  replaced with an error indicator.
+- **Mid-word suggestions are handled quietly.** When the model proposes a new word
+  while you're mid-way through typing one, it's skipped without flashing an error
+  and without the wasteful retry loop that could keep the GPU busy while you sat idle.
+- **The first keystroke after enabling autocomplete is more reliable.** The model is
+  now ensured loaded before the first completion attempt, closing a cold-start gap
+  where the very first request could be silently dropped.
+- **Clear status while the coding agent is running.** When the local coding agent is
+  using the GPU, the inline indicator now shows a paused state instead of an error —
+  suggestions resume automatically when the agent finishes.
+- **New verbose troubleshooting trace for autocomplete.** With "Verbose troubleshooting
+  log" enabled (Settings → About), the autocomplete pipeline now records exactly why a
+  keystroke produced no suggestion (field unsupported, context drifted, model paused,
+  empty result, …) and what the model returned, so flaky cases can be diagnosed.
+
 ### Clipboard History
 - **Arrow keys no longer jump the cursor in the filter field while you navigate.**
   Pressing ↑/↓ moved the selection but also sent the key through to the search box,
