@@ -466,8 +466,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// re-opens it in the real browser. With no handler extension the link is dropped
     /// — only set Prosper default once such an extension is enabled.
     @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent: NSAppleEventDescriptor) {
-        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
-              let data = try? JSONSerialization.data(withJSONObject: ["url": urlString]),
+        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue
+        else { return }
+        // prosper:// is our own control scheme (e.g. `prosper://sleep`, the remote
+        // sleep command). Handle it here, never broadcast it to extensions as a link.
+        if let u = URL(string: urlString), u.scheme == "prosper" {
+            switch u.host {
+            case "sleep": SleepControl.sleepNow()
+            default: break
+            }
+            return
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: ["url": urlString]),
               let payload = String(data: data, encoding: .utf8) else { return }
         extensions.broadcastEvent("url.open", payloadJSON: payload)
     }

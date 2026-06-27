@@ -301,6 +301,76 @@ enum WindowManager {
         return CGRect(dictionaryRepresentation: bounds as! CFDictionary)
     }
 
+    /// Topmost normal (layer 0) on-screen window whose server bounds contain the
+    /// cursor, from the window server — no AX involved. This is the fallback for apps
+    /// whose AX tree is dormant at content pixels (Qt/Telegram), where the AX hit-test
+    /// (`windowUnderCursor`) returns nil. Returns the CGWindowID, owning pid, and the
+    /// server frame; the AX element (for moving the window) is resolved separately via
+    /// `axWindow(pid:windowID:)`.
+    static func serverWindowUnderCursor() -> (windowID: CGWindowID, pid: pid_t, bounds: CGRect)? {
+        let loc = CGEvent(source: nil)?.location ?? .zero        // top-left global
+        guard let arr = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                   kCGNullWindowID) as? [[String: Any]] else { return nil }
+        return pickWindow(infos: arr, cursor: loc)
+    }
+
+    /// Pure selection over a CGWindowList snapshot: the first (front-most — the list
+    /// is ordered front-to-back) normal window (layer 0) whose bounds contain the
+    /// cursor. Split out from the CGWindowList call so the layer filter, hit test, and
+    /// front-to-back ordering are unit-testable without live windows.
+    static func pickWindow(infos: [[String: Any]], cursor: CGPoint)
+        -> (windowID: CGWindowID, pid: pid_t, bounds: CGRect)? {
+        for w in infos {
+            guard (w[kCGWindowLayer as String] as? Int) == 0,
+                  let bDict = w[kCGWindowBounds as String],
+                  let b = CGRect(dictionaryRepresentation: bDict as! CFDictionary),
+                  b.contains(cursor),
+                  let wid = w[kCGWindowNumber as String] as? CGWindowID,
+                  let pid = w[kCGWindowOwnerPID as String] as? pid_t else { continue }
+            return (wid, pid, b)
+        }
+        return nil
+    }
+
+    /// The AX window element for a CGWindowID under app `pid`, or nil. Enumerates the
+    /// app's windows and matches by id; falls back to the app's first window if the id
+    /// match fails. Used to recover a movable element when AX hit-testing can't (Qt) —
+    /// the app-level window list is exposed even when content-pixel hit-tests are not.
+    static func axWindow(pid: pid_t, windowID wid: CGWindowID) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, axTimeout)
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &ref) == .success,
+              let wins = ref as? [AXUIElement], !wins.isEmpty else { return nil }
+        // Prefer the exact id match. Fall back to the sole window only when there's no
+        // ambiguity — never grab an arbitrary window on a multi-window app, since
+        // moving the wrong window is worse than the drag doing nothing.
+        guard let match = wins.first(where: { windowID($0) == wid })
+                ?? (wins.count == 1 ? wins.first : nil) else { return nil }
+        AXUIElementSetMessagingTimeout(match, axTimeout)
+        return match
+    }
+
+    /// Window under the cursor for drag-snap: the AX element (needed to move/resize
+    /// it), its pid, and CGWindowID. Tries the AX hit-test first (precise, handles
+    /// child/sheet windows); when that returns nil — apps with a dormant AX tree like
+    /// Qt/Telegram expose nothing at a content pixel — it falls back to the window
+    /// server to find the window, then resolves the AX element by id. nil only when
+    /// neither path yields a movable window.
+    ///
+    /// Cost tier: runs ONCE per drag (at drag-start), never on the per-event hot path.
+    /// The common path is just the AX hit-test + one `windowID` read; the fallback
+    /// adds a full-window-list snapshot + the app's window enumeration, paid only for
+    /// apps whose AX tree is dormant.
+    static func draggableWindowUnderCursor() -> (element: AXUIElement, pid: pid_t, windowID: CGWindowID?)? {
+        if let (el, pid) = windowUnderCursor() {
+            return (el, pid, windowID(el))
+        }
+        guard let s = serverWindowUnderCursor(),
+              let el = axWindow(pid: s.pid, windowID: s.windowID) else { return nil }
+        return (el, s.pid, s.windowID)
+    }
+
     private static func axPoint(_ el: AXUIElement, _ attr: String) -> CGPoint? {
         guard let v = copyAXValue(el, attr) else { return nil }
         var out = CGPoint.zero

@@ -728,6 +728,8 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         Task.detached { _ = await ShellRunner.run("/usr/bin/open -a ScreenSaverEngine") }
     }
 
+    func caffeinateSleepNow() { SleepControl.sleepNow() }
+
     // MARK: Battery / network / screen (read-only)
 
     func batteryPowerSource() -> String { SystemInfo.powerSource() }

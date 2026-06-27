@@ -262,6 +262,39 @@ final class WindowLayoutTests: XCTestCase {
         XCTAssertFalse(ghostty, "a non-moving drag must never confirm")
     }
 
+    // MARK: - Window-server picker (WindowManager.pickWindow)
+
+    private func winInfo(id: CGWindowID, pid: pid_t, layer: Int, _ b: CGRect) -> [String: Any] {
+        [kCGWindowNumber as String: id,
+         kCGWindowOwnerPID as String: pid,
+         kCGWindowLayer as String: layer,
+         kCGWindowBounds as String: CGRect(x: b.minX, y: b.minY, width: b.width, height: b.height)
+            .dictionaryRepresentation]
+    }
+
+    func testPickWindowTopmostContainingCursor() {
+        // Front-to-back order: two layer-0 windows overlap; the first one wins.
+        let infos = [winInfo(id: 1, pid: 10, layer: 0, CGRect(x: 0, y: 0, width: 200, height: 200)),
+                     winInfo(id: 2, pid: 20, layer: 0, CGRect(x: 0, y: 0, width: 400, height: 400))]
+        let hit = WindowManager.pickWindow(infos: infos, cursor: CGPoint(x: 50, y: 50))
+        XCTAssertEqual(hit?.windowID, 1)
+        XCTAssertEqual(hit?.pid, 10)        // the front window's pid, not the larger one's
+    }
+
+    func testPickWindowSkipsNonZeroLayers() {
+        // A menubar/panel (layer > 0) over the cursor must be skipped for the real
+        // window beneath it.
+        let infos = [winInfo(id: 9, pid: 99, layer: 25, CGRect(x: 0, y: 0, width: 100, height: 100)),
+                     winInfo(id: 3, pid: 30, layer: 0, CGRect(x: 0, y: 0, width: 100, height: 100))]
+        XCTAssertEqual(WindowManager.pickWindow(infos: infos, cursor: CGPoint(x: 10, y: 10))?.windowID, 3)
+    }
+
+    func testPickWindowMissReturnsNil() {
+        let infos = [winInfo(id: 1, pid: 10, layer: 0, CGRect(x: 0, y: 0, width: 100, height: 100))]
+        XCTAssertNil(WindowManager.pickWindow(infos: infos, cursor: CGPoint(x: 500, y: 500)))
+        XCTAssertNil(WindowManager.pickWindow(infos: [], cursor: CGPoint(x: 10, y: 10)))
+    }
+
     // Hot-path requirement: the move-confirm decision runs at most once per drag
     // event while pre-confirm (≤ ~12 events per drag total — it stops the instant the
     // window moves or the no-move cap aborts), so it must be effectively free. Ceiling

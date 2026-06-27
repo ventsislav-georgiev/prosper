@@ -79,12 +79,14 @@ tag from the now-released section and put it on the new top draft.
   moves. Just as important, it shows *only* when the window moves: a text-selection
   drag in a terminal or editor (e.g. Ghostty) no longer pops the palette, since the
   window never moves.
-- **Window movement is now detected even for apps that hide it from accessibility.**
-  Some apps (e.g. Telegram and other Qt-based windows) don't report their live
-  position while you drag them, so the overlay never appeared for those windows. The
-  drag now also reads the position straight from the window server, which always
-  knows where a window really is — so the palette shows for those apps too, while a
-  non-moving drag (text selection, a scrollbar) still triggers nothing.
+- **Drag-snap now works on apps that don't expose their windows to accessibility**
+  (e.g. Telegram and other Qt-based apps). These apps report no accessibility element
+  under the cursor, so the drag couldn't even tell *which* window you'd grabbed — the
+  gesture was dropped before any overlay could show. Drag-snap now identifies the
+  window from the window server (which tracks every on-screen window) and reads its
+  live position from there, falling back to that path whenever accessibility comes up
+  empty. The palette and snapping work for those windows now, while a non-moving drag
+  (text selection, a scrollbar) still triggers nothing.
 - **The palette drop preview no longer promises a resize that won't happen.** For a
   "Move only" layout (reposition, keep size) the preview footprint showed the full
   resized zone instead of where the window would actually land. It now matches the
@@ -128,6 +130,19 @@ tag from the now-released section and put it on the new top draft.
   collapsible and sits at the top of every settings page — folded away once granted,
   opened automatically when something still needs your approval — and toggling a
   checkbox no longer jumps the scroll position.
+- **New "Sleep this Mac now" button — the off-switch for a stuck "held awake" state.**
+  Keeping the Mac awake has more than one holder: your own switch, *and* a hold that's
+  kept while a remote `dch` terminal session is live (so a Mac you woke remotely
+  doesn't sleep mid-command). The manual switch only ever released its own hold, so a
+  Mac held awake purely by a remote session had no off-switch — nothing you clicked
+  turned it off. The new button (Controls) releases **every** hold and sleeps
+  immediately; your detached sessions are left running and reconnect on the next wake.
+  The Status line now says so honestly ("Held by a remote session or another app")
+  instead of guessing.
+- **Sleep this Mac remotely.** Running `open prosper://sleep` on the Mac (e.g. from
+  inside your remote `dch` session) does the same thing — releases the holds and puts
+  it to sleep — so you can wake it, do your work, and send it back to sleep without
+  touching it. Tip: add `alias prosper-sleep='open prosper://sleep'` to your shell.
 
 ### Troubleshooting
 - **New verbose trace mode (Settings → About → Troubleshooting), off by default.**

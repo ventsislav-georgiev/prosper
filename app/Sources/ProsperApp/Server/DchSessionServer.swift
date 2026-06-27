@@ -195,6 +195,20 @@ final class DchSessionServer: @unchecked Sendable {
         sendKeepAwake(false)
     }
 
+    /// Stop re-asserting the remote-session keep-awake hold so the Mac can sleep now
+    /// even while a session is technically "active". Cancels the heartbeat tick
+    /// (it only restarts when a new client connects via `accept`); the daemon hold
+    /// itself is released — in order, before the sleep — by `SleepControl`, so we do
+    /// NOT `sendKeepAwake(false)` here and risk reordering against that chain.
+    func releaseForSleep() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.holdTimer?.cancel(); self.holdTimer = nil
+            self.keepAwakeActive = false
+            self.idleTicks = 0
+        }
+    }
+
     private func sendKeepAwake(_ on: Bool) {
         // Route through LidSleepHelper's order-preserving apply chain (NOT a bare
         // Task) so a true/false heartbeat pair can't reorder on the MainActor, and so
