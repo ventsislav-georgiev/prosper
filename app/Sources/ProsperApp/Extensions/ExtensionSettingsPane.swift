@@ -127,32 +127,92 @@ struct SettingsUIView: View {
     var footer: AnyView? = nil
     let onEvent: (SettingsEvent) -> Void
 
+    /// A section is a "permissions" section if any of its rows is a permission
+    /// grant — those float to the top and collapse once everything is granted.
+    private func isPermissionSection(_ sec: SettingsUISection) -> Bool {
+        sec.rows.contains { $0.kind == "permission" }
+    }
+
     var body: some View {
+        // Permission sections always render first; original order preserved within
+        // each group. Stable partition keeps section identity steady across
+        // re-renders so toggling an unrelated control never reshuffles the scroll.
+        let perm = ui.sections.filter(isPermissionSection)
+        let rest = ui.sections.filter { !isPermissionSection($0) }
         NeonScroll {
             PaneTitle(title: ui.title ?? section.title, accent: section.accent,
                       subtitle: ui.subtitle ?? section.subtitle ?? "")
             if let header { header }
-            ForEach(ui.sections) { sec in
-                NeonSection(sec.title, accent: sec.accent, footer: sec.footer) {
-                    // Index, not row.id: info rows with no id/key/actionID all decode
-                    // to the same id ("info.row"), and ForEach with duplicate ids
-                    // renders the first match N times (the "What's loaded" 4× dup bug).
-                    ForEach(Array(sec.rows.enumerated()), id: \.offset) { idx, row in
-                        if idx > 0, needsDivider(row) { NeonDivider() }
-                        SettingsRowView(row: row, permissionTick: permissionTick, onEvent: onEvent)
-                    }
+            ForEach(perm) { sec in
+                PermissionSectionView(sec: sec, permissionTick: permissionTick, onEvent: onEvent) {
+                    rows(for: sec)
                 }
             }
+            ForEach(rest) { sec in
+                NeonSection(sec.title, accent: sec.accent, footer: sec.footer) {
+                    rows(for: sec)
+                }
+            }
+            if let footer { footer }
+        }
+        // Overlay, not an inline row: a transient "Working…" row at the bottom
+        // changes content height and yanks the scroll position on every toggle.
+        .overlay(alignment: .bottom) {
             if busy {
                 HStack { ProgressView().controlSize(.small)
                     Text("Working…").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary) }
+                    .padding(sz(8))
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.bottom, sz(10))
             }
-            if let footer { footer }
+        }
+    }
+
+    @ViewBuilder private func rows(for sec: SettingsUISection) -> some View {
+        // Index, not row.id: info rows with no id/key/actionID all decode
+        // to the same id ("info.row"), and ForEach with duplicate ids
+        // renders the first match N times (the "What's loaded" 4× dup bug).
+        ForEach(Array(sec.rows.enumerated()), id: \.offset) { idx, row in
+            if idx > 0, needsDivider(row) { NeonDivider() }
+            SettingsRowView(row: row, permissionTick: permissionTick, onEvent: onEvent)
         }
     }
 
     /// Records rows manage their own internal dividers; scalar rows get one between.
     private func needsDivider(_ row: SettingsUIRow) -> Bool { row.kind != "records" }
+}
+
+/// Wraps a permissions section in a collapsible `NeonSection`. Default state is
+/// dynamic: collapsed once every permission in it is granted, expanded while any
+/// is outstanding. The user can override per session; a grant-state change
+/// (re-check / return from System Settings) resets to the dynamic default.
+private struct PermissionSectionView<Content: View>: View {
+    let sec: SettingsUISection
+    let permissionTick: Int
+    let onEvent: (SettingsEvent) -> Void
+    @ViewBuilder let content: () -> Content
+    @State private var allGranted: Bool? = nil
+    @State private var manual: Bool? = nil
+
+    private var names: [String] { sec.rows.filter { $0.kind == "permission" }.compactMap { $0.name } }
+    private var collapsed: Bool { manual ?? (allGranted == true) }
+
+    var body: some View {
+        NeonSection(sec.title, accent: sec.accent, footer: sec.footer,
+                    collapsed: Binding(get: { collapsed }, set: { manual = $0 })) {
+            content()
+        }
+        .task(id: permissionTick) {
+            // Seed from the instant cache to avoid a flash, then confirm off-main.
+            let names = self.names   // capture on-main; the detached task is nonisolated
+            allGranted = names.allSatisfy { PermissionsManager.isGranted($0) }
+            let confirmed = await Task.detached {
+                names.allSatisfy { PermissionsManager.refreshGranted($0) }
+            }.value
+            allGranted = confirmed
+            manual = nil   // grant state recomputed → follow the dynamic default again
+        }
+    }
 }
 
 // MARK: - One row (dispatches by kind)
@@ -305,7 +365,37 @@ private struct PathRow: View {
 private struct InfoRow: View {
     let row: SettingsUIRow
     var body: some View {
-        NeonRow(row.title ?? "", subtitle: row.subtitle) { EmptyView() }
+        NeonRow(row.title ?? "", subtitle: row.subtitle) {
+            // `value` of "on"/"off" renders a high-contrast status pill (read-only
+            // state that must stand out — a subtitle buries it); `badge` keeps the
+            // older neutral count pill. Otherwise the row is label-only.
+            if let v = row.value, v == "on" || v == "off" {
+                StatusPill(on: v == "on")
+            } else if let b = row.badge, !b.isEmpty {
+                Text(b)
+                    .font(Neon.font(11, weight: .semibold))
+                    .padding(.horizontal, sz(7)).padding(.vertical, sz(2))
+                    .background(Capsule().fill(Neon.blue.opacity(0.18)))
+                    .foregroundStyle(Neon.blue)
+            } else {
+                EmptyView()
+            }
+        }
+    }
+}
+
+/// Bold, accented ON / muted OFF pill for read-only status rows.
+private struct StatusPill: View {
+    let on: Bool
+    var body: some View {
+        Text(on ? "ON" : "OFF")
+            .font(Neon.font(11, weight: .heavy))
+            .tracking(sz(0.5))
+            .padding(.horizontal, sz(9)).padding(.vertical, sz(3))
+            .background(Capsule().fill(on ? Neon.blue.opacity(0.22) : Neon.textSecondary.opacity(0.12)))
+            .overlay(Capsule().stroke(on ? Neon.blue.opacity(0.85) : Neon.textSecondary.opacity(0.35), lineWidth: sz(1)))
+            .foregroundStyle(on ? Neon.blue : Neon.textSecondary)
+            .shadow(color: on ? Neon.blue.opacity(0.5) : .clear, radius: sz(4))
     }
 }
 

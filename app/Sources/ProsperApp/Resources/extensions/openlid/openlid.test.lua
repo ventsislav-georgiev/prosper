@@ -291,7 +291,7 @@ do
     h.eq(ui.sections[1].id, "status", "Status is the first section")
     -- Status reflects the REAL system state, not just our stored flag.
     local awake = ui.sections[1].rows[1]
-    assert(awake.subtitle:find("On"), "Status shows Mac-awake ON when disablesleep is held")
+    h.eq(awake.value, "on", "Status shows Mac-awake ON when disablesleep is held")
 end
 
 print("ok openlid")

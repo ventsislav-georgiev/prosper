@@ -1,6 +1,19 @@
 import AppKit
 import ApplicationServices
 
+/// Private AX→CGWindowID bridge (HIServices) — the public AX API exposes no window
+/// id. Resolved once via dlsym rather than a hard `@_silgen_name` link: if Apple
+/// ever drops the symbol this degrades to nil (AX-only movement detection) instead
+/// of aborting app launch on a missing dynamic symbol.
+private typealias AXGetWindowFn =
+    @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+private let axGetWindow: AXGetWindowFn? = {
+    // RTLD_DEFAULT searches all loaded images (ApplicationServices is already linked).
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow")
+    else { return nil }
+    return unsafeBitCast(sym, to: AXGetWindowFn.self)
+}()
+
 /// Built-in window-management actions, applied to a window via the Accessibility
 /// API (same permission as autocomplete). The half/maximize/center cases are bound
 /// to rebindable global shortcuts in `ShortcutAction`; the quarter cases exist for
@@ -265,6 +278,27 @@ enum WindowManager {
         guard let pos = axPoint(win, kAXPositionAttribute),
               let size = axSize(win, kAXSizeAttribute) else { return nil }
         return CGRect(origin: pos, size: size)
+    }
+
+    /// The CoreGraphics window id for an AX window element, or nil. Uses the
+    /// long-standing private `_AXUIElementGetWindow` (the only reliable AX→CGWindowID
+    /// bridge; matching by pid+bounds is ambiguous). App is notarized/independently
+    /// distributed (not Mac App Store), so the private symbol is acceptable.
+    static func windowID(_ win: AXUIElement) -> CGWindowID? {
+        guard let fn = axGetWindow else { return nil }
+        var wid = CGWindowID(0)
+        return fn(win, &wid) == .success ? wid : nil
+    }
+
+    /// The window's frame straight from the window server (top-left global space),
+    /// or nil. Unlike `axFrame`, this reflects the live on-screen position even for
+    /// apps that don't push AXPosition updates during a user drag (e.g. Telegram /
+    /// Qt) — the window server owns the geometry, so it's authoritative for movement.
+    static func serverFrame(of wid: CGWindowID) -> CGRect? {
+        guard let arr = CGWindowListCopyWindowInfo([.optionIncludingWindow], wid)
+                as? [[String: Any]],
+              let bounds = arr.first?[kCGWindowBounds as String] else { return nil }
+        return CGRect(dictionaryRepresentation: bounds as! CFDictionary)
     }
 
     private static func axPoint(_ el: AXUIElement, _ attr: String) -> CGPoint? {
