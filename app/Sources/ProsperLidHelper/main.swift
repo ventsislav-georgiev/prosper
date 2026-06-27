@@ -93,11 +93,14 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
         q.async {
             if on {
                 let ok = self.core.setRemoteHold(true)
+                dtrace("setRemoteSessionActive(true): heartbeat, pmset ok=\(ok), TTL re-armed")
                 self.armRemoteHoldExpiry_locked()
                 reply(ok)
             } else {
                 self.cancelRemoteHoldExpiry_locked()
-                reply(self.core.setRemoteHold(false))
+                let ok = self.core.setRemoteHold(false)
+                dtrace("setRemoteSessionActive(false): released, pmset ok=\(ok)")
+                reply(ok)
             }
         }
     }
@@ -107,7 +110,8 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
     /// giving DchTerm time to dial back in. If nothing connects + heartbeats, the
     /// expiry releases it and the Mac re-sleeps next cadence.
     private func bootstrapRemoteHoldFromPromote() {
-        _ = core.setRemoteHold(true)
+        let ok = core.setRemoteHold(true)
+        dtrace("promote: bootstrap remoteHold pmset ok=\(ok) ttl=\(remoteHoldTTLSeconds)s (Mac held awake for client to reconnect)")
         armRemoteHoldExpiry_locked()
     }
 
@@ -118,6 +122,7 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
         t.setEventHandler { [weak self] in
             guard let self else { return }
             _ = self.core.setRemoteHold(false)
+            dtrace("remoteHold EXPIRED: \(remoteHoldTTLSeconds)s with no heartbeat → sleep re-enabled (app gone / network dropped?)")
             self.remoteHoldTimer = nil
         }
         t.resume()
@@ -155,8 +160,10 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
         do {
             try p.run()
             p.waitUntilExit()
+            dtrace("pmset -a disablesleep \(on ? 1 : 0) → exit \(p.terminationStatus)")
             return p.terminationStatus == 0
         } catch {
+            dtrace("pmset spawn FAILED: \(error.localizedDescription)")
             return false
         }
     }

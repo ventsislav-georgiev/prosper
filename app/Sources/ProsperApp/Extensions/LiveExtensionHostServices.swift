@@ -566,7 +566,16 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             pollURL: Self.wakePollURL(deviceTag: deviceID),
             intervalAC: intervalAC,
             intervalBatt: intervalBatt,
-            batteryFloor: batteryFloor)
+            batteryFloor: batteryFloor,
+            trace: TraceLog.on)
+        // Remember the last enabled config so the About "Verbose log" toggle can
+        // re-push it (with the new trace bit) to a running daemon without the user
+        // re-toggling remote-wake. Non-secret: pollURL carries only the derived tag.
+        if cfg.enabled {
+            UserDefaults.standard.set(cfg.jsonString(), forKey: Self.lastWakeConfigKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.lastWakeConfigKey)
+        }
         // Remember the meta URL whenever signed in (the device has a meta row on the
         // server whether enabled or not) so `signOut` can DELETE it even though it lacks
         // the device tag to rebuild the URL. Set synchronously, before the report task,
@@ -607,6 +616,23 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// `SupporterClient.signOut` can DELETE the server-side wake metadata (it lacks the
     /// device tag to rebuild the URL).
     static let wakeMetaURLKey = "prosper.remoteWake.metaURL"
+
+    /// Last enabled `RemoteWakeConfig` JSON, so the About verbose-log toggle can
+    /// re-push it with an updated trace flag. Cleared whenever remote-wake disables.
+    static let lastWakeConfigKey = "prosper.remoteWake.lastConfig"
+
+    /// Re-push the current remote-wake config with the latest `TraceLog.on` value, so
+    /// flipping verbose logging takes effect on the running daemon immediately. No-op
+    /// when remote-wake isn't enabled (nothing to trace, and we never spin the daemon
+    /// up just for this). Routed through the order-preserving apply chain.
+    static func reapplyRemoteWakeForTrace() {
+        guard let json = UserDefaults.standard.string(forKey: lastWakeConfigKey) else { return }
+        var cfg = RemoteWakeConfig.from(json: json)
+        guard cfg.enabled else { return }
+        cfg.trace = TraceLog.on
+        UserDefaults.standard.set(cfg.jsonString(), forKey: lastWakeConfigKey)
+        LidSleepHelper.enqueueApply { _ = await LidSleepHelper.setRemoteWake(cfg) }
+    }
 
     /// The wake id (`<acctTag>-<devTag>`) this Mac polls, or nil if remote-wake was
     /// never configured while signed in. Derived from the stored meta URL

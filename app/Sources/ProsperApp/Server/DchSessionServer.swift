@@ -177,6 +177,8 @@ final class DchSessionServer: @unchecked Sendable {
             && DchCommand.anySessionActive(within: KeepAwakePolicy.activeWindowSeconds)
         let step = KeepAwakePolicy.step(
             clientConnected: !connections.isEmpty, sessionActive: active, idleTicks: idleTicks)
+        TraceLog.emit("keepAwake tick: clients=\(connections.count) activeSession=\(active) "
+            + "idleTicks=\(idleTicks)→\(step.idleTicks) hold=\(step.hold) release=\(step.release)")
         idleTicks = step.idleTicks
         if step.release {
             stopKeepAwake()

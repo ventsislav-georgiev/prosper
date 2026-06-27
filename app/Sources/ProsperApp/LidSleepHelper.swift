@@ -357,11 +357,14 @@ enum LidSleepHelper {
         } else if on && (remoteWakeEnabled || holdsLidOverride) {
             c = makeConnection()
             connection = c
+            TraceLog.emit("setRemoteSessionActive: rebuilt dropped XPC connection (remoteWake=\(remoteWakeEnabled) lid=\(holdsLidOverride))")
         } else {
+            TraceLog.emit("setRemoteSessionActive(\(on)): no daemon connection and none should be resident — no-op")
             return false
         }
         if on { holdsRemoteSession = true }
         let ok = await callRemoteSession(c, on: on)
+        TraceLog.emit("setRemoteSessionActive(\(on)) → daemon ok=\(ok)")
         // Releasing: drop the connection only if nothing else needs the daemon.
         if !on && !remoteWakeEnabled && !holdsLidOverride {
             c.invalidate()

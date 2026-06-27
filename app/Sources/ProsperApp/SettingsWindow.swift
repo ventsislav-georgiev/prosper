@@ -1953,6 +1953,11 @@ private struct AboutPane: View {
     @State private var clock = Date()
     @StateObject private var supporters = SupportersLoader()
 
+    /// One predicate catches both processes (app logs "ProsperTrace(app)", daemon
+    /// "ProsperTrace"). `--last 1h` since the wake events happen while away.
+    static let traceLogCommand =
+        "log show --last 1h --predicate 'eventMessage CONTAINS \"ProsperTrace\"'"
+
     /// Formats a remaining-seconds interval as a compact countdown.
     private static func fmtCountdown(_ seconds: TimeInterval) -> String {
         let t = Int(seconds.rounded())
@@ -2059,6 +2064,31 @@ private struct AboutPane: View {
                 NeonDivider()
                 Text("Acknowledgments: mlx-swift, swift-transformers, GRDB.swift (encrypted store), Sparkle (auto-update), TOMLDecoder, Aptabase (anonymous analytics), and Apple's Vision / ScreenCaptureKit for screen context.")
                     .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
+            }
+
+            NeonSection("Troubleshooting",
+                        footer: "Logs the remote-wake and keep-awake decision path (app + privileged daemon) to the unified system log, to diagnose why a Mac won't wake or stay awake. Leave off for normal use.") {
+                Toggle("Verbose troubleshooting log", isOn: Binding(
+                    get: { UserDefaults.standard.bool(forKey: TraceLog.key) },
+                    set: { on in
+                        UserDefaults.standard.set(on, forKey: TraceLog.key)
+                        // Push the new flag to a running daemon (no-op if remote-wake off).
+                        LiveExtensionHostServices.reapplyRemoteWakeForTrace()
+                    }))
+                Text("Read the captured log (events persist across sleep — run after reproducing):")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                HStack(spacing: sz(8)) {
+                    Text(Self.traceLogCommand)
+                        .font(Neon.font(11, design: .monospaced))
+                        .foregroundStyle(Neon.textSecondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(Self.traceLogCommand, forType: .string)
+                    }.buttonStyle(.neon)
+                }
             }
 
             if !supporters.names.isEmpty {

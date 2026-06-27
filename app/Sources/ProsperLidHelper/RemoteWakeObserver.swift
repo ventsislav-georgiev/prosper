@@ -49,7 +49,8 @@ final class RemoteWakeObserver: @unchecked Sendable {
             schedule: { [weak self] in self?.armNextWake($0) },
             cancelAll: { [weak self] in self?.cancelOurEvents() },
             poll: { [weak self] in self?.doPoll() ?? nil },
-            promote: { [weak self] in self?.promote() })
+            promote: { [weak self] in self?.promote() },
+            trace: { dtrace("core: \($0)") })
     }
 
     var isResident: Bool { core.isResident }
@@ -63,7 +64,9 @@ final class RemoteWakeObserver: @unchecked Sendable {
     func startFromDisk() {
         registerObserver()
         let cfg = RemoteWakeConfig.from(json: Self.readConfig())
+        daemonTrace = cfg.trace   // before applyConfig so its own trace line fires
         q.sync { _ = core.applyConfig(cfg, onAC: Self.onAC()) }
+        dtrace("startFromDisk: enabled=\(cfg.enabled) onAC=\(Self.onAC()) batt=\(Self.battPct())% resident=\(core.isResident)")
     }
 
     /// Live update from the app over XPC. Persists then applies. Must run on `q`.
@@ -71,8 +74,10 @@ final class RemoteWakeObserver: @unchecked Sendable {
     /// flips the core's residency. Returns whether remote-wake is now resident.
     func apply(json: String) -> Bool {
         let cfg = RemoteWakeConfig.from(json: json)
+        daemonTrace = cfg.trace
         Self.writeConfig(cfg.enabled ? cfg.jsonString() : RemoteWakeConfig.disabled.jsonString())
         _ = core.applyConfig(cfg, onAC: Self.onAC())
+        dtrace("apply: enabled=\(cfg.enabled) resident=\(core.isResident) trace=\(cfg.trace)")
         return core.isResident
     }
 
@@ -91,6 +96,9 @@ final class RemoteWakeObserver: @unchecked Sendable {
         IOPMConnectionSetNotification(c, me, wakeTrampoline)
         IOPMConnectionScheduleWithRunLoop(c, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
         connection = c
+        // Always logged (rare, launch-only, and decisive: a failure here means wake
+        // never fires). The matching failure case already NSLogs above.
+        NSLog("ProsperTrace: registerObserver ok (powerd IOPMConnection scheduled on main runloop)")
     }
 
     /// Called by powerd on each capability change. Holds the wake window, then
@@ -98,12 +106,15 @@ final class RemoteWakeObserver: @unchecked Sendable {
     /// the system awake across it). Acknowledge last so powerd may re-sleep.
     func handleWake(conn: IOPMConnection?, token: IOPMConnectionMessageToken, caps: IOPMCapabilityBits) {
         let cpu = (caps & UInt32(kIOPMCapabilityCPU)) != 0
+        let net = (caps & UInt32(kIOPMCapabilityNetwork)) != 0
+        dtrace("handleWake: caps cpu=\(cpu) net=\(net)")
         if cpu {
             var hold: IOPMAssertionID = 0
             IOPMAssertionCreateWithName(kIOPMAssertionTypePreventSystemSleep as CFString,
                                         IOPMAssertionLevel(kIOPMAssertionLevelOn),
                                         "ProsperRemoteWakeCheck" as CFString, &hold)
-            q.sync { _ = core.onWake(onAC: Self.onAC(), battPct: Self.battPct()) }
+            let outcome = q.sync { core.onWake(onAC: Self.onAC(), battPct: Self.battPct()) }
+            dtrace("handleWake: outcome=\(outcome)")
             if hold != 0 { IOPMAssertionRelease(hold) }
         }
         if let conn { IOPMConnectionAcknowledgeEvent(conn, token) }
@@ -127,6 +138,7 @@ final class RemoteWakeObserver: @unchecked Sendable {
         let when = Date(timeIntervalSinceNow: secs) as CFDate
         let r = IOPMSchedulePowerEvent(when, wakeOwner, kWakeOrPowerOn)
         if r != kIOReturnSuccess { NSLog("RemoteWake: arm +%.0fs failed 0x%x", secs, r) }
+        else { dtrace("armNextWake: scheduled +\(Int(secs))s") }
     }
 
     private func promote() {
@@ -149,7 +161,11 @@ final class RemoteWakeObserver: @unchecked Sendable {
     /// PreventSystemSleep assertion in handleWake holds the wake window across this, so
     /// the only cost of waiting is a little radio-on time, paid once per pending wake.
     private func doPoll() -> String? {
-        guard let url = URL(string: core.config.pollURL) else { return nil }
+        guard let url = URL(string: core.config.pollURL) else {
+            dtrace("doPoll: bad pollURL")
+            return nil
+        }
+        dtrace("doPoll: GET \(url.host ?? "?")\(url.path)")
         for attempt in 0..<2 {
             var req = URLRequest(url: url, timeoutInterval: 10)
             req.httpMethod = "GET"
@@ -166,8 +182,10 @@ final class RemoteWakeObserver: @unchecked Sendable {
             task.resume()
             if sem.wait(timeout: .now() + 11) == .timedOut {
                 task.cancel()   // NEVER read `out` here: no signal => no happens-before, so the
+                dtrace("doPoll: attempt \(attempt) TIMED OUT (>11s)")
                 continue        // cancelled completion's late write would race the read. Retry/end.
             }
+            dtrace("doPoll: attempt \(attempt) http=\(out.code) bodyLen=\(out.body.count)\(out.body == "0" ? " (no request)" : "")")
             if out.code == 200 { return out.body == "0" ? nil : out.body }  // token, or nil for "0"
             // transient (code 0 / 5xx): loop retries once, then falls through to nil
         }

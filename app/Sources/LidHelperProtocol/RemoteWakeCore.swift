@@ -19,19 +19,27 @@ public struct RemoteWakeConfig: Codable, Equatable, Sendable {
     public var intervalBatt: Double
     /// Refuse to wake-promote on battery below this % (drain-attack cap).
     public var batteryFloor: Int
+    /// Verbose troubleshooting trace: when true the daemon logs the dark-wake
+    /// decision path to the unified log. Defaulted in the DECLARATION (not just the
+    /// init) so the synthesized Decodable tolerates a missing key — old on-disk
+    /// configs written before this field still decode instead of failing to
+    /// `.disabled`. Off by default; only the user's About toggle sets it.
+    public var trace: Bool = false
 
     public init(version: Int = RemoteWakeConfig.currentVersion,
                 enabled: Bool,
                 pollURL: String,
                 intervalAC: Double,
                 intervalBatt: Double,
-                batteryFloor: Int) {
+                batteryFloor: Int,
+                trace: Bool = false) {
         self.version = version
         self.enabled = enabled
         self.pollURL = pollURL
         self.intervalAC = intervalAC
         self.intervalBatt = intervalBatt
         self.batteryFloor = batteryFloor
+        self.trace = trace
     }
 
     public static let currentVersion = 1
@@ -65,7 +73,8 @@ public struct RemoteWakeConfig: Codable, Equatable, Sendable {
             pollURL: pollURL,
             intervalAC: clampInterval(intervalAC),
             intervalBatt: clampInterval(intervalBatt),
-            batteryFloor: min(100, max(0, batteryFloor)))
+            batteryFloor: min(100, max(0, batteryFloor)),
+            trace: trace)
     }
 
     /// Decode an XPC/file JSON string, already sanitized. Any decode failure →
@@ -122,6 +131,10 @@ public final class RemoteWakeCore {
     private let poll: () -> String?
     /// Promote dark→full wake (`IOPMAssertionDeclareUserActivity`).
     private let promote: () -> Void
+    /// Verbose troubleshooting sink (daemon → unified log). Only ever CALLED when
+    /// `config.trace` is on, so the message string is never built in the steady-state
+    /// wake path — keeps `onWake` inside its <1µs budget when trace is off.
+    private let trace: (String) -> Void
     private let now: () -> Date
 
     public private(set) var config: RemoteWakeConfig = .disabled
@@ -142,12 +155,14 @@ public final class RemoteWakeCore {
                 cancelAll: @escaping () -> Void,
                 poll: @escaping () -> String?,
                 promote: @escaping () -> Void,
+                trace: @escaping (String) -> Void = { _ in },
                 now: @escaping () -> Date = Date.init,
                 debounce: Double = 10) {
         self.schedule = schedule
         self.cancelAll = cancelAll
         self.poll = poll
         self.promote = promote
+        self.trace = trace
         self.now = now
         self.debounce = debounce
     }
@@ -167,11 +182,16 @@ public final class RemoteWakeCore {
         config = raw.sanitized()
         if config.enabled {
             pinned = true
+            if config.trace {
+                trace("applyConfig: armResident interval(AC=\(config.intervalAC)s,batt=\(config.intervalBatt)s) "
+                    + "floor=\(config.batteryFloor)% onAC=\(onAC) firstWake=+\(interval(onAC: onAC))s")
+            }
             schedule(interval(onAC: onAC))   // schedule cancels-before-arm
             return .armResident
         }
         pinned = false
         cancelAll()
+        if config.trace { trace("applyConfig: idleExit (disabled / rejected by sanitize)") }
         return .idleExit
     }
 
@@ -202,11 +222,18 @@ public final class RemoteWakeCore {
     public func onWake(onAC: Bool, battPct: Int) -> WakeOutcome {
         guard pinned else { return .ignored }
         let t = now()
-        if t.timeIntervalSince(lastWakeTs) < debounce { return .ignored }
+        if t.timeIntervalSince(lastWakeTs) < debounce {
+            if config.trace { trace("onWake ignored: debounce collapsed (<\(debounce)s since last)") }
+            return .ignored
+        }
         lastWakeTs = t
         defer { schedule(interval(onAC: onAC)) }   // every acted wake re-arms the next
 
-        guard canPromote(onAC: onAC, battPct: battPct) else { return .slept }
+        if config.trace { trace("onWake: onAC=\(onAC) batt=\(battPct)% floor=\(config.batteryFloor)%") }
+        guard canPromote(onAC: onAC, battPct: battPct) else {
+            if config.trace { trace("onWake slept: battery \(battPct)% below floor \(config.batteryFloor)% — skipped poll") }
+            return .slept
+        }
         // Edge-trigger: promote only on a well-formed token we haven't acted on. A
         // repeat of the same token (the request still sitting in KV until TTL) must NOT
         // re-promote, or the Mac would wake itself every poll — the whole-night drain bug.
@@ -217,9 +244,21 @@ public final class RemoteWakeCore {
         // promote (drain) on every poll. Only the server's UUID token shape counts; any
         // other 200 body is treated as no-request (sleep), and we leave `lastWakeToken`
         // untouched so the real token still promotes once the captive network clears.
-        guard let token = poll(), RemoteWakeCore.isWakeToken(token),
-              token != lastWakeToken else { return .slept }
+        // Split into separate guards so trace pinpoints WHICH check sent us back to sleep.
+        guard let token = poll() else {
+            if config.trace { trace("onWake slept: poll returned nil (no request / non-200 / timeout)") }
+            return .slept
+        }
+        guard RemoteWakeCore.isWakeToken(token) else {
+            if config.trace { trace("onWake slept: 200 body is not a wake token (captive portal?), len=\(token.count)") }
+            return .slept
+        }
+        guard token != lastWakeToken else {
+            if config.trace { trace("onWake slept: token unchanged — already promoted this request") }
+            return .slept
+        }
         lastWakeToken = token
+        if config.trace { trace("onWake PROMOTING: new request token") }
         promote()
         return .promoted
     }
