@@ -65,6 +65,39 @@ enum ModelFiles {
         return false
     }
 
+    struct DiskState: Equatable { let downloaded: Bool; let sizeBytes: Int64? }
+
+    /// Download state for a model in ONE filesystem walk: whether weights are present
+    /// and the real on-disk size. `hubURL` is injectable for tests.
+    ///
+    /// HF cache layout: real bytes live in `blobs/<sha>` (no extension); the
+    /// `.safetensors` name is on the `snapshots/*` symlinks pointing at those blobs. So:
+    ///   - size = sum of *real* files only — symlinks are skipped (following one would
+    ///     double-count the blob it targets),
+    ///   - "has weights" = any entry (symlink OR regular file) named `*.safetensors`,
+    ///     which also covers a flat, non-cache layout.
+    /// One walk, not two (vs separate `isModelDownloaded` + size), because the AI Models
+    /// pane computes this for every catalog row.
+    static func diskState(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> DiskState {
+        guard !modelId.isEmpty else { return DiskState(downloaded: false, sizeBytes: nil) }
+        let fm = FileManager.default
+        let root = hubURL.appendingPathComponent(cacheDirName(for: modelId))
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
+        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: Array(keys)) else {
+            return DiskState(downloaded: false, sizeBytes: nil)
+        }
+        var total: Int64 = 0
+        var hasWeights = false
+        for case let url as URL in en {
+            if url.pathExtension == "safetensors" { hasWeights = true }
+            guard let v = try? url.resourceValues(forKeys: keys),
+                  v.isSymbolicLink != true, v.isRegularFile == true, let sz = v.fileSize
+            else { continue }
+            total += Int64(sz)
+        }
+        return DiskState(downloaded: hasWeights, sizeBytes: hasWeights ? total : nil)
+    }
+
     /// Decorates a model picker row label with a download-state marker so the user
     /// can see, at a glance, which models are already on disk and which will be
     /// fetched on selection. Empty id (the "None" row) is returned unchanged.

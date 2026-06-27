@@ -103,6 +103,18 @@ actor MLXEngine {
     /// Shared engine instance used by `CoreBridge`.
     static let shared = MLXEngine()
 
+    /// Nonisolated "is the shared inline model resident" snapshot, readable from the
+    /// SwiftUI AI Models pane without an actor hop. Flipped only by the SHARED engine's
+    /// `load`/`unload` (the agent runs on a separate instance — see
+    /// `ModelResidencyCoordinator.isAgentActive` for that one).
+    private static let inlineLoadedFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
+    nonisolated static var isInlineModelLoaded: Bool { inlineLoadedFlag.withLock { $0 } }
+
+    /// Currently-resident MLX memory in bytes (active arrays — weights + live KV). Only
+    /// one LLM is resident at a time (inline OR agent — `ModelResidencyCoordinator`), so
+    /// this is effectively the loaded model's footprint. Nonisolated: a plain global read.
+    nonisolated static var residentMemoryBytes: Int64 { Int64(MLX.GPU.activeMemory) }
+
     /// Hugging Face model id (MLX format). Configurable via Preferences and swappable
     /// at runtime via `prepareSwitch(to:)` (the Settings model picker → live switch).
     private(set) var modelId: String
@@ -357,6 +369,7 @@ actor MLXEngine {
             let loaded = try await task.value
             poll.cancel()
             container = loaded
+            if self === Self.shared { Self.inlineLoadedFlag.withLock { $0 = true } }
             inlineBox.reset() // a fresh model invalidates any primed inline cache
             chatBox.reset()
             loadTask = nil
@@ -467,6 +480,7 @@ actor MLXEngine {
         draftLoadTask?.cancel()  // WS2: cancel any in-flight draft load
         draftLoadTask = nil
         container = nil
+        if self === Self.shared { Self.inlineLoadedFlag.withLock { $0 = false } }
         vlmContainer = nil
         draftContainer = nil     // WS2: drop the second (draft) model's weights
         inlineBox.reset()        // drop primed KV cache so a reload starts clean

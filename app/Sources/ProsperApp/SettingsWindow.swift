@@ -656,6 +656,7 @@ private struct SettingsRootView: View {
         case "apps": AppsPane(model: model)
         case "personalization": PersonalizationPane(model: model)
         case "shortcuts": ShortcutsPane(model: model)
+        case "ai-models": AIModelsPane(model: model)
         case "agent": AgentPane(model: model)
         case "agent-mcp": MCPServersPane(model: model)
         case "agent-plugins": PluginsHooksPane(model: model)
@@ -930,7 +931,7 @@ struct AIModelSection: View {
         NeonSection("AI Model", footer: "Switching downloads the model if needed, then reloads it — no restart required.") {
             Picker("Model", selection: $model.coreModel) {
                 ForEach(modelOptions, id: \.0) {
-                    Text(ModelFiles.pickerLabel(for: $0.0, base: $0.1)).tag($0.0)
+                    Text(ModelFiles.pickerLabel(for: $0.0, base: CustomModelStore.label(for: $0.0, fallback: $0.1))).tag($0.0)
                 }
             }
             NeonDivider()
@@ -1107,10 +1108,16 @@ private struct ContextPane: View {
                     NeonRow("Enabled in System Settings but still not trusted?",
                             subtitle: "An ad-hoc-signed rebuild changes the app's signature, so macOS's old grant stops matching. Reset and re-add in one step.") {
                         Button("Reset & re-add") {
-                            PermissionsManager.resetPrivacyGrant(service: "Accessibility")
-                            PermissionsManager.ensureAccessibilityTrust(prompt: true)
-                            PermissionsManager.openAccessibilitySettings()
-                            hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+                            // Off-main: tccutil reset spawns a subprocess and blocks
+                            // on waitUntilExit — would freeze the Settings window.
+                            Task {
+                                await Task.detached(priority: .userInitiated) {
+                                    PermissionsManager.resetPrivacyGrant(service: "Accessibility")
+                                }.value
+                                PermissionsManager.ensureAccessibilityTrust(prompt: true)
+                                PermissionsManager.openAccessibilitySettings()
+                                hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+                            }
                         }.buttonStyle(.neon)
                     }
                 }
@@ -2451,6 +2458,10 @@ func settingsSidebarGroups(registry: ExtensionRegistry?) -> [(String, [SettingsT
         }
     }
     var result: [(String, [SettingsTab])] = [("General", general)]
+    // AI Models is its own top-level group right under General: it manages BOTH the
+    // inline and agent models (download/load/RAM/custom), so it must show regardless of
+    // which feature master-switch is on.
+    result.append(("AI Models", [SettingsTab(id: "ai-models", title: "AI Models", icon: "cpu")]))
     // Extension Settings sits right after General so user extensions read first,
     // ahead of the built-in feature groups.
     if !extensionSections.isEmpty { result.append(("Extension Settings", extensionSections)) }

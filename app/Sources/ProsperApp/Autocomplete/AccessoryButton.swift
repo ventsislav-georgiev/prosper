@@ -24,6 +24,11 @@ final class AccessoryButton {
         /// Completions impossible here (macOS Secure Input engaged, e.g. a
         /// password field or a password manager holding the input). Lock glyph.
         case blocked
+        /// Inline model intentionally unavailable: the coding agent owns the GPU,
+        /// so the autocomplete model is unloaded and no ghost is coming until the
+        /// agent finishes. Distinct from `.error` (a genuine empty result). Quiet
+        /// dimmed glyph — nothing is wrong, just paused.
+        case paused
     }
 
     private let panel: NSPanel
@@ -156,6 +161,9 @@ final class AccessoryButton {
         case .blocked:
             applySymbol("lock.fill")
             button.alphaValue = 0.6
+        case .paused:
+            applySymbol("pause.circle")
+            button.alphaValue = 0.4
         }
     }
 

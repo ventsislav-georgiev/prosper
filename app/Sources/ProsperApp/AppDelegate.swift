@@ -319,7 +319,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 extensionID: "com.prosper.translate", key: "idle_unload_minutes")
             return ModelIdleUnloader.minutes(fromPref: raw)
         }
-        SettingsHooks.shared.onLaunchAtLoginChanged = { on in LaunchAtLogin.setEnabled(on) }
+        // Off-main: SMAppService.register/unregister is a slow synchronous
+        // syscall that froze the Settings UI when run on the main runloop tick.
+        // The toggle already flips optimistically, so the UI stays snappy.
+        SettingsHooks.shared.onLaunchAtLoginChanged = { on in
+            Task.detached(priority: .userInitiated) { LaunchAtLogin.setEnabled(on) }
+        }
         SettingsHooks.shared.onClipboardHistoryChanged = { [weak self] on in self?.setClipboardHistory(enabled: on) }
         SettingsHooks.shared.onClipboardMaxItemsChanged = { ClipboardStore.shared.applyMaxItemsChange() }
 

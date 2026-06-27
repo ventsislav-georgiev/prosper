@@ -388,6 +388,11 @@ private struct ClipboardView: View {
         .onChange(of: model.focusRequested) { _, req in
             if req { searchFocused = true; model.focusRequested = false }
         }
+        // Filtering can drop the selected row out of the list. Keep selection on a
+        // visible row: if it's gone, fall back to the new first item (which also
+        // fires the selectedId scroll handler → list snaps back to the top).
+        .onChange(of: model.query) { _, _ in selectFirstIfNeeded() }
+        .onChange(of: model.typeFilter) { _, _ in selectFirstIfNeeded() }
         .background(ClipboardKeyHandling(
             onCancel: onCancel,
             onEnter: { commitSelected() },
@@ -494,8 +499,7 @@ private struct ClipboardView: View {
                                 // keeps the realized row (keyed by `.id(item.id)`) and
                                 // the captured highlight went stale — the previously
                                 // selected row kept its card while selection moved on.
-                                ClipRowView(store: store, item: item,
-                                            isSelected: item.id == model.selectedId) {
+                                ClipRowView(store: store, model: model, item: item) {
                                     model.selectedId = item.id
                                     onCommit(item)
                                 }
@@ -917,6 +921,14 @@ private struct ClipboardView: View {
         onCommit(item)
     }
 
+    /// After the filter changes, drop selection to the first visible row when the
+    /// previously selected item is no longer in the list.
+    private func selectFirstIfNeeded() {
+        if !filtered.contains(where: { $0.id == model.selectedId }) {
+            model.selectedId = filtered.first?.id
+        }
+    }
+
     /// The item immediately above `id` in visual order (nil if it's the first).
     /// Used to top-align the predecessor so a header-occluded selection drops into
     /// the first full slot below the pinned header.
@@ -1007,17 +1019,21 @@ func clipboardKindIcon(_ kind: ClipboardKind) -> String {
 
 // MARK: - List row
 
-/// One clipboard row. A standalone `View` struct (not a method on `ClipboardView`)
-/// on purpose: `isSelected` is a stored property, so SwiftUI tracks it as a per-row
-/// dependency and re-renders exactly the rows whose selection changed. When the row
-/// was an inline method-returned view, the `LazyVStack` reused the realized row
-/// (keyed by `.id(item.id)`) without re-invoking the builder on a selection change,
-/// so a previously-selected row kept its highlight card while selection moved away.
+/// One clipboard row. Observes the panel model and derives `isSelected` itself,
+/// rather than taking a precomputed `Bool`: inside a `LazyVStack` a realized row
+/// (keyed by `.id(item.id)`) is NOT reliably re-built when a parent-held value
+/// changes, so a passed-in `isSelected` went stale — the keycap overlay (which
+/// reads `selectedId` live) updated while the row card stayed put. As an
+/// `@ObservedObject` dependency, a `selectedId` change invalidates the row through
+/// Combine directly. Only the ~11 visible rows re-render, and `selectedId` never
+/// changes on scroll, so the scroll-perf path is untouched.
 private struct ClipRowView: View {
     @ObservedObject var store: ClipboardStore
+    @ObservedObject var model: ClipboardPanelModel
     let item: ClipboardItem
-    let isSelected: Bool
     let onTap: () -> Void
+
+    private var isSelected: Bool { model.selectedId == item.id }
 
     var body: some View {
         HStack(spacing: sz(8)) {
@@ -1332,7 +1348,14 @@ private struct ClipboardKeyHandling: NSViewRepresentable {
         func start() {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                self?.handle(event) ?? event
+                // Optional-chain the receiver, NOT the result: `self?.handle(event)`
+                // flattens to nil both when self is gone AND when handle returns nil
+                // (consume), so a trailing `?? event` would resurrect a consumed key —
+                // arrows then reach the field editor and jump the caret even though
+                // selection already moved. Resolve self first; only fall through when
+                // self is actually gone.
+                guard let self else { return event }
+                return self.handle(event)
             }
         }
 

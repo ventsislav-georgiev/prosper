@@ -75,11 +75,52 @@ final class AutocompleteEngine {
     ]
     private static let kDelete: Int64 = 51
 
-    // 120ms: short enough to feel immediate, long enough to coalesce a fast
-    // burst. Type-through (matching keystrokes consume the live ghost locally)
-    // absorbs most mid-suggestion keystrokes, so the debounce no longer needs to
-    // hide round-trip latency behind a long wait.
-    private let debounceInterval: TimeInterval = 0.12
+    // Adaptive debounce (P1.1). Starts at 120ms — short enough to feel immediate,
+    // long enough to coalesce a fast burst — then tracks the model's measured
+    // round-trip latency (EMA, success samples only) clamped to [min,max]: a slow
+    // model debounces longer so we stop spamming it; a fast one stays snappy.
+    // Type-through absorbs most mid-suggestion keystrokes, so the debounce only
+    // gates fresh requests.
+    private var debounceInterval: TimeInterval = 0.12
+    private var latencyEMA: TimeInterval = 0.12
+    nonisolated static let debounceMin: TimeInterval = 0.08
+    nonisolated static let debounceMax: TimeInterval = 0.6
+    private func updateDebounce(_ elapsed: TimeInterval) {
+        let next = Self.nextDebounce(ema: latencyEMA, elapsed: elapsed)
+        latencyEMA = next.ema
+        debounceInterval = next.interval
+    }
+
+    /// Pure debounce step (P1.1) — `nonisolated static` so the clamp/bounds are
+    /// unit-testable off the actor. EMA tracks measured round-trip latency; the
+    /// interval is 0.6× the EMA clamped to `[debounceMin, debounceMax]`. The
+    /// sample is capped at 1s: a cold model load is folded into the first
+    /// request's elapsed time (P0.4) and an empty-ladder reprompt can run long —
+    /// either would otherwise pin the EMA at `debounceMax` for the session.
+    nonisolated static func nextDebounce(
+        ema: TimeInterval, elapsed: TimeInterval
+    ) -> (ema: TimeInterval, interval: TimeInterval) {
+        let sample = min(elapsed, 1.0)
+        let newEMA = ema * 0.7 + sample * 0.3
+        let interval = min(max(newEMA * 0.6, debounceMin), debounceMax)
+        return (newEMA, interval)
+    }
+
+    /// Diagnostics (P2.1): why a keystroke produced no ghost. VSCode tags every
+    /// non-show with a reason; we do the same so "sometimes nothing shows" is
+    /// traceable. Counts are surfaced through the e2e log (gated) and queryable
+    /// in tests via `noShowCounts`.
+    enum NoShowReason: String, CaseIterable {
+        case frontmostSelf, suppressesCompletion, domainDisabled, noCaret
+        case escSuppressed, addressBar, textBeforeEmpty, staleAX, midlineDisabled
+        case secureInput, suppressOnTypo, staleResponseToken, staleNoContext
+        case diverged, midWord, modelEmpty, agentPaused, acceptDiverged
+    }
+    private(set) var noShowCounts: [NoShowReason: Int] = [:]
+    private func recordNoShow(_ reason: NoShowReason) {
+        noShowCounts[reason, default: 0] += 1
+        Self.e2elog("no-show: \(reason.rawValue) [\(noShowCounts[reason]!)]")
+    }
 
     // Keycodes.
     private static let kTab: Int64 = 48
@@ -93,7 +134,15 @@ final class AutocompleteEngine {
     // separate process, so a breakpoint/print is the only window into it).
     private static let e2eTrace = ProcessInfo.processInfo.environment["PROSPER_E2E"] == "1"
     private static func e2elog(_ msg: @autoclosure () -> String) {
-        if e2eTrace { FileHandle.standardError.write(Data("[e2e-engine] \(msg())\n".utf8)) }
+        // Two sinks, one message: the PROSPER_E2E stderr stream the e2e harness
+        // scrapes for `[e2e-engine]` markers, and the user-facing verbose trace
+        // (About → Troubleshooting). The latter lets a user reproduce "sometimes
+        // no ghost" and hand back the no-show reason that fired — the whole
+        // diagnosability point of P2.1. Built once, only when a sink is live.
+        guard e2eTrace || TraceLog.on else { return }
+        let s = msg()
+        if e2eTrace { FileHandle.standardError.write(Data("[e2e-engine] \(s)\n".utf8)) }
+        TraceLog.emit("autocomplete: \(s)")
     }
 
     // Esc pressed with a live suggestion: suppress completions in THIS field until
@@ -658,6 +707,7 @@ final class AutocompleteEngine {
         if let mainId = Bundle.main.bundleIdentifier,
            NSWorkspace.shared.frontmostApplication?.bundleIdentifier == mainId {
             Self.e2elog("bail: frontmost is self (\(mainId))")
+            recordNoShow(.frontmostSelf)
             dismissOverlays()
             return
         }
@@ -666,6 +716,7 @@ final class AutocompleteEngine {
         // it leaks secrets and fights the app's own secure fields.
         let appProfile = AppProfile.current()
         if appProfile.suppressesCompletion {
+            recordNoShow(.suppressesCompletion)
             dismissOverlays()
             return
         }
@@ -680,6 +731,7 @@ final class AutocompleteEngine {
             let host = BrowserURL.currentHost()
                 ?? (AppProfile.current().isElectron ? ChromiumPasteboard.sourceHost() : nil)
             if Preferences.isDomainDisabled(host) {
+                recordNoShow(.domainDisabled)
                 return
             }
         }
@@ -697,6 +749,7 @@ final class AutocompleteEngine {
             // down the overlays instead of letting the indicator linger on the
             // previous field.
             Self.e2elog("bail: AXCaret.currentContext() nil")
+            recordNoShow(.noCaret)
             dismissOverlays()
             return
         }
@@ -706,6 +759,7 @@ final class AutocompleteEngine {
         // quiet in this field until focus moves to a different one (or app switch).
         if let suppressed = escSuppressedFieldRect {
             if Self.sameField(suppressed, fieldRect) {
+                recordNoShow(.escSuppressed)
                 accessoryButton.setState(.idle)
                 return
             }
@@ -722,6 +776,7 @@ final class AutocompleteEngine {
         if context.isAddressBarLike,
            let bid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
            BrowserURL.browserBundleIds.contains(bid) {
+            recordNoShow(.addressBar)
             dismissOverlays()
             return
         }
@@ -731,7 +786,7 @@ final class AutocompleteEngine {
 
         let before = context.textBefore
         Self.e2elog("context ok: before=\"\(before.suffix(24))\" after=\"\(context.textAfter.prefix(12))\"")
-        guard !before.isEmpty else { Self.e2elog("bail: textBefore empty"); return }
+        guard !before.isEmpty else { Self.e2elog("bail: textBefore empty"); recordNoShow(.textBeforeEmpty); return }
 
         // Electron AX-lag guard (Slack): the AX value can lag the keyboard, so a
         // read taken right after typing may MISS the trailing chars we watched
@@ -744,6 +799,7 @@ final class AutocompleteEngine {
         if !typedShadow.isEmpty, !before.hasSuffix(typedShadow) {
             if staleAXRetries < 3 {
                 staleAXRetries += 1
+                recordNoShow(.staleAX)
                 scheduleSuggestion()
                 return
             }
@@ -754,6 +810,7 @@ final class AutocompleteEngine {
         // Mid-line completions: when disabled, only suggest at end-of-field.
         if !Preferences.midlineCompletionsEnabled,
            !context.textAfter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            recordNoShow(.midlineDisabled)
             return
         }
 
@@ -800,6 +857,7 @@ final class AutocompleteEngine {
         // keyboard): completions are impossible AND the context may be a secret.
         // Show the lock state and bail before anything is read into a prompt.
         if SecureInput.isActive {
+            recordNoShow(.secureInput)
             accessoryButton.setState(.blocked)
             clearSuggestion()
             return
@@ -842,7 +900,7 @@ final class AutocompleteEngine {
                 }
                 return
             }
-            if Preferences.suppressOnTypo { return }
+            if Preferences.suppressOnTypo { recordNoShow(.suppressOnTypo); return }
         }
 
         applyAppearance(for: caretRect)
@@ -851,42 +909,61 @@ final class AutocompleteEngine {
         // is thinking (vs. having decided to stay quiet).
         accessoryButton.setState(.thinking)
 
+        let requestStart = Date()
         completionTask = CoreBridge.complete(
             before: before, after: context.textAfter,
             bundleId: bundleId, caretScreenRect: caretRect
         ) { [weak self] suggestion in
             guard let self else { return }
             // Single-flight: ignore stale responses.
-            guard token == self.requestToken else { return }
+            guard token == self.requestToken else { self.recordNoShow(.staleResponseToken); return }
             guard let suggestion, !suggestion.isEmpty else {
                 // Model produced nothing even after CoreBridge's retry/reprompt
-                // ladder — surface it as an ERROR so the user knows no ghost text
-                // is coming for this keystroke (vs. silently looking idle). The
-                // next keystroke fires a fresh request immediately.
+                // ladder. Distinguish the causes (P2.2): when the agent owns the
+                // GPU the inline model is intentionally unloaded — show a PAUSED
+                // state, not an error. Otherwise surface an ERROR so the user
+                // knows no ghost is coming — unless a still-valid ghost is already
+                // on screen (P1.2), in which case keep it rather than flash error.
                 Self.e2elog("model returned empty suggestion")
-                self.accessoryButton.setState(.error)
+                if ModelResidencyCoordinator.isAgentActive {
+                    self.recordNoShow(.agentPaused)
+                    self.accessoryButton.setState(.paused)
+                } else if self.currentSuggestion == nil {
+                    self.recordNoShow(.modelEmpty)
+                    self.accessoryButton.setState(.error)
+                }
                 return
             }
+            // Adaptive debounce (P1.1): sample latency on the success path only —
+            // empty results ran the full 6-rung ladder and would inflate the EMA.
+            self.updateDebounce(Date().timeIntervalSince(requestStart))
             Self.e2elog("model suggestion=\"\(suggestion.prefix(32))\"")
-            // Render-time staleness guard. The response can be seconds old (the
-            // retry ladder may have run several generations), and some Electron
-            // apps (Slack) update their AX text lazily — so the request itself
-            // may have been BUILT from text older than what's on screen. The
-            // token check above can't catch that: no keystroke invalidated the
-            // request, the text was simply read stale. Re-read the field now; if
-            // the text before the caret no longer matches what this suggestion
-            // was computed for, rendering it would duplicate words the user
-            // typed in the meantime ("по всяко" + ghost "по всяко"). Drop it
-            // and request again from the fresh text.
-            guard let fresh = AXCaret.currentContext() else { return }
-            guard fresh.textBefore == before,
-                  self.typedShadow.isEmpty || fresh.textBefore.hasSuffix(self.typedShadow) else {
-                Self.e2elog("stale-AX reschedule: fresh=\"\(fresh.textBefore.suffix(24))\" req=\"\(before.suffix(24))\"")
+            guard let fresh = AXCaret.currentContext() else { self.recordNoShow(.staleNoContext); return }
+            let liveBefore = fresh.textBefore
+            // Electron AX-lag pre-guard (Slack): trust the read only when it ends
+            // with the typed shadow we watched the user type; otherwise wait a
+            // debounce tick for AX to catch up (else a prompt built from stale
+            // text duplicates words — "по всяко" + ghost "по всяко").
+            if !self.typedShadow.isEmpty, !liveBefore.hasSuffix(self.typedShadow) {
+                self.recordNoShow(.staleAX)
+                Self.e2elog("stale-AX reschedule: live=\"\(liveBefore.suffix(24))\" shadow=\"\(self.typedShadow.suffix(12))\"")
                 self.scheduleSuggestion()
                 return
             }
-            // Success: ghost text is about to render at the caret.
-            self.accessoryButton.setState(.ready)
+            // P0.2 reconcile (was a binary drop). The suggestion continues `before`
+            // (the request-time text). If the user typed forward INTO it since,
+            // TRIM the consumed prefix and show the remainder — this is what keeps
+            // the ghost alive through fast typing instead of dropping every drifted
+            // response. Only a genuine divergence reschedules.
+            let shown: String
+            switch Self.reconcile(suggestion: suggestion, anchor: before, live: liveBefore) {
+            case .show(let s): shown = s
+            case .reschedule:
+                self.recordNoShow(.diverged)
+                Self.e2elog("reconcile reschedule: live=\"\(liveBefore.suffix(24))\" req=\"\(before.suffix(24))\"")
+                self.scheduleSuggestion()
+                return
+            }
 
             // Prefer render-time geometry: the caret may have moved — or only
             // now become resolvable (Electron caret rects often lag the text) —
@@ -907,27 +984,39 @@ final class AutocompleteEngine {
             // Insert a separating space when the model begins a NEW word but the
             // user's text ends flush against a finished word (no trailing space),
             // so "brown" + "fox" renders/inserts as "brown fox" not "brownfox".
-            let spaced = Self.applyWordBoundary(before: before, suggestion: suggestion)
-            // Mid-word garbage guard: the caret sits against an unfinished word but
-            // the model started a NEW word ("wri" + " recording"). Inserting it would
-            // orphan the fragment — show nothing and re-request on the next keystroke.
-            if Self.startsNewWordAgainstUnfinishedFragment(before: before, spaced: spaced) {
-                Self.e2elog("suppress: new word against unfinished fragment \"\(before.suffix(12))\"")
-                self.accessoryButton.setState(.error)
-                self.clearSuggestion()
+            let spaced = Self.applyWordBoundary(before: liveBefore, suggestion: shown)
+            // Mid-word guard (P0.3): the caret sits against an unfinished word but
+            // the model started a NEW word ("wri" + " recording"). Inserting it
+            // would orphan the fragment. Don't error+clear (that destroys a kept
+            // ghost and flashes a scary badge for a routine case) — just decline
+            // this new-word suggestion and re-request; the accept-guard protects
+            // any ghost left on screen.
+            // ponytail: skipped the lexicon "try-align" remedy — the snap already
+            // runs on the hot path in typeThrough(); add it here only if mid-word
+            // misses prove common.
+            if Self.startsNewWordAgainstUnfinishedFragment(before: liveBefore, spaced: spaced) {
+                Self.e2elog("suppress: new word against unfinished fragment \"\(liveBefore.suffix(12))\"")
+                self.recordNoShow(.midWord)
+                if self.currentSuggestion == nil { self.accessoryButton.setState(.idle) }
+                // Do NOT reschedule: `liveBefore` is unchanged, so a fresh request
+                // hits the deterministic first rung and returns the same new-word
+                // suggestion → another midWord → spin loop burning the GPU while the
+                // user is idle. The next real keystroke re-triggers naturally.
                 return
             }
+            // Success: ghost text is about to render at the caret.
+            self.accessoryButton.setState(.ready)
             self.currentSuggestion = spaced
             self.replaceLength = 0
             self.isFix = false
-            self.requestBefore = before  // WS6: prompt for the training pair
+            self.requestBefore = liveBefore  // WS6: prompt for the training pair
             // WS6 A/B: count this LLM completion as SHOWN under the session arm, and
             // arm the accept flag so the matching accept (whole or first word) is
             // counted exactly once.
             self.abAcceptedForCurrent = false
             LoRAEvaluator.recordShown(adapterActive: LoRAEvaluator.sessionServesAdapter)
             self.currentCaretRect = liveCaret
-            self.lastRenderedBefore = before // arms type-through for this ghost
+            self.lastRenderedBefore = liveBefore // arms type-through for this ghost
             Self.e2elog("render ghost=\"\(spaced.prefix(32))\"")
             self.renderSuggestion(text: spaced, caret: liveCaret, field: liveField, useMirror: liveMirror)
         }
@@ -989,11 +1078,38 @@ final class AutocompleteEngine {
         return abs(a.midX - b.midX) < 8 && abs(a.midY - b.midY) < 8
     }
 
+    /// Accept-safety guard (P0.1b). A continuation ghost can sit on screen across
+    /// keystrokes (type-through keeps it alive while the user types into it), so at
+    /// accept time the visible ghost may trail the live field by a few chars — or,
+    /// worse, the field may have diverged (caret jump, paste, AX lag). Re-read the
+    /// field and reconcile against `lastRenderedBefore` (the text the ghost is glued
+    /// to): on `.show`, return the suggestion trimmed to what still continues the
+    /// live text; on `.reschedule`, return nil so the caller swallows the accept and
+    /// refreshes — NEVER type divergent text into a third-party app.
+    ///
+    /// Emoji/typo-fix ghosts (`isFix`/`replaceLength>0`) are anchored to a
+    /// just-typed trigger and accepted immediately, so they bypass the guard. If AX
+    /// is momentarily unreadable, fall back to the current suggestion (today's
+    /// behavior) rather than blocking the accept.
+    private func reconciledGhostForAccept() -> String? {
+        guard let suggestion = currentSuggestion, !suggestion.isEmpty else { return nil }
+        if isFix || replaceLength > 0 { return suggestion }
+        guard let anchor = lastRenderedBefore,
+              let live = AXCaret.currentContext()?.textBefore else { return suggestion }
+        switch Self.reconcile(suggestion: suggestion, anchor: anchor, live: live) {
+        case .show(let s): return s
+        case .reschedule: return nil
+        }
+    }
+
     /// Inserts the current suggestion by synthesizing keyboard input, then clears.
     /// For emoji shortcodes / typo fixes, first deletes the replaced trailing chars.
     private func acceptCurrentSuggestion() {
-        guard let suggestion = currentSuggestion, !suggestion.isEmpty else {
-            Self.e2elog("accept: no live suggestion")
+        guard let suggestion = reconciledGhostForAccept() else {
+            Self.e2elog("accept: ghost diverged from live text — swallow + refresh")
+            recordNoShow(.acceptDiverged)
+            clearSuggestion()
+            scheduleSuggestion()
             return
         }
         Self.e2elog("accept inject=\"\(suggestion.prefix(32))\"")
@@ -1132,6 +1248,40 @@ final class AutocompleteEngine {
     /// left unchanged when it already begins with whitespace/punctuation, when the
     /// boundary chars can't glue, or when the trailing word is an incomplete /
     /// misspelled fragment (in which case the model is continuing that word).
+    /// Outcome of reconciling an arrived (or about-to-be-accepted) suggestion
+    /// against the live text. `.show` carries the text that validly continues the
+    /// caret right now (possibly trimmed); `.reschedule` means the context
+    /// diverged and a fresh request is needed.
+    enum ReconcileOutcome: Equatable {
+        case show(String)
+        case reschedule
+    }
+
+    /// Reconcile a `suggestion` — which was computed as a continuation of `anchor`
+    /// — against the current `live` text before the caret (VSCode's
+    /// `computeGhostText`/`cachingDiff` ported to plain text). This is what keeps
+    /// the ghost alive while the user types instead of dropping every drifted
+    /// response. Pure + `nonisolated` so it is unit-testable off the actor.
+    ///
+    /// Four cases:
+    /// - (a) `live == anchor`            → show unchanged.
+    /// - (b) `live` extends `anchor` AND the suggestion starts with the typed
+    ///       delta → user typed forward INTO the suggestion: trim the delta, show
+    ///       the remainder (empty remainder ⇒ reschedule, nothing left to show).
+    /// - (c) `anchor` extends `live` (backspace/deletion) → reschedule.
+    /// - (d) anything else (genuine divergence, paste, caret jump, script switch)
+    ///       → reschedule.
+    nonisolated static func reconcile(suggestion: String, anchor: String, live: String) -> ReconcileOutcome {
+        if live == anchor { return .show(suggestion) }
+        if live.hasPrefix(anchor) {
+            let delta = String(live.dropFirst(anchor.count))
+            guard !delta.isEmpty, suggestion.hasPrefix(delta) else { return .reschedule }
+            let remainder = String(suggestion.dropFirst(delta.count))
+            return remainder.isEmpty ? .reschedule : .show(remainder)
+        }
+        return .reschedule
+    }
+
     static func applyWordBoundary(before: String, suggestion: String) -> String {
         guard let lastBefore = before.last, let firstSug = suggestion.first else { return suggestion }
         // The user's text already ends at a word boundary: drop any leading space
@@ -1257,9 +1407,18 @@ final class AutocompleteEngine {
     /// Accepts only the first word (plus its trailing whitespace) of the current
     /// suggestion, keeping the remainder visible as a fresh suggestion (⌥→).
     private func acceptFirstWord() {
-        guard let suggestion = currentSuggestion, !suggestion.isEmpty else { return }
         // Emoji replacements / typo fixes are atomic — accept the whole thing.
         if replaceLength > 0 { acceptCurrentSuggestion(); return }
+        // Accept-safety guard (P0.1b): same reconcile as the whole-line accept, so a
+        // word-accept on a drifted ghost trims to the live text or refreshes instead
+        // of typing a stale word.
+        guard let suggestion = reconciledGhostForAccept(), !suggestion.isEmpty else {
+            Self.e2elog("accept-word: ghost diverged from live text — swallow + refresh")
+            recordNoShow(.acceptDiverged)
+            clearSuggestion()
+            scheduleSuggestion()
+            return
+        }
         let bundleId = requestBundleId
         let (head, tail) = Self.splitFirstWord(suggestion)
         guard !head.isEmpty else { acceptCurrentSuggestion(); return }

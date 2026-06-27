@@ -174,10 +174,23 @@ enum AgentModelRegistry {
     /// generation, strong agentic coding, fits a 32 GB dev Mac.
     static let recommendedId = "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"
 
-    /// Lookup by id; falls back to the recommended model for an unknown/removed id.
+    /// Built-in catalog plus any user-added (HF-imported) custom models. The single
+    /// source the picker, the AI Models pane, and `model(for:)`/`toolFormat(for:)` read,
+    /// so a custom model is tool-parsed and RAM-warned exactly like a built-in one.
+    /// Built-ins win on id collision: a custom model whose id later ships as a built-in
+    /// is dropped, so callers (and `ForEach`) never see a duplicate id.
+    static func all() -> [AgentModel] {
+        var seen = Set(models.map(\.id))
+        let customs = CustomModelStore.asAgentModels().filter { seen.insert($0.id).inserted }
+        return models + customs
+    }
+
+    /// Lookup by id (built-in + custom); falls back to the recommended model for an
+    /// unknown/removed id.
     static func model(for id: String) -> AgentModel {
-        models.first { $0.id == id }
-            ?? models.first { $0.id == recommendedId }
+        let everything = all()
+        return everything.first { $0.id == id }
+            ?? everything.first { $0.id == recommendedId }
             ?? models[0]
     }
 
