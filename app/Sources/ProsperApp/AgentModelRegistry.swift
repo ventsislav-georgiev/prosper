@@ -89,6 +89,12 @@ enum AgentModelRegistry {
             // demote to chat-only or drop if it won't emit tool calls reliably.
             note: "~9 GB · MS Phi-4 · strong reasoning · tool-calling experimental"
         ),
+        AgentModel(
+            id: "mlx-community/gpt-oss-20b-MXFP4-Q4",
+            label: "gpt-oss 20B",
+            approxRAMGB: 13, minRAMGB: 16, toolFormat: .harmony,
+            note: "native MXFP4 ~12 GB · OpenAI open MoE (3.6B active), native harmony tool-calling"
+        ),
         // ── 24 GB tier ──────────────────────────────────────────────────────
         AgentModel(
             id: "mlx-community/Devstral-Small-2507-4bit-DWQ",
@@ -115,12 +121,35 @@ enum AgentModelRegistry {
             approxRAMGB: 18, minRAMGB: 32, toolFormat: .nemotron,
             note: "~18 GB · NVIDIA agentic-tuned MoE (3B active)"
         ),
+        // Ornith-1.0 (DeepReinforce): self-scaffolding RL coding models, MIT.
+        // Qwen3.5-based → qwenXML tool syntax; replies open with a <think> block
+        // (same as the other Qwen3 reasoning entries, handled by the qwen parser).
+        // The 9B is the only on-device-friendly *dense* Ornith but ships MLX as
+        // BF16 only for now — swap to a 4bit/DWQ id (one-row change) when one lands.
+        AgentModel(
+            id: "leonsarmiento/Ornith-1.0-35B-5bit-mlx",
+            label: "Ornith-1.0 35B-A3B",
+            approxRAMGB: 24, minRAMGB: 32, toolFormat: .qwenXML,
+            note: "5-bit ~24 GB · Qwen3.5 MoE (3B active), SOTA-for-size agentic coding"
+        ),
+        AgentModel(
+            id: "airagrp/ornith-1.0-9B-mlx-BF16",
+            label: "Ornith-1.0 9B",
+            approxRAMGB: 22, minRAMGB: 32, toolFormat: .qwenXML,
+            note: "⚠️ BF16 ~22 GB (no 4bit MLX yet) · Qwen3.5 dense · strong small coder"
+        ),
         // ── 64 GB tier (option; unverified on small machines) ─────────────────
         AgentModel(
             id: "mlx-community/Qwen3-Coder-Next-4bit",
             label: "Qwen3-Coder-Next 80B-A3B",
             approxRAMGB: 45, minRAMGB: 64, toolFormat: .qwenXML,
             note: "~45 GB · needs 64 GB · near-frontier agentic coding"
+        ),
+        AgentModel(
+            id: "mlx-community/gpt-oss-120b-MXFP4-Q4",
+            label: "gpt-oss 120B",
+            approxRAMGB: 65, minRAMGB: 64, toolFormat: .harmony,
+            note: "native MXFP4 ~63 GB · OpenAI open MoE (5.1B active), frontier agentic · needs ≥64 GB"
         ),
         AgentModel(
             id: "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit",
