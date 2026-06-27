@@ -432,6 +432,39 @@ enum LidSleepHelper {
         }
     }
 
+    /// Tell the daemon to clear every `disablesleep` writer and sleep, as root.
+    /// Unlike the keep-awake heartbeat (which must NEVER spin up the privileged
+    /// daemon on its own), this is an explicit user command, so it registers +
+    /// launches + rebuilds the connection unconditionally — the whole point is to
+    /// reach the daemon even when no connection is currently held (the case that
+    /// made the app-side release no-op and left the Mac awake). Returns whether the
+    /// sleep was issued.
+    @discardableResult
+    static func sleepNow() async -> Bool {
+        guard await ensureRegistered() else { return false }
+        let c = connection ?? makeConnection()
+        connection = c
+        let ok = await callSleepNow(c)
+        // The daemon reclaimed both writers; mirror that locally so a later teardown
+        // isn't pinned open by a stale flag.
+        holdsLidOverride = false
+        holdsRemoteSession = false
+        return ok
+    }
+
+    private static func callSleepNow(_ c: NSXPCConnection) async -> Bool {
+        await withCheckedContinuation { cont in
+            let once = ResumeOnce(cont)
+            let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
+                Self.log.error("sleepNow failed: \(err.localizedDescription, privacy: .public)")
+                once.resume(false)
+            } as? LidHelperProtocol
+            guard let proxy else { once.resume(false); return }
+            once.armTimeout()
+            proxy.sleepNow { @Sendable ok in once.resume(ok) }
+        }
+    }
+
     private static func callRemoteWake(_ c: NSXPCConnection, json: String) async -> Bool {
         await withCheckedContinuation { cont in
             let once = ResumeOnce(cont)
