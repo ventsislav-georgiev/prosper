@@ -414,6 +414,12 @@ function on_launch(payload)
         end
     end
     if not s.caffeine and c.caffeineAtLaunch then caffeine_on(nil) end
+    -- Re-arm remote-wake so the app side re-establishes the daemon XPC connection and
+    -- its in-memory remote-wake flag. The daemon stays armed across restarts via its
+    -- root config, but the APP forgets — and the session keep-awake hold is gated on
+    -- the app knowing the daemon is resident, so without this the hold no-ops and a
+    -- remotely-woken Mac sleeps mid-session despite a live dch client.
+    if c.remoteWake then apply_remote_wake() end
 end
 
 function on_battery(payload)
@@ -591,9 +597,11 @@ function settings_render(section_id, state)
             .. "a local-network IP works if you only ever wake it from the same network). Tap ⓘ for "
             .. "how it works and its limits.",
         rows = {
+            -- subtitle is STATIC: a per-state string changed its wrapped line count,
+            -- which shifted total content height and bumped the scroll position on
+            -- every toggle. The switch itself shows on/off; the footer explains.
             s.row{ kind = "toggle", key = "remote_wake", title = "Wake this Mac remotely",
-                   subtitle = c.remoteWake and "On — dark-wakes on a timer to check for a wake request"
-                                            or "Off — Mac is unreachable while asleep",
+                   subtitle = "Dark-wakes on a timer to check for a wake request while asleep",
                    value = b2s(c.remoteWake) },
             s.row{ kind = "enum", key = "rw_interval_batt_min", title = "Check every (on battery)",
                    subtitle = "Less often = less battery, slower wake. On charger it checks every 30s.",
