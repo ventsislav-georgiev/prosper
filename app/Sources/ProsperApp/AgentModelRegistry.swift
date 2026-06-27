@@ -102,12 +102,32 @@ enum AgentModelRegistry {
             approxRAMGB: 14, minRAMGB: 24, toolFormat: .mistral,
             note: "DWQ ~14 GB · SWE-agent-trained, reliable in loops"
         ),
+        AgentModel(
+            // 6-bit, not 4-bit: the 4-bit conversion has a reported tokenizer/
+            // gibberish bug (HF discussions). 6-bit is the safe loadable build.
+            id: "mlx-community/Devstral-Small-2-24B-Instruct-2512-6bit",
+            label: "Devstral Small 2 24B",
+            approxRAMGB: 18, minRAMGB: 24, toolFormat: .mistral,
+            note: "6-bit ~18 GB · Dec-2512 SWE-agent model, newer than 2507"
+        ),
+        AgentModel(
+            id: "mlx-community/GLM-4.7-Flash-4bit",
+            label: "GLM-4.7-Flash 30B-A3B",
+            approxRAMGB: 17, minRAMGB: 24, toolFormat: .glm,
+            note: "~17 GB · GLM Flash MoE (3B active), strong agentic coding, light"
+        ),
         // ── 32 GB tier (primary / recommended) ───────────────────────────────
         AgentModel(
             id: "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2",
             label: "Qwen3-Coder 30B-A3B",
             approxRAMGB: 20, minRAMGB: 32, toolFormat: .qwenXML,
             note: "DWQ v2 ~20 GB · coder-tuned MoE (3B active), best small-Mac tool-calling"
+        ),
+        AgentModel(
+            id: "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-6bit",
+            label: "Qwen3-Coder 30B-A3B (6-bit)",
+            approxRAMGB: 25, minRAMGB: 32, toolFormat: .qwenXML,
+            note: "6-bit ~25 GB · same coder MoE (3B active), less quant damage than 4-bit"
         ),
         AgentModel(
             id: "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ",
@@ -152,6 +172,18 @@ enum AgentModelRegistry {
             note: "native MXFP4 ~63 GB · OpenAI open MoE (5.1B active), frontier agentic · needs ≥64 GB"
         ),
         AgentModel(
+            id: "mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit",
+            label: "Qwen3-Next 80B-A3B",
+            approxRAMGB: 45, minRAMGB: 64, toolFormat: .qwenXML,
+            note: "~45 GB · hybrid-attention flagship MoE (3B active), strong agentic coding"
+        ),
+        AgentModel(
+            id: "mlx-community/GLM-4.5-Air-4bit",
+            label: "GLM-4.5-Air 106B-A12B",
+            approxRAMGB: 60, minRAMGB: 64, toolFormat: .glm,
+            note: "~60 GB · needs ≥64 GB · practical large GLM coder (12B active)"
+        ),
+        AgentModel(
             id: "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit",
             label: "Llama 4 Scout 17B-16E",
             // Llama 4 has no dedicated tool-call parser case; hermes `<tool_call>`
@@ -186,6 +218,12 @@ enum AgentModelRegistry {
             note: "⚠️ 550B agentic MoE · ~300 GB · needs ≥512 GB"
         ),
         AgentModel(
+            id: "mlx-community/GLM-4.6-4bit",
+            label: "GLM-4.6 355B-A32B (experimental)",
+            approxRAMGB: 200, minRAMGB: 256, toolFormat: .glm,
+            note: "⚠️ 355B top GLM coder MoE (32B active) · ~190 GB · needs ≥256 GB"
+        ),
+        AgentModel(
             id: "mlx-community/GLM-5-4bit",
             label: "GLM-5 (experimental)",
             approxRAMGB: 400, minRAMGB: 512, toolFormat: .glm,
@@ -211,7 +249,10 @@ enum AgentModelRegistry {
     static func all() -> [AgentModel] {
         var seen = Set(models.map(\.id))
         let customs = CustomModelStore.asAgentModels().filter { seen.insert($0.id).inserted }
-        return models + customs
+        // Sort smallest→largest by RAM so the picker reads top-down by size and
+        // custom (HF-imported) models slot into the right tier instead of trailing
+        // the list. Stable tie-break on id keeps equal-RAM rows deterministic.
+        return (models + customs).sorted { ($0.approxRAMGB, $0.id) < ($1.approxRAMGB, $1.id) }
     }
 
     /// Lookup by id (built-in + custom); falls back to the recommended model for an

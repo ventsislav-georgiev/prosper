@@ -15,8 +15,10 @@
 
 -- User-tunable settings (OpenLid settings section -> host.prefs). 0 thresholds disable a guard.
 local DEFAULTS = {
-    auto_on_ac            = true,  -- LEGACY (migrated to mac_awake_mode): auto-on when plugged in
-    activate_at_launch    = false, -- LEGACY (migrated to mac_awake_mode): arm on every launch
+    rule_on_ac            = true,  -- keep awake while the charger is connected (off on unplug)
+    rule_at_launch        = false, -- turn on at every launch (manual; survives unplug)
+    auto_on_ac            = true,  -- LEGACY (migrated to rule_on_ac): auto-on when plugged in
+    activate_at_launch    = false, -- LEGACY (migrated to rule_at_launch): arm on every launch
     lock_on_lid_close     = true,  -- on lid close while active: lock + blank the display
     show_menu_icon        = true,  -- show the menu bar status item
     battery_threshold_pct = 20,    -- auto-off below this % on battery (0 disables)
@@ -52,19 +54,28 @@ local function pref_str(key, default)
     return v
 end
 
--- One mode replaces the old activate_at_launch + auto_on_ac toggle pair (4 combos,
--- one of them self-contradictory). The mode decides what happens at launch and when
--- power changes; the "Right now" toggle is still the manual live switch.
---   "restore" — do nothing automatic; the last live state is restored.
---   "on"      — turn Mac-awake on at launch and keep it (manual; survives unplug).
---   "power"   — on while plugged in, off when unplugged (the only mode that auto-offs).
--- Legacy prefs are mapped on first read so upgrades keep their behaviour.
-local function mac_awake_mode()
+-- Two independent automatic rules (each a plain checkbox), decoupled so the UI can
+-- show exactly which one owns the state:
+--   rule_on_ac     — on while the charger is plugged in, off when you unplug (auto).
+--   rule_at_launch — turn on at every launch and keep it (manual; survives unplug).
+-- Both off = "restore last state". They migrate, in order, from the prior single
+-- `mac_awake_mode` enum and then from the original `auto_on_ac`/`activate_at_launch`
+-- pair, so upgrades keep their behaviour.
+local function rule_on_ac()
+    local v = host.prefs.get("rule_on_ac")
+    if v == "true" or v == "false" then return v == "true" end
     local m = host.prefs.get("mac_awake_mode")
-    if m == "on" or m == "power" or m == "restore" then return m end
-    if pref_bool("activate_at_launch", false) then return "on" end
-    if pref_bool("auto_on_ac", DEFAULTS.auto_on_ac) then return "power" end
-    return "restore"
+    if m == "power" then return true end
+    if m == "on" or m == "restore" then return false end
+    return pref_bool("auto_on_ac", DEFAULTS.auto_on_ac)
+end
+local function rule_at_launch()
+    local v = host.prefs.get("rule_at_launch")
+    if v == "true" or v == "false" then return v == "true" end
+    local m = host.prefs.get("mac_awake_mode")
+    if m == "on" then return true end
+    if m == "power" or m == "restore" then return false end
+    return pref_bool("activate_at_launch", DEFAULTS.activate_at_launch)
 end
 
 -- Read settings fresh each call (stateless VM). 0 thresholds collapse to nil = disabled.
@@ -73,7 +84,8 @@ local function cfg()
     local nt = pref_num("network_timeout_min", DEFAULTS.network_timeout_min)
     return {
         enableLidCloseOverride = true, -- core feature, not user-tunable
-        macAwakeMode           = mac_awake_mode(),
+        ruleOnAc               = rule_on_ac(),
+        ruleAtLaunch           = rule_at_launch(),
         lockOnLidClose         = pref_bool("lock_on_lid_close", DEFAULTS.lock_on_lid_close),
         showMenuIcon           = pref_bool("show_menu_icon", DEFAULTS.show_menu_icon),
         batteryThreshold       = (bt > 0) and bt or nil,
@@ -158,6 +170,36 @@ local function caffeine_line(s)
     return "\u{2615} Display awake \u{2014} screen & screensaver stay off"
 end
 local CAFF_OFF_LINE = "\u{1F4A4} Display sleeps normally"
+
+-- The REAL lid-close override, read from the system (`pmset -g` SleepDisabled) —
+-- not our stored intent. This is the OR of every writer (our lid override, a
+-- remote-wake session hold, anything else), so the Status section can never lie
+-- about whether the lid actually keeps the Mac awake. Used in settings only (not
+-- the hot menu render), so the one extra shell-out is fine.
+local function real_disablesleep()
+    local out = host.shell.run("/usr/bin/pmset -g") or ""
+    return out:match("SleepDisabled%s+(%d)") == "1"
+end
+
+-- Human "who owns it" line for the Status row, reconciling our stored intent with
+-- the real system state so a hold we didn't set (or a stale one) is named, not hidden.
+local function mac_awake_status(st, real)
+    if not real then return "Off \u{2014} Mac sleeps when the lid closes" end
+    if st.active then
+        if st.autoActivated then return "On \u{2014} kept awake while plugged in" end
+        if st.endTime then return "On for " .. fmt_remaining(st.endTime) .. " \u{2014} turned on manually" end
+        return "On \u{2014} turned on manually"
+    end
+    if pref_bool("remote_wake", DEFAULTS.remote_wake) then return "On \u{2014} held by a remote session" end
+    return "On \u{2014} held by another app or a stale override"
+end
+
+-- True when the plugged-in rule currently OWNS the awake state, so manual "off"
+-- (settings switch + shortcut) is refused with a reason instead of fighting it.
+local function rule_lock_active(st)
+    st = st or load_state()
+    return rule_on_ac() and (not running_on_battery()) and st.active and st.autoActivated
+end
 
 -- Run the 60s menu-countdown ticker ONLY while a timed session is live. The
 -- common case (indefinite keep-awake) shows no changing number, so a periodic
@@ -331,7 +373,15 @@ end
 -- ============ Command ============
 function openlid_toggle(query)
     local s = load_state()
-    if s.active then deactivate("manual") else activate(nil, false) end
+    if s.active then
+        if rule_lock_active(s) then
+            host.alert.show("\u{1F513} Kept awake while plugged in \u{2014} unplug, or turn off the rule in Settings, to allow sleep")
+            return "\u{1F513} Mac awake \u{2014} kept awake while plugged in"
+        end
+        deactivate("manual")
+    else
+        activate(nil, false)
+    end
     return load_state().active and "\u{1F513} Mac awake \u{2014} lid closed" or "\u{1F4A4} Mac sleeps normally"
 end
 
@@ -407,10 +457,10 @@ function on_launch(payload)
     render(s)
     local c = cfg()
     if not s.active then
-        if c.macAwakeMode == "on" then
-            activate(nil, false)
-        elseif c.macAwakeMode == "power" and src == "AC Power" then
-            activate(nil, true)
+        if c.ruleAtLaunch then
+            activate(nil, false)              -- manual; survives unplug
+        elseif c.ruleOnAc and src == "AC Power" then
+            activate(nil, true)               -- auto; releases on unplug
         end
     end
     if not s.caffeine and c.caffeineAtLaunch then caffeine_on(nil) end
@@ -433,7 +483,7 @@ function on_battery(payload)
     if changed then s.lastPowerSource = src; save_state(s) end
 
     -- AC plugged in -> auto-enable (marked auto, so the unplug below turns it off)
-    if changed and c.macAwakeMode == "power" and src == "AC Power" and not s.active then
+    if changed and c.ruleOnAc and src == "AC Power" and not s.active then
         activate(nil, true); return
     end
     -- Battery threshold ALWAYS wins (runaway-with-lid-closed protection): check it
@@ -495,23 +545,35 @@ function settings_render(section_id, state)
     local s = host.ui.settings
     local c = cfg()
     local st = load_state()
-    -- Live on/off for both features (flip here = flip now), plus arm-at-launch.
-    local now_rows = {
-        s.row{ kind = "toggle", key = "lid_now", title = "Mac awake (lid closed)",
-               subtitle = st.active and awake_line(st) or "Off — Mac sleeps on lid close",
-               value = b2s(st.active) },
-        s.row{ kind = "toggle", key = "caffeine_now", title = "Display awake (no screensaver)",
-               subtitle = st.caffeine and caffeine_line(st) or "Off — display sleeps normally",
-               value = b2s(st.caffeine) },
+    local on_ac = not running_on_battery()
+    local real = real_disablesleep()
+
+    -- ── STATUS (read-only) — what the Mac is ACTUALLY doing now ────────────────
+    -- Separate from the controls (the prior single "Right now" section mixed live
+    -- state with the switches, and showed our stored intent instead of the real
+    -- pmset state — so it could claim "off" while disablesleep was still held).
+    local status = s.section{
+        id = "status", title = "Status",
+        footer = "What's happening right now. Use the controls below to change it.",
+        rows = {
+            s.row{ kind = "info", title = "\u{1F513} Mac awake (lid closed)",
+                   subtitle = mac_awake_status(st, real) },
+            s.row{ kind = "info", title = "\u{2615} Display awake (no screensaver)",
+                   subtitle = st.caffeine and caffeine_line(st) or "Off \u{2014} display sleeps normally" },
+            s.row{ kind = "info", title = "Power",
+                   subtitle = string.format("Battery %d%% \u{00B7} %s \u{00B7} External display: %s",
+                        battery_pct(), on_ac and "on charger" or "on battery",
+                        host.screen.count() > 1 and "yes" or "no") },
+        },
     }
     -- Keeping the Mac awake with the lid closed needs a root-level sleep override,
     -- which Prosper does through a privileged background helper (no sudo). macOS
     -- asks you to approve it once in System Settings → Login Items. This permission
     -- row reports that grant live + offers an Open button — same pattern as the
     -- Accessibility/Input-Monitoring rows. Only shown when the lid-closed feature
-    -- is actually engaged (on now, or armed at launch), so it's silent otherwise.
+    -- is actually engaged (on now, or armed by a rule), so it's silent otherwise.
     local permissions = nil
-    if st.active or c.macAwakeMode == "on" or c.macAwakeMode == "power" or c.remoteWake then
+    if st.active or c.ruleOnAc or c.ruleAtLaunch or c.remoteWake then
         permissions = s.section{
             id = "permissions", title = "Permissions",
             rows = { s.row{
@@ -520,24 +582,44 @@ function settings_render(section_id, state)
             } },
         }
     end
-    local now = s.section{
-        id = "now", title = "Right now",
+    -- ── CONTROLS — the manual on/off switches. When the plugged-in rule owns the
+    -- state, the Mac-awake switch becomes a locked info row (turning it off would
+    -- just fight the rule), naming exactly how to release it. ──────────────────
+    local lid_control
+    if rule_lock_active(st) then
+        lid_control = s.row{ kind = "info", title = "Mac awake (lid closed)",
+            subtitle = "Locked on \u{2014} kept awake while plugged in. Unplug, or turn off "
+                .. "\u{201C}Keep awake while plugged in\u{201D} below, to allow sleep." }
+    else
+        lid_control = s.row{ kind = "toggle", key = "lid_now", title = "Mac awake (lid closed)",
+            subtitle = "Keep the whole Mac running with the lid shut", value = b2s(st.active) }
+    end
+    local controls = s.section{
+        id = "controls", title = "Controls",
         footer = "🔓 Mac awake keeps the whole Mac running when the lid is CLOSED. "
             .. "☕ Display awake keeps the screen and screensaver off while the lid is OPEN. "
             .. "Independent — use either or both.",
-        rows = now_rows,
-    }
-    local general = s.section{
-        id = "general", title = "At launch",
-        footer = "Mac awake at launch — “Restore last state” brings back whatever was on when you quit; "
-            .. "“Turn on” arms it every launch and keeps it on; "
-            .. "“On while plugged in” keeps it awake only while the charger is connected and turns it off when you unplug "
-            .. "(unless the Sessions command below still reports work).",
         rows = {
-            s.row{ kind = "enum", key = "mac_awake_mode", title = "Mac awake at launch",
-                   value = c.macAwakeMode,
-                   options      = { "restore", "on", "power" },
-                   optionLabels = { "Restore last state", "Turn on", "On while plugged in" } },
+            lid_control,
+            s.row{ kind = "toggle", key = "caffeine_now", title = "Display awake (no screensaver)",
+                   subtitle = "Keep the screen + screensaver off while the lid is open",
+                   value = b2s(st.caffeine) },
+        },
+    }
+    -- ── AUTOMATIC — two independent rules, each its own checkbox (replaces the
+    -- old 3-way "at launch" enum) so it's clear which can be on together. ───────
+    local general = s.section{
+        id = "general", title = "Turn on automatically",
+        footer = "Both off = nothing automatic; the last state is restored at launch. "
+            .. "“Keep awake while plugged in” turns off when you unplug (unless the Sessions command "
+            .. "below still reports work) and locks the manual switch while charging. "
+            .. "“Turn on at every launch” arms it each start and keeps it on until you turn it off.",
+        rows = {
+            s.row{ kind = "toggle", key = "rule_on_ac", title = "Keep awake while plugged in",
+                   subtitle = "On when the charger is connected, off when you unplug",
+                   value = b2s(c.ruleOnAc) },
+            s.row{ kind = "toggle", key = "rule_at_launch", title = "Turn on at every launch",
+                   subtitle = "Arm Mac awake each time Prosper starts", value = b2s(c.ruleAtLaunch) },
             s.row{ kind = "toggle", key = "caffeine_at_launch", title = "Display awake at launch",
                    subtitle = "Arm Display awake on every start", value = b2s(c.caffeineAtLaunch) },
             s.row{ kind = "toggle", key = "show_menu_icon", title = "Show menu bar icon",
@@ -559,7 +641,7 @@ function settings_render(section_id, state)
     }
     local busy = s.section{
         id = "busy", title = "Keep awake on unplug",
-        footer = "Only used in “On while plugged in” mode. When you unplug, this command runs once: "
+        footer = "Only used with “Keep awake while plugged in”. When you unplug, this command runs once: "
             .. "non-empty output keeps the Mac awake (work still running); empty lets it sleep. "
             .. "Leave blank to disable. Example: dch -ls",
         rows = {
@@ -638,8 +720,9 @@ function settings_render(section_id, state)
         },
     }
     local sections = {}
+    sections[#sections + 1] = status
     if permissions then sections[#sections + 1] = permissions end
-    sections[#sections + 1] = now
+    sections[#sections + 1] = controls
     sections[#sections + 1] = general
     sections[#sections + 1] = safeguards
     sections[#sections + 1] = busy
@@ -656,6 +739,16 @@ function settings_action(section_id, action, value, form_json)
         if value == "true" then activate(nil, false) else deactivate("manual") end
     elseif key == "caffeine_now" then
         if value == "true" then caffeine_on(nil) else caffeine_off("manual") end
+    elseif key == "rule_on_ac" then
+        host.prefs.set(key, value)
+        local st = load_state()
+        if value == "true" and not running_on_battery() and not st.active then
+            activate(nil, true)                  -- begin the plugged-in hold immediately
+        elseif value ~= "true" and st.active and st.autoActivated then
+            deactivate("plugged-in rule off")    -- release the rule-held session
+        else
+            render(load_state())
+        end
     elseif key == "rw_device_pick" then
         -- The dropdown is just a picker for the canonical rw_device_id pref.
         host.prefs.set("rw_device_id", value)

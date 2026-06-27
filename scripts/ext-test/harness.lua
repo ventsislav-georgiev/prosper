@@ -304,6 +304,10 @@ function M.makeHost(opts)
                     remove = function() env.menu = nil end },
         settings = { open = function(id) env.settingsOpened = id end },
         dialog = { prompt = function(o) env.dialogPrompt = o; return env.dialogReply end },
+        network = {
+            addresses = function() return opts.addresses or {} end,
+            reachable = function() return env.reachable ~= false end,
+        },
 
         -- Declarative UI surface: constructors tag-and-return the node; render
         -- records it and returns it so the extension's return value is inspectable.

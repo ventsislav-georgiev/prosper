@@ -47,9 +47,12 @@ enum PermissionsManager {
         switch permission {
         case "full-disk-access": return hasFullDiskAccess()
         case "accessibility": return isAccessibilityTrusted()
-        // openlid's privileged lid-sleep daemon: "granted" == the SMAppService
-        // background item is approved + enabled (System Settings → Login Items).
-        case "lid-helper": return LidSleepHelper.isEnabled
+        // openlid's privileged lid-sleep daemon: "granted" == nothing for the user
+        // to do in System Settings. The daemon registers lazily and auto-enables, so
+        // a not-yet-registered helper still needs no user action — only a pending
+        // Login-Items approval is actionable. (NOT isEnabled, which means "actively
+        // registered + enabled" and gates re-pin/heal.)
+        case "lid-helper": return LidSleepHelper.permissionResolved
         default: return false
         }
     }
@@ -61,7 +64,7 @@ enum PermissionsManager {
     /// so a stale cache self-heals.
     static func refreshGranted(_ permission: String) -> Bool {
         switch permission {
-        case "lid-helper": return LidSleepHelper.refreshEnabled()
+        case "lid-helper": return LidSleepHelper.refreshPermissionResolved()
         default: return isGranted(permission)
         }
     }

@@ -74,6 +74,52 @@ enum LidSleepHelper {
         return v
     }
 
+    // MARK: - Settings permission row ("anything for the user to do?")
+
+    /// Drives the openlid "Background Helper" permission badge. "Granted" here means
+    /// the USER has nothing to do in System Settings — which is every status EXCEPT
+    /// `.requiresApproval`. Rationale: registration is lazy and auto-enables on
+    /// `register()` (no approval prompt) on a properly signed build, and it happens
+    /// on demand the moment lid-sleep / remote-wake is switched on — so a not-yet-
+    /// registered helper needs no user action and must read as granted, not "Open".
+    /// The ONLY actionable state is a pending Login-Items approval. Distinct from
+    /// `isEnabled` (the residency flag that gates re-pin/heal): a helper can be
+    /// "granted" (nothing to do) while not yet enabled/registered.
+    ///
+    /// Instant + non-blocking, mirroring `isEnabled`: returns the persisted value and
+    /// kicks one off-main refresh. Defaults to `true` (optimistic — don't nag before
+    /// the first probe lands); the refresh flips it to false only if an approval is
+    /// genuinely pending.
+    nonisolated static var permissionResolved: Bool {
+        cacheLock.lock()
+        if !approvalCacheLoaded {
+            approvalOK = UserDefaults.standard.object(forKey: approvalCacheKey) as? Bool ?? true
+            approvalCacheLoaded = true
+        }
+        let value = approvalOK
+        let kick = !approvalRefreshInFlight
+        if kick { approvalRefreshInFlight = true }
+        cacheLock.unlock()
+        if kick { Task.detached(priority: .utility) { _ = refreshPermissionResolved() } }
+        return value
+    }
+
+    /// Blocking authoritative read for `permissionResolved`. OFF-MAIN ONLY.
+    @discardableResult
+    nonisolated static func refreshPermissionResolved() -> Bool {
+        let v = (service.status != .requiresApproval)
+        cacheLock.lock()
+        approvalOK = v; approvalCacheLoaded = true; approvalRefreshInFlight = false
+        cacheLock.unlock()
+        UserDefaults.standard.set(v, forKey: approvalCacheKey)
+        return v
+    }
+
+    nonisolated private static let approvalCacheKey = "prosper.lidHelper.permissionResolved"
+    nonisolated(unsafe) private static var approvalCacheLoaded = false
+    nonisolated(unsafe) private static var approvalOK = true
+    nonisolated(unsafe) private static var approvalRefreshInFlight = false
+
     nonisolated private static func storeCache(_ v: Bool) {
         cacheLock.lock()
         cachedEnabled = v

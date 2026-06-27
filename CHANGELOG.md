@@ -91,6 +91,32 @@ tag from the now-released section and put it on the new top draft.
   the gaps and outlines between panes are now black, so each drop target reads clearly
   against the accent-highlighted cells (the strip stays translucent over your desktop).
 
+### Keep Mac Awake (OpenLid)
+- **A remotely-woken Mac no longer falls back asleep mid-session.** After the app
+  restarted (e.g. following a remote wake), it forgot that the background helper was
+  still armed, so the "keep awake while a session is live" hold quietly no-op'd and
+  the Mac slept a few seconds after you connected — even with open `dch` sessions.
+  The app now re-establishes that link on launch, so the hold actually reaches the
+  helper and the Mac stays awake while work is running.
+- **Settings redesigned so the on/off state is honest and the controls are clear.**
+  The old "Right now" section showed Prosper's stored intent, which could say "off"
+  while the Mac was still being held awake by something else — and the manual toggle
+  sometimes appeared to do nothing. The pane is now split into three plainly-labelled
+  groups:
+  - **Status** — read-only. Shows what the Mac is *actually* doing right now (read
+    from the system, not a stored flag) and *who* is holding it awake: the plugged-in
+    rule, a manual switch, a timed session, a remote session, or an external/stale
+    hold.
+  - **Controls** — the manual on/off switches, separate from the status.
+  - **Turn on automatically** — the launch/power rules.
+- **"Keep awake while plugged in" is now its own checkbox.** It replaces the old
+  three-way "at launch" dropdown with two independent checkboxes ("Keep awake while
+  plugged in" and "Turn on at every launch"), so it's obvious which can be on
+  together. While the charger is connected and this rule is on, the manual switch
+  locks (with the reason shown) so an accidental toggle — or the keyboard shortcut —
+  can't sleep the Mac out from under you; unplug, or turn the rule off, to release it.
+  Existing settings migrate automatically.
+
 ### Troubleshooting
 - **New verbose trace mode (Settings → About → Troubleshooting), off by default.**
   When a remotely-woken Mac won't wake or won't stay awake, flip this on and the whole
@@ -111,6 +137,17 @@ tag from the now-released section and put it on the new top draft.
 - **The accessibility "Reset & re-add" button no longer freezes Settings.** It spawned
   `tccutil` and blocked waiting for it to finish on the main thread; the subprocess now
   runs off-main and the UI stays responsive.
+
+### Coding Agent
+- **Ten new models to choose from.** Ornith-1.0 (9B and 35B-A3B — DeepReinforce's
+  self-scaffolding coding models), OpenAI's gpt-oss (20B and 120B), GLM-4.7-Flash,
+  GLM-4.5-Air and GLM-4.6, Qwen3-Next 80B-A3B, the December Devstral Small 2 24B, and a
+  higher-fidelity 6-bit build of Qwen3-Coder 30B-A3B — spanning the 16 GB tier up to
+  very-large-RAM Macs.
+- **The model picker is now always sorted smallest to largest.** Models — including any
+  you add yourself via a Hugging Face URL — are ordered by their RAM footprint, so the
+  list reads top-down by size and custom models slot into the right place instead of
+  trailing the end.
 
 ## v2.120.0
 
