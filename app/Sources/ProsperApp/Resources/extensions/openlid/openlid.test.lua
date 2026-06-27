@@ -216,4 +216,71 @@ do
     h.le(lus, 3000, string.format("VM load under 3ms (was %.1f)", lus))
 end
 
+-- ── Legacy mac_awake_mode migrates to the two rule checkboxes ─────────────────
+do
+    -- "power" -> keep-awake-while-plugged-in (auto-on on AC).
+    local host, env = h.makeHost { power = "AC Power" }
+    host.prefs.set("mac_awake_mode", "power")
+    local G = h.load(INIT, host)
+    G.on_launch(host.json.encode { powerSource = "AC Power" })
+    h.eq(state(host).active, true, "mac_awake_mode=power migrates to auto-on while plugged")
+    h.eq(state(host).autoActivated, true, "power migration is the auto (plugged-in) rule")
+
+    -- "on" -> turn-on-at-launch (manual; not auto).
+    local host2 = h.makeHost { power = "Battery Power" }
+    host2.prefs.set("mac_awake_mode", "on")
+    local G2 = h.load(INIT, host2)
+    G2.on_launch(host2.json.encode { powerSource = "Battery Power" })
+    h.eq(state(host2).active, true, "mac_awake_mode=on migrates to turn-on-at-launch")
+    h.eq(state(host2).autoActivated, false, "on migration is manual (survives unplug)")
+
+    -- "restore" -> nothing automatic.
+    local host3 = h.makeHost { power = "AC Power" }
+    host3.prefs.set("mac_awake_mode", "restore")
+    local G3 = h.load(INIT, host3)
+    G3.on_launch(host3.json.encode { powerSource = "AC Power" })
+    h.eq(state(host3).active, false, "mac_awake_mode=restore does nothing automatic")
+end
+
+-- ── Plugged-in rule LOCKS the manual switch (shortcut off is refused) ─────────
+do
+    local host, env = h.makeHost { power = "AC Power" }      -- rule_on_ac defaults true
+    local G = h.load(INIT, host)
+    G.on_launch(host.json.encode { powerSource = "AC Power" })
+    h.eq(state(host).active, true, "auto-on at launch on AC")
+    h.eq(state(host).autoActivated, true, "rule owns the state")
+    G.openlid_toggle("")                                     -- try to turn off via shortcut
+    h.eq(state(host).active, true, "shortcut off refused while the plugged-in rule owns it")
+    assert(h.lastAlert(env):find("plugged in"), "refusal names the plugged-in rule")
+    -- A purely manual session (rule did not auto-activate) is NOT locked.
+    host.prefs.set("rule_on_ac", "false")
+    G.openlid_toggle("")                                     -- off (rule no longer owns)
+    h.eq(state(host).active, false, "off allowed once the plugged-in rule is disabled")
+end
+
+-- ── Turning the plugged-in rule off in Settings releases its auto session ─────
+do
+    local host, env = h.makeHost { power = "AC Power" }
+    local G = h.load(INIT, host)
+    G.on_launch(host.json.encode { powerSource = "AC Power" })
+    h.eq(state(host).active, true, "auto-on")
+    G.settings_action("openlid", "set:rule_on_ac", "false", "{}")
+    h.eq(state(host).active, false, "disabling the rule releases the auto-held session")
+    h.eq(host.prefs.get("rule_on_ac"), "false", "rule pref persisted")
+end
+
+-- ── Settings render builds the Status + Controls + rule sections (no crash) ────
+do
+    local host, env = h.makeHost { power = "AC Power" }
+    env.shellOut = " SleepDisabled\t\t1\n"                   -- real pmset state = held
+    local G = h.load(INIT, host)
+    G.openlid_toggle("")                                     -- manual on
+    local ui = G.settings_render("openlid", "{}")
+    h.eq(ui and ui.kind, "settings.ui", "settings_render builds a settings UI")
+    h.eq(ui.sections[1].id, "status", "Status is the first section")
+    -- Status reflects the REAL system state, not just our stored flag.
+    local awake = ui.sections[1].rows[1]
+    assert(awake.subtitle:find("On"), "Status shows Mac-awake ON when disablesleep is held")
+end
+
 print("ok openlid")

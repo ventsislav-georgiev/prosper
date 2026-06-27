@@ -265,10 +265,12 @@ final class DragSnapController {
     /// real drop frame for the hovered cell. The window lands on the PALETTE's screen
     /// (where the cells live), not under the cursor — so `currentScreen` tracks it.
     private func updatePaletteDrag(cur: CGPoint, screen: NSScreen?) {
-        // Not gated on moveConfirmed: the palette must appear the moment a window
-        // drag starts in this mode. The drop (endDrag) is still gated, so a drag
-        // that never moves the window (text selection) shows the strip but won't snap.
-        guard !dragLayouts.isEmpty else { return }
+        // Gated on moveConfirmed (the window's origin has actually moved) so a drag
+        // that never moves the window — e.g. selecting text in a terminal — doesn't
+        // pop the palette. Reliability comes from NOT aborting these modes (see the
+        // pre-confirm block): a real window drag keeps polling until it moves, then
+        // the strip appears the instant the window starts moving.
+        guard moveConfirmed, !dragLayouts.isEmpty else { return }
         if let screen {
             let disp = WindowManager.displayID(of: screen)
             if disp != paletteDisplay || !palette.isShowing {
@@ -331,9 +333,11 @@ final class DragSnapController {
         let changed = idx != currentZoneIdx
         currentZoneIdx = idx
 
-        // Not gated on moveConfirmed: the zone overlay must appear the moment a
-        // window drag starts. The drop (endDrag) stays gated, so an unconfirmed
-        // (non-window) drag shows the overlay but won't snap on release.
+        // Gated on moveConfirmed (the window actually moved) so selecting text or
+        // dragging a scrollbar doesn't pop the zone overlay. Reliability comes from
+        // NOT aborting these modes (see the pre-confirm block): a real window drag
+        // keeps polling until it moves, then the overlay appears immediately.
+        guard moveConfirmed else { return }
         guard let layout = dragLayout, !layout.zones.isEmpty else {
             layoutOverlay.hide(); layoutSig = nil; return
         }
