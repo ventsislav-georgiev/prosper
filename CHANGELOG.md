@@ -13,7 +13,12 @@ one draft as you work; each beta just reposts it. A beta whose base version has 
 draft section fails the build, so start the next `## vX.Y.Z` draft at the top before
 cutting its first beta.
 
-## v2.121.0
+The draft heading is tagged `## vX.Y.Z *(unreleased)*`. The tag is cosmetic — the
+pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so it
+never leaks into release notes. When you start the next version's draft, drop the
+tag from the now-released section and put it on the new top draft.
+
+## v2.121.0 *(unreleased)*
 
 ### Clipboard History
 - **Arrow keys no longer jump the cursor in the filter field while you navigate.**
@@ -61,6 +66,15 @@ cutting its first beta.
   heartbeats, and the smoking-gun "hold expired" line when the Mac re-sleeps because
   the app went away or the network dropped. The flag survives a helper restart and a
   dark wake, and adds zero cost when off.
+
+### Settings
+- **Toggling "Launch at login" no longer freezes the Settings window.** The toggle
+  ran macOS's login-item registration (`SMAppService.register`) synchronously on the
+  main thread — a slow system call that locked the UI for several seconds. The toggle
+  now flips instantly and the registration happens off the main thread.
+- **The accessibility "Reset & re-add" button no longer freezes Settings.** It spawned
+  `tccutil` and blocked waiting for it to finish on the main thread; the subprocess now
+  runs off-main and the UI stays responsive.
 
 ## v2.120.0
 
