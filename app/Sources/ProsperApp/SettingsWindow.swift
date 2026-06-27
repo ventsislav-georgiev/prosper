@@ -1959,6 +1959,9 @@ private struct AboutPane: View {
     // countdown; a stored Date keeps the schedule fixed across rebuilds.
     @State private var clock = Date()
     @StateObject private var supporters = SupportersLoader()
+    // @AppStorage so the toggle re-renders on change — a hand-rolled Binding reading
+    // UserDefaults.bool directly never invalidates the body, so the switch never flips.
+    @AppStorage(TraceLog.key) private var traceVerbose = false
 
     /// One predicate catches both processes (app logs "ProsperTrace(app)", daemon
     /// "ProsperTrace"). `--last 1h` since the wake events happen while away.
@@ -2075,13 +2078,11 @@ private struct AboutPane: View {
 
             NeonSection("Troubleshooting",
                         footer: "Logs the remote-wake and keep-awake decision path (app + privileged daemon) to the unified system log, to diagnose why a Mac won't wake or stay awake. Leave off for normal use.") {
-                Toggle("Verbose troubleshooting log", isOn: Binding(
-                    get: { UserDefaults.standard.bool(forKey: TraceLog.key) },
-                    set: { on in
-                        UserDefaults.standard.set(on, forKey: TraceLog.key)
+                Toggle("Verbose troubleshooting log", isOn: $traceVerbose)
+                    .onChange(of: traceVerbose) {
                         // Push the new flag to a running daemon (no-op if remote-wake off).
                         LiveExtensionHostServices.reapplyRemoteWakeForTrace()
-                    }))
+                    }
                 Text("Read the captured log (events persist across sleep — run after reproducing):")
                     .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 HStack(spacing: sz(8)) {
