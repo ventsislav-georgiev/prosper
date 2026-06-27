@@ -252,10 +252,21 @@ do
     G.openlid_toggle("")                                     -- try to turn off via shortcut
     h.eq(state(host).active, true, "shortcut off refused while the plugged-in rule owns it")
     assert(h.lastAlert(env):find("plugged in"), "refusal names the plugged-in rule")
-    -- A purely manual session (rule did not auto-activate) is NOT locked.
-    host.prefs.set("rule_on_ac", "false")
-    G.openlid_toggle("")                                     -- off (rule no longer owns)
-    h.eq(state(host).active, false, "off allowed once the plugged-in rule is disabled")
+    G.on_menu_off("")                                       -- menu "let sleep" also refused
+    h.eq(state(host).active, true, "menu off refused while the plugged-in rule owns it")
+    -- Unplug releases the auto flag (the only way it clears), so it's no longer locked.
+    env.power = "Battery Power"
+    G.on_battery(host.json.encode { powerSource = "Battery Power", percentage = 90 })
+    h.eq(state(host).active, false, "unplug releases the rule-held session")
+
+    -- A purely manual session (autoActivated false) is NOT locked — off works.
+    local host2 = h.makeHost { power = "AC Power" }
+    host2.prefs.set("rule_on_ac", "false")                  -- no auto rule
+    local G2 = h.load(INIT, host2)
+    G2.openlid_toggle("")                                    -- manual ON (not auto)
+    h.eq(state(host2).active, true, "manual on")
+    G2.openlid_toggle("")                                    -- manual OFF allowed
+    h.eq(state(host2).active, false, "manual session is not locked — off works")
 end
 
 -- ── Turning the plugged-in rule off in Settings releases its auto session ─────
