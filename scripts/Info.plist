@@ -50,6 +50,16 @@
 				<string>https</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Prosper Control</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>prosper</string>
+			</array>
+		</dict>
 	</array>
 	<key>NSHighResolutionCapable</key>
 	<true/>

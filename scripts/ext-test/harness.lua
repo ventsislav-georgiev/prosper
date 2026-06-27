@@ -292,6 +292,9 @@ function M.makeHost(opts)
             end,
             set_disable_lid_sleep = function(on) env.flags.lidDisabled = on end,
             lock_screen = function() env.flags.locked = true end,
+            set_remote_wake = function(t) env.flags.remoteWake = t and t.enabled or false end,
+            start_screensaver = function() env.flags.screensaver = true end,
+            sleep_now = function() env.flags.sleepNow = (env.flags.sleepNow or 0) + 1 end,
         },
         battery = {
             power_source = function() env.calls.battery = env.calls.battery + 1; return env.power end,

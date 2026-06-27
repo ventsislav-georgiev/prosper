@@ -292,6 +292,23 @@ do
     -- Status reflects the REAL system state, not just our stored flag.
     local awake = ui.sections[1].rows[1]
     h.eq(awake.value, "on", "Status shows Mac-awake ON when disablesleep is held")
+    -- Permissions is ALWAYS present (renderer floats it up + collapses when granted);
+    -- it must not appear/disappear on a toggle (that jumped the scroll position).
+    h.eq(ui.sections[2].id, "permissions", "Permissions section is always present")
+end
+
+-- ── "Sleep this Mac now" releases EVERY hold, even a remote-session one we can't
+--    reach through the normal off-switch, and asks the host to sleep ──────────────
+do
+    local host, env = h.makeHost { power = "AC Power" }
+    env.shellOut = " SleepDisabled\t\t1\n"
+    local G = h.load(INIT, host)
+    G.openlid_toggle("")                                     -- our own override on
+    h.eq(env.flags.lidDisabled, true, "lid override held before sleep-now")
+    G.settings_action("openlid", "sleep_now", "", "{}")
+    h.eq(env.flags.lidDisabled, false, "sleep-now releases our lid override")
+    h.eq(state(host).active, false, "sleep-now clears stored active state")
+    h.eq(env.flags.sleepNow, 1, "sleep-now asks the host to release remote holds + sleep")
 end
 
 print("ok openlid")

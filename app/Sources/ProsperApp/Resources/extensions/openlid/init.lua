@@ -196,9 +196,10 @@ local function mac_awake_status(st, real)
         if st.autoActivated then return "Kept awake while plugged in" end
         if st.endTime then return "On for " .. fmt_remaining(st.endTime) .. " \u{2014} turned on manually" end
         return "Turned on manually" end
-    if real then
-        if pref_bool("remote_wake", DEFAULTS.remote_wake) then return "Held by a remote session" end
-        return "Held by another app or a stale override" end
+    -- Held, but not by us: a live remote dch session (the DchSessionServer keep-awake
+    -- hold, refreshed while a session is active), or another app / a stale override.
+    -- OpenLid's own off-switch can't clear those — "Sleep this Mac now" (below) does.
+    if real then return "Held by a remote session or another app \u{2014} use \u{201C}Sleep this Mac now\u{201D} below" end
     return "Mac sleeps when the lid closes"
 end
 
@@ -588,10 +589,12 @@ function settings_render(section_id, state)
             s.row{ kind = "info", title = "\u{2615} Display awake (no screensaver)",
                    value = st.caffeine and "on" or "off",
                    subtitle = st.caffeine and caffeine_line(st) or "Display sleeps normally" },
+            -- STATIC subtitle: a per-state string changes its wrapped line count,
+            -- which shifts content height and bumps the scroll on every toggle. The
+            -- pill shows on/off; the wording stays put.
             s.row{ kind = "info", title = "\u{1F4E1} Remote wake",
                    value = c.remoteWake and "on" or "off",
-                   subtitle = c.remoteWake and "Armed \u{2014} dark-wakes on a timer to check for wake requests"
-                        or "This Mac can't be woken remotely" },
+                   subtitle = "Wake this Mac from another device while it sleeps" },
             s.row{ kind = "info", title = "Power",
                    subtitle = string.format("Battery %d%% \u{00B7} %s \u{00B7} External display: %s",
                         battery_pct(), on_ac and "on charger" or "on battery",
@@ -602,18 +605,16 @@ function settings_render(section_id, state)
     -- which Prosper does through a privileged background helper (no sudo). macOS
     -- asks you to approve it once in System Settings → Login Items. This permission
     -- row reports that grant live + offers an Open button — same pattern as the
-    -- Accessibility/Input-Monitoring rows. Only shown when the lid-closed feature
-    -- is actually engaged (on now, or armed by a rule), so it's silent otherwise.
-    local permissions = nil
-    if st.active or c.ruleOnAc or c.ruleAtLaunch or c.remoteWake then
-        permissions = s.section{
-            id = "permissions", title = "Permissions",
-            rows = { s.row{
-                kind = "permission", name = "lid-helper",
-                title = "Background helper (keep awake with lid closed)",
-            } },
-        }
-    end
+    -- Accessibility/Input-Monitoring rows. ALWAYS shown (the renderer floats it to
+    -- the top and collapses it once granted): a conditional gate made the whole
+    -- section appear/disappear when a feature toggled, jumping the scroll position.
+    local permissions = s.section{
+        id = "permissions", title = "Permissions",
+        rows = { s.row{
+            kind = "permission", name = "lid-helper",
+            title = "Background helper (keep awake with lid closed)",
+        } },
+    }
     -- ── CONTROLS — the manual on/off switches. When the plugged-in rule owns the
     -- state, the Mac-awake switch becomes a locked info row (turning it off would
     -- just fight the rule), naming exactly how to release it. ──────────────────
@@ -636,6 +637,10 @@ function settings_render(section_id, state)
             s.row{ kind = "toggle", key = "caffeine_now", title = "Display awake (no screensaver)",
                    subtitle = "Keep the screen + screensaver off while the lid is open",
                    value = b2s(st.caffeine) },
+            -- The hard off-switch: releases EVERY keep-awake hold (incl. a remote
+            -- dch-session hold that the toggles above can't reach) and sleeps now.
+            s.row{ kind = "button", key = "sleep_now", title = "Sleep this Mac now",
+                   subtitle = "Release every keep-awake hold (incl. remote sessions) and sleep immediately" },
         },
     }
     -- ── AUTOMATIC — two independent rules, each its own checkbox (replaces the
@@ -753,7 +758,7 @@ function settings_render(section_id, state)
     }
     local sections = {}
     sections[#sections + 1] = status
-    if permissions then sections[#sections + 1] = permissions end
+    sections[#sections + 1] = permissions
     sections[#sections + 1] = controls
     sections[#sections + 1] = general
     sections[#sections + 1] = safeguards
@@ -766,6 +771,15 @@ function settings_render(section_id, state)
 end
 
 function settings_action(section_id, action, value, form_json)
+    if action == "sleep_now" then
+        -- Clear OUR holds (state + lid override + display) so the UI reflects off,
+        -- then hand off to the host to drop the remote-session hold and sleep — the
+        -- host orders the daemon releases before the sleep on the shared apply chain.
+        deactivate("sleep now")
+        if load_state().caffeine then caffeine_off("sleep now") end
+        host.caffeinate.sleep_now()
+        return render(load_state())
+    end
     local key = action:match("^set:(.+)$")
     if key == "lid_now" then
         if value == "true" then activate(nil, false) else deactivate("manual") end

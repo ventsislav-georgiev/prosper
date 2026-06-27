@@ -199,7 +199,8 @@ final class DragSnapController {
             guard (dx * dx + dy * dy) >= Self.dragThreshold * Self.dragThreshold else { return }
             // A drag is starting — decide once whether it's eligible to snap.
             guard Preferences.dragSnapModifier.isSatisfied(by: ev.modifierFlags) else { aborted = true; return }
-            guard let (el, pid) = WindowManager.windowUnderCursor(), pid != getpid() else { aborted = true; return }
+            guard let hit = WindowManager.draggableWindowUnderCursor(), hit.pid != getpid() else { aborted = true; return }
+            let el = hit.element, pid = hit.pid
             if let bid = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
                Preferences.dragSnapIgnoredBundleIds.contains(bid) { aborted = true; return }
             dragMode = Preferences.snapMode
@@ -222,8 +223,8 @@ final class DragSnapController {
             if willResize, !WindowManager.isResizable(el) { aborted = true; return }
             dragging = true
             win = el
+            winID = hit.windowID
             winInitialOrigin = WindowManager.axFrame(el)?.origin
-            winID = WindowManager.windowID(el)
             winInitialServerOrigin = winID.flatMap { WindowManager.serverFrame(of: $0)?.origin }
         }
 

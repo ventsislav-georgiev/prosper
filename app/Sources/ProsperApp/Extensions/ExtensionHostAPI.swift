@@ -164,6 +164,9 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func networkAddressesJSON() -> String
     func caffeinateLockScreen()
     func caffeinateStartScreensaver()
+    /// Release every Prosper keep-awake hold (lid override + remote-session hold) and
+    /// put the Mac to sleep now. The off-switch for a stuck "held by remote session".
+    func caffeinateSleepNow()
     // Battery (read-only, open). powerSource() = "AC Power"|"Battery Power"|"".
     func batteryPowerSource() -> String
     func batteryPercentage() -> Int          // -1 when no battery
@@ -249,6 +252,7 @@ extension ExtensionHostServices {
     func caffeinateSetRemoteWake(extensionID: String, enabled: Bool, deviceID: String, intervalAC: Double, intervalBatt: Double, batteryFloor: Int) async {}
     func caffeinateLockScreen() {}
     func caffeinateStartScreensaver() {}
+    func caffeinateSleepNow() {}
     func batteryPowerSource() -> String { "" }
     func batteryPercentage() -> Int { -1 }
     func networkIsReachable() -> Bool { true }
@@ -716,8 +720,9 @@ struct ExtensionHost {
             }
             lua.register("__h_caf_lock") { _ in services.caffeinateLockScreen(); return 0 }
             lua.register("__h_caf_screensaver") { _ in services.caffeinateStartScreensaver(); return 0 }
+            lua.register("__h_caf_sleepnow") { _ in services.caffeinateSleepNow(); return 0 }
         } else {
-            for name in ["__h_caf_idle", "__h_caf_lidsleep", "__h_caf_remotewake", "__h_caf_lock", "__h_caf_screensaver"] {
+            for name in ["__h_caf_idle", "__h_caf_lidsleep", "__h_caf_remotewake", "__h_caf_lock", "__h_caf_screensaver", "__h_caf_sleepnow"] {
                 lua.register(name) { _ in 0 }
             }
         }
@@ -1182,6 +1187,7 @@ struct ExtensionHost {
     local raw_caf_remotewake  = __h_caf_remotewake
     local raw_caf_lock        = __h_caf_lock
     local raw_caf_screensaver = __h_caf_screensaver
+    local raw_caf_sleepnow    = __h_caf_sleepnow
     host.caffeinate = {
         -- prevent_idle_sleep(kind, on): kind = "display" | "system".
         prevent_idle_sleep    = function(kind, on) raw_caf_idle(kind or "display", on and true or false) end,
@@ -1197,8 +1203,10 @@ struct ExtensionHost {
         end,
         lock_screen           = function() raw_caf_lock() end,
         start_screensaver     = function() raw_caf_screensaver() end,
+        -- sleep_now(): release every keep-awake hold and sleep the Mac immediately.
+        sleep_now             = function() raw_caf_sleepnow() end,
     }
-    __h_caf_idle = nil; __h_caf_lidsleep = nil; __h_caf_remotewake = nil; __h_caf_lock = nil; __h_caf_screensaver = nil
+    __h_caf_idle = nil; __h_caf_lidsleep = nil; __h_caf_remotewake = nil; __h_caf_lock = nil; __h_caf_screensaver = nil; __h_caf_sleepnow = nil
 
     local raw_bat_source = __h_battery_source
     local raw_bat_pct    = __h_battery_pct
