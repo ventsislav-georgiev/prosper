@@ -631,7 +631,8 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         guard cfg.enabled else { return }
         cfg.trace = TraceLog.on
         UserDefaults.standard.set(cfg.jsonString(), forKey: lastWakeConfigKey)
-        LidSleepHelper.enqueueApply { _ = await LidSleepHelper.setRemoteWake(cfg) }
+        let frozen = cfg  // immutable capture — the async apply closure can't take a `var`
+        LidSleepHelper.enqueueApply { _ = await LidSleepHelper.setRemoteWake(frozen) }
     }
 
     /// The wake id (`<acctTag>-<devTag>`) this Mac polls, or nil if remote-wake was
