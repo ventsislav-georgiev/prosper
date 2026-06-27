@@ -300,27 +300,39 @@ jobs:
           echo "Final appcast:"; cat dist/appcast.xml
 
       - name: Compose release notes from CHANGELOG
-        # Pull the section for this version out of CHANGELOG.md (heading `## vX.Y.Z`,
-        # up to the next `## `) and use it as the Release body. The auto-generated
-        # commit list is appended below it by generate_release_notes. If CHANGELOG.md
-        # has no matching section the file is left empty → notes fall back to the
-        # auto-generated list alone, so a missing entry never blocks a release.
+        # CHANGELOG.md only ever carries the BASE version heading (`## vX.Y.Z`) — the
+        # one draft for the next version. Beta tags (`vX.Y.Z-beta.N`) are never written
+        # into the changelog; we strip the pre-release suffix and read that same draft.
+        # So every beta of vX.Y.Z and its eventual stable promotion publish identical
+        # notes from one source. The section runs to the next `## `, and the
+        # auto-generated commit list is appended below it by generate_release_notes.
+        #
+        # Policy: a beta REQUIRES its base draft to exist — cutting a beta for a new
+        # unreleased version forces you to start that version's draft first (the build
+        # fails otherwise). A stable promotion only warns, so an emergency stable is
+        # never blocked by a missing entry.
         id: notes
         env:
           VERSION: ${{ steps.ver.outputs.version }}
+          IS_PRERELEASE: ${{ steps.ver.outputs.is_prerelease }}
         run: |
           NOTES="$RUNNER_TEMP/notes.md"
           : > "$NOTES"
+          # Base version = tag with any "-beta.N"/pre-release suffix stripped.
+          BASE="${VERSION%%-*}"
           if [[ -f CHANGELOG.md ]]; then
-            awk -v ver="$VERSION" '
+            awk -v ver="$BASE" '
               /^## / { if (cap) exit; if (index($0, "v" ver) > 0) { cap=1; next } }
               cap { print }
             ' CHANGELOG.md | sed -e '/./,$!d' > "$NOTES"
           fi
           if [[ -s "$NOTES" ]]; then
-            echo "Using CHANGELOG.md section for v${VERSION}:"; cat "$NOTES"
+            echo "Using CHANGELOG.md draft section for v${BASE} (tag v${VERSION}):"; cat "$NOTES"
+          elif [[ "${IS_PRERELEASE}" == "true" ]]; then
+            echo "::error::No CHANGELOG.md '## v${BASE}' draft section. Start the next version's draft in CHANGELOG.md before cutting a beta."
+            exit 1
           else
-            echo "::warning::No CHANGELOG.md section for v${VERSION} — using auto-generated notes only."
+            echo "::warning::No CHANGELOG.md section for v${BASE} — using auto-generated notes only."
           fi
           echo "file=$NOTES" >> "$GITHUB_OUTPUT"
 
