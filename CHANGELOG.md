@@ -87,6 +87,9 @@ tag from the now-released section and put it on the new top draft.
   real move-only placement. Reminder: a layout that only moves and never resizes has
   **Move only** enabled in the layout editor — uncheck it to resize windows into the
   zone.
+- **Higher-contrast layout palette.** The palette strip's backdrop is more opaque and
+  the gaps and outlines between panes are now black, so each drop target reads clearly
+  against the accent-highlighted cells (the strip stays translucent over your desktop).
 
 ### Troubleshooting
 - **New verbose trace mode (Settings → About → Troubleshooting), off by default.**

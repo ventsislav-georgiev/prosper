@@ -50,7 +50,10 @@ final class LayoutPaletteWindow {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .modalPanel
+        // One above the footprint/overlay (both .modalPanel): the drop preview can
+        // cover the whole visible frame (e.g. a maximize zone), which would otherwise
+        // hide the palette strip the user is aiming at. Keep the palette on top.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.modalPanel.rawValue + 1)
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
@@ -60,7 +63,7 @@ final class LayoutPaletteWindow {
         container.wantsLayer = true
         background.wantsLayer = true
         background.layer?.cornerRadius = 14
-        background.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        background.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.82).cgColor
         container.addSubview(background)
         label.font = .systemFont(ofSize: 11, weight: .medium)
         label.textColor = .white
@@ -162,9 +165,11 @@ final class LayoutPaletteWindow {
             let thumb = NSView(frame: NSRect(x: tx, y: ty, width: t.width, height: t.height))
             thumb.wantsLayer = true
             thumb.layer?.cornerRadius = Self.corner
-            thumb.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
+            // Black fill shows through the inter-cell gaps as crisp black outlining;
+            // black border frames each thumbnail against its neighbours.
+            thumb.layer?.backgroundColor = NSColor.black.cgColor
             thumb.layer?.borderWidth = 1
-            thumb.layer?.borderColor = NSColor.white.withAlphaComponent(0.15).cgColor
+            thumb.layer?.borderColor = NSColor.black.cgColor
             container.addSubview(thumb)
 
             let inner = thumb.frame.insetBy(dx: Self.thumbInset, dy: Self.thumbInset)
