@@ -36,6 +36,7 @@ public struct StatsSnapshot: Sendable {
     public var gpu: GPUSample?
     public var power: PowerSample?
     public var temperatures: [TempSensor]?
+    public var powerSensors: [VISensor]?
     public var battery: BatterySample?
     public var topByCPU: [ProcInfo]?
     public var topByMemory: [ProcInfo]?
@@ -77,6 +78,7 @@ public final class StatsPoller {
     private var gpu: GPUReader?
     private var power: IOReportKit?
     private var sensors: IOHIDSensors?
+    private var powerSensors: PowerSensorReader?
     private var battery: BatteryReader?
     private var procs: ProcSampler?
 
@@ -121,7 +123,7 @@ public final class StatsPoller {
         if enabled.contains(.network) { network = NetworkReader() }
         if enabled.contains(.gpu) { gpu = GPUReader() }
         if enabled.contains(.power) { power = IOReportKit() }
-        if enabled.contains(.sensors) { sensors = IOHIDSensors() }
+        if enabled.contains(.sensors) { sensors = IOHIDSensors(); powerSensors = PowerSensorReader() }
         if enabled.contains(.battery) { battery = BatteryReader() }
     }
 
@@ -148,6 +150,9 @@ public final class StatsPoller {
         }
         if slow, let temps = sensors?.read() {
             latest.temperatures = temps
+        }
+        if slow, let vi = powerSensors?.read(), !vi.isEmpty {
+            latest.powerSensors = vi
         }
         if batt, battery != nil, let b = try? battery!.read() {
             latest.battery = b
