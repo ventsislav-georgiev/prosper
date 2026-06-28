@@ -615,6 +615,19 @@ struct StatsPopupView: View {
     /// AWAIT the daemon. Only flip the UI to "manual" if the privileged write actually
     /// engaged — otherwise the popover lied (helper not installed/approved). The first
     /// `setManual` is what triggers helper registration + the macOS approval prompt.
+    /// Run an engage with a hard wall-clock ceiling. If it exceeds `seconds` (e.g. a
+    /// wedged SMAppService registration), return false so the UI resolves; the orphaned
+    /// work harmlessly completes later (the daemon resets fans on its own cold start).
+    private func withFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> Bool) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await op() }
+            group.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); return false }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+    }
+
     private func confirmManualAll() {
         pendingManual = false
         fanError = nil
@@ -631,7 +644,15 @@ struct StatsPopupView: View {
             // If it fails, the helper isn't available — bail now rather than repeat the
             // same long wait per fan. On success the connection + unlock are live, so the
             // remaining fans commit instantly at the default ceiling.
-            let ok = await FanControlHelper.setManual(first.key, rpm: first.value, timeout: 35)
+            // Overall wall-clock watchdog. setManual's own ceiling only bounds the XPC
+            // call; the registration/approval step before it (SMAppService smd IPC,
+            // plus a drift re-register after a Sparkle update) is unbounded and can
+            // hang there — which is exactly a stuck "Enabling…" with no daemon log,
+            // since the call never reaches the daemon. Race the whole engage so the
+            // button always resolves and surfaces the actionable error.
+            let ok = await withFanTimeout(45) {
+                await FanControlHelper.setManual(first.key, rpm: first.value, timeout: 35)
+            }
             guard ok else {
                 fanBusy = false
                 fanError = "Couldn’t enable manual control — the Prosper helper isn’t "
