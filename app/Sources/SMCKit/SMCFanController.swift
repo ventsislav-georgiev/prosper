@@ -124,7 +124,11 @@ public final class SMCFanController {
         // nothing supervising it. Hand it back to the OS before rethrowing so a failed
         // setManual can NEVER leave a fan wedged at an unsafe speed.
         do {
-            try unlock(i)
+            // Skip the unlock dance if the fan is already manual — re-running it on
+            // every slider commit re-triggers the 3 s thermalmonitord yield and makes
+            // the control feel dead. (Matches Stats' setFanSpeed: unlock only when the
+            // mode key isn't already 1.)
+            if (smc.read(modeKey(i))?.double ?? 0) != 1 { try unlock(i) }
             try writeTarget(i, rpm: safe)
         } catch {
             try? setAuto(i)
@@ -173,32 +177,47 @@ public final class SMCFanController {
 
     private func unlock(_ i: Int) throws {
         let key = modeKey(i)
-        if !hasFtst() {
-            // M5+ direct mode write.
-            try retry(times: 50) { try self.guardedWrite(key, [UInt8(FanMode.manual.rawValue)]) }
+        let manual = [UInt8(FanMode.manual.rawValue)]
+        // Try the DIRECT mode write first — succeeds on M5+ (no Ftst) and on any board
+        // whose firmware accepts it without the thermal-daemon handoff. Stats does this
+        // first and only falls back to the Ftst dance when the direct write is rejected;
+        // a rigid hasFtst() branch took the wrong path on some M-series chassis.
+        if (try? guardedWrite(key, manual)) != nil { return }
+
+        guard hasFtst() else {
+            // No Ftst and the direct write was rejected — last resort, retry it spaced.
+            try retry(times: 50, delayMicros: 100_000) { try self.guardedWrite(key, manual) }
             return
         }
-        // M1–M4: Ftst=1, let thermalmonitord yield, then hammer the mode key.
+        // M1–M4 layered unlock: Ftst=1, let thermalmonitord yield, then hammer the mode
+        // key with SPACED retries — the firmware rejects transiently for up to several
+        // seconds after Ftst=1, so the attempts must be spread over time, not burned in
+        // a tight loop (the old no-delay retry threw within ~1 ms → fan never engaged).
         if (smc.read("Ftst")?.double ?? 0) != 1 {
-            try retry(times: 100) { try self.guardedWrite("Ftst", [1]) }
+            try retry(times: 100, delayMicros: 50_000) { try self.guardedWrite("Ftst", [1]) }
             usleep(3_000_000)   // 3s — thermalmonitord must relinquish before mode sticks
         }
-        try retry(times: 300) { try self.guardedWrite(key, [UInt8(FanMode.manual.rawValue)]) }
+        try retry(times: 300, delayMicros: 100_000) { try self.guardedWrite(key, manual) }
     }
 
     private func writeTarget(_ i: Int, rpm: Double) throws {
-        let bytes = hasFtst()
-            ? SMCDecode.encodeFloatLE(Float(rpm))   // AS: `flt `
-            : SMCDecode.encodeFPE2(Int(rpm))        // Intel: `fpe2`
-        try retry(times: 100) { try self.guardedWrite("F\(i)Tg", bytes) }
+        // Encode to the key's ACTUAL type (read it), not a hasFtst() guess: AS reports
+        // `flt ` (LE Float32), Intel `fpe2`. Matches Stats reading value.dataType.
+        let type = smc.read("F\(i)Tg")?.type ?? (hasFtst() ? "flt " : "fpe2")
+        let bytes = type == "fpe2" ? SMCDecode.encodeFPE2(Int(rpm))
+                                   : SMCDecode.encodeFloatLE(Float(rpm))
+        try retry(times: 100, delayMicros: 50_000) { try self.guardedWrite("F\(i)Tg", bytes) }
     }
 
-    /// Bounded retry — AS firmware rejects writes transiently while the thermal
-    /// daemon yields; never an infinite loop.
-    private func retry(times: Int, _ op: () throws -> Void) throws {
+    /// Bounded retry with a delay BETWEEN attempts — AS firmware rejects writes
+    /// transiently while the thermal daemon yields, and it can take seconds; the
+    /// attempts must be spaced (Stats uses 50–100 ms) not burned instantly. Never loops
+    /// forever. ponytail: fixed spacing; per-board backoff only if a chassis needs it.
+    private func retry(times: Int, delayMicros: UInt32 = 50_000, _ op: () throws -> Void) throws {
         var last: Error?
-        for _ in 0..<times {
+        for n in 0..<times {
             do { try op(); return } catch { last = error }
+            if n < times - 1 { usleep(delayMicros) }
         }
         throw last ?? SMCError.firmwareReject(0xff)
     }

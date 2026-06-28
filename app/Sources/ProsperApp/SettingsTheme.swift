@@ -155,14 +155,19 @@ struct SettingsBackground: View {
 
 private struct NeonCardModifier: ViewModifier {
     func body(content: Content) -> some View {
+        // The drop shadow rides on the fill SHAPE, not on `content`. Shadowing
+        // `content` forces SwiftUI to rasterize the whole card — text glyphs and
+        // all — to an offscreen buffer every dirty frame, which is what made long
+        // panes stutter on scroll. Shadowing just the rounded rect is visually
+        // identical (it's the card's drop shadow) but skips the text rasterization.
         content
             .background(
                 RoundedRectangle(cornerRadius: sz(14), style: .continuous)
-                    .fill(Neon.card))
+                    .fill(Neon.card)
+                    .shadow(color: Neon.blue.opacity(0.10), radius: sz(14), x: 0, y: sz(6)))
             .overlay(
                 RoundedRectangle(cornerRadius: sz(14), style: .continuous)
                     .strokeBorder(Neon.cardStroke, lineWidth: 1))
-            .shadow(color: Neon.blue.opacity(0.10), radius: sz(14), x: 0, y: sz(6))
     }
 }
 
@@ -277,7 +282,9 @@ struct NeonScroll<Content: View>: View {
             .padding(.vertical, sz(24))
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(SettingsBackground())
+        // The backdrop is painted once by `content` in SettingsRootView (behind the
+        // whole pane). Painting it here too double-rendered the gradient + two radial
+        // glows on every pane switch — drop it; the ScrollView is transparent over it.
         .tint(Neon.blue)
         .foregroundStyle(Neon.textPrimary)
     }

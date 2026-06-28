@@ -503,6 +503,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// bar to provide them. Idempotent — safe to call once on launch.
     private func installEditMenu() {
         let mainMenu = NSMenu()
+
+        // First menu = the application menu. macOS bolds it and titles it with the
+        // process name ("Prosper"), so when a window is key the user gets the same
+        // About / Settings / Updates / Restart / Quit actions as the status-bar menu
+        // instead of the bare auto-generated Edit menu. Items target `self` (the app
+        // delegate is in the responder chain); Quit/About use the standard selectors.
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu(title: "Prosper")
+        appItem.submenu = appMenu
+        appMenu.addItem(withTitle: "About Prosper",
+                        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                        keyEquivalent: "")
+        appMenu.addItem(.separator())
+        let settings = appMenu.addItem(withTitle: "Settings\u{2026}",
+                                       action: #selector(openSettingsFromMenu),
+                                       keyEquivalent: ",")
+        settings.target = self
+        appMenu.addItem(withTitle: "Check for Updates\u{2026}",
+                        action: #selector(checkForUpdatesFromMenu),
+                        keyEquivalent: "").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Restart",
+                        action: #selector(restartFromMenu),
+                        keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Quit Prosper",
+                        action: #selector(NSApplication.terminate(_:)),
+                        keyEquivalent: "q")
+
         let editItem = NSMenuItem()
         mainMenu.addItem(editItem)
 
@@ -520,6 +549,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = mainMenu
     }
+
+    // App-menu actions (see installEditMenu). Thin wrappers so the menu items
+    // reach the same code paths as the status-bar menu / hotkeys.
+    @objc private func openSettingsFromMenu() { openSettings() }
+    @objc private func checkForUpdatesFromMenu() { AppUpdater.shared.checkForUpdates() }
+    @objc private func restartFromMenu() { AppDelegate.relaunch() }
 
     /// (Re)registers all global hotkeys from the rebindable `ShortcutStore`.
     /// Every trigger — the command-runner triggers (⌘Space, ⌥Space, plus a spare
