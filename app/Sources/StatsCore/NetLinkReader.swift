@@ -1,11 +1,13 @@
 // Link identity that the throughput reader doesn't carry: hardware (MAC) address,
 // Wi-Fi signal strength, and the public IP + country.
 //
-// MAC and RSSI are cheap local lookups (getifaddrs / CoreWLAN). The public IP is
-// a network round-trip, so it's fetched asynchronously at most every 5 minutes
-// and served from cache — read() never blocks. The public-IP fetch is an outbound
-// request to a third party (api.country.is); it only runs while a Network popup is
-// driving reads, never in the background with the app idle.
+// MAC (getifaddrs) and RSSI (CoreWLAN) are local lookups, but CoreWLAN's RSSI can
+// block on IPC to airportd for tens of ms — too long for the shared serial poll
+// queue, where it would stall every other module's tick. So the whole read runs on
+// a private queue, coalesced, and the poller reads a cached value (one tick of lag,
+// never a stall). The public IP is a third-party round-trip (api.country.is), fetched
+// at most every 5 minutes and only while a Network popup is driving refreshes — never
+// in the background with the app idle.
 
 import Foundation
 import Darwin
@@ -24,7 +26,10 @@ public struct NetLinkInfo: Sendable, Equatable {
 
 public final class NetLinkReader {
     private let wifi = CWWiFiClient.shared()
+    private let queue = DispatchQueue(label: "com.prosper.stats.netlink", qos: .utility)
     private let lock = NSLock()
+    private var cached = NetLinkInfo(macAddress: nil, rssi: nil, publicIP: nil, countryCode: nil)
+    private var refreshing = false
     private var publicIP: String?
     private var country: String?
     private var lastFetch: Double = 0
@@ -32,15 +37,29 @@ public final class NetLinkReader {
 
     public init() {}
 
-    public func read(interface: String?) -> NetLinkInfo {
-        maybeFetchPublicIP()
-        let mac = interface.flatMap { Self.mac(for: $0) }
-        var rssi: Int?
-        if let interface, let i = wifi.interface(withName: interface), i.ssid() != nil {
-            let v = i.rssiValue()
-            rssi = v == 0 ? nil : v
+    /// Last computed link info — non-blocking, safe on the poll queue.
+    public func latest() -> NetLinkInfo { lock.withLock { cached } }
+
+    /// Recompute MAC + RSSI on a private queue (coalesced) and kick the public-IP
+    /// fetch. Returns immediately; the result lands in `latest()` a tick later.
+    public func refresh(interface: String?) {
+        let go: Bool = lock.withLock { if refreshing { return false }; refreshing = true; return true }
+        guard go else { return }
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.maybeFetchPublicIP()
+            let mac = interface.flatMap { Self.mac(for: $0) }
+            var rssi: Int?
+            if let interface, let i = self.wifi.interface(withName: interface), i.ssid() != nil {
+                let v = i.rssiValue()
+                rssi = v == 0 ? nil : v
+            }
+            self.lock.withLock {
+                self.cached = NetLinkInfo(macAddress: mac, rssi: rssi,
+                                          publicIP: self.publicIP, countryCode: self.country)
+                self.refreshing = false
+            }
         }
-        return lock.withLock { NetLinkInfo(macAddress: mac, rssi: rssi, publicIP: publicIP, countryCode: country) }
     }
 
     private func maybeFetchPublicIP() {
@@ -54,7 +73,11 @@ public final class NetLinkReader {
             if go { lock.withLock { fetching = false } }
             return
         }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+        // Short timeout so a captive portal / slow endpoint can't pin `fetching` for
+        // URLSession's default 60 s.
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 5
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             guard let self else { return }
             defer { self.lock.withLock { self.fetching = false } }
             guard let data,

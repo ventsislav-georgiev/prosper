@@ -160,7 +160,10 @@ public final class StatsPoller {
             push("net.up", s.uploadBytesPerSec); push("net.down", s.downloadBytesPerSec)
             latest.netLatency = ping?.latest()
             if let c = ping?.connectivity() { latest.connectivity = c }
-            if slow { latest.netLink = netLink?.read(interface: s.interfaceName) }
+            // netLink recomputes off-queue (CoreWLAN RSSI can block ~tens of ms) and
+            // we read its cache here — never blocks this serial tick.
+            if slow { netLink?.refresh(interface: s.interfaceName) }
+            latest.netLink = netLink?.latest()
         }
         if gpu != nil, let s = try? gpu!.read() {
             latest.gpu = s; push("gpu", s.utilization)

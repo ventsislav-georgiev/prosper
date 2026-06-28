@@ -55,10 +55,22 @@ public final class NetProcessReader {
         p.standardOutput = pipe
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return [] }
+
+        // Watchdog: nettop blocks ~1 s by design, but a wedged interface can hang it.
+        // Kill it after 4 s so a stuck process can't freeze refresh() forever (running
+        // would stay true and coalesce every future refresh into a no-op).
+        let watchdog = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 4, execute: watchdog)
+
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
+        watchdog.cancel()
         guard let text = String(data: data, encoding: .utf8) else { return [] }
+        return parse(text, limit: limit)
+    }
 
+    /// Parse nettop delta output into per-process rates. Pure (no I/O) for testing.
+    static func parse(_ text: String, limit: Int) -> [NetProcInfo] {
         // Two sample blocks, each preceded by a header line containing "bytes_in".
         // Rows after the LAST header are the delta block (bytes over the interval).
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
@@ -68,11 +80,15 @@ public final class NetProcessReader {
         for line in lines[(lastHeader + 1)...] {
             let cols = line.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
             guard cols.count >= 3 else { continue }
-            // First column is "name.pid"; the process name itself may contain dots.
+            // First column is "name.pid"; the process name itself may contain dots, so
+            // split on the LAST dot and require a plausible pid (rejects rows whose
+            // trailing segment isn't a real pid, e.g. an indented flow sub-row).
             let nameCol = cols[0]
             guard let dot = nameCol.lastIndex(of: "."),
-                  let pid = Int32(nameCol[nameCol.index(after: dot)...]) else { continue }
+                  let pid = Int32(nameCol[nameCol.index(after: dot)...]),
+                  pid > 0, pid < 4_194_304 else { continue }   // macOS PID_MAX = 99999, headroom kept
             let name = String(nameCol[..<dot])
+            guard !name.isEmpty else { continue }
             let down = Double(cols[1]) ?? 0
             let up = Double(cols[2]) ?? 0
             guard down > 0 || up > 0 else { continue }
