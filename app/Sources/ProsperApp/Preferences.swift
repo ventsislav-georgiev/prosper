@@ -146,6 +146,7 @@ enum Preferences {
         static let dragSnapEdgeMargin = "dragSnapEdgeMargin"
         static let dragSnapCornerSize = "dragSnapCornerSize"
         static let dragSnapIgnoredBundleIds = "dragSnapIgnoredBundleIds"
+        static let runnerPlacement = "runnerPlacement"
         static let snapMode = "snapMode"
         static let layoutGap = "layoutGap"
         static let layoutStoreJSON = "layoutStoreJSON"
@@ -419,6 +420,13 @@ enum Preferences {
     static var uiFrost: Bool {
         get { defaults.bool(forKey: Keys.uiFrost) }
         set { defaults.set(newValue, forKey: Keys.uiFrost) }
+    }
+
+    /// Which screen the command runner and Clipboard History open on. Default
+    /// `.cursorScreen` (follow the pointer, like Raycast/Ditto).
+    static var runnerPlacement: RunnerPlacement {
+        get { RunnerPlacement(rawValue: defaults.string(forKey: Keys.runnerPlacement) ?? "") ?? .cursorScreen }
+        set { defaults.set(newValue.rawValue, forKey: Keys.runnerPlacement) }
     }
 
     /// Optional modifier required during a drag before it will snap. Default `.none`.
