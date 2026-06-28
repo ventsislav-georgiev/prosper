@@ -135,13 +135,24 @@ final class MenuBarManager: NSObject {
         let item = NSStatusBar.system.statusItem(withLength: Lengths.standard)
         item.autosaveName = "ProsperMenuBarChevron"
         if let button = item.button {
-            let glyph = Preferences.menuBarStore.chevronStyle.collapsedSymbol
-            button.image = NSImage(systemSymbolName: glyph, accessibilityDescription: "Menu Bar")
-            button.image?.isTemplate = true
+            button.image = Self.chevronImage(Preferences.menuBarStore.chevronStyle.collapsedSymbol)
             button.target = self
             button.action = #selector(chevronClicked)
         }
         return item
+    }
+
+    /// Build the divider glyph at standard menu-bar icon metrics. A bare
+    /// `NSImage(systemSymbolName:)` renders at the default text point size, so the
+    /// `ellipsis`/chevron glyphs sit small and airy inside the item box and read as
+    /// extra padding next to neighbouring icons. Pin the point size so the chevron
+    /// matches the rest of the bar.
+    private static func chevronImage(_ symbol: String) -> NSImage? {
+        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "Menu Bar")?
+            .withSymbolConfiguration(cfg)
+        img?.isTemplate = true
+        return img
     }
 
     /// An empty, near-invisible expander. Shows a faint hairline boundary while
@@ -240,8 +251,7 @@ final class MenuBarManager: NSObject {
         let style = Preferences.menuBarStore.chevronStyle
         guard let button = chevron?.button else { return }
         let symbol = revealed ? style.revealedSymbol : style.collapsedSymbol
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Menu Bar")
-        button.image?.isTemplate = true
+        button.image = Self.chevronImage(symbol)
     }
 
     /// Re-skin the chevron after a chevron-style change (cheap: one image swap,
