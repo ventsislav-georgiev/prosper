@@ -71,6 +71,7 @@ public enum SMCError: Error, Equatable {
     case notOpen
     case ioReturn(kern_return_t)
     case firmwareReject(UInt8)        // output.result != 0
+    case writeReject(String, UInt8)   // a WRITE to a named key was rejected (result != 0)
     case keyNotFound(String)
     case writeNotAllowed(String)      // key not in whitelist
     case clampUnsafe(String)          // bounds unreadable/degenerate — fail closed
