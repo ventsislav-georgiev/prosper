@@ -277,6 +277,7 @@ struct StatsPopupView: View {
             if !g.renderUtil.isNaN { kv("Renderer", StatsFormat.percent(g.renderUtil)) }
             if !g.tilerUtil.isNaN { kv("Tiler", StatsFormat.percent(g.tilerUtil)) }
             if g.usedMemory > 0 { kv("VRAM in use", StatsFormat.bytes(Double(g.usedMemory))) }
+            if g.coreCount > 0 { kv("GPU cores", "\(g.coreCount)") }
         }
     }
 
