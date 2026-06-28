@@ -12,23 +12,50 @@ enum MenuBarSection: String, Codable, CaseIterable, Sendable {
     case alwaysHidden   // left of the always-hidden divider — shown only via the always-hidden reveal
 }
 
-/// Stable identity for a menu-bar item. Window titles are unreliable (off-space
-/// items report `""`), so identity keys on the owning app's bundle id. Items from
-/// the same app are disambiguated by their left→right slot within that app.
-struct MenuBarItemInfo: Codable, Equatable, Hashable, Sendable {
-    var bundleID: String
-    var slot: Int   // 0-based index among this app's items, left→right
+/// The glyph drawn on the divider `NSStatusItem`s (the user-visible "chevron").
+/// Each style is an SF Symbol pair: the collapsed symbol shows when the hidden
+/// section is tucked away, the revealed symbol when it's open. Purely cosmetic —
+/// nonisolated so the (nonisolated) store can hold it.
+enum ChevronStyle: String, Codable, CaseIterable, Sendable {
+    case chevrons, chevron, arrow, ellipsis, circle
 
-    init(bundleID: String, slot: Int = 0) {
-        self.bundleID = bundleID
-        self.slot = slot
+    var label: String {
+        switch self {
+        case .chevrons: return "Chevrons »"
+        case .chevron:  return "Chevron ›"
+        case .arrow:    return "Arrow ▸"
+        case .ellipsis: return "Dots …"
+        case .circle:   return "Circle ●"
+        }
+    }
+
+    /// Shown when the hidden section is collapsed (pointing "there's more this way").
+    var collapsedSymbol: String {
+        switch self {
+        case .chevrons: return "chevron.left.2"
+        case .chevron:  return "chevron.left"
+        case .arrow:    return "arrowtriangle.left.fill"
+        case .ellipsis: return "ellipsis"
+        case .circle:   return "circle.fill"
+        }
+    }
+
+    /// Shown while revealed (points back the other way; circle/ellipsis just stay).
+    var revealedSymbol: String {
+        switch self {
+        case .chevrons: return "chevron.right.2"
+        case .chevron:  return "chevron.right"
+        case .arrow:    return "arrowtriangle.right.fill"
+        case .ellipsis: return "ellipsis"
+        case .circle:   return "circle"
+        }
     }
 }
 
 /// Persisted menu-bar settings. Stored as a JSON blob in UserDefaults (mirrors
-/// `Preferences.layoutStore`). `observedOrder` is a *display/restore* aid — the
-/// last seen left→right order of items, NOT a command set. The divider positions
-/// + the user's drags are the real source of truth.
+/// `Preferences.layoutStore`). Order is owned by macOS (it persists ⌘-drag
+/// positions itself), so nothing here records item order — section membership is
+/// derived live from divider positions at reconcile time.
 struct MenuBarStore: Codable, Equatable, Sendable {
     static let currentSchema = 1
 
@@ -42,10 +69,6 @@ struct MenuBarStore: Codable, Equatable, Sendable {
     /// single hidden section, one chevron.
     var alwaysHiddenEnabled: Bool = false
 
-    /// Experimental synthetic-⌘-drag reorder. Default OFF — it's the fragile path
-    /// (Ice's top bug source) and needs Accessibility. Core hide never needs it.
-    var reorderEnabled: Bool = false
-
     /// Reveal the hidden section on hovering the menu bar (vs click/hotkey only).
     var hoverReveal: Bool = false
 
@@ -53,9 +76,8 @@ struct MenuBarStore: Codable, Equatable, Sendable {
     /// auto-rehides. Clamped 1...30 on read.
     var autoRehideSeconds: Int = 5
 
-    /// Last observed left→right order, keyed by stable item info. Display/restore
-    /// only.
-    var observedOrder: [MenuBarItemInfo] = []
+    /// Cosmetic glyph for the divider items.
+    var chevronStyle: ChevronStyle = .chevrons
 
     var clampedSpacing: Int { min(max(spacing, MenuBarSpacing.minSpacing), MenuBarSpacing.maxSpacing) }
     var clampedAutoRehide: Int { min(max(autoRehideSeconds, 1), 30) }
@@ -74,10 +96,9 @@ struct MenuBarStore: Codable, Equatable, Sendable {
         schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? d.schemaVersion
         spacing = try c.decodeIfPresent(Int.self, forKey: .spacing) ?? d.spacing
         alwaysHiddenEnabled = try c.decodeIfPresent(Bool.self, forKey: .alwaysHiddenEnabled) ?? d.alwaysHiddenEnabled
-        reorderEnabled = try c.decodeIfPresent(Bool.self, forKey: .reorderEnabled) ?? d.reorderEnabled
         hoverReveal = try c.decodeIfPresent(Bool.self, forKey: .hoverReveal) ?? d.hoverReveal
         autoRehideSeconds = try c.decodeIfPresent(Int.self, forKey: .autoRehideSeconds) ?? d.autoRehideSeconds
-        observedOrder = try c.decodeIfPresent([MenuBarItemInfo].self, forKey: .observedOrder) ?? d.observedOrder
+        chevronStyle = try c.decodeIfPresent(ChevronStyle.self, forKey: .chevronStyle) ?? d.chevronStyle
     }
 }
 
@@ -123,36 +144,17 @@ enum MenuBarLogic {
         return v == MenuBarSpacing.defaultSpacing ? nil : v
     }
 
-    /// Index where `item` should land to sit immediately left/right of `anchor`
-    /// within a left→right ordered list. Pure index math for the reorder planner;
-    /// the synthetic-event executor turns this into a ⌘-drag. Returns nil if either
-    /// item isn't found.
-    static func reorderInsertionIndex(moving item: MenuBarItemInfo,
-                                      toLeftOf anchor: MenuBarItemInfo,
-                                      in order: [MenuBarItemInfo]) -> Int? {
-        guard order.firstIndex(of: item) != nil,
-              let anchorIdx = order.firstIndex(of: anchor) else { return nil }
-        return anchorIdx
-    }
-
-    static func reorderInsertionIndex(moving item: MenuBarItemInfo,
-                                      toRightOf anchor: MenuBarItemInfo,
-                                      in order: [MenuBarItemInfo]) -> Int? {
-        guard order.firstIndex(of: item) != nil,
-              let anchorIdx = order.firstIndex(of: anchor) else { return nil }
-        return anchorIdx + 1
-    }
-
-    /// Apply an insertion index to produce the resulting order (pure, for tests +
-    /// observedOrder restore). Removing the item first means the index is relative
-    /// to the list WITHOUT the moved item.
-    static func applyMove(_ item: MenuBarItemInfo, toIndex rawIndex: Int,
-                          in order: [MenuBarItemInfo]) -> [MenuBarItemInfo] {
-        var out = order
-        guard let from = out.firstIndex(of: item) else { return order }
-        out.remove(at: from)
-        let clamped = min(max(rawIndex > from ? rawIndex - 1 : rawIndex, 0), out.count)
-        out.insert(item, at: clamped)
-        return out
+    /// Whether the Settings preview strip can be trusted (pure; the live wrapper
+    /// supplies the sets). Hide/show + spacing ride public AppKit and never depend
+    /// on this — ONLY the cosmetic preview reads item positions via the private CGS
+    /// enumeration. A future macOS can shift menu-bar window semantics (Tahoe did
+    /// exactly this to Bartender) and return `.success` while omitting windows that
+    /// provably exist — a hard CGS error wouldn't catch that. So we probe positively:
+    /// does the enumeration still contain our OWN divider windows? Empty dividers ⇒
+    /// nothing to probe against yet ⇒ trust (never false-alarm before setup runs).
+    static func previewHealthy(dividerWindowIDs: Set<CGWindowID>,
+                               enumeratedWindowIDs: Set<CGWindowID>) -> Bool {
+        guard !dividerWindowIDs.isEmpty else { return true }
+        return !dividerWindowIDs.isDisjoint(with: enumeratedWindowIDs)
     }
 }

@@ -1,14 +1,14 @@
 # Menu Bar Management — Ice/Bartender-style control of the menu bar: hide icons
-# behind a chevron and reveal on demand, customize icon spacing, and (opt-in)
-# reorder icons. Implemented natively (MenuBarManager) over the private CGS
-# window list — enumeration/hide/spacing need NO permission; only the opt-in
-# synthetic-drag reorder uses Accessibility, prompted on its own toggle.
+# behind a chevron and reveal on demand, customize icon spacing and chevron style,
+# and preview the live bar. Implemented natively (MenuBarManager) over the private
+# CGS window list — enumeration/hide/spacing need NO permission. Reordering is the
+# native macOS ⌘-drag (the OS persists it); the preview just hints the user to it.
 [extension]
 id          = "com.prosper.menubar"
 name        = "menubar"
 title       = "Menu Bar Management"
-description = "Hide menu-bar icons behind a chevron, reveal on demand, tune icon spacing, and reorder."
-version     = "1.0.0"
+description = "Hide menu-bar icons behind a chevron, reveal on demand, and tune icon spacing and style."
+version     = "1.2.0"
 author      = "Prosper"
 license     = "MIT"
 icon        = "menubar.rectangle"

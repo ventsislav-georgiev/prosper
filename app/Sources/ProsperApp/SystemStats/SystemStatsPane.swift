@@ -10,6 +10,10 @@ import StatsCore
 struct SystemStatsPane: View {
     @State private var enabled = Preferences.systemStatsEnabled
     @State private var style = SystemStatsStore.load()
+    /// Coalesces the persist+notify burst a ColorPicker drag emits (one set per
+    /// frame) into a single commit, so we don't JSON-encode + reconfigure the live
+    /// controller dozens of times a second mid-drag.
+    @State private var commitWork: DispatchWorkItem?
 
     var body: some View {
         NeonScroll {
@@ -82,7 +86,7 @@ struct SystemStatsPane: View {
     private func colorPicker(_ rgba: Binding<RGBAColor>) -> some View {
         ColorPicker("", selection: Binding(
             get: { rgba.wrappedValue.color },
-            set: { rgba.wrappedValue = RGBAColor($0); notify() }))
+            set: { rgba.wrappedValue = RGBAColor($0) }))   // setter routes through binding(m) → commit()
             .labelsHidden()
     }
 
@@ -99,16 +103,29 @@ struct SystemStatsPane: View {
 
     private var alignmentBinding: Binding<StatsWidgetAlignment> {
         Binding(get: { style.alignment },
-                set: { style.alignment = $0; persist() })
+                set: { style.alignment = $0; commit() })
     }
 
-    /// A binding into one module's config that persists + notifies on every set.
+    /// A binding into one module's config. Mutates the @State immediately (so the
+    /// UI is responsive) and schedules a debounced persist+notify.
     private func binding(_ m: StatsModule) -> Binding<ModuleWidgetConfig> {
         Binding(
             get: { style.modules[m.rawValue] ?? .defaultFor(m) },
-            set: { style.modules[m.rawValue] = $0; persist() })
+            set: { style.modules[m.rawValue] = $0; commit() })
     }
 
-    private func persist() { SystemStatsStore.save(style); notify() }
+    /// Debounced save + controller reload — 120 ms after the last edit.
+    private func commit() {
+        commitWork?.cancel()
+        let snapshot = style
+        let work = DispatchWorkItem {
+            SystemStatsStore.save(snapshot)
+            NotificationCenter.default.post(name: .systemStatsConfigChanged, object: nil)
+        }
+        commitWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    /// Immediate (un-debounced) notify for the master toggle — a single discrete event.
     private func notify() { NotificationCenter.default.post(name: .systemStatsConfigChanged, object: nil) }
 }

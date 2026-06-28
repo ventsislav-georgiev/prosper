@@ -123,12 +123,9 @@ final class MenuBarTests: XCTestCase {
         var s = MenuBarStore.default
         s.spacing = 8
         s.alwaysHiddenEnabled = true
-        s.reorderEnabled = true
         s.hoverReveal = true
         s.autoRehideSeconds = 12
-        s.observedOrder = [MenuBarItemInfo(bundleID: "com.a", slot: 0),
-                           MenuBarItemInfo(bundleID: "com.a", slot: 1),
-                           MenuBarItemInfo(bundleID: "com.b", slot: 0)]
+        s.chevronStyle = .circle
         let data = try JSONEncoder().encode(s)
         let back = try JSONDecoder().decode(MenuBarStore.self, from: data)
         XCTAssertEqual(s, back)
@@ -141,56 +138,302 @@ final class MenuBarTests: XCTestCase {
         let s = try JSONDecoder().decode(MenuBarStore.self, from: json)
         XCTAssertEqual(s.spacing, MenuBarSpacing.defaultSpacing)
         XCTAssertFalse(s.alwaysHiddenEnabled)
-        XCTAssertFalse(s.reorderEnabled)
         XCTAssertEqual(s.autoRehideSeconds, 5)
-        XCTAssertTrue(s.observedOrder.isEmpty)
+        XCTAssertEqual(s.chevronStyle, .chevrons)
     }
 
-    // MARK: - Reorder destination + apply math (the planner; executor is gated off)
-
-    private let order = [MenuBarItemInfo(bundleID: "a"),
-                         MenuBarItemInfo(bundleID: "b"),
-                         MenuBarItemInfo(bundleID: "c"),
-                         MenuBarItemInfo(bundleID: "d")]
-
-    func testInsertionIndexLeftOf() {
-        let i = MenuBarLogic.reorderInsertionIndex(
-            moving: order[3], toLeftOf: order[1], in: order)   // d to left of b
-        XCTAssertEqual(i, 1)
+    // A blob from the old build that still carries the removed reorder/order keys
+    // must decode (ignoring them), not fail — the tolerant init drops unknown keys.
+    func testStoreIgnoresRemovedReorderKeys() throws {
+        let json = #"{"schemaVersion":1,"reorderEnabled":true,"observedOrder":[{"bundleID":"x","slot":0}],"chevronStyle":"arrow"}"#
+            .data(using: .utf8)!
+        let s = try JSONDecoder().decode(MenuBarStore.self, from: json)
+        XCTAssertEqual(s.chevronStyle, .arrow)
     }
 
-    func testInsertionIndexRightOf() {
-        let i = MenuBarLogic.reorderInsertionIndex(
-            moving: order[0], toRightOf: order[2], in: order)   // a to right of c
-        XCTAssertEqual(i, 3)
+    // MARK: - Chevron style (cosmetic glyph mapping)
+
+    func testChevronSymbolsDifferPerStyle() {
+        // Every style maps to a distinct collapsed glyph (no two share one), so the
+        // picker actually changes the bar.
+        let collapsed = ChevronStyle.allCases.map(\.collapsedSymbol)
+        XCTAssertEqual(Set(collapsed).count, ChevronStyle.allCases.count)
     }
 
-    func testInsertionIndexMissingItemReturnsNil() {
-        let ghost = MenuBarItemInfo(bundleID: "zzz")
-        XCTAssertNil(MenuBarLogic.reorderInsertionIndex(moving: ghost, toLeftOf: order[0], in: order))
-        XCTAssertNil(MenuBarLogic.reorderInsertionIndex(moving: order[0], toLeftOf: ghost, in: order))
+    // MARK: - Preview-strip health probe (Tahoe-style CGS-shift detection)
+
+    func testPreviewHealthyWhenEnumContainsOwnDivider() {
+        // Enum still returns a window we know exists (divider 10) → trust the preview.
+        XCTAssertTrue(MenuBarLogic.previewHealthy(dividerWindowIDs: [10, 11],
+                                                  enumeratedWindowIDs: [5, 10, 99]))
     }
 
-    func testApplyMoveForward() {
-        // Move "a" to index 3 (right of c). Removing a first shifts the index down.
-        let out = MenuBarLogic.applyMove(order[0], toIndex: 3, in: order)
-        XCTAssertEqual(out.map(\.bundleID), ["b", "c", "a", "d"])
+    func testPreviewUnhealthyWhenEnumOmitsAllDividers() {
+        // Enum returns success but omits BOTH dividers that provably exist → the
+        // CGS semantics shifted (as on Tahoe for Bartender); preview can't be trusted.
+        XCTAssertFalse(MenuBarLogic.previewHealthy(dividerWindowIDs: [10, 11],
+                                                   enumeratedWindowIDs: [5, 99]))
     }
 
-    func testApplyMoveBackward() {
-        // Move "d" to index 1 (left of b). Index is before the removed item → no shift.
-        let out = MenuBarLogic.applyMove(order[3], toIndex: 1, in: order)
-        XCTAssertEqual(out.map(\.bundleID), ["a", "d", "b", "c"])
+    func testPreviewHealthyBeforeDividersExist() {
+        // No dividers built yet (setup hasn't run) → nothing to probe → never false-alarm.
+        XCTAssertTrue(MenuBarLogic.previewHealthy(dividerWindowIDs: [],
+                                                  enumeratedWindowIDs: []))
     }
 
-    func testApplyMoveClampsOutOfRange() {
-        let out = MenuBarLogic.applyMove(order[0], toIndex: 999, in: order)
-        XCTAssertEqual(out.map(\.bundleID), ["b", "c", "d", "a"])
+    // MARK: - Ordering engine: identity composition (multi-icon disambiguation)
+
+    func testIdentityKeyPrefersTitleOverImageHash() {
+        let id = MenuBarIdentity(bundleID: "eu.exelban.Stats", title: "CPU", imageHash: "ab12")
+        XCTAssertEqual(id.key, "eu.exelban.Stats#CPU")
+        XCTAssertTrue(id.isResolved)
     }
 
-    func testApplyMoveMissingItemIsIdentity() {
-        let ghost = MenuBarItemInfo(bundleID: "zzz")
-        XCTAssertEqual(MenuBarLogic.applyMove(ghost, toIndex: 0, in: order), order)
+    func testIdentitySameAppDistinctTitlesDontCollide() {
+        // The Stats problem: one bundle id, three items → three distinct keys.
+        let cpu = MenuBarIdentity(bundleID: "eu.exelban.Stats", title: "CPU")
+        let ram = MenuBarIdentity(bundleID: "eu.exelban.Stats", title: "RAM")
+        XCTAssertNotEqual(cpu.key, ram.key)
+    }
+
+    func testIdentityTahoeMenuItemPlaceholderFallsBackToImageHash() {
+        // Tahoe reports "Menu Item" as title → must be ignored so imageHash wins.
+        let id = MenuBarIdentity(bundleID: "eu.exelban.Stats", title: "Menu Item", imageHash: "ff09")
+        XCTAssertEqual(id.key, "eu.exelban.Stats#ff09")
+        XCTAssertTrue(id.isResolved)
+    }
+
+    func testIdentityUnindexedTahoeDegradesToBundleAndIsUnresolved() {
+        // No title (or placeholder) and nothing indexed yet → bundle-only key,
+        // flagged unresolved so siblings can't be ordered apart prematurely.
+        let id = MenuBarIdentity(bundleID: "eu.exelban.Stats", title: "Menu Item")
+        XCTAssertEqual(id.key, "eu.exelban.Stats#")
+        XCTAssertFalse(id.isResolved)
+    }
+
+    // MARK: - Ordering engine: OS capability gate
+
+    func testOrderingSupportedOnTahoe() {
+        XCTAssertEqual(MenuBarOrderingCapability.osSupport(major: 26), .supported)
+    }
+
+    func testOrderingUnsupportedBelowTahoe() {
+        guard case .unsupportedOS = MenuBarOrderingCapability.osSupport(major: 15) else {
+            return XCTFail("macOS 15 must be gated off until the OS-title path ships")
+        }
+    }
+
+    func testOrderingUnsupportedAboveTahoe() {
+        guard case .unsupportedOS = MenuBarOrderingCapability.osSupport(major: 27) else {
+            return XCTFail("future macOS must be gated off until verified")
+        }
+    }
+
+    // MARK: - Ordering engine: order store (tolerant Codable, opt-in default off)
+
+    func testOrderStoreDefaultsInert() {
+        let s = MenuBarOrderStore.default
+        XCTAssertFalse(s.enabled)
+        XCTAssertEqual(s.mode, .onDemand)
+        XCTAssertTrue(s.desiredOrder.isEmpty)
+    }
+
+    func testOrderStoreRoundTrips() throws {
+        var s = MenuBarOrderStore.default
+        s.enabled = true
+        s.mode = .live
+        s.desiredOrder = [MenuBarIdentity(bundleID: "a", title: "CPU"),
+                          MenuBarIdentity(bundleID: "a", title: "RAM")]
+        let data = try JSONEncoder().encode(s)
+        XCTAssertEqual(try JSONDecoder().decode(MenuBarOrderStore.self, from: data), s)
+    }
+
+    func testOrderStoreDecodesFromMinimalJSON() throws {
+        let json = #"{"schemaVersion":1}"#.data(using: .utf8)!
+        let s = try JSONDecoder().decode(MenuBarOrderStore.self, from: json)
+        XCTAssertFalse(s.enabled)
+        XCTAssertEqual(s.mode, .onDemand)
+        XCTAssertTrue(s.desiredOrder.isEmpty)
+    }
+
+    // MARK: - Ordering engine: reorder diff (must converge current → desired)
+
+    /// Apply a full move list and assert the common items land in desired order.
+    private func assertConverges(current: [String], desired: [String],
+                                 line: UInt = #line) {
+        let moves = MenuBarOrderDiff.reorderMoves(current: current, desired: desired)
+        var seq = current
+        for m in moves { seq = MenuBarOrderDiff.apply(m, to: seq) }
+        let want = desired.filter(Set(current).contains)
+        let got = seq.filter(Set(desired).contains)
+        XCTAssertEqual(got, want, "did not converge", line: line)
+    }
+
+    func testReorderAlreadyOrderedEmitsNoMoves() {
+        XCTAssertTrue(MenuBarOrderDiff.reorderMoves(current: ["a", "b", "c"],
+                                                    desired: ["a", "b", "c"]).isEmpty)
+    }
+
+    func testReorderReversalConverges() {
+        assertConverges(current: ["a", "b", "c", "d"], desired: ["d", "c", "b", "a"])
+    }
+
+    func testReorderPartialAndExtraneousItemsConverge() {
+        // Desired references only some items; current has extras not in desired.
+        assertConverges(current: ["x", "a", "y", "b", "z"], desired: ["b", "a"])
+    }
+
+    func testReorderIgnoresDesiredItemsNotPresent() {
+        // "q" isn't in the bar → must be skipped, not crash.
+        assertConverges(current: ["a", "b"], desired: ["q", "b", "a"])
+    }
+
+    // MARK: - Ordering engine: arranger identity mapping
+
+    @MainActor
+    func testArrangerIdentityUsesBundleAndTitle() {
+        let item = MenuBarItem(windowID: 1, pid: 9, frame: .zero, bundleID: "eu.exelban.Stats",
+                               displayID: 0, title: "CPU")
+        XCTAssertEqual(MenuBarArranger.identity(for: item).key, "eu.exelban.Stats#CPU")
+    }
+
+    @MainActor
+    func testArrangerIdentityFallsBackToUnknownBundle() {
+        // A nil bundle id mustn't collapse every such item onto key "#" — it gets a
+        // stable "unknown" bundle so they don't all alias together.
+        let item = MenuBarItem(windowID: 2, pid: 9, frame: .zero, bundleID: nil,
+                               displayID: 0, title: "X")
+        XCTAssertEqual(MenuBarArranger.identity(for: item).key, "unknown#X")
+    }
+
+    // MARK: - Ordering engine: circuit breaker (CPU/battery protection)
+
+    func testCircuitBreakerTripsAtThreshold() {
+        var cb = MenuBarCircuitBreaker(failureThreshold: 3, cooldown: 60)
+        cb.recordFailure(now: 0); cb.recordFailure(now: 1)
+        XCTAssertFalse(cb.isTripped(now: 1))
+        cb.recordFailure(now: 2)
+        XCTAssertTrue(cb.isTripped(now: 2))
+        XCTAssertTrue(cb.isTripped(now: 61))
+        XCTAssertFalse(cb.isTripped(now: 62), "cooldown elapsed at now+60")
+    }
+
+    func testCircuitBreakerSuccessResets() {
+        var cb = MenuBarCircuitBreaker(failureThreshold: 2, cooldown: 60)
+        cb.recordFailure(now: 0)
+        cb.recordSuccess()
+        cb.recordFailure(now: 1)
+        XCTAssertFalse(cb.isTripped(now: 1), "success cleared the failure count")
+    }
+
+    func testCircuitBreakerResetsAfterCooldown() {
+        var cb = MenuBarCircuitBreaker(failureThreshold: 1, cooldown: 60)
+        cb.recordFailure(now: 0)
+        XCTAssertTrue(cb.isTripped(now: 10))
+        cb.resetIfCooledDown(now: 70)
+        XCTAssertFalse(cb.isTripped(now: 70))
+        XCTAssertEqual(cb.failures, 0)
+    }
+
+    // MARK: - Ordering engine: perceptual hash (Tahoe identity rebuild)
+
+    func testDHashStableForIdenticalBuffers() {
+        let buf = (0..<72).map { UInt8(($0 * 7) % 256) }
+        XCTAssertEqual(MenuBarPerceptualHash.dHash(gray9x8: buf),
+                       MenuBarPerceptualHash.dHash(gray9x8: buf))
+    }
+
+    func testDHashDistinguishesDifferentImages() {
+        let a = [UInt8](repeating: 0, count: 72)
+        var b = a; for i in stride(from: 0, to: 72, by: 2) { b[i] = 255 }  // alternating bright
+        XCTAssertNotEqual(MenuBarPerceptualHash.dHash(gray9x8: a),
+                          MenuBarPerceptualHash.dHash(gray9x8: b))
+    }
+
+    func testDHashGradientEncodesDirection() {
+        // Each row strictly increasing left→right ⇒ every "left > right" is false ⇒ 0.
+        var asc = [UInt8](repeating: 0, count: 72)
+        for r in 0..<8 { for c in 0..<9 { asc[r*9 + c] = UInt8(c * 28) } }
+        XCTAssertEqual(MenuBarPerceptualHash.dHash(gray9x8: asc), 0)
+    }
+
+    func testHexRoundTrips() {
+        let h: UInt64 = 0xDEAD_BEEF_0000_1234
+        XCTAssertEqual(MenuBarPerceptualHash.value(fromHex: MenuBarPerceptualHash.hex(h)), h)
+        XCTAssertEqual(MenuBarPerceptualHash.hex(0), "0000000000000000")
+    }
+
+    func testBestMatchPicksNearestWithinThreshold() {
+        let target: UInt64 = 0b1111
+        let cands = [("a", UInt64(0b1110)),   // dist 1
+                     ("b", UInt64(0b1000)),   // dist 3
+                     ("c", UInt64(0))]        // dist 4
+        XCTAssertEqual(MenuBarPerceptualHash.bestMatch(target: target, candidates: cands, maxDistance: 2), "a")
+    }
+
+    func testBestMatchRejectsBeyondThreshold() {
+        let cands = [("a", UInt64(0xFFFF_FFFF_FFFF_FFFF))]   // far from 0
+        XCTAssertNil(MenuBarPerceptualHash.bestMatch(target: 0, candidates: cands, maxDistance: 5))
+        XCTAssertNil(MenuBarPerceptualHash.bestMatch(target: 0, candidates: [], maxDistance: 5))
+    }
+
+    // MARK: - Ordering engine: live drift + enforcement policy (P4)
+
+    func testRelativeOrderSatisfiedWhenSubsequence() {
+        // Desired A,B,C present in correct relative order with foreign X,Y wedged in.
+        XCTAssertTrue(MenuBarOrderDiff.isRelativeOrderSatisfied(
+            current: ["A", "X", "B", "Y", "C"], desired: ["A", "B", "C"]))
+    }
+
+    func testRelativeOrderViolatedWhenSwapped() {
+        XCTAssertFalse(MenuBarOrderDiff.isRelativeOrderSatisfied(
+            current: ["A", "C", "B"], desired: ["A", "B", "C"]))
+    }
+
+    func testRelativeOrderIgnoresAbsentDesired() {
+        // C not live ⇒ only A,B constrain, and they're ordered.
+        XCTAssertTrue(MenuBarOrderDiff.isRelativeOrderSatisfied(
+            current: ["A", "B"], desired: ["A", "C", "B"]))
+        // Single present desired ⇒ trivially satisfied.
+        XCTAssertTrue(MenuBarOrderDiff.isRelativeOrderSatisfied(
+            current: ["Z", "A"], desired: ["A", "B", "C"]))
+    }
+
+    func testPolicyBlocksWithinCooldownAndStretchesOnBattery() {
+        var p = MenuBarEnforcementPolicy(baseCooldown: 2, batteryMultiplier: 4)
+        XCTAssertTrue(p.canApply(now: 0, onBattery: false))
+        p.recordApply(now: 0, success: true)
+        XCTAssertFalse(p.canApply(now: 1, onBattery: false), "within 2s AC cooldown")
+        XCTAssertTrue(p.canApply(now: 3, onBattery: false), "past 2s AC cooldown")
+        XCTAssertFalse(p.canApply(now: 3, onBattery: true), "battery cooldown is 8s")
+        XCTAssertTrue(p.canApply(now: 9, onBattery: true), "past 8s battery cooldown")
+    }
+
+    func testPolicyBreakerTripBlocksApply() {
+        var p = MenuBarEnforcementPolicy(baseCooldown: 0,
+                                         breaker: MenuBarCircuitBreaker(failureThreshold: 2, cooldown: 60))
+        p.recordApply(now: 0, success: false)
+        p.recordApply(now: 0, success: false)   // trips
+        XCTAssertFalse(p.canApply(now: 1, onBattery: false), "tripped breaker blocks")
+        XCTAssertTrue(p.canApply(now: 61, onBattery: false), "unblocks after cooldown")
+    }
+
+    func testNoOpPassDoesNotResetBreaker() {
+        // Regression: a no-op pass must NOT call recordSuccess (which would reset the
+        // failure count every tick and permanently disarm the breaker on a stuck loop).
+        var p = MenuBarEnforcementPolicy(baseCooldown: 0,
+                                         breaker: MenuBarCircuitBreaker(failureThreshold: 2, cooldown: 60))
+        p.recordApply(now: 0, success: false)   // failure 1
+        p.stampThrottleOnly(now: 0)             // no-op tick — must preserve failure count
+        p.recordApply(now: 0, success: false)   // failure 2 → trips
+        XCTAssertFalse(p.canApply(now: 1, onBattery: false), "breaker should have tripped despite the no-op tick")
+    }
+
+    func testStampThrottleOnlyStillBlocksWithinCooldown() {
+        var p = MenuBarEnforcementPolicy(baseCooldown: 5, batteryMultiplier: 2)
+        p.stampThrottleOnly(now: 10)
+        XCTAssertFalse(p.canApply(now: 12, onBattery: false), "no-op still throttles the next attempt")
+        XCTAssertTrue(p.canApply(now: 16, onBattery: false))
     }
 
     // MARK: - Manifest wiring (the declarative section + reveal shortcut)
@@ -240,5 +483,70 @@ final class MenuBarTests: XCTestCase {
                 }
             }
         }
+    }
+
+    // MARK: - Ordering engine: hot-path budgets
+    //
+    // HOT PATH (ordering): the live drift check runs every 2 s while live mode is on,
+    // so it must be effectively free. dHash + match run per item per index pass
+    // (on-demand, ≤ tens of items) but still need to stay sub-millisecond so an
+    // index of a full bar is imperceptible. Budgets below are deliberately loose
+    // (CI headroom) yet would catch an accidental O(n²)/allocation blow-up.
+
+    /// Live drift check: 1000 passes over a realistic 30-item bar must be ≤ 20 ms
+    /// (≤ 20 µs/pass). Runs every live tick, so any regression here is idle CPU.
+    func testDriftCheckIsCheap() {
+        let current = (0..<30).map { "com.app\($0)#i" }
+        let desired = stride(from: 0, to: 30, by: 2).map { "com.app\($0)#i" }   // every other item
+        let start = Date()
+        for _ in 0..<1000 {
+            _ = MenuBarOrderDiff.isRelativeOrderSatisfied(current: current, desired: desired)
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 0.020, "drift check too slow: \(elapsed * 1000) ms / 1000 passes")
+    }
+
+    /// Reorder planning over a 30-item bar (worst case: full reversal). Budget is a
+    /// DEBUG-build ceiling (≈10× slower than release) chosen to catch an accidental
+    /// O(n³)+ blow-up of the splice, not to assert release latency: ≤ 200 ms / 1000
+    /// plans (≈200 µs/plan debug, ≈20 µs release — fine at menu-bar scale).
+    func testReorderPlanningIsCheap() {
+        let current = (0..<30).map { "k\($0)" }
+        let desired = current.reversed().map { $0 }
+        let start = Date()
+        for _ in 0..<1000 { _ = MenuBarOrderDiff.reorderMoves(current: current, desired: desired) }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 0.200, "reorder planning too slow: \(elapsed * 1000) ms / 1000 plans")
+    }
+
+    /// dHash + nearest-match over a 72-byte buffer + 30 candidates. DEBUG-build
+    /// ceiling: ≤ 200 ms / 10 000 iters (≈20 µs/iter debug, ≈2 µs release). Catches
+    /// a regression to a non-bitwise hash or a quadratic match.
+    func testHashAndMatchAreCheap() {
+        let buf = (0..<72).map { UInt8(($0 * 37 + 11) % 256) }
+        let cands = (0..<30).map { ("k\($0)", UInt64($0) &* 0x9E37_79B9_7F4A_7C15) }
+        let start = Date()
+        for _ in 0..<10_000 {
+            let h = MenuBarPerceptualHash.dHash(gray9x8: buf)
+            _ = MenuBarPerceptualHash.bestMatch(target: h, candidates: cands, maxDistance: 8)
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 0.200, "hash+match too slow: \(elapsed * 1000) ms / 10k iters")
+    }
+
+    /// dHash distance between distinct synthetic glyphs must comfortably exceed the
+    /// match tolerance — guards against a loose tolerance collapsing sibling items
+    /// (Stats CPU vs RAM) onto one identity.
+    func testDistinctGlyphsExceedMatchTolerance() {
+        var a = [UInt8](repeating: 0, count: 72)
+        var b = [UInt8](repeating: 0, count: 72)
+        for r in 0..<8 { for c in 0..<9 {
+            a[r*9 + c] = UInt8((c * 30) % 256)              // left→right ramp
+            b[r*9 + c] = UInt8(((8 - c) * 30) % 256)        // mirrored ramp
+        } }
+        let d = MenuBarPerceptualHash.hamming(MenuBarPerceptualHash.dHash(gray9x8: a),
+                                              MenuBarPerceptualHash.dHash(gray9x8: b))
+        XCTAssertGreaterThan(d, MenuBarArranger.hashMatchTolerance,
+                             "mirrored glyphs only \(d) apart — tolerance \(MenuBarArranger.hashMatchTolerance) too loose")
     }
 }

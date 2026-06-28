@@ -27,6 +27,11 @@ public struct StatsSnapshot: Sendable {
     public var battery: BatterySample?
     public var topByCPU: [ProcInfo]?
     public var topByMemory: [ProcInfo]?
+    /// Headline metric histories (oldest→newest), keyed cpu/memory/net.up/net.down/
+    /// gpu/power. Carried on the snapshot so the UI reads a plain array on the main
+    /// thread — no cross-queue `sync` hop into the poller during view rendering.
+    public var histories: [String: [Double]] = [:]
+    public init() {}
 }
 
 public final class StatsPoller {
@@ -138,6 +143,10 @@ public final class StatsPoller {
             let (byCPU, byMem) = procs!.sample(limit: 5)
             latest.topByCPU = byCPU; latest.topByMemory = byMem
         }
+
+        // Snapshot the rings onto the delivered value so the UI never reaches back
+        // into `queue`. Small (≤120 Doubles × 6 keys) — copied once per tick.
+        latest.histories = histories.mapValues { $0.snapshot() }
 
         let snap = latest
         deliverQueue.async { [onSnapshot] in onSnapshot?(snap) }

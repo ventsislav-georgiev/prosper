@@ -86,7 +86,8 @@ struct Sparkline: View {
             ctx.fill(fill, with: .color(color.opacity(0.22)))
             ctx.stroke(line, with: .color(color), lineWidth: 1.5)
         }
-        .drawingGroup()
+        // No .drawingGroup(): Canvas already composites efficiently; an offscreen
+        // Metal pass for a 26pt line would be steady wasted energy in a forever widget.
     }
 }
 
