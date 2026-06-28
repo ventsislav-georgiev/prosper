@@ -29,6 +29,9 @@ final class RunnerPanel {
     /// UserDefaults key for the remembered top-left corner of the runner.
     private static let originKey = "RunnerPanelTopLeft"
 
+    // ponytail: no deinit to remove observers — AppDelegate holds this panel for the
+    // app's lifetime (lazily created, never released), so deinit never fires.
+
     /// The runner panel's fixed content width — used to center other panels
     /// (e.g. clipboard history) on the runner's last position.
     static let runnerWidth: CGFloat = 600
@@ -164,28 +167,35 @@ final class RunnerPanel {
     /// the last position the user dragged it to, or the main screen.
     private func positionPanel() {
         let size = panel.frame.size
+        // Guard the whole positioning pass: every branch here moves the window, and
+        // the didMove observer must not mistake a programmatic move (incl. center())
+        // for a user drag and overwrite the saved spot.
+        isProgrammaticMove = true
+        defer { isProgrammaticMove = false }
         switch Preferences.runnerPlacement {
         case .cursorScreen:
             // Follow the pointer, but keep the remembered spot when the cursor is
             // still on the screen it was dragged to.
-            isProgrammaticMove = true
-            panel.setFrameOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0, saved: Self.savedTopLeft()))
-            isProgrammaticMove = false
+            setOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0, saved: Self.savedTopLeft()))
         case .lastPosition:
-            if let saved = UserDefaults.standard.dictionary(forKey: Self.originKey),
-               let x = saved["x"] as? CGFloat, let top = saved["y"] as? CGFloat {
-                isProgrammaticMove = true
-                panel.setFrameOrigin(NSPoint(x: x, y: top - size.height))
-                isProgrammaticMove = false
+            if let tl = Self.savedTopLeft(),
+               let screen = NSScreen.containing(runnerTopLeft: tl, runnerWidth: Self.runnerWidth) {
+                // Clamp to the screen the saved spot lives on, so a since-disconnected
+                // display can't leave the panel off-screen and invisible.
+                setOrigin(PanelGeometry.clampedOrigin(
+                    NSPoint(x: tl.x, y: tl.top - size.height), size: size, in: screen.visibleFrame))
             } else {
                 // Never moved yet — fall to the cursor screen rather than main.
-                isProgrammaticMove = true
-                panel.setFrameOrigin(NSScreen.centeredOrigin(size: size, in: .underCursor))
-                isProgrammaticMove = false
+                setOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0, saved: nil))
             }
         case .mainScreen:
             panel.center()
         }
+    }
+
+    /// Applies an origin, or centers (no-display fallback) when nil.
+    private func setOrigin(_ origin: NSPoint?) {
+        if let origin { panel.setFrameOrigin(origin) } else { panel.center() }
     }
 
     /// Captures the frontmost app, positions, and shows the panel focused.
