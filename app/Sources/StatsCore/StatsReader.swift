@@ -1,0 +1,68 @@
+// Reader protocol + the shared sample value types every module emits.
+//
+// A reader is a stateless-ish sampler: `read()` returns one snapshot. Delta
+// readers (CPU, network) keep the previous raw counters internally and emit a
+// rate. The poller calls `read()` on its serial queue at the module's cadence.
+
+import Foundation
+
+public enum StatsError: Error, Equatable {
+    case machCall(kern_return_t)   // host_* / task_* failure
+    case unavailable(String)       // API/source absent on this machine
+}
+
+public protocol StatsReader {
+    associatedtype Sample
+    /// One snapshot. Throws on a hard failure (API gone); a soft/partial read
+    /// returns a Sample with the unavailable fields nil-ed.
+    mutating func read() throws -> Sample
+}
+
+// MARK: - Sample types (plain values, Sendable for actor hand-off)
+
+public struct CPUSample: Sendable, Equatable {
+    public let total: Double          // 0...1 overall load
+    public let performance: Double    // 0...1 P-cluster (NaN if unknown)
+    public let efficiency: Double     // 0...1 E-cluster (NaN if unknown)
+    public let system: Double
+    public let user: Double
+    public let idle: Double
+    public let perCore: [Double]      // 0...1 per logical core
+    public init(total: Double, performance: Double, efficiency: Double,
+                system: Double, user: Double, idle: Double, perCore: [Double]) {
+        self.total = total; self.performance = performance; self.efficiency = efficiency
+        self.system = system; self.user = user; self.idle = idle; self.perCore = perCore
+    }
+}
+
+public struct MemorySample: Sendable, Equatable {
+    public let total: UInt64
+    public let used: UInt64           // active + wired + compressed (the "real" pressure)
+    public let app: UInt64
+    public let wired: UInt64
+    public let compressed: UInt64
+    public let free: UInt64
+    public let pressure: Double       // 0...1
+    public let swapUsed: UInt64
+    public init(total: UInt64, used: UInt64, app: UInt64, wired: UInt64,
+                compressed: UInt64, free: UInt64, pressure: Double, swapUsed: UInt64) {
+        self.total = total; self.used = used; self.app = app; self.wired = wired
+        self.compressed = compressed; self.free = free; self.pressure = pressure
+        self.swapUsed = swapUsed
+    }
+    public var usedFraction: Double { total == 0 ? 0 : Double(used) / Double(total) }
+}
+
+public struct NetworkSample: Sendable, Equatable {
+    public let uploadBytesPerSec: Double
+    public let downloadBytesPerSec: Double
+    public let totalUploaded: UInt64
+    public let totalDownloaded: UInt64
+    public init(uploadBytesPerSec: Double, downloadBytesPerSec: Double,
+                totalUploaded: UInt64, totalDownloaded: UInt64) {
+        self.uploadBytesPerSec = uploadBytesPerSec
+        self.downloadBytesPerSec = downloadBytesPerSec
+        self.totalUploaded = totalUploaded
+        self.totalDownloaded = totalDownloaded
+    }
+}
