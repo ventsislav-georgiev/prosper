@@ -157,4 +157,14 @@ enum MenuBarLogic {
         guard !dividerWindowIDs.isEmpty else { return true }
         return !dividerWindowIDs.isDisjoint(with: enumeratedWindowIDs)
     }
+
+    /// The `CGWindowID` for an `NSWindow.windowNumber`, or nil for a non-positive
+    /// (off-screen / unrealized) window. macOS 26 (Tahoe) widened `windowNumber`
+    /// past `UInt32` range, but the CGWindowID the CGS list reports is still its low
+    /// 32 bits — so `truncatingIfNeeded` yields the value that matches the CGS
+    /// enumeration. A plain `CGWindowID(n)` instead TRAPS on overflow (this crashed
+    /// menu-bar setup + the ordering self-probe on Tahoe).
+    static func windowID(forWindowNumber n: Int) -> CGWindowID? {
+        n > 0 ? CGWindowID(truncatingIfNeeded: n) : nil
+    }
 }

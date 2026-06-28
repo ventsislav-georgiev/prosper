@@ -221,9 +221,10 @@ enum MenuBarItemMover {
 
         // Let AppKit place the windows.
         try? await Task.sleep(for: .milliseconds(120))
-        guard let widA = a.button?.window?.windowNumber, widA > 0,
-              let widB = b.button?.window?.windowNumber, widB > 0 else { return false }
-        let wa = CGWindowID(widA), wb = CGWindowID(widB)
+        guard let widA = a.button?.window?.windowNumber,
+              let wa = MenuBarLogic.windowID(forWindowNumber: widA),
+              let widB = b.button?.window?.windowNumber,
+              let wb = MenuBarLogic.windowID(forWindowNumber: widB) else { return false }
         let pid = getpid()
         guard let fa = MenuBarBridge.frame(for: wa), let fb = MenuBarBridge.frame(for: wb) else { return false }
         // Both probe items must have landed in the same menu-bar row with real width.

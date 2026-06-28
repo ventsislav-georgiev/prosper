@@ -181,6 +181,26 @@ final class MenuBarTests: XCTestCase {
                                                   enumeratedWindowIDs: []))
     }
 
+    // MARK: - windowNumber → CGWindowID (Tahoe overflow trap regression)
+
+    func testWindowIDTruncatesWideTahoeWindowNumber() {
+        // macOS 26 returns windowNumber values past UInt32; plain CGWindowID(n) would
+        // trap. The CGWindowID is the low 32 bits → must truncate, not crash.
+        let wide = Int(UInt32.max) + 0x43          // 0x1_0000_0042
+        XCTAssertEqual(MenuBarLogic.windowID(forWindowNumber: wide), 0x42)
+    }
+
+    func testWindowIDPassesThroughClassicNumber() {
+        // Pre-Tahoe windowNumber already fits UInt32 → identity, unchanged.
+        XCTAssertEqual(MenuBarLogic.windowID(forWindowNumber: 12345), 12345)
+    }
+
+    func testWindowIDNilForNonPositive() {
+        // Off-screen / unrealized window → nil (excluded), never CGWindowID(negative) trap.
+        XCTAssertNil(MenuBarLogic.windowID(forWindowNumber: 0))
+        XCTAssertNil(MenuBarLogic.windowID(forWindowNumber: -1))
+    }
+
     // MARK: - Ordering engine: identity composition (multi-icon disambiguation)
 
     func testIdentityKeyPrefersTitleOverImageHash() {

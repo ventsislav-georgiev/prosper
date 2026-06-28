@@ -26,6 +26,8 @@ tag from the now-released section and put it on the new top draft.
   expanded chevron style — all with no Accessibility or Screen Recording permission.
   A live preview strip in Settings shows your real icons in order. Ships **disabled**
   — it adds nothing to your menu bar until you turn it on in Settings › Extensions.
+  - Fixed a crash on enabling the extension on macOS 26 (Tahoe), where the system's
+    wider window numbers overflowed a 32-bit conversion.
 - **Item ordering that survives relaunch, including multi-icon apps (experimental).**
   Apps like Stats or iStat Menus publish several icons that macOS normally shuffles
   on every launch. Turn on ordering, arrange your icons once, and Prosper keeps them
