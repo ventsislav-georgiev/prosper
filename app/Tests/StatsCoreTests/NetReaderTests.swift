@@ -48,6 +48,22 @@ final class NetPingTests: XCTestCase {
         XCTAssertEqual(NetPingReader.jitter([7, 7, 7]), 0, accuracy: 1e-9)
     }
 
+    func testCachedAccessorsAreHotPathCheap() {
+        // Hot-path budget: every poll() tick reads ping.latest() + connectivity() on the
+        // shared serial queue. With a full history ring (worst case) the two copies must
+        // stay trivial so they never eat into a module's tick — assert < 50µs combined.
+        let r = NetPingReader(host: "1.1.1.1", historyLength: 120)
+        r.start(); usleep(50_000); r.stop()   // seed some history
+        let iterations = 2000
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        var sink = 0
+        for _ in 0..<iterations { sink &+= r.connectivity().count; sink &+= r.latest().reachable ? 1 : 0 }
+        let perCall = Double(DispatchTime.now().uptimeNanoseconds - t0) / Double(iterations)
+        XCTAssertGreaterThanOrEqual(sink, 0)
+        XCTAssertLessThan(perCall, 50_000, "ping cached accessors \(Int(perCall))ns exceed 50µs tick budget")
+        print("ping latest()+connectivity() = \(Int(perCall))ns/call")
+    }
+
     func testLifecycleNoCrashOnRapidStartStop() {
         let r = NetPingReader(host: "1.1.1.1", historyLength: 8)
         for _ in 0..<20 { r.start(); r.stop() }   // epoch guard: no double-loop, no crash
