@@ -2438,6 +2438,7 @@ private struct MenuBarPane: View {
     @State private var sections: [(item: MenuBarItem, section: MenuBarSection)] = []
     @State private var previewHealthy = true
     @State private var skipped: [String] = []
+    @State private var spacingNote: String? = nil
     @State private var relaunching = false
     @State private var probeOK: Bool? = nil      // nil = not run; true iff probeReason == .ok
     @State private var probeReason: MenuBarItemMover.ProbeResult? = nil   // why the probe passed/failed
@@ -2470,16 +2471,14 @@ private struct MenuBarPane: View {
                     Text("Skipped (unsaved work / declined to quit): \(skipped.joined(separator: ", ")). Quit and reopen them yourself to apply.")
                         .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 }
+                if let spacingNote {
+                    Text(spacingNote)
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                }
             }
 
             NeonSection("Hide & reveal",
                         footer: "A chevron sits in your menu bar. Drag any icon to its LEFT to hide it; click the chevron (or the reveal shortcut) to show the hidden icons. They auto-rehide after a few seconds.") {
-                Toggle("Two-tier hide — add an always-hidden section", isOn: Binding(
-                    get: { store.alwaysHiddenEnabled },
-                    set: { v in mutate { $0.alwaysHiddenEnabled = v }; MenuBarManager.shared.reconcileDividers() }))
-                Text("Adds a second chevron. ⌘-drag an icon to its LEFT to hide it for good; ⌥-click the chevron to peek at that section. Items between the two chevrons hide/reveal normally.")
-                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-                NeonDivider()
                 Toggle("Reveal on hover", isOn: Binding(
                     get: { store.hoverReveal },
                     set: { v in mutate { $0.hoverReveal = v } }))
@@ -2652,11 +2651,21 @@ private struct MenuBarPane: View {
                 }.buttonStyle(.neon)
             }
         case .some(.moveFailed):
-            Label("Move test failed — this Mac’s menu bar didn’t accept the reorder. Ordering is disabled.",
-                  systemImage: "exclamationmark.triangle.fill")
-                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-        case .some(.unavailable), .some(.enumerationFailed):
-            Label("Move test couldn’t run on this version of macOS — ordering is disabled.",
+            VStack(alignment: .leading, spacing: sz(4)) {
+                Label("Move test failed — this Mac’s menu bar didn’t accept the reorder. Ordering is disabled.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                Button("Run move test again") { probeReason = nil; probeOK = nil; runProbe() }.buttonStyle(.neon)
+            }
+        case .some(.enumerationFailed):
+            VStack(alignment: .leading, spacing: sz(4)) {
+                Label("Move test couldn’t see its own probe items (enumeration). Ordering is disabled.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                Button("Run move test again") { probeReason = nil; probeOK = nil; runProbe() }.buttonStyle(.neon)
+            }
+        case .some(.unavailable):
+            Label("Menu-bar bridge unavailable on this macOS — ordering is disabled.",
                   systemImage: "exclamationmark.triangle.fill")
                 .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
         case nil:
@@ -2748,7 +2757,14 @@ private struct MenuBarPane: View {
 
     private func applyNow() {
         let apps = MenuBarSpacing.owningApps()
-        guard !apps.isEmpty else { return }
+        guard !apps.isEmpty else {
+            // Tahoe: item owners aren't identifiable (every item reports Control
+            // Center), so there's nothing we can target a relaunch at. The spacing is
+            // already saved — be honest about how to make it take effect now.
+            spacingNote = "The new spacing is saved, but this version of macOS hides which apps own each menu-bar icon, so Prosper can’t relaunch them for you. Log out and back in (or quit and reopen your menu-bar apps) to apply it now."
+            return
+        }
+        spacingNote = nil
         relaunching = true
         skipped = []
         MenuBarSpacing.relaunchOwners(apps) { skippedNames in
@@ -2834,12 +2850,18 @@ private struct MenuBarPreviewStrip: View {
                         switch el {
                         case .icon(let img, let dimmed):
                             if let img {
+                                // Captured menu-bar items aren't square (the OS item
+                                // window is taller than wide, clocks are very wide), so
+                                // preserve aspect at a fixed height instead of forcing a
+                                // square — that's what made them look tiny/squished.
                                 Image(nsImage: img).resizable().interpolation(.high)
-                                    .frame(width: sz(18), height: sz(18))
+                                    .scaledToFit()
+                                    .frame(height: sz(22))
+                                    .frame(maxWidth: sz(44))
                                     .opacity(dimmed ? 0.4 : 1)
                             } else {
                                 Image(systemName: "app.dashed")
-                                    .frame(width: sz(18), height: sz(18))
+                                    .frame(width: sz(22), height: sz(22))
                                     .foregroundStyle(Neon.textSecondary)
                             }
                         case .chevron:

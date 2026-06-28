@@ -240,14 +240,20 @@ enum MenuBarItemMover {
         a.button?.title = "◐"; b.button?.title = "◑"
         defer { NSStatusBar.system.removeStatusItem(a); NSStatusBar.system.removeStatusItem(b) }
 
-        // Let AppKit place the windows.
-        try? await Task.sleep(for: .milliseconds(120))
-        // Map each throwaway item to its CGS window by frame match — windowNumber is
-        // unusable on Tahoe (separate +2³² namespace, unrelated to CGWindowID).
-        guard let xA = a.button?.window?.frame.minX, let wa = MenuBarBridge.windowID(forItemMinX: xA),
-              let xB = b.button?.window?.frame.minX, let wb = MenuBarBridge.windowID(forItemMinX: xB),
-              wa != wb else {
-            NSLog("prosper: menu-bar ordering self-probe — frame-match failed (xA=\(a.button?.window?.frame.minX ?? -1) xB=\(b.button?.window?.frame.minX ?? -1))")
+        // Poll for layout instead of a fixed sleep: on Tahoe the status windows can
+        // take >120 ms to attach + position, and a too-early frame read makes the
+        // frame-match miss (looked like a dead mechanism). Wait until BOTH throwaway
+        // items have distinct CGS windows, up to ~1.2 s.
+        var matched: (wa: CGWindowID, wb: CGWindowID)?
+        for _ in 0..<24 {
+            try? await Task.sleep(for: .milliseconds(50))
+            guard let xA = a.button?.window?.frame.minX, let xB = b.button?.window?.frame.minX,
+                  let wa = MenuBarBridge.windowID(forItemMinX: xA),
+                  let wb = MenuBarBridge.windowID(forItemMinX: xB), wa != wb else { continue }
+            matched = (wa, wb); break
+        }
+        guard let (wa, wb) = matched else {
+            NSLog("prosper: menu-bar ordering self-probe — frame-match failed after poll (xA=\(a.button?.window?.frame.minX ?? -1) xB=\(b.button?.window?.frame.minX ?? -1))")
             return .enumerationFailed
         }
         let pid = getpid()

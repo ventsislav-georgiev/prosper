@@ -39,11 +39,18 @@ enum MenuBarSpacing {
         return value
     }
 
-    /// Apps that own a menu-bar item right now, for the relaunch UI to enumerate.
+    /// Apps that own a menu-bar item right now AND that we can actually relaunch, for
+    /// the relaunch UI to enumerate. On macOS 26 (Tahoe) the window server attributes
+    /// every item to Control Center (pid 800), so this collapses to nothing
+    /// relaunchable — the caller detects the empty result and tells the user to log
+    /// out / relaunch apps themselves instead of silently doing nothing.
     static func owningApps() -> [NSRunningApplication] {
+        let selfPID = getpid()
+        let skip: Set<String> = ["com.apple.controlcenter", "com.apple.Spotlight"]
         let pids = Set(MenuBarBridge.items(onDisplay: CGMainDisplayID()).map(\.pid))
-        return pids.compactMap { NSRunningApplication(processIdentifier: $0) }
-            .filter { $0.processIdentifier != getpid() }
+        return pids.filter { $0 != 0 && $0 != selfPID }
+            .compactMap { NSRunningApplication(processIdentifier: $0) }
+            .filter { !skip.contains($0.bundleIdentifier ?? "") }
     }
 
     /// DATA-LOSS-SAFE live apply (opt-in only, explicit confirm in the UI).
