@@ -76,11 +76,6 @@ final class StatsController {
             // snapshots reorder). Touches UI/store directly.
             MainActor.assumeIsolated {
                 guard let self else { return }
-                // Skip the publish (and the relayout) on idle ticks where nothing
-                // visible changed — battery/sensors deliver the same bytes for 9 of
-                // every 10 ticks, and an unchanged snapshot would still re-render
-                // every widget's body. Equatable compare is cheap vs a SwiftUI pass.
-                guard snap != self.store.snapshot else { return }
                 self.store.snapshot = snap
                 self.resizeItems()
             }
@@ -125,9 +120,11 @@ final class StatsController {
     /// — every length write relayouts the whole menu bar.
     private func resizeItems() {
         for (_, pair) in items {
-            // fittingSize lays out lazily when dirty; no need to force a full
-            // layoutSubtreeIfNeeded pass every tick. monospacedDigit + fixedSize
-            // means width only moves when the formatted string's length changes.
+            // Resolve any pending SwiftUI invalidation so fittingSize reflects the
+            // string just published (else the item lags a tick when a digit-count
+            // boundary changes the width). The cost that matters — the `length`
+            // write that relayouts the whole menu bar — stays guarded below.
+            pair.host.layoutSubtreeIfNeeded()
             let w = pair.host.fittingSize.width
             if w > 0, abs(pair.item.length - w) > 0.5 { pair.item.length = w }
         }
