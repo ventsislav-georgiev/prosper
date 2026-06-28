@@ -11,7 +11,6 @@
 
 import SwiftUI
 import AppKit
-import Charts
 import StatsCore
 
 /// Load/cluster legend colours, matched to exelban's CPU popup.
@@ -279,21 +278,32 @@ struct StatsPopupView: View {
 
     private func areaChart(_ values: [Double], _ color: Color, _ maxV: Double,
                            xMax: Int? = nil, lineOnly: Bool = false) -> some View {
-        // Pin X to a shared domain so overlaid charts share one time axis (else
-        // each auto-scales to its own count and the curves slide apart).
-        let upper = Double(max((xMax ?? values.count) - 1, 1))
-        return Chart(Array(values.enumerated()), id: \.offset) { i, v in
-            if !lineOnly {
-                AreaMark(x: .value("t", i), y: .value("v", min(1, max(0, v / maxV))))
-                    .foregroundStyle(color.opacity(0.18))
+        // Hand-drawn in a Canvas, NOT Swift Charts. Swift Charts' first synchronous
+        // layout (which `.preferredContentSize` forces on every freshly-built popover
+        // hosting controller) cost ~2s per open — the whole popover felt frozen. A
+        // Canvas area+line is the same picture for a fraction of the cost and matches
+        // the network chart's renderer. X pinned to `upper` so overlaid charts share
+        // one time axis; Y normalised 0…1 against maxV (Canvas y grows downward).
+        let upper = CGFloat(max((xMax ?? values.count) - 1, 1))
+        return Canvas { ctx, size in
+            guard values.count > 1 else { return }
+            func pt(_ i: Int) -> CGPoint {
+                let frac = CGFloat(min(1, max(0, values[i] / maxV)))
+                return CGPoint(x: size.width * CGFloat(i) / upper, y: size.height - frac * size.height)
             }
-            LineMark(x: .value("t", i), y: .value("v", min(1, max(0, v / maxV))))
-                .foregroundStyle(color)
+            var line = Path()
+            line.move(to: pt(0))
+            for i in 1..<values.count { line.addLine(to: pt(i)) }
+            if !lineOnly {
+                var area = line
+                area.addLine(to: CGPoint(x: size.width * CGFloat(values.count - 1) / upper, y: size.height))
+                area.addLine(to: CGPoint(x: pt(0).x, y: size.height))
+                area.closeSubpath()
+                ctx.fill(area, with: .color(color.opacity(0.18)))
+            }
+            ctx.stroke(line, with: .color(color), lineWidth: 1.5)
         }
-        .chartXAxis(.hidden).chartYAxis(.hidden)
-        .chartYScale(domain: 0...1).chartXScale(domain: 0...upper)
         .frame(height: sz(70))
-        .animation(nil, value: values.count)   // live-feed chart: no morphing tweens
     }
 
     // Mirrored about the centre line — upload fills upward, download downward — each

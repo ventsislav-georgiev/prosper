@@ -61,23 +61,21 @@ struct MenuBarStore: Codable, Equatable, Sendable {
 
     var schemaVersion: Int = MenuBarStore.currentSchema
 
-    /// Absolute icon spacing in points written to both NSStatusItem keys.
-    /// macOS default is 16; `MenuBarSpacing.defaultSpacing`. Clamped on read.
-    var spacing: Int = MenuBarSpacing.defaultSpacing
+    /// Absolute icon spacing in points written to both NSStatusItem keys. macOS stock
+    /// is 16 (`MenuBarSpacing.defaultSpacing`); we default tighter (3) since the whole
+    /// point of the feature is a denser bar. Clamped on read.
+    var spacing: Int = 3
 
     /// Master gate for the always-hidden third section (two-tier hide). Off → a
     /// single hidden section, one chevron.
     var alwaysHiddenEnabled: Bool = false
-
-    /// Reveal the hidden section on hovering the menu bar (vs click/hotkey only).
-    var hoverReveal: Bool = false
 
     /// Seconds the hidden section stays revealed with no interaction before it
     /// auto-rehides. Clamped 1...30 on read.
     var autoRehideSeconds: Int = 5
 
     /// Cosmetic glyph for the divider items.
-    var chevronStyle: ChevronStyle = .chevrons
+    var chevronStyle: ChevronStyle = .ellipsis
 
     var clampedSpacing: Int { min(max(spacing, MenuBarSpacing.minSpacing), MenuBarSpacing.maxSpacing) }
     var clampedAutoRehide: Int { min(max(autoRehideSeconds, 1), 30) }
@@ -96,7 +94,6 @@ struct MenuBarStore: Codable, Equatable, Sendable {
         schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? d.schemaVersion
         spacing = try c.decodeIfPresent(Int.self, forKey: .spacing) ?? d.spacing
         alwaysHiddenEnabled = try c.decodeIfPresent(Bool.self, forKey: .alwaysHiddenEnabled) ?? d.alwaysHiddenEnabled
-        hoverReveal = try c.decodeIfPresent(Bool.self, forKey: .hoverReveal) ?? d.hoverReveal
         autoRehideSeconds = try c.decodeIfPresent(Int.self, forKey: .autoRehideSeconds) ?? d.autoRehideSeconds
         chevronStyle = try c.decodeIfPresent(ChevronStyle.self, forKey: .chevronStyle) ?? d.chevronStyle
     }

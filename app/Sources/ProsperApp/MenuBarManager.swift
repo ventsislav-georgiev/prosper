@@ -46,7 +46,6 @@ final class MenuBarManager: NSObject {
     private var revealed = false
     private var rehideTimer: Timer?
     private var outsideMonitor: Any?
-    private var hoverMonitor: Any?
 
     /// Set by AppDelegate from the registry (boot + onEnabledChanged). Defaults
     /// true so a reconcile before the registry wires up doesn't suppress setup.
@@ -298,20 +297,10 @@ final class MenuBarManager: NSObject {
                 }
             }
         }
-        guard Preferences.menuBarStore.hoverReveal else { return }
-        hoverMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { _ in
-            MainActor.assumeIsolated {
-                let y = NSEvent.mouseLocation.y
-                if y >= (NSScreen.main?.frame.maxY ?? 0) - Self.menuBarHeight {
-                    MenuBarManager.shared.scheduleRehide()   // cursor in the bar: stay open
-                }
-            }
-        }
     }
 
     private func stopRevealMonitors() {
         if let m = outsideMonitor { NSEvent.removeMonitor(m); outsideMonitor = nil }
-        if let m = hoverMonitor { NSEvent.removeMonitor(m); hoverMonitor = nil }
     }
 
     private static let menuBarHeight: CGFloat = 24

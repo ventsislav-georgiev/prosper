@@ -24,6 +24,7 @@ final class StatsController {
     private lazy var popover: NSPopover = {
         let p = NSPopover()
         p.behavior = .transient
+        p.animates = false   // instant show/hide; the default tween read as a ~0.2s lag on switch
         p.delegate = popoverDelegate
         return p
     }()

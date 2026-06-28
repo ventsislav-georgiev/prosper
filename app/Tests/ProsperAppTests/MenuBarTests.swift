@@ -123,7 +123,6 @@ final class MenuBarTests: XCTestCase {
         var s = MenuBarStore.default
         s.spacing = 8
         s.alwaysHiddenEnabled = true
-        s.hoverReveal = true
         s.autoRehideSeconds = 12
         s.chevronStyle = .circle
         let data = try JSONEncoder().encode(s)
@@ -136,10 +135,10 @@ final class MenuBarTests: XCTestCase {
         // other field defaulted (downgrade-safe, mirrors layoutStore behavior).
         let json = #"{"schemaVersion":1}"#.data(using: .utf8)!
         let s = try JSONDecoder().decode(MenuBarStore.self, from: json)
-        XCTAssertEqual(s.spacing, MenuBarSpacing.defaultSpacing)
+        XCTAssertEqual(s.spacing, 3)   // model default (denser than macOS stock 16)
         XCTAssertFalse(s.alwaysHiddenEnabled)
         XCTAssertEqual(s.autoRehideSeconds, 5)
-        XCTAssertEqual(s.chevronStyle, .chevrons)
+        XCTAssertEqual(s.chevronStyle, .ellipsis)
     }
 
     // A blob from the old build that still carries the removed reorder/order keys
