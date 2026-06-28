@@ -737,17 +737,23 @@ struct StatsPopupView: View {
     // MARK: - Top processes (CPU / RAM), with real app icons
 
     private var topProcesses: some View {
-        let procs = module == .cpu ? store.snapshot.topByCPU : store.snapshot.topByMemory
+        // Battery ranks by ENERGY, not memory — CPU is the energy proxy on Apple
+        // Silicon (no discrete GPU; energy impact ≈ CPU time), so an idle high-RAM
+        // tab doesn't wrongly top the list. ponytail: CPU proxy, swap for a `top`
+        // POWER-column reader only if Activity-Monitor-exact energy is wanted.
+        let byMem = module == .memory
+        let procs = byMem ? store.snapshot.topByMemory : store.snapshot.topByCPU
         return VStack(alignment: .leading, spacing: sz(5)) {
             section("Top processes")
             HStack {
                 Text("Process").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 Spacer()
-                Text(module == .cpu ? "Usage" : "Memory").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                Text(module == .memory ? "Memory" : (module == .battery ? "Energy" : "Usage"))
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             }
             if let procs, !procs.isEmpty {
                 ForEach(procs, id: \.pid) { p in
-                    procRow(p, module == .cpu ? StatsFormat.percent(p.cpu) : StatsFormat.bytes(Double(p.memory)))
+                    procRow(p, byMem ? StatsFormat.bytes(Double(p.memory)) : StatsFormat.percent(p.cpu))
                 }
             } else {
                 Text("Sampling…").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
