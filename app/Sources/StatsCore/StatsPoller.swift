@@ -15,6 +15,16 @@ import os
 
 public enum StatsModule: String, CaseIterable, Sendable {
     case cpu, memory, network, gpu, power, sensors, battery
+
+    /// Metric history series this module feeds (empty = not charted). Drives both
+    /// which rings the poller allocates and what it snapshots each tick.
+    public var historyKeys: [String] {
+        switch self {
+        case .cpu: ["cpu"]; case .memory: ["memory"]; case .gpu: ["gpu"]
+        case .power: ["power"]; case .network: ["net.up", "net.down"]
+        case .sensors, .battery: []
+        }
+    }
 }
 
 public struct StatsSnapshot: Sendable {
@@ -77,9 +87,11 @@ public final class StatsPoller {
         self.enabled = modules
         self.config = config
         self.deliverQueue = deliverQueue
-        for key in ["cpu", "memory", "net.up", "net.down", "gpu", "power"] {
+        // Only ring the metrics an enabled module actually pushes — the per-tick
+        // snapshot below is then proportional to what's on screen, not a fixed 6.
+        for m in modules { for key in m.historyKeys {
             histories[key] = RingBuffer<Double>(capacity: config.historyLength)
-        }
+        } }
     }
 
     public func start() {

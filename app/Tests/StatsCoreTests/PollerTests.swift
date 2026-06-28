@@ -81,6 +81,29 @@ final class StatsPollerTests: XCTestCase {
         XCTAssertFalse(v, "GPU disabled → never present in snapshot")
     }
 
+    func testPerTickHistorySnapshotWithinBudget() {
+        // Hot-path budget: poll() materializes the ring histories onto the snapshot
+        // every tick. With every metric ringed and full (worst case), one
+        // materialization must stay well under the 1s tick — assert < 200µs so a
+        // regression (e.g. O(n²) copy) trips here, not in the field.
+        var rings: [String: RingBuffer<Double>] = [:]
+        for key in ["cpu", "memory", "net.up", "net.down", "gpu", "power"] {
+            var r = RingBuffer<Double>(capacity: 120)
+            for i in 0..<120 { r.append(Double(i)) }
+            rings[key] = r
+        }
+        let iterations = 1000
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        var sink = 0
+        for _ in 0..<iterations {
+            let snap = rings.mapValues { $0.snapshot() }
+            sink &+= snap["cpu"]?.count ?? 0
+        }
+        let perCall = Double(DispatchTime.now().uptimeNanoseconds - t0) / Double(iterations)
+        XCTAssertEqual(sink, iterations * 120)
+        XCTAssertLessThan(perCall, 200_000, "per-tick history snapshot \(Int(perCall))ns exceeds 200µs budget")
+    }
+
     func testStopHaltsDelivery() {
         var cfg = StatsPoller.Config(); cfg.baseInterval = 0.02
         let poller = StatsPoller(modules: [.memory], config: cfg,
