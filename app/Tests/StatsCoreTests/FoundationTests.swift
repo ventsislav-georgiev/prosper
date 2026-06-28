@@ -134,4 +134,19 @@ final class PowerSensorReaderTests: XCTestCase {
         // Labels are deduped — no two sensors share a name.
         XCTAssertEqual(Set(rails.map(\.name)).count, rails.count)
     }
+
+    // HOT-PATH REQUIREMENT: runs on the sensors slow tick. After the one-time
+    // key resolution, a steady read touches only keys present on this Mac — must
+    // stay well under 2 ms (≈6 SMC syscalls). A regression here means the
+    // absent-key resolution cache broke and we're re-probing dead keys.
+    func testSteadyReadUnderBudget() throws {
+        guard let r = PowerSensorReader() else { throw XCTSkip("no SMC") }
+        _ = r.read()                       // pay the one-time resolve
+        let n = 200
+        let t0 = Date()
+        for _ in 0..<n { _ = r.read() }
+        let ms = Date().timeIntervalSince(t0) / Double(n) * 1000
+        print("PowerSensorReader steady read \(String(format: "%.3f", ms))ms/call")
+        XCTAssert(ms < 2.0, "steady V/I read \(ms)ms — resolution cache regressed?")
+    }
 }

@@ -33,28 +33,51 @@ public final class PowerSensorReader {
         ("IDBR", "Display"),   // backlight rail (validated present on M4 Pro)
     ]
 
+    // A rail resolved as present on THIS machine: which key to read, its label,
+    // and the unit. Built once (the SMC key set is static for a boot) so steady
+    // reads never pay a syscall for an absent key — a failed SMC lookup is NOT
+    // cached by the SMC layer, so re-probing absent keys every tick is pure waste.
+    private struct Rail { let key: String; let label: String; let unit: VISensor.Unit }
+    private var resolved: [Rail]?
+
     public init?() {
         guard let smc = try? SMC() else { return nil }
         self.smc = smc
     }
 
-    /// Present, sane-valued labeled rails. Voltages then currents; first label
-    /// wins when two keys map to the same name (e.g. VM0R/VDMA → "Memory").
-    public func read() -> [VISensor] {
-        var out: [VISensor] = []
+    /// Probe the curated keys ONCE, keeping only those present as `flt ` rails.
+    /// First label wins when two keys map to one name (e.g. VM0R/VDMA → "Memory").
+    private func resolve() -> [Rail] {
+        var rails: [Rail] = []
         var seen = Set<String>()
-        func add(_ keys: [(String, String)], _ unit: VISensor.Unit, valid: (Double) -> Bool) {
+        func probe(_ keys: [(String, String)], _ unit: VISensor.Unit) {
             for (key, label) in keys where !seen.contains(label) {
-                guard let v = smc.read(key), v.type == "flt ",
-                      v.double.isFinite, valid(v.double) else { continue }
-                out.append(VISensor(name: label, value: v.double, unit: unit))
+                guard smc.read(key)?.type == "flt " else { continue }
+                rails.append(Rail(key: key, label: label, unit: unit))
                 seen.insert(label)
             }
         }
-        // USB-C PD tops out ~48V; a real rail is above noise. Current rails sit
-        // below ~100A even on desktops; allow 0 (an idle rail reads zero).
-        add(Self.voltageKeys, .volt) { $0 > 0.1 && $0 < 60 }
-        add(Self.currentKeys, .amp) { $0 >= 0 && $0 < 100 }
+        probe(Self.voltageKeys, .volt)
+        probe(Self.currentKeys, .amp)
+        return rails
+    }
+
+    /// Present, sane-valued labeled rails. Reads only keys resolved present on
+    /// this Mac; the per-read range check drops a transient bogus value.
+    public func read() -> [VISensor] {
+        let rails = resolved ?? { let r = resolve(); resolved = r; return r }()
+        var out: [VISensor] = []
+        out.reserveCapacity(rails.count)
+        for r in rails {
+            guard let v = smc.read(r.key), v.double.isFinite else { continue }
+            // USB-C PD tops out ~48V; a real rail is above noise. Current rails
+            // sit below ~100A even on desktops; allow 0 (an idle rail reads zero).
+            switch r.unit {
+            case .volt: guard v.double > 0.1 && v.double < 60 else { continue }
+            case .amp:  guard v.double >= 0 && v.double < 100 else { continue }
+            }
+            out.append(VISensor(name: r.label, value: v.double, unit: r.unit))
+        }
         return out
     }
 }
