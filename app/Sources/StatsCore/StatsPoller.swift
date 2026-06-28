@@ -29,7 +29,7 @@ public enum StatsModule: String, CaseIterable, Sendable {
     }
 }
 
-public struct StatsSnapshot: Sendable, Equatable {
+public struct StatsSnapshot: Sendable {
     public var cpu: CPUSample?
     public var memory: MemorySample?
     public var network: NetworkSample?
