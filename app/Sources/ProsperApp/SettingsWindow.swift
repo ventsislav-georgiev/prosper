@@ -269,6 +269,8 @@ final class SettingsModel: ObservableObject {
     @Published var dragSnapEdgeMargin: Double { didSet { Preferences.dragSnapEdgeMargin = CGFloat(dragSnapEdgeMargin) } }
     @Published var dragSnapCornerSize: Double { didSet { Preferences.dragSnapCornerSize = CGFloat(dragSnapCornerSize) } }
     @Published var dragSnapIgnoredBundleIds: [String]
+    // Which screen the command runner / Clipboard History open on.
+    @Published var runnerPlacement: RunnerPlacement { didSet { Preferences.runnerPlacement = runnerPlacement } }
     // Window layouts (drag-into-zone). Mode + gap persist directly; the store holds
     // groups/layouts and the active selection.
     @Published var snapMode: SnapMode { didSet { Preferences.snapMode = snapMode } }
@@ -359,6 +361,7 @@ final class SettingsModel: ObservableObject {
         dragSnapEdgeMargin = Double(Preferences.dragSnapEdgeMargin)
         dragSnapCornerSize = Double(Preferences.dragSnapCornerSize)
         dragSnapIgnoredBundleIds = Preferences.dragSnapIgnoredBundleIds.sorted()
+        runnerPlacement = Preferences.runnerPlacement
         snapMode = Preferences.snapMode
         layoutGap = Double(Preferences.layoutGap)
         layoutStore = Preferences.layoutStore
@@ -2284,6 +2287,13 @@ private struct WindowManagementPane: View {
     // NeonScroll), so no own scroll/title — the page header already names it.
     var body: some View {
         VStack(alignment: .leading, spacing: sz(16)) {
+            NeonSection("Panel placement",
+                        footer: "Where the command runner (⌥Space) and Clipboard History open on a multi-display setup. “Screen under the cursor” follows your pointer like Raycast and Ditto; “Last position” reopens wherever you last dragged the runner; “Main screen” always uses the display with the menu bar.") {
+                Picker("Open on", selection: $model.runnerPlacement) {
+                    ForEach(RunnerPlacement.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+            }
+
             NeonSection("Drag to Snap",
                         footer: "Drag a window so the pointer reaches a screen edge or corner; a live preview shows where it will land, and it snaps there when you let go. Left/right/bottom edges give halves, the top edge maximizes, and corners give quarters.") {
                 Toggle("Enable drag-to-snap", isOn: Binding(

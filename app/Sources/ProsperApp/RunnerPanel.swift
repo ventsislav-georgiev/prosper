@@ -160,15 +160,28 @@ final class RunnerPanel {
         UserDefaults.standard.set(["x": f.minX, "y": f.maxY], forKey: Self.originKey)
     }
 
-    /// Restores the remembered top-left corner, or centers if none saved.
+    /// Positions per `Preferences.runnerPlacement`: under the cursor (default),
+    /// the last position the user dragged it to, or the main screen.
     private func positionPanel() {
-        let h = panel.frame.height
-        if let saved = UserDefaults.standard.dictionary(forKey: Self.originKey),
-           let x = saved["x"] as? CGFloat, let top = saved["y"] as? CGFloat {
+        let size = panel.frame.size
+        switch Preferences.runnerPlacement {
+        case .cursorScreen:
             isProgrammaticMove = true
-            panel.setFrameOrigin(NSPoint(x: x, y: top - h))
+            panel.setFrameOrigin(NSScreen.centeredOrigin(size: size, in: .underCursor))
             isProgrammaticMove = false
-        } else {
+        case .lastPosition:
+            if let saved = UserDefaults.standard.dictionary(forKey: Self.originKey),
+               let x = saved["x"] as? CGFloat, let top = saved["y"] as? CGFloat {
+                isProgrammaticMove = true
+                panel.setFrameOrigin(NSPoint(x: x, y: top - size.height))
+                isProgrammaticMove = false
+            } else {
+                // Never moved yet — fall to the cursor screen rather than main.
+                isProgrammaticMove = true
+                panel.setFrameOrigin(NSScreen.centeredOrigin(size: size, in: .underCursor))
+                isProgrammaticMove = false
+            }
+        case .mainScreen:
             panel.center()
         }
     }

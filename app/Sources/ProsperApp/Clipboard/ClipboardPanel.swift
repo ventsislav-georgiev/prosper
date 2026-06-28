@@ -71,25 +71,34 @@ final class ClipboardPanel {
         DispatchQueue.main.async { [weak self] in self?.model.focusRequested = true }
     }
 
-    /// Opens centered on the command runner's remembered position (so both panels
-    /// live in the same spot), clamped to the runner's screen. Falls back to
-    /// screen-center when the runner has never been moved.
+    /// Positions per `Preferences.runnerPlacement`. Under `.cursorScreen` (default)
+    /// it opens slightly above center on the screen under the pointer. Under
+    /// `.lastPosition` it co-locates with the command runner's remembered spot
+    /// (clamped to that screen). `.mainScreen` centers on the main display.
     private func positionRelativeToRunner() {
         let size = panel.frame.size
-        guard let tl = RunnerPanel.savedTopLeft() else { panel.center(); return }
-
-        let runnerCenterX = tl.x + RunnerPanel.runnerWidth / 2
-        // Horizontally centered on the runner; raised by 30% of its height above
-        // the runner's top edge so it sits higher than the runner.
-        var origin = NSPoint(x: runnerCenterX - size.width / 2, y: tl.top - size.height * 0.7)
-
-        let probe = NSPoint(x: runnerCenterX, y: tl.top - 1)
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(probe) }) ?? NSScreen.main {
-            let vf = screen.visibleFrame
-            origin.x = min(max(origin.x, vf.minX + 8), vf.maxX - size.width - 8)
-            origin.y = min(max(origin.y, vf.minY + 8), vf.maxY - size.height - 8)
+        switch Preferences.runnerPlacement {
+        case .cursorScreen:
+            panel.setFrameOrigin(NSScreen.centeredOrigin(size: size, in: .underCursor, raiseFraction: 0.1))
+            return
+        case .mainScreen:
+            panel.center()
+            return
+        case .lastPosition:
+            break
         }
-        panel.setFrameOrigin(origin)
+        guard let tl = RunnerPanel.savedTopLeft() else {
+            // Never moved yet — open on the cursor screen rather than main.
+            panel.setFrameOrigin(NSScreen.centeredOrigin(size: size, in: .underCursor, raiseFraction: 0.1))
+            return
+        }
+
+        // Centered on the runner column, raised above its top edge, clamped to the
+        // screen the runner sits on.
+        let screen = NSScreen.containing(runnerTopLeft: tl, runnerWidth: RunnerPanel.runnerWidth)
+        panel.setFrameOrigin(PanelGeometry.runnerRelativeOrigin(
+            size: size, runnerTopLeft: tl, runnerWidth: RunnerPanel.runnerWidth,
+            screenVisible: screen.visibleFrame))
     }
 
     func dismiss() {
