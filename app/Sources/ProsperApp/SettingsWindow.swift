@@ -2477,12 +2477,8 @@ private struct MenuBarPane: View {
                 }
             }
 
-            NeonSection("Hide & reveal",
+            NeonSection("Hiding",
                         footer: "A chevron sits in your menu bar. Drag any icon to its LEFT to hide it; click the chevron (or the reveal shortcut) to show the hidden icons. They auto-rehide after a few seconds.") {
-                Toggle("Reveal on hover", isOn: Binding(
-                    get: { store.hoverReveal },
-                    set: { v in mutate { $0.hoverReveal = v } }))
-                NeonDivider()
                 NeonRow("Auto-rehide", subtitle: "\(store.clampedAutoRehide) s") {
                     Slider(value: Binding(get: { Double(store.clampedAutoRehide) },
                                           set: { v in mutate { $0.autoRehideSeconds = Int(v.rounded()) } }),
