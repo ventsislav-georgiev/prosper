@@ -123,7 +123,9 @@ final class MenuBarOrderEnforcer {
         let desired = store.desiredOrder
         let mode = store.mode
         Task {
-            let result = await MenuBarArranger.apply(desired: desired)
+            // Live mode never force-reveals — only reorders on-screen items (Stats are
+            // visible; that's the use case). On-demand reveals via onReveal/Apply.
+            let result = await MenuBarArranger.apply(desired: desired, reveal: mode != .live)
             let actionable = result.moved > 0 || result.failed > 0
             // Stamp the cooldown from the pass START (`n`), not `self.now` after the
             // await — apply() can run hundreds of ms (reveal + capture + drags) and

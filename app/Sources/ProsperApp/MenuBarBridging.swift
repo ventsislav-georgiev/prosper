@@ -171,7 +171,9 @@ enum MenuBarBridge {
         let ownContent = ProsperStatusItems.live().filter { $0.role == .content }
         var out: [MenuBarItem] = []
         out.reserveCapacity(windowIDs.count)
+        var seen = Set<UInt32>()   // the CGS list can repeat a window id during a reflow
         for wid in windowIDs {
+            guard seen.insert(wid).inserted else { continue }
             var rect = CGRect.zero
             guard CGSGetScreenRectForWindow(cid, wid, &rect) == .success,
                   rect.width > 0, rect.height > 0 else { continue }
