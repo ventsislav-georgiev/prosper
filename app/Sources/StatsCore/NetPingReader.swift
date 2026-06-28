@@ -27,32 +27,40 @@ public final class NetPingReader {
     private var reach: [Bool] = []       // connectivity history (oldest→newest)
     private let reachCap: Int
     private var thread: Thread?
-    private var running = false
+    // Lifecycle epoch — bumped on stop() so an old loop still draining its
+    // recv()/sleep exits instead of racing a freshly-started one. Guarded by lock.
+    private var epoch = 0
 
     public init(host: String = "1.1.1.1", historyLength: Int = 120) {
         self.host = host; self.reachCap = historyLength
     }
 
     public func start() {
-        guard thread == nil else { return }
-        running = true
-        let t = Thread { [weak self] in self?.loop() }
+        guard thread == nil else { return }   // thread var touched only on the poller queue
+        let myEpoch = lock.withLock { epoch += 1; return epoch }
+        let t = Thread { [weak self] in self?.loop(epoch: myEpoch) }
         t.stackSize = 256 * 1024
         t.qualityOfService = .background
         thread = t
         t.start()
     }
 
-    public func stop() { running = false; thread = nil }
+    public func stop() {
+        lock.withLock { epoch += 1 }   // invalidate the running loop
+        thread = nil
+    }
 
     public func latest() -> NetLatency { lock.withLock { _latency } }
     public func connectivity() -> [Bool] { lock.withLock { reach } }
 
-    private func loop() {
+    private func alive(_ myEpoch: Int) -> Bool { lock.withLock { epoch == myEpoch } }
+
+    private func loop(epoch myEpoch: Int) {
         var seq: UInt16 = 0
-        while running {
+        while alive(myEpoch) {
             let rtt = Self.ping(host: host, seq: seq, timeout: 1.0)
             seq &+= 1
+            guard alive(myEpoch) else { return }   // dropped while pinging → don't write
             lock.withLock {
                 let ok = rtt != nil
                 reach.append(ok)
@@ -60,27 +68,31 @@ public final class NetPingReader {
                 if let r = rtt {
                     rtts.append(r)
                     if rtts.count > 20 { rtts.removeFirst(rtts.count - 20) }
+                } else {
+                    rtts.removeAll(keepingCapacity: true)   // gap breaks the jitter window
                 }
-                var jitter = Double.nan
-                if rtts.count >= 2 {
-                    var s = 0.0
-                    for i in 1..<rtts.count { s += abs(rtts[i] - rtts[i - 1]) }
-                    jitter = s / Double(rtts.count - 1)
-                }
-                _latency = NetLatency(latencyMs: rtt ?? .nan, jitterMs: jitter, reachable: ok)
+                _latency = NetLatency(latencyMs: rtt ?? .nan, jitterMs: Self.jitter(rtts), reachable: ok)
             }
             Thread.sleep(forTimeInterval: 1.0)   // ~1 s between pings (plus the timeout above)
         }
     }
 
-    /// One ICMP echo round-trip in milliseconds, or nil on timeout/error.
+    /// Mean absolute successive RTT difference (ms); NaN with <2 samples.
+    static func jitter(_ rtts: [Double]) -> Double {
+        guard rtts.count >= 2 else { return .nan }
+        var s = 0.0
+        for i in 1..<rtts.count { s += abs(rtts[i] - rtts[i - 1]) }
+        return s / Double(rtts.count - 1)
+    }
+
+    /// One ICMP echo round-trip in milliseconds, or nil on timeout/error. Validates
+    /// the reply is an echo-reply (type 0) echoing OUR seq, looping past stale or
+    /// foreign replies until the deadline — a timed-out ping N's late answer must not
+    /// be mis-read as ping N+1's RTT.
     static func ping(host: String, seq: UInt16, timeout: Double) -> Double? {
         let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
-
-        var tv = timeval(tv_sec: Int(timeout), tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
@@ -106,10 +118,33 @@ public final class NetPingReader {
         }
         guard sent > 0 else { return nil }
 
-        var recvBuf = [UInt8](repeating: 0, count: 128)
-        let n = recv(fd, &recvBuf, recvBuf.count, 0)
-        guard n > 0 else { return nil }   // timeout → recv returns -1 (EAGAIN)
-        return (NetworkReader.monotonicSeconds() - start) * 1000
+        var recvBuf = [UInt8](repeating: 0, count: 256)
+        while true {
+            let elapsed = NetworkReader.monotonicSeconds() - start
+            let remaining = timeout - elapsed
+            guard remaining > 0 else { return nil }
+            var tv = timeval(tv_sec: Int(remaining), tv_usec: Int32((remaining - Double(Int(remaining))) * 1_000_000))
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+
+            let n = recv(fd, &recvBuf, recvBuf.count, 0)
+            guard n > 0 else { return nil }   // timeout → recv returns -1 (EAGAIN)
+            guard let (type, rseq) = parseReply(recvBuf, count: n) else { continue }
+            guard type == 0, rseq == seq else { continue }   // not our echo-reply → keep waiting
+            return (NetworkReader.monotonicSeconds() - start) * 1000
+        }
+    }
+
+    /// Extract (icmpType, echoSeq) from a received buffer, skipping a leading IPv4
+    /// header if the kernel left one on (DGRAM sockets usually don't, raw do).
+    static func parseReply(_ buf: [UInt8], count n: Int) -> (UInt8, UInt16)? {
+        var off = 0
+        if n >= 1, buf[0] >> 4 == 4 {                 // IPv4 header present
+            off = Int(buf[0] & 0x0f) * 4
+        }
+        guard n >= off + 8 else { return nil }        // need ICMP header (8 bytes)
+        let type = buf[off]
+        let rseq = UInt16(buf[off + 6]) << 8 | UInt16(buf[off + 7])
+        return (type, rseq)
     }
 
     /// Internet checksum (RFC 1071). The kernel recomputes it for DGRAM sockets,
