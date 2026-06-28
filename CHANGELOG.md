@@ -63,6 +63,14 @@ tag from the now-released section and put it on the new top draft.
 - **Reads stay light.** Every sampler runs in microseconds and the menu bar updates
   once a second, so the monitors don't add measurable load to the thing they measure.
 
+### Windows
+- **Clipboard History and the command runner now open on the screen you're using.**
+  On a multi-monitor setup they used to pop up centered on the main display
+  regardless of where your cursor or focused window was. By default they now open
+  on the screen under the pointer, like Raycast and Ditto. A new **Panel placement**
+  setting (Settings › Windows) lets you choose "Screen under the cursor" (default),
+  "Last position I moved it to", or "Main screen".
+
 ### Inline Autocomplete
 - **Ghost text no longer vanishes while you type fast.** The biggest cause of
   "sometimes no suggestion appears" was that a completion arriving a moment after
