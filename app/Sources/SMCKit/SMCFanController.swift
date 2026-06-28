@@ -89,7 +89,11 @@ public final class SMCFanController {
         // an out-of-rail speed by reaching guardedWrite directly — the value bound
         // no longer depends on every caller routing through setManual.
         let safeBytes = key.hasSuffix("Tg") ? clampTargetBytes(bytes) : bytes
-        try smc.writeRawUnchecked(key, safeBytes)
+        // Tag the failing key onto a firmware rejection so the daemon log names WHICH
+        // write the chassis refused (Ftst unlock / F{i}Md mode / F{i}Tg target) — the
+        // bare result byte alone can't tell those apart.
+        do { try smc.writeRawUnchecked(key, safeBytes) }
+        catch SMCError.firmwareReject(let r) { throw SMCError.writeReject(key, r) }
     }
 
     /// Decode an RPM target (format depends on platform), clamp to the absolute
