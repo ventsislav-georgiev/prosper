@@ -2523,6 +2523,10 @@ private struct MenuBarPane: View {
         .onAppear {
             store = Preferences.menuBarStore
             orderStore = Preferences.menuBarOrderStore
+            // Migrate away any placeholder/unmanageable entries a prior build saved
+            // ("Item-0"): drop them once so the list matches what the engine drives.
+            let clean = orderStore.desiredOrder.filter(\.isManageable)
+            if clean.count != orderStore.desiredOrder.count { mutateOrder { $0.desiredOrder = clean } }
             refresh()
         }
     }

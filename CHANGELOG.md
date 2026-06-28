@@ -45,6 +45,12 @@ tag from the now-released section and put it on the new top draft.
     confirmed working on your Mac.
   - The ordering self-test now waits for its probe icons to lay out before checking,
     and reports a precise reason if it can't run, instead of a generic failure.
+  - The saved order no longer fills up with unidentifiable "Item-0" entries. macOS 26
+    (Tahoe) gives some system icons generic placeholder names and won't let them be
+    moved; ordering now skips those instead of listing them and retrying a move that
+    can never succeed (which made live mode churn). Your own icons and any real,
+    nameable app stay in the list; previously-saved placeholders are cleaned out
+    automatically.
   - Spacing: when this version of macOS hides which apps own each icon, "Apply now"
     can't relaunch them — it now says so (the spacing is still saved and applies on
     next launch / login) instead of silently doing nothing.

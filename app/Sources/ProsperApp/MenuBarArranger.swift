@@ -77,6 +77,10 @@ enum MenuBarArranger {
         var seen = Set<String>()
         return items.compactMap { item in
             let id = identity(for: item, hash: hashes[item.windowID])
+            // Drop items the engine can't manage on Tahoe — placeholder/unresolvable
+            // foreign items ("Item-0") that we can neither name nor reliably move.
+            // Own items always carry com.prosper, so they survive even pre-index.
+            guard id.isManageable else { return nil }
             return seen.insert(id.key).inserted ? id : nil
         }
     }

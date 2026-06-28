@@ -216,6 +216,22 @@ final class MenuBarTests: XCTestCase {
         XCTAssertFalse(id.isResolved)
     }
 
+    func testItemOrdinalPlaceholderTitleIsUnresolvedAndUnmanageable() {
+        // Tahoe names items it can't identify "Item-0" / "Item 1" — those must be
+        // treated as placeholders so unidentifiable foreign items drop out of the
+        // managed set instead of appearing as "Item-0" in the saved order.
+        for t in ["Item-0", "Item 1", "Item-42"] {
+            let id = MenuBarIdentity(bundleID: "com.apple.controlcenter", title: t)
+            XCTAssertFalse(id.isResolved, "\(t) should be unresolved")
+            XCTAssertFalse(id.isManageable, "\(t) should be unmanageable")
+        }
+        // A real foreign title is kept; our own items are always manageable.
+        XCTAssertTrue(MenuBarIdentity(bundleID: "com.apple.controlcenter", title: "WiFi").isManageable)
+        XCTAssertTrue(MenuBarIdentity(bundleID: "com.prosper", title: "CPU").isManageable)
+        // "Item" without a trailing number is a legitimate title, not a placeholder.
+        XCTAssertFalse(MenuBarIdentity.isPlaceholderTitle("Item Shop"))
+    }
+
     // MARK: - Ordering engine: OS capability gate
 
     func testOrderingSupportedOnTahoe() {
