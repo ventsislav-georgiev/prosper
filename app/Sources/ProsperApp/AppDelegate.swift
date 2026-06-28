@@ -889,7 +889,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         Task { @MainActor in
-            let ok = await MenuBarItemMover.selfProbe()
+            let ok = (await MenuBarItemMover.selfProbe()) == .ok
             MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: ok)
         }
     }

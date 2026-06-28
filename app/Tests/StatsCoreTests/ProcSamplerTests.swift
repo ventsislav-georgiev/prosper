@@ -22,6 +22,18 @@ final class ProcSamplerTests: XCTestCase {
         for p in byCPU { XCTAssertGreaterThanOrEqual(p.cpu, 0); XCTAssert(p.cpu.isFinite) }
     }
 
+    func testCPURateUsesTimebaseNotRawNanoseconds() {
+        // One core busy for `dt` wall-seconds accrues dt core-seconds of CPU time.
+        // In mach ticks that's (dt * 1e9 / machToNS) ticks. cpuRate must map that back
+        // to ~1.0 — the old bug treated ticks as ns, undercounting ~42× on Apple Silicon.
+        let dt = 1.0
+        let ticksForOneCore = UInt64(dt * 1_000_000_000 / ProcSampler.machToNS)
+        XCTAssertEqual(ProcSampler.cpuRate(deltaTicks: ticksForOneCore, seconds: dt), 1.0, accuracy: 1e-6)
+        // Half a core over 2s = 0.25.
+        XCTAssertEqual(ProcSampler.cpuRate(deltaTicks: ticksForOneCore / 2, seconds: 2.0), 0.25, accuracy: 1e-3)
+        XCTAssertEqual(ProcSampler.cpuRate(deltaTicks: 999, seconds: 0), 0, "no wall time → no rate")
+    }
+
     func testRepeatedSamplingStable() {
         var s = ProcSampler()
         _ = s.sample(limit: 5)

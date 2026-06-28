@@ -2434,11 +2434,13 @@ private struct MenuBarPane: View {
     @State private var previewHealthy = true
     @State private var skipped: [String] = []
     @State private var relaunching = false
-    @State private var probeOK: Bool? = nil      // nil = not run; result of selfProbe()
+    @State private var probeOK: Bool? = nil      // nil = not run; true iff probeReason == .ok
+    @State private var probeReason: MenuBarItemMover.ProbeResult? = nil   // why the probe passed/failed
     @State private var probing = false
     @State private var applying = false
     @State private var saving = false
     @State private var screenRecOK = MenuBarItemIndexer.hasPermission()
+    @State private var previewImages: [CGWindowID: NSImage] = [:]   // live per-item captures (Tahoe: only way to show real icons)
     @State private var lastApply: MenuBarArranger.ApplyResult?
 
     // OS gate is fixed for the running system — decide once.
@@ -2467,9 +2469,11 @@ private struct MenuBarPane: View {
 
             NeonSection("Hide & reveal",
                         footer: "A chevron sits in your menu bar. Drag any icon to its LEFT to hide it; click the chevron (or the reveal shortcut) to show the hidden icons. They auto-rehide after a few seconds.") {
-                Toggle("Two-tier hide (extra always-hidden section)", isOn: Binding(
+                Toggle("Two-tier hide — add an always-hidden section", isOn: Binding(
                     get: { store.alwaysHiddenEnabled },
                     set: { v in mutate { $0.alwaysHiddenEnabled = v }; MenuBarManager.shared.reconcileDividers() }))
+                Text("Adds a second chevron. ⌘-drag an icon to its LEFT to hide it for good; ⌥-click the chevron to peek at that section. Items between the two chevrons hide/reveal normally.")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 NeonDivider()
                 Toggle("Reveal on hover", isOn: Binding(
                     get: { store.hoverReveal },
@@ -2497,6 +2501,16 @@ private struct MenuBarPane: View {
                         footer: "Live preview of your primary display. To move an icon between sections (or reorder it), hold ⌘ and drag it directly in the real menu bar — macOS remembers the new position. Drag an icon to the LEFT of a chevron to hide it.") {
                 MenuBarPreviewStrip(elements: previewElements(), chevron: store.chevronStyle,
                                     spacing: store.clampedSpacing, healthy: previewHealthy)
+                if !screenRecOK {
+                    NeonDivider()
+                    NeonRow("Show real icons",
+                            subtitle: "This macOS hides each item’s app identity, so the preview needs Screen Recording to show the actual icons. Hide/reveal works without it.") {
+                        Button("Grant…") {
+                            MenuBarItemIndexer.requestPermission()
+                            Task { try? await Task.sleep(for: .milliseconds(500)); refresh() }
+                        }.buttonStyle(.neon)
+                    }
+                }
                 NeonDivider()
                 Text("Hold ⌘ and drag icons in your menu bar to reorder or re-section them.")
                     .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
@@ -2617,12 +2631,27 @@ private struct MenuBarPane: View {
     }
 
     @ViewBuilder private var probeStatusRow: some View {
-        switch probeOK {
-        case .some(true):
+        switch probeReason {
+        case .some(.ok):
             Label("Move test passed — ordering works on this Mac.", systemImage: "checkmark.seal.fill")
                 .font(Neon.font(.caption)).foregroundStyle(Neon.terminal)
-        case .some(false):
-            Label("Move test failed — ordering isn’t reliable on this Mac and is disabled.",
+        case .some(.needsAccessibility):
+            VStack(alignment: .leading, spacing: sz(4)) {
+                Label("Ordering needs Accessibility permission to move icons.", systemImage: "lock.shield")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                Button("Grant Accessibility…") {
+                    _ = PermissionsManager.ensureAccessibilityTrust(prompt: true)
+                    // Let the user flip the switch, then re-run the probe.
+                    probeReason = nil; probeOK = nil
+                    Task { try? await Task.sleep(for: .milliseconds(800)); runProbe() }
+                }.buttonStyle(.neon)
+            }
+        case .some(.moveFailed):
+            Label("Move test failed — this Mac’s menu bar didn’t accept the reorder. Ordering is disabled.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+        case .some(.unavailable), .some(.enumerationFailed):
+            Label("Move test couldn’t run on this version of macOS — ordering is disabled.",
                   systemImage: "exclamationmark.triangle.fill")
                 .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
         case nil:
@@ -2655,14 +2684,18 @@ private struct MenuBarPane: View {
     }
 
     private func runProbe() {
-        guard probeOK == nil, !probing else { return }
+        guard probeReason == nil, !probing else { return }
         probing = true
         Task {
-            let ok = await MenuBarItemMover.selfProbe()
+            let result = await MenuBarItemMover.selfProbe()
             probing = false
+            probeReason = result
+            let ok = (result == .ok)
             probeOK = ok
-            if !ok { mutateOrder { $0.enabled = false } }   // self-disable on unreliable OS
-            else { MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: true) }
+            // Don't hard-disable when it's only a missing Accessibility grant — the
+            // user gets a "Grant…" button and can re-probe. Disable on real failures.
+            if !ok && result != .needsAccessibility { mutateOrder { $0.enabled = false } }
+            if ok { MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: true) }
         }
     }
 
@@ -2722,6 +2755,26 @@ private struct MenuBarPane: View {
     private func refresh() {
         previewHealthy = MenuBarManager.shared.previewHealthy()
         sections = MenuBarManager.shared.sectionedItems()
+        capturePreviewIcons()
+    }
+
+    /// Capture a live image for each currently-visible item so the preview shows
+    /// real icons. On Tahoe pid-based icons are dead (every item = Control Center),
+    /// so this is the only source. Needs Screen Recording; without it we keep the
+    /// placeholder glyphs. Off-screen (hidden) items can't be captured — they fall
+    /// back to placeholders too.
+    private func capturePreviewIcons() {
+        screenRecOK = MenuBarItemIndexer.hasPermission()
+        guard screenRecOK else { previewImages = [:]; return }
+        let items = sections.map(\.item)
+        Task {
+            let cgs = await MenuBarItemIndexer.images(for: items)
+            var out: [CGWindowID: NSImage] = [:]
+            for (wid, cg) in cgs {
+                out[wid] = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            }
+            previewImages = out
+        }
     }
 
     /// Flatten the sectioned items (left→right) into preview elements, dropping a
@@ -2732,8 +2785,11 @@ private struct MenuBarPane: View {
         var prev: MenuBarSection?
         for entry in sections {
             if let p = prev, p != entry.section { out.append(.chevron) }
-            out.append(.icon(NSRunningApplication(processIdentifier: entry.item.pid)?.icon,
-                             dimmed: entry.section != .visible))
+            // Live capture first (only reliable icon source on Tahoe), then the
+            // pid-based app icon (works pre-Tahoe), else a placeholder glyph.
+            let img = previewImages[entry.item.windowID]
+                ?? NSRunningApplication(processIdentifier: entry.item.pid)?.icon
+            out.append(.icon(img, dimmed: entry.section != .visible))
             prev = entry.section
         }
         return out
