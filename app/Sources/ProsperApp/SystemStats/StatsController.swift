@@ -7,6 +7,7 @@
 import AppKit
 import SwiftUI
 import StatsCore
+import os
 
 extension Notification.Name {
     /// Posted by the settings pane when the enable flag or widget style changes.
@@ -157,9 +158,12 @@ final class StatsController {
         }
     }
 
+    private static let log = Logger(subsystem: "eu.illegible.prosper", category: "statspopup")
+
     @objc private func itemClicked(_ sender: NSStatusBarButton) {
         guard let m = buttonModule[ObjectIdentifier(sender)] else { return }
         if popover.isShown, openModule == m { popover.performClose(sender); return }
+        let t0 = DispatchTime.now()
         openModule = m
         let host = NSHostingController(rootView: StatsPopupView(module: m, store: store))
         // Let the popover learn the view's real size BEFORE it positions itself.
@@ -169,8 +173,12 @@ final class StatsController {
         // sizes the popover to the SwiftUI content up front so .minY (below the
         // menu-bar item) lands flush every time.
         host.sizingOptions = [.preferredContentSize]
+        let tBuilt = DispatchTime.now()
         popover.contentViewController = host
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        let tShown = DispatchTime.now()
+        func ms(_ a: DispatchTime, _ b: DispatchTime) -> Double { Double(b.uptimeNanoseconds - a.uptimeNanoseconds) / 1_000_000 }
+        Self.log.notice("popup \(m.rawValue, privacy: .public) build=\(ms(t0, tBuilt), format: .fixed(precision: 1))ms show=\(ms(tBuilt, tShown), format: .fixed(precision: 1))ms")
     }
 
     private func teardown() {
