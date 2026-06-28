@@ -20,6 +20,18 @@ public struct TempSensor: Sendable, Equatable {
     public let celsius: Double
 }
 
+/// A labeled voltage or current rail (SMC `flt ` sensor). `unit` distinguishes
+/// the two so the UI can group and format them.
+public struct VISensor: Sendable, Equatable {
+    public enum Unit: Sendable { case volt, amp }
+    public let name: String
+    public let value: Double
+    public let unit: Unit
+    public init(name: String, value: Double, unit: Unit) {
+        self.name = name; self.value = value; self.unit = unit
+    }
+}
+
 public final class IOHIDSensors {
     private typealias CreateT   = @convention(c) (CFAllocator?) -> Unmanaged<AnyObject>?
     private typealias SetMatchT = @convention(c) (AnyObject?, CFDictionary?) -> Void

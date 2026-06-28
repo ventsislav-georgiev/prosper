@@ -313,6 +313,17 @@ struct StatsPopupView: View {
                 sectionHeader("FANS")
                 ForEach(fans) { f in kv("Fan \(f.id + 1)", "\(Int(f.current.rounded())) rpm") }
             }
+            let vi = store.snapshot.powerSensors ?? []
+            let volts = vi.filter { $0.unit == .volt }
+            let amps = vi.filter { $0.unit == .amp }
+            if !volts.isEmpty {
+                sectionHeader("VOLTAGE")
+                ForEach(volts, id: \.name) { v in kv(v.name, String(format: "%.2f V", v.value)) }
+            }
+            if !amps.isEmpty {
+                sectionHeader("CURRENT")
+                ForEach(amps, id: \.name) { a in kv(a.name, String(format: "%.2f A", a.value)) }
+            }
         }
     }
 

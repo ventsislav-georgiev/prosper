@@ -117,3 +117,21 @@ final class SMCDecodeTests: XCTestCase {
         XCTAssertEqual(SMCDecode.decodeFPE2([]), 0, "short fpe2 → 0 → clamp lifts to floor")
     }
 }
+
+final class PowerSensorReaderTests: XCTestCase {
+    func testRailsPresentAndSane() throws {
+        guard let r = PowerSensorReader() else { throw XCTSkip("no SMC") }
+        let rails = r.read()
+        // On a charging laptop DC In should surface; on others the set may be
+        // empty (no labeled rail present) — that's valid, so only assert ranges.
+        for s in rails {
+            switch s.unit {
+            case .volt: XCTAssertTrue(s.value > 0.1 && s.value < 60, "\(s.name) V out of range: \(s.value)")
+            case .amp:  XCTAssertTrue(s.value >= 0 && s.value < 100, "\(s.name) A out of range: \(s.value)")
+            }
+            XCTAssertFalse(s.name.isEmpty)
+        }
+        // Labels are deduped — no two sensors share a name.
+        XCTAssertEqual(Set(rails.map(\.name)).count, rails.count)
+    }
+}
