@@ -52,16 +52,22 @@ tag from the now-released section and put it on the new top draft.
 - **A detail popover behind each menu-bar item.** Click a module for a live history
   chart and a full breakdown:
   - **CPU** — per-core load bars, system/user/idle split, efficiency vs performance
-    cores, plus load average and uptime.
-  - **Memory** — app/wired/compressed stacked usage, memory pressure, and swap.
-  - **GPU** — utilization with renderer and tiler breakdown, VRAM in use, and core count.
+    cores with their live clock speeds, plus load average and uptime.
+  - **Memory** — app/wired/compressed stacked usage, cached files, the real kernel
+    memory-pressure level, and swap used/total.
+  - **GPU** — utilization with renderer and tiler breakdown, VRAM in use, core count,
+    and frames-per-second presented to the display.
   - **Network** — up/down throughput with a dual-area chart, total transferred, and
     the active interface, IP address, and Wi-Fi network.
-  - **Sensors** — the full temperature list and current fan speeds.
+  - **Sensors** — the full temperature list, current fan speeds, and labeled voltage
+    and current rails (DC in, system, memory, display).
+  - **Power** — live CPU, GPU, Neural Engine, and DRAM wattage with the total.
   - **Battery** — charge, health, cycle count, live power draw, voltage, amperage,
     capacity, power-adapter wattage, and time remaining.
 - **Reads stay light.** Every sampler runs in microseconds and the menu bar updates
   once a second, so the monitors don't add measurable load to the thing they measure.
+  Expensive sources (frequency, frame rate, power) sample on a throttled background
+  tick and the voltage/current reader probes only the rails your Mac actually has.
 
 ### Windows
 - **Clipboard History and the command runner now open on the screen you're using.**
