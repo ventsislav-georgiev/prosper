@@ -561,6 +561,22 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
                enabled ? 1 : 0, loaded == nil ? 1 : 0,
                (loaded?.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) ? 1 : 0,
                signedIn ? 1 : 0, deviceID)
+        // GUARD: user wants remote-wake ON but the keychain wasn't readable this
+        // instant (loaded == nil — common right after launch/wake; a background context
+        // can momentarily fail to fetch the iCloud-synced key). Do NOT read that as
+        // "signed out" and disarm: writing enabled=false below would clobber the daemon's
+        // root config (which otherwise persists dark-wake across restarts) AND clear
+        // lastWakeConfig/metaURL, silently killing remote-wake while the checkbox still
+        // shows on — the "woke once, then never again" bug, triggered by the on_launch
+        // re-apply. Leave the daemon exactly as-is and bail. A REAL sign-out reads
+        // loaded != nil with an empty email (disarmed below), and signOut() disarms
+        // explicitly — so this only skips the ambiguous transient. Self-heals on the
+        // next launch/wake re-apply once the keychain is readable.
+        if enabled && loaded == nil {
+            os_log("remoteWake.apply DEFERRED: keychain unreadable while enabling — daemon left armed, no disarm",
+                   log: .default, type: .info)
+            return
+        }
         let cfg = RemoteWakeConfig(
             enabled: enabled && signedIn,
             pollURL: Self.wakePollURL(deviceTag: deviceID),
@@ -785,6 +801,16 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     }
 
     func screenAllJSON() -> String { mainSync { SystemInfo.screensJSON() } }
+
+    func dchSessionsJSON() -> String {
+        // 10s = the same window DchSessionServer's keep-awake tick uses, so the
+        // Status readout matches exactly what Prosper counts as an active session.
+        let arr = DchCommand.sessionsStatus(within: 10).map {
+            ["name": $0.name, "alias": $0.alias, "active": $0.active] as [String: Any]
+        }
+        return (try? JSONSerialization.data(withJSONObject: arr))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+    }
 
     func screenLidClosed() -> Int {
         switch SystemInfo.lidClosed() {
