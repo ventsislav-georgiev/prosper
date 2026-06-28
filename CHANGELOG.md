@@ -96,6 +96,10 @@ tag from the now-released section and put it on the new top draft.
 - **Higher-contrast layout palette.** The palette strip's backdrop is more opaque and
   the gaps and outlines between panes are now black, so each drop target reads clearly
   against the accent-highlighted cells (the strip stays translucent over your desktop).
+- **Fresh installs start on the layout palette.** A brand-new install now defaults the
+  drag-snap mode to the layout palette so the feature is discoverable out of the box.
+  Existing and upgrading users keep whatever mode they were on — the default is only
+  seeded on a genuine first launch.
 
 ### Keep Mac Awake (OpenLid)
 - **A remotely-woken Mac no longer falls back asleep mid-session.** After the app
@@ -104,6 +108,19 @@ tag from the now-released section and put it on the new top draft.
   the Mac slept a few seconds after you connected — even with open `dch` sessions.
   The app now re-establishes that link on launch, so the hold actually reaches the
   helper and the Mac stays awake while work is running.
+- **Remote wake no longer silently switches itself off after the first wake.** Remote
+  wake could wake the Mac once and then never again, while the checkbox and Status
+  still showed it "on". Cause: on every launch the app re-applied the remote-wake
+  setting, and if the sign-in key happened to be momentarily unreadable at that instant
+  (common right after a wake) it was misread as "signed out" and disarmed the
+  background helper's saved config — killing the dark-wake while the UI kept claiming
+  it was armed. A transient unreadable key is now left alone: only a real sign-out or
+  an explicit toggle-off ever disarms, so a Mac you armed stays wakeable across
+  restarts and wakes.
+- **Status now lists your remote terminal sessions.** A new "Remote sessions" line in
+  the Status group shows each live `dch` session and which ones Prosper currently
+  counts as *active* (producing output within the keep-awake window) — so you can see
+  exactly when a session is holding the Mac awake versus sitting idle.
 - **Settings redesigned so the on/off state is honest and the controls are clear.**
   The old "Right now" section showed Prosper's stored intent, which could say "off"
   while the Mac was still being held awake by something else — and the manual toggle

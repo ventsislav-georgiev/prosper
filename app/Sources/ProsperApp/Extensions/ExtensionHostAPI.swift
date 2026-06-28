@@ -175,6 +175,10 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     // Screens (read-only, open). all() = JSON array; lidClosed = 1/0/-1(unknown).
     func screenAllJSON() -> String
     func screenLidClosed() -> Int
+    /// Live dch (remote terminal) sessions for the Status readout: JSON array of
+    /// {name, alias, active} where active = output stamped within the keep-awake
+    /// window. Read-only, open.
+    func dchSessionsJSON() -> String
     // Release every native resource (power assertions, pmset lid override) an
     // extension holds. Called on disable/reset/quit so a wedged "disable sleep" can
     // never outlive its owner (stateless-resource teardown, plan §2.3).
@@ -258,6 +262,7 @@ extension ExtensionHostServices {
     func networkIsReachable() -> Bool { true }
     func networkAddressesJSON() -> String { "[]" }
     func screenAllJSON() -> String { "[]" }
+    func dchSessionsJSON() -> String { "[]" }
     func screenLidClosed() -> Int { -1 }
 
     /// Default: nothing to release (test / minimal hosts). The live host frees native
@@ -680,6 +685,7 @@ struct ExtensionHost {
         lua.register("__h_network_addresses") { rt in rt.push(services.networkAddressesJSON()); return 1 }
         lua.register("__h_screen_all") { rt in rt.push(services.screenAllJSON()); return 1 }
         lua.register("__h_screen_lid") { rt in rt.push(Double(services.screenLidClosed())); return 1 }
+        lua.register("__h_dch_sessions") { rt in rt.push(services.dchSessionsJSON()); return 1 }
 
         // --- caffeinate / power (automation: holds system resources + pmset) ---
         if automation {
@@ -1178,6 +1184,18 @@ struct ExtensionHost {
         end,
     }
     __h_fs_list_dirs = nil
+
+    -- Live dch (remote terminal) sessions, for the OpenLid Status readout.
+    --   host.dch.sessions() -> { {name=, alias=, active=}, ... }
+    -- active = the session stamped pty output within the keep-awake window.
+    local raw_dch_sessions = __h_dch_sessions
+    host.dch = {
+        sessions = function()
+            local raw = raw_dch_sessions()
+            return raw and json_decode(raw) or {}
+        end,
+    }
+    __h_dch_sessions = nil
 
     -- Power / battery / network / screen (Hammerspoon openlid parity). Reads are
     -- open; the caffeinate writes are privileged (no-op stubs otherwise). Captured

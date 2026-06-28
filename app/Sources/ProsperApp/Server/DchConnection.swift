@@ -287,6 +287,20 @@ enum DchCommand {
         return false
     }
 
+    /// Per-session keep-awake view for the OpenLid Status UI: every live session
+    /// plus whether it stamped pty output within `seconds` — the exact per-session
+    /// signal `anySessionActive` OR's into the keep-awake hold. (A session running a
+    /// silent long command reads inactive, same documented limitation.)
+    static func sessionsStatus(within seconds: Int) -> [(name: String, alias: String, active: Bool)] {
+        let dir = socketDir
+        let fm = FileManager.default
+        let cutoff = Date().addingTimeInterval(-Double(seconds))
+        return listSessions().map { s in
+            let m = (try? fm.attributesOfItem(atPath: "\(dir)/\(s.name).sock.act"))?[.modificationDate] as? Date
+            return (s.name, s.alias, m.map { $0 >= cutoff } ?? false)
+        }
+    }
+
     static func kill(_ name: String) {
         _ = runCapturing(args: ["-k", name])
     }

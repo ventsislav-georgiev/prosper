@@ -575,6 +575,26 @@ function settings_render(section_id, state)
     local on_ac = not running_on_battery()
     local real = real_disablesleep()
 
+    -- Live remote-terminal (dch) sessions + which ones Prosper currently counts as
+    -- active (stamped output within the keep-awake window). Lets you see exactly when
+    -- a dch session is holding the Mac awake. Collapsed into ONE info row (a variable
+    -- row count would jump the scroll like the remote-wake subtitle did).
+    local sessions = host.dch.sessions()
+    local sess_active, sess_parts = 0, {}
+    for _, se in ipairs(sessions) do
+        if se.active then sess_active = sess_active + 1 end
+        local label = (se.alias ~= nil and se.alias ~= "") and se.alias or se.name
+        sess_parts[#sess_parts + 1] = label .. (se.active and " \u{00B7} active" or " \u{00B7} idle")
+    end
+    local sess_value, sess_subtitle
+    if #sessions == 0 then
+        sess_value, sess_subtitle = "none", "No remote terminal (dch) sessions"
+    else
+        sess_value = sess_active > 0 and string.format("%d active", sess_active)
+                                      or string.format("%d idle", #sessions)
+        sess_subtitle = table.concat(sess_parts, ", ")
+    end
+
     -- ── STATUS (read-only) — what the Mac is ACTUALLY doing now ────────────────
     -- Separate from the controls (the prior single "Right now" section mixed live
     -- state with the switches, and showed our stored intent instead of the real
@@ -595,6 +615,8 @@ function settings_render(section_id, state)
             s.row{ kind = "info", title = "\u{1F4E1} Remote wake",
                    value = c.remoteWake and "on" or "off",
                    subtitle = "Wake this Mac from another device while it sleeps" },
+            s.row{ kind = "info", title = "\u{1F5A5}\u{FE0F} Remote sessions",
+                   value = sess_value, subtitle = sess_subtitle },
             s.row{ kind = "info", title = "Power",
                    subtitle = string.format("Battery %d%% \u{00B7} %s \u{00B7} External display: %s",
                         battery_pct(), on_ac and "on charger" or "on battery",

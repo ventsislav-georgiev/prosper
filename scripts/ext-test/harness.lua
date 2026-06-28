@@ -301,6 +301,7 @@ function M.makeHost(opts)
             percentage = function() env.calls.battery = env.calls.battery + 1; return env.pct end,
         },
         screen = { count = function() env.calls.screen = env.calls.screen + 1; return opts.screens or 1 end },
+        dch = { sessions = function() return opts.dchSessions or {} end },
         time = function() return env.now end,
         date = function() return opts.date or { hour = 12, min = 0, sec = 0 } end,
         menubar = { set = function(t) env.calls.menubarSet = env.calls.menubarSet + 1; env.menu = t end,

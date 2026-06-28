@@ -15,6 +15,7 @@ import Foundation
 enum DefaultsMigration {
     private static let legacyBundleID = "com.prosper.app"
     private static let migratedKey = "migratedFromComProsperApp"
+    private static let snapModeKey = "snapMode"  // mirrors Preferences.Keys.snapMode (private there)
 
     static func runIfNeeded() {
         // Only meaningful in a bundled run (the legacy domain is keyed by bundle
@@ -26,11 +27,21 @@ enum DefaultsMigration {
 
         // persistentDomain(forName:) returns the legacy app's plist contents
         // without binding this process to that suite.
-        if let legacy = defaults.persistentDomain(forName: legacyBundleID), !legacy.isEmpty {
+        let legacy = defaults.persistentDomain(forName: legacyBundleID) ?? [:]
+        if !legacy.isEmpty {
             for (key, value) in legacy where defaults.object(forKey: key) == nil {
                 defaults.set(value, forKey: key)
             }
         }
+
+        // First-run-only default: a genuinely fresh install (nothing to migrate
+        // from legacy, no value already present) starts on the layout palette.
+        // Existing/upgrading users keep their behavior — `migratedKey` short-
+        // circuits this on every later launch, and a set key is never overwritten.
+        if legacy.isEmpty && defaults.object(forKey: snapModeKey) == nil {
+            defaults.set(SnapMode.palette.rawValue, forKey: snapModeKey)
+        }
+
         defaults.set(true, forKey: migratedKey)
     }
 }
