@@ -139,7 +139,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             ?? Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png")
                 .flatMap { NSImage(contentsOf: $0) }
         if let icon {
-            let h = NSStatusBar.system.thickness
+            // Standard menu-bar icon height: leave ~3pt margin top/bottom inside the
+            // bar like every other status icon. Filling the FULL thickness made the
+            // logo oversized with no transparent breathing room, so it visually glued
+            // to its neighbour (the … chevron) and ate the configured inter-item gap.
+            let h = (NSStatusBar.system.thickness - sz(6)).rounded()
             let w = h * (icon.size.width / max(icon.size.height, 1))
             icon.size = NSSize(width: w, height: h)
             icon.isTemplate = false
