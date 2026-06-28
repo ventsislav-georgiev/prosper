@@ -608,7 +608,13 @@ function settings_render(section_id, state)
                    subtitle = mac_awake_status(st, real) },
             s.row{ kind = "info", title = "\u{2615} Display awake (no screensaver)",
                    value = st.caffeine and "on" or "off",
-                   subtitle = st.caffeine and caffeine_line(st) or "Display sleeps normally" },
+                   -- Subtitle drops the title's ☕ + the redundant "Display awake"
+                   -- (caffeine_line keeps both — it's reused standalone in the alert
+                   -- toast). Status just needs the remaining time / detail.
+                   subtitle = st.caffeine
+                       and (st.caffeineEnd and (fmt_remaining(st.caffeineEnd) .. " remaining \u{2014} screen & screensaver stay off")
+                                            or "Screen & screensaver stay off")
+                       or "Display sleeps normally" },
             -- STATIC subtitle: a per-state string changes its wrapped line count,
             -- which shifts content height and bumps the scroll on every toggle. The
             -- pill shows on/off; the wording stays put.
@@ -617,7 +623,7 @@ function settings_render(section_id, state)
                    subtitle = "Wake this Mac from another device while it sleeps" },
             s.row{ kind = "info", title = "\u{1F5A5}\u{FE0F} Remote sessions",
                    value = sess_value, subtitle = sess_subtitle },
-            s.row{ kind = "info", title = "Power",
+            s.row{ kind = "info", title = "\u{1F50B} Power",
                    subtitle = string.format("Battery %d%% \u{00B7} %s \u{00B7} External display: %s",
                         battery_pct(), on_ac and "on charger" or "on battery",
                         host.screen.count() > 1 and "yes" or "no") },

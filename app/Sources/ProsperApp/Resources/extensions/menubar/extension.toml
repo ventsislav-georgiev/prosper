@@ -1,0 +1,42 @@
+# Menu Bar Management — Ice/Bartender-style control of the menu bar: hide icons
+# behind a chevron and reveal on demand, customize icon spacing, and (opt-in)
+# reorder icons. Implemented natively (MenuBarManager) over the private CGS
+# window list — enumeration/hide/spacing need NO permission; only the opt-in
+# synthetic-drag reorder uses Accessibility, prompted on its own toggle.
+[extension]
+id          = "com.prosper.menubar"
+name        = "menubar"
+title       = "Menu Bar Management"
+description = "Hide menu-bar icons behind a chevron, reveal on demand, tune icon spacing, and reorder."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "menubar.rectangle"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Declarative (Tier-A) settings header: a Permissions-style intro group + the
+# rebindable "toggle hidden section" shortcut. The rich controls (spacing slider,
+# section list, reorder + relaunch buttons) render natively as the footer pane
+# (MenuBarPane), same merge pattern as Window Management.
+[[contributes.settings_sections]]
+id        = "menubar"
+title     = "Menu Bar Management"
+icon      = "menubar.rectangle"
+accent    = "Menu Bar"
+subtitle  = "Hide, reveal, space, and reorder your menu-bar icons"
+
+[[contributes.settings_sections.controls]]
+kind   = "group"
+title  = "Reveal shortcut (click to rebind)"
+footer = "Drag an icon to the LEFT of the chevron to hide it; click the chevron or press this shortcut to reveal the hidden icons."
+
+[[contributes.settings_sections.controls]]
+kind = "shortcut"
+name = "menuBarToggleHidden"

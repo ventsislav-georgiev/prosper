@@ -208,6 +208,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     case windowBottomHalf
     case windowMaximize
     case windowCenter
+    case menuBarToggleHidden
 
     var title: String {
         switch self {
@@ -225,6 +226,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .windowBottomHalf: return "Window: Bottom Half"
         case .windowMaximize: return "Window: Maximize"
         case .windowCenter: return "Window: Center"
+        case .menuBarToggleHidden: return "Menu Bar: Reveal/Hide Section"
         }
     }
 
@@ -245,6 +247,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .settings: return 12
         case .translate: return 13
         case .toggleAutocomplete: return 14
+        case .menuBarToggleHidden: return 15
         }
     }
 
@@ -256,6 +259,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     var owningExtensionID: String? {
         switch self {
         case .translate: return "com.prosper.translate"
+        case .menuBarToggleHidden: return "com.prosper.menubar"
         default: return nil
         }
     }
@@ -312,6 +316,10 @@ enum ShortcutAction: String, CaseIterable, Sendable {
             return KeyCombo(keyCode: UInt32(kVK_Return), carbonModifiers: UInt32(controlKey | optionKey), display: "⌃⌥↩")
         case .windowCenter:
             return KeyCombo(keyCode: UInt32(kVK_ANSI_C), carbonModifiers: UInt32(controlKey | optionKey), display: "⌃⌥C")
+        case .menuBarToggleHidden:
+            // Opt-in: no default combo so it never collides out of the box. The
+            // chevron in the menu bar is the always-available trigger.
+            return unsetKeyCombo
         }
     }
 }
