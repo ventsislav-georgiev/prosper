@@ -32,18 +32,27 @@ public struct MemoryReader: StatsReader {
         let total      = facts.physicalMemory
         let free       = total > used ? total - used : 0
 
-        let swap = Self.swapUsed()
+        let swap = Self.swapUsage()
         return MemorySample(
             total: total, used: used, app: app, wired: wired,
             compressed: compressed, free: free,
             pressure: total > 0 ? min(1, Double(used) / Double(total)) : 0,
-            swapUsed: swap)
+            swapUsed: swap.used, swapTotal: swap.total,
+            pressureLevel: Self.pressureLevel())
     }
 
-    static func swapUsed() -> UInt64 {
+    static func swapUsage() -> (used: UInt64, total: UInt64) {
         var xsw = xsw_usage()
         var size = MemoryLayout<xsw_usage>.stride
-        guard sysctlbyname("vm.swapusage", &xsw, &size, nil, 0) == 0 else { return 0 }
-        return xsw.xsu_used
+        guard sysctlbyname("vm.swapusage", &xsw, &size, nil, 0) == 0 else { return (0, 0) }
+        return (xsw.xsu_used, xsw.xsu_total)
+    }
+
+    /// Kernel memory-pressure level (1/2/4). 0 if the sysctl is unavailable.
+    static func pressureLevel() -> Int {
+        var level: Int32 = 0
+        var size = MemoryLayout<Int32>.stride
+        guard sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0) == 0 else { return 0 }
+        return Int(level)
     }
 }

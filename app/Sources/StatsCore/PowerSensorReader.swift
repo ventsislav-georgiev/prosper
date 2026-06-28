@@ -30,6 +30,7 @@ public final class PowerSensorReader {
         ("IG0R", "GPU"), ("IG0C", "GPU"),
         ("IC0R", "CPU"), ("IC0C", "CPU"),
         ("IM0C", "Memory"), ("IBAC", "Battery"),
+        ("IDBR", "Display"),   // backlight rail (validated present on M4 Pro)
     ]
 
     public init?() {

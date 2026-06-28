@@ -117,11 +117,11 @@ final class IOReportKitTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.3)
         guard let p = k.read() else { return XCTFail("nil power sample after seed") }
         // Idle-to-load: bounded sanity. A whole Mac SoC is well under 200W.
-        for (label, w) in [("cpu", p.cpuWatts), ("gpu", p.gpuWatts), ("ane", p.aneWatts)] {
+        for (label, w) in [("cpu", p.cpuWatts), ("gpu", p.gpuWatts), ("ane", p.aneWatts), ("dram", p.dramWatts)] {
             XCTAssert(w >= 0 && w < 200 && w.isFinite, "\(label)=\(w)W implausible (unit-scale bug?)")
         }
-        XCTAssertEqual(p.totalWatts, p.cpuWatts + p.gpuWatts + p.aneWatts, accuracy: 0.001)
-        print("Power: CPU=\(String(format: "%.2f", p.cpuWatts))W GPU=\(String(format: "%.2f", p.gpuWatts))W ANE=\(String(format: "%.2f", p.aneWatts))W")
+        XCTAssertEqual(p.totalWatts, p.cpuWatts + p.gpuWatts + p.aneWatts + p.dramWatts, accuracy: 0.001)
+        print("Power: CPU=\(String(format: "%.2f", p.cpuWatts))W GPU=\(String(format: "%.2f", p.gpuWatts))W ANE=\(String(format: "%.2f", p.aneWatts))W DRAM=\(String(format: "%.2f", p.dramWatts))W")
     }
 
     func testFirstReadSeedsZero() throws {

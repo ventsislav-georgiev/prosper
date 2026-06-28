@@ -57,6 +57,20 @@ final class MemoryReaderTests: XCTestCase {
         XCTAssertEqual(s.used, s.app + s.wired + s.compressed)
         XCTAssert(s.pressure >= 0 && s.pressure <= 1)
         XCTAssertEqual(s.used + s.free, s.total)   // free is the remainder
+        // Kernel pressure level is one of the known states (0=unread).
+        XCTAssert([0, 1, 2, 4].contains(s.pressureLevel), "unexpected level \(s.pressureLevel)")
+        XCTAssertGreaterThanOrEqual(s.swapTotal, s.swapUsed)
+    }
+
+    func testNetworkCounterResetIsDropped() throws {
+        var t = 1000.0
+        var r = NetworkReader(now: { t })
+        _ = try r.read()          // seed against live counters
+        t = 1001.0
+        let s = try r.read()      // 1s later — real idle traffic, must stay sane
+        // A phantom counter reset would blow past any real link; the guard caps it.
+        XCTAssert(s.downloadBytesPerSec < 25_000_000_000, "wrap guard let a glitch through")
+        XCTAssert(s.uploadBytesPerSec < 25_000_000_000)
     }
 }
 

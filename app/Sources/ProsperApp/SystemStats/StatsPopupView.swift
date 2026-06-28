@@ -254,8 +254,12 @@ struct StatsPopupView: View {
             kv("Wired", StatsFormat.bytes(Double(m.wired)))
             kv("Compressed", StatsFormat.bytes(Double(m.compressed)))
             kv("Free", StatsFormat.bytes(Double(m.free)))
-            kv("Pressure", StatsFormat.percent(m.pressure))
-            if m.swapUsed > 0 { kv("Swap used", StatsFormat.bytes(Double(m.swapUsed))) }
+            kv("Pressure", m.pressureState)
+            if m.swapTotal > 0 {
+                kv("Swap", "\(StatsFormat.bytes(Double(m.swapUsed))) / \(StatsFormat.bytes(Double(m.swapTotal)))")
+            } else if m.swapUsed > 0 {
+                kv("Swap used", StatsFormat.bytes(Double(m.swapUsed)))
+            }
         }
     }
 
@@ -293,6 +297,7 @@ struct StatsPopupView: View {
             kv("CPU", StatsFormat.watts(p.cpuWatts))
             kv("GPU", StatsFormat.watts(p.gpuWatts))
             kv("ANE", StatsFormat.watts(p.aneWatts))
+            if p.dramWatts > 0 { kv("DRAM", StatsFormat.watts(p.dramWatts)) }
             kv("Total", StatsFormat.watts(p.totalWatts))
         }
     }
