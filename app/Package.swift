@@ -88,6 +88,7 @@ let package = Package(
                 .product(name: "TOMLDecoder", package: "TOMLDecoder"),
                 "LuaRuntime",
                 "LidHelperProtocol",
+                "StatsCore",
             ],
             // NOTE: no `resources:` here on purpose. SwiftPM's generated
             // `Bundle.module` accessor resolves resources at
@@ -123,7 +124,7 @@ let package = Package(
         // LaunchDaemons plist it writes.
         .executableTarget(
             name: "ProsperLidHelper",
-            dependencies: ["LidHelperProtocol"],
+            dependencies: ["LidHelperProtocol", "SMCKit"],
             // RemoteWakeSPI.h re-declares the IOPMConnection dark-wake observer
             // family (SPI, exported from IOKit but absent from the SDK headers).
             // No entitlement; passes notarization. See the header for why.
@@ -145,11 +146,39 @@ let package = Package(
                 .linkedFramework("WebKit"),
             ]
         ),
+        // System Management Controller read/write over IOKit (public API only).
+        // Read side (fans/temps/power) used by ProsperApp; guarded write side
+        // (fan control, root-only) used by ProsperLidHelper. No private symbols,
+        // no AppKit/MLX — compiles fast, testable in isolation.
+        .target(
+            name: "SMCKit",
+            linkerSettings: [
+                .linkedFramework("IOKit")
+            ]
+        ),
+        // System-monitor core: readers (CPU/RAM/Net/GPU/Sensors/Battery), ring
+        // buffers, tiered poller. AppKit-free so the hot paths are unit-testable
+        // without the heavy ProsperApp (MLX/Metal/AppKit) build. UI lives in
+        // ProsperApp; this is the pure data layer. See .omc/plans/system-stats-modules.md.
+        .target(
+            name: "StatsCore",
+            dependencies: ["SMCKit"],
+            linkerSettings: [
+                .linkedFramework("IOKit"),
+                .linkedFramework("Foundation"),
+            ]
+        ),
         // Unit tests for the deterministic command-runner engines (calc, units).
         // LLM + network + GUI paths are not covered here (require model/Metal).
         .testTarget(
             name: "ProsperAppTests",
             dependencies: ["ProsperApp", "LuaRuntime"]
+        ),
+        // Fast-iterating unit tests for the AppKit-free system-monitor core:
+        // ring buffers, decoders, reader correctness, hot-path budgets.
+        .testTarget(
+            name: "StatsCoreTests",
+            dependencies: ["StatsCore", "SMCKit"]
         ),
     ]
 )
