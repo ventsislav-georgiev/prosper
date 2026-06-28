@@ -2627,9 +2627,14 @@ private struct MenuBarPane: View {
     /// else the bundle id. Multi-icon siblings (same bundle, distinct hash) get a
     /// short hash tag so they're tellable apart.
     private static func displayName(_ id: MenuBarIdentity) -> String {
-        if let t = id.title, !t.isEmpty, t != "Menu Item" { return t }
-        let base = NSRunningApplication.runningApplications(withBundleIdentifier: id.bundleID)
-            .first?.localizedName ?? id.bundleID
+        // A real OS title wins; Tahoe placeholders ("Item-0", "Menu Item") don't —
+        // fall back to the owning app's name so anonymous items don't all read "Item-0".
+        if let t = id.title, !t.isEmpty, !MenuBarIdentity.isPlaceholderTitle(t) { return t }
+        let app = NSRunningApplication.runningApplications(withBundleIdentifier: id.bundleID)
+            .first?.localizedName
+        let base = app ?? (id.bundleID == "unknown" ? "Menu item" : id.bundleID)
+        // Same-app siblings (and anonymous Control Center items) share a base name, so
+        // tag with the image hash to keep them tellable apart.
         if let h = id.imageHash { return "\(base) · \(h.prefix(4))" }
         return base
     }
