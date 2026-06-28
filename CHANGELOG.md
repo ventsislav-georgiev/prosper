@@ -113,13 +113,16 @@ tag from the now-released section and put it on the new top draft.
   with a speed bar and an Automatic/Manual control (with the same confirmation and
   automatic-reset safeguards), instead of the settings pane.
 
-### Windows
+### Launcher & Clipboard
 - **Clipboard History and the command runner now open on the screen you're using.**
   On a multi-monitor setup they used to pop up centered on the main display
   regardless of where your cursor or focused window was. By default they now open
-  on the screen under the pointer, like Raycast and Ditto. A new **Panel placement**
-  setting (Settings › Windows) lets you choose "Screen under the cursor" (default),
-  "Last position I moved it to", or "Main screen".
+  on the screen under the pointer, like Raycast and Ditto — and they still remember
+  the exact spot you dragged them to, reopening there as long as the cursor is on
+  that same screen (so you can park one for side-by-side work). Move to another
+  screen and it follows the pointer there. A new **Panel placement** setting
+  (Settings › General) lets you choose "Screen under the cursor" (default), "Last
+  position I moved it to", or "Main screen".
 
 ### Inline Autocomplete
 - **Ghost text no longer vanishes while you type fast.** The biggest cause of

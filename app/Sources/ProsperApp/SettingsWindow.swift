@@ -874,6 +874,13 @@ private struct GeneralPane: View {
                     .frame(width: sz(150))
                 }
             }
+
+            NeonSection("Panel placement",
+                        footer: "Where the command runner (⌥Space) and Clipboard History open on a multi-display setup. “Screen under the cursor” follows your pointer like Raycast and Ditto, and still reopens at the exact spot you dragged it to while you stay on that screen. “Last position” always reuses the last spot; “Main screen” always uses the display with the menu bar.") {
+                Picker("Open on", selection: $model.runnerPlacement) {
+                    ForEach(RunnerPlacement.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+            }
         }
         .onAppear { hasAccessibility = PermissionsManager.isAccessibilityTrusted() }
     }
@@ -2292,13 +2299,6 @@ private struct WindowManagementPane: View {
     // NeonScroll), so no own scroll/title — the page header already names it.
     var body: some View {
         VStack(alignment: .leading, spacing: sz(16)) {
-            NeonSection("Panel placement",
-                        footer: "Where the command runner (⌥Space) and Clipboard History open on a multi-display setup. “Screen under the cursor” follows your pointer like Raycast and Ditto; “Last position” reopens wherever you last dragged the runner; “Main screen” always uses the display with the menu bar.") {
-                Picker("Open on", selection: $model.runnerPlacement) {
-                    ForEach(RunnerPlacement.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-            }
-
             NeonSection("Drag to Snap",
                         footer: "Drag a window so the pointer reaches a screen edge or corner; a live preview shows where it will land, and it snaps there when you let go. Left/right/bottom edges give halves, the top edge maximizes, and corners give quarters.") {
                 Toggle("Enable drag-to-snap", isOn: Binding(
