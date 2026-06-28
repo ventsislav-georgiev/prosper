@@ -50,6 +50,24 @@ final class StatsPollerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(poller.history("memory").count, 5, "history should accumulate")
     }
 
+    func testSnapshotCarriesHistory() {
+        // Regression: the UI reads history off the delivered snapshot (no queue
+        // hop). A delivered snapshot must carry a growing per-metric series.
+        var cfg = StatsPoller.Config(); cfg.baseInterval = 0.02
+        let poller = StatsPoller(modules: [.memory], config: cfg,
+                                 deliverQueue: DispatchQueue(label: "thist"))
+        let lock = NSLock(); var maxCount = 0
+        poller.onSnapshot = { snap in
+            lock.lock(); maxCount = max(maxCount, snap.histories["memory"]?.count ?? 0); lock.unlock()
+        }
+        poller.start()
+        let deadline = Date().addingTimeInterval(1.0)
+        while true { lock.lock(); let c = maxCount; lock.unlock(); if c >= 3 || Date() > deadline { break }; usleep(20_000) }
+        poller.stop()
+        lock.lock(); let c = maxCount; lock.unlock()
+        XCTAssertGreaterThanOrEqual(c, 3, "snapshot.histories must accumulate the metric series")
+    }
+
     func testDisabledModuleNeverSampled() {
         var cfg = StatsPoller.Config(); cfg.baseInterval = 0.02
         let poller = StatsPoller(modules: [.memory], config: cfg,

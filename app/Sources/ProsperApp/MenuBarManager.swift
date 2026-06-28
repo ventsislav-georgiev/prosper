@@ -74,13 +74,14 @@ final class MenuBarManager: NSObject {
         // Apply persisted spacing (no relaunch — takes effect as apps launch).
         MenuBarSpacing.apply(spacing: Preferences.menuBarStore.clampedSpacing)
 
-        let div = makeDivider(symbol: "chevron.left.2", autosave: "ProsperMenuBarHiddenDivider",
+        let glyph = Preferences.menuBarStore.chevronStyle.collapsedSymbol
+        let div = makeDivider(symbol: glyph, autosave: "ProsperMenuBarHiddenDivider",
                               action: #selector(toggleHidden))
         hiddenDivider = div
         MenuBarBridge.dividerWindowIDs = dividerWindowIDs()
 
         if Preferences.menuBarStore.alwaysHiddenEnabled {
-            let alt = makeDivider(symbol: "chevron.left", autosave: "ProsperMenuBarAlwaysHiddenDivider",
+            let alt = makeDivider(symbol: glyph, autosave: "ProsperMenuBarAlwaysHiddenDivider",
                                   action: #selector(toggleAlwaysHidden))
             alwaysHiddenDivider = alt
             MenuBarBridge.dividerWindowIDs = dividerWindowIDs()
@@ -176,6 +177,7 @@ final class MenuBarManager: NSObject {
         if revealed {
             scheduleRehide()
             startRevealMonitors()
+            MenuBarOrderEnforcer.shared.onReveal()   // on-demand ordering: correct order while visible
         } else {
             revealedAlwaysHidden = false
             rehideTimer?.invalidate(); rehideTimer = nil
@@ -184,10 +186,20 @@ final class MenuBarManager: NSObject {
     }
 
     private func updateChevron() {
-        let symbol = revealed ? "chevron.right.2" : "chevron.left.2"
-        hiddenDivider?.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Menu Bar")
-        hiddenDivider?.button?.image?.isTemplate = true
+        let style = Preferences.menuBarStore.chevronStyle
+        setGlyph(hiddenDivider, revealed ? style.revealedSymbol : style.collapsedSymbol)
+        setGlyph(alwaysHiddenDivider, revealedAlwaysHidden ? style.revealedSymbol : style.collapsedSymbol)
     }
+
+    private func setGlyph(_ item: NSStatusItem?, _ symbol: String) {
+        guard let button = item?.button else { return }
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Menu Bar")
+        button.image?.isTemplate = true
+    }
+
+    /// Re-skin the dividers after a chevron-style change (cheap: two image swaps,
+    /// no teardown). Called from Settings.
+    func refreshChevronStyle() { updateChevron() }
 
     // MARK: - Auto-rehide + reveal monitors
 
@@ -260,6 +272,11 @@ final class MenuBarManager: NSObject {
                                                       hiddenDividerX: hiddenX,
                                                       alwaysHiddenDividerX: altX)) }
     }
+
+    /// Whether the live preview can be trusted (CGS enumeration still sees our own
+    /// dividers). Hide/show + spacing don't depend on this — only the Settings
+    /// preview strip does, so it degrades to an "update macOS" note in isolation.
+    func previewHealthy() -> Bool { MenuBarBridge.enumHealthy() }
 
     private func dividerFrameX(_ item: NSStatusItem?) -> CGFloat? {
         guard let n = item?.button?.window?.frame.minX else { return nil }

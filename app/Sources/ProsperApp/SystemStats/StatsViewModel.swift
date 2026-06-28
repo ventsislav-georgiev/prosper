@@ -11,12 +11,11 @@ final class StatsStore: ObservableObject {
     @Published var snapshot = StatsSnapshot()
     @Published var style: StatsWidgetStyle
 
-    /// History pulled lazily for charts (thread-safe ring snapshot inside the poller).
-    weak var poller: StatsPoller?
-
     init(style: StatsWidgetStyle) { self.style = style }
 
-    func history(_ key: String) -> [Double] { poller?.history(key) ?? [] }
+    /// History for a metric — read straight off the delivered snapshot (no cross-
+    /// queue hop; the poller already snapshotted its rings onto it).
+    func history(_ key: String) -> [Double] { snapshot.histories[key] ?? [] }
 }
 
 // MARK: - Number formatting (allocation-light, no NumberFormatter on the hot path)

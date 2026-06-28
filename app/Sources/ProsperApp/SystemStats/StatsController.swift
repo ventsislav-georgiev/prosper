@@ -27,20 +27,31 @@ final class StatsController {
         p.delegate = popoverDelegate
         return p
     }()
-    private lazy var popoverDelegate = PopoverDelegate { [weak self] open in
-        // The all-pid scan only runs while the popover is open.
-        self?.poller?.setProcSampling(open)
+    private lazy var popoverDelegate = PopoverDelegate { [weak self] in
+        // Reconcile against actual visibility, not the firing event: clicking item
+        // B while A is open fires didClose(A)+didShow(B) in an unguaranteed order, so
+        // a literal true/false could leave sampling off with a popover still shown.
+        guard let self else { return }
+        self.poller?.setProcSampling(self.popover.isShown)
     }
     private var openModule: StatsModule?
+    /// Process-lifetime observer token. The controller is a `static let` singleton
+    /// meant to live forever, so this is intentionally never removed.
+    private var configObserver: NSObjectProtocol?
 
     private init() {
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(reload), name: .systemStatsConfigChanged, object: nil)
+        // Block API with `queue: .main` guarantees `reload()` runs on the main
+        // thread (it mutates NSStatusBar + a @Published store), regardless of which
+        // thread posted the notification.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .systemStatsConfigChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reload() }
+        }
     }
 
     /// Bring the feature to match current prefs/style. Idempotent — safe to call
     /// on launch and on every config change.
-    @objc func reload() {
+    func reload() {
         store.style = SystemStatsStore.load()
         guard Preferences.systemStatsEnabled else { teardown(); return }
 
@@ -134,8 +145,8 @@ final class StatsController {
 /// Bridges NSPopover open/close to the proc-sampling toggle without the
 /// controller having to conform to the delegate protocol itself.
 private final class PopoverDelegate: NSObject, NSPopoverDelegate {
-    let onChange: (Bool) -> Void
-    init(_ onChange: @escaping (Bool) -> Void) { self.onChange = onChange }
-    func popoverDidShow(_ n: Notification) { onChange(true) }
-    func popoverDidClose(_ n: Notification) { onChange(false) }
+    let reconcile: () -> Void
+    init(_ reconcile: @escaping () -> Void) { self.reconcile = reconcile }
+    func popoverDidShow(_ n: Notification) { reconcile() }
+    func popoverDidClose(_ n: Notification) { reconcile() }
 }

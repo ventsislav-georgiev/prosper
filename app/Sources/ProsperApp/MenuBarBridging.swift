@@ -37,6 +37,9 @@ struct MenuBarItem: Equatable, Sendable {
     var frame: CGRect            // screen coords (top-left origin, like CGWindow)
     var bundleID: String?
     var displayID: CGDirectDisplayID
+    /// OS window name (kCGWindowName). Per-item discriminator for the ordering
+    /// engine pre-Tahoe; nil/"Menu Item" on Tahoe (the indexer fills identity then).
+    var title: String?
 }
 
 /// Reads the live menu bar via the private CGS list. Fail-open: any CGS error or
@@ -80,24 +83,43 @@ enum MenuBarBridge {
         let windowIDs = Array(ids.prefix(Int(max(0, realCount))))
         guard !windowIDs.isEmpty else { return [] }
 
-        // 2. One window-info pass to map windowID → pid (CGS doesn't give owner pid).
-        let pidByWindow = ownerPIDs(for: windowIDs)
+        // 2. One window-info pass to map windowID → (pid, name).
+        let metaByWindow = windowMeta(for: windowIDs)
 
         // 3. Build items, self-filtering and per-display.
         let mine = getpid()
         var out: [MenuBarItem] = []
         out.reserveCapacity(windowIDs.count)
         for wid in windowIDs {
-            guard let pid = pidByWindow[wid], pid != mine else { continue }   // F4 self-filter
+            guard let meta = metaByWindow[wid], meta.pid != mine else { continue }   // F4 self-filter
             var rect = CGRect.zero
             guard CGSGetScreenRectForWindow(cid, wid, &rect) == .success,
                   rect.width > 0, rect.height > 0 else { continue }
             guard displayID(for: rect) == display else { continue }            // F3 per-display
-            out.append(MenuBarItem(windowID: CGWindowID(wid), pid: pid, frame: rect,
-                                   bundleID: bundleID(for: pid), displayID: display))
+            out.append(MenuBarItem(windowID: CGWindowID(wid), pid: meta.pid, frame: rect,
+                                   bundleID: bundleID(for: meta.pid), displayID: display,
+                                   title: meta.name))
         }
         out.sort { $0.frame.minX < $1.frame.minX }
         return out
+    }
+
+    /// Positive sanity probe for the Settings preview strip. Healthy = the CGS
+    /// enumeration still contains windows we KNOW exist (our own dividers). See
+    /// `MenuBarLogic.previewHealthy` for why a hard error check isn't enough. Only
+    /// the preview depends on this — hide/show + spacing are unaffected.
+    static func enumHealthy() -> Bool {
+        guard available else { return false }
+        guard !dividerWindowIDs.isEmpty else { return true }   // nothing to probe against yet
+        let cid = CGSMainConnectionID()
+        var ids = [UInt32](repeating: 0, count: 256)
+        var realCount: Int32 = 0
+        let err = ids.withUnsafeMutableBufferPointer { buf -> CGError in
+            CGSGetProcessMenuBarWindowList(cid, 0, Int32(buf.count), buf.baseAddress!, &realCount)
+        }
+        guard err == .success else { return false }
+        let seen = Set(ids.prefix(Int(max(0, realCount))).map { CGWindowID($0) })
+        return MenuBarLogic.previewHealthy(dividerWindowIDs: dividerWindowIDs, enumeratedWindowIDs: seen)
     }
 
     /// The display a frame's center lands on; falls back to the main display.
@@ -111,18 +133,29 @@ enum MenuBarBridge {
 
     // MARK: - Private
 
-    /// Map window ids → owner pid via one `CGWindowListCopyWindowInfo` pass.
-    private static func ownerPIDs(for windowIDs: [UInt32]) -> [UInt32: pid_t] {
+    /// Live screen frame for one window id (the ordering engine reads this between
+    /// moves to confirm an item actually shifted). nil on any CGS error.
+    static func frame(for windowID: CGWindowID) -> CGRect? {
+        guard available else { return nil }
+        var rect = CGRect.zero
+        guard CGSGetScreenRectForWindow(CGSMainConnectionID(), UInt32(windowID), &rect) == .success,
+              rect.width > 0, rect.height > 0 else { return nil }
+        return rect
+    }
+
+    /// Map window ids → (owner pid, name) via one `CGWindowListCopyWindowInfo` pass.
+    private static func windowMeta(for windowIDs: [UInt32]) -> [UInt32: (pid: pid_t, name: String?)] {
         guard let info = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
             return [:]
         }
         let wanted = Set(windowIDs)
-        var map: [UInt32: pid_t] = [:]
+        var map: [UInt32: (pid: pid_t, name: String?)] = [:]
         map.reserveCapacity(windowIDs.count)
         for w in info {
             guard let num = w[kCGWindowNumber as String] as? UInt32, wanted.contains(num),
                   let pid = w[kCGWindowOwnerPID as String] as? pid_t else { continue }
-            map[num] = pid
+            let name = (w[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            map[num] = (pid, name)
         }
         return map
     }
