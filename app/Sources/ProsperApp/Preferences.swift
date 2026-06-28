@@ -137,6 +137,7 @@ enum Preferences {
     private enum Keys {
         static let autocompleteEnabled = "autocompleteEnabled"
         static let agentEnabled = "agentEnabled"
+        static let systemStatsEnabled = "systemStatsEnabled"
         static let dragSnapEnabled = "dragSnapEnabled"
         static let dragSnapStyle = "dragSnapStyle"
         static let dragSnapModifier = "dragSnapModifier"
@@ -149,6 +150,8 @@ enum Preferences {
         static let layoutStoreBackupJSON = "layoutStoreBackupJSON"   // newer-schema blob preserved on downgrade
         static let menuBarStoreJSON = "menuBarStoreJSON"
         static let menuBarStoreBackupJSON = "menuBarStoreBackupJSON"
+        static let menuBarOrderStoreJSON = "menuBarOrderStoreJSON"
+        static let menuBarOrderStoreBackupJSON = "menuBarOrderStoreBackupJSON"
         static let uiScale = "prosper.uiScale"
         static let uiOpacity = "prosper.uiOpacity"
         static let uiFrost = "prosper.uiFrost"
@@ -525,6 +528,29 @@ enum Preferences {
         }
     }
 
+    /// Menu-bar ordering engine settings (opt-in, desired layout). Separate blob
+    /// from `menuBarStore` so the always-on hide/spacing store never carries the
+    /// opt-in ordering payload. Same downgrade-safe pattern.
+    static var menuBarOrderStore: MenuBarOrderStore {
+        get {
+            guard let data = defaults.data(forKey: Keys.menuBarOrderStoreJSON),
+                  let store = try? JSONDecoder().decode(MenuBarOrderStore.self, from: data),
+                  store.schemaVersion == MenuBarOrderStore.currentSchema else {
+                return .default
+            }
+            return store
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            if let old = defaults.data(forKey: Keys.menuBarOrderStoreJSON),
+               let v = try? JSONDecoder().decode(SchemaProbe.self, from: old),
+               v.schemaVersion > MenuBarOrderStore.currentSchema {
+                defaults.set(old, forKey: Keys.menuBarOrderStoreBackupJSON)
+            }
+            defaults.set(data, forKey: Keys.menuBarOrderStoreJSON)
+        }
+    }
+
     /// Minimal envelope to read just `schemaVersion` from a stored blob without
     /// decoding the whole (possibly newer, unknown-shaped) store.
     private struct SchemaProbe: Decodable { var schemaVersion: Int }
@@ -712,6 +738,16 @@ enum Preferences {
             return defaults.bool(forKey: Keys.agentEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.agentEnabled) }
+    }
+
+    /// Whether the System Stats menu-bar monitors are enabled. Off by default —
+    /// the whole feature (status items + poller) stays torn down until opted in.
+    static var systemStatsEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.systemStatsEnabled) == nil { return false }
+            return defaults.bool(forKey: Keys.systemStatsEnabled)
+        }
+        set { defaults.set(newValue, forKey: Keys.systemStatsEnabled) }
     }
 
     /// Whether Prosper registers as a login item (SMAppService). The actual

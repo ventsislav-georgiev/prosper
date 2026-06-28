@@ -661,6 +661,7 @@ private struct SettingsRootView: View {
         case "personalization": PersonalizationPane(model: model)
         case "shortcuts": ShortcutsPane(model: model)
         case "ai-models": AIModelsPane(model: model)
+        case "system-stats": SystemStatsPane()
         case "agent": AgentPane(model: model)
         case "agent-mcp": MCPServersPane(model: model)
         case "agent-plugins": PluginsHooksPane(model: model)
@@ -2411,16 +2412,28 @@ private struct WindowManagementPane: View {
 
 /// Footer pane for the menubar extension's settings section (renders inside its
 /// NeonScroll, below the declarative shortcut header). Spacing slider, two-tier
-/// hide + hover/auto-rehide toggles, the opt-in (AX-gated) reorder switch, a live
-/// section list, and the data-loss-safe "relaunch to apply spacing" action.
+/// hide + hover/auto-rehide toggles, chevron-style picker, a read-only preview
+/// strip of the live bar, and the data-loss-safe "relaunch to apply spacing".
+/// Reordering is intentionally NOT here — macOS owns icon order (⌘-drag), so the
+/// preview just hints the user to do that natively.
 private struct MenuBarPane: View {
     @ObservedObject var model: SettingsModel
-    @AppStorage("settingsSelectedPane") private var selection = "general"
     @State private var store = Preferences.menuBarStore
-    @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+    @State private var orderStore = Preferences.menuBarOrderStore
     @State private var sections: [(item: MenuBarItem, section: MenuBarSection)] = []
+    @State private var previewHealthy = true
     @State private var skipped: [String] = []
     @State private var relaunching = false
+    @State private var probeOK: Bool? = nil      // nil = not run; result of selfProbe()
+    @State private var probing = false
+    @State private var applying = false
+    @State private var saving = false
+    @State private var screenRecOK = MenuBarItemIndexer.hasPermission()
+    @State private var lastApply: MenuBarArranger.ApplyResult?
+
+    // OS gate is fixed for the running system — decide once.
+    private let orderingSupport = MenuBarOrderingCapability.osSupport(
+        major: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(16)) {
@@ -2458,54 +2471,208 @@ private struct MenuBarPane: View {
                            in: 1...30, step: 1)
                         .frame(width: sz(200))
                 }
-            }
-
-            NeonSection("Reorder (experimental)",
-                        footer: "Lets Prosper reorder icons with a synthetic ⌘-drag. This is fragile (the same trick Ice/Bartender struggle with) and needs Accessibility, so it's off by default — you can always ⌘-drag icons yourself.") {
-                Toggle("Enable synthetic reorder", isOn: Binding(
-                    get: { store.reorderEnabled },
-                    set: { v in
-                        mutate { $0.reorderEnabled = v }
-                        if v && !hasAccessibility {
-                            hasAccessibility = PermissionsManager.ensureAccessibilityTrust(prompt: true)
-                        }
-                    }))
-                if store.reorderEnabled && !hasAccessibility {
-                    NeonDivider()
-                    PermissionWarningRow(
-                        title: "Accessibility permission needed",
-                        message: "Reorder can't post the ⌘-drag until you grant it. Open Context to fix.") {
-                            selection = "context"
-                        }
-                }
-            }
-
-            NeonSection("Menu-bar items",
-                        footer: "Live snapshot of what's in each section right now (positional — set by where each icon sits relative to the chevron). Applies to your primary display only.") {
-                if sections.isEmpty {
-                    Text("No items detected (or the feature is off).")
-                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-                } else {
-                    ForEach(Array(sections.enumerated()), id: \.offset) { idx, entry in
-                        if idx > 0 { NeonDivider() }
-                        HStack {
-                            Text((entry.item.bundleID ?? "").isEmpty ? "—" : (entry.item.bundleID ?? ""))
-                                .font(Neon.font(.body, design: .monospaced))
-                                .foregroundStyle(Neon.textPrimary)
-                            Spacer()
-                            Text(entry.section.rawValue)
-                                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-                        }
+                NeonDivider()
+                NeonRow("Chevron", subtitle: "Divider glyph") {
+                    Picker("", selection: Binding(
+                        get: { store.chevronStyle },
+                        set: { v in mutate { $0.chevronStyle = v }; MenuBarManager.shared.refreshChevronStyle() })) {
+                        ForEach(ChevronStyle.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
+                    .labelsHidden()
+                    .frame(width: sz(160))
                 }
+            }
+
+            NeonSection("Your menu bar",
+                        footer: "Live preview of your primary display. To move an icon between sections (or reorder it), hold ⌘ and drag it directly in the real menu bar — macOS remembers the new position. Drag an icon to the LEFT of a chevron to hide it.") {
+                MenuBarPreviewStrip(elements: previewElements(), chevron: store.chevronStyle,
+                                    spacing: store.clampedSpacing, healthy: previewHealthy)
+                NeonDivider()
+                Text("Hold ⌘ and drag icons in your menu bar to reorder or re-section them.")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 NeonDivider()
                 Button("Refresh") { refresh() }.buttonStyle(.neon)
             }
+
+            orderingSection
         }
         .onAppear {
             store = Preferences.menuBarStore
-            hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+            orderStore = Preferences.menuBarOrderStore
             refresh()
+        }
+    }
+
+    // MARK: - Item ordering (opt-in, version-gated; engine wired in later phases)
+
+    @ViewBuilder private var orderingSection: some View {
+        NeonSection("Item ordering (experimental)",
+                    footer: "Keeps multi-icon apps (Stats, iStat Menus) in a fixed order across relaunch — the one thing macOS itself loses. Opt-in and version-gated: it only runs where Prosper can drive it reliably. Off does nothing.") {
+            switch orderingSupport {
+            case .unsupportedOS(let message):
+                Text(message)
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            case .supported:
+                Toggle("Enforce a saved menu-bar order", isOn: Binding(
+                    get: { orderStore.enabled },
+                    set: { v in mutateOrder { $0.enabled = v }; if v { runProbe() } }))
+                NeonDivider()
+                NeonRow("When", subtitle: "How aggressively to keep the order") {
+                    Picker("", selection: Binding(
+                        get: { orderStore.mode },
+                        set: { v in mutateOrder { $0.mode = v } })) {
+                        Text("On reveal").tag(MenuBarOrderStore.EnforceMode.onDemand)
+                        Text("Always (live)").tag(MenuBarOrderStore.EnforceMode.live)
+                    }
+                    .labelsHidden()
+                    .frame(width: sz(160))
+                    .disabled(!orderStore.enabled)
+                }
+                if orderStore.enabled {
+                    NeonDivider()
+                    probeStatusRow
+                    if !screenRecOK {
+                        NeonDivider()
+                        screenRecordingRow
+                    }
+                    NeonDivider()
+                    HStack(spacing: sz(8)) {
+                        Button(saving ? "Saving…" : "Save current order") { saveOrder() }
+                            .buttonStyle(.neon)
+                            .disabled(saving || applying)
+                        Button(applying ? "Applying…" : "Apply saved order") { applyOrder() }
+                            .buttonStyle(.neon)
+                            .disabled(applying || saving || orderStore.desiredOrder.isEmpty || probeOK != true)
+                    }
+                    Text(orderStatusText)
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                    if !orderStore.desiredOrder.isEmpty {
+                        NeonDivider()
+                        orderEditor
+                    }
+                }
+            }
+        }
+        .task(id: orderStore.enabled) { if orderStore.enabled && probeOK == nil { runProbe() } }
+    }
+
+    /// Drag-to-reorder editor over the saved layout — define the desired left→right
+    /// order here instead of ⌘-dragging the real bar then "Save current order".
+    /// "Apply saved order" then drives the bar to match.
+    @ViewBuilder private var orderEditor: some View {
+        VStack(alignment: .leading, spacing: sz(4)) {
+            Text("Saved order (drag to reorder, ⌫ to remove)")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            List {
+                ForEach(orderStore.desiredOrder, id: \.key) { id in
+                    HStack(spacing: sz(8)) {
+                        if let icon = Self.appIcon(id.bundleID) {
+                            Image(nsImage: icon).resizable().frame(width: sz(16), height: sz(16))
+                        }
+                        Text(Self.displayName(id)).font(Neon.font(.body))
+                        Spacer()
+                    }
+                    .listRowSeparator(.hidden)
+                }
+                .onMove { from, to in mutateOrder { $0.desiredOrder.move(fromOffsets: from, toOffset: to) } }
+                .onDelete { idx in mutateOrder { $0.desiredOrder.remove(atOffsets: idx) } }
+            }
+            .frame(height: sz(min(CGFloat(orderStore.desiredOrder.count) * 26 + 8, 200)))
+            .scrollContentBackground(.hidden)
+        }
+    }
+
+    /// App icon for a bundle id (running app first, then on-disk lookup). nil for the
+    /// "unknown" placeholder bundle.
+    private static func appIcon(_ bundleID: String) -> NSImage? {
+        guard bundleID != "unknown" else { return nil }
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
+            return app.icon
+        }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return NSWorkspace.shared.icon(forFile: url.path)
+        }
+        return nil
+    }
+
+    /// Human label for an identity: the OS title, else the app's localized name,
+    /// else the bundle id. Multi-icon siblings (same bundle, distinct hash) get a
+    /// short hash tag so they're tellable apart.
+    private static func displayName(_ id: MenuBarIdentity) -> String {
+        if let t = id.title, !t.isEmpty, t != "Menu Item" { return t }
+        let base = NSRunningApplication.runningApplications(withBundleIdentifier: id.bundleID)
+            .first?.localizedName ?? id.bundleID
+        if let h = id.imageHash { return "\(base) · \(h.prefix(4))" }
+        return base
+    }
+
+    @ViewBuilder private var probeStatusRow: some View {
+        switch probeOK {
+        case .some(true):
+            Label("Move test passed — ordering works on this Mac.", systemImage: "checkmark.seal.fill")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.terminal)
+        case .some(false):
+            Label("Move test failed — ordering isn’t reliable on this Mac and is disabled.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+        case nil:
+            Label(probing ? "Running move test…" : "Move test not run yet.",
+                  systemImage: "hourglass")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+        }
+    }
+
+    @ViewBuilder private var screenRecordingRow: some View {
+        NeonRow("Screen Recording",
+                subtitle: "Needed only on this macOS to tell multi-icon apps apart (Stats CPU vs RAM). Without it, those items stay in place.") {
+            Button("Grant…") {
+                MenuBarItemIndexer.requestPermission()
+                // Grant takes effect after the system dialog; re-poll shortly.
+                Task { try? await Task.sleep(for: .milliseconds(500)); screenRecOK = MenuBarItemIndexer.hasPermission() }
+            }.buttonStyle(.neon)
+        }
+    }
+
+    private var orderStatusText: String {
+        if orderStore.desiredOrder.isEmpty {
+            return "No saved order yet. Arrange your icons (⌘-drag), then “Save current order”."
+        }
+        let n = orderStore.desiredOrder.count
+        if let r = lastApply {
+            return "Saved \(n) items. Last apply: moved \(r.moved), \(r.failed) failed, \(r.skippedUnresolved) not yet identifiable."
+        }
+        return "Saved \(n) items. “Apply saved order” to restore it."
+    }
+
+    private func runProbe() {
+        guard probeOK == nil, !probing else { return }
+        probing = true
+        Task {
+            let ok = await MenuBarItemMover.selfProbe()
+            probing = false
+            probeOK = ok
+            if !ok { mutateOrder { $0.enabled = false } }   // self-disable on unreliable OS
+            else { MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: true) }
+        }
+    }
+
+    private func saveOrder() {
+        guard !saving, !applying else { return }
+        saving = true
+        Task {
+            let order = await MenuBarArranger.snapshotCurrentOrder()
+            mutateOrder { $0.desiredOrder = order }
+            screenRecOK = MenuBarItemIndexer.hasPermission()
+            saving = false
+        }
+    }
+
+    private func applyOrder() {
+        guard !applying, !saving else { return }
+        applying = true
+        Task {
+            lastApply = await MenuBarArranger.apply(desired: orderStore.desiredOrder)
+            applying = false
         }
     }
 
@@ -2516,6 +2683,14 @@ private struct MenuBarPane: View {
         change(&s)
         store = s
         Preferences.menuBarStore = s
+    }
+
+    private func mutateOrder(_ change: (inout MenuBarOrderStore) -> Void) {
+        var s = orderStore
+        change(&s)
+        orderStore = s
+        Preferences.menuBarOrderStore = s
+        MenuBarOrderEnforcer.shared.update(store: s, probeOK: probeOK == true)
     }
 
     private func setSpacing(_ value: Int) {
@@ -2535,7 +2710,79 @@ private struct MenuBarPane: View {
     }
 
     private func refresh() {
+        previewHealthy = MenuBarManager.shared.previewHealthy()
         sections = MenuBarManager.shared.sectionedItems()
+    }
+
+    /// Flatten the sectioned items (left→right) into preview elements, dropping a
+    /// chevron marker at each section boundary — exactly where a real divider sits.
+    /// All-visible bars show no chevron (nothing is hidden), matching the real bar.
+    private func previewElements() -> [PreviewElement] {
+        var out: [PreviewElement] = []
+        var prev: MenuBarSection?
+        for entry in sections {
+            if let p = prev, p != entry.section { out.append(.chevron) }
+            out.append(.icon(NSRunningApplication(processIdentifier: entry.item.pid)?.icon,
+                             dimmed: entry.section != .visible))
+            prev = entry.section
+        }
+        return out
+    }
+}
+
+/// One slot in the preview strip: an app icon (dimmed when in a hidden band) or a
+/// chevron marking a section boundary.
+private enum PreviewElement {
+    case icon(NSImage?, dimmed: Bool)
+    case chevron
+}
+
+/// Read-only mock of the live menu bar: app icons in their real left→right order,
+/// chevrons at the section boundaries, inter-icon gap scaled to the chosen
+/// spacing. Purely illustrative — no interaction (reorder is a native ⌘-drag).
+private struct MenuBarPreviewStrip: View {
+    let elements: [PreviewElement]
+    let chevron: ChevronStyle
+    let spacing: Int
+    var healthy: Bool = true
+
+    var body: some View {
+        Group {
+            if !healthy {
+                // CGS enumeration can't see windows that provably exist — a newer
+                // macOS shifted menu-bar semantics. Hide/reveal + spacing still work;
+                // only this preview can't be drawn. (See MenuBarLogic.previewHealthy.)
+                Text("Live preview isn’t available on this version of macOS. Your icons are still hidden, revealed, and spaced correctly — only this preview needs a macOS update.")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            } else if elements.isEmpty {
+                Text("No menu-bar items detected (or the feature is off).")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            } else {
+                HStack(spacing: max(sz(2), CGFloat(spacing) * 0.5)) {
+                    ForEach(Array(elements.enumerated()), id: \.offset) { _, el in
+                        switch el {
+                        case .icon(let img, let dimmed):
+                            if let img {
+                                Image(nsImage: img).resizable().interpolation(.high)
+                                    .frame(width: sz(18), height: sz(18))
+                                    .opacity(dimmed ? 0.4 : 1)
+                            } else {
+                                Image(systemName: "app.dashed")
+                                    .frame(width: sz(18), height: sz(18))
+                                    .foregroundStyle(Neon.textSecondary)
+                            }
+                        case .chevron:
+                            Image(systemName: chevron.collapsedSymbol)
+                                .foregroundStyle(Neon.textPrimary)
+                                .frame(width: sz(16))
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)   // bar grows from the right edge
+                .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
+                .background(RoundedRectangle(cornerRadius: sz(6)).fill(Color.black.opacity(0.28)))
+            }
+        }
     }
 }
 
@@ -2599,6 +2846,9 @@ func settingsSidebarGroups(registry: ExtensionRegistry?) -> [(String, [SettingsT
     // inline and agent models (download/load/RAM/custom), so it must show regardless of
     // which feature master-switch is on.
     result.append(("AI Models", [SettingsTab(id: "ai-models", title: "AI Models", icon: "cpu")]))
+    // System Stats is its own top-level group (native menu-bar monitors); the
+    // pane's master switch gates the whole feature, so it shows regardless.
+    result.append(("System Stats", [SettingsTab(id: "system-stats", title: "System Stats", icon: "speedometer", accent: "Stats")]))
     // Extension Settings sits right after General so user extensions read first,
     // ahead of the built-in feature groups.
     if !extensionSections.isEmpty { result.append(("Extension Settings", extensionSections)) }

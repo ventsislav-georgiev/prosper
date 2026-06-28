@@ -45,6 +45,9 @@ public final class StatsPoller {
     private var tick: UInt64 = 0
 
     private let enabled: Set<StatsModule>
+    /// The module set this poller was created for (controller compares it to
+    /// decide whether a config change needs a fresh poller).
+    public var enabledSet: Set<StatsModule> { enabled }
     public var onSnapshot: ((StatsSnapshot) -> Void)?
     /// Set true while a popup is open to enable the expensive top-process scan.
     private let procFlag = ManagedAtomicFlag()

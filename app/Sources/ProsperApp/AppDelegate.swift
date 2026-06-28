@@ -89,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // migrated system extensions (calc, …) handle their queries, with the
         // native engines as fallback. See docs/ADR-002-extensibility.md.
         extensions.discover()
+        // System Stats menu-bar monitors. No-ops entirely when disabled (the
+        // default) — no poller, no status items until the user opts in.
+        StatsController.shared.reload()
         // Headless self-check of the settings code paths (ordering + bookmarks FDA
         // gate). Set PROSPER_VERIFY=1 to dump and exit — used to verify on a locked
         // display where windows won't render. No effect on normal launches.
@@ -392,6 +395,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Menu Bar Management: build the divider items when its extension is live.
         MenuBarManager.shared.menubarExtLive = menubarExtLive
         MenuBarManager.shared.reconcile()
+
+        // Ordering engine: if opted-in on a supported OS, self-probe once at boot
+        // then arm the enforcer so live mode works without opening Settings. Probe
+        // spawns/removes two throwaway status items, so do it after the bar is built.
+        let orderStore = Preferences.menuBarOrderStore
+        if menubarExtLive, orderStore.enabled,
+           case .supported = MenuBarOrderingCapability.osSupport(
+               major: ProcessInfo.processInfo.operatingSystemVersion.majorVersion) {
+            Task { @MainActor in
+                let ok = await MenuBarItemMover.selfProbe()
+                MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: ok)
+            }
+        }
 
         // E2E handshake (gated by PROSPER_E2E=1): tell the launching test process
         // whether the keystroke tap is live so it can proceed — or skip with a
