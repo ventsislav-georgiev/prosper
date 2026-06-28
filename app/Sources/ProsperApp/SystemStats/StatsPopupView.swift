@@ -47,7 +47,7 @@ struct StatsPopupView: View {
             primary
             historySection
             detail
-            if module == .cpu || module == .memory { topProcesses }
+            if module == .cpu || module == .memory || module == .battery { topProcesses }
         }
         .padding(sz(16))
         .frame(width: sz(320))
@@ -100,7 +100,8 @@ struct StatsPopupView: View {
     private var primary: some View {
         switch module {
         case .cpu: cpuGauges
-        case .memory, .gpu: singleGauge
+        case .memory: memoryGauges
+        case .gpu: gpuGauges
         case .battery: batteryPrimary
         case .network: networkPrimary
         case .power, .sensors: bigReadout
@@ -135,12 +136,43 @@ struct StatsPopupView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// Memory / GPU: a single usage donut.
-    private var singleGauge: some View {
-        StatsRing(value: module.rampValue(store.snapshot) ?? 0, color: ringColor,
-                  lineWidth: sz(8), label: module.primaryText(store.snapshot, showUnit: true))
-            .frame(width: sz(74), height: sz(74))
-            .frame(maxWidth: .infinity)
+    /// Memory: a pressure half-gauge (left) + a segmented app/wired/compressed
+    /// usage donut (right), matching exelban's RAM popup.
+    private var memoryGauges: some View {
+        let m = store.snapshot.memory
+        let total = Double(m?.total ?? 0)
+        func frac(_ v: UInt64?) -> Double { total > 0 ? Double(v ?? 0) / total : 0 }
+        return HStack(spacing: sz(24)) {
+            PressureGauge(fraction: m?.pressure ?? 0, state: m?.pressureState ?? "—")
+                .frame(width: sz(120), height: sz(78))
+            SegmentedRing(
+                segments: [(frac(m?.app), Neon.blue),
+                           (frac(m?.wired), .orange),
+                           (frac(m?.compressed), LoadColor.system)],
+                lineWidth: sz(8),
+                label: m.map { StatsFormat.percent($0.usedFraction) } ?? "—")
+                .frame(width: sz(78), height: sz(78))
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// GPU: render · utilization (big) · tiler donuts, single-colour like exelban.
+    private var gpuGauges: some View {
+        let g = store.snapshot.gpu
+        return HStack(spacing: sz(16)) {
+            if let r = g?.renderUtil, !r.isNaN {
+                StatsRing(value: r, color: Neon.blue, lineWidth: sz(6), label: StatsFormat.percent(r))
+                    .frame(width: sz(58), height: sz(58))
+            }
+            StatsRing(value: g?.utilization ?? 0, color: ringColor, lineWidth: sz(8),
+                      label: g.map { StatsFormat.percent($0.utilization) } ?? "—")
+                .frame(width: sz(74), height: sz(74))
+            if let t = g?.tilerUtil, !t.isNaN {
+                StatsRing(value: t, color: Neon.blue, lineWidth: sz(6), label: StatsFormat.percent(t))
+                    .frame(width: sz(58), height: sz(58))
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var maxTemp: Double? { store.snapshot.temperatures?.map(\.celsius).max() }
@@ -153,35 +185,54 @@ struct StatsPopupView: View {
         store.style.config(.sensors).rampColor(min(1, max(0, (c - 30) / 70)))
     }
 
+    /// A large centred battery glyph (green when on power), the charge percent, and
+    /// a state pill — exelban's battery popup.
     private var batteryPrimary: some View {
         let b = store.snapshot.battery
-        return HStack(spacing: sz(12)) {
-            BatteryGlyph(charge: b?.charge ?? 0, charging: b?.isCharging ?? false, color: ringColor)
-            VStack(alignment: .leading, spacing: sz(2)) {
-                Text(module.primaryText(store.snapshot, showUnit: true))
-                    .font(Neon.font(20, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(ringColor)
-                if let b { Text(batteryState(b)).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary) }
+        let onPower = b?.isCharging == true || b?.isPluggedIn == true
+        return VStack(spacing: sz(8)) {
+            BigBattery(charge: b?.charge ?? 0, charging: b?.isCharging ?? false,
+                       onPower: onPower)
+                .frame(width: sz(150), height: sz(74))
+            HStack(alignment: .firstTextBaseline, spacing: sz(1)) {
+                Text("\(Int(((b?.charge ?? 0) * 100).rounded()))")
+                    .font(Neon.font(34, weight: .bold, design: .rounded).monospacedDigit())
+                Text("%").font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textSecondary)
             }
-            Spacer()
-        }
-    }
-
-    private var networkPrimary: some View {
-        let n = store.snapshot.network
-        let cfg = store.style.config(.network)
-        return HStack(spacing: sz(24)) {
-            channelBig("arrow.up", n?.uploadBytesPerSec ?? 0, cfg.up.color)
-            channelBig("arrow.down", n?.downloadBytesPerSec ?? 0, cfg.down.color)
+            if let b {
+                StatusBadge(text: batteryState(b),
+                            color: onPower ? .green : Neon.textSecondary,
+                            symbol: b.isCharging ? "bolt.fill" : (b.isPluggedIn ? "powerplug.fill" : nil))
+            }
         }
         .frame(maxWidth: .infinity)
     }
 
-    private func channelBig(_ symbol: String, _ rate: Double, _ color: Color) -> some View {
-        HStack(spacing: sz(6)) {
-            Image(systemName: symbol).font(Neon.font(13, weight: .bold)).foregroundStyle(color)
-            Text(StatsFormat.rateLong(rate))
-                .font(Neon.font(15, weight: .bold, design: .rounded).monospacedDigit())
+    /// Download (left) and Upload (right): big rate, small unit, a colour dot + label
+    /// beneath — exelban's network header.
+    private var networkPrimary: some View {
+        let n = store.snapshot.network
+        let cfg = store.style.config(.network)
+        return HStack(spacing: sz(40)) {
+            channelBig(n?.downloadBytesPerSec ?? 0, "Download", cfg.down.color)
+            channelBig(n?.uploadBytesPerSec ?? 0, "Upload", cfg.up.color)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func channelBig(_ rate: Double, _ label: String, _ color: Color) -> some View {
+        let parts = StatsFormat.rateMenu(rate).split(separator: " ", maxSplits: 1)
+        return VStack(spacing: sz(2)) {
+            HStack(alignment: .firstTextBaseline, spacing: sz(3)) {
+                Text(parts.first.map(String.init) ?? "0")
+                    .font(Neon.font(24, weight: .bold, design: .rounded).monospacedDigit())
+                Text(parts.count > 1 ? String(parts[1]) : "B/s")
+                    .font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textSecondary)
+            }
+            HStack(spacing: sz(5)) {
+                Circle().fill(color).frame(width: sz(8), height: sz(8))
+                Text(label).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            }
         }
     }
 
@@ -237,17 +288,27 @@ struct StatsPopupView: View {
         .animation(nil, value: values.count)   // live-feed chart: no morphing tweens
     }
 
-    // Two overlaid charts on a SHARED x-domain + peak. Download is the filled area;
-    // upload draws as a line on top (no second fill) so neither occludes the other.
+    // Mirrored about the centre line — upload fills upward, download downward — each
+    // normalised to its own peak, with the peak rates labelled top-left/bottom-left.
+    // exelban's network history.
     private var networkChart: some View {
         let up = store.history("net.up"), down = store.history("net.down")
-        let peak = max(up.max() ?? 0, down.max() ?? 0, 1)
-        let n = max(up.count, down.count)
         let cfg = store.style.config(.network)
-        return ZStack {
-            areaChart(down, cfg.down.color, peak, xMax: n)
-            areaChart(up, cfg.up.color, peak, xMax: n, lineOnly: true)
+        let upPeak = up.max() ?? 0, downPeak = down.max() ?? 0
+        return ZStack(alignment: .leading) {
+            MirrorNetChart(up: up, upPeak: upPeak, upColor: cfg.up.color,
+                           down: down, downPeak: downPeak, downColor: cfg.down.color)
+                .frame(height: sz(90))
+            VStack(alignment: .leading) {
+                Text(StatsFormat.rateMenu(upPeak))
+                Spacer()
+                Text(StatsFormat.rateMenu(downPeak))
+            }
+            .font(Neon.font(10).monospacedDigit())
+            .foregroundStyle(Neon.textSecondary)
+            .padding(sz(4))
         }
+        .frame(height: sz(90))
     }
 
     // MARK: - Per-module detail
@@ -311,38 +372,40 @@ struct StatsPopupView: View {
 
     private func memDetail(_ m: MemorySample) -> some View {
         VStack(alignment: .leading, spacing: sz(6)) {
+            section("Details")
+            kv("Used", StatsFormat.bytes(Double(m.used)))
             StackedBar(segments: [(Double(m.app), Neon.blue),
                                   (Double(m.wired), .orange),
-                                  (Double(m.compressed), .purple)],
+                                  (Double(m.compressed), LoadColor.system)],
                        total: Double(m.total))
-            section("Details")
             legend(Neon.blue, "App", StatsFormat.bytes(Double(m.app)))
             legend(.orange, "Wired", StatsFormat.bytes(Double(m.wired)))
-            legend(.purple, "Compressed", StatsFormat.bytes(Double(m.compressed)))
-            kv("Used", StatsFormat.bytes(Double(m.used)))
-            if m.cached > 0 { kv("Cached files", StatsFormat.bytes(Double(m.cached))) }
-            kv("Free", StatsFormat.bytes(Double(m.free)))
-            kv("Pressure", m.pressureState)
+            legend(LoadColor.system, "Compressed", StatsFormat.bytes(Double(m.compressed)))
+            legend(LoadColor.idle, "Free", StatsFormat.bytes(Double(m.free)))
             if m.swapTotal > 0 {
                 kv("Swap", "\(StatsFormat.bytes(Double(m.swapUsed))) / \(StatsFormat.bytes(Double(m.swapTotal)))")
-            } else if m.swapUsed > 0 {
-                kv("Swap used", StatsFormat.bytes(Double(m.swapUsed)))
+            } else {
+                kv("Swap", StatsFormat.bytes(Double(m.swapUsed)))
             }
         }
     }
 
     private func netDetail(_ n: NetworkSample) -> some View {
-        VStack(alignment: .leading, spacing: sz(6)) {
+        let cfg = store.style.config(.network)
+        return VStack(alignment: .leading, spacing: sz(6)) {
             section("Details")
-            kv("Download", StatsFormat.rateLong(n.downloadBytesPerSec))
-            kv("Upload", StatsFormat.rateLong(n.uploadBytesPerSec))
-            kv("Total down", StatsFormat.bytes(Double(n.totalDownloaded)))
-            kv("Total up", StatsFormat.bytes(Double(n.totalUploaded)))
+            legend(cfg.up.color, "Total upload", StatsFormat.bytes(Double(n.totalUploaded)))
+            legend(cfg.down.color, "Total download", StatsFormat.bytes(Double(n.totalDownloaded)))
             if n.interfaceName != nil || n.ipv4 != nil || n.ssid != nil {
                 section("Interface")
-                if let s = n.ssid { kv("Wi-Fi", s) }
-                if let i = n.interfaceName { kv("Interface", i) }
-                if let ip = n.ipv4 { kv("IP address", ip) }
+                if let s = n.ssid { kv("Network", s) }
+                if let i = n.interfaceName {
+                    kv("Interface", n.ssid != nil ? "Wi-Fi (\(i))" : i)
+                }
+            }
+            if let ip = n.ipv4 {
+                section("Address")
+                kv("Local IP", ip)
             }
         }
     }
@@ -350,12 +413,13 @@ struct StatsPopupView: View {
     private func gpuDetail(_ g: GPUSample) -> some View {
         VStack(alignment: .leading, spacing: sz(6)) {
             section("Details")
+            kv("Model", facts.chipName)
+            if g.coreCount > 0 { kv("Cores", "\(g.coreCount)") }
             kv("Utilization", StatsFormat.percent(g.utilization))
-            if !g.renderUtil.isNaN { kv("Renderer", StatsFormat.percent(g.renderUtil)) }
-            if !g.tilerUtil.isNaN { kv("Tiler", StatsFormat.percent(g.tilerUtil)) }
+            if !g.renderUtil.isNaN { kv("Render utilization", StatsFormat.percent(g.renderUtil)) }
+            if !g.tilerUtil.isNaN { kv("Tiler utilization", StatsFormat.percent(g.tilerUtil)) }
             if g.usedMemory > 0 { kv("VRAM in use", StatsFormat.bytes(Double(g.usedMemory))) }
-            if g.coreCount > 0 { kv("GPU cores", "\(g.coreCount)") }
-            if !g.fps.isNaN && g.fps > 0 { kv("Frames presented", String(format: "%.0f fps", g.fps)) }
+            if !g.fps.isNaN && g.fps > 0 { kv("FPS", String(format: "%.0f", g.fps)) }
         }
     }
 
@@ -505,16 +569,39 @@ struct StatsPopupView: View {
     private func batteryDetail(_ b: BatterySample) -> some View {
         VStack(alignment: .leading, spacing: sz(6)) {
             section("Details")
+            kv("Source", b.isPluggedIn ? "AC Power" : "Battery")
+            if b.isCharging {
+                kv("Time to charge", b.timeToFull > 0 ? timeText(b.timeToFull) : "Calculating…")
+            } else if b.isPluggedIn {
+                kv("Time to charge", "Fully charged")
+            } else if b.timeToEmpty > 0 {
+                kv("Time remaining", timeText(b.timeToEmpty))
+            }
+            kv("Power", StatsFormat.watts(abs(b.powerWatts)))
+            if !b.amperage.isNaN { kv("Current", String(format: "%.0f mA", abs(b.amperage) * 1000)) }
+            if !b.voltage.isNaN { kv("Voltage", String(format: "%.2f V", b.voltage)) }
+
+            section("Battery")
+            if b.maxCapacity > 0 {
+                HStack {
+                    Text("Max capacity").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                    Spacer()
+                    Text("Designed capacity").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                }
+                StackedBar(segments: [(b.health.isNaN ? 1 : b.health, .green)], total: 1)
+            }
             if !b.health.isNaN { kv("Health", StatsFormat.percent(b.health)) }
             kv("Cycles", "\(b.cycleCount)")
-            if b.maxCapacity > 0 { kv("Capacity", "\(b.currentCapacity) / \(b.maxCapacity) mAh") }
-            kv("Power", StatsFormat.watts(b.powerWatts))
-            if !b.voltage.isNaN { kv("Voltage", String(format: "%.2f V", b.voltage)) }
-            if !b.amperage.isNaN { kv("Amperage", String(format: "%.2f A", b.amperage)) }
             if !b.temperature.isNaN { kv("Temperature", StatsFormat.tempDetail(b.temperature)) }
-            if b.adapterWatts > 0 { kv("Power adapter", StatsFormat.watts(b.adapterWatts)) }
-            if b.isCharging, b.timeToFull > 0 { kv("Time to full", timeText(b.timeToFull)) }
-            if !b.isCharging, b.timeToEmpty > 0 { kv("Time remaining", timeText(b.timeToEmpty)) }
+
+            section("Power adapter")
+            HStack {
+                Text("Is charging").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                Spacer()
+                StatusBadge(text: b.isCharging ? "Yes" : "No",
+                            color: b.isCharging ? .green : LoadColor.system, symbol: nil)
+            }
+            if b.adapterWatts > 0 { kv("Power", StatsFormat.watts(b.adapterWatts)) }
         }
     }
 
@@ -647,32 +734,122 @@ private struct ProcessIcon: View {
     }
 }
 
-/// A small battery outline filled to `charge`, with a charging bolt overlay.
-private struct BatteryGlyph: View {
+/// The large battery glyph for the popup header: a rounded outline + nub, filled
+/// green when on power (with a plug/bolt) else neon, scaled to its frame.
+private struct BigBattery: View {
     let charge: Double
     let charging: Bool
-    let color: Color
+    let onPower: Bool
 
     var body: some View {
-        HStack(spacing: sz(2)) {
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: sz(3))
-                    .stroke(Neon.textSecondary, lineWidth: sz(1.5))
-                    .frame(width: sz(36), height: sz(17))
-                RoundedRectangle(cornerRadius: sz(1.5))
-                    .fill(color)
-                    .frame(width: max(sz(2), sz(30) * CGFloat(min(1, max(0, charge)))), height: sz(11))
-                    .padding(.leading, sz(2.5))
-                if charging {
-                    Image(systemName: "bolt.fill")
-                        .font(Neon.font(9, weight: .bold))
-                        .foregroundStyle(Neon.textPrimary)
-                        .frame(width: sz(36), height: sz(17))
+        GeometryReader { g in
+            let h = g.size.height
+            let bodyW = g.size.width - h * 0.12
+            let fill = onPower ? Color.green : Neon.blue
+            HStack(spacing: h * 0.04) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: h * 0.28)
+                        .stroke(Neon.textSecondary.opacity(0.6), lineWidth: h * 0.07)
+                    RoundedRectangle(cornerRadius: h * 0.2)
+                        .fill(fill)
+                        .padding(h * 0.12)
+                        .scaleEffect(x: CGFloat(min(1, max(0.02, charge))), anchor: .leading)
+                    if onPower {
+                        Image(systemName: charging ? "bolt.fill" : "powerplug.fill")
+                            .font(.system(size: h * 0.42, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
                 }
+                .frame(width: bodyW)
+                RoundedRectangle(cornerRadius: h * 0.06)
+                    .fill(Neon.textSecondary.opacity(0.6))
+                    .frame(width: h * 0.08, height: h * 0.34)
             }
-            RoundedRectangle(cornerRadius: sz(1))
-                .fill(Neon.textSecondary)
-                .frame(width: sz(2.5), height: sz(7))
+        }
+    }
+}
+
+/// exelban's RAM pressure half-gauge: a 180° green→yellow→red arc with a needle at
+/// `fraction`, and the textual state below.
+private struct PressureGauge: View {
+    let fraction: Double
+    let state: String
+
+    var body: some View {
+        VStack(spacing: sz(2)) {
+            Canvas { ctx, size in
+                let lw = size.height * 0.14
+                let r = min(size.width / 2, size.height) - lw
+                let c = CGPoint(x: size.width / 2, y: size.height - lw / 2)
+                // Arc spans 180°→360° (left to right across the top). Draw three zones.
+                let zones: [(Double, Double, Color)] = [
+                    (180, 240, .green), (240, 300, .yellow), (300, 360, LoadColor.system)]
+                for (a0, a1, col) in zones {
+                    var p = Path()
+                    p.addArc(center: c, radius: r,
+                             startAngle: .degrees(a0), endAngle: .degrees(a1), clockwise: false)
+                    ctx.stroke(p, with: .color(col), style: StrokeStyle(lineWidth: lw, lineCap: .butt))
+                }
+                // Needle.
+                let f = min(1, max(0, fraction))
+                let ang = (180 + 180 * f) * .pi / 180
+                let tip = CGPoint(x: c.x + cos(ang) * r, y: c.y + sin(ang) * r)
+                var needle = Path()
+                needle.move(to: c); needle.addLine(to: tip)
+                ctx.stroke(needle, with: .color(Neon.blue), style: StrokeStyle(lineWidth: lw * 0.6, lineCap: .round))
+                ctx.fill(Path(ellipseIn: CGRect(x: c.x - lw * 0.5, y: c.y - lw * 0.5, width: lw, height: lw)),
+                         with: .color(Neon.blue))
+            }
+            Text(state).font(Neon.font(.caption, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+        }
+    }
+}
+
+/// A small pill badge (status / state), optionally with a leading symbol.
+private struct StatusBadge: View {
+    let text: String
+    let color: Color
+    let symbol: String?
+
+    var body: some View {
+        HStack(spacing: sz(3)) {
+            if let symbol { Image(systemName: symbol).font(Neon.font(9, weight: .bold)) }
+            Text(text).font(Neon.font(.caption, weight: .semibold))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, sz(8)).padding(.vertical, sz(2))
+        .background(Capsule().fill(color.opacity(0.18)))
+    }
+}
+
+/// Mirrored network history: upload fills upward from the centre, download
+/// downward, each normalised to its own peak. exelban's network chart.
+private struct MirrorNetChart: View {
+    let up: [Double]; let upPeak: Double; let upColor: Color
+    let down: [Double]; let downPeak: Double; let downColor: Color
+
+    var body: some View {
+        Canvas { ctx, size in
+            let mid = size.height / 2
+            func fillArea(_ vals: [Double], _ peak: Double, _ color: Color, up: Bool) {
+                guard vals.count > 1 else { return }
+                let maxV = Swift.max(peak, 0.0001)
+                let n = vals.count
+                var p = Path()
+                p.move(to: CGPoint(x: 0, y: mid))
+                for i in 0..<n {
+                    let x = size.width * CGFloat(i) / CGFloat(n - 1)
+                    let frac = CGFloat(min(1, max(0, vals[i] / maxV)))
+                    let y = up ? mid - frac * mid : mid + frac * mid
+                    p.addLine(to: CGPoint(x: x, y: y))
+                }
+                p.addLine(to: CGPoint(x: size.width, y: mid))
+                p.closeSubpath()
+                ctx.fill(p, with: .color(color.opacity(0.5)))
+                ctx.stroke(p, with: .color(color), lineWidth: 1)
+            }
+            fillArea(up, upPeak, upColor, up: true)
+            fillArea(down, downPeak, downColor, up: false)
         }
     }
 }

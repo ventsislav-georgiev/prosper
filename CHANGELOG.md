@@ -96,6 +96,12 @@ tag from the now-released section and put it on the new top draft.
   colour-dot legends; average load and per-cluster clock frequency sections; and a
   top-processes list with a column header and each app's real icon. Temperatures,
   voltages, and currents are formatted like the reference (37.3°C, 27.827V, 0.38A).
+  Each module's popup now matches that reference too: **Memory** shows a pressure
+  half-gauge beside an app/wired/compressed usage donut; **GPU** shows render,
+  utilization, and tiler dials with the chip model; **Network** shows big download/
+  upload readouts over a mirrored up/down history chart with peak labels; and
+  **Battery** shows a large glyph with a charging pill and grouped Details / Battery /
+  Power-adapter sections, plus a top-processes list.
 - **Per-process CPU% reads like Activity Monitor** — percent of a single core, so a
   multi-threaded process can read above 100%.
 - **Fan speed and manual fan control now live in the Sensors popover**, each fan shown

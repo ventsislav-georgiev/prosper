@@ -14,6 +14,7 @@ public struct SystemFacts: Sendable {
     public let pageSize: Int
     public let physicalMemory: UInt64   // bytes
     public let modelIdentifier: String
+    public let chipName: String         // e.g. "Apple M4 Pro" (CPU brand string)
     public let isAppleSilicon: Bool
 
     public static let current = SystemFacts()
@@ -28,6 +29,7 @@ public struct SystemFacts: Sendable {
         self.pageSize       = Self.sysctlInt("hw.pagesize") ?? 16384
         self.physicalMemory = UInt64(Self.sysctlInt64("hw.memsize") ?? 0)
         self.modelIdentifier = Self.sysctlString("hw.model") ?? "unknown"
+        self.chipName = Self.sysctlString("machdep.cpu.brand_string") ?? "unknown"
         #if arch(arm64)
         self.isAppleSilicon = true
         #else
