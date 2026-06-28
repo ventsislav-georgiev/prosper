@@ -221,10 +221,11 @@ enum MenuBarItemMover {
 
         // Let AppKit place the windows.
         try? await Task.sleep(for: .milliseconds(120))
-        guard let widA = a.button?.window?.windowNumber,
-              let wa = MenuBarLogic.windowID(forWindowNumber: widA),
-              let widB = b.button?.window?.windowNumber,
-              let wb = MenuBarLogic.windowID(forWindowNumber: widB) else { return false }
+        // Map each throwaway item to its CGS window by frame match — windowNumber is
+        // unusable on Tahoe (separate +2³² namespace, unrelated to CGWindowID).
+        guard let xA = a.button?.window?.frame.minX, let wa = MenuBarBridge.windowID(forItemMinX: xA),
+              let xB = b.button?.window?.frame.minX, let wb = MenuBarBridge.windowID(forItemMinX: xB),
+              wa != wb else { return false }
         let pid = getpid()
         guard let fa = MenuBarBridge.frame(for: wa), let fb = MenuBarBridge.frame(for: wb) else { return false }
         // Both probe items must have landed in the same menu-bar row with real width.

@@ -49,6 +49,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.onQuit = onQuit
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        ProsperStatusItems.register(statusItem)   // self-filter source for the menu-bar manager
         versionItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false
         secureInputItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")

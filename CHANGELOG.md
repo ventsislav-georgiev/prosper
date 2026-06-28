@@ -28,6 +28,15 @@ tag from the now-released section and put it on the new top draft.
   — it adds nothing to your menu bar until you turn it on in Settings › Extensions.
   - Fixed a crash on enabling the extension on macOS 26 (Tahoe), where the system's
     wider window numbers overflowed a 32-bit conversion.
+  - **Rebuilt the show/hide control for macOS 26 (Tahoe).** The clickable chevron is
+    now a separate, always-on-screen item from the invisible separator that does the
+    hiding — previously a single item did both jobs, so expanding it to hide your
+    icons also swept the chevron (and Prosper's own menu-bar icon) off the screen,
+    leaving nothing to click. The chevron now stays put: click it to show/hide, and
+    ⌥-click to reach the always-hidden section.
+  - Identifying Prosper's own menu-bar items no longer relies on signals Tahoe
+    removed (per-app window ownership), so the live preview and ordering self-test
+    work again instead of reporting "ordering isn't reliable on this Mac."
 - **Item ordering that survives relaunch, including multi-icon apps (experimental).**
   Apps like Stats or iStat Menus publish several icons that macOS normally shuffles
   on every launch. Turn on ordering, arrange your icons once, and Prosper keeps them
