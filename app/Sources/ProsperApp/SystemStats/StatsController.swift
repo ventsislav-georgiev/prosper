@@ -73,12 +73,18 @@ final class StatsController {
 
     // MARK: - Poller
 
+    private var pollerInterval: TimeInterval = 0
+
     private func startPoller(for modules: Set<StatsModule>) {
-        // Re-create only when the enabled set changed (avoids churn on a pure
-        // colour/label tweak).
-        if let p = poller, p.enabledSet == modules { return }
+        let interval = Preferences.statsRefreshInterval
+        // Re-create only when the enabled set OR the sampling period changed (avoids
+        // churn on a pure colour/label tweak).
+        if let p = poller, p.enabledSet == modules, pollerInterval == interval { return }
         poller?.stop()
-        let p = StatsPoller(modules: modules)
+        var cfg = StatsPoller.Config()
+        cfg.baseInterval = interval
+        pollerInterval = interval
+        let p = StatsPoller(modules: modules, config: cfg)
         p.onSnapshot = { [weak self] snap in
             // The poller delivers on the main queue (its default deliverQueue), so
             // assert the isolation rather than pay a Task hop (which would also let

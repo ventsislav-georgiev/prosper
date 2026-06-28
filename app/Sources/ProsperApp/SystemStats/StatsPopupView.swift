@@ -36,7 +36,6 @@ struct StatsPopupView: View {
     /// Live fan readout for the sensors popover. Refreshed every few store ticks
     /// while open — an unprivileged SMC open/close, never the write path.
     @State private var fans: [FanReading] = []
-    @State private var fanTick = 0
 
     // Fan manual control (sensors popup only). Default OFF, opt-in, confirmation-
     // gated inline (a modal alert would dismiss the transient popover).
@@ -44,6 +43,8 @@ struct StatsPopupView: View {
     @State private var fanTargets = Preferences.fanTargets
     @State private var pendingManual = false
     @State private var fanCommitWork: DispatchWorkItem?
+    @State private var fanBusy = false           // engage in flight (daemon round-trip)
+    @State private var fanError: String?         // last engage failure, shown inline
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(12)) {
@@ -61,8 +62,10 @@ struct StatsPopupView: View {
         .onAppear { if module == .sensors { fans = FanInfo.read() } }
         .onReceive(store.$snapshot) { _ in
             guard module == .sensors else { return }
-            fanTick += 1
-            if fanTick % 3 == 0 { fans = FanInfo.read() }   // ~3 s, not every 1 Hz tick
+            // Re-read every tick: a cheap unprivileged SMC read, only while this popup
+            // is open, and the readout must track real RPM closely enough to expose a
+            // fan that isn't responding to a manual write.
+            fans = FanInfo.read()
         }
     }
 
@@ -562,22 +565,31 @@ struct StatsPopupView: View {
                 Button("Cancel") { pendingManual = false }
                     .buttonStyle(.plain).foregroundStyle(Neon.textSecondary)
                 Spacer()
-                Button("Enable manual") { confirmManualAll() }.foregroundStyle(.red)
+                Button(fanBusy ? "Enabling…" : "Enable manual") { confirmManualAll() }
+                    .foregroundStyle(.red).disabled(fanBusy)
             }
             .font(Neon.font(.caption, weight: .semibold))
         }
+
+        if let err = fanError {
+            Text(err).font(Neon.font(10)).foregroundStyle(.red).padding(.top, sz(2))
+        }
     }
 
-    /// Live per-fan bar (no per-fan controls — governance is shared below).
+    /// Live per-fan bar — ALWAYS the real measured RPM (`F{i}Ac`), never the slider
+    /// target. The bar/percent must reflect what the hardware is actually doing so a
+    /// fan that isn't responding to a manual write reads honestly (stays put) instead
+    /// of optimistically tracking the drag. RPM number shown so it's unambiguous.
     private func fanReadout(_ fan: FanReading) -> some View {
-        let manual = fanManual && fanTargets[fan.id] != nil
-        // While manual, follow the live target so the bar tracks the slider instead of
-        // lagging on the ~3 s SMC re-read of `fan.current`.
-        let shownRPM = manual ? (fanTargets[fan.id] ?? fan.current) : fan.current
-        let pct = fan.max > 0 ? shownRPM / fan.max : 0
+        let pct = fan.max > 0 ? fan.current / fan.max : 0
+        let target = (fanManual ? fanTargets[fan.id] : nil)
         return HStack(spacing: sz(8)) {
             Text("Fan \(fan.id + 1)").font(Neon.font(.caption, weight: .bold))
             FanBar(fraction: pct)
+            // Show the manual target alongside actual so a non-responding fan is obvious
+            // (e.g. "1200 → 3000 rpm" while the bar sits at 1200).
+            Text(target != nil ? "\(Int(fan.current)) → \(Int(target!)) rpm" : "\(Int(fan.current)) rpm")
+                .font(Neon.font(10).monospacedDigit()).foregroundStyle(Neon.textSecondary)
             Text(StatsFormat.percent(pct))
                 .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
         }
@@ -599,15 +611,29 @@ struct StatsPopupView: View {
         else { pendingManual = true }                  // first time → inline confirm
     }
 
-    /// Turn manual on (post-confirmation): seed every fan at its current RPM.
+    /// Turn manual on (post-confirmation): seed every fan at its current RPM, then
+    /// AWAIT the daemon. Only flip the UI to "manual" if the privileged write actually
+    /// engaged — otherwise the popover lied (helper not installed/approved). The first
+    /// `setManual` is what triggers helper registration + the macOS approval prompt.
     private func confirmManualAll() {
         pendingManual = false
-        fanManual = true
-        Preferences.fanManualEnabled = true
+        fanError = nil
+        fanBusy = true
         var t = Preferences.fanTargets
         for f in fansAdjustable { t[f.id] = clampRPM(f.current, f) }
-        Preferences.fanTargets = t; fanTargets = t
-        commitAll(t)
+        Task {
+            var ok = !t.isEmpty
+            for (i, rpm) in t { if await FanControlHelper.setManual(i, rpm: rpm) == false { ok = false } }
+            fanBusy = false
+            guard ok else {
+                fanError = "Couldn’t enable manual control — the Prosper helper isn’t "
+                    + "running. Approve it in System Settings ▸ General ▸ Login Items, then try again."
+                return
+            }
+            fanManual = true
+            Preferences.fanManualEnabled = true
+            Preferences.fanTargets = t; fanTargets = t
+        }
     }
 
     /// Hand every fan back to the OS and tear the daemon connection down.

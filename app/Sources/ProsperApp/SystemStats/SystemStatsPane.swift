@@ -10,6 +10,7 @@ import StatsCore
 struct SystemStatsPane: View {
     @State private var enabled = Preferences.systemStatsEnabled
     @State private var style = SystemStatsStore.load()
+    @State private var interval = Preferences.statsRefreshInterval
     /// Coalesces the persist+notify burst a ColorPicker drag emits (one set per
     /// frame) into a single commit, so we don't JSON-encode + reconfigure the live
     /// controller dozens of times a second mid-drag.
@@ -26,6 +27,14 @@ struct SystemStatsPane: View {
                         .onChange(of: enabled) { _, v in Preferences.systemStatsEnabled = v; notify() }
                 }
                 if enabled {
+                    NeonDivider()
+                    NeonRow("Update interval", subtitle: "Lower = more responsive, more CPU. Slow metrics (temps, power, battery) sample less often.") {
+                        Picker("", selection: intervalBinding) {
+                            Text("1s").tag(1.0); Text("2s").tag(2.0)
+                            Text("3s").tag(3.0); Text("5s").tag(5.0)
+                        }
+                        .labelsHidden().pickerStyle(.segmented).frame(width: sz(180))
+                    }
                     NeonDivider()
                     NeonRow("Number alignment") {
                         Picker("", selection: alignmentBinding) {
@@ -104,6 +113,11 @@ struct SystemStatsPane: View {
     private var alignmentBinding: Binding<StatsWidgetAlignment> {
         Binding(get: { style.alignment },
                 set: { style.alignment = $0; commit() })
+    }
+
+    private var intervalBinding: Binding<Double> {
+        Binding(get: { interval },
+                set: { interval = $0; Preferences.statsRefreshInterval = $0; notify() })
     }
 
     /// A binding into one module's config. Mutates the @State immediately (so the
