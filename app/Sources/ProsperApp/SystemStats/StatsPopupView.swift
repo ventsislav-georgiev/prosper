@@ -42,7 +42,7 @@ struct StatsPopupView: View {
     // gated inline (a modal alert would dismiss the transient popover).
     @State private var fanManual = Preferences.fanManualEnabled
     @State private var fanTargets = Preferences.fanTargets
-    @State private var pendingManualFan: Int?
+    @State private var pendingManual = false
     @State private var fanCommitWork: DispatchWorkItem?
 
     var body: some View {
@@ -508,106 +508,136 @@ struct StatsPopupView: View {
         }
     }
 
-    // MARK: - Fans (readout + per-fan Automatic/Manual, confirmation-gated inline)
+    // MARK: - Fans (readout + ONE synced Automatic/Manual control, like exelban/Stats)
+
+    // Fans are governed together, not individually: one Automatic|Manual segmented
+    // control plus min/max quick buttons drive every fan off a single 0…1 fraction
+    // (each fan mapped into its own min…max range). Matches Stats' "sync" behaviour
+    // and keeps the popover compact. The write path is still per-fan under the hood.
+
+    private var fansAdjustable: [FanReading] { fans.filter { $0.max > $0.min } }
 
     @ViewBuilder
     private var fanSection: some View {
         section("Fans")
-        ForEach(fans) { fan in fanRow(fan) }
-        if let pending = pendingManualFan {
+        ForEach(fans) { fan in fanReadout(fan) }
+
+        let adj = fansAdjustable
+        if !adj.isEmpty {
+            let manual = fanManual && !fanTargets.isEmpty
+            // Auto|Manual on its own line; the two quick buttons (min / max) sit to the
+            // right and only act once manual is engaged.
+            HStack(spacing: sz(6)) {
+                Picker("", selection: Binding(
+                    get: { manual ? 1 : 0 },
+                    set: { sel in sel == 1 ? selectManualAll() : selectAutoAll() })) {
+                        Text("Automatic").tag(0)
+                        Text("Manual").tag(1)
+                    }
+                    .labelsHidden().pickerStyle(.segmented).controlSize(.small)
+                Button { applyFraction(0) } label: { Image(systemName: "minus.circle") }
+                    .buttonStyle(.plain).foregroundStyle(manual ? Neon.textPrimary : Neon.textSecondary.opacity(0.4))
+                    .disabled(!manual).help("Quietest (minimum RPM)")
+                Button { applyFraction(1) } label: { Image(systemName: "snowflake") }
+                    .buttonStyle(.plain).foregroundStyle(manual ? Neon.blueBright : Neon.textSecondary.opacity(0.4))
+                    .disabled(!manual).help("Full speed (maximum RPM)")
+            }
+            if manual {
+                Slider(value: Binding(get: { fanFraction }, set: { applyFraction($0) }), in: 0...1)
+                    .controlSize(.mini)
+                HStack {
+                    Text(StatsFormat.percent(fanFraction))
+                        .font(Neon.font(10).monospacedDigit()).foregroundStyle(Neon.textSecondary)
+                    Spacer()
+                    Text("all fans").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
+                }
+            }
+        }
+
+        if pendingManual {
             Text("Manual fan control writes speeds to hardware as root. Too low can "
                  + "overheat. Fans reset to automatic on sleep, quit, or disable.")
                 .font(Neon.font(10)).foregroundStyle(Neon.textSecondary).padding(.top, sz(2))
             HStack {
-                Button("Cancel") { pendingManualFan = nil }
+                Button("Cancel") { pendingManual = false }
                     .buttonStyle(.plain).foregroundStyle(Neon.textSecondary)
                 Spacer()
-                Button("Enable manual") { confirmManual(pending) }.foregroundStyle(.red)
+                Button("Enable manual") { confirmManualAll() }.foregroundStyle(.red)
             }
             .font(Neon.font(.caption, weight: .semibold))
         }
     }
 
-    @ViewBuilder
-    private func fanRow(_ fan: FanReading) -> some View {
+    /// Live per-fan bar (no per-fan controls — governance is shared below).
+    private func fanReadout(_ fan: FanReading) -> some View {
         let manual = fanManual && fanTargets[fan.id] != nil
-        // While manual, track the live target so the bar follows the slider instead of
+        // While manual, follow the live target so the bar tracks the slider instead of
         // lagging on the ~3 s SMC re-read of `fan.current`.
         let shownRPM = manual ? (fanTargets[fan.id] ?? fan.current) : fan.current
         let pct = fan.max > 0 ? shownRPM / fan.max : 0
-        let adjustable = fan.max > fan.min   // degenerate (single-speed) fans crash Slider
-        VStack(alignment: .leading, spacing: sz(5)) {
-            HStack(spacing: sz(8)) {
-                Text("Fan \(fan.id + 1)").font(Neon.font(.caption, weight: .bold))
-                FanBar(fraction: pct)
-                Text(StatsFormat.percent(pct))
-                    .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
-            }
-            if adjustable {
-                Picker("", selection: Binding(
-                    get: { manual ? 1 : 0 },
-                    set: { sel in sel == 1 ? selectManual(fan) : selectAuto(fan) })) {
-                        Text("Automatic").tag(0)
-                        Text("Manual").tag(1)
-                    }
-                    .labelsHidden().pickerStyle(.segmented).controlSize(.small)
-            }
-            if manual && adjustable {
-                Slider(value: Binding(
-                    get: { fanTargets[fan.id] ?? clampRPM(fan.current, fan) },
-                    set: { v in fanTargets[fan.id] = v; commitFan(fan.id, v) }),
-                       in: fan.min...fan.max)
-                    .controlSize(.mini)
-                HStack {
-                    Text("\(Int(fanTargets[fan.id] ?? fan.current)) rpm")
-                        .font(Neon.font(10).monospacedDigit()).foregroundStyle(Neon.textSecondary)
-                    Spacer()
-                    Text("\(Int(fan.min))–\(Int(fan.max))")
-                        .font(Neon.font(10).monospacedDigit()).foregroundStyle(Neon.textSecondary)
-                }
-            }
+        return HStack(spacing: sz(8)) {
+            Text("Fan \(fan.id + 1)").font(Neon.font(.caption, weight: .bold))
+            FanBar(fraction: pct)
+            Text(StatsFormat.percent(pct))
+                .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
         }
     }
 
-    private func selectManual(_ fan: FanReading) {
-        if fanManual { confirmManual(fan.id) }   // already trusted — set straight away
-        else { pendingManualFan = fan.id }        // first time → inline confirm
+    /// Shared 0…1 fraction across all adjustable fans (mean of each fan's position in
+    /// its own range). Drives the sync slider and the percent readout.
+    private var fanFraction: Double {
+        let fs = fansAdjustable.compactMap { f -> Double? in
+            guard let t = fanTargets[f.id] else { return nil }
+            return (t - f.min) / (f.max - f.min)
+        }
+        guard !fs.isEmpty else { return 0 }
+        return fs.reduce(0, +) / Double(fs.count)
     }
 
-    /// Turn one fan manual (post-confirmation): seed its target at the current RPM.
-    private func confirmManual(_ index: Int) {
-        pendingManualFan = nil
+    private func selectManualAll() {
+        if fanManual { applyFraction(fanFraction) }   // already trusted
+        else { pendingManual = true }                  // first time → inline confirm
+    }
+
+    /// Turn manual on (post-confirmation): seed every fan at its current RPM.
+    private func confirmManualAll() {
+        pendingManual = false
         fanManual = true
         Preferences.fanManualEnabled = true
-        let seed = fans.first { $0.id == index }.map { clampRPM($0.current, $0) } ?? 0
-        var t = Preferences.fanTargets; t[index] = seed; Preferences.fanTargets = t
-        fanTargets = t
-        Task { await FanControlHelper.setManual(index, rpm: seed) }
+        var t = Preferences.fanTargets
+        for f in fansAdjustable { t[f.id] = clampRPM(f.current, f) }
+        Preferences.fanTargets = t; fanTargets = t
+        commitAll(t)
     }
 
-    /// Hand one fan back to the OS. When the last manual fan goes auto, fully tear
-    /// down (resets all + drops the daemon connection).
-    private func selectAuto(_ fan: FanReading) {
-        var t = Preferences.fanTargets; t[fan.id] = nil; Preferences.fanTargets = t
-        fanTargets = t
-        if t.isEmpty {
-            fanManual = false
-            Preferences.fanManualEnabled = false
-            Task { await FanControlHelper.resetAll(teardown: true) }
-        } else {
-            Task { await FanControlHelper.setAuto(fan.id) }
-        }
+    /// Hand every fan back to the OS and tear the daemon connection down.
+    private func selectAutoAll() {
+        fanManual = false
+        Preferences.fanManualEnabled = false
+        Preferences.fanTargets = [:]; fanTargets = [:]
+        Task { await FanControlHelper.resetAll(teardown: true) }
+    }
+
+    /// Map a single 0…1 fraction onto every fan's own range and commit them together.
+    private func applyFraction(_ frac: Double) {
+        let f = Swift.min(1, Swift.max(0, frac))
+        var t = Preferences.fanTargets
+        for fan in fansAdjustable { t[fan.id] = fan.min + f * (fan.max - fan.min) }
+        Preferences.fanTargets = t; fanTargets = t
+        commitAll(t)
     }
 
     private func clampRPM(_ v: Double, _ fan: FanReading) -> Double {
         Swift.min(Swift.max(v, fan.min), fan.max)
     }
 
-    /// Persist immediately (cheap) but debounce the slow root SMC write.
-    private func commitFan(_ index: Int, _ rpm: Double) {
-        var t = Preferences.fanTargets; t[index] = rpm; Preferences.fanTargets = t
+    /// Persist immediately (cheap) but debounce the slow root SMC writes; one
+    /// debounced burst sets all fans so a slider drag doesn't hammer the daemon.
+    private func commitAll(_ targets: [Int: Double]) {
         fanCommitWork?.cancel()
-        let work = DispatchWorkItem { Task { await FanControlHelper.setManual(index, rpm: rpm) } }
+        let work = DispatchWorkItem {
+            Task { for (i, rpm) in targets { await FanControlHelper.setManual(i, rpm: rpm) } }
+        }
         fanCommitWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }

@@ -28,7 +28,7 @@ struct StatsMenuWidget: View {
     var body: some View {
         let cfg = store.style.config(module)
         content(cfg)
-            .padding(.horizontal, sz(6))
+            .padding(.horizontal, sz(3))
             .frame(height: thickness)
             .fixedSize()
     }
@@ -87,9 +87,10 @@ struct StatsMenuWidget: View {
 
     private func channelLine(_ rate: String, _ arrow: String, _ color: Color) -> some View {
         ZStack(alignment: .trailing) {
-            // Reserve the widest rateMenu output ("999.9 MB/s") + arrow so a decimal
-            // MB/s or GB/s reading can't widen the item. Keeps the channel fixed-width.
-            Text("999.9 MB/s \(arrow)").hidden()
+            // Reserve a realistic worst-case ("99.9 MB/s" ≈ 800 Mbps) so the channel
+            // stays fixed-width without the dead space a 3-digit MB/s sample left. A
+            // rarer >100 MB/s burst can grow the item a hair — acceptable over the gap.
+            Text("99.9 MB/s\(arrow)").hidden()
             HStack(spacing: sz(2)) {
                 Text(rate)
                 Text(arrow)

@@ -45,6 +45,30 @@ enum MenuBarItemIndexer {
         return out
     }
 
+    /// Live cropped image per item window — for the Settings preview, NOT a hash.
+    /// On Tahoe every third-party item reports owner pid = Control Center, so
+    /// `NSRunningApplication(pid).icon` is dead; capturing the rendered item is the
+    /// only way to show a real icon. Same on-screen + permission constraints as
+    /// `hashes`; items we can't capture (off-screen / permission) just drop out and
+    /// the caller falls back to a placeholder glyph.
+    static func images(for items: [MenuBarItem]) async -> [CGWindowID: CGImage] {
+        guard !items.isEmpty, hasPermission() else { return [:] }
+        guard #available(macOS 14.0, *) else { return [:] }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true) else { return [:] }
+
+        var windowByID: [CGWindowID: SCWindow] = [:]
+        for w in content.windows { windowByID[w.windowID] = w }
+
+        var out: [CGWindowID: CGImage] = [:]
+        for item in items {
+            guard let win = windowByID[item.windowID],
+                  let cg = await screenshot(of: win) else { continue }
+            out[item.windowID] = cg
+        }
+        return out
+    }
+
     @available(macOS 14.0, *)
     private static func screenshot(of window: SCWindow) async -> CGImage? {
         let filter = SCContentFilter(desktopIndependentWindow: window)

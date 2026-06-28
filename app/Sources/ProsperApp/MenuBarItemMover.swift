@@ -209,11 +209,32 @@ enum MenuBarItemMover {
         throw lastError
     }
 
+    /// Why the self-probe couldn't confirm ordering — surfaced so the UI can tell the
+    /// user "grant Accessibility" (fixable) apart from "this Mac can't do it" (not).
+    enum ProbeResult: Equatable {
+        case ok
+        case needsAccessibility   // Accessibility not granted — synthetic drag can't post
+        case unavailable          // CGS bridge down (private symbols gone)
+        case enumerationFailed    // couldn't see our own throwaway windows (frame-match)
+        case moveFailed           // Accessibility granted but the drag didn't take effect
+    }
+
     /// Runtime gate: prove the move pipeline works on this exact OS by moving a
-    /// throwaway status item we own, then tearing it down. Returns false (never
-    /// throws) so the caller can simply disable the feature on failure.
-    static func selfProbe() async -> Bool {
-        guard MenuBarBridge.available else { return false }
+    /// throwaway status item we own, then tearing it down. Never throws — returns a
+    /// reason the caller maps to UI. Logs each gate (the user runs with troubleshooting
+    /// logs) so a failure on a new OS is diagnosable from Console.
+    static func selfProbe() async -> ProbeResult {
+        guard MenuBarBridge.available else {
+            NSLog("prosper: menu-bar ordering self-probe — CGS bridge unavailable")
+            return .unavailable
+        }
+        // Synthetic ⌘-drag is posted through a session event tap; that requires
+        // Accessibility. Without it the move silently no-ops and would look like a
+        // dead mechanism — check up front so we can ask for the grant instead.
+        guard PermissionsManager.isAccessibilityTrusted() else {
+            NSLog("prosper: menu-bar ordering self-probe — Accessibility not granted")
+            return .needsAccessibility
+        }
         let a = NSStatusBar.system.statusItem(withLength: 24)
         let b = NSStatusBar.system.statusItem(withLength: 24)
         a.button?.title = "◐"; b.button?.title = "◑"
@@ -225,23 +246,26 @@ enum MenuBarItemMover {
         // unusable on Tahoe (separate +2³² namespace, unrelated to CGWindowID).
         guard let xA = a.button?.window?.frame.minX, let wa = MenuBarBridge.windowID(forItemMinX: xA),
               let xB = b.button?.window?.frame.minX, let wb = MenuBarBridge.windowID(forItemMinX: xB),
-              wa != wb else { return false }
+              wa != wb else {
+            NSLog("prosper: menu-bar ordering self-probe — frame-match failed (xA=\(a.button?.window?.frame.minX ?? -1) xB=\(b.button?.window?.frame.minX ?? -1))")
+            return .enumerationFailed
+        }
         let pid = getpid()
-        guard let fa = MenuBarBridge.frame(for: wa), let fb = MenuBarBridge.frame(for: wb) else { return false }
-        // Both probe items must have landed in the same menu-bar row with real width.
-        // If one spilled into an overflow/off-screen region a frame-change could
-        // "succeed" without proving real ordering capability — a false positive.
-        guard fa.width > 0, fb.width > 0, abs(fa.minY - fb.minY) < 2 else { return false }
+        guard let fa = MenuBarBridge.frame(for: wa), let fb = MenuBarBridge.frame(for: wb),
+              fa.width > 0, fb.width > 0, abs(fa.minY - fb.minY) < 2 else {
+            NSLog("prosper: menu-bar ordering self-probe — bad probe frames")
+            return .enumerationFailed
+        }
 
         // Whichever sits on the right, move it to the left of the other — a real,
         // observable position change using the exact same machinery as live moves.
         let (mover, anchor) = fa.minX > fb.minX ? (wa, wb) : (wb, wa)
         do {
             try await withCursorParked { try await move(windowID: mover, pid: pid, to: .leftOf(anchor)) }
-            return true
+            return .ok
         } catch {
-            NSLog("prosper: menu-bar ordering self-probe failed: \(error)")
-            return false
+            NSLog("prosper: menu-bar ordering self-probe — move failed: \(error)")
+            return .moveFailed
         }
     }
 

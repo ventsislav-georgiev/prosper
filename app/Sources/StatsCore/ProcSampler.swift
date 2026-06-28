@@ -19,6 +19,23 @@ public struct ProcSampler {
     private var prevCPU: [Int32: (ns: UInt64, t: Double)] = [:]
     private let now: () -> Double
 
+    // proc_pid_rusage reports ri_user_time/ri_system_time in MACH time units, not
+    // nanoseconds — on Apple Silicon a tick is 125/3 ≈ 41.67 ns, so treating the raw
+    // value as ns undercounts CPU ~42×. Convert with the machine's timebase (numer/
+    // denom == 1 on Intel, so this is a no-op there).
+    static let machToNS: Double = {
+        var tb = mach_timebase_info_data_t()
+        mach_timebase_info(&tb)
+        return tb.denom == 0 ? 1 : Double(tb.numer) / Double(tb.denom)
+    }()
+
+    /// CPU-time delta (mach ticks) over a wall interval → core-seconds per wall-second.
+    /// Pure so a test can pin the timebase conversion (one busy core for `dt` ⇒ ~1.0).
+    static func cpuRate(deltaTicks: UInt64, seconds dt: Double) -> Double {
+        guard dt > 0 else { return 0 }
+        return (Double(deltaTicks) * machToNS / 1_000_000_000) / dt
+    }
+
     public init(now: @escaping () -> Double = NetworkReader.monotonicSeconds) {
         self.now = now
     }
@@ -37,8 +54,7 @@ public struct ProcSampler {
             let cpuNS = ru.ri_user_time &+ ru.ri_system_time
             var cpu = 0.0
             if let prev = prevCPU[pid], t > prev.t {
-                let dNS = Double(cpuNS &- prev.ns)
-                cpu = (dNS / 1_000_000_000) / (t - prev.t)   // core-seconds per wall-second
+                cpu = Self.cpuRate(deltaTicks: cpuNS &- prev.ns, seconds: t - prev.t)
             }
             prevCPU[pid] = (cpuNS, t)
             infos.append(ProcInfo(pid: pid, name: Self.name(pid),
