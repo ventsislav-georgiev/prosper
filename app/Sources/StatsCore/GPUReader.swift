@@ -14,10 +14,11 @@ public struct GPUSample: Sendable, Equatable {
     public let usedMemory: UInt64       // bytes, 0 if unreported
     public let renderUtil: Double       // 0...1 renderer (NaN if unreported)
     public let tilerUtil: Double        // 0...1 tiler (NaN if unreported)
+    public let coreCount: Int           // GPU cores, 0 if unreported
     public init(utilization: Double, name: String, usedMemory: UInt64,
-                renderUtil: Double = .nan, tilerUtil: Double = .nan) {
+                renderUtil: Double = .nan, tilerUtil: Double = .nan, coreCount: Int = 0) {
         self.utilization = utilization; self.name = name; self.usedMemory = usedMemory
-        self.renderUtil = renderUtil; self.tilerUtil = tilerUtil
+        self.renderUtil = renderUtil; self.tilerUtil = tilerUtil; self.coreCount = coreCount
     }
 }
 
@@ -49,6 +50,7 @@ public struct GPUReader: StatsReader {
                    ?? (perf["vramUsedBytes"] as? NSNumber)?.uint64Value ?? 0
             let name = (dict["IOGLBundleName"] as? String)
                     ?? (dict["model"] as? String) ?? "GPU"
+            let cores = (dict["gpu-core-count"] as? NSNumber)?.intValue ?? 0
             func frac(_ k: String) -> Double {
                 (perf[k] as? NSNumber).map { min(1, max(0, $0.doubleValue / 100)) } ?? .nan
             }
@@ -57,7 +59,7 @@ public struct GPUReader: StatsReader {
             if !found || util / 100 > best.utilization {
                 best = GPUSample(utilization: min(1, max(0, util / 100)), name: name, usedMemory: mem,
                                  renderUtil: frac("Renderer Utilization %"),
-                                 tilerUtil: frac("Tiler Utilization %"))
+                                 tilerUtil: frac("Tiler Utilization %"), coreCount: cores)
             }
             found = true
         }

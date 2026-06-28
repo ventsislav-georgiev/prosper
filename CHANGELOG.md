@@ -54,7 +54,7 @@ tag from the now-released section and put it on the new top draft.
   - **CPU** — per-core load bars, system/user/idle split, efficiency vs performance
     cores, plus load average and uptime.
   - **Memory** — app/wired/compressed stacked usage, memory pressure, and swap.
-  - **GPU** — utilization with renderer and tiler breakdown and VRAM in use.
+  - **GPU** — utilization with renderer and tiler breakdown, VRAM in use, and core count.
   - **Network** — up/down throughput with a dual-area chart, total transferred, and
     the active interface, IP address, and Wi-Fi network.
   - **Sensors** — the full temperature list and current fan speeds.
