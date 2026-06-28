@@ -29,6 +29,10 @@ struct StatsPopupView: View {
 
     private let facts = SystemFacts.current
 
+    /// Rough full-load ANE power for util estimation — no residency channel exists.
+    /// ponytail: calibration knob; Apple-silicon ANE peaks roughly here, tune per chip.
+    private let aneWattsPeak: Double = 8.0
+
     /// Live fan readout for the sensors popover. Refreshed every few store ticks
     /// while open — an unprivileged SMC open/close, never the write path.
     @State private var fans: [FanReading] = []
@@ -48,6 +52,7 @@ struct StatsPopupView: View {
             historySection
             detail
             if module == .cpu || module == .memory || module == .battery { topProcesses }
+            if module == .network { networkProcesses }
         }
         .padding(sz(16))
         .frame(width: sz(320))
@@ -392,22 +397,57 @@ struct StatsPopupView: View {
 
     private func netDetail(_ n: NetworkSample) -> some View {
         let cfg = store.style.config(.network)
+        let lat = store.snapshot.netLatency
+        let link = store.snapshot.netLink
         return VStack(alignment: .leading, spacing: sz(6)) {
+            if !store.snapshot.connectivity.isEmpty {
+                section("Connectivity history")
+                ConnectivityGrid(history: store.snapshot.connectivity, up: cfg.down.color)
+            }
             section("Details")
             legend(cfg.up.color, "Total upload", StatsFormat.bytes(Double(n.totalUploaded)))
             legend(cfg.down.color, "Total download", StatsFormat.bytes(Double(n.totalDownloaded)))
-            if n.interfaceName != nil || n.ipv4 != nil || n.ssid != nil {
+            if let lat {
+                kvBadge("Internet connection") {
+                    StatusBadge(text: lat.reachable ? "UP" : "DOWN",
+                                color: lat.reachable ? Color.green : LoadColor.system,
+                                symbol: lat.reachable ? "arrow.up" : "arrow.down")
+                }
+                if !lat.latencyMs.isNaN { kv("Latency", String(format: "%.0f ms", lat.latencyMs)) }
+                if !lat.jitterMs.isNaN { kv("Jitter", String(format: "%.0f ms", lat.jitterMs)) }
+            }
+            if n.interfaceName != nil || n.ssid != nil || link?.macAddress != nil {
                 section("Interface")
-                if let s = n.ssid { kv("Network", s) }
+                kvBadge("Status") {
+                    StatusBadge(text: "UP", color: Color.green, symbol: "arrow.up")
+                }
                 if let i = n.interfaceName {
                     kv("Interface", n.ssid != nil ? "Wi-Fi (\(i))" : i)
                 }
+                if let mac = link?.macAddress { kv("Physical address", mac) }
+                if let s = n.ssid {
+                    kv("Network", link?.rssi.map { "\(s) (\($0))" } ?? s)
+                }
             }
-            if let ip = n.ipv4 {
+            if n.ipv4 != nil || link?.publicIP != nil {
                 section("Address")
-                kv("Local IP", ip)
+                if let ip = n.ipv4 { kv("Local IP", ip) }
+                if let pub = link?.publicIP {
+                    kv("Public IP", flag(link?.countryCode).map { "\($0) \(pub)" } ?? pub)
+                }
             }
         }
+    }
+
+    /// ISO-3166 alpha-2 → regional-indicator flag emoji ("BG" → 🇧🇬). nil if absent/malformed.
+    private func flag(_ iso2: String?) -> String? {
+        guard let iso2, iso2.count == 2 else { return nil }
+        var s = ""
+        for u in iso2.uppercased().unicodeScalars {
+            guard u.value >= 65, u.value <= 90, let r = Unicode.Scalar(127397 + u.value) else { return nil }
+            s.unicodeScalars.append(r)
+        }
+        return s
     }
 
     private func gpuDetail(_ g: GPUSample) -> some View {
@@ -418,6 +458,12 @@ struct StatsPopupView: View {
             kv("Utilization", StatsFormat.percent(g.utilization))
             if !g.renderUtil.isNaN { kv("Render utilization", StatsFormat.percent(g.renderUtil)) }
             if !g.tilerUtil.isNaN { kv("Tiler utilization", StatsFormat.percent(g.tilerUtil)) }
+            // ANE has no public residency channel; derive a rough utilization from its
+            // power draw vs a peak estimate. ponytail: heuristic divisor, tune if it
+            // reads wrong on other chips — there's no exact source to compare against.
+            if let p = store.snapshot.power, p.aneWatts > 0.01 {
+                kv("ANE utilization", StatsFormat.percent(min(1, p.aneWatts / aneWattsPeak)))
+            }
             if g.usedMemory > 0 { kv("VRAM in use", StatsFormat.bytes(Double(g.usedMemory))) }
             if !g.fps.isNaN && g.fps > 0 { kv("FPS", String(format: "%.0f", g.fps)) }
         }
@@ -662,6 +708,45 @@ struct StatsPopupView: View {
         }
     }
 
+    /// Per-process network throughput (nettop-backed): name + down/up rate columns,
+    /// each column headed by its colour dot. exelban's network "Top processes".
+    private var networkProcesses: some View {
+        let procs = store.snapshot.topByNetwork
+        let cfg = store.style.config(.network)
+        return VStack(alignment: .leading, spacing: sz(5)) {
+            section("Top processes")
+            HStack(spacing: sz(8)) {
+                Text("Process").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                Spacer(minLength: sz(8))
+                Circle().fill(cfg.down.color).frame(width: sz(7), height: sz(7))
+                Text("Download").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                    .frame(width: sz(64), alignment: .trailing)
+                Circle().fill(cfg.up.color).frame(width: sz(7), height: sz(7))
+                Text("Upload").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                    .frame(width: sz(64), alignment: .trailing)
+            }
+            if let procs, !procs.isEmpty {
+                ForEach(procs, id: \.pid) { netProcRow($0) }
+            } else {
+                Text("Sampling…").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            }
+        }
+    }
+
+    private func netProcRow(_ p: NetProcInfo) -> some View {
+        HStack(spacing: sz(7)) {
+            ProcessIcon(pid: p.pid)
+            Text(p.name).font(Neon.font(.caption)).foregroundStyle(Neon.textPrimary).lineLimit(1)
+            Spacer(minLength: sz(8))
+            Text(StatsFormat.rateMenu(p.downBytesPerSec))
+                .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
+                .frame(width: sz(71), alignment: .trailing)
+            Text(StatsFormat.rateMenu(p.upBytesPerSec))
+                .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
+                .frame(width: sz(71), alignment: .trailing)
+        }
+    }
+
     // MARK: - Shared rows
 
     /// Centred section header — a small-caps title flanked by hairline rules,
@@ -696,6 +781,15 @@ struct StatsPopupView: View {
             Text(k).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary).lineLimit(1)
             Spacer(minLength: sz(8))
             Text(v).font(Neon.font(.caption, weight: .semibold).monospacedDigit())
+        }
+    }
+
+    /// kv whose trailing value is a view (a status badge), not text.
+    private func kvBadge<V: View>(_ k: String, @ViewBuilder _ trailing: () -> V) -> some View {
+        HStack {
+            Text(k).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+            Spacer(minLength: sz(8))
+            trailing()
         }
     }
 }
@@ -764,6 +858,33 @@ private struct BigBattery: View {
                 RoundedRectangle(cornerRadius: h * 0.06)
                     .fill(Neon.textSecondary.opacity(0.6))
                     .frame(width: h * 0.08, height: h * 0.34)
+            }
+        }
+    }
+}
+
+/// A grid of small squares — one per reachability sample (green = up, red = down),
+/// oldest→newest. exelban's connectivity history. Shows the most recent `cols × rows`.
+private struct ConnectivityGrid: View {
+    let history: [Bool]
+    let up: Color
+    private let cols = 30, rows = 2
+
+    var body: some View {
+        let cap = cols * rows
+        let recent = Array(history.suffix(cap))
+        return VStack(alignment: .leading, spacing: sz(2)) {
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: sz(2)) {
+                    ForEach(0..<cols, id: \.self) { col in
+                        let i = row * cols + col
+                        let on = i < recent.count ? recent[i] : nil
+                        RoundedRectangle(cornerRadius: sz(1))
+                            .fill(on == nil ? Neon.textSecondary.opacity(0.12)
+                                  : (on! ? up : LoadColor.system))
+                            .frame(height: sz(7))
+                    }
+                }
             }
         }
     }
