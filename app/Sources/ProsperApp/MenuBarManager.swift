@@ -146,13 +146,20 @@ final class MenuBarManager: NSObject {
     /// `NSImage(systemSymbolName:)` renders at the default text point size, so the
     /// `ellipsis`/chevron glyphs sit small and airy inside the item box and read as
     /// extra padding next to neighbouring icons. Pin the point size so the chevron
-    /// matches the rest of the bar.
+    /// matches the rest of the bar, then bake transparent padding onto the RIGHT edge:
+    /// AppKit exposes no per-item trailing margin, so without this the divider sits
+    /// glued to its neighbour (the Prosper icon) with no inter-item breathing room.
     private static func chevronImage(_ symbol: String) -> NSImage? {
         let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "Menu Bar")?
-            .withSymbolConfiguration(cfg)
-        img?.isTemplate = true
-        return img
+        guard let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: "Menu Bar")?
+            .withSymbolConfiguration(cfg) else { return nil }
+        let pad: CGFloat = 8
+        let padded = NSImage(size: NSSize(width: glyph.size.width + pad, height: glyph.size.height))
+        padded.lockFocus()
+        glyph.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)   // left-aligned → gap on the right
+        padded.unlockFocus()
+        padded.isTemplate = true
+        return padded
     }
 
     /// An empty, near-invisible expander. Shows a faint hairline boundary while
