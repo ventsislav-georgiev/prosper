@@ -33,8 +33,21 @@ enum StatsFormat {
     /// Bytes/sec for the popover, with the per-second suffix.
     static func rateLong(_ bytesPerSec: Double) -> String { rate(bytesPerSec) + "B/s" }
 
+    /// Menu-bar rate with a spaced unit, exelban-style: "98 KB/s", "1.2 MB/s".
+    static func rateMenu(_ bytesPerSec: Double) -> String {
+        let v = max(0, bytesPerSec)
+        if v >= 1_000_000_000 { return String(format: "%.1f GB/s", v / 1_000_000_000) }
+        if v >= 1_000_000 { return String(format: "%.1f MB/s", v / 1_000_000) }
+        if v >= 1_000 { return String(format: "%.0f KB/s", v / 1_000) }
+        return String(format: "%.0f B/s", v)
+    }
+
     static func percent(_ fraction: Double) -> String { "\(Int((fraction * 100).rounded()))%" }
     static func temp(_ celsius: Double) -> String { String(format: "%.0f°", celsius) }
+    /// Detail-list temperature, exelban-style one decimal + unit: "37.3°C".
+    static func tempDetail(_ celsius: Double) -> String { String(format: "%.1f°C", celsius) }
+    static func volts(_ v: Double) -> String { String(format: "%.3fV", v) }
+    static func amps(_ a: Double) -> String { String(format: "%.2fA", a) }
     static func watts(_ w: Double) -> String { String(format: "%.1fW", w) }
 
     static func bytes(_ count: Double) -> String {
@@ -51,7 +64,7 @@ extension StatsModule {
     var shortLabel: String {
         switch self {
         case .cpu: "CPU"; case .memory: "RAM"; case .network: "NET"
-        case .gpu: "GPU"; case .power: "PWR"; case .sensors: "TMP"; case .battery: "BAT"
+        case .gpu: "GPU"; case .power: "Power"; case .sensors: "Sensor"; case .battery: "BAT"
         }
     }
 

@@ -79,20 +79,28 @@ tag from the now-released section and put it on the new top draft.
   once a second, so the monitors don't add measurable load to the thing they measure.
   Expensive sources (frequency, frame rate, power) sample on a throttled background
   tick and the voltage/current reader probes only the rails your Mac actually has.
-- **Menu-bar items no longer jitter.** Each widget now reserves a fixed width for its
-  value, so a reading going from "9%" to "100%" no longer resizes the item and shoves
-  its neighbours around. Height was already fixed to the menu bar.
+- **Restyled the menu-bar items to match a polished system-monitor look.** A small
+  label sits above its value, the value coloured by the module's thresholds; widths
+  are fixed so a reading going from "9%" to "100%" no longer resizes the item and
+  shoves its neighbours around. **The left/center/right alignment now actually works** —
+  it positions the value under its label. Network shows upload over download with a
+  trailing ↑/↓ arrow, and battery draws as a glyph.
 - **Popovers open flush with their menu-bar item.** They previously sometimes landed
   offscreen above the bar or with a stray gap below; they now size up front and anchor
   directly beneath the item every time.
-- **Redesigned popovers to match a polished system-monitor look.** A header strip with
-  the module glyph, a centered title, and a settings gear; circular gauges for the
-  primary metric (CPU also shows a temperature dial); centered section dividers;
-  color-square legends; and a top-processes list with each app's real icon.
+- **Redesigned the popovers to match a polished system-monitor look 1:1.** A header
+  strip with a bar-chart glyph, a centered title, and a settings gear; circular gauges
+  for the primary metric (CPU shows three — temperature, a system/user split usage
+  donut, and load); the per-core load bars now sit directly under the usage-history
+  chart, coloured by efficiency vs performance cluster; centered section dividers;
+  colour-dot legends; average load and per-cluster clock frequency sections; and a
+  top-processes list with a column header and each app's real icon. Temperatures,
+  voltages, and currents are formatted like the reference (37.3°C, 27.827V, 0.38A).
 - **Per-process CPU% reads like Activity Monitor** — percent of a single core, so a
   multi-threaded process can read above 100%.
-- **Fan speed and manual fan control now live in the Sensors popover** (with the same
-  confirmation and automatic-reset safeguards), instead of the settings pane.
+- **Fan speed and manual fan control now live in the Sensors popover**, each fan shown
+  with a speed bar and an Automatic/Manual control (with the same confirmation and
+  automatic-reset safeguards), instead of the settings pane.
 
 ### Windows
 - **Clipboard History and the command runner now open on the screen you're using.**
