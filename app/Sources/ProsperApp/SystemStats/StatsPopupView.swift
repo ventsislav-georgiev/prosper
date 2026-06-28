@@ -253,6 +253,7 @@ struct StatsPopupView: View {
             kv("App", StatsFormat.bytes(Double(m.app)))
             kv("Wired", StatsFormat.bytes(Double(m.wired)))
             kv("Compressed", StatsFormat.bytes(Double(m.compressed)))
+            if m.cached > 0 { kv("Cached files", StatsFormat.bytes(Double(m.cached))) }
             kv("Free", StatsFormat.bytes(Double(m.free)))
             kv("Pressure", m.pressureState)
             if m.swapTotal > 0 {

@@ -49,6 +49,7 @@ public struct MemorySample: Sendable, Equatable {
     public let app: UInt64
     public let wired: UInt64
     public let compressed: UInt64
+    public let cached: UInt64          // purgeable + external (Activity Monitor "Cached Files")
     public let free: UInt64
     public let pressure: Double       // 0...1 (used/total proxy, drives the chart)
     public let swapUsed: UInt64
@@ -59,9 +60,10 @@ public struct MemorySample: Sendable, Equatable {
     public let pressureLevel: Int
     public init(total: UInt64, used: UInt64, app: UInt64, wired: UInt64,
                 compressed: UInt64, free: UInt64, pressure: Double, swapUsed: UInt64,
-                swapTotal: UInt64 = 0, pressureLevel: Int = 0) {
+                cached: UInt64 = 0, swapTotal: UInt64 = 0, pressureLevel: Int = 0) {
         self.total = total; self.used = used; self.app = app; self.wired = wired
-        self.compressed = compressed; self.free = free; self.pressure = pressure
+        self.compressed = compressed; self.cached = cached; self.free = free
+        self.pressure = pressure
         self.swapUsed = swapUsed; self.swapTotal = swapTotal; self.pressureLevel = pressureLevel
     }
     public var usedFraction: Double { total == 0 ? 0 : Double(used) / Double(total) }
