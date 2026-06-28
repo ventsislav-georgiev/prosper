@@ -151,8 +151,11 @@ enum FanControlHelper {
 
     // MARK: - XPC call with hard timeout
 
-    /// Run one fan selector with a 6s ceiling: an idle-exited / mid-relaunch daemon
-    /// can invoke neither reply nor error handler, and a bare `await` would hang.
+    /// Run one fan selector with a 12s ceiling: an idle-exited / mid-relaunch daemon
+    /// can invoke neither reply nor error handler, and a bare `await` would hang. The
+    /// ceiling must clear a FIRST-time manual engage — the AS unlock waits ~3s for
+    /// thermalmonitord to yield, then retries the mode write spaced over time — so a
+    /// slow-but-successful engage isn't reported as failure. Steady commits are instant.
     private static func call(_ c: NSXPCConnection,
                              _ body: @escaping (ProsperHelperProtocol, @escaping @Sendable (Bool) -> Void) -> Void) async -> Bool {
         await withCheckedContinuation { cont in
@@ -177,7 +180,7 @@ enum FanControlHelper {
             c?.resume(returning: v)
         }
         func armTimeout() {
-            DispatchQueue.global().asyncAfter(deadline: .now() + 6) { [weak self] in self?.resume(false) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 12) { [weak self] in self?.resume(false) }
         }
     }
 }

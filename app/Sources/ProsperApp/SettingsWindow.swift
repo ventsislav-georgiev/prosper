@@ -63,7 +63,12 @@ final class SettingsWindow {
         // aqua so system controls (segmented pickers, fields) match the theme.
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
-        win.isMovableByWindowBackground = true
+        // NOT movable by background: SwiftUI controls hosted in an NSHostingView don't
+        // report `mouseDownCanMoveWindow = false` the way native NSControls do, so a
+        // background-drag window steals the press from sliders/segmented pickers — a
+        // click-drag on a slider moved the whole window instead of the thumb. The
+        // titlebar strip (titled style mask, just transparent/hidden) stays draggable.
+        win.isMovableByWindowBackground = false
         win.appearance = NSAppearance(named: .darkAqua)
         // Tagged so the theme onChange hook (AppDelegate) can find this window to
         // re-apply opacity + scaled min-size live when the user changes them.
