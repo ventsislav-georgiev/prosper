@@ -80,9 +80,9 @@ enum FanControlHelper {
     /// Force one fan to a manual RPM. Holds the connection open so the daemon keeps
     /// the manual pin alive; a drop (crash/disable) resets it. Returns success.
     @discardableResult
-    static func setManual(_ index: Int, rpm: Double) async -> Bool {
+    static func setManual(_ index: Int, rpm: Double, timeout: TimeInterval = 12) async -> Bool {
         guard let c = await ensureConnection() else { return false }
-        return await call(c) { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }
+        return await call(c, timeout: timeout) { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }
     }
 
     /// Hand one fan back to OS thermal control (other fans unaffected).
@@ -151,12 +151,17 @@ enum FanControlHelper {
 
     // MARK: - XPC call with hard timeout
 
-    /// Run one fan selector with a 12s ceiling: an idle-exited / mid-relaunch daemon
+    /// Run one fan selector with a hard ceiling: an idle-exited / mid-relaunch daemon
     /// can invoke neither reply nor error handler, and a bare `await` would hang. The
-    /// ceiling must clear a FIRST-time manual engage — the AS unlock waits ~3s for
-    /// thermalmonitord to yield, then retries the mode write spaced over time — so a
-    /// slow-but-successful engage isn't reported as failure. Steady commits are instant.
+    /// ceiling MUST exceed the daemon's own worst case for a FIRST-time manual engage —
+    /// the AS unlock writes Ftst, waits 3s for thermalmonitord to yield, then retries
+    /// the mode key SPACED over many attempts (up to ~30s on a contended chassis). A
+    /// 12s default fits steady commits (instant) but is shorter than that dance, so the
+    /// caller passes a generous `timeout` for the first engage — otherwise a slow-but-
+    /// successful engage gets reported as failure while the daemon is still grinding
+    /// (and silently leaves the fan pinned, desyncing the UI).
     private static func call(_ c: NSXPCConnection,
+                             timeout: TimeInterval = 12,
                              _ body: @escaping (ProsperHelperProtocol, @escaping @Sendable (Bool) -> Void) -> Void) async -> Bool {
         await withCheckedContinuation { cont in
             let once = ResumeOnce(cont)
@@ -165,7 +170,7 @@ enum FanControlHelper {
                 once.resume(false)
             } as? ProsperHelperProtocol
             guard let proxy else { once.resume(false); return }
-            once.armTimeout()
+            once.armTimeout(timeout)
             body(proxy) { @Sendable ok in once.resume(ok) }
         }
     }
@@ -179,8 +184,8 @@ enum FanControlHelper {
             lock.lock(); let c = done ? nil : cont; done = true; cont = nil; lock.unlock()
             c?.resume(returning: v)
         }
-        func armTimeout() {
-            DispatchQueue.global().asyncAfter(deadline: .now() + 12) { [weak self] in self?.resume(false) }
+        func armTimeout(_ seconds: TimeInterval) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [weak self] in self?.resume(false) }
         }
     }
 }

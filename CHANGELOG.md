@@ -57,6 +57,10 @@ tag from the now-released section and put it on the new top draft.
   - On macOS 26 (Tahoe), where the system no longer tells apps which icon is which,
     Prosper rebuilds each icon's identity from its picture (this is the only part
     that asks for Screen Recording, and only when you use ordering).
+  - Prosper's own icons (Stats modules, extension icons) now appear in the order list
+    and live preview with their real names and pictures — previously they were hidden
+    from the list entirely, so the multi-icon apps you most want to order weren't
+    even shown. Own icons are named and drawn directly (no Screen Recording needed).
   - **On-reveal** mode restores your order whenever the bar is shown; **Live** mode
     also snaps icons back if they drift. Live mode stays gentle: it backs off on
     battery, and a circuit breaker parks it if a move keeps failing so it can never

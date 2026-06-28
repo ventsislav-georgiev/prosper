@@ -36,7 +36,12 @@ final class ExtensionMenuBar {
         let isNew = items[k] == nil
         let item = items[k] ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         items[k] = item
-        if isNew { ProsperStatusItems.register(item) }   // self-filter source for the menu-bar manager
+        // .content: extension icons are user-facing data icons — keep them orderable/
+        // previewable, named by the extension's title (else the extension id).
+        if isNew {
+            let name = (obj["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? extensionID
+            ProsperStatusItems.register(item, role: .content, name: name)
+        }
 
         if let button = item.button {
             button.title = (obj["title"] as? String) ?? ""
