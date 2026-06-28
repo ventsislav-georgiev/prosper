@@ -90,9 +90,12 @@ final class MenuBarManager: NSObject {
         // pushed off-screen when they grow.
         chevron = makeChevron()
         hiddenSeparator = makeSeparator(autosave: "ProsperMenuBarHiddenSeparator")
-        // Two-tier (always-hidden) removed: the positional second tier was confusing
-        // and a chosen-icon "always hide" belongs in Settings (needs the move engine).
-        // ponytail: alwaysHiddenSeparator stays nil; revive only when settings-assign ships.
+        // Always-hidden band: created (leftmost) only when the user has marked at least
+        // one icon always-hidden in Settings. The arranger moves those icons left of it
+        // (the move engine) and it stays expanded, so they never show — even on reveal.
+        if !Preferences.menuBarOrderStore.alwaysHidden.isEmpty {
+            alwaysHiddenSeparator = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator")
+        }
         for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
             ProsperStatusItems.register(item)
         }
@@ -334,6 +337,32 @@ final class MenuBarManager: NSObject {
     private func dividerFrameX(_ item: NSStatusItem?) -> CGFloat? {
         guard let n = item?.button?.window?.frame.minX else { return nil }
         return n
+    }
+
+    // MARK: - Always-hidden placement (used by the arranger)
+
+    /// CGS window id of the always-hidden separator — the anchor the arranger moves
+    /// marked icons to the LEFT of. nil if the band isn't active or hasn't laid out.
+    func alwaysHiddenAnchorWindowID() -> CGWindowID? {
+        guard let x = alwaysHiddenSeparator?.button?.window?.frame.minX else { return nil }
+        return MenuBarBridge.windowID(forItemMinX: x)
+    }
+
+    var hasAlwaysHiddenBand: Bool { alwaysHiddenSeparator != nil }
+
+    /// Collapse both separators so every item is on-screen — the arranger needs a
+    /// valid (on-screen) drop point to move an icon into/out of the always-hidden
+    /// band. No rehide timer or monitors; the caller pairs this with `endPlacement()`.
+    func beginPlacement() {
+        hiddenSeparator?.length = Lengths.standard
+        alwaysHiddenSeparator?.length = Lengths.standard
+    }
+
+    /// Restore the steady hidden state (both separators expanded) after a placement.
+    func endPlacement() {
+        revealed = false
+        revealedAlwaysHidden = false
+        applyDividerLengths()
     }
 
     // MARK: - Spacing

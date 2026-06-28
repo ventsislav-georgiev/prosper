@@ -2589,17 +2589,27 @@ private struct MenuBarPane: View {
     /// "Apply saved order" then drives the bar to match.
     @ViewBuilder private var orderEditor: some View {
         VStack(alignment: .leading, spacing: sz(4)) {
-            Text("Saved order (drag to reorder, ⌫ to remove)")
+            Text("Saved order (drag to reorder, ⌫ to remove). The eye marks an icon always-hidden.")
                 .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             List {
                 ForEach(orderStore.desiredOrder, id: \.key) { id in
+                    let hidden = orderStore.isAlwaysHidden(id.key)
                     HStack(spacing: sz(8)) {
                         if let icon = Self.appIcon(id.bundleID) {
                             Image(nsImage: icon).resizable().frame(width: sz(16), height: sz(16))
                         }
                         Text(Self.displayName(id)).font(Neon.font(.body))
                         Spacer()
+                        if probeOK == true {
+                            Button { toggleAlwaysHidden(id) } label: {
+                                Image(systemName: hidden ? "eye.slash.fill" : "eye")
+                                    .foregroundStyle(hidden ? Neon.blue : Neon.textSecondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(hidden ? "Always-hidden — click to show" : "Mark always-hidden")
+                        }
                     }
+                    .opacity(hidden ? 0.5 : 1)
                     .listRowSeparator(.hidden)
                 }
                 .onMove { from, to in mutateOrder { $0.desiredOrder.move(fromOffsets: from, toOffset: to) } }
@@ -2734,6 +2744,23 @@ private struct MenuBarPane: View {
         applying = true
         Task {
             lastApply = await MenuBarArranger.apply(desired: orderStore.desiredOrder)
+            applying = false
+        }
+    }
+
+    /// Toggle an icon's always-hidden mark, then create/destroy the always-hidden
+    /// separator to match and (re)place items behind it.
+    private func toggleAlwaysHidden(_ id: MenuBarIdentity) {
+        guard !applying, !saving else { return }
+        let key = id.key
+        mutateOrder { s in
+            if let i = s.alwaysHidden.firstIndex(of: key) { s.alwaysHidden.remove(at: i) }
+            else { s.alwaysHidden.append(key) }
+        }
+        applying = true
+        Task {
+            MenuBarManager.shared.reconcileDividers()   // add/remove the band's separator
+            await MenuBarArranger.applyAlwaysHidden(keys: orderStore.alwaysHidden)
             applying = false
         }
     }

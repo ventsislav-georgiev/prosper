@@ -100,6 +100,13 @@ struct MenuBarOrderStore: Codable, Equatable, Sendable {
     var mode: EnforceMode = .onDemand
     /// Desired order, left→right (visible band first). Empty = nothing captured yet.
     var desiredOrder: [MenuBarIdentity] = []
+    /// Identity keys the user marked "always hidden": the engine moves these left of
+    /// the always-hidden separator (kept expanded) so they never show, even on the
+    /// normal reveal. Empty = no always-hidden band (the separator isn't even created).
+    var alwaysHidden: [String] = []
+
+    /// Whether `key` is marked always-hidden.
+    func isAlwaysHidden(_ key: String) -> Bool { alwaysHidden.contains(key) }
 
     static let `default` = MenuBarOrderStore()
 
@@ -114,6 +121,7 @@ struct MenuBarOrderStore: Codable, Equatable, Sendable {
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
         mode = try c.decodeIfPresent(EnforceMode.self, forKey: .mode) ?? d.mode
         desiredOrder = try c.decodeIfPresent([MenuBarIdentity].self, forKey: .desiredOrder) ?? d.desiredOrder
+        alwaysHidden = try c.decodeIfPresent([String].self, forKey: .alwaysHidden) ?? d.alwaysHidden
     }
 }
 
