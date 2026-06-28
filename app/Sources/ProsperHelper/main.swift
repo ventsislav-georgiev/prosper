@@ -57,7 +57,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
     // mode-key cache + the core need no extra lock.
     private let fanQ = DispatchQueue(label: "\(helperLabel).fan")
     private lazy var fan: SMCFanController? = {
-        guard let smc = try? SMC() else { dtrace("fan: SMC open failed — fan control inert"); return nil }
+        guard let smc = try? SMC() else { fanLog.error("fan: SMC open failed — fan control inert"); return nil }
         return SMCFanController(smc)
     }()
     private lazy var fanCore = FanControlCore(reset: { [weak self] in _ = self?.fan?.resetAll() })
@@ -152,15 +152,15 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         guard let conn = NSXPCConnection.current() else { reply(false); return }
         let cid = ObjectIdentifier(conn)
         fanQ.async {
-            guard let fan = self.fan else { reply(false); return }
+            guard let fan = self.fan else { fanLog.error("setFanManualRPM: no SMC fan controller — inert"); reply(false); return }
             do {
                 try fan.setManual(index, rpm: rpm)
                 self.fanCore.didSetManual()
                 self.fanHolderID = cid
-                dtrace("setFanManualRPM(\(index), \(rpm)) ok")
+                fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) ok")
                 reply(true)
             } catch {
-                dtrace("setFanManualRPM(\(index), \(rpm)) FAILED: \(error)")
+                fanLog.error("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)")
                 reply(false)
             }
         }
@@ -172,8 +172,8 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // harmless while under-resetting is the hazard.
         fanQ.async {
             guard let fan = self.fan else { reply(false); return }
-            do { try fan.setAuto(index); dtrace("setFanAuto(\(index)) ok"); reply(true) }
-            catch { dtrace("setFanAuto(\(index)) FAILED: \(error)"); reply(false) }
+            do { try fan.setAuto(index); fanLog.notice("setFanAuto(\(index, privacy: .public)) ok"); reply(true) }
+            catch { fanLog.error("setFanAuto(\(index, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)"); reply(false) }
         }
     }
 
@@ -186,7 +186,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             guard let fan = self.fan else { reply(false); return }
             let ok = fan.resetAll()
             if ok { self.fanCore.didResetAll(); self.fanHolderID = nil }
-            dtrace("resetAllFans ok=\(ok)")
+            fanLog.notice("resetAllFans ok=\(ok, privacy: .public)")
             reply(ok)
         }
     }
