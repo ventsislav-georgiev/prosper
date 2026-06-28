@@ -144,7 +144,15 @@ final class StatsController {
         guard let m = buttonModule[ObjectIdentifier(sender)] else { return }
         if popover.isShown, openModule == m { popover.performClose(sender); return }
         openModule = m
-        popover.contentViewController = NSHostingController(rootView: StatsPopupView(module: m, store: store))
+        let host = NSHostingController(rootView: StatsPopupView(module: m, store: store))
+        // Let the popover learn the view's real size BEFORE it positions itself.
+        // Without this the hosting controller reports a zero content size on first
+        // show, so AppKit anchors a 0×0 popover and then it grows — landing it
+        // offscreen above the bar or with a stray gap below. `.preferredContentSize`
+        // sizes the popover to the SwiftUI content up front so .minY (below the
+        // menu-bar item) lands flush every time.
+        host.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = host
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
     }
 
