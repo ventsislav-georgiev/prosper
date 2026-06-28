@@ -41,9 +41,15 @@ struct StatsMenuWidget: View {
                         .frame(width: sz(26), height: thickness - sz(8))
                 }
                 if cfg.mode != .graph {
-                    Text(module.primaryText(store.snapshot, showUnit: cfg.showUnit))
-                        .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(cfg.rampColor(ramp))
+                    // Reserve the widest possible string (hidden) so the item width is
+                    // FIXED — the visible value trails inside it and never resizes the
+                    // menu bar as digits come and go.
+                    ZStack(alignment: .trailing) {
+                        Text(module.primaryWidthSample()).hidden()
+                        Text(module.primaryText(store.snapshot, showUnit: cfg.showUnit))
+                            .foregroundStyle(cfg.rampColor(ramp))
+                    }
+                    .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
                 }
             }
         }
@@ -51,11 +57,20 @@ struct StatsMenuWidget: View {
 
     private func networkChannels(_ cfg: ModuleWidgetConfig) -> some View {
         let n = store.snapshot.network
+        // Each channel reserves a fixed width ("↓ 999.9M") so the two-line readout
+        // can't widen the item as rates climb into the megabytes.
         return VStack(alignment: .trailing, spacing: -1) {
-            Text("↓ " + StatsFormat.rate(n?.downloadBytesPerSec ?? 0)).foregroundStyle(cfg.down.color)
-            Text("↑ " + StatsFormat.rate(n?.uploadBytesPerSec ?? 0)).foregroundStyle(cfg.up.color)
+            channelLine("↓ ", StatsFormat.rate(n?.downloadBytesPerSec ?? 0), cfg.down.color)
+            channelLine("↑ ", StatsFormat.rate(n?.uploadBytesPerSec ?? 0), cfg.up.color)
         }
         .font(.system(size: 9, weight: .semibold, design: .rounded).monospacedDigit())
+    }
+
+    private func channelLine(_ arrow: String, _ rate: String, _ color: Color) -> some View {
+        ZStack(alignment: .trailing) {
+            Text(arrow + "999.9M").hidden()
+            Text(arrow + rate).foregroundStyle(color)
+        }
     }
 }
 

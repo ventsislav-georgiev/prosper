@@ -79,6 +79,20 @@ tag from the now-released section and put it on the new top draft.
   once a second, so the monitors don't add measurable load to the thing they measure.
   Expensive sources (frequency, frame rate, power) sample on a throttled background
   tick and the voltage/current reader probes only the rails your Mac actually has.
+- **Menu-bar items no longer jitter.** Each widget now reserves a fixed width for its
+  value, so a reading going from "9%" to "100%" no longer resizes the item and shoves
+  its neighbours around. Height was already fixed to the menu bar.
+- **Popovers open flush with their menu-bar item.** They previously sometimes landed
+  offscreen above the bar or with a stray gap below; they now size up front and anchor
+  directly beneath the item every time.
+- **Redesigned popovers to match a polished system-monitor look.** A header strip with
+  the module glyph, a centered title, and a settings gear; circular gauges for the
+  primary metric (CPU also shows a temperature dial); centered section dividers;
+  color-square legends; and a top-processes list with each app's real icon.
+- **Per-process CPU% reads like Activity Monitor** — percent of a single core, so a
+  multi-threaded process can read above 100%.
+- **Fan speed and manual fan control now live in the Sensors popover** (with the same
+  confirmation and automatic-reset safeguards), instead of the settings pane.
 
 ### Windows
 - **Clipboard History and the command runner now open on the screen you're using.**

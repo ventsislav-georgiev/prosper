@@ -84,6 +84,19 @@ extension StatsModule {
         }
     }
 
+    /// Widest string the primary text can ever be, used to reserve a FIXED widget
+    /// width so the menu-bar item doesn't resize (and shove its neighbours) as the
+    /// value changes. Monospaced digits make every same-length string equal-width,
+    /// so the worst case is just "max digits + unit".
+    func primaryWidthSample() -> String {
+        switch self {
+        case .cpu, .memory, .gpu, .battery: return "100%"
+        case .sensors: return "100°"
+        case .power: return "99.9W"
+        case .network: return ""
+        }
+    }
+
     /// Primary menu-bar text (non-network). Empty string if no sample yet.
     func primaryText(_ s: StatsSnapshot, showUnit: Bool) -> String {
         switch self {
