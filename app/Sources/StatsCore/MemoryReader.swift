@@ -26,9 +26,11 @@ public struct MemoryReader: StatsReader {
         let wired      = UInt64(stats.wire_count) * pg
         let compressed = UInt64(stats.compressor_page_count) * pg
         let purgeable  = UInt64(stats.purgeable_count) * pg
+        let external   = UInt64(stats.external_page_count) * pg
         let internalB  = UInt64(stats.internal_page_count) * pg
         let app        = internalB > purgeable ? internalB - purgeable : 0
         let used       = app + wired + compressed
+        let cached     = purgeable + external      // Activity Monitor "Cached Files"
         let total      = facts.physicalMemory
         let free       = total > used ? total - used : 0
 
@@ -37,7 +39,7 @@ public struct MemoryReader: StatsReader {
             total: total, used: used, app: app, wired: wired,
             compressed: compressed, free: free,
             pressure: total > 0 ? min(1, Double(used) / Double(total)) : 0,
-            swapUsed: swap.used, swapTotal: swap.total,
+            swapUsed: swap.used, cached: cached, swapTotal: swap.total,
             pressureLevel: Self.pressureLevel())
     }
 
