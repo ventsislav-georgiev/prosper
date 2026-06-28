@@ -76,6 +76,11 @@ final class StatsController {
             // snapshots reorder). Touches UI/store directly.
             MainActor.assumeIsolated {
                 guard let self else { return }
+                // Skip the publish (and the relayout) on idle ticks where nothing
+                // visible changed — battery/sensors deliver the same bytes for 9 of
+                // every 10 ticks, and an unchanged snapshot would still re-render
+                // every widget's body. Equatable compare is cheap vs a SwiftUI pass.
+                guard snap != self.store.snapshot else { return }
                 self.store.snapshot = snap
                 self.resizeItems()
             }
@@ -91,7 +96,7 @@ final class StatsController {
         // Remove items for modules no longer shown.
         for (m, pair) in items where !wanted.contains(m) {
             NSStatusBar.system.removeStatusItem(pair.item)
-            buttonModule[ObjectIdentifier(pair.item.button!)] = nil
+            if let b = pair.item.button { buttonModule[ObjectIdentifier(b)] = nil }
             items[m] = nil
         }
         // Add items for newly shown modules.
@@ -120,7 +125,9 @@ final class StatsController {
     /// — every length write relayouts the whole menu bar.
     private func resizeItems() {
         for (_, pair) in items {
-            pair.host.layoutSubtreeIfNeeded()
+            // fittingSize lays out lazily when dirty; no need to force a full
+            // layoutSubtreeIfNeeded pass every tick. monospacedDigit + fixedSize
+            // means width only moves when the formatted string's length changes.
             let w = pair.host.fittingSize.width
             if w > 0, abs(pair.item.length - w) > 0.5 { pair.item.length = w }
         }

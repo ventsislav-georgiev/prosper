@@ -153,9 +153,10 @@ public final class SMC {
 
     // MARK: Write (root-only; guarded — see SMCWrite.swift)
 
-    /// Low-level write primitive. Internal: callers MUST go through the guarded
-    /// `writeFan` / reset paths in SMCWrite.swift, which enforce the whitelist
-    /// and clamp. This is the single chokepoint to IOConnect selector `write`.
+    /// Low-level write primitive. Internal: the ONLY sanctioned caller is
+    /// `SMCFanController.guardedWrite`, which enforces the key whitelist AND
+    /// re-clamps any RPM target to the absolute rails. This is the single
+    /// chokepoint to IOConnect selector `write`.
     func writeRawUnchecked(_ keyStr: String, _ bytes: [UInt8]) throws {
         let key = smcFourCC(keyStr)
         let info = try keyInfo(key)
@@ -209,5 +210,16 @@ public enum SMCDecode {
     public static func encodeFPE2(_ rpm: Int) -> [UInt8] {
         let v = UInt16(max(0, min(rpm, 0x3fff))) << 2
         return [UInt8(v >> 8), UInt8(v & 0xff)]
+    }
+
+    /// Inverse of `encodeFloatLE` — decode a `flt ` RPM target. NaN if short.
+    public static func decodeFloatLE(_ b: [UInt8]) -> Float {
+        guard b.count >= 4 else { return .nan }
+        return b.withUnsafeBytes { $0.loadUnaligned(as: Float.self) }
+    }
+    /// Inverse of `encodeFPE2` — decode an `fpe2` RPM target.
+    public static func decodeFPE2(_ b: [UInt8]) -> Int {
+        guard b.count >= 2 else { return 0 }
+        return Int(UInt16(b[0]) << 6 | UInt16(b[1]) >> 2)
     }
 }

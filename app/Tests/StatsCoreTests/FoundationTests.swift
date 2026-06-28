@@ -101,4 +101,19 @@ final class SMCDecodeTests: XCTestCase {
     func testUnknownTypeFallsBackNotCrash() {
         XCTAssertEqual(SMCDecode.scalar([0x01, 0x00], type: smcFourCC("zzzz")), 1.0, accuracy: 0.001)
     }
+
+    // The fan-target clamp re-decodes a target with these explicit inverse helpers
+    // before re-clamping; round-trip + short-buffer fail-safe must hold or the
+    // clamp could mis-read a target and fail open.
+    func testExplicitTargetDecodersRoundTrip() {
+        for rpm in [200, 1234, 2500, 5777, 16383] {
+            XCTAssertEqual(Int(SMCDecode.decodeFloatLE(SMCDecode.encodeFloatLE(Float(rpm))).rounded()), rpm)
+            XCTAssertEqual(SMCDecode.decodeFPE2(SMCDecode.encodeFPE2(rpm)), rpm)
+        }
+    }
+
+    func testTargetDecodersShortBufferFailSafe() {
+        XCTAssertTrue(SMCDecode.decodeFloatLE([1, 2]).isNaN, "short flt → NaN → clamp lifts to floor")
+        XCTAssertEqual(SMCDecode.decodeFPE2([]), 0, "short fpe2 → 0 → clamp lifts to floor")
+    }
 }
