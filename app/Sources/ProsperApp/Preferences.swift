@@ -140,6 +140,7 @@ enum Preferences {
         static let systemStatsEnabled = "systemStatsEnabled"
         static let fanManualEnabled = "fanManualEnabled"
         static let fanTargets = "fanTargets"
+        static let statsRefreshInterval = "statsRefreshInterval"
         static let dragSnapEnabled = "dragSnapEnabled"
         static let dragSnapStyle = "dragSnapStyle"
         static let dragSnapModifier = "dragSnapModifier"
@@ -758,6 +759,18 @@ enum Preferences {
             return defaults.bool(forKey: Keys.systemStatsEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.systemStatsEnabled) }
+    }
+
+    /// Base sampling period (seconds) for every System Stats module. Higher = less
+    /// CPU. Default 3s (lean to the low side). The poller tiers off this: fast metrics
+    /// (CPU/RAM/Net/GPU) sample at this rate, slow ones (temps/power) at half, battery
+    /// far slower — so one knob scales the whole cost profile. Clamped 1…10s.
+    static var statsRefreshInterval: Double {
+        get {
+            let v = defaults.object(forKey: Keys.statsRefreshInterval) as? Double ?? 3.0
+            return Swift.min(10, Swift.max(1, v))
+        }
+        set { defaults.set(Swift.min(10, Swift.max(1, newValue)), forKey: Keys.statsRefreshInterval) }
     }
 
     /// Whether the user has opted into MANUAL fan control. Default OFF — fan writes
