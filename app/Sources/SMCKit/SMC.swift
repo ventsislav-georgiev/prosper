@@ -1,6 +1,6 @@
 // SMCKit — System Management Controller read/write over IOKit.
 //
-// Shared by ProsperApp (read: fans/temps/power) and ProsperLidHelper (write:
+// Shared by ProsperApp (read: fans/temps/power) and ProsperHelper (write:
 // fan control, root-only). IOKit public API only — no private symbols.
 //
 // ABI validated on a real M4 Pro (macOS 26.5.1): FNum=2, F{i}Mn/Mx as `flt `,
@@ -208,6 +208,10 @@ public enum SMCDecode {
     /// point stored big-endian, i.e. (rpm << 2) as a UInt16. Inverse of the
     /// `fpe2` decoder above: `(b0 << 6) | (b1 >> 2)`.
     public static func encodeFPE2(_ rpm: Int) -> [UInt8] {
+        // NOTE: fpe2 saturates at 0x3fff = 16383 rpm, BELOW SMCFanController's
+        // absoluteCeilRPM (20000). Harmless — capping high is thermally safe and no
+        // real Mac fan exceeds 16k — but the Intel encoder and the AS ceiling
+        // disagree, so don't assume 20000 is reachable on Intel if bounds ever change.
         let v = UInt16(max(0, min(rpm, 0x3fff))) << 2
         return [UInt8(v >> 8), UInt8(v & 0xff)]
     }

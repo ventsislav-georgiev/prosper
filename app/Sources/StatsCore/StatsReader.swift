@@ -28,10 +28,14 @@ public struct CPUSample: Sendable, Equatable {
     public let user: Double
     public let idle: Double
     public let perCore: [Double]      // 0...1 per logical core
+    public let loadAverage: [Double]  // 1/5/15-min run-queue averages (empty if unread)
+    public let uptimeSeconds: Int     // since boot; 0 if unknown
     public init(total: Double, performance: Double, efficiency: Double,
-                system: Double, user: Double, idle: Double, perCore: [Double]) {
+                system: Double, user: Double, idle: Double, perCore: [Double],
+                loadAverage: [Double] = [], uptimeSeconds: Int = 0) {
         self.total = total; self.performance = performance; self.efficiency = efficiency
         self.system = system; self.user = user; self.idle = idle; self.perCore = perCore
+        self.loadAverage = loadAverage; self.uptimeSeconds = uptimeSeconds
     }
 }
 
@@ -58,11 +62,16 @@ public struct NetworkSample: Sendable, Equatable {
     public let downloadBytesPerSec: Double
     public let totalUploaded: UInt64
     public let totalDownloaded: UInt64
+    public let interfaceName: String?   // primary active interface, e.g. "en0"
+    public let ipv4: String?            // its IPv4 address
+    public let ssid: String?            // Wi-Fi network name, nil on wired/none
     public init(uploadBytesPerSec: Double, downloadBytesPerSec: Double,
-                totalUploaded: UInt64, totalDownloaded: UInt64) {
+                totalUploaded: UInt64, totalDownloaded: UInt64,
+                interfaceName: String? = nil, ipv4: String? = nil, ssid: String? = nil) {
         self.uploadBytesPerSec = uploadBytesPerSec
         self.downloadBytesPerSec = downloadBytesPerSec
         self.totalUploaded = totalUploaded
         self.totalDownloaded = totalDownloaded
+        self.interfaceName = interfaceName; self.ipv4 = ipv4; self.ssid = ssid
     }
 }

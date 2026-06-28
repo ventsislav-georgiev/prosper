@@ -25,6 +25,12 @@ struct ExtensionMeta: Codable, Sendable, Equatable {
     let license: String?
     /// System extension: bundled, editable + resettable, disable-not-uninstall.
     let system: Bool?
+    /// Opt-in extension: ships disabled, the user must explicitly enable it. Unlike
+    /// a normal extension (default-enabled, the disable set tracks turn-offs), an
+    /// opt-in one is live ONLY if the user turned it on (the enabled set tracks
+    /// turn-ons). Used by extensions whose mere activation shows menu-bar chrome or
+    /// changes system behaviour, so the default install footprint stays zero.
+    let default_disabled: Bool?
     /// macOS privacy grants this extension can make use of, surfaced in
     /// Settings › Extensions so the user can grant them (see PermissionsManager).
     /// Currently only `"full-disk-access"` is recognized — required by the
@@ -40,6 +46,7 @@ struct ExtensionMeta: Codable, Sendable, Equatable {
     let activation: Activation?
 
     var isSystem: Bool { system ?? false }
+    var defaultDisabled: Bool { default_disabled ?? false }
     var updateURL: String? { update_url }
 
     /// macOS privacy grants this extension declares it can use ([] when none).

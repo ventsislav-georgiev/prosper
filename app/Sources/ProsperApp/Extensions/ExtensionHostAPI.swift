@@ -56,6 +56,10 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func keyboardCurrentSource() -> String
     func keyboardLayoutsJSON() -> String
     func keyboardSetSource(_ id: String) -> Bool
+    /// Present a native app chooser (NSOpenPanel over /Applications) and return the
+    /// picked app as JSON `{bundleID, name}`, or "" if cancelled. UI affordance for
+    /// settings panes (e.g. picking an app to override input source for).
+    func chooseApp() -> String
     // Declarative per-app key remapping (§D) + synthetic key injection (§E). Rules
     // (a JSON array) are evaluated natively inside the shared event tap — NO Lua in
     // the keystroke path. An extension registers its full set from `on_launch`;
@@ -287,6 +291,7 @@ extension ExtensionHostServices {
     func keyboardCurrentSource() -> String { "" }
     func keyboardLayoutsJSON() -> String { "[]" }
     func keyboardSetSource(_ id: String) -> Bool { false }
+    func chooseApp() -> String { "" }
     func keysSetRules(extensionID: String, json: String) {}
     func keysStroke(_ spec: String) {}
     func keysSystem(_ name: String) {}
@@ -777,6 +782,8 @@ struct ExtensionHost {
         }
         lua.register("__h_kbd_current") { rt in rt.push(services.keyboardCurrentSource()); return 1 }
         lua.register("__h_kbd_layouts") { rt in rt.push(services.keyboardLayoutsJSON()); return 1 }
+        // App chooser (NSOpenPanel) for settings panes. Read-only file pick — ungated.
+        lua.register("__h_choose_app") { rt in rt.push(services.chooseApp()); return 1 }
         lua.register("__h_url_open") { rt in
             rt.push(services.urlOpen(rt.stringArgument(1) ?? "", bundleID: rt.stringArgument(2))); return 1
         }
@@ -1501,6 +1508,16 @@ struct ExtensionHost {
         -- keystroke, so this is the hot path that most benefits from going native.
         render  = raw_json_encode,
     }
+
+    -- Native app chooser for settings actions:
+    --   host.ui.chooseApp() -> { bundleID=, name= } | nil (cancelled)
+    local raw_choose_app = __h_choose_app
+    host.ui.chooseApp = function()
+        local s = raw_choose_app and raw_choose_app() or ""
+        if not s or #s == 0 then return nil end
+        return host.json.decode(s)
+    end
+    __h_choose_app = nil
 
     -- Declarative Settings sections (Tier B). A `settings_render(section_id, state)`
     -- handler returns host.ui.settings.render(host.ui.settings.ui{ sections = {...} }).

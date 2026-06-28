@@ -261,4 +261,55 @@ final class ExtensionManifestTests: XCTestCase {
         try registry.uninstall(id: "com.prosper.calc")
         XCTAssertTrue(registry.records.isEmpty)
     }
+
+    @MainActor
+    func testOptInExtensionDefaultsDisabledAndPersistsEnable() throws {
+        let systemRoot = try tempDir()
+        let userRoot = try tempDir()
+        defer {
+            try? FileManager.default.removeItem(at: systemRoot)
+            try? FileManager.default.removeItem(at: userRoot)
+        }
+        let optIn = Self.sampleManifest.replacingOccurrences(
+            of: "system      = true",
+            with: "system      = true\n    default_disabled = true")
+        _ = try writeExtension(in: systemRoot, dirName: "calc", toml: optIn)
+
+        let suite = "test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let registry = ExtensionRegistry(
+            systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0", defaults: defaults)
+        registry.discover()
+
+        // Opt-in ext is trusted (system) but OFF until the user enables it → not live.
+        XCTAssertTrue(registry.records[0].trusted)
+        XCTAssertFalse(registry.records[0].enabled, "opt-in ext must default OFF")
+        XCTAssertFalse(registry.records[0].isLive)
+        XCTAssertNil(registry.route(query: "12+3"), "off opt-in ext must not route")
+
+        // Turning it on persists across a fresh registry.
+        try registry.setEnabled(true, id: "com.prosper.calc")
+        XCTAssertTrue(registry.records[0].isLive)
+
+        let registry2 = ExtensionRegistry(
+            systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0", defaults: defaults)
+        registry2.discover()
+        XCTAssertTrue(registry2.records[0].enabled, "enable must survive relaunch")
+
+        // While ON it lives in the enabled set, not the disabled set.
+        XCTAssertEqual(defaults.stringArray(forKey: "enabledExtensionIDs"), ["com.prosper.calc"])
+        XCTAssertEqual(defaults.stringArray(forKey: "disabledExtensionIDs") ?? [], [])
+
+        // And turning it back off persists too (inverse of the default).
+        try registry2.setEnabled(false, id: "com.prosper.calc")
+        let registry3 = ExtensionRegistry(
+            systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0", defaults: defaults)
+        registry3.discover()
+        XCTAssertFalse(registry3.records[0].enabled, "disable must survive relaunch")
+
+        // Single-key invariant: a disabled opt-in ext is in NEITHER set — governed
+        // solely by absence from the enabled set, never dead-weight in the disabled set.
+        XCTAssertEqual(defaults.stringArray(forKey: "enabledExtensionIDs") ?? [], [])
+        XCTAssertEqual(defaults.stringArray(forKey: "disabledExtensionIDs") ?? [], [])
+    }
 }

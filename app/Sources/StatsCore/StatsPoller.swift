@@ -22,9 +22,9 @@ public enum StatsModule: String, CaseIterable, Sendable {
         switch self {
         case .cpu: ["cpu"]; case .memory: ["memory"]; case .gpu: ["gpu"]
         case .power: ["power"]
-        // Network renders live up/down text, not a sparkline, and its popover has
-        // no chart — so it feeds no history ring (was allocating 2 dead rings/tick).
-        case .network, .sensors, .battery: []
+        // Network feeds two channels for the popover's dual up/down area chart.
+        case .network: ["net.up", "net.down"]
+        case .sensors, .battery: []
         }
     }
 }
@@ -137,7 +137,8 @@ public final class StatsPoller {
             latest.memory = s; push("memory", s.usedFraction)
         }
         if network != nil, let s = try? network!.read() {
-            latest.network = s   // rendered as live text, not charted — no history ring
+            latest.network = s
+            push("net.up", s.uploadBytesPerSec); push("net.down", s.downloadBytesPerSec)
         }
         if gpu != nil, let s = try? gpu!.read() {
             latest.gpu = s; push("gpu", s.utilization)

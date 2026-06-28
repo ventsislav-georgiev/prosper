@@ -2,12 +2,15 @@
 id          = "com.prosper.url-dispatcher"
 name        = "url-dispatcher"
 title       = "URL Dispatcher"
-description = "Routes opened links to different browsers by domain (§O). Make Prosper the default browser and every clicked link arrives as a `url.open` event; this extension picks the right browser and re-opens it there — a stateless port of finicky / Hammerspoon URL routing."
-version     = "1.2.1"
+description = "Routes opened links to different browsers by domain (§O), with optional tracking-parameter cleanup. Make Prosper the default browser and every clicked link arrives as a `url.open` event; this extension picks the right browser and re-opens it there — a stateless port of finicky / Hammerspoon URL routing."
+version     = "1.3.0"
 author      = "prosper"
 license     = "MIT"
 icon        = "arrow.triangle.branch"
 system      = true
+# Opt-in: this hijacks the system default browser, so it stays off until the user
+# enables it (then sets Prosper as default from the settings pane).
+default_disabled = true
 
 [extension.host]
 min_version = "2.0.0"

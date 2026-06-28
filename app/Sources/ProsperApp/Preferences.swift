@@ -138,6 +138,8 @@ enum Preferences {
         static let autocompleteEnabled = "autocompleteEnabled"
         static let agentEnabled = "agentEnabled"
         static let systemStatsEnabled = "systemStatsEnabled"
+        static let fanManualEnabled = "fanManualEnabled"
+        static let fanTargets = "fanTargets"
         static let dragSnapEnabled = "dragSnapEnabled"
         static let dragSnapStyle = "dragSnapStyle"
         static let dragSnapModifier = "dragSnapModifier"
@@ -748,6 +750,30 @@ enum Preferences {
             return defaults.bool(forKey: Keys.systemStatsEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.systemStatsEnabled) }
+    }
+
+    /// Whether the user has opted into MANUAL fan control. Default OFF — fan writes
+    /// go to thermal hardware as root, so nothing touches a fan until this is
+    /// explicitly enabled (with a confirmation prompt). Turning it off resets every
+    /// fan to OS thermal control.
+    static var fanManualEnabled: Bool {
+        get { defaults.bool(forKey: Keys.fanManualEnabled) }   // absent → false
+        set { defaults.set(newValue, forKey: Keys.fanManualEnabled) }
+    }
+
+    /// Saved per-fan manual target RPM, keyed by SMC fan index. Re-applied on launch
+    /// and after wake (the daemon never persists fan state — NO save-state on its
+    /// side — so the app is the single owner of intent). Stored as a [String: Double]
+    /// dictionary in UserDefaults.
+    static var fanTargets: [Int: Double] {
+        get {
+            let raw = defaults.dictionary(forKey: Keys.fanTargets) as? [String: Double] ?? [:]
+            return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in Int(k).map { ($0, v) } })
+        }
+        set {
+            let raw = Dictionary(uniqueKeysWithValues: newValue.map { (String($0.key), $0.value) })
+            defaults.set(raw, forKey: Keys.fanTargets)
+        }
     }
 
     /// Whether Prosper registers as a login item (SMAppService). The actual

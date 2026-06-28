@@ -12,8 +12,12 @@ public struct GPUSample: Sendable, Equatable {
     public let utilization: Double      // 0...1
     public let name: String
     public let usedMemory: UInt64       // bytes, 0 if unreported
-    public init(utilization: Double, name: String, usedMemory: UInt64) {
+    public let renderUtil: Double       // 0...1 renderer (NaN if unreported)
+    public let tilerUtil: Double        // 0...1 tiler (NaN if unreported)
+    public init(utilization: Double, name: String, usedMemory: UInt64,
+                renderUtil: Double = .nan, tilerUtil: Double = .nan) {
         self.utilization = utilization; self.name = name; self.usedMemory = usedMemory
+        self.renderUtil = renderUtil; self.tilerUtil = tilerUtil
     }
 }
 
@@ -45,10 +49,17 @@ public struct GPUReader: StatsReader {
                    ?? (perf["vramUsedBytes"] as? NSNumber)?.uint64Value ?? 0
             let name = (dict["IOGLBundleName"] as? String)
                     ?? (dict["model"] as? String) ?? "GPU"
-            found = true
-            if util / 100 >= best.utilization {
-                best = GPUSample(utilization: min(1, max(0, util / 100)), name: name, usedMemory: mem)
+            func frac(_ k: String) -> Double {
+                (perf[k] as? NSNumber).map { min(1, max(0, $0.doubleValue / 100)) } ?? .nan
             }
+            // Adopt the first nub, then only strictly-busier ones — so an all-idle
+            // multi-GPU Mac keeps the first real name/mem instead of flip-flopping.
+            if !found || util / 100 > best.utilization {
+                best = GPUSample(utilization: min(1, max(0, util / 100)), name: name, usedMemory: mem,
+                                 renderUtil: frac("Renderer Utilization %"),
+                                 tilerUtil: frac("Tiler Utilization %"))
+            }
+            found = true
         }
         guard found else { throw StatsError.unavailable("IOAccelerator: no nub") }
         return best

@@ -9,6 +9,9 @@ final class BatteryReaderTests: XCTestCase {
             XCTAssert(s.charge >= 0 && s.charge <= 1, "charge \(s.charge) out of range")
             XCTAssert(s.health.isNaN || (s.health > 0 && s.health <= 1.2), "health \(s.health)")
             XCTAssertGreaterThanOrEqual(s.cycleCount, 0)
+            if !s.voltage.isNaN { XCTAssert(s.voltage > 0 && s.voltage < 30, "Li-ion V \(s.voltage)") }
+            XCTAssertGreaterThanOrEqual(s.currentCapacity, 0)
+            XCTAssertGreaterThanOrEqual(s.adapterWatts, 0)
             print("Battery: \(Int(s.charge * 100))% health=\(String(format: "%.0f", s.health * 100))% cycles=\(s.cycleCount) \(String(format: "%.1f", s.powerWatts))W \(String(format: "%.1f", s.temperature))°C")
         } catch StatsError.unavailable {
             throw XCTSkip("no battery on this machine")

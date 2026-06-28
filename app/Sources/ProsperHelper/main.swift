@@ -1,7 +1,8 @@
 import Foundation
-import LidHelperProtocol
+import ProsperHelperProtocol
+import SMCKit
 
-// ProsperLidHelper — the privileged daemon behind "keep awake with the lid
+// ProsperHelper — the privileged daemon behind "keep awake with the lid
 // closed". Installed via SMAppService.daemon, launched by launchd as root on the
 // first XPC message. Its ONLY job is `pmset -a disablesleep 0/1`, which needs
 // root — that root requirement is the whole reason the daemon exists (it removes
@@ -33,29 +34,50 @@ private let remoteHoldTTLSeconds = 120
 
 // @unchecked Sendable: every mutable member (`core`, `idleTimer`) is touched
 // only inside a `q.sync`/`q.async` block, so the serial queue is the lock.
-final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unchecked Sendable {
+final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unchecked Sendable {
     // Single serial queue guards all mutable state — XPC delivers connection
     // events + method calls on arbitrary queues, and the idle timer runs here too,
     // so every `core` call is serialized without the core needing its own lock.
-    private let q = DispatchQueue(label: "\(lidHelperLabel).state")
+    private let q = DispatchQueue(label: "\(helperLabel).state")
     private var idleTimer: DispatchSourceTimer?
     // Auto-expiry for the remote-session keep-awake hold (see remoteHoldTTLSeconds).
     private var remoteHoldTimer: DispatchSourceTimer?
-    private let core = LidHelperCore(apply: LidHelper.applyPmset, onIdle: { exit(0) })
+    private let core = LidHelperCore(apply: Helper.applyPmset, onIdle: { exit(0) })
     // Remote-wake lives in its own observer with its own state machine — zero
     // shared mutable state with `core` (the only coupling is the idle-exit guard
     // below, which keeps the daemon resident while remote-wake is armed). Uses the
     // same serial queue `q` so a setRemoteWake never races a lid op.
     private lazy var remoteWake = RemoteWakeObserver(queue: q)
 
+    // Privileged fan control runs on its OWN serial queue, NOT `q`. The Apple-Silicon
+    // manual unlock sleeps ~3s (thermalmonitord must yield) + retries the mode key
+    // hundreds of times; on `q` that would stall the safety-critical lid-sleep FIFO
+    // (and remote-wake / sleepNow) for seconds. `fanQ` isolates that latency. `fan`,
+    // `fanCore`, and `fanHolderID` are touched ONLY on `fanQ`, so SMCFanController's
+    // mode-key cache + the core need no extra lock.
+    private let fanQ = DispatchQueue(label: "\(helperLabel).fan")
+    private lazy var fan: SMCFanController? = {
+        guard let smc = try? SMC() else { dtrace("fan: SMC open failed — fan control inert"); return nil }
+        return SMCFanController(smc)
+    }()
+    private lazy var fanCore = FanControlCore(reset: { [weak self] in _ = self?.fan?.resetAll() })
+    // Identity of the XPC connection currently holding a manual fan pin. Fan
+    // crash-safety is tracked PER FAN-CLIENT, independent of the lid connection count
+    // (the app opens SEPARATE connections for lid vs fans): the fan must reset when
+    // ITS client drops, even while a lid-sleep connection is still held.
+    private var fanHolderID: ObjectIdentifier?
+
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
         // The OS invalidates the connection automatically if the peer fails this
         // requirement, so an impostor never reaches setLidSleepDisabled.
         conn.setCodeSigningRequirement(clientRequirement)
-        conn.exportedInterface = NSXPCInterface(with: LidHelperProtocol.self)
+        conn.exportedInterface = NSXPCInterface(with: ProsperHelperProtocol.self)
         conn.exportedObject = self
-        conn.invalidationHandler = { [weak self] in self?.connectionClosed() }
-        conn.interruptionHandler  = { [weak self] in self?.connectionClosed() }
+        // Capture the connection IDENTITY (a value type — no retain cycle on conn's
+        // own handler) so a drop can be matched against the fan holder.
+        let cid = ObjectIdentifier(conn)
+        conn.invalidationHandler = { [weak self] in self?.connectionClosed(cid) }
+        conn.interruptionHandler  = { [weak self] in self?.connectionClosed(cid) }
         q.sync {
             core.connectionOpened()
             cancelIdleExit_locked()
@@ -64,10 +86,22 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
         return true
     }
 
-    private func connectionClosed() {
-        // App quit or crashed — core resets the override here so the lid is NEVER
+    private func connectionClosed(_ cid: ObjectIdentifier) {
+        // App quit or crashed — core resets the lid override here so the lid is NEVER
         // left wedged awake; arm the idle exit once no client remains.
-        q.async { if self.core.connectionClosed() { self.armIdleExit_locked() } }
+        q.async {
+            if self.core.connectionClosed() { self.armIdleExit_locked() }
+        }
+        // Fan crash-safety is tracked independently on `fanQ`: if the FAN client that
+        // set a manual pin is the one that just dropped, reset every fan to auto —
+        // even if a lid-sleep connection is still open (so the fan pin never outlives
+        // its own client). Matched by identity, so an unrelated lid drop is a no-op.
+        fanQ.async {
+            if self.fanHolderID == cid {
+                self.fanCore.lastClientGone()
+                self.fanHolderID = nil
+            }
+        }
     }
 
     func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) {
@@ -105,6 +139,58 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
         }
     }
 
+    func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) {
+        // Force one fan to a manual RPM. SMCFanController re-clamps fail-closed to the
+        // absolute floor/ceiling at its lowest write layer AND hands the fan back to
+        // the OS if any step throws, so a bad index/rpm can't leave a fan wedged. On
+        // real success, record THIS connection as the fan holder + arm the crash reset.
+        // Refuse if there's no current connection: arming with a nil holder would make
+        // connectionClosed's `fanHolderID == cid` never match this client → its drop
+        // wouldn't trigger the crash reset (the fan would outlive its only client until
+        // the next drop / cold start). A handler always has a current connection, so this
+        // only rejects a genuinely connectionless call.
+        guard let conn = NSXPCConnection.current() else { reply(false); return }
+        let cid = ObjectIdentifier(conn)
+        fanQ.async {
+            guard let fan = self.fan else { reply(false); return }
+            do {
+                try fan.setManual(index, rpm: rpm)
+                self.fanCore.didSetManual()
+                self.fanHolderID = cid
+                dtrace("setFanManualRPM(\(index), \(rpm)) ok")
+                reply(true)
+            } catch {
+                dtrace("setFanManualRPM(\(index), \(rpm)) FAILED: \(error)")
+                reply(false)
+            }
+        }
+    }
+
+    func setFanAuto(_ index: Int, withReply reply: @escaping (Bool) -> Void) {
+        // Hand one fan back to the OS. Does NOT clear the crash-reset arm or holder: a
+        // sibling fan may still be manual, and over-resetting on a later drop is
+        // harmless while under-resetting is the hazard.
+        fanQ.async {
+            guard let fan = self.fan else { reply(false); return }
+            do { try fan.setAuto(index); dtrace("setFanAuto(\(index)) ok"); reply(true) }
+            catch { dtrace("setFanAuto(\(index)) FAILED: \(error)"); reply(false) }
+        }
+    }
+
+    func resetAllFans(withReply reply: @escaping (Bool) -> Void) {
+        // Explicit full reset (app disabled / pre-sleep). Disarm the crash reset ONLY
+        // if the critical clears actually succeeded — a silently-failed reset must
+        // leave `manualHeld` armed so a later last-client-drop retries instead of
+        // believing the fans were already handed back.
+        fanQ.async {
+            guard let fan = self.fan else { reply(false); return }
+            let ok = fan.resetAll()
+            if ok { self.fanCore.didResetAll(); self.fanHolderID = nil }
+            dtrace("resetAllFans ok=\(ok)")
+            reply(ok)
+        }
+    }
+
     func sleepNow(withReply reply: @escaping (Bool) -> Void) {
         // Explicit user "sleep now". Force EVERY disablesleep writer off first
         // (reclaim = lid override + remote hold → pmset disablesleep 0, synchronous
@@ -114,7 +200,7 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
         q.async {
             self.cancelRemoteHoldExpiry_locked()
             self.core.reclaimAtStartup()
-            let ok = LidHelper.sleepNowPmset()
+            let ok = Helper.sleepNowPmset()
             dtrace("sleepNow: writers cleared, pmset sleepnow ok=\(ok)")
             reply(ok)
         }
@@ -176,7 +262,12 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
     /// it completes before we accept the first connection (no race with an
     /// incoming setOverride(true)). See LidHelperCore.reclaimAtStartup.
     func reclaimAtStartup() {
+        // Clear a stuck lid override AND reset every fan to auto, both before the
+        // first connection is accepted — a fan left manual by an unclean kill is a
+        // thermal hazard, so cold start always hands fans back to the OS. fanCore is
+        // owned by fanQ, so its reclaim runs there (also sync — done before resume).
         q.sync { core.reclaimAtStartup() }
+        fanQ.sync { fanCore.reclaimAtStartup() }
     }
 
     // pmset is a one-shot toggle (not a hot path); shelling it matches openlid and
@@ -235,8 +326,8 @@ final class LidHelper: NSObject, LidHelperProtocol, NSXPCListenerDelegate, @unch
     }
 }
 
-let delegate = LidHelper()
-let listener = NSXPCListener(machServiceName: lidHelperMachServiceName)
+let delegate = Helper()
+let listener = NSXPCListener(machServiceName: helperMachServiceName)
 listener.delegate = delegate
 // Self-heal a `disablesleep` left stuck by an unclean kill, THEN arm the idle
 // exit, both BEFORE accepting connections: a daemon launchd spun up for a

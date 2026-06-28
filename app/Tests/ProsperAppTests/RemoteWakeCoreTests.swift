@@ -1,5 +1,5 @@
 import XCTest
-@testable import LidHelperProtocol
+@testable import ProsperHelperProtocol
 
 /// Covers the remote-wake decisions without root/IOKit/network: debounce
 /// collapses powerd's multi-notify, fail-safe sleeps on a bad poll, the battery

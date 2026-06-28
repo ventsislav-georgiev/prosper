@@ -285,8 +285,12 @@ enum KeyboardSource {
 
     static func layoutsJSON() -> String {
         guard let list = TISCreateInputSourceList(nil, false)?.takeRetainedValue() as? [TISInputSource] else { return "[]" }
+        // Only selectable sources: TISCreateInputSourceList(_, false) returns ALL
+        // installed sources incl. ones disabled in System Settings. Offering an
+        // unselectable source in the picker makes setSource fail forever — the
+        // hot path then retries the failing select on every focus change.
         let arr = list.compactMap { src -> [String: String]? in
-            guard let i = id(of: src) else { return nil }
+            guard isSelectable(src), let i = id(of: src) else { return nil }
             return ["id": i, "name": name(of: src) ?? i]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: arr),
@@ -302,6 +306,17 @@ enum KeyboardSource {
         return false
     }
 
+    // TISSelectInputSource succeeds only when the source is BOTH select-capable
+    // (type allows it — input-mode parents etc. are not) AND enabled in System
+    // Settings. Filtering on only one lets a disabled source into the picker, which
+    // then fails to select forever on the hot path. Require both.
+    private static func isSelectable(_ src: TISInputSource) -> Bool {
+        boolProp(src, kTISPropertyInputSourceIsSelectCapable) && boolProp(src, kTISPropertyInputSourceIsEnabled)
+    }
+    private static func boolProp(_ src: TISInputSource, _ key: CFString) -> Bool {
+        guard let ptr = TISGetInputSourceProperty(src, key) else { return false }
+        return Unmanaged<CFBoolean>.fromOpaque(ptr).takeUnretainedValue() == kCFBooleanTrue
+    }
     private static func id(of src: TISInputSource) -> String? {
         property(src, kTISPropertyInputSourceID)
     }

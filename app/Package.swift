@@ -87,8 +87,9 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "TOMLDecoder", package: "TOMLDecoder"),
                 "LuaRuntime",
-                "LidHelperProtocol",
+                "ProsperHelperProtocol",
                 "StatsCore",
+                "SMCKit",
             ],
             // NOTE: no `resources:` here on purpose. SwiftPM's generated
             // `Bundle.module` accessor resolves resources at
@@ -115,7 +116,7 @@ let package = Package(
         // privileged lid-sleep daemon. Tiny, no deps — its own target so both
         // executables compile the exact same interface.
         .target(
-            name: "LidHelperProtocol"
+            name: "ProsperHelperProtocol"
         ),
         // Privileged helper daemon behind "keep awake with the lid closed". Runs
         // as root via launchd (installed by SMAppService.daemon), flips
@@ -123,13 +124,13 @@ let package = Package(
         // Embedded into the .app by scripts/bundle.sh; see that script + the
         // LaunchDaemons plist it writes.
         .executableTarget(
-            name: "ProsperLidHelper",
-            dependencies: ["LidHelperProtocol", "SMCKit"],
+            name: "ProsperHelper",
+            dependencies: ["ProsperHelperProtocol", "SMCKit"],
             // RemoteWakeSPI.h re-declares the IOPMConnection dark-wake observer
             // family (SPI, exported from IOKit but absent from the SDK headers).
             // No entitlement; passes notarization. See the header for why.
             swiftSettings: [
-                .unsafeFlags(["-import-objc-header", "Sources/ProsperLidHelper/include/RemoteWakeSPI.h"])
+                .unsafeFlags(["-import-objc-header", "Sources/ProsperHelper/include/RemoteWakeSPI.h"])
             ],
             linkerSettings: [
                 .linkedFramework("IOKit")
@@ -148,7 +149,7 @@ let package = Package(
         ),
         // System Management Controller read/write over IOKit (public API only).
         // Read side (fans/temps/power) used by ProsperApp; guarded write side
-        // (fan control, root-only) used by ProsperLidHelper. No private symbols,
+        // (fan control, root-only) used by ProsperHelper. No private symbols,
         // no AppKit/MLX — compiles fast, testable in isolation.
         .target(
             name: "SMCKit",

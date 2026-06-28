@@ -20,6 +20,49 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.121.0 *(unreleased)*
 
+### Menu Bar Management
+- **New "Menu Bar Management" extension (opt-in).** Hide menu-bar icons behind a
+  divider you can show on demand, add spacing between icons, and pick the collapsed/
+  expanded chevron style — all with no Accessibility or Screen Recording permission.
+  A live preview strip in Settings shows your real icons in order. Ships **disabled**
+  — it adds nothing to your menu bar until you turn it on in Settings › Extensions.
+- **Item ordering that survives relaunch, including multi-icon apps (experimental).**
+  Apps like Stats or iStat Menus publish several icons that macOS normally shuffles
+  on every launch. Turn on ordering, arrange your icons once, and Prosper keeps them
+  in place. It's opt-in, only enabled on macOS versions it has verified it can drive,
+  and self-tests on a throwaway icon at startup — if the move can't be performed
+  reliably on your Mac it disables itself rather than fighting the system.
+  - On macOS 26 (Tahoe), where the system no longer tells apps which icon is which,
+    Prosper rebuilds each icon's identity from its picture (this is the only part
+    that asks for Screen Recording, and only when you use ordering).
+  - **On-reveal** mode restores your order whenever the bar is shown; **Live** mode
+    also snaps icons back if they drift. Live mode stays gentle: it backs off on
+    battery, and a circuit breaker parks it if a move keeps failing so it can never
+    spin the CPU.
+  - Ordering work runs on a fast path that, in steady state, avoids the expensive
+    system-wide window scan — so the background order check doesn't add input lag
+    while you type.
+
+### System Stats
+- **New "System Stats" extension (opt-in).** Native menu-bar system monitors in
+  Prosper's style — CPU, memory, GPU, network, temperatures, fans, battery, and
+  power. Pick which modules show and in what order. Ships **disabled**; turn on the
+  ones you want in Settings › System Stats. Built entirely on public and on-device
+  APIs — no Accessibility, Screen Recording, or root access just to read your stats.
+- **A detail popover behind each menu-bar item.** Click a module for a live history
+  chart and a full breakdown:
+  - **CPU** — per-core load bars, system/user/idle split, efficiency vs performance
+    cores, plus load average and uptime.
+  - **Memory** — app/wired/compressed stacked usage, memory pressure, and swap.
+  - **GPU** — utilization with renderer and tiler breakdown and VRAM in use.
+  - **Network** — up/down throughput with a dual-area chart, total transferred, and
+    the active interface, IP address, and Wi-Fi network.
+  - **Sensors** — the full temperature list and current fan speeds.
+  - **Battery** — charge, health, cycle count, live power draw, voltage, amperage,
+    capacity, power-adapter wattage, and time remaining.
+- **Reads stay light.** Every sampler runs in microseconds and the menu bar updates
+  once a second, so the monitors don't add measurable load to the thing they measure.
+
 ### Inline Autocomplete
 - **Ghost text no longer vanishes while you type fast.** The biggest cause of
   "sometimes no suggestion appears" was that a completion arriving a moment after
@@ -200,6 +243,35 @@ tag from the now-released section and put it on the new top draft.
   you add yourself via a Hugging Face URL — are ordered by their RAM footprint, so the
   list reads top-down by size and custom models slot into the right place instead of
   trailing the end.
+
+### Input Switcher
+- **New "Input Switcher" extension (opt-in).** Automatically set your keyboard input
+  source by focused app: pick one default input for every app, then add per-app
+  overrides — choose an app from a picker and the input source it should use. When that
+  app comes to the front Prosper switches the layout for you, and switches back to your
+  default elsewhere. A native take on the common Hammerspoon input-switching recipe.
+  Ships **disabled** — turn it on in Settings › Extensions.
+
+### URL Dispatcher
+- **Optional tracking-parameter cleanup.** A new "Remove tracking parameters" toggle
+  in the URL Dispatcher settings strips analytics and click-tracking junk
+  (`utm_*`, `fbclid`, `gclid`, `mc_eid`, `igshid`, and ~90 more from the AdGuard/
+  ClearURLs lists) from links before they're opened — so the page never sees them.
+  Only known trackers are removed; functional parameters are kept untouched. Off by
+  default. A native take on the Hammerspoon URL-cleanup recipe.
+- **Now ships disabled.** The extension hijacks the system default browser, so it's
+  now opt-in like the other system extensions — turn it on in Settings › Extensions,
+  then make Prosper your default from its settings pane.
+
+### Extensions
+- **The marketplace moved into its own window.** Browsing and installing extensions
+  no longer crowds the Extensions settings page — open it from the new "Browse
+  Marketplace" button. The window gives search room to breathe, filter by All /
+  Themes / Extensions, and sort by recently updated or most downloaded.
+- **Built for a full catalogue.** Results load a page at a time and the next page
+  pulls in as you scroll (infinite scroll), so a marketplace with thousands of
+  packages stays fast and light. A network hiccup on the first page now shows a
+  tap-to-retry message instead of silently ending the list.
 
 ## v2.120.0
 

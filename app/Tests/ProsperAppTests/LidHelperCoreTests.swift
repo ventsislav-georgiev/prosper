@@ -1,5 +1,5 @@
 import XCTest
-@testable import LidHelperProtocol
+@testable import ProsperHelperProtocol
 
 /// Covers the safety-critical daemon logic without root/launchd: the override is
 /// reset when the last client drops (crash safety), idle-exit fires only when no

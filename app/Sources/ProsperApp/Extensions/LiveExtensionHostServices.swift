@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import CryptoKit
 import Foundation
-import LidHelperProtocol
+import ProsperHelperProtocol
 import SystemConfiguration
 import UniformTypeIdentifiers
 import UserNotifications
@@ -521,7 +521,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     }
 
     /// `pmset -a disablesleep` overrides lid-close sleep, and that needs root. We
-    /// route it through the privileged `ProsperLidHelper` daemon (installed lazily
+    /// route it through the privileged `ProsperHelper` daemon (installed lazily
     /// via SMAppService on first use) — NO sudoers entry, works out of the box.
     /// Tracked in ExtensionResources so it is reset on disable/quit; the daemon
     /// also resets it if the app crashes (the XPC connection drops). Only records
@@ -874,6 +874,29 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     func keyboardCurrentSource() -> String { mainSync { KeyboardSource.currentSourceID() } }
     func keyboardLayoutsJSON() -> String { mainSync { KeyboardSource.layoutsJSON() } }
     func keyboardSetSource(_ id: String) -> Bool { mainSync { KeyboardSource.setSource(id) } }
+
+    // Runs a modal NSOpenPanel on the main thread. Safe because callers (settings
+    // actions) run off-main, so main isn't already blocked on this lane — calling
+    // from a context where main waits on the worker lane would deadlock.
+    func chooseApp() -> String {
+        mainSync {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.application]
+            panel.allowsMultipleSelection = false
+            panel.directoryURL = URL(fileURLWithPath: "/Applications")
+            guard panel.runModal() == .OK, let url = panel.url,
+                  let bundle = Bundle(url: url), let id = bundle.bundleIdentifier
+            else { return "" }
+            // Prefer the user-facing display name; some apps set only one of the two.
+            let name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
+                ?? url.deletingPathExtension().lastPathComponent
+            let obj: [String: String] = ["bundleID": id, "name": name]
+            guard let data = try? JSONSerialization.data(withJSONObject: obj),
+                  let s = String(data: data, encoding: .utf8) else { return "" }
+            return s
+        }
+    }
 
     func keysSetRules(extensionID: String, json: String) {
         Task { @MainActor in

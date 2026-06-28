@@ -28,6 +28,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let onOpenSettings: () -> Void
     private let onCheckForUpdates: () -> Void
     private let onRerunSetup: () -> Void
+    private let onRestart: () -> Void
     private let onQuit: () -> Void
 
     init(
@@ -36,6 +37,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         onOpenSettings: @escaping () -> Void,
         onCheckForUpdates: @escaping () -> Void,
         onRerunSetup: @escaping () -> Void,
+        onRestart: @escaping () -> Void,
         onQuit: @escaping () -> Void
     ) {
         self.onOpenRunner = onOpenRunner
@@ -43,6 +45,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.onOpenSettings = onOpenSettings
         self.onCheckForUpdates = onCheckForUpdates
         self.onRerunSetup = onRerunSetup
+        self.onRestart = onRestart
         self.onQuit = onQuit
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -255,6 +258,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let restartItem = NSMenuItem(
+            title: "Restart",
+            action: #selector(restartSelected),
+            keyEquivalent: ""
+        )
+        restartItem.target = self
+        menu.addItem(restartItem)
+
         let quitItem = NSMenuItem(
             title: "Quit",
             action: #selector(quitSelected),
@@ -393,6 +404,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Reflect the in-flight state immediately — the menu is closing, but a
         // quick re-open should already read "Checking…".
         updateItem.title = "Checking for Updates\u{2026}"
+    }
+
+    @objc private func restartSelected() {
+        onRestart()
     }
 
     @objc private func quitSelected() {

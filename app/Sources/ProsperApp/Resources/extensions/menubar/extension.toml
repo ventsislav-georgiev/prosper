@@ -8,11 +8,14 @@ id          = "com.prosper.menubar"
 name        = "menubar"
 title       = "Menu Bar Management"
 description = "Hide menu-bar icons behind a chevron, reveal on demand, and tune icon spacing and style."
-version     = "1.2.0"
+version     = "1.3.0"
 author      = "Prosper"
 license     = "MIT"
 icon        = "menubar.rectangle"
 system      = true
+# Opt-in: enabling this extension adds a chevron to the menu bar, so it ships OFF.
+# The user turns it on in Settings › Extensions.
+default_disabled = true
 
 [extension.host]
 min_version = "2.0.0"

@@ -7,6 +7,48 @@ import UserNotifications
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
+    /// Builds the `/bin/sh` argv for the relaunch waiter. Pure + injection-safe:
+    /// `pid` and `bundlePath` are passed as positional args (`$1`/`$2`), never
+    /// interpolated into the script body, so a bundle path containing quotes,
+    /// `$`, or spaces can't break out. The waiter polls until this process is
+    /// gone, waits a short grace for LaunchServices to deregister the dead
+    /// instance (otherwise `open` can race the stale registration and just
+    /// activate a corpse instead of relaunching), then re-opens the bundle. The
+    /// loop is bounded (~60s) so a cancelled `terminate` can't leave an immortal
+    /// spinner — and `open` on a still-alive app is a harmless activate, so the
+    /// final `open` is safe either way.
+    nonisolated static func relaunchShellArguments(bundlePath: String, pid: Int32) -> [String] {
+        [
+            "-c",
+            "i=0; while kill -0 \"$1\" 2>/dev/null && [ $i -lt 600 ]; "
+                + "do sleep 0.1; i=$((i+1)); done; sleep 0.3; exec /usr/bin/open \"$2\"",
+            "sh",            // $0
+            String(pid),     // $1
+            bundlePath,      // $2
+        ]
+    }
+
+    /// Relaunches the app: spawns a detached waiter (survives our exit — AppKit
+    /// doesn't reap child processes), then terminates self. `open` re-activates
+    /// the bundle once we're gone (LSUIElement, so no Dock bounce to fight).
+    static func relaunch() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = relaunchShellArguments(
+            bundlePath: Bundle.main.bundlePath,
+            pid: ProcessInfo.processInfo.processIdentifier
+        )
+        // If the waiter can't even spawn, do NOT terminate — a Restart click must
+        // never degrade into a silent Quit with no relaunch.
+        do {
+            try task.run()
+        } catch {
+            NSLog("AppDelegate.relaunch: failed to spawn relaunch waiter: \(error)")
+            return
+        }
+        NSApp.terminate(nil)
+    }
+
     private var menuBar: MenuBarController?
     private var hotKeys: [GlobalHotKey] = []
     private var runnerPanel: RunnerPanel?
@@ -121,7 +163,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // update (SMAppService pins the daemon to the bundle version at register()
         // time → launchd refuses the updated binary, EX_CONFIG crash-loop, lid sleep
         // + remote wake silently dead). No-op unless the helper is already enabled.
+        // One-time: retire the legacy `.lidhelper` daemon label and re-pin lid-sleep
+        // under the new generic `.helper` label so the override survives the upgrade.
+        LidSleepHelper.migrateLegacyLabelOnLaunch()
         LidSleepHelper.healStaleRegistrationOnLaunch()
+        // Re-assert saved manual fan targets (no-op unless fan control is enabled).
+        // The daemon never persists fan state, so the app re-applies on every launch.
+        Task { await FanControlHelper.reapplyFromPreferences() }
         // Cross-device settings sync (no-op unless signed in + enabled).
         SyncCoordinator.shared.startup()
         // After a pulled snapshot is written to disk, reconcile live subsystems
@@ -258,6 +306,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // builds/tears down the divider status items.
             MenuBarManager.shared.menubarExtLive = self.menubarExtLive
             MenuBarManager.shared.reconcile()
+            // Enabling resumes live ordering without a relaunch; disabling stops the
+            // enforcer's 2s timer so it can't keep driving a torn-down bar.
+            self.reconcileMenuBarOrdering()
         }
 
         // Reconcile quicklinks with their human-editable file
@@ -304,6 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onOpenSettings: { [weak self] in self?.openSettings() },
             onCheckForUpdates: { AppUpdater.shared.checkForUpdates() },
             onRerunSetup: { [weak self] in self?.runModelSetup(force: true) },
+            onRestart: { AppDelegate.relaunch() },
             onQuit: { NSApp.terminate(nil) }
         )
         self.menuBar = menuBar
@@ -396,18 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MenuBarManager.shared.menubarExtLive = menubarExtLive
         MenuBarManager.shared.reconcile()
 
-        // Ordering engine: if opted-in on a supported OS, self-probe once at boot
-        // then arm the enforcer so live mode works without opening Settings. Probe
-        // spawns/removes two throwaway status items, so do it after the bar is built.
-        let orderStore = Preferences.menuBarOrderStore
-        if menubarExtLive, orderStore.enabled,
-           case .supported = MenuBarOrderingCapability.osSupport(
-               major: ProcessInfo.processInfo.operatingSystemVersion.majorVersion) {
-            Task { @MainActor in
-                let ok = await MenuBarItemMover.selfProbe()
-                MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: ok)
-            }
-        }
+        reconcileMenuBarOrdering()
 
         // E2E handshake (gated by PROSPER_E2E=1): tell the launching test process
         // whether the keystroke tap is live so it can proceed — or skip with a
@@ -830,6 +871,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Whether the Menu Bar Management extension is enabled + trusted.
     private var menubarExtLive: Bool {
         extensions.record(id: "com.prosper.menubar")?.isLive ?? false
+    }
+
+    /// Arm or disarm the menu-bar ordering enforcer to match current state. Called at
+    /// launch AND whenever the menubar extension is toggled at runtime (now the primary
+    /// path, since the extension ships opt-in/off). When live + opted-in on a supported
+    /// OS, self-probe (spawns/removes two throwaway status items, so run it after the
+    /// bar is built) then arm the enforcer so live mode works without opening Settings.
+    /// Otherwise disarm it — else disabling the extension would leave the live timer
+    /// (and its synthetic drags) running against a torn-down feature.
+    private func reconcileMenuBarOrdering() {
+        let orderStore = Preferences.menuBarOrderStore
+        guard menubarExtLive, orderStore.enabled,
+              case .supported = MenuBarOrderingCapability.osSupport(
+                  major: ProcessInfo.processInfo.operatingSystemVersion.majorVersion) else {
+            MenuBarOrderEnforcer.shared.update(store: .default, probeOK: false)  // stop live loop
+            return
+        }
+        Task { @MainActor in
+            let ok = await MenuBarItemMover.selfProbe()
+            MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: ok)
+        }
     }
 
     private func setDragSnap(enabled: Bool) {
