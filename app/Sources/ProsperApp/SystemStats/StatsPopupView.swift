@@ -621,18 +621,29 @@ struct StatsPopupView: View {
         fanBusy = true
         var t = Preferences.fanTargets
         for f in fansAdjustable { t[f.id] = clampRPM(f.current, f) }
+        let targets = t
         Task {
-            var ok = !t.isEmpty
-            for (i, rpm) in t { if await FanControlHelper.setManual(i, rpm: rpm) == false { ok = false } }
-            fanBusy = false
+            guard let first = targets.first else { fanBusy = false; return }
+            // Engage ONE fan first. This is what registers/approves the helper and runs
+            // the daemon's full AS unlock (Ftst + 3s thermalmonitord yield + spaced mode-
+            // key retries) — far slower than a steady commit, so give it a ceiling that
+            // clears the daemon's worst case instead of timing out mid-dance and lying.
+            // If it fails, the helper isn't available — bail now rather than repeat the
+            // same long wait per fan. On success the connection + unlock are live, so the
+            // remaining fans commit instantly at the default ceiling.
+            let ok = await FanControlHelper.setManual(first.key, rpm: first.value, timeout: 35)
             guard ok else {
+                fanBusy = false
                 fanError = "Couldn’t enable manual control — the Prosper helper isn’t "
-                    + "running. Approve it in System Settings ▸ General ▸ Login Items, then try again."
+                    + "running or wasn’t approved. Turn on “Prosper” under System Settings ▸ "
+                    + "General ▸ Login Items ▸ Allow in the Background, then try again."
                 return
             }
+            for (i, rpm) in targets where i != first.key { _ = await FanControlHelper.setManual(i, rpm: rpm) }
+            fanBusy = false
             fanManual = true
             Preferences.fanManualEnabled = true
-            Preferences.fanTargets = t; fanTargets = t
+            Preferences.fanTargets = targets; fanTargets = targets
         }
     }
 

@@ -30,8 +30,21 @@ private func CGSGetScreenRectForWindow(_ cid: Int32, _ wid: UInt32,
 
 // MARK: - Own-item registry (Tahoe self-filter source)
 
+/// Whether an own status item is chrome we hide from the managed set, or content
+/// the user wants to see and order.
+enum MenuBarItemRole {
+    /// Launcher icon, chevron, dividers — Prosper's own UI. Always self-filtered out.
+    case control
+    /// Stats modules, extension icons — our own data icons. KEPT in the managed list
+    /// (named + previewed from this registry) so the user can order/preview them;
+    /// ordering multi-icon apps like Stats is the whole point of the feature.
+    case content
+}
+
 /// Every `NSStatusItem` Prosper creates registers here so the menu-bar bridge can
-/// filter our own windows out of the foreign-item enumeration.
+/// (a) filter our own CHROME out of the foreign-item enumeration and (b) name +
+/// snapshot our own CONTENT icons, which Tahoe would otherwise reduce to "Item-0"
+/// with no picture.
 ///
 /// Why a registry instead of a pid check: on macOS 26 (Tahoe) the window server
 /// attributes EVERY menu-bar window — ours, third-party, all of them — to Control
@@ -40,24 +53,50 @@ private func CGSGetScreenRectForWindow(_ cid: Int32, _ wid: UInt32,
 /// The only reliable self-signal left is geometry: an item's on-screen `minX`
 /// (read from `item.button.window.frame`, which is correct — `NSApp.windows`
 /// reports a bogus (0,-33) frame for status windows) matches its CGS window's minX
-/// exactly. The bridge frame-matches these minX values to exclude our own windows.
+/// exactly. The bridge frame-matches these minX values.
 @MainActor
 enum ProsperStatusItems {
-    private static var items: [() -> NSStatusItem?] = []
+    struct Live { let minX: CGFloat; let role: MenuBarItemRole; let name: String?; let item: NSStatusItem }
+    private struct Entry { let provider: () -> NSStatusItem?; let role: MenuBarItemRole; let name: String? }
+    private static var entries: [Entry] = []
 
-    /// Register a Prosper-owned status item (idempotent enough — duplicates only cost
-    /// a redundant minX). Holds the item weakly so removed items drop out on the next
-    /// `ownMinX()` sweep.
-    static func register(_ item: NSStatusItem) {
-        items.append({ [weak item] in item })
+    /// Register a Prosper-owned status item. `role` defaults to `.control` (chrome);
+    /// pass `.content` + a human `name` for Stats/extension icons. Held weakly so
+    /// removed items drop out on the next sweep.
+    static func register(_ item: NSStatusItem, role: MenuBarItemRole = .control, name: String? = nil) {
+        entries.append(Entry(provider: { [weak item] in item }, role: role, name: name))
     }
 
-    /// On-screen `minX` of every live Prosper-owned status item. Compacts dead
-    /// weak refs as a side effect. Cheap (a handful of items) — called once per
-    /// enumeration, not per window.
-    static func ownMinX() -> [CGFloat] {
-        items.removeAll { $0() == nil }
-        return items.compactMap { $0()?.button?.window?.frame.minX }
+    /// Live snapshot of every own item with a resolvable on-screen minX. Compacts
+    /// dead weak refs. Cheap (a handful of items).
+    static func live() -> [Live] {
+        entries.removeAll { $0.provider() == nil }
+        return entries.compactMap { e in
+            guard let it = e.provider(), let x = it.button?.window?.frame.minX else { return nil }
+            return Live(minX: x, role: e.role, name: e.name, item: it)
+        }
+    }
+
+    /// minX of own CONTROL items only — the set the bridge self-filters out. Content
+    /// items stay in the managed list.
+    static func controlMinX() -> [CGFloat] { live().filter { $0.role == .control }.map(\.minX) }
+
+    /// Own CONTENT item whose on-screen minX matches `x` — supplies a real name + a
+    /// button to snapshot.
+    static func content(nearMinX x: CGFloat, tolerance: CGFloat = 2) -> Live? {
+        live().first { $0.role == .content && abs($0.minX - x) < tolerance }
+    }
+
+    /// Direct button snapshot of the own content item at `x` — no Screen Recording
+    /// needed (it's our own view). nil if no match or the button has no size yet.
+    static func snapshot(nearMinX x: CGFloat, tolerance: CGFloat = 2) -> NSImage? {
+        guard let hit = content(nearMinX: x, tolerance: tolerance),
+              let b = hit.item.button, b.bounds.width > 1, b.bounds.height > 1,
+              let rep = b.bitmapImageRepForCachingDisplay(in: b.bounds) else { return nil }
+        b.cacheDisplay(in: b.bounds, to: rep)
+        let img = NSImage(size: b.bounds.size)
+        img.addRepresentation(rep)
+        return img
     }
 }
 
@@ -73,6 +112,11 @@ struct MenuBarItem: Equatable, Sendable {
     /// OS window name (kCGWindowName). Per-item discriminator for the ordering
     /// engine pre-Tahoe; nil/"Menu Item" on Tahoe (the indexer fills identity then).
     var title: String?
+    /// True for Prosper's own CONTENT icons (Stats modules, extension icons). They
+    /// stay in the managed set but carry a real name/bundle from the registry instead
+    /// of Tahoe's "controlcenter / Item-0" masking — and preview from a direct button
+    /// snapshot rather than Screen Recording.
+    var isOwn: Bool = false
 }
 
 /// Reads the live menu bar via the private CGS list. Fail-open: any CGS error or
@@ -119,21 +163,30 @@ enum MenuBarBridge {
         // 2. One window-info pass to map windowID → (pid, name).
         let metaByWindow = windowMeta(for: windowIDs)
 
-        // 3. Build items, self-filtering by FRAME MATCH (Tahoe-safe; pid no longer
-        //    identifies our windows — see ProsperStatusItems) and per-display.
-        let ownX = ProsperStatusItems.ownMinX()
+        // 3. Build items, self-filtering OUR CHROME by FRAME MATCH (Tahoe-safe; pid no
+        //    longer identifies our windows — see ProsperStatusItems) and per-display.
+        //    Own CONTENT icons (Stats, extensions) are KEPT and enriched with a real
+        //    name/bundle from the registry (Tahoe masks them to controlcenter/Item-0).
+        let controlX = ProsperStatusItems.controlMinX()
+        let ownContent = ProsperStatusItems.live().filter { $0.role == .content }
         var out: [MenuBarItem] = []
         out.reserveCapacity(windowIDs.count)
         for wid in windowIDs {
             var rect = CGRect.zero
             guard CGSGetScreenRectForWindow(cid, wid, &rect) == .success,
                   rect.width > 0, rect.height > 0 else { continue }
-            if isOwn(minX: rect.minX, ownX) { continue }                       // F4 self-filter
-            guard displayID(for: rect) == display else { continue }            // F3 per-display
+            if controlX.contains(where: { abs($0 - rect.minX) < 2 }) { continue }  // F4 self-filter (chrome only)
+            guard displayID(for: rect) == display else { continue }                // F3 per-display
             let meta = metaByWindow[wid]
-            out.append(MenuBarItem(windowID: CGWindowID(wid), pid: meta?.pid ?? 0, frame: rect,
-                                   bundleID: (meta?.pid).flatMap { bundleID(for: $0) }, displayID: display,
-                                   title: meta?.name))
+            if let own = ownContent.first(where: { abs($0.minX - rect.minX) < 2 }) {
+                out.append(MenuBarItem(windowID: CGWindowID(wid), pid: getpid(), frame: rect,
+                                       bundleID: "com.prosper", displayID: display,
+                                       title: own.name ?? meta?.name, isOwn: true))
+            } else {
+                out.append(MenuBarItem(windowID: CGWindowID(wid), pid: meta?.pid ?? 0, frame: rect,
+                                       bundleID: (meta?.pid).flatMap { bundleID(for: $0) }, displayID: display,
+                                       title: meta?.name))
+            }
         }
         out.sort { $0.frame.minX < $1.frame.minX }
         return out
@@ -193,14 +246,14 @@ enum MenuBarBridge {
         guard err == .success else { return [] }
         let all = Array(ids.prefix(Int(max(0, n))))
         guard !all.isEmpty else { return [] }
-        let ownX = ProsperStatusItems.ownMinX()   // self-filter by frame match (Tahoe-safe)
+        let controlX = ProsperStatusItems.controlMinX()   // self-filter CHROME by frame match (Tahoe-safe)
         var pairs: [(id: CGWindowID, x: CGFloat)] = []
         pairs.reserveCapacity(all.count)
         for wid in all {
             var rect = CGRect.zero
             guard CGSGetScreenRectForWindow(cid, wid, &rect) == .success,
                   rect.width > 0, rect.height > 0, displayID(for: rect) == display else { continue }
-            if isOwn(minX: rect.minX, ownX) { continue }
+            if isOwn(minX: rect.minX, controlX) { continue }
             pairs.append((CGWindowID(wid), rect.minX))
         }
         return pairs.sorted { $0.x < $1.x }.map(\.id)

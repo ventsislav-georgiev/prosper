@@ -2786,15 +2786,25 @@ private struct MenuBarPane: View {
     /// back to placeholders too.
     private func capturePreviewIcons() {
         screenRecOK = MenuBarItemIndexer.hasPermission()
-        guard screenRecOK else { previewImages = [:]; return }
-        let items = sections.map(\.item)
-        Task {
-            let cgs = await MenuBarItemIndexer.images(for: items)
-            var out: [CGWindowID: NSImage] = [:]
-            for (wid, cg) in cgs {
-                out[wid] = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        // Own content icons (Stats, extensions) snapshot from their own button — no
+        // permission, always available, and the only correct picture on Tahoe.
+        var own: [CGWindowID: NSImage] = [:]
+        for entry in sections where entry.item.isOwn {
+            if let img = ProsperStatusItems.snapshot(nearMinX: entry.item.frame.minX) {
+                own[entry.item.windowID] = img
             }
-            previewImages = out
+        }
+        previewImages = own
+        // Foreign icons need Screen Recording (we can't read another app's pixels).
+        guard screenRecOK else { return }
+        let foreign = sections.map(\.item).filter { !$0.isOwn }
+        Task {
+            let cgs = await MenuBarItemIndexer.images(for: foreign)
+            var merged = own
+            for (wid, cg) in cgs {
+                merged[wid] = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            }
+            previewImages = merged
         }
     }
 
