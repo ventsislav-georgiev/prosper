@@ -36,12 +36,25 @@ struct MenuBarIdentity: Codable, Equatable, Hashable, Sendable {
         self.ocrName = ocrName
     }
 
-    /// "Menu Item" is Tahoe's placeholder for an unidentified item — treat it as no
-    /// title so it can't masquerade as a real discriminator.
+    /// "Menu Item" / "Item-0" / "Item 1" are Tahoe's placeholders for an item it
+    /// can't name — treat them as no title so they can't masquerade as a real
+    /// discriminator (and so such foreign items stay unresolved → out of the managed
+    /// set, instead of polluting the saved order as "Item-0").
     private var usableTitle: String? {
-        guard let t = title, !t.isEmpty, t != "Menu Item" else { return nil }
+        guard let t = title, !t.isEmpty, !MenuBarIdentity.isPlaceholderTitle(t) else { return nil }
         return t
     }
+
+    /// Tahoe names unidentifiable menu-bar items with the generic "Menu Item" or an
+    /// ordinal "Item-0" / "Item 1". None is a real, app-distinct discriminator.
+    static func isPlaceholderTitle(_ t: String) -> Bool {
+        t == "Menu Item" || t.range(of: #"^Item[ -]?\d+$"#, options: .regularExpression) != nil
+    }
+
+    /// True for items the engine can actually manage on this OS: our own icons
+    /// (`com.prosper`, always nameable + movable) or any foreign item with a real
+    /// identity. Tahoe placeholder items ("Item-0", unresolvable foreign) are not.
+    var isManageable: Bool { bundleID == "com.prosper" || isResolved }
 
     /// Stable matching key. Picks the strongest discriminator so two items of the
     /// same app don't collapse to one key. When none is available (unindexed on
