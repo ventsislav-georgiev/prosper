@@ -45,20 +45,33 @@ public struct CPUSample: Sendable, Equatable {
 
 public struct MemorySample: Sendable, Equatable {
     public let total: UInt64
-    public let used: UInt64           // active + wired + compressed (the "real" pressure)
+    public let used: UInt64           // app + wired + compressed (matches Activity Monitor)
     public let app: UInt64
     public let wired: UInt64
     public let compressed: UInt64
     public let free: UInt64
-    public let pressure: Double       // 0...1
+    public let pressure: Double       // 0...1 (used/total proxy, drives the chart)
     public let swapUsed: UInt64
+    public let swapTotal: UInt64
+    /// Kernel memory-pressure level from `kern.memorystatus_vm_pressure_level`:
+    /// 1=normal, 2=warning, 4=critical (0 if unread). The true signal, unlike the
+    /// `pressure` fraction above which is only a used/total approximation.
+    public let pressureLevel: Int
     public init(total: UInt64, used: UInt64, app: UInt64, wired: UInt64,
-                compressed: UInt64, free: UInt64, pressure: Double, swapUsed: UInt64) {
+                compressed: UInt64, free: UInt64, pressure: Double, swapUsed: UInt64,
+                swapTotal: UInt64 = 0, pressureLevel: Int = 0) {
         self.total = total; self.used = used; self.app = app; self.wired = wired
         self.compressed = compressed; self.free = free; self.pressure = pressure
-        self.swapUsed = swapUsed
+        self.swapUsed = swapUsed; self.swapTotal = swapTotal; self.pressureLevel = pressureLevel
     }
     public var usedFraction: Double { total == 0 ? 0 : Double(used) / Double(total) }
+    /// Human pressure state from the kernel level (falls back to the fraction).
+    public var pressureState: String {
+        switch pressureLevel {
+        case 4: "Critical"; case 2: "Warning"; case 1: "Normal"
+        default: pressure > 0.8 ? "High" : "Normal"
+        }
+    }
 }
 
 public struct NetworkSample: Sendable, Equatable {

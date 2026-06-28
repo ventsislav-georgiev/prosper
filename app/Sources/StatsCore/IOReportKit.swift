@@ -18,10 +18,12 @@ public struct PowerSample: Sendable, Equatable {
     public let cpuWatts: Double
     public let gpuWatts: Double
     public let aneWatts: Double      // Apple Neural Engine
+    public let dramWatts: Double     // DRAM (0 if the SoC doesn't report it)
     public let totalWatts: Double
-    public init(cpuWatts: Double, gpuWatts: Double, aneWatts: Double, totalWatts: Double) {
+    public init(cpuWatts: Double, gpuWatts: Double, aneWatts: Double,
+                dramWatts: Double = 0, totalWatts: Double) {
         self.cpuWatts = cpuWatts; self.gpuWatts = gpuWatts
-        self.aneWatts = aneWatts; self.totalWatts = totalWatts
+        self.aneWatts = aneWatts; self.dramWatts = dramWatts; self.totalWatts = totalWatts
     }
 }
 
@@ -95,7 +97,7 @@ public final class IOReportKit {
         guard let cur = createSamples(subscription, channels, nil)?.takeRetainedValue() else { return nil }
         let t = now()
         defer { prevSample = cur; prevTime = t }
-        guard let prev = prevSample else { return PowerSample(cpuWatts: 0, gpuWatts: 0, aneWatts: 0, totalWatts: 0) }
+        guard let prev = prevSample else { return PowerSample(cpuWatts: 0, gpuWatts: 0, aneWatts: 0, totalWatts: 0) }   // seed
         let dt = max(t - prevTime, 0.0001)
         guard let d = delta(prev, cur, nil)?.takeRetainedValue() else { return nil }
 
@@ -116,6 +118,7 @@ public final class IOReportKit {
             case "CPU Energy":               energyJ["cpu", default: 0] += joules
             case "GPU Energy":               energyJ["gpu", default: 0] += joules
             case "ANE", "ANE Energy":        energyJ["ane", default: 0] += joules
+            case "DRAM", "DRAM Energy":      energyJ["dram", default: 0] += joules
             default: break
             }
             return 0
@@ -123,6 +126,8 @@ public final class IOReportKit {
         let cpu = (energyJ["cpu"] ?? 0) / dt
         let gpu = (energyJ["gpu"] ?? 0) / dt
         let ane = (energyJ["ane"] ?? 0) / dt
-        return PowerSample(cpuWatts: cpu, gpuWatts: gpu, aneWatts: ane, totalWatts: cpu + gpu + ane)
+        let dram = (energyJ["dram"] ?? 0) / dt
+        return PowerSample(cpuWatts: cpu, gpuWatts: gpu, aneWatts: ane,
+                           dramWatts: dram, totalWatts: cpu + gpu + ane + dram)
     }
 }

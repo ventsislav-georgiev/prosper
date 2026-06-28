@@ -47,10 +47,17 @@ public struct NetworkReader: StatsReader {
                                  totalUploaded: 0, totalDownloaded: 0)
         }
         let dt = max(t - prevTime, 0.0001)
-        let dIn = UInt64(inB &- prevIn)     // wrap-safe
-        let dOut = UInt64(outB &- prevOut)
-        cumIn += dIn; cumOut += dOut
+        var dIn = UInt64(inB &- prevIn)     // wrap-safe
+        var dOut = UInt64(outB &- prevOut)
         prevIn = inB; prevOut = outB; prevTime = t
+        // A 32-bit counter reset (iface down/up, not a true ~4 GB wrap) shows as a
+        // near-2^32 delta and `&-` can't tell it from real traffic. Gate on a sane
+        // ceiling — 25 GB/s is above any Mac NIC/Thunderbolt link — and drop the
+        // glitch so it poisons neither the rate nor the cumulative totals.
+        let maxBytes = UInt64(25_000_000_000 * dt)
+        if dIn > maxBytes { dIn = 0 }
+        if dOut > maxBytes { dOut = 0 }
+        cumIn += dIn; cumOut += dOut
 
         if linkTick % 10 == 0 { link = primaryLink() }   // ~10 s; identity rarely changes
         linkTick += 1
