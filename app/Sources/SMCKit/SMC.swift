@@ -144,6 +144,27 @@ public final class SMC {
         (try? keyInfo(smcFourCC(keyStr))) != nil
     }
 
+    /// Total SMC key count from the `#KEY` register (ui32). 0 if unreadable.
+    public func keyCount() -> Int {
+        guard let (b, _) = try? readRaw("#KEY"), b.count >= 4 else { return 0 }
+        return Int(UInt32(b[0]) << 24 | UInt32(b[1]) << 16 | UInt32(b[2]) << 8 | UInt32(b[3]))
+    }
+
+    /// The FourCC key name at an enumeration index (getKeyFromIndex), or nil.
+    public func keyAt(_ index: Int) -> String? {
+        var input = SMCParamStruct()
+        input.data8 = SMCCmd.getKeyFromIndex.rawValue
+        input.data32 = UInt32(index)
+        guard let out = try? callStruct(&input), out.key != 0 else { return nil }
+        return smcKeyString(out.key)
+    }
+
+    /// Every SMC key name. One firmware call per key — enumerate ONCE off the hot
+    /// path (the key set is static for a boot), then `read()` only what you need.
+    public func allKeys() -> [String] {
+        (0..<keyCount()).compactMap { keyAt($0) }
+    }
+
     /// Decoded scalar read. Returns nil if the key is absent.
     public func read(_ keyStr: String) -> SMCValue? {
         guard let (bytes, type) = try? readRaw(keyStr) else { return nil }

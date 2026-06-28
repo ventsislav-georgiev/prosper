@@ -220,6 +220,11 @@ struct StatsPopupView: View {
             kv("Idle", StatsFormat.percent(c.idle))
             if !c.efficiency.isNaN { kv("Efficiency cores", StatsFormat.percent(c.efficiency)) }
             if !c.performance.isNaN { kv("Performance cores", StatsFormat.percent(c.performance)) }
+            if !c.freqE.isNaN || !c.freqP.isNaN {
+                sectionHeader("FREQUENCY")
+                if !c.freqE.isNaN { kv("Efficiency", String(format: "%.2f GHz", c.freqE)) }
+                if !c.freqP.isNaN { kv("Performance", String(format: "%.2f GHz", c.freqP)) }
+            }
             if c.loadAverage.count == 3 || c.uptimeSeconds > 0 {
                 sectionHeader("SYSTEM")
                 if c.loadAverage.count == 3 {
@@ -278,6 +283,7 @@ struct StatsPopupView: View {
             if !g.tilerUtil.isNaN { kv("Tiler", StatsFormat.percent(g.tilerUtil)) }
             if g.usedMemory > 0 { kv("VRAM in use", StatsFormat.bytes(Double(g.usedMemory))) }
             if g.coreCount > 0 { kv("GPU cores", "\(g.coreCount)") }
+            if !g.fps.isNaN && g.fps > 0 { kv("Frames presented", String(format: "%.0f fps", g.fps)) }
         }
     }
 

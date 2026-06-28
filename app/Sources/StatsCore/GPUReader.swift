@@ -15,15 +15,24 @@ public struct GPUSample: Sendable, Equatable {
     public let renderUtil: Double       // 0...1 renderer (NaN if unreported)
     public let tilerUtil: Double        // 0...1 tiler (NaN if unreported)
     public let coreCount: Int           // GPU cores, 0 if unreported
+    public let fps: Double              // presented frames/sec (NaN if unreported)
     public init(utilization: Double, name: String, usedMemory: UInt64,
-                renderUtil: Double = .nan, tilerUtil: Double = .nan, coreCount: Int = 0) {
+                renderUtil: Double = .nan, tilerUtil: Double = .nan, coreCount: Int = 0,
+                fps: Double = .nan) {
         self.utilization = utilization; self.name = name; self.usedMemory = usedMemory
         self.renderUtil = renderUtil; self.tilerUtil = tilerUtil; self.coreCount = coreCount
+        self.fps = fps
     }
 }
 
 public struct GPUReader: StatsReader {
-    public init() {}
+    // Reference type: presented-frame counters persist across reads. nil when the
+    // DCP IOReport group is unavailable → fps stays NaN.
+    private let frameRate: GPUFrameRate?
+
+    public init(frameRate: Bool = true) {
+        self.frameRate = frameRate ? GPUFrameRate() : nil
+    }
 
     public mutating func read() throws -> GPUSample {
         var iter: io_iterator_t = 0
@@ -64,6 +73,10 @@ public struct GPUReader: StatsReader {
             found = true
         }
         guard found else { throw StatsError.unavailable("IOAccelerator: no nub") }
-        return best
+        // FPS spans all displays, not a single nub — read once and stamp it on.
+        let fps = frameRate?.read() ?? .nan
+        return GPUSample(utilization: best.utilization, name: best.name, usedMemory: best.usedMemory,
+                         renderUtil: best.renderUtil, tilerUtil: best.tilerUtil,
+                         coreCount: best.coreCount, fps: fps)
     }
 }

@@ -36,6 +36,80 @@ final class GPUReaderTests: XCTestCase {
     }
 }
 
+final class CPUFrequencyTests: XCTestCase {
+    func testFreqTablesDecodeToSaneGHz() throws {
+        guard SystemFacts.current.isAppleSilicon else { throw XCTSkip("freq tables Apple-Silicon only") }
+        let (e, p) = CPUFrequency.readFreqTables()
+        XCTAssertFalse(e.isEmpty && p.isEmpty, "expected E or P DVFS table on Apple Silicon")
+        for (label, tbl) in [("E", e), ("P", p)] where !tbl.isEmpty {
+            // Monotonic-ish, all in a plausible per-state range.
+            for f in tbl { XCTAssert(f > 0.3 && f < 8.0, "\(label) state \(f)GHz out of range") }
+            XCTAssert(tbl.max()! > 1.5, "\(label) max \(tbl.max()!)GHz too low")
+        }
+        print("Freq tables: E maxGHz=\(String(format: "%.2f", e.max() ?? 0)) P maxGHz=\(String(format: "%.2f", p.max() ?? 0))")
+    }
+
+    func testResidencyWeightedFreqInRange() throws {
+        guard let f = CPUFrequency(minInterval: 0) else { throw XCTSkip("CPU Stats / DVFS unavailable") }
+        _ = f.read()                       // seed
+        Thread.sleep(forTimeInterval: 0.3)
+        let (e, p) = f.read()
+        // NaN allowed (cluster parked all interval); any number must be sane GHz.
+        for (label, v) in [("E", e), ("P", p)] where !v.isNaN {
+            XCTAssert(v > 0.3 && v < 8.0, "\(label) weighted \(v)GHz out of range")
+        }
+        print("Weighted freq: E=\(String(format: "%.2f", e)) P=\(String(format: "%.2f", p)) GHz")
+    }
+
+    // Hot path: CPUReader.read() runs every fast tick and calls freq.read().
+    // The throttle must keep that amortized cost near-zero (cached between
+    // ~1.5s samples) — a regression that removed it would jump to ~7ms/tick.
+    func testThrottledReadIsCheapOnHotPath() throws {
+        guard let f = CPUFrequency() else { throw XCTSkip("CPU Stats unavailable") }
+        _ = f.read()                                   // seed + arm throttle
+        let start = Date()
+        for _ in 0..<1000 { _ = f.read() }             // all within the throttle window
+        let ms = Date().timeIntervalSince(start) * 1000 / 1000
+        print("CPUFrequency.read (throttled) avg \(String(format: "%.4f", ms))ms")
+        XCTAssert(ms < 0.5, "throttled freq read \(ms)ms — throttle regressed?")
+    }
+
+    // A forced fresh sample is IOReport-bound (samples the whole CPU Stats group).
+    // Documented ceiling, not a hot-path number — it only runs ~every 1.5s.
+    func testFreshSampleBounded() throws {
+        guard let f = CPUFrequency(minInterval: 0) else { throw XCTSkip("CPU Stats unavailable") }
+        _ = f.read(); Thread.sleep(forTimeInterval: 0.05)
+        let start = Date()
+        _ = f.read()
+        let ms = Date().timeIntervalSince(start) * 1000
+        print("CPUFrequency fresh sample \(String(format: "%.2f", ms))ms")
+        XCTAssert(ms < 20.0, "fresh IOReport sample \(ms)ms implausibly slow")
+    }
+}
+
+final class GPUFrameRateTests: XCTestCase {
+    func testFrameRateInRange() throws {
+        guard let fr = GPUFrameRate(minInterval: 0) else { throw XCTSkip("DCP IOReport unavailable") }
+        _ = fr.read()                      // seed
+        Thread.sleep(forTimeInterval: 0.5)
+        let fps = fr.read()
+        // 0 (static screen, no swaps) up to a generous multi-display ceiling.
+        XCTAssert(fps.isNaN || (fps >= 0 && fps < 1000), "fps \(fps) implausible")
+        print("GPU fps: \(String(format: "%.1f", fps))")
+    }
+
+    // GPUReader.read() runs every fast tick; the throttle keeps fps amortized cheap.
+    func testThrottledReadIsCheap() throws {
+        guard let fr = GPUFrameRate() else { throw XCTSkip("DCP unavailable") }
+        _ = fr.read()
+        let start = Date()
+        for _ in 0..<1000 { _ = fr.read() }
+        let ms = Date().timeIntervalSince(start) * 1000 / 1000
+        print("GPUFrameRate.read (throttled) avg \(String(format: "%.4f", ms))ms")
+        XCTAssert(ms < 0.5, "throttled fps read \(ms)ms — throttle regressed?")
+    }
+}
+
 final class IOReportKitTests: XCTestCase {
     func testPowerNonNegativeAndBounded() throws {
         guard let k = IOReportKit() else { throw XCTSkip("libIOReport unavailable") }
