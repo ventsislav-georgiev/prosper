@@ -1,0 +1,42 @@
+# Input Switcher — set the keyboard input source per focused app. A default input
+# for every app, plus per-app overrides chosen from an app picker. On each app
+# activation the matching source is selected via Carbon TIS (host.keyboard).
+# Stateless: each focus change is one `on_app` invocation; nothing resident.
+# Native port of the common Hammerspoon hs.application.watcher + hs.keycodes recipe.
+[extension]
+id          = "com.prosper.inputswitch"
+name        = "inputswitch"
+title       = "Input Switcher"
+description = "Switch the keyboard input source automatically by focused app: pick a default input for all apps and per-app overrides."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "globe"
+system      = true
+# Opt-in: silently changing the keyboard layout on focus is surprising, so it ships
+# OFF. The user turns it on in Settings › Extensions.
+default_disabled = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Each frontmost-app change arrives as app.activated { bundleID, name, pid } and
+# selects this app's input source (override, else the default).
+[[contributes.events]]
+event   = "app.activated"
+handler = "on_app"
+
+# Dynamic (Tier-B) settings: the default input picker + the per-app override list
+# (Add App… opens a native picker). Rendered by `settings_render`, edited via
+# `settings_action`. No hardcoded apps — everything lives in host.prefs.
+[[contributes.settings_sections]]
+id       = "inputswitch"
+title    = "Input Switcher"
+icon     = "globe"
+accent   = "inputswitch"
+subtitle = "Switch keyboard input source by focused app"
+dynamic  = true

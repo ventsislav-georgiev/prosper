@@ -47,12 +47,16 @@ public struct CPUReader: StatsReader {
             }
         }
 
+        let loadAvg = Self.loadAverage()
+        let uptime = Self.uptimeSeconds()
+
         // First read: store baseline, report idle (no prior delta to rate).
         guard prev.count == n else {
             prev = cur
             return CPUSample(total: 0, performance: 0, efficiency: 0,
                              system: 0, user: 0, idle: 1,
-                             perCore: Array(repeating: 0, count: n))
+                             perCore: Array(repeating: 0, count: n),
+                             loadAverage: loadAvg, uptimeSeconds: uptime)
         }
 
         var perCore = [Double](repeating: 0, count: n)
@@ -69,7 +73,8 @@ public struct CPUReader: StatsReader {
         }
         prev = cur
 
-        let total = sumTotal > 0 ? (sumUser + sumSys + (sumTotal - sumUser - sumSys - sumIdle)) / sumTotal : 0
+        // Total busy = everything not idle (includes nice), matching Activity Monitor.
+        let total = sumTotal > 0 ? (sumTotal - sumIdle) / sumTotal : 0
         let (eLoad, pLoad) = clusterLoads(perCore)
         return CPUSample(
             total: max(0, min(1, total)),
@@ -78,7 +83,21 @@ public struct CPUReader: StatsReader {
             system: sumTotal > 0 ? sumSys / sumTotal : 0,
             user: sumTotal > 0 ? sumUser / sumTotal : 0,
             idle: sumTotal > 0 ? sumIdle / sumTotal : 1,
-            perCore: perCore)
+            perCore: perCore,
+            loadAverage: loadAvg, uptimeSeconds: uptime)
+    }
+
+    /// 1/5/15-minute run-queue load averages via libc `getloadavg`.
+    static func loadAverage() -> [Double] {
+        var l = [Double](repeating: 0, count: 3)
+        return getloadavg(&l, 3) == 3 ? l : []
+    }
+
+    /// Seconds since boot from `kern.boottime` (wall-clock delta).
+    static func uptimeSeconds() -> Int {
+        var bt = timeval(); var size = MemoryLayout<timeval>.stride
+        guard sysctlbyname("kern.boottime", &bt, &size, nil, 0) == 0, bt.tv_sec != 0 else { return 0 }
+        return max(0, Int(time(nil) - bt.tv_sec))
     }
 
     /// Average load of the E and P clusters from the per-core array.

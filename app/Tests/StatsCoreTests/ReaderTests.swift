@@ -25,6 +25,29 @@ final class CPUReaderTests: XCTestCase {
     }
 }
 
+final class CPUExtraFieldsTests: XCTestCase {
+    func testLoadAverageAndUptime() throws {
+        var r = CPUReader()
+        let s = try r.read()
+        // getloadavg returns 3 values or nothing; never partial.
+        XCTAssert(s.loadAverage.isEmpty || s.loadAverage.count == 3)
+        for v in s.loadAverage { XCTAssert(v >= 0 && v.isFinite, "loadavg \(v)") }
+        XCTAssertGreaterThan(s.uptimeSeconds, 0, "machine has been up")
+    }
+}
+
+final class NetworkLinkFieldsTests: XCTestCase {
+    func testLinkFieldsWellFormed() throws {
+        var r = NetworkReader()
+        let s = try r.read()   // tick 0 resolves link
+        if let ip = s.ipv4 {
+            XCTAssertEqual(ip.split(separator: ".").count, 4, "ipv4 dotted-quad: \(ip)")
+        }
+        // name/ssid are environment-dependent (nil in headless CI) — just no crash.
+        _ = (s.interfaceName, s.ssid)
+    }
+}
+
 final class MemoryReaderTests: XCTestCase {
     func testReadIsSane() throws {
         var r = MemoryReader()
@@ -98,5 +121,19 @@ final class HotPathBudgetTests: XCTestCase {
         let perRead = (NetworkReader.monotonicSeconds() - start) / Double(iters)
         XCTAssertLessThan(perRead, 0.005, "net read \(perRead * 1e6)µs > 5ms budget")
         print("net read: \(String(format: "%.1f", perRead * 1e6))µs/read")
+    }
+
+    // The averaged net read amortizes the every-10th-tick link resolve. Guard the
+    // resolve path itself (SCDynamicStore + getifaddrs + CoreWLAN) so a regression
+    // there can't hide behind the average. It runs at most every 10 s in the field.
+    func testLinkResolveUnderBudget() throws {
+        let r = NetworkReader()
+        _ = r.primaryLink()                 // warm caches
+        let iters = 100
+        let start = NetworkReader.monotonicSeconds()
+        for _ in 0..<iters { _ = r.primaryLink() }
+        let perCall = (NetworkReader.monotonicSeconds() - start) / Double(iters)
+        XCTAssertLessThan(perCall, 0.003, "link resolve \(perCall * 1e6)µs > 3ms budget")
+        print("link resolve: \(String(format: "%.1f", perCall * 1e6))µs/call")
     }
 }

@@ -84,7 +84,7 @@ enum PermissionsManager {
             // opens Login Items itself when approval is needed; always surface the
             // pane so the user can manage it even when already registered.
             Task { @MainActor in
-                _ = await LidSleepHelper.ensureRegistered()
+                _ = await LidSleepHelper.ensureRegistered(presentModal: false)
                 SMAppService.openSystemSettingsLoginItems()
             }
         default: break

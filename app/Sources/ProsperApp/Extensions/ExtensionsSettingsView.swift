@@ -11,10 +11,9 @@ struct ExtensionsPane: View {
 
     @State private var checkingUpdates = false
 
-    // Per-section collapse state, persisted across opens (user > system > marketplace).
+    // Per-section collapse state, persisted across opens (user > system).
     @AppStorage("ext.collapse.user") private var userCollapsed = true
     @AppStorage("ext.collapse.system") private var systemCollapsed = true
-    @AppStorage("ext.collapse.market") private var marketCollapsed = false
 
     private var userRecords: [ExtensionRecord] { registry.records.filter { !$0.isSystem } }
     private var systemRecords: [ExtensionRecord] { registry.records.filter(\.isSystem) }
@@ -43,9 +42,19 @@ struct ExtensionsPane: View {
             }
             .padding(.bottom, sz(2))
 
-            // Marketplace first (discovery), then user-installed (what the user added /
-            // is publishing), then the bundled system ones.
-            MarketBrowseSection(registry: registry, collapsed: $marketCollapsed)
+            // Discovery lives in its own window — a marketplace full of packages wants
+            // room to search/sort/scroll, which would crowd this settings pane.
+            HStack {
+                Button {
+                    MarketplaceWindow.shared.show()
+                } label: {
+                    Label("Browse Marketplace", systemImage: "bag")
+                }
+                .buttonStyle(.neon)
+                .help("Open the extension marketplace in its own window")
+                Spacer()
+            }
+            .padding(.bottom, sz(4))
 
             NeonSection("User Extensions", collapsed: $userCollapsed) {
                 HStack {
@@ -331,179 +340,5 @@ private extension View {
             .onHover { inside in
                 if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
-    }
-}
-
-/// Marketplace browse + one-click install. Installed packages land UNTRUSTED — the
-/// user reviews + trusts them in the Installed list above.
-private struct MarketBrowseSection: View {
-    @ObservedObject var registry: ExtensionRegistry
-    @Binding var collapsed: Bool
-
-    /// All | Themes | Extensions. nil kind = no server filter.
-    private enum Category: String, CaseIterable, Identifiable {
-        case all = "All", themes = "Themes", extensions = "Extensions"
-        var id: String { rawValue }
-        var kind: String? {
-            switch self {
-            case .all: return nil
-            case .themes: return "theme"
-            case .extensions: return "extension"
-            }
-        }
-    }
-
-    @State private var query = ""
-    @State private var category: Category = .all
-    @State private var packages: [MarketClient.Package] = []
-    @State private var loading = false
-    @State private var installingID: String?
-    @State private var error: String?
-
-    private var installedIDs: Set<String> { Set(registry.records.map(\.id)) }
-
-    var body: some View {
-        NeonSection("Marketplace",
-                    footer: "Anyone can publish. Installed extensions stay inert until you review and trust them.",
-                    collapsed: $collapsed) {
-            Picker("", selection: $category) {
-                ForEach(Category.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .onChange(of: category) { _ in load() }
-
-            HStack {
-                TextField("Search", text: $query)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(load)
-                if loading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button("Search", action: load).rowAction()
-                }
-            }
-            if let error {
-                Text(error).font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
-            }
-            ForEach(packages) { pkg in
-                NeonDivider()
-                row(pkg)
-            }
-            if packages.isEmpty && !loading {
-                Text("No packages.").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-            }
-        }
-        .onAppear { if packages.isEmpty { load() } }
-    }
-
-    private func row(_ pkg: MarketClient.Package) -> some View {
-        VStack(alignment: .leading, spacing: sz(6)) {
-            HStack(alignment: .top) {
-                Image(systemName: pkg.icon ?? (pkg.isTheme ? "paintpalette" : "puzzlepiece.extension"))
-                    .foregroundColor(.accentColor).frame(width: sz(22))
-                VStack(alignment: .leading, spacing: sz(2)) {
-                    HStack(spacing: sz(6)) {
-                        Text(pkg.title).font(Neon.font(.body)).bold()
-                        if pkg.isTheme {
-                            Text("THEME").font(Neon.font(.caption2)).bold()
-                                .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
-                                .background(Color.accentColor.opacity(0.25))
-                                .clipShape(Capsule())
-                        }
-                        Text("v\(pkg.latestVersion)").font(Neon.font(.caption)).foregroundColor(.secondary)
-                    }
-                    Text(pkg.description).font(Neon.font(.caption)).foregroundColor(.secondary)
-                    Text("by \(pkg.author) · \(pkg.downloads) downloads")
-                        .font(Neon.font(.caption2)).foregroundColor(.secondary)
-                }
-                Spacer()
-                if installingID == pkg.id {
-                    ProgressView().controlSize(.small)
-                } else if installedIDs.contains(pkg.id) {
-                    Text("Installed").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-                } else {
-                    Button("Install") { install(pkg) }.buttonStyle(.neon)
-                }
-            }
-            if let preview = pkg.preview {
-                ForEach(Array(preview.themes.enumerated()), id: \.offset) { _, swatch in
-                    ThemePreviewStrip(swatch: swatch)
-                }
-            }
-        }
-        .padding(.vertical, sz(4))
-    }
-
-    private func load() {
-        loading = true
-        error = nil
-        let q = query.trimmingCharacters(in: .whitespaces)
-        let kind = category.kind
-        Task {
-            let result = await MarketClient.browse(query: q, kind: kind)
-            await MainActor.run { packages = result.packages; loading = false }
-        }
-    }
-
-    private func install(_ pkg: MarketClient.Package) {
-        installingID = pkg.id
-        error = nil
-        Task {
-            do {
-                try await registry.installFromMarket(id: pkg.id, version: pkg.latestVersion)
-                await MainActor.run { installingID = nil }
-            } catch {
-                await MainActor.run {
-                    installingID = nil
-                    self.error = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-                }
-            }
-        }
-    }
-}
-
-/// A miniature app mock that demonstrates a theme's look and feel: window
-/// background, a sidebar strip, a card with two text lines, and the accent
-/// swatches. Unknown tokens fall back to grey so a partial palette still renders.
-private struct ThemePreviewStrip: View {
-    let swatch: MarketClient.ThemePreview.Swatch
-
-    private func c(_ token: String) -> Color {
-        swatch.colors[token].flatMap(Color.init(hex:)) ?? Color.gray.opacity(0.4)
-    }
-
-    var body: some View {
-        HStack(spacing: 0) {
-            // Sidebar.
-            c("sidebar").frame(width: sz(16))
-            // Content: card with two "text" lines over the window background.
-            ZStack {
-                LinearGradient(colors: [c("bgTop"), c("bgBottom")],
-                               startPoint: .top, endPoint: .bottom)
-                HStack(spacing: sz(8)) {
-                    RoundedRectangle(cornerRadius: sz(4))
-                        .fill(c("card"))
-                        .overlay(
-                            VStack(alignment: .leading, spacing: sz(3)) {
-                                Capsule().fill(c("textPrimary")).frame(width: sz(46), height: sz(4))
-                                Capsule().fill(c("textSecondary")).frame(width: sz(30), height: sz(3))
-                            }, alignment: .topLeading)
-                        .padding(sz(6))
-                    Spacer(minLength: 0)
-                    // Accent dots.
-                    HStack(spacing: sz(4)) {
-                        ForEach(["blue", "indigo", "magenta", "terminal"], id: \.self) { tok in
-                            Circle().fill(c(tok)).frame(width: sz(7), height: sz(7))
-                        }
-                    }
-                    .padding(.trailing, sz(8))
-                }
-            }
-        }
-        .frame(height: sz(44))
-        .clipShape(RoundedRectangle(cornerRadius: sz(6)))
-        .overlay(RoundedRectangle(cornerRadius: sz(6)).strokeBorder(.white.opacity(0.08)))
-        .help("\(swatch.title) · \(swatch.appearance ?? "dark")")
     }
 }

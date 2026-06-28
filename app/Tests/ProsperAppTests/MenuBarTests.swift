@@ -507,16 +507,19 @@ final class MenuBarTests: XCTestCase {
     }
 
     /// Reorder planning over a 30-item bar (worst case: full reversal). Budget is a
-    /// DEBUG-build ceiling (≈10× slower than release) chosen to catch an accidental
-    /// O(n³)+ blow-up of the splice, not to assert release latency: ≤ 200 ms / 1000
-    /// plans (≈200 µs/plan debug, ≈20 µs release — fine at menu-bar scale).
+    /// DEBUG-build ceiling chosen to catch an accidental O(n³)+ blow-up of the splice,
+    /// NOT to assert release latency. The O(n²) baseline measures ~215 ms/1000 plans
+    /// at idle on an M-series debug build and 300+ ms under load, so the old 200 ms
+    /// ceiling flaked red with no real regression. 500 ms keeps a real blow-up caught
+    /// (an O(n³) reversal would be 20×+ slower → multiple seconds) while absorbing
+    /// debug + machine-load variance. Release is ~20 µs/plan — irrelevant at bar scale.
     func testReorderPlanningIsCheap() {
         let current = (0..<30).map { "k\($0)" }
         let desired = current.reversed().map { $0 }
         let start = Date()
         for _ in 0..<1000 { _ = MenuBarOrderDiff.reorderMoves(current: current, desired: desired) }
         let elapsed = Date().timeIntervalSince(start)
-        XCTAssertLessThan(elapsed, 0.200, "reorder planning too slow: \(elapsed * 1000) ms / 1000 plans")
+        XCTAssertLessThan(elapsed, 0.500, "reorder planning too slow: \(elapsed * 1000) ms / 1000 plans")
     }
 
     /// dHash + nearest-match over a 72-byte buffer + 30 candidates. DEBUG-build
@@ -548,5 +551,28 @@ final class MenuBarTests: XCTestCase {
                                               MenuBarPerceptualHash.dHash(gray9x8: b))
         XCTAssertGreaterThan(d, MenuBarArranger.hashMatchTolerance,
                              "mirrored glyphs only \(d) apart — tolerance \(MenuBarArranger.hashMatchTolerance) too loose")
+    }
+
+    /// The enforcer must disarm its live timer when handed a disabled store — this is
+    /// what stops the 2s loop (and its synthetic drags) the instant the menu-bar
+    /// extension is toggled off at runtime. Arm it first, then confirm disarm.
+    @MainActor
+    func testEnforcerDisarmsOnDisabledStore() {
+        var live = MenuBarOrderStore()
+        live.enabled = true
+        live.mode = .live
+        live.desiredOrder = [MenuBarIdentity(bundleID: "a", title: "A"),
+                             MenuBarIdentity(bundleID: "b", title: "B")]
+
+        let enforcer = MenuBarOrderEnforcer.shared
+        enforcer.update(store: live, probeOK: true)
+        XCTAssertTrue(enforcer.isLiveRunning, "live store + probe ⇒ timer armed")
+
+        enforcer.update(store: .default, probeOK: false)   // extension disabled
+        XCTAssertFalse(enforcer.isLiveRunning, "disabled store must stop the live loop")
+
+        // Also: even an enabled store with probe failed must NOT run (self-probe gate).
+        enforcer.update(store: live, probeOK: false)
+        XCTAssertFalse(enforcer.isLiveRunning, "probe-failed must not arm the loop")
     }
 }

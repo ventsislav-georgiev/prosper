@@ -166,6 +166,10 @@ final class ExtensionRegistry: ObservableObject {
     private let log = Logger(subsystem: "com.prosper.app", category: "extensions")
 
     private static let disabledKey = "disabledExtensionIDs"
+    /// Turn-ONS for opt-in (`default_disabled`) extensions. The disabled set is the
+    /// inverse default (everything on unless listed); opt-in flips it (everything off
+    /// unless listed) so a brand-new opt-in extension stays inert until the user acts.
+    private static let enabledKey = "enabledExtensionIDs"
     private static let trustedKey = "trustedExtensionIDs"
     private static let privilegedKey = "privilegedExtensionIDs"
 
@@ -285,6 +289,7 @@ final class ExtensionRegistry: ObservableObject {
 
         var found: [ExtensionRecord] = []
         let disabled = disabledIDs()
+        let optedIn = enabledIDs()
         var seen = Set<String>()
 
         // A missing/unreadable userDir = zero user extensions. Fall through (don't
@@ -306,8 +311,13 @@ final class ExtensionRegistry: ObservableObject {
                     continue
                 }
                 seen.insert(loaded.id)
+                // Opt-in extensions are off unless the user turned them on; everything
+                // else is on unless the user turned it off.
+                let isEnabled = loaded.manifest.extension.defaultDisabled
+                    ? optedIn.contains(loaded.id)
+                    : !disabled.contains(loaded.id)
                 found.append(ExtensionRecord(loaded: loaded,
-                                             enabled: !disabled.contains(loaded.id),
+                                             enabled: isEnabled,
                                              trusted: false))
             } catch {
                 log.error("failed to load extension at \(entry.path, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -868,6 +878,7 @@ final class ExtensionRegistry: ObservableObject {
         }
         asyncRuntimes.invalidate(id: id)        // and its off-main twin
         persistDisabled()
+        persistEnabled()
         rebuildRoutes()
         objectWillChange.send()
         onEnabledChanged?()
@@ -1075,8 +1086,23 @@ final class ExtensionRegistry: ObservableObject {
     }
 
     private func persistDisabled() {
-        let ids = records.filter { !$0.enabled }.map(\.id).sorted()
+        // Opt-in exts are governed SOLELY by `enabledExtensionIDs` (persistEnabled),
+        // so keep them out of the disabled set — else a disabled opt-in ext sits in
+        // both keys and the two could disagree about the same id.
+        let ids = records.filter { !$0.enabled && !$0.manifest.extension.defaultDisabled }
+            .map(\.id).sorted()
         defaults.set(ids, forKey: Self.disabledKey)
+    }
+
+    private func enabledIDs() -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.enabledKey) ?? [])
+    }
+
+    /// Persist the turn-ONs for opt-in extensions (mirror of `persistDisabled`).
+    private func persistEnabled() {
+        let ids = records.filter { $0.manifest.extension.defaultDisabled && $0.enabled }
+            .map(\.id).sorted()
+        defaults.set(ids, forKey: Self.enabledKey)
     }
 
     // MARK: - Trust gate

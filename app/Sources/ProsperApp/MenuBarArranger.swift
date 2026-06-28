@@ -137,7 +137,11 @@ enum MenuBarArranger {
                 // correctly ordered items are never pixel-touching, so a pixel check
                 // would re-drag (and fail "didNotMove") every pass. Re-read live order
                 // each step since prior moves reflow frames.
-                let seq = currentItems().map { $0.windowID }.filter { placedIDs.contains($0) }
+                // Cheap windowID-order read (no system window enum) — the skip/confirm
+                // only need order, not item metadata, and this runs inside the
+                // cursor-hidden window where shorter == safer.
+                let seq = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
+                    .filter { placedIDs.contains($0) }
                 if let ai = seq.firstIndex(of: anchor.windowID),
                    let ii = seq.firstIndex(of: item.windowID), ii == ai + 1 { continue }
                 do {
@@ -145,7 +149,8 @@ enum MenuBarArranger {
                                                     to: .rightOf(anchor.windowID))
                     // Confirm by landing position, not bare frame change: a neighbor's
                     // reflow also changes our frame, which would over-count moves.
-                    let after = currentItems().map { $0.windowID }.filter { placedIDs.contains($0) }
+                    let after = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
+                        .filter { placedIDs.contains($0) }
                     if let ai = after.firstIndex(of: anchor.windowID),
                        let ii = after.firstIndex(of: item.windowID), ii == ai + 1 { moved += 1 }
                 } catch {

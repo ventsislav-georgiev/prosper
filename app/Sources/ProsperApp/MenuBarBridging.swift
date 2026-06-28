@@ -104,6 +104,43 @@ enum MenuBarBridge {
         return out
     }
 
+    /// Cheap left→right windowID order of FOREIGN menu-bar items on `display`,
+    /// WITHOUT the heavy `CGWindowListCopyWindowInfo(.optionAll)` system-wide window
+    /// enumeration that `items(onDisplay:)` pays for pid/name/bundle. Used by the
+    /// live enforcer as a drift PRE-GATE on its 2s main-thread tick: if this sequence
+    /// is unchanged since the last full check, the order cannot have drifted, so it
+    /// skips the expensive identity rebuild entirely. Self-filters our own windows
+    /// via the per-pid CGS list (two cheap CGS calls, no system window scan). Returns
+    /// [] on any CGS error — the caller then falls back to the full check.
+    ///
+    /// HOT PATH: this is the ONLY thing the steady-state live loop should call per
+    /// tick. Keep it free of `CGWindowListCopyWindowInfo` and heap-heavy work.
+    static func menuBarWindowOrder(onDisplay display: CGDirectDisplayID) -> [CGWindowID] {
+        guard available else { return [] }
+        let cid = CGSMainConnectionID()
+        func windowList(pid: Int32) -> [UInt32] {
+            var ids = [UInt32](repeating: 0, count: 256)
+            var n: Int32 = 0
+            let err = ids.withUnsafeMutableBufferPointer {
+                CGSGetProcessMenuBarWindowList(cid, pid, Int32($0.count), $0.baseAddress!, &n)
+            }
+            guard err == .success else { return [] }
+            return Array(ids.prefix(Int(max(0, n))))
+        }
+        let all = windowList(pid: 0)
+        guard !all.isEmpty else { return [] }
+        let mine = Set(windowList(pid: Int32(getpid())))   // self-filter, no system enum
+        var pairs: [(id: CGWindowID, x: CGFloat)] = []
+        pairs.reserveCapacity(all.count)
+        for wid in all where !mine.contains(wid) {
+            var rect = CGRect.zero
+            guard CGSGetScreenRectForWindow(cid, wid, &rect) == .success,
+                  rect.width > 0, rect.height > 0, displayID(for: rect) == display else { continue }
+            pairs.append((CGWindowID(wid), rect.minX))
+        }
+        return pairs.sorted { $0.x < $1.x }.map(\.id)
+    }
+
     /// Positive sanity probe for the Settings preview strip. Healthy = the CGS
     /// enumeration still contains windows we KNOW exist (our own dividers). See
     /// `MenuBarLogic.previewHealthy` for why a hard error check isn't enough. Only

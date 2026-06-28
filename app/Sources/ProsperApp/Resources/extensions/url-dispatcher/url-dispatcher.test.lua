@@ -115,11 +115,80 @@ env.defaultBrowser = "com.apple.Safari"
 G.url_dispatcher_make_default()
 h.eq(env.prefs["fallback"], "org.mozilla.firefox", "make_default keeps existing fallback")
 
--- 14. settings_render returns a settings UI with the 3 sections (no crash)
+-- 14. settings_render returns a settings UI with the 4 sections (no crash)
 host.prefs.set("routes", J{ { match = "github.com", browser = "com.google.Chrome" } })
 local ui = G.settings_render("url-dispatcher", "{}")
 h.eq(ui and ui.kind, "settings.ui", "settings_render builds a settings UI")
-h.eq(#ui.sections, 3, "settings_render builds 3 sections")
+h.eq(#ui.sections, 4, "settings_render builds 4 sections (status/privacy/fallback/routes)")
+
+-- ── tracking cleanup (opt-in) ────────────────────────────────────────────────
+host.prefs.set("routes", J{})
+host.prefs.set("fallback", "com.apple.Safari")
+
+-- 15. off by default: every param preserved verbatim
+host.prefs.set("clean_tracking", "false")
+reset()
+on_url(payload("https://x.com/a?utm_source=z&id=5&fbclid=abc"))
+h.eq(env.urlOpened.url, "https://x.com/a?utm_source=z&id=5&fbclid=abc", "clean off: url untouched")
+
+-- 16. on: strips utm_*/fbclid, keeps functional params (id, q)
+host.prefs.set("clean_tracking", "true")
+reset()
+on_url(payload("https://x.com/a?utm_source=z&id=5&fbclid=abc&q=hi"))
+h.eq(env.urlOpened.url, "https://x.com/a?id=5&q=hi", "clean on: trackers stripped, real params kept")
+
+-- 17. all params are trackers -> the '?' is dropped too
+reset()
+on_url(payload("https://x.com/a?utm_source=z&gclid=1&mc_eid=2"))
+h.eq(env.urlOpened.url, "https://x.com/a", "clean on: all-tracker query drops '?'")
+
+-- 18. fragment preserved
+reset()
+on_url(payload("https://x.com/a?utm_source=z#sec"))
+h.eq(env.urlOpened.url, "https://x.com/a#sec", "clean on: fragment preserved")
+
+-- 19. case-insensitive key match (UTM_Source, FBCLID)
+reset()
+on_url(payload("https://x.com/a?UTM_Source=z&keep=1"))
+h.eq(env.urlOpened.url, "https://x.com/a?keep=1", "clean on: case-insensitive tracker match")
+
+-- 20. '?' inside the fragment is not treated as a query
+reset()
+on_url(payload("https://x.com/a#/route?utm_source=z"))
+h.eq(env.urlOpened.url, "https://x.com/a#/route?utm_source=z", "clean on: '?' in fragment untouched")
+
+-- 21. no query -> untouched
+reset()
+on_url(payload("https://x.com/a"))
+h.eq(env.urlOpened.url, "https://x.com/a", "clean on: no query untouched")
+
+-- 21b. REGRESSION GUARD: generic/functional keys must never be stripped.
+reset()
+on_url(payload("https://x.com/s?id=5&ref=nav&q=hi&page=2&from=home&c=1&var=x&lang=en"))
+h.eq(env.urlOpened.url, "https://x.com/s?id=5&ref=nav&q=hi&page=2&from=home&c=1&var=x&lang=en",
+     "clean on: generic/functional keys all preserved")
+
+-- 21c. new exacts (_ga/_gl/mibextid/epik) stripped, real param kept
+reset()
+on_url(payload("https://x.com/a?_ga=1&_gl=2&mibextid=3&epik=4&keep=ok"))
+h.eq(env.urlOpened.url, "https://x.com/a?keep=ok", "clean on: GA/FB/Pinterest exacts stripped")
+
+-- 21d. removed 'ga_' prefix must NOT over-match a functional 'ga_'-prefixed key
+reset()
+on_url(payload("https://x.com/a?ga_token=keepme&utm_source=z"))
+h.eq(env.urlOpened.url, "https://x.com/a?ga_token=keepme", "clean on: 'ga_' prefix not over-matched")
+
+-- 21e. removed 'uta_' prefix (unattested in AdGuard/ClearURLs) must NOT over-match
+reset()
+on_url(payload("https://x.com/a?uta_key=keepme&utm_source=z"))
+h.eq(env.urlOpened.url, "https://x.com/a?uta_key=keepme", "clean on: 'uta_' prefix not over-matched")
+host.prefs.set("clean_tracking", "false")
+
+-- 22. set:clean_tracking action persists the toggle
+G.settings_action("url-dispatcher", "set:clean_tracking", "true")
+h.eq(env.prefs["clean_tracking"], "true", "set:clean_tracking on")
+G.settings_action("url-dispatcher", "set:clean_tracking", "false")
+h.eq(env.prefs["clean_tracking"], "false", "set:clean_tracking off")
 
 -- ── performance: on_url hot path ─────────────────────────────────────────────
 host.prefs.set("routes", J{
@@ -130,7 +199,54 @@ host.prefs.set("routes", J{
 host.prefs.set("fallback", "com.apple.Safari")
 local p = payload("https://github.com/some/long/path?q=1")
 local per = h.bench(20000, function() on_url(p) end) * 1e6 -- us/call
-print(string.format("perf: on_url = %.2f us/link", per))
+print(string.format("perf: on_url (clean off) = %.2f us/link", per))
 h.le(per, 1000, "on_url under 1ms/link hot-path budget")
+
+-- ── stability: tracking-cleanup edge cases (clean on) ────────────────────────
+host.prefs.set("clean_tracking", "true")
+host.prefs.set("routes", J{}); host.prefs.set("fallback", "com.apple.Safari")
+
+reset(); on_url(payload("https://x.com/a?"))            -- empty query, no trackers
+h.eq(env.urlOpened.url, "https://x.com/a?", "empty query preserved verbatim")
+
+reset(); on_url(payload("https://x.com/a?keep=1&utm_source=z&"))  -- trailing &
+h.eq(env.urlOpened.url, "https://x.com/a?keep=1", "trailing & + tracker handled")
+
+reset(); on_url(payload("https://x.com/a?utm_source"))  -- tracker key, no value
+h.eq(env.urlOpened.url, "https://x.com/a", "valueless tracker key stripped")
+
+reset(); on_url(payload("https://x.com/a?flag&keep=1")) -- valueless non-tracker kept
+h.eq(env.urlOpened.url, "https://x.com/a?flag&keep=1", "valueless non-tracker kept")
+
+reset(); on_url(payload("https://x.com/p?a=1&b=2&c=3&d=4&e=5")) -- no trackers
+h.eq(env.urlOpened.url, "https://x.com/p?a=1&b=2&c=3&d=4&e=5",
+     "no-tracker URL returned byte-identical (early exit, no collapse)")
+host.prefs.set("clean_tracking", "false")
+
+-- ── performance: clean_url hot path (clean ON) ───────────────────────────────
+-- Budget rationale: links arrive at human click rate, not on the keystroke tap,
+-- so the bar is generous — but cleanup is pure Lua string work and must stay
+-- comfortably sub-millisecond on every shape. We assert three representative
+-- shapes: a clean URL (early-exit), a mixed URL, and a tracker-heavy URL.
+host.prefs.set("clean_tracking", "true")
+host.prefs.set("routes", J{
+    { match = "github.com", browser = "com.google.Chrome" },
+    { match = "figma.com",  browser = "company.thebrowser.Browser" },
+    { match = "localhost",  browser = "com.google.Chrome" },
+})
+
+local p_clean = payload("https://shop.example.com/item?id=42&color=blue&size=large&ref=home")
+local p_mixed = payload("https://shop.example.com/item?id=42&utm_source=nl&utm_medium=email&fbclid=XYZ&color=blue")
+local p_heavy = payload("https://x.com/a?utm_source=a&utm_medium=b&utm_campaign=c&utm_term=d&utm_content=e&gclid=f&fbclid=g&mc_eid=h&msclkid=i&igshid=j")
+
+local t_clean = h.bench(20000, function() on_url(p_clean) end) * 1e6
+local t_mixed = h.bench(20000, function() on_url(p_mixed) end) * 1e6
+local t_heavy = h.bench(20000, function() on_url(p_heavy) end) * 1e6
+print(string.format("perf: on_url clean ON  early-exit=%.2f  mixed=%.2f  heavy=%.2f us/link",
+    t_clean, t_mixed, t_heavy))
+h.le(t_clean, 1000, "clean on, no-tracker link under 1ms/link")
+h.le(t_mixed, 1000, "clean on, mixed link under 1ms/link")
+h.le(t_heavy, 1000, "clean on, tracker-heavy link under 1ms/link")
+host.prefs.set("clean_tracking", "false")
 
 print("url-dispatcher: ALL PASS")

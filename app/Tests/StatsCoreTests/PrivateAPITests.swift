@@ -27,6 +27,8 @@ final class GPUReaderTests: XCTestCase {
         let s = try r.read()
         XCTAssert(s.utilization >= 0 && s.utilization <= 1, "util \(s.utilization) out of range")
         XCTAssertFalse(s.name.isEmpty)
+        XCTAssert(s.renderUtil.isNaN || (s.renderUtil >= 0 && s.renderUtil <= 1), "render \(s.renderUtil)")
+        XCTAssert(s.tilerUtil.isNaN || (s.tilerUtil >= 0 && s.tilerUtil <= 1), "tiler \(s.tilerUtil)")
         print("GPU: \(s.name) util=\(String(format: "%.1f", s.utilization * 100))% mem=\(s.usedMemory / 1_048_576)MB")
     }
 }

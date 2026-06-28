@@ -1,5 +1,5 @@
 import Foundation
-import LidHelperProtocol
+import ProsperHelperProtocol
 
 /// Drives auth + supporter status against the Prosper backend (`server/`).
 ///

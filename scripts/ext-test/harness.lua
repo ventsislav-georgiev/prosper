@@ -244,6 +244,8 @@ function M.makeHost(opts)
         httpResponse = opts.httpResponse,
         setDefaultOK = (opts.setDefaultOK ~= false),
         defaultBrowser = opts.defaultBrowser, -- current system default (url.default_browser)
+        keyboardSource = opts.keyboardSource, -- current input source id (host.keyboard)
+        keyboardSets = {},                    -- full log of keyboard.set_source(id) calls
         urlOpens = {},                        -- full log of url.open(url, browser) calls
         perms = opts.perms or {},
         snippets = opts.snippets or {},
@@ -259,7 +261,8 @@ function M.makeHost(opts)
         -- timing-free proxy for an extension's per-event cost. h.resetCalls(env)
         -- before an op, then assert env.calls.* budgets after.
         calls = { prefsGet = 0, prefsSet = 0, shell = 0, timerSchedule = 0,
-                  timerCancel = 0, menubarSet = 0, screen = 0, battery = 0, http = 0 },
+                  timerCancel = 0, menubarSet = 0, screen = 0, battery = 0, http = 0,
+                  kbdLayouts = 0 },
     }
     local function shell_run(cmd)
         env.calls.shell = env.calls.shell + 1
@@ -321,6 +324,32 @@ function M.makeHost(opts)
             converter = uiNode("converter"),
             render = function(node) env.rendered = node; return node end,
             settings = settings,
+            -- Native app chooser. Returns env.chosenApp ({ bundleID=, name= } or nil).
+            chooseApp = function() env.chooseAppCalled = (env.chooseAppCalled or 0) + 1; return env.chosenApp end,
+        },
+
+        -- Keyboard input source (Carbon TIS). env.keyboardSource is the current id;
+        -- set_source records every selection (last id + full log env.keyboardSets).
+        keyboard = {
+            current_source = function() return env.keyboardSource or "" end,
+            layouts = function() env.calls.kbdLayouts = env.calls.kbdLayouts + 1; return opts.layouts or {} end,
+            -- Mirrors real TIS: a source can only be selected if it is in the
+            -- (already selectable-filtered) layouts list. An id not present —
+            -- e.g. a source disabled in System Settings after being picked —
+            -- fails, exactly like TISSelectInputSource returning paramErr.
+            set_source = function(id)
+                env.keyboardSets[#env.keyboardSets + 1] = id
+                local settable = env.keyboardSetFails ~= true
+                if settable then
+                    settable = false
+                    for _, l in ipairs(opts.layouts or {}) do
+                        if l.id == id then settable = true; break end
+                    end
+                end
+                if not settable then return false end
+                env.keyboardSource = id
+                return true
+            end,
         },
 
         window = {

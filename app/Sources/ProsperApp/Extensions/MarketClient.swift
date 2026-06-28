@@ -42,6 +42,10 @@ enum MarketClient {
     struct BrowseResult: Sendable {
         let packages: [Package]
         let cursor: Int?
+        /// True when the request itself failed (network/decode), as opposed to a
+        /// successful empty page. Lets the UI tell "no results" from "couldn't reach
+        /// the server" and avoid permanently ending pagination on a transient error.
+        var failed = false
     }
 
     /// A downloaded artifact plus its signed claim (verified by the installer).
@@ -98,7 +102,7 @@ enum MarketClient {
         guard let url = comps.url,
               let (data, code) = try? await get(url), code < 300,
               let resp = try? JSONDecoder().decode(BrowseResponse.self, from: data)
-        else { return BrowseResult(packages: [], cursor: nil) }
+        else { return BrowseResult(packages: [], cursor: nil, failed: true) }
         return BrowseResult(packages: resp.packages, cursor: resp.cursor)
     }
 

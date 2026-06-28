@@ -1,9 +1,9 @@
 import Foundation
 import ServiceManagement
-import LidHelperProtocol
+import ProsperHelperProtocol
 import os
 
-/// Client for the privileged lid-sleep helper daemon (`ProsperLidHelper`). It is
+/// Client for the privileged lid-sleep helper daemon (`ProsperHelper`). It is
 /// what makes "keep awake with the lid closed" work with NO sudoers entry: the
 /// daemon flips `pmset -a disablesleep` as root, and this type registers it via
 /// SMAppService and drives it over XPC.
@@ -32,7 +32,7 @@ enum LidSleepHelper {
     // nonisolated: stateless (a fresh SMAppService each call, touches no shared
     // mutable state), so it can run on any background thread.
     nonisolated private static var service: SMAppService {
-        SMAppService.daemon(plistName: "\(lidHelperLabel).plist")
+        SMAppService.daemon(plistName: "\(helperLabel).plist")
     }
 
     // MARK: - Cached status (never blocks the caller)
@@ -131,7 +131,16 @@ enum LidSleepHelper {
 
     // MARK: - Registration (off-main)
 
-    private enum RegisterOutcome { case enabled, needsApproval, failed }
+    private enum RegisterOutcome {
+        case enabled, needsApproval, failed
+        var migrationResult: HelperMigration.RegisterResult {
+            switch self {
+            case .enabled: return .enabled
+            case .needsApproval: return .needsApproval
+            case .failed: return .failed
+            }
+        }
+    }
 
     // SMAppService pins the daemon registration to the bundle version present at
     // register() time. A Sparkle in-place update swaps the binary but NOT the
@@ -205,11 +214,13 @@ enum LidSleepHelper {
 
     /// Register the daemon if needed, running the blocking SMAppService work on a
     /// background task so a slow `smd` cannot freeze the app. Returns true once
-    /// enabled. When macOS needs the user to OK the background item, opens the
-    /// Login Items pane (on main) and returns false. Called from `setDisabled(true)`
-    /// and the settings permission row's Open button — always on explicit action.
+    /// enabled. When macOS needs the user to OK the background item, presents the
+    /// approval modal (`HelperApproval`, which guides them to Login Items) and
+    /// returns false. `feature` is the human label shown in that modal. Called from
+    /// `setDisabled(true)`, the remote-wake / sleep-now / fan paths, and the settings
+    /// permission row's Open button — always on explicit action or launch re-apply.
     @discardableResult
-    static func ensureRegistered() async -> Bool {
+    static func ensureRegistered(feature: String = "This feature", presentModal: Bool = true) async -> Bool {
         let outcome = await Task.detached(priority: .userInitiated) { registerIfNeeded() }.value
         switch outcome {
         case .enabled:
@@ -217,11 +228,53 @@ enum LidSleepHelper {
             return true
         case .needsApproval:
             storeCache(false)
-            SMAppService.openSystemSettingsLoginItems()
+            // The settings "Background Helper → Open" row opens Login Items itself, so
+            // it suppresses the modal (presentModal: false) to avoid double-prompting.
+            if presentModal { HelperApproval.presentNeedsApproval(feature: feature) }
             return false
         case .failed:
             storeCache(false)
             return false
+        }
+    }
+
+    // MARK: - Legacy label migration (one-time, on launch)
+
+    nonisolated private static let labelMigratedKey = "prosper.helper.labelMigrated"
+
+    /// v2.96–v2.11x registered the daemon under the legacy label `…lidhelper`. The
+    /// label is now the generic `…helper`, and the bundle no longer ships the old
+    /// plist, so that SMAppService item is orphaned (launchd can't spawn it). Drop
+    /// it once; if lid-sleep was enabled, register the NEW item so the override keeps
+    /// working across the upgrade with no user action. Off-main (blocking smd IPC),
+    /// guarded by a one-shot flag. Idempotent and safe for never-enabled users (the
+    /// legacy item just isn't registered → unregister is a no-op).
+    nonisolated static func migrateLegacyLabelOnLaunch() {
+        guard !UserDefaults.standard.bool(forKey: labelMigratedKey) else { return }
+        // Snapshot the legacy enabled flag SYNCHRONOUSLY, before spawning any task —
+        // a concurrent `isEnabled`→`refreshEnabled()` (heal, settings) would otherwise
+        // flip `cacheKey` to false against the not-yet-registered new label and we'd
+        // skip the re-pin, silently killing the override for an upgrading user.
+        let wasEnabled = UserDefaults.standard.bool(forKey: cacheKey)
+        Task.detached(priority: .utility) {
+            let legacy = SMAppService.daemon(plistName: "\(legacyHelperLabel).plist")
+            if legacy.status != .notRegistered { try? await legacy.unregister() }
+            // Re-pin under the new label so an existing lid-sleep user doesn't silently
+            // lose the override on upgrade. The new label is a DISTINCT Login-Items item,
+            // so if macOS makes the user re-approve it, guide them with the modal instead
+            // of failing silently (openlid may not re-arm on launch). The branching
+            // (cache, modal, when to mark migrated) lives in the pure HelperMigration.plan.
+            let result = wasEnabled ? registerIfNeeded().migrationResult : nil
+            let plan = HelperMigration.plan(wasEnabled: wasEnabled, result: result)
+            if let cache = plan.cacheEnabled { storeCache(cache) }
+            if plan.showApprovalModal {
+                await MainActor.run {
+                    HelperApproval.presentNeedsApproval(feature: "Keep awake with the lid closed")
+                }
+            }
+            // markMigrated == false on a failed re-pin → next launch retries (the legacy
+            // unregister is idempotent, so retrying is safe).
+            if plan.markMigrated { UserDefaults.standard.set(true, forKey: labelMigratedKey) }
         }
     }
 
@@ -241,6 +294,11 @@ enum LidSleepHelper {
     /// drives `registerIfNeeded` directly, not `ensureRegistered`, so the rare
     /// re-approval case stays silent at launch and surfaces on next settings/toggle.
     nonisolated static func healStaleRegistrationOnLaunch() {
+        // Let the label migration own the first post-upgrade launch: it re-pins under
+        // the new label, and heal's `isEnabled`→`refreshEnabled()` against the not-yet-
+        // registered new label would otherwise race-clobber the cache the migration
+        // reads. Once migrated (set only after a successful re-pin), heal resumes.
+        guard UserDefaults.standard.bool(forKey: labelMigratedKey) else { return }
         guard isEnabled else { return }   // cached: false for never-enabled → no IPC, no registration
         Task.detached(priority: .utility) {
             guard service.status == .enabled else { return }   // real status; skip pending-approval / removed
@@ -269,8 +327,8 @@ enum LidSleepHelper {
     }
 
     private static func makeConnection() -> NSXPCConnection {
-        let c = NSXPCConnection(machServiceName: lidHelperMachServiceName, options: .privileged)
-        c.remoteObjectInterface = NSXPCInterface(with: LidHelperProtocol.self)
+        let c = NSXPCConnection(machServiceName: helperMachServiceName, options: .privileged)
+        c.remoteObjectInterface = NSXPCInterface(with: ProsperHelperProtocol.self)
         let clear: () -> Void = { Task { @MainActor in if connection === c { connection = nil } } }
         c.invalidationHandler = clear
         c.interruptionHandler = clear
@@ -284,7 +342,7 @@ enum LidSleepHelper {
     @discardableResult
     static func setDisabled(_ on: Bool) async -> Bool {
         if on {
-            guard await ensureRegistered() else { return false }
+            guard await ensureRegistered(feature: "Keep awake with the lid closed") else { return false }
             let c = connection ?? makeConnection()
             connection = c
             let ok = await call(c, on: true)
@@ -322,7 +380,7 @@ enum LidSleepHelper {
             let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
                 Self.log.error("lid helper set(\(on)) failed: \(err.localizedDescription, privacy: .public)")
                 once.resume(false)
-            } as? LidHelperProtocol
+            } as? ProsperHelperProtocol
             guard let proxy else { once.resume(false); return }
             once.armTimeout()
             proxy.setLidSleepDisabled(on) { @Sendable ok in once.resume(ok) }
@@ -359,7 +417,7 @@ enum LidSleepHelper {
     @discardableResult
     static func setRemoteWake(_ config: RemoteWakeConfig) async -> Bool {
         if config.enabled {
-            guard await ensureRegistered() else { return false }
+            guard await ensureRegistered(feature: "Remote wake") else { return false }
         }
         let c = connection ?? makeConnection()
         connection = c
@@ -425,7 +483,7 @@ enum LidSleepHelper {
             let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
                 Self.log.error("remote session set(\(on)) failed: \(err.localizedDescription, privacy: .public)")
                 once.resume(false)
-            } as? LidHelperProtocol
+            } as? ProsperHelperProtocol
             guard let proxy else { once.resume(false); return }
             once.armTimeout()
             proxy.setRemoteSessionActive(on) { @Sendable ok in once.resume(ok) }
@@ -441,7 +499,7 @@ enum LidSleepHelper {
     /// sleep was issued.
     @discardableResult
     static func sleepNow() async -> Bool {
-        guard await ensureRegistered() else { return false }
+        guard await ensureRegistered(feature: "Sleep now") else { return false }
         let c = connection ?? makeConnection()
         connection = c
         let ok = await callSleepNow(c)
@@ -458,7 +516,7 @@ enum LidSleepHelper {
             let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
                 Self.log.error("sleepNow failed: \(err.localizedDescription, privacy: .public)")
                 once.resume(false)
-            } as? LidHelperProtocol
+            } as? ProsperHelperProtocol
             guard let proxy else { once.resume(false); return }
             once.armTimeout()
             proxy.sleepNow { @Sendable ok in once.resume(ok) }
@@ -473,7 +531,7 @@ enum LidSleepHelper {
             let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
                 Self.log.error("remote wake set failed: \(err.localizedDescription, privacy: .public)")
                 once.resume(false)
-            } as? LidHelperProtocol
+            } as? ProsperHelperProtocol
             guard let proxy else { once.resume(false); return }
             once.armTimeout()
             proxy.setRemoteWake(json) { @Sendable resident in once.resume(resident) }

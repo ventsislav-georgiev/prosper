@@ -27,8 +27,13 @@ public struct FanBounds: Equatable {
 public final class SMCFanController {
     private let smc: SMC
 
-    // Absolute safety rails, independent of (untrusted) SMC-reported bounds.
+    // Absolute safety rails, independent of (untrusted) SMC-reported bounds. The
+    // FLOOR is the single load-bearing thermal backstop — distrusting SMC bounds on
+    // the low side. Before adding a newly supported Mac, confirm 200 RPM is survivable
+    // on its coldest-idle chassis, or promote this to a per-model calibration knob.
     private static let absoluteFloorRPM: Double = 200      // never command below this
+                                                           // ponytail: per-model floor if a future chassis needs more
+
     private static let absoluteCeilRPM: Double = 20_000    // sanity ceiling
 
     /// Cached per-fan mode-key form: uppercase `F{i}Md` (Intel/most AS) vs
@@ -113,8 +118,18 @@ public final class SMCFanController {
         let hi = Swift.min(b.max, Self.absoluteCeilRPM)
         let safe = Swift.min(Swift.max(rpm, lo), hi)
 
-        try unlock(i)
-        try writeTarget(i, rpm: safe)
+        // Fail CLOSED across the whole manual sequence: if the unlock half-succeeds
+        // (mode flipped to manual / Ftst=1) but the target write then throws, the fan
+        // would be left in manual driven by a stale (possibly very low) F{i}Tg with
+        // nothing supervising it. Hand it back to the OS before rethrowing so a failed
+        // setManual can NEVER leave a fan wedged at an unsafe speed.
+        do {
+            try unlock(i)
+            try writeTarget(i, rpm: safe)
+        } catch {
+            try? setAuto(i)
+            throw error
+        }
     }
 
     public func setFull(_ i: Int) throws {
@@ -135,12 +150,23 @@ public final class SMCFanController {
     }
 
     /// Reset every fan to auto. Cheap, idempotent — the thermal-safety primitive
-    /// called on launch, sleep, disconnect, version-skew.
-    public func resetAll() {
+    /// called on launch, sleep, disconnect, version-skew. Returns whether the
+    /// CRITICAL clears (per-fan mode key, and `Ftst=0` on AS) all succeeded, so the
+    /// caller can keep the crash-safety armed and retry instead of believing a
+    /// silently-failed reset handed the fans back. The Intel `FS!` bitmask clear is
+    /// best-effort and does not gate the result (absent on Apple Silicon).
+    @discardableResult
+    public func resetAll() -> Bool {
         let n = fanCount()
-        for i in 0..<Swift.max(n, 0) { try? guardedWrite(modeKey(i), [0]) }
-        try? guardedWrite("Ftst", [0])    // M1–M4 master unlock-clear
-        try? guardedWrite("FS! ", [0, 0]) // Intel force bitmask
+        var ok = true
+        for i in 0..<Swift.max(n, 0) {
+            do { try guardedWrite(modeKey(i), [0]) } catch { ok = false }
+        }
+        if hasFtst() {
+            do { try guardedWrite("Ftst", [0]) } catch { ok = false }   // M1–M4 master unlock-clear
+        }
+        try? guardedWrite("FS! ", [0, 0]) // Intel force bitmask (best effort)
+        return ok
     }
 
     // MARK: AS unlock sequence

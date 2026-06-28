@@ -27,7 +27,17 @@ final class MenuBarOrderEnforcer {
     private var probeOK = false
     private var policy = MenuBarEnforcementPolicy()
     private var timer: Timer?
+    /// True while the live drift timer is armed. Test seam: lets coverage assert the
+    /// enforcer disarms when the extension is disabled (no orphan timer driving a
+    /// torn-down bar) without exposing the timer itself.
+    var isLiveRunning: Bool { timer != nil }
     private var working = false   // re-entrancy guard: one apply pass at a time
+    /// Cheap windowID-order fingerprint from the last full drift check. While the
+    /// live bar's foreign-item order is byte-identical to this, the order can't have
+    /// drifted, so the 2s tick skips the expensive identity rebuild + system window
+    /// enumeration. Reset to nil on any settings change (the desired order may now
+    /// differ even though the live order is static).
+    private var lastOrderFingerprint: [CGWindowID]?
 
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
@@ -36,6 +46,7 @@ final class MenuBarOrderEnforcer {
     func update(store: MenuBarOrderStore, probeOK: Bool) {
         self.store = store
         self.probeOK = probeOK
+        lastOrderFingerprint = nil   // settings changed → re-check on next tick
         let shouldRunLive = store.enabled && probeOK && store.mode == .live && !store.desiredOrder.isEmpty
         shouldRunLive ? startLive() : stopLive()
     }
@@ -74,6 +85,19 @@ final class MenuBarOrderEnforcer {
         guard MenuBarBridge.available else { stopLive(); return }
         let n = now
         if !policy.canApply(now: n, onBattery: Self.onBattery()) { return }
+
+        // Cheap pre-gate: the foreign-item windowID order, read via CGS only (no
+        // system-wide CGWindowListCopyWindowInfo). Identical to the last full check ⇒
+        // no POSITIONAL or MEMBERSHIP drift (no reorder, relaunch, quit, or launch) ⇒
+        // skip the expensive identity rebuild below, keeping the 2s main-thread tick
+        // off the heavy window-enumeration path in steady state (typing-latency
+        // sensitive). The one drift it can't see — an item becoming resolvable in
+        // place after a re-index — is covered by clearing the fingerprint after every
+        // apply (see below). Main-display only, matching `desiredOrder` capture and
+        // `currentItems`; secondary-display items aren't managed.
+        let order = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
+        if lastOrderFingerprint == order { return }   // bar unchanged (incl. empty) → skip
+        lastOrderFingerprint = order
 
         // Capture-free drift signal: build live keys from titles + the last index's
         // cached hashes. Items we can't yet identify are excluded from the order check.
@@ -121,6 +145,13 @@ final class MenuBarOrderEnforcer {
             } else {
                 policy.stampThrottleOnly(now: n)
             }
+            // Invalidate the fingerprint: apply() re-ran the indexer (refreshing
+            // `lastIndexedHashes`), which can make a previously-unresolvable item
+            // resolvable WITHOUT changing the windowID order — invisible to the
+            // order-only pre-gate. Forcing one full check next tick re-evaluates
+            // identity. Costs nothing extra on the happy path (a real move already
+            // changed the order, so the next tick wouldn't have skipped anyway).
+            lastOrderFingerprint = nil
             working = false
         }
     }

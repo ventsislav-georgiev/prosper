@@ -33,6 +33,15 @@ final class StatsController {
         // a literal true/false could leave sampling off with a popover still shown.
         guard let self else { return }
         self.poller?.setProcSampling(self.popover.isShown)
+        // Drop the hosting controller once truly closed so the SwiftUI view
+        // deallocs — otherwise its per-tick subscriptions (charts, the sensor
+        // fan read) keep firing against a hidden popover. Deferred + re-guarded
+        // on isShown to survive the didClose(A)+didShow(B) switch race above.
+        if !self.popover.isShown {
+            DispatchQueue.main.async {
+                if !self.popover.isShown { self.popover.contentViewController = nil }
+            }
+        }
     }
     private var openModule: StatsModule?
     /// Process-lifetime observer token. The controller is a `static let` singleton

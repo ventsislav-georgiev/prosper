@@ -7,6 +7,8 @@
 
 import Foundation
 import Darwin
+import SystemConfiguration
+import CoreWLAN
 
 public struct NetworkReader: StatsReader {
     private var prevIn: UInt32 = 0
@@ -16,9 +18,17 @@ public struct NetworkReader: StatsReader {
     private var cumIn: UInt64 = 0
     private var cumOut: UInt64 = 0
     private let now: () -> Double
+    // Held once, not rebuilt each tick: the dynamic-store session and the CoreWLAN
+    // client are designed to persist. Link identity (interface/IP/SSID) is resolved
+    // on a coarse cadence — it changes on the order of seconds-to-never, not 1 Hz.
+    private let scStore: SCDynamicStore?
+    private let wifi = CWWiFiClient.shared()
+    private var link: (name: String?, ipv4: String?, ssid: String?) = (nil, nil, nil)
+    private var linkTick = 0
 
     public init(now: @escaping () -> Double = NetworkReader.monotonicSeconds) {
         self.now = now
+        self.scStore = SCDynamicStoreCreate(nil, "prosper.net" as CFString, nil, nil)
     }
 
     public static func monotonicSeconds() -> Double {
@@ -42,11 +52,46 @@ public struct NetworkReader: StatsReader {
         cumIn += dIn; cumOut += dOut
         prevIn = inB; prevOut = outB; prevTime = t
 
+        if linkTick % 10 == 0 { link = primaryLink() }   // ~10 s; identity rarely changes
+        linkTick += 1
         return NetworkSample(
             uploadBytesPerSec: Double(dOut) / dt,
             downloadBytesPerSec: Double(dIn) / dt,
             totalUploaded: cumOut,
-            totalDownloaded: cumIn)
+            totalDownloaded: cumIn,
+            interfaceName: link.name, ipv4: link.ipv4, ssid: link.ssid)
+    }
+
+    /// The default-route interface plus its IPv4 and (if Wi-Fi) SSID. All nil-able:
+    /// SSID needs Location authorization on recent macOS and is simply omitted when
+    /// unavailable. Uses the held store/client — see the cadence note in read().
+    func primaryLink() -> (name: String?, ipv4: String?, ssid: String?) {
+        guard let store = scStore,
+              let global = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
+              let name = global["PrimaryInterface"] as? String
+        else { return (nil, nil, nil) }
+        let ssid = wifi.interface(withName: name)?.ssid()
+        return (name, Self.ipv4(for: name), ssid)
+    }
+
+    /// First AF_INET address bound to `iface`.
+    private static func ipv4(for iface: String) -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let cur = ptr {
+            defer { ptr = cur.pointee.ifa_next }
+            guard let addr = cur.pointee.ifa_addr,
+                  addr.pointee.sa_family == UInt8(AF_INET),
+                  String(cString: cur.pointee.ifa_name) == iface else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count),
+                           nil, 0, NI_NUMERICHOST) == 0 {
+                return String(cString: host)
+            }
+        }
+        return nil
     }
 
     /// Aggregate (in, out) bytes across non-loopback link-layer interfaces.

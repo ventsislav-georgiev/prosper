@@ -2,7 +2,7 @@ import Foundation
 import IOKit
 import IOKit.ps
 import IOKit.pwr_mgt
-import LidHelperProtocol
+import ProsperHelperProtocol
 
 // IOKit/network side of remote-wake — everything RemoteWakeCore injects as a
 // side effect. Mirrors the validated feasibility spike (darkcheck.swift):
