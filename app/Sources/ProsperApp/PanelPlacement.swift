@@ -81,37 +81,35 @@ enum PanelGeometry {
 }
 
 extension NSScreen {
-    /// The screen containing the mouse pointer, falling back to main / first.
-    static var underCursor: NSScreen {
+    /// The screen containing the mouse pointer, falling back to main / first. Returns
+    /// nil only when no displays are attached (e.g. mid display-reconfiguration) — the
+    /// caller then defers to `panel.center()`.
+    static var underCursor: NSScreen? {
         let loc = NSEvent.mouseLocation
         if let i = PanelGeometry.screenIndex(for: loc, frames: screens.map(\.frame)) {
             return screens[i]
         }
-        return main ?? screens[0]
-    }
-
-    /// `.cursorScreen` origin for a panel of `size`, honoring the panel's own `saved`
-    /// top-left when it's still on the screen under the pointer (see `PanelGeometry`).
-    static func followCursorOrigin(size: NSSize, raiseFraction: CGFloat,
-                                   saved: (x: CGFloat, top: CGFloat)?) -> NSPoint {
-        let s = underCursor
-        return PanelGeometry.followCursorOrigin(
-            size: size, raiseFraction: raiseFraction,
-            cursorFrame: s.frame, cursorVisible: s.visibleFrame, saved: saved)
+        return main ?? screens.first
     }
 
     /// The screen the runner's saved top-left sits on (by its top-center probe),
-    /// falling back to main / first.
-    static func containing(runnerTopLeft tl: (x: CGFloat, top: CGFloat), runnerWidth: CGFloat) -> NSScreen {
+    /// falling back to main / first. Nil only when no displays are attached.
+    static func containing(runnerTopLeft tl: (x: CGFloat, top: CGFloat), runnerWidth: CGFloat) -> NSScreen? {
         let probe = NSPoint(x: tl.x + runnerWidth / 2, y: tl.top - 1)
         if let i = PanelGeometry.screenIndex(for: probe, frames: screens.map(\.frame)) {
             return screens[i]
         }
-        return main ?? screens[0]
+        return main ?? screens.first
     }
 
-    /// Origin that centers `size` in this screen's visibleFrame (see `PanelGeometry`).
-    static func centeredOrigin(size: NSSize, in screen: NSScreen, raiseFraction: CGFloat = 0) -> NSPoint {
-        PanelGeometry.centeredOrigin(size: size, in: screen.visibleFrame, raiseFraction: raiseFraction)
+    /// `.cursorScreen` origin for a panel of `size`, honoring the panel's own `saved`
+    /// top-left when it's still on the screen under the pointer (see `PanelGeometry`).
+    /// Nil when no displays are attached.
+    static func followCursorOrigin(size: NSSize, raiseFraction: CGFloat,
+                                   saved: (x: CGFloat, top: CGFloat)?) -> NSPoint? {
+        guard let s = underCursor else { return nil }
+        return PanelGeometry.followCursorOrigin(
+            size: size, raiseFraction: raiseFraction,
+            cursorFrame: s.frame, cursorVisible: s.visibleFrame, saved: saved)
     }
 }

@@ -88,6 +88,8 @@ final class ClipboardPanel {
         let f = panel.frame
         UserDefaults.standard.set(["x": f.minX, "y": f.maxY], forKey: Self.originKey)
     }
+    // ponytail: no deinit to remove moveObserver — AppDelegate holds this panel for
+    // the app's lifetime (lazily created, never released), so deinit never fires.
 
     func present() {
         previousApp = NSWorkspace.shared.frontmostApplication
@@ -111,7 +113,7 @@ final class ClipboardPanel {
         let size = panel.frame.size
         switch Preferences.runnerPlacement {
         case .cursorScreen:
-            panel.setFrameOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0.1, saved: Self.savedTopLeft()))
+            setOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0.1, saved: Self.savedTopLeft()))
             return
         case .mainScreen:
             panel.center()
@@ -119,18 +121,23 @@ final class ClipboardPanel {
         case .lastPosition:
             break
         }
-        guard let tl = RunnerPanel.savedTopLeft() else {
-            // Never moved yet — open on the cursor screen rather than main.
-            panel.setFrameOrigin(NSScreen.centeredOrigin(size: size, in: .underCursor, raiseFraction: 0.1))
+        guard let tl = RunnerPanel.savedTopLeft(),
+              let screen = NSScreen.containing(runnerTopLeft: tl, runnerWidth: RunnerPanel.runnerWidth) else {
+            // Never moved yet (or no display) — open on the cursor screen.
+            setOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0.1, saved: nil))
             return
         }
 
         // Centered on the runner column, raised above its top edge, clamped to the
         // screen the runner sits on.
-        let screen = NSScreen.containing(runnerTopLeft: tl, runnerWidth: RunnerPanel.runnerWidth)
-        panel.setFrameOrigin(PanelGeometry.runnerRelativeOrigin(
+        setOrigin(PanelGeometry.runnerRelativeOrigin(
             size: size, runnerTopLeft: tl, runnerWidth: RunnerPanel.runnerWidth,
             screenVisible: screen.visibleFrame))
+    }
+
+    /// Applies an origin, or centers (no-display fallback) when nil.
+    private func setOrigin(_ origin: NSPoint?) {
+        if let origin { panel.setFrameOrigin(origin) } else { panel.center() }
     }
 
     func dismiss() {
