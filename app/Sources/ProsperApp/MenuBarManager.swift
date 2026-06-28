@@ -130,7 +130,8 @@ final class MenuBarManager: NSObject {
     private func dividerWindowIDs() -> Set<CGWindowID> {
         var ids = Set<CGWindowID>()
         for d in [hiddenDivider, alwaysHiddenDivider] {
-            if let n = d?.button?.window?.windowNumber, n > 0 { ids.insert(CGWindowID(n)) }
+            if let n = d?.button?.window?.windowNumber,
+               let id = MenuBarLogic.windowID(forWindowNumber: n) { ids.insert(id) }
         }
         return ids
     }
