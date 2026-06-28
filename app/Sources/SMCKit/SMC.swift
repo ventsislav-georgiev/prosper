@@ -184,7 +184,11 @@ public final class SMC {
         let info = try keyInfo(key)
         var input = SMCParamStruct()
         input.key = key
-        input.keyInfo = info
+        // ONLY dataSize — NOT the full keyInfo. The `read`/getKeyInfo selectors tolerate
+        // a fully-populated keyInfo (dataType/dataAttributes), but the `write` selector
+        // validates those extra fields strictly and firmware-rejects (0x82) when they're
+        // set. exelban/Stats writes carry dataSize alone; mirror that (proven on M1–M4).
+        input.keyInfo.dataSize = info.dataSize
         input.data8 = SMCCmd.write.rawValue
         // Pack bytes into the 32-byte tuple region.
         withUnsafeMutableBytes(of: &input.bytes) { raw in

@@ -232,6 +232,16 @@ final class MenuBarTests: XCTestCase {
         XCTAssertFalse(MenuBarIdentity.isPlaceholderTitle("Item Shop"))
     }
 
+    func testSystemFixedExtrasAreUnmanageable() {
+        // The clock and Control Center's BentoBox cluster are pinned by macOS and
+        // can't be ⌘-dragged → must drop out of the orderable set entirely.
+        XCTAssertFalse(MenuBarIdentity(bundleID: "com.apple.controlcenter", title: "Clock").isManageable)
+        XCTAssertFalse(MenuBarIdentity(bundleID: "com.apple.controlcenter", title: "BentoBox-0").isManageable)
+        // A normal app icon and our own items remain manageable.
+        XCTAssertTrue(MenuBarIdentity(bundleID: "com.apple.controlcenter", title: "WiFi").isManageable)
+        XCTAssertTrue(MenuBarIdentity(bundleID: "com.prosper", title: "CPU").isManageable)
+    }
+
     // MARK: - Ordering engine: OS capability gate
 
     func testOrderingSupportedOnTahoe() {

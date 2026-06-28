@@ -51,10 +51,21 @@ struct MenuBarIdentity: Codable, Equatable, Hashable, Sendable {
         t == "Menu Item" || t.range(of: #"^Item[ -]?\d+$"#, options: .regularExpression) != nil
     }
 
+    /// Menu extras macOS pins to the right edge (the clock, Control Center's
+    /// "BentoBox" cluster). They can't be ⌘-dragged, so the engine must not list them
+    /// or retry a move that can never land. Matched by title since Tahoe masks bundle.
+    static func isSystemFixed(title: String?) -> Bool {
+        guard let t = title else { return false }
+        return t == "Clock" || t.hasPrefix("BentoBox")
+    }
+
     /// True for items the engine can actually manage on this OS: our own icons
     /// (`com.prosper`, always nameable + movable) or any foreign item with a real
-    /// identity. Tahoe placeholder items ("Item-0", unresolvable foreign) are not.
-    var isManageable: Bool { bundleID == "com.prosper" || isResolved }
+    /// identity — excluding system-fixed extras that can't be moved at all.
+    var isManageable: Bool {
+        guard !MenuBarIdentity.isSystemFixed(title: title) else { return false }
+        return bundleID == "com.prosper" || isResolved
+    }
 
     /// Stable matching key. Picks the strongest discriminator so two items of the
     /// same app don't collapse to one key. When none is available (unindexed on
