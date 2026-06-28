@@ -251,6 +251,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // must start/stop its passive monitors.
             DragSnapController.shared.windowExtLive = self.windowExtLive
             DragSnapController.shared.reconcile()
+            // Menu Bar Management is its own system extension; enabling/disabling it
+            // builds/tears down the divider status items.
+            MenuBarManager.shared.menubarExtLive = self.menubarExtLive
+            MenuBarManager.shared.reconcile()
         }
 
         // Reconcile quicklinks with their human-editable file
@@ -384,6 +388,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // them if enabled, the window extension is live, and Accessibility is trusted.
         DragSnapController.shared.windowExtLive = windowExtLive
         DragSnapController.shared.reconcile()
+
+        // Menu Bar Management: build the divider items when its extension is live.
+        MenuBarManager.shared.menubarExtLive = menubarExtLive
+        MenuBarManager.shared.reconcile()
 
         // E2E handshake (gated by PROSPER_E2E=1): tell the launching test process
         // whether the keystroke tap is live so it can proceed — or skip with a
@@ -587,6 +595,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(.clipboard, toggleClipboard)
         add(.agent, openAgent)
         add(.toggleAutocomplete, toggleAutocomplete)
+        add(.menuBarToggleHidden) { MenuBarManager.shared.toggleHidden() }
 
         // Built-in window management: snap the frontmost window to a screen edge,
         // maximize, or centre it. Applied via Accessibility to whatever app is
@@ -800,6 +809,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// features, so it only runs while the extension is live.
     private var windowExtLive: Bool {
         extensions.record(id: "com.prosper.window")?.isLive ?? false
+    }
+
+    /// Whether the Menu Bar Management extension is enabled + trusted.
+    private var menubarExtLive: Bool {
+        extensions.record(id: "com.prosper.menubar")?.isLive ?? false
     }
 
     private func setDragSnap(enabled: Bool) {

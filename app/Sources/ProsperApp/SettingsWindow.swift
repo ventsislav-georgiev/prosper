@@ -596,6 +596,10 @@ private struct SettingsRootView: View {
         // Window: drag-snap config rides in as the FOOTER so the manifest's
         // Permissions + window-move shortcut binds read first on the page.
         case "com.prosper.window": footer = AnyView(WindowManagementPane(model: model))
+        // Menu Bar Management: the rich native controls (spacing, section list,
+        // reorder + relaunch) ride in as the FOOTER below the manifest's reveal
+        // shortcut, so there's ONE Menu Bar Management section.
+        case "com.prosper.menubar": footer = AnyView(MenuBarPane(model: model))
         default: break
         }
         return ExtensionSettingsPane(registry: registry, record: record, section: section,
@@ -2403,6 +2407,138 @@ private struct WindowManagementPane: View {
     }
 }
 
+// MARK: - Menu Bar Management
+
+/// Footer pane for the menubar extension's settings section (renders inside its
+/// NeonScroll, below the declarative shortcut header). Spacing slider, two-tier
+/// hide + hover/auto-rehide toggles, the opt-in (AX-gated) reorder switch, a live
+/// section list, and the data-loss-safe "relaunch to apply spacing" action.
+private struct MenuBarPane: View {
+    @ObservedObject var model: SettingsModel
+    @AppStorage("settingsSelectedPane") private var selection = "general"
+    @State private var store = Preferences.menuBarStore
+    @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+    @State private var sections: [(item: MenuBarItem, section: MenuBarSection)] = []
+    @State private var skipped: [String] = []
+    @State private var relaunching = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(16)) {
+            NeonSection("Icon spacing",
+                        footer: "Spacing (in points) between every menu-bar icon. macOS default is 16. New value applies as apps next launch — use “Apply now” to relaunch running menu-bar apps.") {
+                NeonRow("Spacing", subtitle: "\(store.clampedSpacing) px") {
+                    Slider(value: Binding(get: { Double(store.clampedSpacing) },
+                                          set: { setSpacing(Int($0.rounded())) }),
+                           in: Double(MenuBarSpacing.minSpacing)...Double(MenuBarSpacing.maxSpacing), step: 1)
+                        .frame(width: sz(200))
+                }
+                NeonDivider()
+                Button(relaunching ? "Relaunching…" : "Apply now (relaunch menu-bar apps)") { applyNow() }
+                    .buttonStyle(.neon)
+                    .disabled(relaunching)
+                if !skipped.isEmpty {
+                    Text("Skipped (unsaved work / declined to quit): \(skipped.joined(separator: ", ")). Quit and reopen them yourself to apply.")
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                }
+            }
+
+            NeonSection("Hide & reveal",
+                        footer: "A chevron sits in your menu bar. Drag any icon to its LEFT to hide it; click the chevron (or the reveal shortcut) to show the hidden icons. They auto-rehide after a few seconds.") {
+                Toggle("Two-tier hide (extra always-hidden section)", isOn: Binding(
+                    get: { store.alwaysHiddenEnabled },
+                    set: { v in mutate { $0.alwaysHiddenEnabled = v }; MenuBarManager.shared.reconcileDividers() }))
+                NeonDivider()
+                Toggle("Reveal on hover", isOn: Binding(
+                    get: { store.hoverReveal },
+                    set: { v in mutate { $0.hoverReveal = v } }))
+                NeonDivider()
+                NeonRow("Auto-rehide", subtitle: "\(store.clampedAutoRehide) s") {
+                    Slider(value: Binding(get: { Double(store.clampedAutoRehide) },
+                                          set: { v in mutate { $0.autoRehideSeconds = Int(v.rounded()) } }),
+                           in: 1...30, step: 1)
+                        .frame(width: sz(200))
+                }
+            }
+
+            NeonSection("Reorder (experimental)",
+                        footer: "Lets Prosper reorder icons with a synthetic ⌘-drag. This is fragile (the same trick Ice/Bartender struggle with) and needs Accessibility, so it's off by default — you can always ⌘-drag icons yourself.") {
+                Toggle("Enable synthetic reorder", isOn: Binding(
+                    get: { store.reorderEnabled },
+                    set: { v in
+                        mutate { $0.reorderEnabled = v }
+                        if v && !hasAccessibility {
+                            hasAccessibility = PermissionsManager.ensureAccessibilityTrust(prompt: true)
+                        }
+                    }))
+                if store.reorderEnabled && !hasAccessibility {
+                    NeonDivider()
+                    PermissionWarningRow(
+                        title: "Accessibility permission needed",
+                        message: "Reorder can't post the ⌘-drag until you grant it. Open Context to fix.") {
+                            selection = "context"
+                        }
+                }
+            }
+
+            NeonSection("Menu-bar items",
+                        footer: "Live snapshot of what's in each section right now (positional — set by where each icon sits relative to the chevron). Applies to your primary display only.") {
+                if sections.isEmpty {
+                    Text("No items detected (or the feature is off).")
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                } else {
+                    ForEach(Array(sections.enumerated()), id: \.offset) { idx, entry in
+                        if idx > 0 { NeonDivider() }
+                        HStack {
+                            Text((entry.item.bundleID ?? "").isEmpty ? "—" : (entry.item.bundleID ?? ""))
+                                .font(Neon.font(.body, design: .monospaced))
+                                .foregroundStyle(Neon.textPrimary)
+                            Spacer()
+                            Text(entry.section.rawValue)
+                                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                        }
+                    }
+                }
+                NeonDivider()
+                Button("Refresh") { refresh() }.buttonStyle(.neon)
+            }
+        }
+        .onAppear {
+            store = Preferences.menuBarStore
+            hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+            refresh()
+        }
+    }
+
+    // MARK: - Actions
+
+    private func mutate(_ change: (inout MenuBarStore) -> Void) {
+        var s = store
+        change(&s)
+        store = s
+        Preferences.menuBarStore = s
+    }
+
+    private func setSpacing(_ value: Int) {
+        mutate { $0.spacing = value }
+        MenuBarManager.shared.setSpacing(value)
+    }
+
+    private func applyNow() {
+        let apps = MenuBarSpacing.owningApps()
+        guard !apps.isEmpty else { return }
+        relaunching = true
+        skipped = []
+        MenuBarSpacing.relaunchOwners(apps) { skippedNames in
+            skipped = skippedNames
+            relaunching = false
+        }
+    }
+
+    private func refresh() {
+        sections = MenuBarManager.shared.sectionedItems()
+    }
+}
+
 /// The Settings sidebar's grouped navigation, derived from the live registry.
 /// Extracted from the view so launch-time verification can assert ordering
 /// without opening a window. "Extension Settings" sits above "More" so user
@@ -2656,6 +2792,29 @@ enum ProsperVerify {
         print("part6 frames: leftHalf=\(leftHalf) tlQuarter=\(tlQuarter) max=\(maxF)")
         print("part6 frames-ok: \(okFrames)  (expect: true)")
         assert(okFrames, "WindowManager.targetFrame geometry regressed")
+
+        // ── Part 7: Menu Bar Management section contributes with the "Menu Bar"
+        // accent and a rebindable reveal shortcut; the section math is unit-tested
+        // (MenuBarTests) — here we only assert the declarative section wires up.
+        if let (_, sec) = registry.settingsSection(extensionID: "com.prosper.menubar", sectionID: "menubar") {
+            print("part7 menubar: accent=\(sec.accent ?? "-")  (expect: Menu Bar)")
+            if let ui = await registry.renderSettingsAsync(extensionID: "com.prosper.menubar", sectionID: "menubar") {
+                let hasShortcut = ui.sections.flatMap(\.rows).contains {
+                    $0.kind == "shortcut" && $0.name == "menuBarToggleHidden"
+                }
+                print("part7 menubar: reveal-shortcut=\(hasShortcut)  (expect: true)")
+            } else {
+                print("part7 menubar: Lua render FAILED")
+            }
+        } else {
+            print("part7 menubar: SECTION NOT FOUND")
+        }
+        // Pure section math sanity (no AX): visible band sits right of the divider.
+        let mbOK = MenuBarLogic.section(forItemX: 1400, hiddenDividerX: 1000, alwaysHiddenDividerX: 500) == .visible
+            && MenuBarLogic.section(forItemX: 300, hiddenDividerX: 1000, alwaysHiddenDividerX: 500) == .alwaysHidden
+            && MenuBarLogic.spacingDefaultsValue(forSpacing: MenuBarSpacing.defaultSpacing) == nil
+        print("part7 menubar-math-ok: \(mbOK)  (expect: true)")
+        assert(mbOK, "MenuBarLogic section/spacing math regressed")
 
         print("=== END PROSPER_VERIFY ===")
     }

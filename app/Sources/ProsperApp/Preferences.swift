@@ -147,6 +147,8 @@ enum Preferences {
         static let layoutGap = "layoutGap"
         static let layoutStoreJSON = "layoutStoreJSON"
         static let layoutStoreBackupJSON = "layoutStoreBackupJSON"   // newer-schema blob preserved on downgrade
+        static let menuBarStoreJSON = "menuBarStoreJSON"
+        static let menuBarStoreBackupJSON = "menuBarStoreBackupJSON"
         static let uiScale = "prosper.uiScale"
         static let uiOpacity = "prosper.uiOpacity"
         static let uiFrost = "prosper.uiFrost"
@@ -497,6 +499,29 @@ enum Preferences {
                 defaults.set(old, forKey: Keys.layoutStoreBackupJSON)
             }
             defaults.set(data, forKey: Keys.layoutStoreJSON)
+        }
+    }
+
+    /// Menu Bar Management settings (spacing, reveal/hide, reorder). Same
+    /// downgrade-safe JSON-in-UserDefaults pattern as `layoutStore`: a corrupt or
+    /// newer-schema blob falls back to defaults rather than wiping the feature.
+    static var menuBarStore: MenuBarStore {
+        get {
+            guard let data = defaults.data(forKey: Keys.menuBarStoreJSON),
+                  let store = try? JSONDecoder().decode(MenuBarStore.self, from: data),
+                  store.schemaVersion == MenuBarStore.currentSchema else {
+                return .default
+            }
+            return store
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            if let old = defaults.data(forKey: Keys.menuBarStoreJSON),
+               let v = try? JSONDecoder().decode(SchemaProbe.self, from: old),
+               v.schemaVersion > MenuBarStore.currentSchema {
+                defaults.set(old, forKey: Keys.menuBarStoreBackupJSON)
+            }
+            defaults.set(data, forKey: Keys.menuBarStoreJSON)
         }
     }
 
