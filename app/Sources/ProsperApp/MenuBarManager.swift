@@ -91,9 +91,9 @@ final class MenuBarManager: NSObject {
         // pushed off-screen when they grow.
         chevron = makeChevron()
         hiddenSeparator = makeSeparator(autosave: "ProsperMenuBarHiddenSeparator")
-        if Preferences.menuBarStore.alwaysHiddenEnabled {
-            alwaysHiddenSeparator = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator")
-        }
+        // Two-tier (always-hidden) removed: the positional second tier was confusing
+        // and a chosen-icon "always hide" belongs in Settings (needs the move engine).
+        // ponytail: alwaysHiddenSeparator stays nil; revive only when settings-assign ships.
         for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
             ProsperStatusItems.register(item)
         }

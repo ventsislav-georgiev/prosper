@@ -32,11 +32,22 @@ tag from the now-released section and put it on the new top draft.
     now a separate, always-on-screen item from the invisible separator that does the
     hiding — previously a single item did both jobs, so expanding it to hide your
     icons also swept the chevron (and Prosper's own menu-bar icon) off the screen,
-    leaving nothing to click. The chevron now stays put: click it to show/hide, and
-    ⌥-click to reach the always-hidden section.
+    leaving nothing to click. The chevron now stays put: click it to show/hide.
   - Identifying Prosper's own menu-bar items no longer relies on signals Tahoe
     removed (per-app window ownership), so the live preview and ordering self-test
     work again instead of reporting "ordering isn't reliable on this Mac."
+  - The live preview now shows each icon's real picture on macOS 26 (Tahoe), where
+    the system hides per-app identity, by capturing the icons directly (needs Screen
+    Recording — there's an in-place prompt; without it you get placeholder glyphs).
+    Icons keep their real proportions instead of being squished into squares.
+  - Removed the confusing two-tier (always-hidden) section. Marking a specific icon
+    as always-hidden belongs in Settings and is coming back there once reordering is
+    confirmed working on your Mac.
+  - The ordering self-test now waits for its probe icons to lay out before checking,
+    and reports a precise reason if it can't run, instead of a generic failure.
+  - Spacing: when this version of macOS hides which apps own each icon, "Apply now"
+    can't relaunch them — it now says so (the spacing is still saved and applies on
+    next launch / login) instead of silently doing nothing.
 - **Item ordering that survives relaunch, including multi-icon apps (experimental).**
   Apps like Stats or iStat Menus publish several icons that macOS normally shuffles
   on every launch. Turn on ordering, arrange your icons once, and Prosper keeps them
