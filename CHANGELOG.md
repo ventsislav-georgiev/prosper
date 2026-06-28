@@ -66,10 +66,15 @@ tag from the now-released section and put it on the new top draft.
     cores with their live clock speeds, plus load average and uptime.
   - **Memory** — app/wired/compressed stacked usage, cached files, the real kernel
     memory-pressure level, and swap used/total.
-  - **GPU** — utilization with renderer and tiler breakdown, VRAM in use, core count,
-    and frames-per-second presented to the display.
-  - **Network** — up/down throughput with a dual-area chart, total transferred, and
-    the active interface, IP address, and Wi-Fi network.
+  - **GPU** — utilization with renderer and tiler breakdown, a Neural-Engine
+    utilization estimate, VRAM in use, core count, and frames-per-second presented
+    to the display.
+  - **Network** — up/down throughput with a mirrored area chart, live latency and
+    jitter with an internet-reachability badge, a connectivity-history grid, total
+    transferred, the active interface with its hardware (MAC) address and Wi-Fi
+    signal, local and public IP with country flag, and a per-process download/upload
+    list. Latency is measured with unprivileged ICMP; the public-IP lookup is an
+    outbound request that runs only while the Network popover is open.
   - **Sensors** — the full temperature list, current fan speeds, and labeled voltage
     and current rails (DC in, system, memory, display).
   - **Power** — live CPU, GPU, Neural Engine, and DRAM wattage with the total.

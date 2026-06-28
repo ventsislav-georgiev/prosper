@@ -40,6 +40,11 @@ public struct StatsSnapshot: Sendable {
     public var battery: BatterySample?
     public var topByCPU: [ProcInfo]?
     public var topByMemory: [ProcInfo]?
+    public var topByNetwork: [NetProcInfo]?
+    public var netLatency: NetLatency?
+    public var netLink: NetLinkInfo?
+    /// Reachability history (oldest→newest); true = an ICMP echo round-tripped.
+    public var connectivity: [Bool] = []
     /// Headline metric histories (oldest→newest), keyed cpu/memory/net.up/net.down/
     /// gpu/power. Carried on the snapshot so the UI reads a plain array on the main
     /// thread — no cross-queue `sync` hop into the poller during view rendering.
@@ -81,6 +86,9 @@ public final class StatsPoller {
     private var powerSensors: PowerSensorReader?
     private var battery: BatteryReader?
     private var procs: ProcSampler?
+    private var ping: NetPingReader?
+    private var netLink: NetLinkReader?
+    private var netProc: NetProcessReader?
 
     // Headline histories for charts. Mutated only on `queue`; read via history().
     private var histories: [String: RingBuffer<Double>] = [:]
@@ -114,15 +122,24 @@ public final class StatsPoller {
         queue.async { [self] in
             timer?.cancel(); timer = nil
             procs = nil   // drop the pid cpu-time map
+            ping?.stop(); ping = nil
+            netProc = nil; netLink = nil
         }
     }
 
     private func instantiateReaders() {
         if enabled.contains(.cpu) { cpu = CPUReader() }
         if enabled.contains(.memory) { memory = MemoryReader() }
-        if enabled.contains(.network) { network = NetworkReader() }
+        if enabled.contains(.network) {
+            network = NetworkReader()
+            ping = NetPingReader(historyLength: config.historyLength); ping?.start()
+            netLink = NetLinkReader()
+        }
         if enabled.contains(.gpu) { gpu = GPUReader() }
-        if enabled.contains(.power) { power = IOReportKit() }
+        // GPU's popup shows ANE utilization, derived from ANE power — so the
+        // IOReport reader is created for GPU too, but its history is only pushed
+        // when the Power module itself is enabled (see poll()).
+        if enabled.contains(.power) || enabled.contains(.gpu) { power = IOReportKit() }
         if enabled.contains(.sensors) { sensors = IOHIDSensors(); powerSensors = PowerSensorReader() }
         if enabled.contains(.battery) { battery = BatteryReader() }
     }
@@ -141,12 +158,16 @@ public final class StatsPoller {
         if network != nil, let s = try? network!.read() {
             latest.network = s
             push("net.up", s.uploadBytesPerSec); push("net.down", s.downloadBytesPerSec)
+            latest.netLatency = ping?.latest()
+            if let c = ping?.connectivity() { latest.connectivity = c }
+            if slow { latest.netLink = netLink?.read(interface: s.interfaceName) }
         }
         if gpu != nil, let s = try? gpu!.read() {
             latest.gpu = s; push("gpu", s.utilization)
         }
         if slow, let p = power?.read() {
-            latest.power = p; push("power", p.totalWatts)
+            latest.power = p
+            if enabled.contains(.power) { push("power", p.totalWatts) }
         }
         if slow, let temps = sensors?.read() {
             latest.temperatures = temps
@@ -161,6 +182,11 @@ public final class StatsPoller {
             if procs == nil { procs = ProcSampler() }
             let (byCPU, byMem) = procs!.sample(limit: 5)
             latest.topByCPU = byCPU; latest.topByMemory = byMem
+            if enabled.contains(.network) {
+                if netProc == nil { netProc = NetProcessReader() }
+                netProc!.refresh(limit: 8)
+                latest.topByNetwork = netProc!.latest()
+            }
         }
 
         // Snapshot the rings onto the delivered value so the UI never reaches back
