@@ -73,6 +73,37 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(o.x, right.minX + PanelGeometry.edgeInset - 0.5)
     }
 
+    func testFollowCursorRestoresSavedWhenOnSameScreen() {
+        let size = NSSize(width: 400, height: 300)
+        // Saved top-left at (120, top=900) lives on `main` (the cursor screen).
+        let o = PanelGeometry.followCursorOrigin(
+            size: size, raiseFraction: 0.1,
+            cursorFrame: main, cursorVisible: main,
+            saved: (x: 120, top: 900))
+        XCTAssertEqual(o.x, 120, accuracy: 0.5)            // restored x
+        XCTAssertEqual(o.y, 900 - 300, accuracy: 0.5)      // restored top - height
+    }
+
+    func testFollowCursorCentersWhenSavedOnDifferentScreen() {
+        let size = NSSize(width: 400, height: 300)
+        // Cursor is on `right`, but the saved spot lives on `main` → center on right.
+        let o = PanelGeometry.followCursorOrigin(
+            size: size, raiseFraction: 0,
+            cursorFrame: right, cursorVisible: right,
+            saved: (x: 120, top: 900))
+        XCTAssertEqual(o.x, right.midX - size.width / 2, accuracy: 0.5)
+        XCTAssertEqual(o.y, right.midY - size.height / 2, accuracy: 0.5)
+    }
+
+    func testFollowCursorCentersWhenNoSaved() {
+        let size = NSSize(width: 400, height: 300)
+        let o = PanelGeometry.followCursorOrigin(
+            size: size, raiseFraction: 0,
+            cursorFrame: main, cursorVisible: main, saved: nil)
+        XCTAssertEqual(o.x, main.midX - size.width / 2, accuracy: 0.5)
+        XCTAssertEqual(o.y, main.midY - size.height / 2, accuracy: 0.5)
+    }
+
     /// Hot-path budget: placement runs once per ⌥Space / Clipboard open on the main
     /// thread before the panel is shown. The pure geometry must be effectively free.
     /// Gate: full cursor-screen resolution (screen pick + centered origin) over a

@@ -45,6 +45,21 @@ enum PanelGeometry {
         return clampedOrigin(NSPoint(x: x, y: y), size: size, in: vf)
     }
 
+    /// `.cursorScreen` origin: follow the pointer across displays, but keep the exact
+    /// remembered position when it still lives on the screen under the cursor (so a
+    /// panel the user dragged shows/hides in the same spot for side-by-side work). If
+    /// `saved` is nil or sits on a different/disconnected screen, center on the cursor
+    /// screen (raised by `raiseFraction`).
+    static func followCursorOrigin(size: NSSize, raiseFraction: CGFloat,
+                                   cursorFrame: CGRect, cursorVisible: CGRect,
+                                   saved: (x: CGFloat, top: CGFloat)?) -> NSPoint {
+        if let s = saved, cursorFrame.contains(NSPoint(x: s.x, y: s.top - 1)) {
+            // Same screen as last time — honor the remembered spot, clamped on-screen.
+            return clampedOrigin(NSPoint(x: s.x, y: s.top - size.height), size: size, in: cursorVisible)
+        }
+        return centeredOrigin(size: size, in: cursorVisible, raiseFraction: raiseFraction)
+    }
+
     /// Clipboard History's runner-relative origin (`.lastPosition` mode): centered on
     /// the runner column and raised above the runner's top edge, clamped to the
     /// screen the runner sits on (`screenVisible`).
@@ -73,6 +88,16 @@ extension NSScreen {
             return screens[i]
         }
         return main ?? screens[0]
+    }
+
+    /// `.cursorScreen` origin for a panel of `size`, honoring the panel's own `saved`
+    /// top-left when it's still on the screen under the pointer (see `PanelGeometry`).
+    static func followCursorOrigin(size: NSSize, raiseFraction: CGFloat,
+                                   saved: (x: CGFloat, top: CGFloat)?) -> NSPoint {
+        let s = underCursor
+        return PanelGeometry.followCursorOrigin(
+            size: size, raiseFraction: raiseFraction,
+            cursorFrame: s.frame, cursorVisible: s.visibleFrame, saved: saved)
     }
 
     /// The screen the runner's saved top-left sits on (by its top-center probe),

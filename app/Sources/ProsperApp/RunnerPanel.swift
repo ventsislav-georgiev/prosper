@@ -166,8 +166,10 @@ final class RunnerPanel {
         let size = panel.frame.size
         switch Preferences.runnerPlacement {
         case .cursorScreen:
+            // Follow the pointer, but keep the remembered spot when the cursor is
+            // still on the screen it was dragged to.
             isProgrammaticMove = true
-            panel.setFrameOrigin(NSScreen.centeredOrigin(size: size, in: .underCursor))
+            panel.setFrameOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0, saved: Self.savedTopLeft()))
             isProgrammaticMove = false
         case .lastPosition:
             if let saved = UserDefaults.standard.dictionary(forKey: Self.originKey),

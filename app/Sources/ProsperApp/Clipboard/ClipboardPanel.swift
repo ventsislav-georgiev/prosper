@@ -15,8 +15,21 @@ final class ClipboardPanel {
     /// Opens the Settings window so the user can grant the Accessibility permission
     /// the auto-paste needs. Wired by AppDelegate to its shared settings opener.
     private let onOpenSettings: () -> Void
+    /// True while we reposition the panel ourselves, so the move observer doesn't
+    /// mistake a programmatic restore for a user drag and overwrite the saved spot.
+    private var isProgrammaticMove = false
+    private var moveObserver: NSObjectProtocol?
+    private static let originKey = "ClipboardPanelTopLeft"
 
     var isShown: Bool { panel.isVisible }
+
+    /// The panel's remembered top-left (x, maxY) from the user's last drag, or nil.
+    static func savedTopLeft() -> (x: CGFloat, top: CGFloat)? {
+        guard let saved = UserDefaults.standard.dictionary(forKey: originKey),
+              let x = saved["x"] as? CGFloat,
+              let top = saved["y"] as? CGFloat else { return nil }
+        return (x, top)
+    }
 
     init(onOpenSettings: @escaping () -> Void = {}) {
         self.onOpenSettings = onOpenSettings
@@ -58,12 +71,30 @@ final class ClipboardPanel {
         // FootprintWindow). `neonPanelSurface().clipShape` already rounds the content.
         hosting.layer?.masksToBounds = false
         panel.contentView = hosting
+
+        // Remember where the user drags the panel; restored on next present() when
+        // the cursor is still on that screen (see positionRelativeToRunner).
+        moveObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: panel, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isProgrammaticMove else { return }
+                self.saveOrigin()
+            }
+        }
+    }
+
+    private func saveOrigin() {
+        let f = panel.frame
+        UserDefaults.standard.set(["x": f.minX, "y": f.maxY], forKey: Self.originKey)
     }
 
     func present() {
         previousApp = NSWorkspace.shared.frontmostApplication
         model.reset(selecting: store.items.first?.id)
+        isProgrammaticMove = true
         positionRelativeToRunner()
+        isProgrammaticMove = false
         DockPolicy.windowDidShow(panel)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -72,14 +103,15 @@ final class ClipboardPanel {
     }
 
     /// Positions per `Preferences.runnerPlacement`. Under `.cursorScreen` (default)
-    /// it opens slightly above center on the screen under the pointer. Under
-    /// `.lastPosition` it co-locates with the command runner's remembered spot
-    /// (clamped to that screen). `.mainScreen` centers on the main display.
+    /// it follows the pointer but restores its own remembered drag position when the
+    /// cursor is still on that screen. Under `.lastPosition` it co-locates with the
+    /// command runner's remembered spot (clamped to that screen). `.mainScreen`
+    /// centers on the main display.
     private func positionRelativeToRunner() {
         let size = panel.frame.size
         switch Preferences.runnerPlacement {
         case .cursorScreen:
-            panel.setFrameOrigin(NSScreen.centeredOrigin(size: size, in: .underCursor, raiseFraction: 0.1))
+            panel.setFrameOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0.1, saved: Self.savedTopLeft()))
             return
         case .mainScreen:
             panel.center()
