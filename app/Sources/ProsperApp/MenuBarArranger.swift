@@ -49,9 +49,11 @@ enum MenuBarArranger {
     /// ponytail: no circuit breaker here — indexing only runs on explicit user
     /// action (Save / Apply / Re-index), never a loop, so it can't melt the CPU; the
     /// live enforcement loop (P4) is the one that wires `MenuBarCircuitBreaker`.
-    private static func revealAndIndex() async -> (items: [MenuBarItem], hashes: [CGWindowID: UInt64]) {
-        MenuBarManager.shared.setRevealed(true)
-        try? await Task.sleep(for: .milliseconds(120))
+    private static func revealAndIndex(reveal: Bool) async -> (items: [MenuBarItem], hashes: [CGWindowID: UInt64]) {
+        if reveal {
+            MenuBarManager.shared.setRevealed(true)
+            try? await Task.sleep(for: .milliseconds(120))
+        }
         let items = currentItems()
         let hashes = await MenuBarItemIndexer.hashes(for: items)
         lastIndexedHashes = hashes   // share with the live enforcer's cheap drift check
@@ -65,8 +67,18 @@ enum MenuBarArranger {
     /// Capture the current left→right order as the desired layout (with hashes so
     /// Tahoe items become resolvable). Async because it may index images.
     static func snapshotCurrentOrder() async -> [MenuBarIdentity] {
-        let (items, hashes) = await revealAndIndex()
-        return items.map { identity(for: $0, hash: hashes[$0.windowID]) }
+        // Block the live enforcer from reordering mid-capture (it would shift frames
+        // and the racing enumeration would record the same item twice).
+        isApplying = true
+        defer { isApplying = false }
+        let (items, hashes) = await revealAndIndex(reveal: true)
+        // Dedup by identity key: a transient reflow (or two CGS windows for one item)
+        // can surface the same identity twice; keep first occurrence, preserve order.
+        var seen = Set<String>()
+        return items.compactMap { item in
+            let id = identity(for: item, hash: hashes[item.windowID])
+            return seen.insert(id.key).inserted ? id : nil
+        }
     }
 
     /// Replay `desired` over the live bar. Reveals hidden items first (off-screen
@@ -84,13 +96,17 @@ enum MenuBarArranger {
     /// kick off a concurrent second pass.
     private(set) static var isApplying = false
 
+    /// `reveal: false` reorders only items already on-screen — used by LIVE mode so it
+    /// never force-reveals (then re-collapses) the hidden section every tick, which
+    /// looked like icons flickering in and out. Reveal-to-reorder (so hidden items can
+    /// be dragged too) stays for explicit actions: "Apply saved order" and on-demand.
     @discardableResult
-    static func apply(desired: [MenuBarIdentity]) async -> ApplyResult {
+    static func apply(desired: [MenuBarIdentity], reveal: Bool = true) async -> ApplyResult {
         guard !desired.isEmpty else { return ApplyResult(moved: 0, skippedUnresolved: 0, failed: 0) }
         isApplying = true
         defer { isApplying = false }
 
-        let (live, hashes) = await revealAndIndex()
+        let (live, hashes) = await revealAndIndex(reveal: reveal)
 
         // Live identities (title or fresh hash). First item wins a key (dup
         // unresolved keys can't be ordered apart).
