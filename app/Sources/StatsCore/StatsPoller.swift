@@ -21,13 +21,15 @@ public enum StatsModule: String, CaseIterable, Sendable {
     public var historyKeys: [String] {
         switch self {
         case .cpu: ["cpu"]; case .memory: ["memory"]; case .gpu: ["gpu"]
-        case .power: ["power"]; case .network: ["net.up", "net.down"]
-        case .sensors, .battery: []
+        case .power: ["power"]
+        // Network renders live up/down text, not a sparkline, and its popover has
+        // no chart — so it feeds no history ring (was allocating 2 dead rings/tick).
+        case .network, .sensors, .battery: []
         }
     }
 }
 
-public struct StatsSnapshot: Sendable {
+public struct StatsSnapshot: Sendable, Equatable {
     public var cpu: CPUSample?
     public var memory: MemorySample?
     public var network: NetworkSample?
@@ -135,8 +137,7 @@ public final class StatsPoller {
             latest.memory = s; push("memory", s.usedFraction)
         }
         if network != nil, let s = try? network!.read() {
-            latest.network = s
-            push("net.up", s.uploadBytesPerSec); push("net.down", s.downloadBytesPerSec)
+            latest.network = s   // rendered as live text, not charted — no history ring
         }
         if gpu != nil, let s = try? gpu!.read() {
             latest.gpu = s; push("gpu", s.utilization)
@@ -174,11 +175,11 @@ public final class StatsPoller {
     }
 }
 
-/// Minimal lock-free-ish boolean flag (popup open/closed) without importing a
-/// dependency. A plain os_unfair_lock guards a Bool — contention is nil.
+/// Thread-safe boolean flag (popup open/closed). `OSAllocatedUnfairLock` owns the
+/// state behind a stable heap pointer — avoids the `os_unfair_lock`-as-stored-var
+/// move hazard for zero contention.
 final class ManagedAtomicFlag {
-    private var value = false
-    private var lock = os_unfair_lock()
-    func set(_ v: Bool) { os_unfair_lock_lock(&lock); value = v; os_unfair_lock_unlock(&lock) }
-    func get() -> Bool { os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }; return value }
+    private let lock = OSAllocatedUnfairLock(initialState: false)
+    func set(_ v: Bool) { lock.withLock { $0 = v } }
+    func get() -> Bool { lock.withLock { $0 } }
 }

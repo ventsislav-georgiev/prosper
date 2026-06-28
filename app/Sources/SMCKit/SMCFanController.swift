@@ -79,7 +79,24 @@ public final class SMCFanController {
     }
     private func guardedWrite(_ key: String, _ bytes: [UInt8]) throws {
         guard keyAllowed(key) else { throw SMCError.writeNotAllowed(key) }
-        try smc.writeRawUnchecked(key, bytes)
+        // Centralized clamp: any RPM target write (`F{n}Tg`) is re-decoded and
+        // re-clamped to the absolute rails HERE, so no in-module caller can write
+        // an out-of-rail speed by reaching guardedWrite directly — the value bound
+        // no longer depends on every caller routing through setManual.
+        let safeBytes = key.hasSuffix("Tg") ? clampTargetBytes(bytes) : bytes
+        try smc.writeRawUnchecked(key, safeBytes)
+    }
+
+    /// Decode an RPM target (format depends on platform), clamp to the absolute
+    /// floor/ceiling, re-encode. Floor is the thermal hazard, so it's hard-guarded.
+    private func clampTargetBytes(_ bytes: [UInt8]) -> [UInt8] {
+        let ftst = hasFtst()
+        let rpm = ftst ? Double(SMCDecode.decodeFloatLE(bytes))
+                       : Double(SMCDecode.decodeFPE2(bytes))
+        guard rpm.isFinite else { return ftst ? SMCDecode.encodeFloatLE(Float(Self.absoluteFloorRPM))
+                                              : SMCDecode.encodeFPE2(Int(Self.absoluteFloorRPM)) }
+        let safe = Swift.min(Swift.max(rpm, Self.absoluteFloorRPM), Self.absoluteCeilRPM)
+        return ftst ? SMCDecode.encodeFloatLE(Float(safe)) : SMCDecode.encodeFPE2(Int(safe))
     }
 
     // MARK: Manual / auto
