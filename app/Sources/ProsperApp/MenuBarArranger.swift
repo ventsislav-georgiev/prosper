@@ -182,6 +182,44 @@ enum MenuBarArranger {
         return ApplyResult(moved: moved, skippedUnresolved: skippedUnresolved, failed: failed)
     }
 
+    /// Apply the user's always-hidden marks: move each marked live item to the LEFT
+    /// of the always-hidden separator (which stays expanded → off-screen), and pull
+    /// any unmarked item that drifted left of it back to the right. Reveals both bands
+    /// first so the drop points are on-screen, then restores the hidden state.
+    ///
+    /// macOS persists status-item positions across relaunch, so this only needs to run
+    /// when the marks change (and as a correction on reveal) — not on a loop. Best-
+    /// effort; per-item failures are logged, never thrown (it must not wedge Settings).
+    static func applyAlwaysHidden(keys: [String]) async {
+        guard MenuBarBridge.available, MenuBarManager.shared.hasAlwaysHiddenBand else { return }
+        isApplying = true
+        defer { isApplying = false }
+
+        MenuBarManager.shared.beginPlacement()
+        defer { MenuBarManager.shared.endPlacement() }
+        try? await Task.sleep(for: .milliseconds(150))   // let the collapsed bands lay out
+
+        guard let anchor = MenuBarManager.shared.alwaysHiddenAnchorWindowID(),
+              let anchorFrame = MenuBarBridge.frame(for: anchor) else { return }
+
+        let hidden = Set(keys)
+        let items = currentItems()
+        let hashes = await MenuBarItemIndexer.hashes(for: items)
+        await MenuBarItemMover.withCursorParked {
+            for item in items {
+                let key = identity(for: item, hash: hashes[item.windowID]).key
+                let isLeft = item.frame.minX < anchorFrame.minX
+                let dest: MenuBarItemMover.Destination?
+                if hidden.contains(key), !isLeft { dest = .leftOf(anchor) }
+                else if !hidden.contains(key), isLeft { dest = .rightOf(anchor) }
+                else { dest = nil }   // already on the correct side
+                guard let dest else { continue }
+                do { try await MenuBarItemMover.move(windowID: item.windowID, pid: item.pid, to: dest) }
+                catch { NSLog("prosper: always-hide placement failed for \(item.bundleID ?? "?"): \(error)") }
+            }
+        }
+    }
+
     /// Hash-only fallback when a desired item's exact key isn't live: among the same
     /// bundle's UNCLAIMED live hashes, pick the nearest within tolerance. Returns nil
     /// for title-resolved desired items (no hash to compare) or when nothing's close

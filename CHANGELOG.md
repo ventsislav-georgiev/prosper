@@ -40,9 +40,14 @@ tag from the now-released section and put it on the new top draft.
     the system hides per-app identity, by capturing the icons directly (needs Screen
     Recording — there's an in-place prompt; without it you get placeholder glyphs).
     Icons keep their real proportions instead of being squished into squares.
-  - Removed the confusing two-tier (always-hidden) section. Marking a specific icon
-    as always-hidden belongs in Settings and is coming back there once reordering is
-    confirmed working on your Mac.
+  - **Mark any icon "always hidden" from Settings.** In the saved-order list, click
+    the eye next to an icon to keep it permanently off the bar (it moves behind an
+    always-hidden separator and never shows, even on reveal); click again to bring it
+    back. Replaces the old confusing two-tier drag section — you now pick the exact
+    icons instead of dragging across an invisible divider. Needs the move test passed.
+  - System-fixed menu extras (the clock, Control Center's cluster) no longer appear in
+    the orderable list — macOS pins them and they can't be moved, so listing them only
+    invited a move that could never land.
   - The ordering self-test now waits for its probe icons to lay out before checking,
     and reports a precise reason if it can't run, instead of a generic failure.
   - The saved order no longer fills up with unidentifiable "Item-0" entries. macOS 26

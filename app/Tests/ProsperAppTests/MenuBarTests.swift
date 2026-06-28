@@ -275,8 +275,12 @@ final class MenuBarTests: XCTestCase {
         s.mode = .live
         s.desiredOrder = [MenuBarIdentity(bundleID: "a", title: "CPU"),
                           MenuBarIdentity(bundleID: "a", title: "RAM")]
+        s.alwaysHidden = ["a#RAM"]
         let data = try JSONEncoder().encode(s)
-        XCTAssertEqual(try JSONDecoder().decode(MenuBarOrderStore.self, from: data), s)
+        let back = try JSONDecoder().decode(MenuBarOrderStore.self, from: data)
+        XCTAssertEqual(back, s)
+        XCTAssertTrue(back.isAlwaysHidden("a#RAM"))
+        XCTAssertFalse(back.isAlwaysHidden("a#CPU"))
     }
 
     func testOrderStoreDecodesFromMinimalJSON() throws {
