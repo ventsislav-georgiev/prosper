@@ -15,10 +15,14 @@ public struct CPUReader: StatsReader {
     private let facts: SystemFacts
     private let eFirst: Bool
     private var prev: [(user: UInt32, system: UInt32, idle: UInt32, nice: UInt32)] = []
+    // Reference type: residency state lives across reads. nil on Intel / when the
+    // IOReport "CPU Stats" group or DVFS tables are unavailable → freq stays NaN.
+    private let freq: CPUFrequency?
 
-    public init(facts: SystemFacts = .current, eCoresFirst: Bool = true) {
+    public init(facts: SystemFacts = .current, eCoresFirst: Bool = true, frequency: Bool = true) {
         self.facts = facts
         self.eFirst = eCoresFirst
+        self.freq = frequency ? CPUFrequency() : nil
     }
 
     public mutating func read() throws -> CPUSample {
@@ -49,6 +53,9 @@ public struct CPUReader: StatsReader {
 
         let loadAvg = Self.loadAverage()
         let uptime = Self.uptimeSeconds()
+        // Residency is a ratio over the interval — both readers share the same
+        // tick cadence, so freq's delta window lines up with the load delta.
+        let f = freq?.read() ?? (.nan, .nan)
 
         // First read: store baseline, report idle (no prior delta to rate).
         guard prev.count == n else {
@@ -56,7 +63,8 @@ public struct CPUReader: StatsReader {
             return CPUSample(total: 0, performance: 0, efficiency: 0,
                              system: 0, user: 0, idle: 1,
                              perCore: Array(repeating: 0, count: n),
-                             loadAverage: loadAvg, uptimeSeconds: uptime)
+                             loadAverage: loadAvg, uptimeSeconds: uptime,
+                             freqE: f.0, freqP: f.1)
         }
 
         var perCore = [Double](repeating: 0, count: n)
@@ -84,7 +92,8 @@ public struct CPUReader: StatsReader {
             user: sumTotal > 0 ? sumUser / sumTotal : 0,
             idle: sumTotal > 0 ? sumIdle / sumTotal : 1,
             perCore: perCore,
-            loadAverage: loadAvg, uptimeSeconds: uptime)
+            loadAverage: loadAvg, uptimeSeconds: uptime,
+            freqE: f.0, freqP: f.1)
     }
 
     /// 1/5/15-minute run-queue load averages via libc `getloadavg`.
