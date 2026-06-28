@@ -29,10 +29,20 @@ final class MenuBarManager: NSObject {
     /// 10 000) so it stays correct on ultrawide / Retina-scaled displays.
     private var expandedLength: CGFloat { (NSScreen.main?.frame.width ?? 2000) + 200 }
 
-    private var hiddenDivider: NSStatusItem?
-    private var alwaysHiddenDivider: NSStatusItem?
+    /// The always-visible control item (rightmost of ours). Clicking it toggles the
+    /// hidden section; ⌥-clicking toggles the always-hidden band. It NEVER expands —
+    /// that's the whole fix: a single divider that did double duty as chevron AND
+    /// expander rode itself (and Prosper's own icon) off-screen when it expanded, so
+    /// nothing was clickable. Splitting the control from the expander (the Ice /
+    /// Bartender model) keeps the chevron on screen at all times.
+    private var chevron: NSStatusItem?
+    /// Empty expanding separator. Sits to the LEFT of the chevron; growing its
+    /// `length` pushes every item left of it (the hidden section) off the screen edge.
+    private var hiddenSeparator: NSStatusItem?
+    /// Second-tier expander for the always-hidden band (leftmost of ours).
+    private var alwaysHiddenSeparator: NSStatusItem?
 
-    /// Transient: is the hidden section currently revealed (dividers collapsed)?
+    /// Transient: is the hidden section currently revealed (separators collapsed)?
     private var revealed = false
     private var rehideTimer: Timer?
     private var outsideMonitor: Any?
@@ -42,7 +52,7 @@ final class MenuBarManager: NSObject {
     /// true so a reconcile before the registry wires up doesn't suppress setup.
     var menubarExtLive = true
 
-    var isActive: Bool { hiddenDivider != nil }
+    var isActive: Bool { chevron != nil }
 
     // MARK: - Lifecycle
 
@@ -70,29 +80,31 @@ final class MenuBarManager: NSObject {
     }
 
     private func setup() {
-        guard hiddenDivider == nil else { return }
+        guard chevron == nil else { return }
         // Apply persisted spacing (no relaunch — takes effect as apps launch).
         MenuBarSpacing.apply(spacing: Preferences.menuBarStore.clampedSpacing)
 
-        let glyph = Preferences.menuBarStore.chevronStyle.collapsedSymbol
-        let div = makeDivider(symbol: glyph, autosave: "ProsperMenuBarHiddenDivider",
-                              action: #selector(toggleHidden))
-        hiddenDivider = div
-        MenuBarBridge.dividerWindowIDs = dividerWindowIDs()
-
+        // Order matters: the FIRST-created status item is rightmost, later ones appear
+        // to its left. We want screen order (left→right):
+        //   [alwaysHiddenSeparator] [always-hidden items] [hiddenSeparator] [hidden items] [chevron] [visible items]
+        // so the chevron (created first) stays right of the expanders and is never
+        // pushed off-screen when they grow.
+        chevron = makeChevron()
+        hiddenSeparator = makeSeparator(autosave: "ProsperMenuBarHiddenSeparator")
         if Preferences.menuBarStore.alwaysHiddenEnabled {
-            let alt = makeDivider(symbol: glyph, autosave: "ProsperMenuBarAlwaysHiddenDivider",
-                                  action: #selector(toggleAlwaysHidden))
-            alwaysHiddenDivider = alt
-            MenuBarBridge.dividerWindowIDs = dividerWindowIDs()
+            alwaysHiddenSeparator = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator")
+        }
+        for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
+            ProsperStatusItems.register(item)
         }
 
-        // Start in the hidden state (dividers expanded). A crash can't strand
+        // Start in the hidden state (separators expanded). A crash can't strand
         // third-party icons off-screen: our status items die with the process, so
         // the OS reflows the menu bar automatically — no persistent off-screen push.
         revealed = false
         revealedAlwaysHidden = false
         applyDividerLengths()
+        publishOwnWindowIDs()
         observeTermination()
         observeScreenChanges()
     }
@@ -100,10 +112,12 @@ final class MenuBarManager: NSObject {
     private func teardown() {
         rehideTimer?.invalidate(); rehideTimer = nil
         stopRevealMonitors()
-        if let d = hiddenDivider { NSStatusBar.system.removeStatusItem(d) }
-        if let d = alwaysHiddenDivider { NSStatusBar.system.removeStatusItem(d) }
-        hiddenDivider = nil
-        alwaysHiddenDivider = nil
+        for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
+            NSStatusBar.system.removeStatusItem(item)
+        }
+        chevron = nil
+        hiddenSeparator = nil
+        alwaysHiddenSeparator = nil
         MenuBarBridge.dividerWindowIDs = []
         revealed = false
         revealedAlwaysHidden = false
@@ -115,25 +129,50 @@ final class MenuBarManager: NSObject {
         }
     }
 
-    private func makeDivider(symbol: String, autosave: String, action: Selector) -> NSStatusItem {
+    /// The always-visible clickable control. Left-click toggles the hidden section;
+    /// ⌥-left-click toggles the always-hidden band (when the two-tier mode is on).
+    private func makeChevron() -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: Lengths.standard)
-        item.autosaveName = autosave   // distinct per divider so positions don't collide
+        item.autosaveName = "ProsperMenuBarChevron"
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Menu Bar")
+            let glyph = Preferences.menuBarStore.chevronStyle.collapsedSymbol
+            button.image = NSImage(systemSymbolName: glyph, accessibilityDescription: "Menu Bar")
             button.image?.isTemplate = true
             button.target = self
-            button.action = action
+            button.action = #selector(chevronClicked)
         }
         return item
     }
 
-    private func dividerWindowIDs() -> Set<CGWindowID> {
-        var ids = Set<CGWindowID>()
-        for d in [hiddenDivider, alwaysHiddenDivider] {
-            if let n = d?.button?.window?.windowNumber,
-               let id = MenuBarLogic.windowID(forWindowNumber: n) { ids.insert(id) }
+    /// An empty, near-invisible expander. Shows a faint hairline boundary while
+    /// REVEALED (so the user can see where to ⌘-drag icons), and rides off-screen
+    /// when expanded to hide. It is never the click target — the chevron is.
+    private func makeSeparator(autosave: String) -> NSStatusItem {
+        let item = NSStatusBar.system.statusItem(withLength: Lengths.standard)
+        item.autosaveName = autosave
+        if let button = item.button {
+            button.attributedTitle = NSAttributedString(
+                string: "￨", attributes: [.foregroundColor: NSColor.tertiaryLabelColor])
+            // Not interactive: clicks fall through to do nothing rather than toggle.
+            button.target = nil
+            button.action = nil
         }
-        return ids
+        return item
+    }
+
+    /// Publish our own control windows' CGS ids for the preview-health probe. Frame
+    /// match needs the windows laid out, so defer one runloop hop past creation
+    /// (windowNumber is unusable on Tahoe — see MenuBarBridge.windowID(forItemMinX:)).
+    private func publishOwnWindowIDs() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self, self.chevron != nil else { return }
+            var ids = Set<CGWindowID>()
+            for item in [self.chevron, self.hiddenSeparator, self.alwaysHiddenSeparator].compactMap({ $0 }) {
+                if let x = item.button?.window?.frame.minX,
+                   let id = MenuBarBridge.windowID(forItemMinX: x) { ids.insert(id) }
+            }
+            MenuBarBridge.dividerWindowIDs = ids
+        }
     }
 
     // MARK: - Show / hide (the hot path)
@@ -147,21 +186,32 @@ final class MenuBarManager: NSObject {
         let l = MenuBarLogic.dividerLengths(revealed: revealed,
                                             revealedAlwaysHidden: revealedAlwaysHidden,
                                             standard: Lengths.standard, expanded: expandedLength)
-        hiddenDivider?.length = l.hidden
-        alwaysHiddenDivider?.length = l.alwaysHidden
+        hiddenSeparator?.length = l.hidden
+        alwaysHiddenSeparator?.length = l.alwaysHidden
         updateChevron()
     }
 
     private var revealedAlwaysHidden = false
 
+    /// Chevron click handler. Plain click toggles the hidden section; ⌥-click toggles
+    /// the always-hidden band (when enabled).
+    @objc private func chevronClicked() {
+        let optionDown = NSApp.currentEvent?.modifierFlags.contains(.option) ?? false
+        if optionDown && alwaysHiddenSeparator != nil {
+            toggleAlwaysHidden()
+        } else {
+            toggleHidden()
+        }
+    }
+
     @objc func toggleHidden() {
-        guard hiddenDivider != nil else { return }
+        guard chevron != nil else { return }
         if isActiveSpaceFullscreen { return }   // menu bar is auto-hidden anyway
         setRevealed(!revealed)
     }
 
     @objc func toggleAlwaysHidden() {
-        guard alwaysHiddenDivider != nil else { return }
+        guard alwaysHiddenSeparator != nil else { return }
         if isActiveSpaceFullscreen { return }
         revealedAlwaysHidden.toggle()
         if revealedAlwaysHidden {
@@ -188,17 +238,13 @@ final class MenuBarManager: NSObject {
 
     private func updateChevron() {
         let style = Preferences.menuBarStore.chevronStyle
-        setGlyph(hiddenDivider, revealed ? style.revealedSymbol : style.collapsedSymbol)
-        setGlyph(alwaysHiddenDivider, revealedAlwaysHidden ? style.revealedSymbol : style.collapsedSymbol)
-    }
-
-    private func setGlyph(_ item: NSStatusItem?, _ symbol: String) {
-        guard let button = item?.button else { return }
+        guard let button = chevron?.button else { return }
+        let symbol = revealed ? style.revealedSymbol : style.collapsedSymbol
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Menu Bar")
         button.image?.isTemplate = true
     }
 
-    /// Re-skin the dividers after a chevron-style change (cheap: two image swaps,
+    /// Re-skin the chevron after a chevron-style change (cheap: one image swap,
     /// no teardown). Called from Settings.
     func refreshChevronStyle() { updateChevron() }
 
@@ -265,10 +311,10 @@ final class MenuBarManager: NSObject {
     /// each item's x against the divider window x-positions.
     func sectionedItems() -> [(item: MenuBarItem, section: MenuBarSection)] {
         let items = currentItems()
-        guard let hiddenX = dividerFrameX(hiddenDivider) else {
+        guard let hiddenX = dividerFrameX(hiddenSeparator) else {
             return items.map { ($0, .visible) }
         }
-        let altX = dividerFrameX(alwaysHiddenDivider)
+        let altX = dividerFrameX(alwaysHiddenSeparator)
         return items.map { ($0, MenuBarLogic.section(forItemX: $0.frame.minX,
                                                       hiddenDividerX: hiddenX,
                                                       alwaysHiddenDividerX: altX)) }

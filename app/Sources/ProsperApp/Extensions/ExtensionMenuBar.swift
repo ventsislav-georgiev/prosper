@@ -33,8 +33,10 @@ final class ExtensionMenuBar {
     func set(extensionID: String, id: String, json: String) {
         guard let obj = Self.object(json) else { return }
         let k = Self.key(extensionID, id)
+        let isNew = items[k] == nil
         let item = items[k] ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         items[k] = item
+        if isNew { ProsperStatusItems.register(item) }   // self-filter source for the menu-bar manager
 
         if let button = item.button {
             button.title = (obj["title"] as? String) ?? ""

@@ -107,6 +107,7 @@ final class StatsController {
         for m in modules where items[m] == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             item.autosaveName = "ProsperStats-\(m.rawValue)"
+            ProsperStatusItems.register(item)   // self-filter source for the menu-bar manager
             guard let button = item.button else { continue }
             let host = NSHostingView(rootView: StatsMenuWidget(module: m, store: store))
             host.translatesAutoresizingMaskIntoConstraints = false
