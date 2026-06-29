@@ -85,13 +85,52 @@ public final class IOHIDSensors {
         if services.isEmpty { refreshServices() }
         var out = [TempSensor]()
         out.reserveCapacity(services.count)
+        var counters = [Int: Int]()   // per-pattern running index for the % placeholder
         for s in services {
             guard let ev = copyEvt(s, Int64(Self.kTemperature), 0, 0)?.takeRetainedValue() else { continue }
             let v = getFloat(ev, Int64(Self.kTemperature) << 16)
             guard v > 0, v < 150 else { continue }   // reject bogus/unpopulated
-            let name = (copyProp(s, "Product" as CFString)?.takeRetainedValue() as? String) ?? "Sensor"
-            out.append(TempSensor(name: name, celsius: v))
+            let raw = (copyProp(s, "Product" as CFString)?.takeRetainedValue() as? String) ?? "Sensor"
+            out.append(TempSensor(name: Self.label(raw, counters: &counters), celsius: v))
         }
         return out
+    }
+
+    // exelban/Stats `HIDSensorsList` (Modules/Sensors/values.swift): maps the raw
+    // IOHIDEventSystem "Product" string to a human label. `%` is replaced by a 1-based
+    // running index so the N sensors sharing a pattern (e.g. every "pACC MTR Temp
+    // Sensor") read as "CPU performance core 1…N" instead of cryptic raw duplicates.
+    // Unmatched names (e.g. the static "PMU tcal" calibration reference) pass through
+    // raw — honest, and skipped by the headline auto-pick.
+    private static let labelPatterns: [(key: String, name: String)] = [
+        ("pACC MTR Temp Sensor%", "CPU performance core %"),
+        ("eACC MTR Temp Sensor%", "CPU efficiency core %"),
+        ("GPU MTR Temp Sensor%",  "GPU core %"),
+        ("SOC MTR Temp Sensor%",  "SOC core %"),
+        ("ANE MTR Temp Sensor%",  "Neural engine %"),
+        ("ISP MTR Temp Sensor%",  "Image signal processor %"),
+        ("PMGR SOC Die Temp Sensor%", "Power manager die %"),
+        ("PMU tdev%",             "Power management unit dev %"),
+        ("PMU tdie%",             "Power management unit die %"),
+        ("gas gauge battery",     "Battery"),
+        ("NAND CH% temp",         "Disk %"),
+    ]
+
+    /// Map one raw Product name to its friendly label, numbering duplicates 1…N.
+    /// `counters` carries the per-pattern index across one full `read()`.
+    static func label(_ raw: String, counters: inout [Int: Int]) -> String {
+        for (i, p) in labelPatterns.enumerated() {
+            let parts = p.key.components(separatedBy: "%")
+            // No placeholder → exact match; else match the literal prefix AND suffix
+            // around the `%` (handles trailing-% like "PMU tdie%" and mid-% like
+            // "NAND CH% temp").
+            let matched = parts.count == 1 ? (raw == p.key)
+                                           : (raw.hasPrefix(parts[0]) && raw.hasSuffix(parts[1]))
+            guard matched else { continue }
+            guard p.name.contains("%") else { return p.name }   // single named sensor
+            let n = (counters[i] ?? 0) + 1; counters[i] = n
+            return p.name.replacingOccurrences(of: "%", with: "\(n)")
+        }
+        return raw
     }
 }

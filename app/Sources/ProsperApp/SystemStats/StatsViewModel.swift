@@ -90,7 +90,7 @@ extension StatsModule {
         case .memory: return s.memory?.usedFraction
         case .gpu: return s.gpu?.utilization
         // Normalize temp to 0…1 over a 30–100 °C comfort→hot band.
-        case .sensors: return s.temperatures?.map(\.celsius).max().map { min(1, max(0, ($0 - 30) / 70)) }
+        case .sensors: return s.headlineTemperature(pinned: Preferences.sensorsHeadlineSensor).map { min(1, max(0, ($0 - 30) / 70)) }
         case .battery: return s.battery.map { 1 - $0.charge }   // ramp reddens as it drains
         case .power: return s.power.map { min(1, $0.totalWatts / 60) }
         case .network: return nil
@@ -116,7 +116,7 @@ extension StatsModule {
         case .cpu: return s.cpu.map { StatsFormat.percent($0.total) } ?? "—"
         case .memory: return s.memory.map { StatsFormat.percent($0.usedFraction) } ?? "—"
         case .gpu: return s.gpu.map { StatsFormat.percent($0.utilization) } ?? "—"
-        case .sensors: return s.temperatures?.map(\.celsius).max().map { StatsFormat.temp($0) } ?? "—"
+        case .sensors: return s.headlineTemperature(pinned: Preferences.sensorsHeadlineSensor).map { StatsFormat.temp($0) } ?? "—"
         case .battery: return s.battery.map { StatsFormat.percent($0.charge) } ?? "—"
         case .power: return s.power.map { StatsFormat.watts($0.totalWatts) } ?? "—"
         case .network: return ""   // rendered as two channels

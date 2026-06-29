@@ -50,6 +50,19 @@ public struct StatsSnapshot: Sendable {
     /// thread — no cross-queue `sync` hop into the poller during view rendering.
     public var histories: [String: [Double]] = [:]
     public init() {}
+
+    /// The temperature shown as the Sensors headline (menu bar + popup big readout).
+    /// `pinned` names a sensor the user chose; if it's present its value wins. With no
+    /// pick we take the hottest LIVE sensor, skipping static calibration references
+    /// (names containing "cal", e.g. "PMU tcal") that never move and would otherwise
+    /// peg the readout — the "stuck at 52°" report. Falls back to the plain max if a
+    /// machine somehow exposes only calibration sensors.
+    public func headlineTemperature(pinned: String? = nil) -> Double? {
+        guard let temps = temperatures, !temps.isEmpty else { return nil }
+        if let pinned, let s = temps.first(where: { $0.name == pinned }) { return s.celsius }
+        let live = temps.filter { !$0.name.lowercased().contains("cal") }
+        return (live.isEmpty ? temps : live).map(\.celsius).max()
+    }
 }
 
 public final class StatsPoller {

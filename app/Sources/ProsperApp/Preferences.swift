@@ -139,8 +139,10 @@ enum Preferences {
         static let agentEnabled = "agentEnabled"
         static let systemStatsEnabled = "systemStatsEnabled"
         static let fanManualEnabled = "fanManualEnabled"
+        static let fanManualConsent = "fanManualConsent"
         static let fanTargets = "fanTargets"
         static let statsRefreshInterval = "statsRefreshInterval"
+        static let sensorsHeadlineSensor = "sensorsHeadlineSensor"
         static let dragSnapEnabled = "dragSnapEnabled"
         static let dragSnapStyle = "dragSnapStyle"
         static let dragSnapModifier = "dragSnapModifier"
@@ -782,6 +784,17 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.fanManualEnabled) }
     }
 
+    /// One-time acknowledgement that the user understands manual fan control writes
+    /// hardware as root and can overheat. Once granted, re-engaging manual (e.g.
+    /// after toggling back to Automatic) goes straight to the unlock instead of
+    /// re-showing the risk prompt every time — consent persists, the per-engage
+    /// hardware safety (the thermalmonitord unlock handoff, reset-on-sleep) does not
+    /// depend on it.
+    static var fanManualConsent: Bool {
+        get { defaults.bool(forKey: Keys.fanManualConsent) }   // absent → false
+        set { defaults.set(newValue, forKey: Keys.fanManualConsent) }
+    }
+
     /// Saved per-fan manual target RPM, keyed by SMC fan index. Re-applied on launch
     /// and after wake (the daemon never persists fan state — NO save-state on its
     /// side — so the app is the single owner of intent). Stored as a [String: Double]
@@ -794,6 +807,18 @@ enum Preferences {
         set {
             let raw = Dictionary(uniqueKeysWithValues: newValue.map { (String($0.key), $0.value) })
             defaults.set(raw, forKey: Keys.fanTargets)
+        }
+    }
+
+    /// Name of the temperature sensor the user pinned as the Sensors headline (menu
+    /// bar + popup big readout). nil → auto-pick the hottest live sensor (skipping
+    /// static calibration references). Stored by sensor name; an absent/renamed
+    /// sensor falls back to auto.
+    static var sensorsHeadlineSensor: String? {
+        get { defaults.string(forKey: Keys.sensorsHeadlineSensor) }
+        set {
+            if let v = newValue { defaults.set(v, forKey: Keys.sensorsHeadlineSensor) }
+            else { defaults.removeObject(forKey: Keys.sensorsHeadlineSensor) }
         }
     }
 

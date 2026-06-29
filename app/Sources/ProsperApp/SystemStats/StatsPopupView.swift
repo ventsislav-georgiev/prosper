@@ -45,6 +45,9 @@ struct StatsPopupView: View {
     @State private var fanBusy = false           // engage in flight (daemon round-trip)
     @State private var fanError: String?         // last engage failure, shown inline
 
+    /// Sensor the user pinned as the headline (menu bar + big readout); nil = auto.
+    @State private var headlineSensor = Preferences.sensorsHeadlineSensor
+
     var body: some View {
         VStack(alignment: .leading, spacing: sz(12)) {
             header
@@ -182,7 +185,7 @@ struct StatsPopupView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var maxTemp: Double? { store.snapshot.temperatures?.map(\.celsius).max() }
+    private var maxTemp: Double? { store.snapshot.headlineTemperature(pinned: Preferences.sensorsHeadlineSensor) }
     private var load1: Double? {
         guard let l = store.snapshot.cpu?.loadAverage, l.count == 3 else { return nil }
         return l[0]
@@ -499,6 +502,7 @@ struct StatsPopupView: View {
             if !fans.isEmpty { fanSection }
             if !temps.isEmpty {
                 section("Temperature")
+                headlinePicker(temps)
                 // offset id, not name: duplicate sensor names (e.g. several "PMU tdie") are common.
                 let rows = ForEach(Array(temps.enumerated()), id: \.offset) { _, t in kv(t.name, StatsFormat.tempDetail(t.celsius)) }
                 if temps.count > 8 {
@@ -553,6 +557,7 @@ struct StatsPopupView: View {
                         Text("Manual").tag(1)
                     }
                     .labelsHidden().pickerStyle(.segmented).controlSize(.small)
+                    .frame(maxWidth: .infinity)
                     .disabled(fanBusy)
                 Button { applyFraction(0) } label: { Image(systemName: "minus.circle") }
                     .buttonStyle(.plain).foregroundStyle(manual ? Neon.textPrimary : Neon.textSecondary.opacity(0.4))
@@ -561,6 +566,7 @@ struct StatsPopupView: View {
                     .buttonStyle(.plain).foregroundStyle(manual ? Neon.blueBright : Neon.textSecondary.opacity(0.4))
                     .disabled(!manual).help("Full speed (maximum RPM)")
             }
+            .frame(maxWidth: .infinity)
             if manual {
                 Slider(value: Binding(get: { fanFraction }, set: { applyFraction($0) }), in: 0...1)
                     .controlSize(.mini)
@@ -638,8 +644,9 @@ struct StatsPopupView: View {
     }
 
     private func selectManualAll() {
-        if fanManual { applyFraction(fanFraction) }   // already trusted
-        else { pendingManual = true }                  // first time → inline confirm
+        if fanManual { applyFraction(fanFraction) }            // already engaged
+        else if Preferences.fanManualConsent { confirmManualAll() }  // acknowledged before → straight to engage
+        else { pendingManual = true }                          // first time → inline confirm
     }
 
     /// Turn manual on (post-confirmation): seed every fan at its current RPM, then
@@ -661,6 +668,7 @@ struct StatsPopupView: View {
 
     private func confirmManualAll() {
         pendingManual = false
+        Preferences.fanManualConsent = true   // remember the acknowledgement; don't re-prompt on re-engage
         fanError = nil
         fanBusy = true
         var t = Preferences.fanTargets
@@ -898,6 +906,37 @@ struct StatsPopupView: View {
             Text(k).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary).lineLimit(1)
             Spacer(minLength: sz(8))
             Text(v).font(Neon.font(.caption, weight: .semibold).monospacedDigit())
+        }
+    }
+
+    /// Lets the user pin which sensor drives the headline (menu bar + big readout),
+    /// exelban-style. "Auto" picks the hottest live sensor (skipping the static
+    /// calibration reference that otherwise pegs the value). A pinned sensor that
+    /// later disappears falls back to Auto automatically (headlineTemperature returns
+    /// the auto value when the name isn't found).
+    private func headlinePicker(_ temps: [TempSensor]) -> some View {
+        HStack {
+            Text("Headline").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            Spacer(minLength: sz(8))
+            Menu {
+                Picker("", selection: Binding(
+                    get: { headlineSensor ?? "" },
+                    set: { sel in
+                        let v = sel.isEmpty ? nil : sel
+                        headlineSensor = v
+                        Preferences.sensorsHeadlineSensor = v
+                    })) {
+                        Text("Auto (hottest)").tag("")
+                        ForEach(Array(temps.enumerated()), id: \.offset) { _, t in
+                            Text(t.name).tag(t.name)
+                        }
+                    }
+                    .labelsHidden().pickerStyle(.inline)
+            } label: {
+                Text(headlineSensor ?? "Auto (hottest)")
+                    .font(Neon.font(.caption, weight: .semibold)).lineLimit(1)
+            }
+            .menuStyle(.borderlessButton).fixedSize()
         }
     }
 
