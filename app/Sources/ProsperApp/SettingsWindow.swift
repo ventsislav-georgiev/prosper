@@ -2559,6 +2559,13 @@ private struct MenuBarPane: View {
                 if orderStore.enabled {
                     NeonDivider()
                     probeStatusRow
+                    NeonDivider()
+                    Toggle("Keep new icons visible", isOn: Binding(
+                        get: { orderStore.revealNewItems },
+                        set: { v in mutateOrder { $0.revealNewItems = v } }))
+                        .disabled(probeOK != true)
+                    Text("When a newly-launched app's icon lands behind the chevron (macOS always inserts new items there), move it out so you see it. You can hide it again afterwards.")
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     if !screenRecOK {
                         NeonDivider()
                         screenRecordingRow
