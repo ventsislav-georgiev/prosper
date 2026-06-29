@@ -269,6 +269,17 @@ Prosper is free and open source. Extend it without touching the core: write **Lu
 
 ---
 
+## Acknowledgements
+
+Prosper stands on the shoulders of other open-source projects we learned a great deal from:
+
+- **[exelban/Stats](https://github.com/exelban/stats)** — the System Stats modules (CPU / RAM / GPU / network / sensors / fans) draw heavily on Stats' implementation and popup UI/UX. Much of our know-how for the private IOReport / IOHID sensor paths and the SMC fan-control sequence came from studying it.
+- **[jordanbaird/Ice](https://github.com/jordanbaird/Ice)** — our menu-bar management (hiding, reordering, layout) is modelled on Ice's approach.
+
+Huge thanks to both — their work shaped ours. Also building on mlx-swift, swift-transformers, GRDB.swift, Sparkle, TOMLDecoder, and Apple's Vision / ScreenCaptureKit.
+
+---
+
 ## License
 
 Prosper is **free and open source**, licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE). You're free to use, study, modify, and redistribute it; derivative works must also be GPLv3. Every feature is free; [supporting](#support-prosper) the project is optional.
