@@ -158,12 +158,20 @@ enum MenuBarArranger {
     }
 
     /// After the order pass the desired items sit in their saved relative order
-    /// (always-hidden, then hidden, then visible). Restore band MEMBERSHIP by dropping
-    /// the separators at their right boundaries — the hidden separator just LEFT of the
-    /// first visible item, the always-hidden separator just LEFT of the first merely-
-    /// hidden item — so on re-collapse everything to a separator's left goes off-screen.
-    /// Moving the (own) separators with `.leftOf` is reliable on Tahoe; pulling each item
-    /// across with `.rightOf` is not. No-ops when there's no hidden band to restore.
+    /// (always-hidden, then hidden, then visible). Restore band MEMBERSHIP by re-seating
+    /// our three OWN control items so the steady-state layout is, left→right:
+    ///   [always-hidden] altSep [hidden] hiddenSep chevron [visible]
+    /// Expanding a separator pushes everything to its LEFT off-screen, so the chevron —
+    /// the always-visible click target — MUST sit on the visible side of the hidden
+    /// separator. The old pass moved only the hidden separator and left the chevron
+    /// floating; if the chevron ended up left of the (then-expanded) separator it was
+    /// swept off-screen too, leaving nothing to click to reveal the hidden band.
+    ///
+    /// Both the separator and the chevron anchor on `firstVisible` (a real managed item
+    /// that doesn't move), via `.leftOf` only (reliable on Tahoe; `.rightOf` is not).
+    /// ORDER MATTERS: seat the hidden separator first, then the chevron `.leftOf` the
+    /// same anchor so the chevron inserts BETWEEN the separator and the visible band —
+    /// `hiddenSep, chevron, firstVisible`. No-ops when there's no hidden band to restore.
     private static func placeDividers(desired: [MenuBarIdentity],
                                       hiddenKeys: [String], alwaysHiddenKeys: [String]) async {
         guard !hiddenKeys.isEmpty || !alwaysHiddenKeys.isEmpty else { return }
@@ -179,14 +187,29 @@ enum MenuBarArranger {
         let firstVisible = desired.first { !hidden.contains($0.key) && !always.contains($0.key) }
         let firstHidden = desired.first { hidden.contains($0.key) }
         let pid = getpid()
+        let mgr = MenuBarManager.shared
+        // Read all three control-item window ids while at rest — windowID is stable for
+        // the window's lifetime, so these stay valid through the moves that follow even
+        // though each move reflows the bar (and the AppKit frame would read stale).
+        let hiddenSep = mgr.hiddenAnchorWindowID()
+        let chevron = mgr.chevronAnchorWindowID()
+        let altSep = mgr.alwaysHiddenAnchorWindowID()
         await MenuBarItemMover.withCursorParked {
-            if let fv = firstVisible.flatMap({ win[$0.key] }),
-               let sep = MenuBarManager.shared.hiddenAnchorWindowID() {
-                try? await MenuBarItemMover.move(windowID: sep, pid: pid, to: .leftOf(fv.windowID))
+            if let fv = firstVisible.flatMap({ win[$0.key] }) {
+                // 1. Hidden separator immediately left of the first visible item.
+                if let sep = hiddenSep {
+                    try? await MenuBarItemMover.move(windowID: sep, pid: pid, to: .leftOf(fv.windowID))
+                }
+                // 2. Chevron left of the SAME anchor → inserts between the separator and
+                //    the visible band, keeping the click target on the visible side.
+                if let chevron {
+                    try? await MenuBarItemMover.move(windowID: chevron, pid: pid, to: .leftOf(fv.windowID))
+                }
             }
-            if !always.isEmpty,
-               let boundary = (firstHidden ?? firstVisible).flatMap({ win[$0.key] }),
-               let altSep = MenuBarManager.shared.alwaysHiddenAnchorWindowID() {
+            // 3. Always-hidden separator just left of the first hidden item (its right
+            //    boundary): always-hidden items sit further left and stay collapsed.
+            if !always.isEmpty, let altSep,
+               let boundary = (firstHidden ?? firstVisible).flatMap({ win[$0.key] }) {
                 try? await MenuBarItemMover.move(windowID: altSep, pid: pid, to: .leftOf(boundary.windowID))
             }
         }

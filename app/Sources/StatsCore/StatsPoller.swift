@@ -39,6 +39,7 @@ public struct StatsSnapshot: Sendable {
     public var powerSensors: [VISensor]?
     public var battery: BatterySample?
     public var topByCPU: [ProcInfo]?
+    public var topByPower: [ProcInfo]?
     public var topByMemory: [ProcInfo]?
     public var topByNetwork: [NetProcInfo]?
     public var netLatency: NetLatency?
@@ -224,9 +225,14 @@ public final class StatsPoller {
             if procs == nil { procs = ProcSampler() }
             latest.topByMemory = procs!.sample(limit: 5).byMemory
             if topProc == nil { topProc = TopProcessReader() }
-            topProc!.refresh(limit: 5)
-            let cpuRows = topProc!.latest()   // empty until the first top frame lands
-            if !cpuRows.isEmpty { latest.topByCPU = cpuRows }
+            // 12 = enough headroom that the cpu-ranked window also contains the energy
+            // leaders; both lists are trimmed to 5 below.
+            topProc!.refresh(limit: 12)
+            let rows = topProc!.latest()   // empty until the first top frame lands
+            if !rows.isEmpty {
+                latest.topByCPU = Array(rows.prefix(5))                              // already cpu-sorted
+                latest.topByPower = Array(rows.sorted { $0.power > $1.power }.prefix(5))
+            }
             if enabled.contains(.network) {
                 if netProc == nil { netProc = NetProcessReader() }
                 netProc!.refresh(limit: 8)

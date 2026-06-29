@@ -810,12 +810,14 @@ struct StatsPopupView: View {
     // MARK: - Top processes (CPU / RAM), with real app icons
 
     private var topProcesses: some View {
-        // Battery ranks by ENERGY, not memory — CPU is the energy proxy on Apple
-        // Silicon (no discrete GPU; energy impact ≈ CPU time), so an idle high-RAM
-        // tab doesn't wrongly top the list. ponytail: CPU proxy, swap for a `top`
-        // POWER-column reader only if Activity-Monitor-exact energy is wanted.
+        // Battery ranks by ENERGY using top's `power` column — the same relative
+        // energy-impact score Activity Monitor shows in its "Energy" tab. CPU/RAM
+        // popups keep their own axes.
         let byMem = module == .memory
-        let procs = byMem ? store.snapshot.topByMemory : store.snapshot.topByCPU
+        let byEnergy = module == .battery
+        let procs = byMem ? store.snapshot.topByMemory
+                  : byEnergy ? store.snapshot.topByPower
+                  : store.snapshot.topByCPU
         return VStack(alignment: .leading, spacing: sz(5)) {
             section("Top processes")
             HStack {
@@ -826,7 +828,9 @@ struct StatsPopupView: View {
             }
             if let procs, !procs.isEmpty {
                 ForEach(procs, id: \.pid) { p in
-                    procRow(p, byMem ? StatsFormat.bytes(Double(p.memory)) : StatsFormat.percent(p.cpu))
+                    procRow(p, byMem ? StatsFormat.bytes(Double(p.memory))
+                              : byEnergy ? String(format: "%.1f", p.power)
+                              : StatsFormat.percent(p.cpu))
                 }
             } else {
                 Text("Sampling…").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
