@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.121.0 *(unreleased)*
+## v2.121.0
 
 ### Menu Bar Management
 - **New "Menu Bar Management" extension (opt-in).** Hide menu-bar icons behind a
@@ -26,60 +26,28 @@ tag from the now-released section and put it on the new top draft.
   expanded chevron style — all with no Accessibility or Screen Recording permission.
   A live preview strip in Settings shows your real icons in order. Ships **disabled**
   — it adds nothing to your menu bar until you turn it on in Settings › Extensions.
-  - Fixed a crash on enabling the extension on macOS 26 (Tahoe), where the system's
-    wider window numbers overflowed a 32-bit conversion.
-  - **Rebuilt the show/hide control for macOS 26 (Tahoe).** The clickable chevron is
-    now a separate, always-on-screen item from the invisible separator that does the
-    hiding — previously a single item did both jobs, so expanding it to hide your
-    icons also swept the chevron (and Prosper's own menu-bar icon) off the screen,
-    leaving nothing to click. The chevron now stays put: click it to show/hide.
-  - Identifying Prosper's own menu-bar items no longer relies on signals Tahoe
-    removed (per-app window ownership), so the live preview and ordering self-test
-    work again instead of reporting "ordering isn't reliable on this Mac."
-  - The live preview now shows each icon's real picture on macOS 26 (Tahoe), where
-    the system hides per-app identity, by capturing the icons directly (needs Screen
-    Recording — there's an in-place prompt; without it you get placeholder glyphs).
-    Icons keep their real proportions instead of being squished into squares.
-  - **Mark any icon "always hidden" from Settings.** In the saved-order list, click
-    the eye next to an icon to keep it permanently off the bar (it moves behind an
-    always-hidden separator and never shows, even on reveal); click again to bring it
-    back. Replaces the old confusing two-tier drag section — you now pick the exact
-    icons instead of dragging across an invisible divider. Needs the move test passed.
-  - **Hidden divider in the saved-order list.** The list now shows the hidden-section
-    divider as a draggable row: icons above it are hidden behind the chevron, icons
-    below stay visible. Drag the divider (or icons across it) to choose what's hidden,
-    and Prosper drives the real bar to match — no more ⌘-dragging in the menu bar to
-    set it. The divider's position is captured from your real bar on "Save current
-    order", so the list mirrors where you already put things — including icons you'd
-    already dragged behind the chevron (the divider now lands after them instead of
-    snapping to the top).
-  - Marking an icon always-hidden no longer un-hides everything in your hidden
-    section. The toggle used to rebuild all of Prosper's dividers from scratch, which
-    reflowed the bar and popped your hidden icons back on screen; it now adds/removes
-    just the one always-hidden separator.
-  - "Save current order" and the preview "Refresh" now briefly reveal the hidden and
-    always-hidden icons before capturing, so off-screen items get real names/pictures
-    and distinct identities — previously several hidden icons captured as identical
-    blank placeholders and the preview showed empty glyphs unless you'd opened the
-    section by hand first.
-  - System-fixed menu extras (the clock, Control Center's cluster) no longer appear in
-    the orderable list — macOS pins them and they can't be moved, so listing them only
-    invited a move that could never land.
-  - The ordering self-test now waits for its probe icons to lay out before checking,
-    and reports a precise reason if it can't run, instead of a generic failure. It also
-    no longer races the live preview (which could make it spuriously fail just from
-    switching settings panes), retries a transient failure before reporting one, and
-    caches a pass for the session — so "Enforce a saved menu-bar order" stops randomly
-    unchecking itself.
-  - The saved order no longer fills up with unidentifiable "Item-0" entries. macOS 26
-    (Tahoe) gives some system icons generic placeholder names and won't let them be
-    moved; ordering now skips those instead of listing them and retrying a move that
-    can never succeed (which made live mode churn). Your own icons and any real,
-    nameable app stay in the list; previously-saved placeholders are cleaned out
-    automatically.
-  - Spacing: when this version of macOS hides which apps own each icon, "Apply now"
-    can't relaunch them — it now says so (the spacing is still saved and applies on
-    next launch / login) instead of silently doing nothing.
+  The clickable chevron is a separate, always-on-screen item from the invisible
+  separator that does the hiding, so showing/hiding your icons never sweeps the
+  chevron (or Prosper's own icon) off the screen — click it to show/hide.
+- **Mark any icon "always hidden" from Settings.** In the saved-order list, click
+  the eye next to an icon to keep it permanently off the bar (it moves behind an
+  always-hidden separator and never shows, even on reveal); click again to bring it
+  back. You pick the exact icons instead of dragging across an invisible divider.
+  Needs the move test passed.
+- **Hidden divider in the saved-order list.** The list shows the hidden-section
+  divider as a draggable row: icons above it are hidden behind the chevron, icons
+  below stay visible. Drag the divider (or icons across it) to choose what's hidden,
+  and Prosper drives the real bar to match — no ⌘-dragging in the menu bar. The
+  divider's position is captured from your real bar on "Save current order", so the
+  list mirrors where you already put things, including icons you'd already dragged
+  behind the chevron.
+- **The live preview shows each icon's real picture on macOS 26 (Tahoe)**, where the
+  system hides per-app identity, by capturing the icons directly (needs Screen
+  Recording — there's an in-place prompt; without it you get placeholder glyphs).
+  Icons keep their real proportions instead of being squished into squares.
+- **Spacing applies on next launch when macOS hides app ownership.** On macOS 26
+  (Tahoe) "Apply now" can't relaunch the apps to re-space them, so it says so — the
+  spacing is still saved and takes effect on next launch / login.
 - **Item ordering that survives relaunch, including multi-icon apps (experimental).**
   Apps like Stats or iStat Menus publish several icons that macOS normally shuffles
   on every launch. Turn on ordering, arrange your icons once, and Prosper keeps them
@@ -89,35 +57,20 @@ tag from the now-released section and put it on the new top draft.
   - On macOS 26 (Tahoe), where the system no longer tells apps which icon is which,
     Prosper rebuilds each icon's identity from its picture (this is the only part
     that asks for Screen Recording, and only when you use ordering).
-  - Prosper's own icons (Stats modules, extension icons) now appear in the order list
-    and live preview with their real names and pictures — previously they were hidden
-    from the list entirely, so the multi-icon apps you most want to order weren't
-    even shown. Own icons are named and drawn directly (no Screen Recording needed).
+  - Prosper's own icons (Stats modules, extension icons) appear in the order list and
+    live preview with their real names and pictures — named and drawn directly (no
+    Screen Recording needed).
   - **On chevron click** mode restores your order each time you click the chevron to
     show hidden icons; **Live** mode also snaps icons back if they drift. Live mode
-    stays gentle: it backs off on
-    battery, and a circuit breaker parks it if a move keeps failing so it can never
-    spin the CPU.
-  - Restoring a saved order is now stable instead of shuffling icons endlessly. Two
-    fixes: (1) it only cares about icons' order relative to each other, not whether
-    they're physically touching — managed icons are often split into groups by system
-    icons (Control Center, the clock) that can't be moved, so demanding they sit flush
-    made it drag everything back and forth forever chasing an impossible layout; it now
-    moves an icon only when it's genuinely on the wrong side of a neighbor. (2) It
-    rearranges using only the leftward drag the startup self-test verifies — the
-    rightward drag mis-landed on macOS 26 (Tahoe), where a dragged icon snaps its right
-    edge to the cursor, which could shove an icon across the divider into the hidden
-    band. The hidden area also stays pinned open for the whole pass so it can't
-    auto-collapse mid-move.
-  - Applying a saved order now restores the hidden section too, in the same pass.
-    Previously it only fixed left-to-right order and never touched the divider, so an
-    icon that belonged behind the chevron stayed out in the open and no amount of
-    re-applying pulled it back. Prosper now also drops the divider at its saved boundary
-    (just left of your first visible icon) once the icons are in order — so order and
-    what's-hidden are both restored in one click instead of needing several. The
-    always-visible chevron is also re-seated on the visible side of that divider, so
-    restoring an order can never sweep the click target (or your Prosper icon) off
-    into the hidden band and leave you with nothing to click to bring them back.
+    stays gentle: it backs off on battery, and a circuit breaker parks it if a move
+    keeps failing so it can never spin the CPU.
+  - Applying a saved order restores both the left-to-right order and the hidden
+    section in one pass: icons are put in order, the divider drops at its saved
+    boundary (just left of your first visible icon), and the always-visible chevron is
+    re-seated on the visible side so the click target (and your Prosper icon) can never
+    be swept into the hidden band. Order is judged relative to each icon's neighbors
+    rather than by physical adjacency, since system icons (Control Center, the clock)
+    can split managed icons into groups that can't ever sit flush.
   - Ordering work runs on a fast path that, in steady state, avoids the expensive
     system-wide window scan — so the background order check doesn't add input lag
     while you type.
@@ -152,34 +105,27 @@ tag from the now-released section and put it on the new top draft.
   once a second, so the monitors don't add measurable load to the thing they measure.
   Expensive sources (frequency, frame rate, power) sample on a throttled background
   tick and the voltage/current reader probes only the rails your Mac actually has.
-- **Restyled the menu-bar items to match a polished system-monitor look.** A small
-  label sits above its value, the value coloured by the module's thresholds; widths
-  are fixed so a reading going from "9%" to "100%" no longer resizes the item and
-  shoves its neighbours around. **The left/center/right alignment now actually works** —
-  it positions the value under its label. Network shows upload over download with a
-  trailing ↑/↓ arrow, and battery draws as a glyph.
-- **Popovers open flush with their menu-bar item.** They previously sometimes landed
-  offscreen above the bar or with a stray gap below; they now size up front and anchor
-  directly beneath the item every time.
-- **Redesigned the popovers to match a polished system-monitor look 1:1.** A header
-  strip with a bar-chart glyph, a centered title, and a settings gear; circular gauges
-  for the primary metric (CPU shows three — temperature, a system/user split usage
-  donut, and load); the per-core load bars now sit directly under the usage-history
-  chart, coloured by efficiency vs performance cluster; centered section dividers;
-  colour-dot legends; average load and per-cluster clock frequency sections; and a
-  top-processes list with a column header and each app's real icon. Temperatures,
-  voltages, and currents are formatted like the reference (37.3°C, 27.827V, 0.38A).
-  Each module's popup now matches that reference too: **Memory** shows a pressure
-  half-gauge beside an app/wired/compressed usage donut; **GPU** shows render,
-  utilization, and tiler dials with the chip model; **Network** shows big download/
-  upload readouts over a mirrored up/down history chart with peak labels; and
-  **Battery** shows a large glyph with a charging pill and grouped Details / Battery /
-  Power-adapter sections, plus a top-processes list.
+- **Menu-bar items styled like a polished system monitor.** A small label sits above
+  its value, coloured by the module's thresholds, with fixed widths so a reading going
+  from "9%" to "100%" doesn't resize the item and shove its neighbours around. The
+  left/center/right alignment positions the value under its label. Network shows upload
+  over download with a trailing ↑/↓ arrow; battery draws as a glyph.
+- **Popovers open flush beneath their menu-bar item** and match a polished
+  system-monitor look 1:1: a header strip with a bar-chart glyph, a centered title, and
+  a settings gear; circular gauges for the primary metric (CPU shows three —
+  temperature, a system/user split usage donut, and load); per-core load bars under the
+  usage-history chart, coloured by efficiency vs performance cluster; colour-dot
+  legends; average load and per-cluster clock frequency sections; and a top-processes
+  list with each app's real icon. Temperatures, voltages, and currents are formatted
+  like the reference (37.3°C, 27.827V, 0.38A). **Memory** shows a pressure half-gauge
+  beside an app/wired/compressed usage donut; **GPU** shows render, utilization, and
+  tiler dials with the chip model; **Network** shows big download/upload readouts over a
+  mirrored up/down history chart with peak labels; **Battery** shows a large glyph with
+  a charging pill and grouped Details / Battery / Power-adapter sections.
 - **Per-process CPU% reads like Activity Monitor** — percent of a single core, so a
   multi-threaded process can read above 100%.
-- **Fan speed and manual fan control now live in the Sensors popover**, each fan shown
-  with a speed bar and an Automatic/Manual control (with the same confirmation and
-  automatic-reset safeguards), instead of the settings pane.
+- **Manual fan control lives in the Sensors popover** — each fan shown with a speed bar
+  and an Automatic/Manual control (with confirmation and automatic-reset safeguards).
 
 ### Launcher & Clipboard
 - **Clipboard History and the command runner now open on the screen you're using.**
@@ -325,30 +271,17 @@ tag from the now-released section and put it on the new top draft.
   doesn't sleep mid-command). The manual switch only ever released its own hold, so a
   Mac held awake purely by a remote session had no off-switch — nothing you clicked
   turned it off. The new button (Controls) releases **every** hold and sleeps
-  immediately; your detached sessions are left running and reconnect on the next wake.
-  The Status line now says so honestly ("Held by a remote session or another app")
-  instead of guessing.
+  immediately, inside the privileged helper as root so the Mac actually goes down on
+  the first click (not just the display) and stays asleep — re-triggers like a `dch`
+  client reconnecting or the "keep awake while plugged in" rule are suppressed until
+  the Mac genuinely wakes again. Your detached sessions are left running and reconnect
+  on the next wake; remote wake is untouched, so an armed Mac stays wakeable. The
+  Status line says so honestly ("Held by a remote session or another app") instead of
+  guessing.
 - **Sleep this Mac remotely.** Running `open prosper://sleep` on the Mac (e.g. from
   inside your remote `dch` session) does the same thing — releases the holds and puts
   it to sleep — so you can wake it, do your work, and send it back to sleep without
   touching it. Tip: add `alias prosper-sleep='open prosper://sleep'` to your shell.
-- **"Sleep this Mac now" actually sleeps the Mac.** The first beta of this button
-  only slept the *display* — the Mac stayed awake and network-reachable — and often
-  did nothing on the first click. Cause: the keep-awake holds were released from the
-  app over a connection that may have already dropped (so the release silently
-  no-op'd), and `pmset sleepnow` run while sleep was still disabled only sleeps the
-  screen. The release-then-sleep now happens inside the privileged helper as root:
-  it clears every hold first (committed synchronously) and only then sleeps, so the
-  Mac goes down on the first click and stays down.
-- **A remotely-slept Mac now stays asleep instead of waking back up seconds later.**
-  After `prosper://sleep` (or the button), the Mac would briefly drop off the network
-  and then become reachable again — because the instant it slept, something re-enabled
-  the sleep override: a `dch` client reconnecting on a momentary wake, or the "keep
-  awake while plugged in" rule re-firing. A sleep command now suppresses *both* of
-  those re-triggers until the Mac genuinely wakes again (a real wake from you, or a
-  remote wake you request), so it sleeps and stays asleep. **Remote wake is left
-  completely untouched** — an armed Mac stays wakeable, so you can sleep and wake it
-  remotely as often as you like.
 
 ### Troubleshooting
 - **New verbose trace mode (Settings → About → Troubleshooting), off by default.**
