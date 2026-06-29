@@ -148,17 +148,19 @@ final class MenuBarManager: NSObject {
     /// `NSImage(systemSymbolName:)` renders at the default text point size, so the
     /// `ellipsis`/chevron glyphs sit small and airy inside the item box and read as
     /// extra padding next to neighbouring icons. Pin the point size so the chevron
-    /// matches the rest of the bar, then bake transparent padding onto the RIGHT edge:
-    /// AppKit exposes no per-item trailing margin, so without this the divider sits
-    /// glued to its neighbour (the Prosper icon) with no inter-item breathing room.
+    /// matches the rest of the bar, then bake transparent padding onto BOTH edges:
+    /// AppKit exposes no per-item margin, so without this the divider sits glued to its
+    /// neighbour (the Prosper icon) with no breathing room. Padding is symmetric (not
+    /// right-only) so the click highlight — which AppKit sizes to the button bounds —
+    /// stays centered on the glyph instead of leaving an empty gap to the glyph's right.
     private static func chevronImage(_ symbol: String) -> NSImage? {
         let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
         guard let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: "Menu Bar")?
             .withSymbolConfiguration(cfg) else { return nil }
-        let pad: CGFloat = 8
-        let padded = NSImage(size: NSSize(width: glyph.size.width + pad, height: glyph.size.height))
+        let pad: CGFloat = 6   // per-side
+        let padded = NSImage(size: NSSize(width: glyph.size.width + pad * 2, height: glyph.size.height))
         padded.lockFocus()
-        glyph.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)   // left-aligned → gap on the right
+        glyph.draw(at: NSPoint(x: pad, y: 0), from: .zero, operation: .sourceOver, fraction: 1)   // centered
         padded.unlockFocus()
         padded.isTemplate = true
         return padded
@@ -348,7 +350,49 @@ final class MenuBarManager: NSObject {
         return MenuBarBridge.windowID(forItemMinX: x)
     }
 
+    /// CGS window id of the (always-present) hidden separator — the anchor the
+    /// arranger moves list-marked "hidden" icons to the LEFT of so the chevron
+    /// collapses them off-screen. nil only if it hasn't laid out yet.
+    func hiddenAnchorWindowID() -> CGWindowID? {
+        guard let x = hiddenSeparator?.button?.window?.frame.minX else { return nil }
+        return MenuBarBridge.windowID(forItemMinX: x)
+    }
+
     var hasAlwaysHiddenBand: Bool { alwaysHiddenSeparator != nil }
+
+    /// Create (or remove) the always-hidden separator WITHOUT tearing down the
+    /// chevron/hidden separator. `reconcileDividers()` did a full teardown+setup,
+    /// which reflowed the bar and lost the positional relationship of the regular
+    /// hidden section — so toggling an always-hidden mark made every hidden icon pop
+    /// back on-screen. This touches only the one band's status item.
+    func ensureAlwaysHiddenBand(_ needed: Bool) {
+        guard menubarExtLive && MenuBarBridge.available, chevron != nil else { return }
+        if needed, alwaysHiddenSeparator == nil {
+            let s = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator")
+            ProsperStatusItems.register(s)
+            alwaysHiddenSeparator = s
+            applyDividerLengths()
+            publishOwnWindowIDs()
+        } else if !needed, let s = alwaysHiddenSeparator {
+            NSStatusBar.system.removeStatusItem(s)
+            alwaysHiddenSeparator = nil
+            applyDividerLengths()
+            publishOwnWindowIDs()
+        }
+    }
+
+    /// Reveal BOTH bands (collapse both separators) so every item — including the
+    /// always-hidden ones — is on-screen, run `body` while they have real on-screen
+    /// frames/pixels to capture or perceptually hash, then restore the steady hidden
+    /// state. Used by Save-order (distinct hashes for off-screen items) and the
+    /// preview Refresh (real icons for hidden items).
+    func withAllRevealed<T>(_ body: () async -> T) async -> T {
+        beginPlacement()
+        try? await Task.sleep(for: .milliseconds(180))
+        let result = await body()
+        endPlacement()
+        return result
+    }
 
     /// Collapse both separators so every item is on-screen — the arranger needs a
     /// valid (on-screen) drop point to move an icon into/out of the always-hidden

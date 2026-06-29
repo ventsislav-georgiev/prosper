@@ -276,11 +276,26 @@ final class MenuBarTests: XCTestCase {
         s.desiredOrder = [MenuBarIdentity(bundleID: "a", title: "CPU"),
                           MenuBarIdentity(bundleID: "a", title: "RAM")]
         s.alwaysHidden = ["a#RAM"]
+        s.hiddenDividerIndex = 1
         let data = try JSONEncoder().encode(s)
         let back = try JSONDecoder().decode(MenuBarOrderStore.self, from: data)
         XCTAssertEqual(back, s)
         XCTAssertTrue(back.isAlwaysHidden("a#RAM"))
         XCTAssertFalse(back.isAlwaysHidden("a#CPU"))
+        XCTAssertEqual(back.hiddenDividerIndex, 1)
+    }
+
+    func testHiddenKeysAreDividerPrefixMinusAlwaysHidden() {
+        var s = MenuBarOrderStore.default
+        s.desiredOrder = [MenuBarIdentity(bundleID: "x", title: "A"),   // x#A — hidden
+                          MenuBarIdentity(bundleID: "x", title: "B"),   // x#B — always-hidden
+                          MenuBarIdentity(bundleID: "x", title: "C")]   // x#C — visible (after divider)
+        s.alwaysHidden = ["x#B"]
+        // No divider → nothing hidden.
+        XCTAssertTrue(s.hiddenKeys.isEmpty)
+        // Divider after the first two → prefix {x#A, x#B}, minus always-hidden x#B.
+        s.hiddenDividerIndex = 2
+        XCTAssertEqual(s.hiddenKeys, ["x#A"])
     }
 
     func testOrderStoreDecodesFromMinimalJSON() throws {

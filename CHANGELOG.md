@@ -45,6 +45,21 @@ tag from the now-released section and put it on the new top draft.
     always-hidden separator and never shows, even on reveal); click again to bring it
     back. Replaces the old confusing two-tier drag section — you now pick the exact
     icons instead of dragging across an invisible divider. Needs the move test passed.
+  - **Hidden divider in the saved-order list.** The list now shows the hidden-section
+    divider as a draggable row: icons above it are hidden behind the chevron, icons
+    below stay visible. Drag the divider (or icons across it) to choose what's hidden,
+    and Prosper drives the real bar to match — no more ⌘-dragging in the menu bar to
+    set it. The divider's position is captured from your real bar on "Save current
+    order", so the list mirrors where you already put things.
+  - Marking an icon always-hidden no longer un-hides everything in your hidden
+    section. The toggle used to rebuild all of Prosper's dividers from scratch, which
+    reflowed the bar and popped your hidden icons back on screen; it now adds/removes
+    just the one always-hidden separator.
+  - "Save current order" and the preview "Refresh" now briefly reveal the hidden and
+    always-hidden icons before capturing, so off-screen items get real names/pictures
+    and distinct identities — previously several hidden icons captured as identical
+    blank placeholders and the preview showed empty glyphs unless you'd opened the
+    section by hand first.
   - System-fixed menu extras (the clock, Control Center's cluster) no longer appear in
     the orderable list — macOS pins them and they can't be moved, so listing them only
     invited a move that could never land.
@@ -72,8 +87,9 @@ tag from the now-released section and put it on the new top draft.
     and live preview with their real names and pictures — previously they were hidden
     from the list entirely, so the multi-icon apps you most want to order weren't
     even shown. Own icons are named and drawn directly (no Screen Recording needed).
-  - **On-reveal** mode restores your order whenever the bar is shown; **Live** mode
-    also snaps icons back if they drift. Live mode stays gentle: it backs off on
+  - **On chevron click** mode restores your order each time you click the chevron to
+    show hidden icons; **Live** mode also snaps icons back if they drift. Live mode
+    stays gentle: it backs off on
     battery, and a circuit breaker parks it if a move keeps failing so it can never
     spin the CPU.
   - Ordering work runs on a fast path that, in steady state, avoids the expensive

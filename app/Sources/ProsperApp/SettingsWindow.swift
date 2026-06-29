@@ -2545,15 +2545,15 @@ private struct MenuBarPane: View {
                     get: { orderStore.enabled },
                     set: { v in mutateOrder { $0.enabled = v }; if v { runProbe() } }))
                 NeonDivider()
-                NeonRow("When", subtitle: "How aggressively to keep the order") {
+                NeonRow("When", subtitle: "On chevron click = re-applies the order each time you click the chevron to show hidden icons. Always = keeps it live.") {
                     Picker("", selection: Binding(
                         get: { orderStore.mode },
                         set: { v in mutateOrder { $0.mode = v } })) {
-                        Text("On reveal").tag(MenuBarOrderStore.EnforceMode.onDemand)
+                        Text("On chevron click").tag(MenuBarOrderStore.EnforceMode.onDemand)
                         Text("Always (live)").tag(MenuBarOrderStore.EnforceMode.live)
                     }
                     .labelsHidden()
-                    .frame(width: sz(160))
+                    .frame(width: sz(180))
                     .disabled(!orderStore.enabled)
                 }
                 if orderStore.enabled {
@@ -2587,36 +2587,110 @@ private struct MenuBarPane: View {
     /// Drag-to-reorder editor over the saved layout — define the desired left→right
     /// order here instead of ⌘-dragging the real bar then "Save current order".
     /// "Apply saved order" then drives the bar to match.
+    /// One row in the editor: a real item, or the single hidden-section divider
+    /// sentinel. Icons dragged ABOVE the divider are hidden (collapsed behind the
+    /// chevron); below it they stay visible.
+    private enum OrderRow: Identifiable {
+        case divider
+        case item(MenuBarIdentity)
+        var id: String { if case .item(let i) = self { return i.key }; return "__prosper_hidden_divider__" }
+    }
+
+    /// `desiredOrder` with the divider sentinel spliced in at `hiddenDividerIndex`
+    /// (default 0 = nothing hidden). Only shown when moves work (probeOK).
+    private var editorRows: [OrderRow] {
+        var rows = orderStore.desiredOrder.map(OrderRow.item)
+        guard probeOK == true else { return rows }
+        let idx = min(max(orderStore.hiddenDividerIndex ?? 0, 0), rows.count)
+        rows.insert(.divider, at: idx)
+        return rows
+    }
+
     @ViewBuilder private var orderEditor: some View {
         VStack(alignment: .leading, spacing: sz(4)) {
-            Text("Saved order (drag to reorder, ⌫ to remove). The eye marks an icon always-hidden.")
+            Text(probeOK == true
+                 ? "Saved order (drag to reorder, ⌫ to remove). Drag the divider — icons above it are hidden behind the chevron. The eye marks an icon always-hidden."
+                 : "Saved order (drag to reorder, ⌫ to remove).")
                 .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             List {
-                ForEach(orderStore.desiredOrder, id: \.key) { id in
-                    let hidden = orderStore.isAlwaysHidden(id.key)
-                    HStack(spacing: sz(8)) {
-                        if let icon = Self.appIcon(id.bundleID) {
-                            Image(nsImage: icon).resizable().frame(width: sz(16), height: sz(16))
-                        }
-                        Text(Self.displayName(id)).font(Neon.font(.body))
-                        Spacer()
-                        if probeOK == true {
-                            Button { toggleAlwaysHidden(id) } label: {
-                                Image(systemName: hidden ? "eye.slash.fill" : "eye")
-                                    .foregroundStyle(hidden ? Neon.blue : Neon.textSecondary)
-                            }
-                            .buttonStyle(.plain)
-                            .help(hidden ? "Always-hidden — click to show" : "Mark always-hidden")
-                        }
+                ForEach(editorRows) { row in
+                    switch row {
+                    case .divider: dividerRow
+                    case .item(let id): itemRow(id)
                     }
-                    .opacity(hidden ? 0.5 : 1)
-                    .listRowSeparator(.hidden)
                 }
-                .onMove { from, to in mutateOrder { $0.desiredOrder.move(fromOffsets: from, toOffset: to) } }
-                .onDelete { idx in mutateOrder { $0.desiredOrder.remove(atOffsets: idx) } }
+                .onMove { from, to in
+                    var rows = editorRows
+                    rows.move(fromOffsets: from, toOffset: to)
+                    commitRows(rows)
+                }
+                .onDelete { idx in
+                    var rows = editorRows
+                    let items = idx.filter { if case .item = rows[$0] { return true }; return false }
+                    rows.remove(atOffsets: IndexSet(items))   // never delete the divider sentinel
+                    commitRows(rows)
+                }
             }
-            .frame(height: sz(min(CGFloat(orderStore.desiredOrder.count) * 26 + 8, 200)))
+            .frame(height: sz(min(CGFloat(editorRows.count) * 26 + 8, 220)))
             .scrollContentBackground(.hidden)
+        }
+    }
+
+    @ViewBuilder private func itemRow(_ id: MenuBarIdentity) -> some View {
+        let always = orderStore.isAlwaysHidden(id.key)
+        HStack(spacing: sz(8)) {
+            if let icon = Self.appIcon(id.bundleID) {
+                Image(nsImage: icon).resizable().frame(width: sz(16), height: sz(16))
+            }
+            Text(Self.displayName(id)).font(Neon.font(.body))
+            Spacer()
+            if probeOK == true {
+                Button { toggleAlwaysHidden(id) } label: {
+                    Image(systemName: always ? "eye.slash.fill" : "eye")
+                        .foregroundStyle(always ? Neon.blue : Neon.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help(always ? "Always-hidden — click to show" : "Mark always-hidden")
+            }
+        }
+        .opacity(always ? 0.5 : 1)
+        .listRowSeparator(.hidden)
+    }
+
+    @ViewBuilder private var dividerRow: some View {
+        HStack(spacing: sz(8)) {
+            Image(systemName: "chevron.left.2").foregroundStyle(Neon.indigo)
+            Text("Hidden divider — icons above hide behind the chevron")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.indigo)
+            Spacer()
+        }
+        .padding(.vertical, sz(2))
+        .listRowSeparator(.hidden)
+        .help("Drag this divider up/down. Icons above it are hidden (shown only on chevron click); icons below stay visible.")
+    }
+
+    /// Decompose the mixed editor rows back into saved order + divider index, persist,
+    /// and drive the live bar to match the new hidden / visible split.
+    private func commitRows(_ rows: [OrderRow]) {
+        let dividerPos = rows.firstIndex { if case .divider = $0 { return true }; return false }
+        let items: [MenuBarIdentity] = rows.compactMap { if case .item(let i) = $0 { return i }; return nil }
+        mutateOrder {
+            $0.desiredOrder = items
+            // dividerPos counts the items before the sentinel = size of hidden prefix.
+            $0.hiddenDividerIndex = (dividerPos.map { $0 == 0 ? nil : $0 } ?? nil)
+        }
+        applyBandsNow()
+    }
+
+    /// Push the current hidden / always-hidden membership to the real bar (best-effort).
+    private func applyBandsNow() {
+        guard probeOK == true, !applying, !saving else { return }
+        applying = true
+        Task {
+            MenuBarManager.shared.ensureAlwaysHiddenBand(!orderStore.alwaysHidden.isEmpty)
+            await MenuBarArranger.applyBands(hidden: orderStore.hiddenKeys,
+                                             alwaysHidden: orderStore.alwaysHidden)
+            applying = false
         }
     }
 
@@ -2732,8 +2806,8 @@ private struct MenuBarPane: View {
         guard !saving, !applying else { return }
         saving = true
         Task {
-            let order = await MenuBarArranger.snapshotCurrentOrder()
-            mutateOrder { $0.desiredOrder = order }
+            let snap = await MenuBarArranger.snapshotCurrentOrder()
+            mutateOrder { $0.desiredOrder = snap.order; $0.hiddenDividerIndex = snap.hiddenDividerIndex }
             screenRecOK = MenuBarItemIndexer.hasPermission()
             saving = false
         }
@@ -2757,12 +2831,7 @@ private struct MenuBarPane: View {
             if let i = s.alwaysHidden.firstIndex(of: key) { s.alwaysHidden.remove(at: i) }
             else { s.alwaysHidden.append(key) }
         }
-        applying = true
-        Task {
-            MenuBarManager.shared.reconcileDividers()   // add/remove the band's separator
-            await MenuBarArranger.applyAlwaysHidden(keys: orderStore.alwaysHidden)
-            applying = false
-        }
+        applyBandsNow()
     }
 
     // MARK: - Actions
@@ -2806,9 +2875,16 @@ private struct MenuBarPane: View {
     }
 
     private func refresh() {
+        // Section membership from the STEADY state (divider positions intact), so the
+        // preview keeps its hidden/always-hidden boundaries…
         previewHealthy = MenuBarManager.shared.previewHealthy()
         sections = MenuBarManager.shared.sectionedItems()
-        capturePreviewIcons()
+        // …then briefly reveal BOTH bands to capture real pixels for the off-screen
+        // (hidden/always-hidden) icons too. Without this they fell back to placeholder
+        // glyphs unless the user had manually clicked the divider open first.
+        Task {
+            await MenuBarManager.shared.withAllRevealed { await capturePreviewIcons() }
+        }
     }
 
     /// Capture a live image for each currently-visible item so the preview shows
@@ -2816,28 +2892,30 @@ private struct MenuBarPane: View {
     /// so this is the only source. Needs Screen Recording; without it we keep the
     /// placeholder glyphs. Off-screen (hidden) items can't be captured — they fall
     /// back to placeholders too.
-    private func capturePreviewIcons() {
+    private func capturePreviewIcons() async {
         screenRecOK = MenuBarItemIndexer.hasPermission()
+        // Re-enumerate while revealed so off-screen (hidden/always-hidden) items have
+        // real on-screen frames to capture from. Key by windowID (stable across the
+        // reveal) so the preview — laid out from `sections` — still finds each image.
+        let live = MenuBarManager.shared.currentItems()
         // Own content icons (Stats, extensions) snapshot from their own button — no
         // permission, always available, and the only correct picture on Tahoe.
         var own: [CGWindowID: NSImage] = [:]
-        for entry in sections where entry.item.isOwn {
-            if let img = ProsperStatusItems.snapshot(nearMinX: entry.item.frame.minX) {
-                own[entry.item.windowID] = img
+        for item in live where item.isOwn {
+            if let img = ProsperStatusItems.snapshot(nearMinX: item.frame.minX) {
+                own[item.windowID] = img
             }
         }
         previewImages = own
         // Foreign icons need Screen Recording (we can't read another app's pixels).
         guard screenRecOK else { return }
-        let foreign = sections.map(\.item).filter { !$0.isOwn }
-        Task {
-            let cgs = await MenuBarItemIndexer.images(for: foreign)
-            var merged = own
-            for (wid, cg) in cgs {
-                merged[wid] = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-            }
-            previewImages = merged
+        let foreign = live.filter { !$0.isOwn }
+        let cgs = await MenuBarItemIndexer.images(for: foreign)
+        var merged = own
+        for (wid, cg) in cgs {
+            merged[wid] = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         }
+        previewImages = merged
     }
 
     /// Flatten the sectioned items (left→right) into preview elements, dropping a
