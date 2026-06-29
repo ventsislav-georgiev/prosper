@@ -1210,6 +1210,9 @@ private struct RunnerView: View {
                 .overlayPreferenceValue(RunnerRowFrameKey.self) { frames in
                     slotOverlay(frames)
                 }
+                // Float the scroller so a legacy gutter never desyncs the selection
+                // highlight from the fixed ⌘-digit badge ladder. See OverlayScrollerStyle.
+                .background(OverlayScrollerStyle())
             }
         }
         // Bound the captured geometry to THIS list's lifetime. Switching to a card
@@ -2002,6 +2005,21 @@ private struct KeyCap: View {
                         RoundedRectangle(cornerRadius: sz(4))
                             .strokeBorder(Neon.blue.opacity(active ? 0.9 : 0.3), lineWidth: active ? 1 : 0.5))
             )
+    }
+}
+
+/// Forces floating (overlay) scrollers on the backing `NSScrollView`, regardless
+/// of the user's macOS "Show scroll bars" setting (or a plugged-in mouse forcing
+/// legacy scrollers). Legacy scrollers reserve a side gutter that shrinks the
+/// content width, pulling the per-row selection highlight's right corner left of
+/// the fixed ⌘/⌃-digit badge ladder — they're drawn in different coordinate
+/// spaces, so any gutter desyncs them and the selection corner peeks past the
+/// badge. Overlay scrollers reserve nothing → content width == frame width on
+/// every Mac → badge and selection stay aligned. Attach via `.background(...)`.
+struct OverlayScrollerStyle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ v: NSView, context: Context) {
+        DispatchQueue.main.async { v.enclosingScrollView?.scrollerStyle = .overlay }
     }
 }
 
