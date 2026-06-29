@@ -148,13 +148,35 @@ enum MenuBarArranger {
         // only maintains relative order of on-screen items; the divider is left alone.
         if reveal {
             return await MenuBarManager.shared.withAllRevealed {
-                let r = await applyMoves(desired: desired)
+                // Converge in ONE click: a single move pass leaves the bar closer but
+                // not always sorted (managed icons are split into groups by unmovable
+                // system items, and each synthetic drop can shift only so far), which is
+                // why the user had to click Apply repeatedly. Loop the pass until the
+                // saved RELATIVE order holds, or a pass moves nothing (done, or genuinely
+                // stuck — no point re-dragging). Bounded so a pathological bar can never
+                // spin: a handful of passes is what manual reclicking achieved anyway.
+                var last = ApplyResult(moved: 0, skippedUnresolved: 0, failed: 0)
+                for _ in 0..<6 {
+                    last = await applyMoves(desired: desired)
+                    if last.moved == 0 || isOrderSatisfied(desired: desired) { break }
+                }
                 await placeDividers(desired: desired, hiddenKeys: hiddenKeys,
                                     alwaysHiddenKeys: alwaysHiddenKeys)
-                return r
+                return last
             }
         }
         return await applyMoves(desired: desired)
+    }
+
+    /// True when the live on-screen items already satisfy the saved RELATIVE order —
+    /// the convergence stop condition for the explicit Apply loop. Mirrors the live
+    /// enforcer's drift check (subsequence, not contiguity) so "Apply converged" and
+    /// "Live sees no drift" agree. Cheap: cached hashes, no capture.
+    private static func isOrderSatisfied(desired: [MenuBarIdentity]) -> Bool {
+        let hashes = lastIndexedHashes
+        let curKeys = currentItems().map { identity(for: $0, hash: hashes[$0.windowID]).key }
+        let desiredKeys = desired.filter { $0.isResolved }.map { $0.key }
+        return MenuBarOrderDiff.isRelativeOrderSatisfied(current: curKeys, desired: desiredKeys)
     }
 
     /// After the order pass the desired items sit in their saved relative order
