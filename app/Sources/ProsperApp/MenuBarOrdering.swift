@@ -56,7 +56,10 @@ struct MenuBarIdentity: Codable, Equatable, Hashable, Sendable {
     /// or retry a move that can never land. Matched by title since Tahoe masks bundle.
     static func isSystemFixed(title: String?) -> Bool {
         guard let t = title else { return false }
-        return t == "Clock" || t.hasPrefix("BentoBox")
+        // "Menubar" is Tahoe's menu-bar ROOT window (the bar itself), not a status
+        // item — it has a real-looking title so it slips past the placeholder filter,
+        // but it can't be dragged and must never be listed/hidden/counted.
+        return t == "Clock" || t == "Menubar" || t.hasPrefix("BentoBox")
     }
 
     /// True for items the engine can actually manage on this OS: our own icons
