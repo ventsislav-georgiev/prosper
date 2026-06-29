@@ -358,6 +358,15 @@ final class MenuBarManager: NSObject {
         return MenuBarBridge.windowID(forItemMinX: x)
     }
 
+    /// CGS window id of the chevron (the always-visible click target). The arranger
+    /// re-seats it on the VISIBLE side of the hidden separator after an order pass so
+    /// expanding the separator can never push the click target off-screen. nil only if
+    /// it hasn't laid out yet.
+    func chevronAnchorWindowID() -> CGWindowID? {
+        guard let x = chevron?.button?.window?.frame.minX else { return nil }
+        return MenuBarBridge.windowID(forItemMinX: x)
+    }
+
     var hasAlwaysHiddenBand: Bool { alwaysHiddenSeparator != nil }
 
     /// Create (or remove) the always-hidden separator WITHOUT tearing down the

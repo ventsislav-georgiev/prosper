@@ -114,7 +114,10 @@ tag from the now-released section and put it on the new top draft.
     icon that belonged behind the chevron stayed out in the open and no amount of
     re-applying pulled it back. Prosper now also drops the divider at its saved boundary
     (just left of your first visible icon) once the icons are in order — so order and
-    what's-hidden are both restored in one click instead of needing several.
+    what's-hidden are both restored in one click instead of needing several. The
+    always-visible chevron is also re-seated on the visible side of that divider, so
+    restoring an order can never sweep the click target (or your Prosper icon) off
+    into the hidden band and leave you with nothing to click to bring them back.
   - Ordering work runs on a fast path that, in steady state, avoids the expensive
     system-wide window scan — so the background order check doesn't add input lag
     while you type.

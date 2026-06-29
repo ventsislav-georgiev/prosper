@@ -12,6 +12,7 @@ public struct ProcInfo: Sendable, Equatable {
     public let name: String
     public let cpu: Double          // 0...1 of one core-second per wall-second
     public let memory: UInt64       // phys_footprint bytes
+    public var power: Double = 0     // top's relative energy-impact score (Activity Monitor "Energy")
 }
 
 public struct ProcSampler {

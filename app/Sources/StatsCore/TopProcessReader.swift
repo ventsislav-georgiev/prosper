@@ -49,9 +49,13 @@ public final class TopProcessReader {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/top")
         // -n caps rows top itself ranks (by cpu); a little headroom over `limit` so the
-        // sort below is stable. -stats keeps the output narrow (pid,cpu,command only).
+        // sort below is stable. `power` is top's relative energy-impact score (what
+        // Activity Monitor's "Energy" column shows) — the battery popup ranks by it.
+        // ponytail: top ranks the -n window by cpu, so a high-energy/low-cpu process
+        // could fall outside it. On Apple Silicon energy tracks cpu/gpu closely, so the
+        // window's cpu leaders are also its energy leaders in practice; widen -n if not.
         p.arguments = ["-l", "2", "-o", "cpu", "-n", "\(max(limit, 5) + 3)",
-                       "-stats", "pid,cpu,command"]
+                       "-stats", "pid,cpu,power,command"]
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = FileHandle.nullDevice
@@ -79,15 +83,17 @@ public final class TopProcessReader {
         var out: [ProcInfo] = []
         for line in lines[(header + 1)...] {
             let cols = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-            guard cols.count >= 3,
+            guard cols.count >= 4,
                   let pid = Int32(cols[0]), pid > 0,
                   let pct = Double(cols[1]) else { continue }
-            // COMMAND is everything after pid+cpu — rejoined so spaced names survive.
-            let name = cols[2...].joined(separator: " ")
+            // power may be absent on older OSes ("N/A") → treat as 0, don't drop the row.
+            let power = Double(cols[2]) ?? 0
+            // COMMAND is everything after pid+cpu+power — rejoined so spaced names survive.
+            let name = cols[3...].joined(separator: " ")
             guard !name.isEmpty else { continue }
             // top reports %CPU as percent of ONE core (can exceed 100 for multi-thread);
             // ProcInfo.cpu is core-seconds/sec, so /100. memory unused on the CPU list.
-            out.append(ProcInfo(pid: pid, name: name, cpu: max(0, pct / 100), memory: 0))
+            out.append(ProcInfo(pid: pid, name: name, cpu: max(0, pct / 100), memory: 0, power: max(0, power)))
         }
         return Array(out.sorted { $0.cpu > $1.cpu }.prefix(limit))
     }
