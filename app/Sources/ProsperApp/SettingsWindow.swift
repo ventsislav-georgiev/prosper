@@ -2094,6 +2094,8 @@ private struct AboutPane: View {
                 NeonDivider()
                 Text("Acknowledgments: mlx-swift, swift-transformers, GRDB.swift (encrypted store), Sparkle (auto-update), TOMLDecoder, Aptabase (anonymous analytics), and Apple's Vision / ScreenCaptureKit for screen context.")
                     .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
+                Text("Inspiration & know-how: the System Stats modules draw heavily on exelban/Stats (github.com/exelban/stats), and the menu-bar management on jordanbaird/Ice (github.com/jordanbaird/Ice). Huge thanks to both projects — their open-source implementations and UI/UX shaped ours.")
+                    .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
             }
 
             NeonSection("Troubleshooting",
@@ -2748,14 +2750,14 @@ private struct MenuBarPane: View {
             }
         case .some(.moveFailed):
             VStack(alignment: .leading, spacing: sz(4)) {
-                Label("Move test failed — this Mac’s menu bar didn’t accept the reorder. Ordering is disabled.",
+                Label("Move test failed — this Mac’s menu bar didn’t accept the reorder. Ordering won’t run until it passes.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 Button("Run move test again") { probeReason = nil; probeOK = nil; runProbe() }.buttonStyle(.neon)
             }
         case .some(.enumerationFailed):
             VStack(alignment: .leading, spacing: sz(4)) {
-                Label("Move test couldn’t see its own probe items (enumeration). Ordering is disabled.",
+                Label("Move test couldn’t see its own probe items (enumeration). Ordering won’t run until it passes.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 Button("Run move test again") { probeReason = nil; probeOK = nil; runProbe() }.buttonStyle(.neon)
@@ -2802,10 +2804,14 @@ private struct MenuBarPane: View {
             probeReason = result
             let ok = (result == .ok)
             probeOK = ok
-            // Don't hard-disable when it's only a missing Accessibility grant — the
-            // user gets a "Grant…" button and can re-probe. Disable on real failures.
-            if !ok && result != .needsAccessibility { mutateOrder { $0.enabled = false } }
-            if ok { MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: true) }
+            // Never flip the user's toggle off on a probe failure: selfProbe is a
+            // best-effort synthetic ⌘-drag that fails transiently on Tahoe, and the
+            // engine is ALREADY gated on probeOK (a failing Mac never enforces). Auto-
+            // disabling just lost the user's intent — they'd re-enable, the probe would
+            // re-run on next open, one transient failure, and it silently unchecked
+            // again. Keep the pref; the status row + "Run move test again" surface a
+            // genuine failure without destroying state.
+            MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: ok)
         }
     }
 
