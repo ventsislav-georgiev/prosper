@@ -271,12 +271,18 @@ Prosper is free and open source. Extend it without touching the core: write **Lu
 
 ## Acknowledgements
 
-Prosper stands on the shoulders of other open-source projects we learned a great deal from:
+Prosper takes inspiration — ideas, UI/UX, and implementation know-how — from a number of projects we admire:
 
-- **[exelban/Stats](https://github.com/exelban/stats)** — the System Stats modules (CPU / RAM / GPU / network / sensors / fans) draw heavily on Stats' implementation and popup UI/UX. Much of our know-how for the private IOReport / IOHID sensor paths and the SMC fan-control sequence came from studying it.
-- **[jordanbaird/Ice](https://github.com/jordanbaird/Ice)** — our menu-bar management (hiding, reordering, layout) is modelled on Ice's approach.
+- **[exelban/Stats](https://github.com/exelban/stats)** — the System Stats modules (CPU / RAM / GPU / network / sensors / fans) and their popups. Much of our know-how for the private IOReport / IOHID sensor paths and the SMC fan-control sequence came from studying it.
+- **[jordanbaird/Ice](https://github.com/jordanbaird/Ice)** — the menu-bar management (hiding, reordering, layout).
+- **[openlid/openlid](https://github.com/openlid/openlid)** — the OpenLid lid-stay-awake feature.
+- **[Raycast](https://www.raycast.com)** — the command palette / launcher.
+- **[Cotypist](https://cotypist.app)** — on-device inline autocomplete.
+- **[Hammerspoon](https://github.com/Hammerspoon/hammerspoon)** — the Lua automation / scripting bridge.
+- **[Rectangle](https://github.com/rxhanson/Rectangle)** — drag-to-edge window snapping.
+- **[Mosaic](https://www.lightpillar.com/mosaic.html)** — drag-into-zone window layouts.
 
-Huge thanks to both — their work shaped ours. Also building on mlx-swift, swift-transformers, GRDB.swift, Sparkle, TOMLDecoder, and Apple's Vision / ScreenCaptureKit.
+Huge thanks to all of them — their work shaped ours. Also building on mlx-swift, swift-transformers, GRDB.swift, Sparkle, TOMLDecoder, and Apple's Vision / ScreenCaptureKit.
 
 ---
 

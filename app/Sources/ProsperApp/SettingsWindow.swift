@@ -2094,7 +2094,7 @@ private struct AboutPane: View {
                 NeonDivider()
                 Text("Acknowledgments: mlx-swift, swift-transformers, GRDB.swift (encrypted store), Sparkle (auto-update), TOMLDecoder, Aptabase (anonymous analytics), and Apple's Vision / ScreenCaptureKit for screen context.")
                     .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
-                Text("Inspiration & know-how: the System Stats modules draw heavily on exelban/Stats (github.com/exelban/stats), and the menu-bar management on jordanbaird/Ice (github.com/jordanbaird/Ice). Huge thanks to both projects — their open-source implementations and UI/UX shaped ours.")
+                Text("Inspiration & know-how — System Stats from exelban/Stats, menu-bar management from jordanbaird/Ice, OpenLid from openlid/openlid, the command palette from Raycast, inline autocomplete from Cotypist, the Lua bridge from Hammerspoon, window snapping from Rectangle, and window layouts from Mosaic. Huge thanks to all — their implementations and UI/UX shaped ours.")
                     .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
             }
 
