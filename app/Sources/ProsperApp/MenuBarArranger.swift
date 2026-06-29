@@ -162,8 +162,15 @@ enum MenuBarArranger {
                 var last = ApplyResult(moved: 0, skippedUnresolved: 0, failed: 0)
                 var prev = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
                 var stable = 0
+                // Hard wall-clock deadline in addition to the pass-count bound: a single
+                // applyMoves can itself stall (per-move retries + scromble waits), so 20
+                // passes is NOT a time bound. If a broken pipeline never settles, stop
+                // after ~20s rather than spinning the cursor-hijack forever — the bar is
+                // left as-good-as-it-got and the user keeps control.
+                let deadline = ContinuousClock.now.advanced(by: .seconds(20))
                 for _ in 0..<20 {
                     if isOrderSatisfied(desired: desired) { break }   // fast positive exit
+                    if ContinuousClock.now >= deadline { break }      // wall-clock guard
                     last = await applyMoves(desired: desired)
                     try? await Task.sleep(for: .milliseconds(120))    // settle before measuring
                     let now = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())

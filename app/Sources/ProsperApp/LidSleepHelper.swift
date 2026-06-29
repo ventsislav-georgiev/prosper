@@ -342,6 +342,10 @@ enum LidSleepHelper {
     @discardableResult
     static func setDisabled(_ on: Bool) async -> Bool {
         if on {
+            if isSleepSuppressed() {
+                TraceLog.emit("setDisabled(true) suppressed: sleep requested — holding sleep open until full wake")
+                return false
+            }
             guard await ensureRegistered(feature: "Keep awake with the lid closed") else { return false }
             let c = connection ?? makeConnection()
             connection = c
@@ -438,6 +442,33 @@ enum LidSleepHelper {
     nonisolated(unsafe) private static var remoteWakeEnabled = false
     nonisolated(unsafe) private static var holdsRemoteSession = false
 
+    // MARK: - Sleep suppression latch
+    //
+    // `prosper://sleep` (and "Sleep this Mac now") must actually put the Mac to sleep
+    // and KEEP it asleep. But the moment it sleeps, two paths race to re-enable
+    // disablesleep: a DchTerm client reconnecting over Tailscale on a brief wake
+    // (→ setRemoteSessionActive(true)) and OpenLid's "keep awake while plugged in"
+    // rule re-firing on a power/wake event (→ setDisabled(true)). Either one promotes
+    // the dark wake to a full wake and the Mac stays reachable — the reported "briefly
+    // disconnects then accessible again". While this latch is set, both enabling paths
+    // are dropped (disabling always flows). Remote wake is a different XPC method and
+    // is NOT gated, so the Mac stays remotely wakeable. Cleared on the next genuine
+    // full wake (SleepControl observes NSWorkspace.didWakeNotification) — dark wakes
+    // for the poll don't post it, so the Mac keeps re-sleeping until the user (or a
+    // remote /wake) really brings it up.
+    nonisolated(unsafe) private static var sleepSuppressed = false
+    nonisolated private static let suppressLock = NSLock()
+
+    nonisolated static func beginSleepSuppression() {
+        suppressLock.lock(); sleepSuppressed = true; suppressLock.unlock()
+    }
+    nonisolated static func endSleepSuppression() {
+        suppressLock.lock(); sleepSuppressed = false; suppressLock.unlock()
+    }
+    nonisolated private static func isSleepSuppressed() -> Bool {
+        suppressLock.lock(); defer { suppressLock.unlock() }; return sleepSuppressed
+    }
+
     /// Hold/release the remote-session keep-awake while a dch session is live. Reuses
     /// the connection remote-wake already keeps open — if no daemon connection exists
     /// (remote-wake off), this is a no-op: keep-awake only matters once the wake path
@@ -449,6 +480,13 @@ enum LidSleepHelper {
         // Release always clears the flag, even if the daemon is unreachable, so a
         // later teardown isn't pinned open by a stale hold we can't actually release.
         if !on { holdsRemoteSession = false }
+        // A client reconnecting on a brief wake must NOT re-hold the Mac awake after a
+        // sleep command — that's the loop that kept it reachable. Drop the hold; the
+        // latch clears on the next full wake.
+        if on && isSleepSuppressed() {
+            TraceLog.emit("setRemoteSessionActive(true) suppressed: sleep requested")
+            return false
+        }
         // Reuse the daemon connection remote-wake / lid already keeps open. Rebuild it
         // if it dropped — an XPC connection can be interrupted across a sleep/wake, so
         // after a remote wake the heartbeat would otherwise find `connection == nil`,
