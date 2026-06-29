@@ -195,22 +195,34 @@ enum MenuBarArranger {
         let chevron = mgr.chevronAnchorWindowID()
         let altSep = mgr.alwaysHiddenAnchorWindowID()
         await MenuBarItemMover.withCursorParked {
+            // Seat the control items as a CHAIN off DISTINCT, freshly-read anchors —
+            // never two `.leftOf` drags against the SAME anchor (beta.48 did, and the
+            // second drag could shove the first to the wrong side of the boundary,
+            // landing the separator RIGHT of the chevron+Prosper and hiding them).
+            // `move()` re-reads the anchor's live frame by windowID each call, so
+            // chaining chevron→firstVisible then hiddenSep→chevron is order-stable.
             if let fv = firstVisible.flatMap({ win[$0.key] }) {
-                // 1. Hidden separator immediately left of the first visible item.
-                if let sep = hiddenSep {
-                    try? await MenuBarItemMover.move(windowID: sep, pid: pid, to: .leftOf(fv.windowID))
-                }
-                // 2. Chevron left of the SAME anchor → inserts between the separator and
-                //    the visible band, keeping the click target on the visible side.
+                // 1. Chevron immediately left of the first visible item (click target
+                //    stays on the visible side).
                 if let chevron {
                     try? await MenuBarItemMover.move(windowID: chevron, pid: pid, to: .leftOf(fv.windowID))
                 }
+                // 2. Hidden separator immediately left of the CHEVRON → guarantees
+                //    [hidden] hiddenSep chevron firstVisible, never hiddenSep on the
+                //    visible side. Falls back to firstVisible if the chevron id is gone.
+                if let sep = hiddenSep {
+                    try? await MenuBarItemMover.move(windowID: sep, pid: pid,
+                                                     to: .leftOf(chevron ?? fv.windowID))
+                }
             }
             // 3. Always-hidden separator just left of the first hidden item (its right
-            //    boundary): always-hidden items sit further left and stay collapsed.
-            if !always.isEmpty, let altSep,
-               let boundary = (firstHidden ?? firstVisible).flatMap({ win[$0.key] }) {
-                try? await MenuBarItemMover.move(windowID: altSep, pid: pid, to: .leftOf(boundary.windowID))
+            //    boundary), or left of the hidden separator when nothing is merely-
+            //    hidden — always-hidden items sit further left and stay collapsed.
+            if !always.isEmpty, let altSep {
+                let anchor = firstHidden.flatMap({ win[$0.key]?.windowID }) ?? hiddenSep
+                if let anchor {
+                    try? await MenuBarItemMover.move(windowID: altSep, pid: pid, to: .leftOf(anchor))
+                }
             }
         }
     }
