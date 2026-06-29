@@ -53,6 +53,11 @@ tag from the now-released section and put it on the new top draft.
     order", so the list mirrors where you already put things — including icons you'd
     already dragged behind the chevron (the divider now lands after them instead of
     snapping to the top).
+  - **Keep new icons visible** (opt-in, in Item ordering). macOS always drops a
+    newly-launched app's menu-bar icon at the far left — which is behind the chevron,
+    so you never see it appear. With this on, Prosper moves a new icon out to just
+    after the hidden divider so it stays visible; you can hide it again if you want.
+    Needs the move test passed.
   - Marking an icon always-hidden no longer un-hides everything in your hidden
     section. The toggle used to rebuild all of Prosper's dividers from scratch, which
     reflowed the bar and popped your hidden icons back on screen; it now adds/removes

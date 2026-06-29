@@ -259,6 +259,32 @@ enum MenuBarArranger {
         }
     }
 
+    /// Move freshly-appeared items (windowIDs the caller flagged as new) that macOS
+    /// dropped into the HIDDEN band out to just-right of the hidden separator, so a new
+    /// app's icon stays visible instead of being swallowed off-screen. Identity-free —
+    /// the caller decides "new" by windowID novelty, robust on Tahoe where foreign items
+    /// can't be told apart. Best-effort; a failed move is dropped (the caller's
+    /// attempt-once bookkeeping means it isn't retried forever).
+    static func revealNewItems(newcomerWindowIDs ids: Set<CGWindowID>) async {
+        guard MenuBarBridge.available, !ids.isEmpty else { return }
+        guard let anchor = MenuBarManager.shared.hiddenAnchorWindowID(),
+              let hiddenX = MenuBarBridge.frame(for: anchor)?.minX else { return }
+        // Only the newcomers macOS actually buried in the hidden band (left of the
+        // chevron); ones it placed visible already need no move. Never our own chrome.
+        let items = currentItems().filter {
+            ids.contains($0.windowID) && !$0.isOwn && $0.frame.minX < hiddenX
+        }
+        guard !items.isEmpty else { return }
+        isApplying = true
+        defer { isApplying = false }
+        await MenuBarItemMover.withCursorParked {
+            for item in items {
+                do { try await MenuBarItemMover.move(windowID: item.windowID, pid: item.pid, to: .rightOf(anchor)) }
+                catch { NSLog("prosper: reveal-new-item failed for \(item.bundleID ?? "?"): \(error)") }
+            }
+        }
+    }
+
     /// Hash-only fallback when a desired item's exact key isn't live: among the same
     /// bundle's UNCLAIMED live hashes, pick the nearest within tolerance. Returns nil
     /// for title-resolved desired items (no hash to compare) or when nothing's close

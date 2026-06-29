@@ -111,6 +111,12 @@ struct MenuBarOrderStore: Codable, Equatable, Sendable {
     /// mirrors where the user ⌘-dragged the real divider, and editable by dragging the
     /// divider row in Settings.
     var hiddenDividerIndex: Int? = nil
+    /// When on, an icon a newly-launched app drops into the hidden band (macOS always
+    /// inserts new status items leftmost = off-screen behind the chevron) is moved to
+    /// just-right of the hidden divider so it stays visible. Identity-free: keyed on
+    /// windowID novelty, so it's robust on Tahoe where foreign items can't be told
+    /// apart. Needs the move engine (probeOK). Default off.
+    var revealNewItems: Bool = false
 
     /// Whether `key` is marked always-hidden.
     func isAlwaysHidden(_ key: String) -> Bool { alwaysHidden.contains(key) }
@@ -138,6 +144,7 @@ struct MenuBarOrderStore: Codable, Equatable, Sendable {
         desiredOrder = try c.decodeIfPresent([MenuBarIdentity].self, forKey: .desiredOrder) ?? d.desiredOrder
         alwaysHidden = try c.decodeIfPresent([String].self, forKey: .alwaysHidden) ?? d.alwaysHidden
         hiddenDividerIndex = try c.decodeIfPresent(Int.self, forKey: .hiddenDividerIndex) ?? d.hiddenDividerIndex
+        revealNewItems = try c.decodeIfPresent(Bool.self, forKey: .revealNewItems) ?? d.revealNewItems
     }
 }
 
