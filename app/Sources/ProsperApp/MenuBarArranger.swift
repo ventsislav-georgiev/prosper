@@ -152,13 +152,26 @@ enum MenuBarArranger {
                 // not always sorted (managed icons are split into groups by unmovable
                 // system items, and each synthetic drop can shift only so far), which is
                 // why the user had to click Apply repeatedly. Loop the pass until the
-                // saved RELATIVE order holds, or a pass moves nothing (done, or genuinely
-                // stuck — no point re-dragging). Bounded so a pathological bar can never
-                // spin: a handful of passes is what manual reclicking achieved anyway.
+                // saved RELATIVE order holds.
+                //
+                // Two subtleties learned from the field:
+                //  • SETTLE between passes. `applyMoves` reads `reveal:false` (no 120ms
+                //    settle), so a back-to-back re-read sees mid-flight frames from the
+                //    pass just finished — the relative-order skip then trusts stale
+                //    positions and the pass confirms nothing (moved==0). A short settle
+                //    lets frames land, which is exactly why a manual reclick (reveal +
+                //    capture each time) made progress where the in-loop retry didn't.
+                //  • Don't bail on the FIRST moved==0. One dry pass is usually that
+                //    stale-frame blip, and the next settled pass moves again. Only a
+                //    RUN of dry passes means genuinely stuck (split by unmovable items).
                 var last = ApplyResult(moved: 0, skippedUnresolved: 0, failed: 0)
-                for _ in 0..<6 {
+                var dryStreak = 0
+                for pass in 0..<16 {
                     last = await applyMoves(desired: desired)
-                    if last.moved == 0 || isOrderSatisfied(desired: desired) { break }
+                    if isOrderSatisfied(desired: desired) { break }
+                    dryStreak = last.moved == 0 ? dryStreak + 1 : 0
+                    if dryStreak >= 3 { break }            // stuck: no point re-dragging
+                    if pass < 15 { try? await Task.sleep(for: .milliseconds(120)) }   // settle
                 }
                 await placeDividers(desired: desired, hiddenKeys: hiddenKeys,
                                     alwaysHiddenKeys: alwaysHiddenKeys)
