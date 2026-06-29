@@ -57,7 +57,8 @@ tag from the now-released section and put it on the new top draft.
     newly-launched app's menu-bar icon at the far left — which is behind the chevron,
     so you never see it appear. With this on, Prosper moves a new icon out to just
     after the hidden divider so it stays visible; you can hide it again if you want.
-    Needs the move test passed.
+    Needs the move test passed. (A new icon lands off-screen, so Prosper now reveals
+    the bar before moving it — an off-screen icon can't be grabbed otherwise.)
   - Marking an icon always-hidden no longer un-hides everything in your hidden
     section. The toggle used to rebuild all of Prosper's dividers from scratch, which
     reflowed the bar and popped your hidden icons back on screen; it now adds/removes
