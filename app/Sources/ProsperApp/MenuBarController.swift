@@ -49,7 +49,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.onQuit = onQuit
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        ProsperStatusItems.register(statusItem)   // self-filter source for the menu-bar manager
+        // CONTENT, not chrome: the launcher is a real user-facing icon, so it belongs
+        // in the order list (named + previewed) and can be arranged/hidden like any
+        // other. Only the chevron + dividers (the management mechanism) are .control.
+        ProsperStatusItems.register(statusItem, role: .content, name: "Prosper")
         versionItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false
         secureInputItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
