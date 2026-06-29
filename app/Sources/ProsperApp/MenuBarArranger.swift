@@ -267,20 +267,28 @@ enum MenuBarArranger {
     /// attempt-once bookkeeping means it isn't retried forever).
     static func revealNewItems(newcomerWindowIDs ids: Set<CGWindowID>) async {
         guard MenuBarBridge.available, !ids.isEmpty else { return }
-        guard let anchor = MenuBarManager.shared.hiddenAnchorWindowID(),
-              let hiddenX = MenuBarBridge.frame(for: anchor)?.minX else { return }
-        // Only the newcomers macOS actually buried in the hidden band (left of the
-        // chevron); ones it placed visible already need no move. Never our own chrome.
-        let items = currentItems().filter {
-            ids.contains($0.windowID) && !$0.isOwn && $0.frame.minX < hiddenX
-        }
-        guard !items.isEmpty else { return }
         isApplying = true
         defer { isApplying = false }
-        await MenuBarItemMover.withCursorParked {
-            for item in items {
-                do { try await MenuBarItemMover.move(windowID: item.windowID, pid: item.pid, to: .rightOf(anchor)) }
-                catch { NSLog("prosper: reveal-new-item failed for \(item.bundleID ?? "?"): \(error)") }
+        // MUST reveal first: in the steady state the hidden separator is EXPANDED, so a
+        // newcomer macOS buried in the hidden band sits OFF-SCREEN — the synthetic
+        // ⌘-drag can't grab a window it can't click. Collapsing both separators slides
+        // every item on-screen (and the anchor to its real boundary x); the moved item
+        // then lands right-of-anchor = visible band, and endPlacement's re-expand leaves
+        // it on-screen because it's now right of the separator. (Mirrors applyBands.)
+        await MenuBarManager.shared.withAllRevealed { () async -> Void in
+            guard let anchor = MenuBarManager.shared.hiddenAnchorWindowID(),
+                  let hiddenX = MenuBarBridge.frame(for: anchor)?.minX else { return }
+            // Only newcomers macOS actually buried in the hidden band (left of the
+            // separator); ones it placed visible need no move. Never our own chrome.
+            let items = currentItems().filter {
+                ids.contains($0.windowID) && !$0.isOwn && $0.frame.minX < hiddenX
+            }
+            guard !items.isEmpty else { return }
+            await MenuBarItemMover.withCursorParked {
+                for item in items {
+                    do { try await MenuBarItemMover.move(windowID: item.windowID, pid: item.pid, to: .rightOf(anchor)) }
+                    catch { NSLog("prosper: reveal-new-item failed for \(item.bundleID ?? "?"): \(error)") }
+                }
             }
         }
     }
