@@ -151,27 +151,25 @@ enum MenuBarArranger {
                 // Converge in ONE click: a single move pass leaves the bar closer but
                 // not always sorted (managed icons are split into groups by unmovable
                 // system items, and each synthetic drop can shift only so far), which is
-                // why the user had to click Apply repeatedly. Loop the pass until the
-                // saved RELATIVE order holds.
-                //
-                // Two subtleties learned from the field:
-                //  • SETTLE between passes. `applyMoves` reads `reveal:false` (no 120ms
-                //    settle), so a back-to-back re-read sees mid-flight frames from the
-                //    pass just finished — the relative-order skip then trusts stale
-                //    positions and the pass confirms nothing (moved==0). A short settle
-                //    lets frames land, which is exactly why a manual reclick (reveal +
-                //    capture each time) made progress where the in-loop retry didn't.
-                //  • Don't bail on the FIRST moved==0. One dry pass is usually that
-                //    stale-frame blip, and the next settled pass moves again. Only a
-                //    RUN of dry passes means genuinely stuck (split by unmovable items).
+                // why the user had to click Apply repeatedly. Re-apply until the bar
+                // STOPS CHANGING — two consecutive passes that produce no net change to
+                // the actual on-screen window order mean it's settled (either sorted, or
+                // genuinely stuck against unmovable items; either way more dragging is
+                // pointless). This is the robust convergence signal the per-move `moved`
+                // counter couldn't be: that counter mis-reads mid-flight frames as
+                // "moved nothing" and bailed early. Each pass SETTLES (120ms) before its
+                // order is measured so the snapshot is real, not a frame in flight.
                 var last = ApplyResult(moved: 0, skippedUnresolved: 0, failed: 0)
-                var dryStreak = 0
-                for pass in 0..<16 {
+                var prev = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
+                var stable = 0
+                for _ in 0..<20 {
+                    if isOrderSatisfied(desired: desired) { break }   // fast positive exit
                     last = await applyMoves(desired: desired)
-                    if isOrderSatisfied(desired: desired) { break }
-                    dryStreak = last.moved == 0 ? dryStreak + 1 : 0
-                    if dryStreak >= 3 { break }            // stuck: no point re-dragging
-                    if pass < 15 { try? await Task.sleep(for: .milliseconds(120)) }   // settle
+                    try? await Task.sleep(for: .milliseconds(120))    // settle before measuring
+                    let now = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
+                    stable = (now == prev) ? stable + 1 : 0
+                    prev = now
+                    if stable >= 2 { break }   // no net change twice running → settled
                 }
                 await placeDividers(desired: desired, hiddenKeys: hiddenKeys,
                                     alwaysHiddenKeys: alwaysHiddenKeys)

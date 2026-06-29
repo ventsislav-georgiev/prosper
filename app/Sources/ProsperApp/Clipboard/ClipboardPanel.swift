@@ -617,6 +617,10 @@ private struct ClipboardView: View {
             .overlayPreferenceValue(RowFrameKey.self) { frames in
                 slotOverlay(frames)
             }
+            // Float the scroller (still .visible as a persistent hint) so a legacy
+            // gutter never desyncs the selection highlight from the ⌃-digit badge
+            // ladder. See OverlayScrollerStyle.
+            .background(OverlayScrollerStyle())
         }
         .frame(width: sz(300))
     }
