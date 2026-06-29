@@ -39,7 +39,7 @@ final class MarketplaceWindow {
         SettingsWindow.applyWindowOpacity(win)
         win.isReleasedWhenClosed = false
         win.setFrameAutosaveName("ProsperMarketplaceWindow")
-        if !win.setFrameUsingName("ProsperMarketplaceWindow") { win.center() }
+        if !win.setFrameUsingName("ProsperMarketplaceWindow") { win.centerOnScreen() }
         window = win
 
         closeObserver = NotificationCenter.default.addObserver(
