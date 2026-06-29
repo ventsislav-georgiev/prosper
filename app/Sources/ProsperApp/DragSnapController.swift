@@ -198,6 +198,13 @@ final class DragSnapController {
             let dx = cur.x - down.x, dy = cur.y - down.y
             guard (dx * dx + dy * dy) >= Self.dragThreshold * Self.dragThreshold else { return }
             // A drag is starting — decide once whether it's eligible to snap.
+            // A gesture that BEGINS in the menu bar is a menu-bar-item rearrange (macOS
+            // requires holding ⌘ to drag those) — never a window move. Without this the
+            // ⌘-drag satisfies the .command/.none modifier and the hit-test finds a
+            // window beneath the bar, popping the layout palette. A real window drag
+            // starts in the title bar, below the menu bar, so this never false-aborts.
+            if let downScreen = WindowManager.screenContaining(axPoint: down),
+               down.y < WindowManager.visibleFrameAX(for: downScreen).minY { aborted = true; return }
             guard Preferences.dragSnapModifier.isSatisfied(by: ev.modifierFlags) else { aborted = true; return }
             guard let hit = WindowManager.draggableWindowUnderCursor(), hit.pid != getpid() else { aborted = true; return }
             let el = hit.element, pid = hit.pid
