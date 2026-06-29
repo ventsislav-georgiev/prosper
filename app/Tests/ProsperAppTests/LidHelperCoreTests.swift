@@ -145,6 +145,68 @@ final class LidHelperCoreTests: XCTestCase {
         XCTAssertEqual(spy.calls.last, false)
     }
 
+    // MARK: - sticky remote hold (remote-wake promote → persist until explicit sleep)
+
+    func testPromoteRemoteHoldIsStickyAndSurvivesSoftRelease() {
+        let spy = Spy()
+        let core = make(spy)
+        XCTAssertTrue(core.promoteRemoteHold())         // [true]
+        XCTAssertTrue(core.remoteHoldOn)
+        XCTAssertTrue(core.remoteHoldSticky)
+
+        // Heartbeat soft release (session idle / TTL lapse) must NOT drop a sticky hold.
+        XCTAssertTrue(core.setRemoteHold(false))        // ignored, no pmset call
+        XCTAssertTrue(core.remoteHoldOn)
+        XCTAssertTrue(core.remoteHoldSticky)
+        XCTAssertEqual(spy.calls, [true])               // sleep never re-enabled
+    }
+
+    func testClearRemoteHoldReleasesStickyHold() {
+        let spy = Spy()
+        let core = make(spy)
+        _ = core.promoteRemoteHold()                    // [true]
+        XCTAssertTrue(core.clearRemoteHold())           // lid open → hard release, [true,false]
+        XCTAssertFalse(core.remoteHoldOn)
+        XCTAssertFalse(core.remoteHoldSticky)
+        XCTAssertEqual(spy.calls, [true, false])
+    }
+
+    func testClearRemoteHoldKeepsLidOverride() {
+        let spy = Spy()
+        let core = make(spy)
+        core.connectionOpened()
+        _ = core.setOverride(true)                      // [true]
+        _ = core.promoteRemoteHold()                    // OR still true, [true,true]
+        XCTAssertTrue(core.clearRemoteHold())           // lid override keeps OR true, [..,true]
+        XCTAssertTrue(core.overrideOn)
+        XCTAssertFalse(core.remoteHoldOn)
+        XCTAssertFalse(core.remoteHoldSticky)
+        XCTAssertEqual(spy.calls.last, true)            // sleep never re-enabled
+    }
+
+    func testReclaimClearsStickyHold() {
+        let spy = Spy()
+        let core = make(spy)
+        _ = core.promoteRemoteHold()
+        core.reclaimAtStartup()                         // explicit sleep path
+        XCTAssertFalse(core.remoteHoldSticky)
+        XCTAssertFalse(core.remoteHoldOn)
+        XCTAssertEqual(spy.calls.last, false)
+    }
+
+    func testStickyClearedThenNormalSoftReleaseWorksAgain() {
+        let spy = Spy()
+        let core = make(spy)
+        _ = core.promoteRemoteHold()                    // [true] sticky
+        _ = core.clearRemoteHold()                      // [true,false] sticky cleared
+        // A fresh transient hold (lid closed again, session active) is now soft-releasable.
+        XCTAssertTrue(core.setRemoteHold(true))         // [..,true]
+        XCTAssertFalse(core.remoteHoldSticky)
+        XCTAssertTrue(core.setRemoteHold(false))        // honored now, [..,false]
+        XCTAssertFalse(core.remoteHoldOn)
+        XCTAssertEqual(spy.calls, [true, false, true, false])
+    }
+
     /// Hot-path budget: the daemon serializes every connection/method event
     /// through the core, so a transition must be effectively free — no allocation,
     /// no locking. 1M open+set+close cycles under 500ms is ~500ns/cycle, a

@@ -220,6 +220,20 @@ tag from the now-released section and put it on the new top draft.
   seeded on a genuine first launch.
 
 ### Keep Mac Awake (OpenLid)
+- **A remotely-woken Mac now stays awake until you sleep it — no more dropping the
+  connection a few seconds after you reach it.** The instant a remote wake fires, the
+  helper now holds the Mac awake *stickily* as root, before your terminal has even
+  reconnected, and keeps holding it regardless of whether the app's keep-alive
+  heartbeat is delayed or its link to the helper is still re-establishing across the
+  wake. The hold stays until you explicitly sleep the Mac (`prosper://sleep` / "Sleep
+  this Mac now") or open the lid — exactly the two moments you'd want it back asleep.
+  Remote wake itself is left completely untouched, so you keep waking and sleeping the
+  Mac remotely at will.
+- **The "held awake by a remote session" state now resets the moment you open the
+  lid.** That keep-awake exists only to stop a *closed-lid* Mac from sleeping, so it
+  made no sense to keep holding once you're sitting in front of an open lid. Opening
+  the lid now releases it immediately (and a hold is never taken while the lid is
+  open), so normal sleep resumes as soon as you're physically using the Mac.
 - **A remotely-woken Mac no longer falls back asleep mid-session.** After the app
   restarted (e.g. following a remote wake), it forgot that the background helper was
   still armed, so the "keep awake while a session is live" hold quietly no-op'd and

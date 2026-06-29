@@ -568,6 +568,14 @@ final class SystemEventWatchers {
         let closed = SystemInfo.lidClosed()
         guard closed != lastLidClosed, let closed else { return }
         lastLidClosed = closed
+        // Opening the lid means the user is physically present — hard-release any
+        // remote-session keep-awake hold (a clamshell-only concept, incl. a sticky
+        // remote-wake promote hold) so normal power management resumes. Routed
+        // through the apply chain so it can't reorder against an in-flight
+        // lid / remote-wake op.
+        if !closed {
+            LidSleepHelper.enqueueApply { _ = await LidSleepHelper.clearRemoteSession() }
+        }
         emit?("lid.changed", Self.json(["closed": closed]))
     }
 
