@@ -2823,7 +2823,9 @@ private struct MenuBarPane: View {
         guard !applying, !saving else { return }
         applying = true
         Task {
-            lastApply = await MenuBarArranger.apply(desired: orderStore.desiredOrder)
+            lastApply = await MenuBarArranger.apply(desired: orderStore.desiredOrder,
+                                                    hiddenKeys: orderStore.hiddenKeys,
+                                                    alwaysHiddenKeys: orderStore.alwaysHidden)
             applying = false
         }
     }

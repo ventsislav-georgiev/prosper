@@ -109,6 +109,12 @@ tag from the now-released section and put it on the new top draft.
     edge to the cursor, which could shove an icon across the divider into the hidden
     band. The hidden area also stays pinned open for the whole pass so it can't
     auto-collapse mid-move.
+  - Applying a saved order now restores the hidden section too, in the same pass.
+    Previously it only fixed left-to-right order and never touched the divider, so an
+    icon that belonged behind the chevron stayed out in the open and no amount of
+    re-applying pulled it back. Prosper now also drops the divider at its saved boundary
+    (just left of your first visible icon) once the icons are in order — so order and
+    what's-hidden are both restored in one click instead of needing several.
   - Ordering work runs on a fast path that, in steady state, avoids the expensive
     system-wide window scan — so the background order check doesn't add input lag
     while you type.
