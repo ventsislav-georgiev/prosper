@@ -198,28 +198,29 @@ enum MenuBarArranger {
             // each item against the already-correct neighbor to its right.
             for i in stride(from: placed.count - 2, through: 0, by: -1) {
                 let item = placed[i], anchor = placed[i + 1]
-                // Order-based skip (NOT pixel adjacency): if `item` already sits
-                // immediately left of `anchor` among the placed items in the live bar,
-                // it's correct — don't re-drag it. Inter-item spacing means correctly
-                // ordered items are never pixel-touching, so a pixel check would re-drag
-                // (and fail "didNotMove") every pass. Re-read live order each step since
-                // prior moves reflow frames.
-                // Cheap windowID-order read (no system window enum) — the skip/confirm
-                // only need order, not item metadata, and this runs inside the
-                // cursor-hidden window where shorter == safer.
+                // RELATIVE-order skip, NOT physical adjacency: skip when `item` already
+                // appears anywhere BEFORE `anchor` among the placed items in the live
+                // bar. Demanding adjacency (ii == ai-1) was the oscillation bug — managed
+                // icons can be split into groups by UNMOVABLE system items (Control
+                // Center, clock), so contiguity is unreachable and the live timer would
+                // re-drag already-correctly-ordered icons forever chasing it. This
+                // matches the enforcer's drift check (isRelativeOrderSatisfied), so a
+                // pass that satisfies relative order also clears drift → it converges.
+                // Cheap windowID-order read (no system window enum); re-read each step
+                // since prior moves reflow frames.
                 let seq = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
                     .filter { placedIDs.contains($0) }
                 if let ai = seq.firstIndex(of: anchor.windowID),
-                   let ii = seq.firstIndex(of: item.windowID), ii == ai - 1 { continue }
+                   let ii = seq.firstIndex(of: item.windowID), ii < ai { continue }
                 do {
                     try await MenuBarItemMover.move(windowID: item.windowID, pid: item.pid,
                                                     to: .leftOf(anchor.windowID))
-                    // Confirm by landing position, not bare frame change: a neighbor's
-                    // reflow also changes our frame, which would over-count moves.
+                    // Confirm by relative landing position, not a bare frame change: a
+                    // neighbor's reflow also changes our frame, which would over-count.
                     let after = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
                         .filter { placedIDs.contains($0) }
                     if let ai = after.firstIndex(of: anchor.windowID),
-                       let ii = after.firstIndex(of: item.windowID), ii == ai - 1 { moved += 1 }
+                       let ii = after.firstIndex(of: item.windowID), ii < ai { moved += 1 }
                 } catch {
                     failed += 1
                     NSLog("prosper: menu-bar arrange — move failed for \(item.bundleID ?? "?"): \(error)")

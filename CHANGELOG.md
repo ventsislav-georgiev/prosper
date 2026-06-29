@@ -98,14 +98,17 @@ tag from the now-released section and put it on the new top draft.
     stays gentle: it backs off on
     battery, and a circuit breaker parks it if a move keeps failing so it can never
     spin the CPU.
-  - Applying a saved order no longer drops an icon into the hidden section. On macOS 26
-    (Tahoe) a dragged icon aligns its right edge to the drop point, so placing an icon
-    "to the right of" its neighbor actually shoved it onto that neighbor's slot and
-    pushed it left — across the divider into the hidden band when the neighbor was the
-    leftmost visible icon. Prosper now restores order using only the leftward drag the
-    startup self-test actually verifies, anchoring each icon against the already-correct
-    one to its right. The hidden area also stays pinned open for the whole pass so it
-    can't auto-collapse mid-move and shift the targets.
+  - Restoring a saved order is now stable instead of shuffling icons endlessly. Two
+    fixes: (1) it only cares about icons' order relative to each other, not whether
+    they're physically touching — managed icons are often split into groups by system
+    icons (Control Center, the clock) that can't be moved, so demanding they sit flush
+    made it drag everything back and forth forever chasing an impossible layout; it now
+    moves an icon only when it's genuinely on the wrong side of a neighbor. (2) It
+    rearranges using only the leftward drag the startup self-test verifies — the
+    rightward drag mis-landed on macOS 26 (Tahoe), where a dragged icon snaps its right
+    edge to the cursor, which could shove an icon across the divider into the hidden
+    band. The hidden area also stays pinned open for the whole pass so it can't
+    auto-collapse mid-move.
   - Ordering work runs on a fast path that, in steady state, avoids the expensive
     system-wide window scan — so the background order check doesn't add input lag
     while you type.

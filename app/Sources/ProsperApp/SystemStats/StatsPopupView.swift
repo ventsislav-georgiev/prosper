@@ -556,16 +556,15 @@ struct StatsPopupView: View {
                         Text("Automatic").tag(0)
                         Text("Manual").tag(1)
                     }
-                    .labelsHidden().pickerStyle(.segmented).controlSize(.small)
-                    .fixedSize()
+                    .labelsHidden().pickerStyle(.segmented).controlSize(.large)
+                    .frame(maxWidth: .infinity)
                     .disabled(fanBusy)
-                Button { applyFraction(0) } label: { Image(systemName: "minus.circle").font(Neon.font(15)) }
+                Button { applyFraction(0) } label: { Image(systemName: "minus.circle").font(Neon.font(18)) }
                     .buttonStyle(.plain).foregroundStyle(manual ? Neon.textPrimary : Neon.textSecondary.opacity(0.4))
                     .disabled(!manual).help("Quietest (minimum RPM)")
-                Button { applyFraction(1) } label: { Image(systemName: "snowflake").font(Neon.font(15)) }
+                Button { applyFraction(1) } label: { Image(systemName: "snowflake").font(Neon.font(18)) }
                     .buttonStyle(.plain).foregroundStyle(manual ? Neon.blueBright : Neon.textSecondary.opacity(0.4))
                     .disabled(!manual).help("Full speed (maximum RPM)")
-                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity)
             if manual {
@@ -619,7 +618,9 @@ struct StatsPopupView: View {
     /// fan that isn't responding to a manual write reads honestly (stays put) instead
     /// of optimistically tracking the drag. RPM number shown so it's unambiguous.
     private func fanReadout(_ fan: FanReading) -> some View {
-        let pct = fan.max > 0 ? fan.current / fan.max : 0
+        // Normalize into the fan's operating range (min…max), same basis as the slider
+        // fraction (line ~641) and exelban/Stats — else readout % and slider % disagree.
+        let pct = fan.max > fan.min ? Swift.min(1, Swift.max(0, (fan.current - fan.min) / (fan.max - fan.min))) : 0
         let target = (fanManual ? fanTargets[fan.id] : nil)
         return HStack(spacing: sz(8)) {
             Text("Fan \(fan.id + 1)").font(Neon.font(.caption, weight: .bold))
