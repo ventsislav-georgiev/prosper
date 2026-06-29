@@ -189,30 +189,37 @@ enum MenuBarArranger {
         var moved = 0, failed = 0
         // Park the cursor once around the whole batch (not per move).
         await MenuBarItemMover.withCursorParked {
-            for i in 1..<placed.count {
-                let anchor = placed[i - 1], item = placed[i]
+            // Build the order RIGHT-TO-LEFT using ONLY `.leftOf`. `.rightOf` (drop at
+            // anchor.maxX) is unreliable on Tahoe: the dragged item snaps its RIGHT edge
+            // to the cursor, so dropping at the anchor's right edge lands the item ON the
+            // anchor's slot and shoves it LEFT — when the anchor is the leftmost visible
+            // item that pushes it across the divider into the hidden band. `.leftOf` is
+            // the only direction the self-probe exercises (and proves works), so anchor
+            // each item against the already-correct neighbor to its right.
+            for i in stride(from: placed.count - 2, through: 0, by: -1) {
+                let item = placed[i], anchor = placed[i + 1]
                 // Order-based skip (NOT pixel adjacency): if `item` already sits
-                // immediately right of `anchor` among the placed items in the live
-                // bar, it's correct — don't re-drag it. Inter-item spacing means
-                // correctly ordered items are never pixel-touching, so a pixel check
-                // would re-drag (and fail "didNotMove") every pass. Re-read live order
-                // each step since prior moves reflow frames.
+                // immediately left of `anchor` among the placed items in the live bar,
+                // it's correct — don't re-drag it. Inter-item spacing means correctly
+                // ordered items are never pixel-touching, so a pixel check would re-drag
+                // (and fail "didNotMove") every pass. Re-read live order each step since
+                // prior moves reflow frames.
                 // Cheap windowID-order read (no system window enum) — the skip/confirm
                 // only need order, not item metadata, and this runs inside the
                 // cursor-hidden window where shorter == safer.
                 let seq = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
                     .filter { placedIDs.contains($0) }
                 if let ai = seq.firstIndex(of: anchor.windowID),
-                   let ii = seq.firstIndex(of: item.windowID), ii == ai + 1 { continue }
+                   let ii = seq.firstIndex(of: item.windowID), ii == ai - 1 { continue }
                 do {
                     try await MenuBarItemMover.move(windowID: item.windowID, pid: item.pid,
-                                                    to: .rightOf(anchor.windowID))
+                                                    to: .leftOf(anchor.windowID))
                     // Confirm by landing position, not bare frame change: a neighbor's
                     // reflow also changes our frame, which would over-count moves.
                     let after = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
                         .filter { placedIDs.contains($0) }
                     if let ai = after.firstIndex(of: anchor.windowID),
-                       let ii = after.firstIndex(of: item.windowID), ii == ai + 1 { moved += 1 }
+                       let ii = after.firstIndex(of: item.windowID), ii == ai - 1 { moved += 1 }
                 } catch {
                     failed += 1
                     NSLog("prosper: menu-bar arrange — move failed for \(item.bundleID ?? "?"): \(error)")
