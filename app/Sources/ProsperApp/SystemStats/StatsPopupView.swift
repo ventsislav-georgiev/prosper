@@ -557,14 +557,15 @@ struct StatsPopupView: View {
                         Text("Manual").tag(1)
                     }
                     .labelsHidden().pickerStyle(.segmented).controlSize(.small)
-                    .frame(maxWidth: .infinity)
+                    .fixedSize()
                     .disabled(fanBusy)
-                Button { applyFraction(0) } label: { Image(systemName: "minus.circle") }
+                Button { applyFraction(0) } label: { Image(systemName: "minus.circle").font(Neon.font(15)) }
                     .buttonStyle(.plain).foregroundStyle(manual ? Neon.textPrimary : Neon.textSecondary.opacity(0.4))
                     .disabled(!manual).help("Quietest (minimum RPM)")
-                Button { applyFraction(1) } label: { Image(systemName: "snowflake") }
+                Button { applyFraction(1) } label: { Image(systemName: "snowflake").font(Neon.font(15)) }
                     .buttonStyle(.plain).foregroundStyle(manual ? Neon.blueBright : Neon.textSecondary.opacity(0.4))
                     .disabled(!manual).help("Full speed (maximum RPM)")
+                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity)
             if manual {

@@ -98,6 +98,11 @@ tag from the now-released section and put it on the new top draft.
     stays gentle: it backs off on
     battery, and a circuit breaker parks it if a move keeps failing so it can never
     spin the CPU.
+  - Applying a saved order no longer drops an icon into the hidden section. While
+    rearranging, Prosper now keeps the hidden area pinned open for the whole pass —
+    previously it could auto-collapse mid-move (the cursor parks off the bar during a
+    move, which looked like "not hovering"), shifting everything left so an icon landed
+    a couple of slots too far over, sometimes across the divider into the hidden band.
   - Ordering work runs on a fast path that, in steady state, avoids the expensive
     system-wide window scan — so the background order check doesn't add input lag
     while you type.

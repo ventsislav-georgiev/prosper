@@ -133,7 +133,24 @@ enum MenuBarArranger {
         isApplying = true
         defer { isApplying = false }
 
-        let (live, hashes) = await revealAndIndex(reveal: reveal)
+        // Explicit applies (reveal:true) pin BOTH separators collapsed for the WHOLE
+        // move batch via withAllRevealed — a STABLE reveal with no auto-rehide. The old
+        // path (setRevealed(true)) armed a rehide timer + hover monitors; because the
+        // cursor parks off-bar during synthetic drags, "not hovering" auto-collapsed the
+        // hidden zone mid-batch, shifting the visible band left by ~the hidden-zone width
+        // so items landed ~2 slots too far left — sometimes across the divider into hidden.
+        if reveal {
+            return await MenuBarManager.shared.withAllRevealed { await applyMoves(desired: desired) }
+        }
+        return await applyMoves(desired: desired)
+    }
+
+    /// The match + move batch. Assumes the caller already established the desired reveal
+    /// state (withAllRevealed for explicit applies; live mode reorders only on-screen
+    /// items). Reads the current on-screen layout WITHOUT toggling separators, so frames
+    /// stay stable for every endpoint computation in the loop.
+    private static func applyMoves(desired: [MenuBarIdentity]) async -> ApplyResult {
+        let (live, hashes) = await revealAndIndex(reveal: false)
 
         // Live identities (title or fresh hash). First item wins a key (dup
         // unresolved keys can't be ordered apart).
