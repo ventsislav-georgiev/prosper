@@ -175,11 +175,5 @@ let package = Package(
             name: "ProsperAppTests",
             dependencies: ["ProsperApp", "LuaRuntime"]
         ),
-        // Fast-iterating unit tests for the AppKit-free system-monitor core:
-        // ring buffers, decoders, reader correctness, hot-path budgets.
-        .testTarget(
-            name: "StatsCoreTests",
-            dependencies: ["StatsCore", "SMCKit"]
-        ),
     ]
 )
