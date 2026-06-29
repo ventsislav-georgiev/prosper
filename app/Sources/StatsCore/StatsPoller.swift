@@ -58,6 +58,11 @@ public final class StatsPoller {
         public var slowDivider: Int = 2       // temps/power
         public var batteryDivider: Int = 10
         public var historyLength: Int = 120
+        /// Faster cadence used WHILE a popup is open, so the live process list and
+        /// charts refresh quickly for inspection then drop back to `baseInterval` (the
+        /// quiet background rate) on close. Floored against baseInterval so a user who
+        /// already set a sub-1.5 s base never gets slowed down.
+        public var activeInterval: TimeInterval = 1.5
         public init() {}
     }
 
@@ -72,9 +77,21 @@ public final class StatsPoller {
     /// decide whether a config change needs a fresh poller).
     public var enabledSet: Set<StatsModule> { enabled }
     public var onSnapshot: ((StatsSnapshot) -> Void)?
-    /// Set true while a popup is open to enable the expensive top-process scan.
+    /// Set true while a popup is open: enables the expensive top-process scan AND
+    /// reschedules the timer to the faster `activeInterval` (back to baseInterval on
+    /// close). One call from the popover delegate drives both.
     private let procFlag = ManagedAtomicFlag()
-    public func setProcSampling(_ on: Bool) { procFlag.set(on) }
+    public func setPopupActive(_ on: Bool) {
+        procFlag.set(on)
+        queue.async { [self] in
+            guard let timer else { return }   // not running → nothing to reschedule
+            let target = on ? Swift.min(config.activeInterval, config.baseInterval) : config.baseInterval
+            guard abs(target - currentInterval) > 0.01 else { return }
+            currentInterval = target
+            timer.schedule(deadline: .now() + target, repeating: target, leeway: .milliseconds(100))
+        }
+    }
+    private var currentInterval: TimeInterval = 0
 
     // Readers (only those for enabled modules are created).
     private var cpu: CPUReader?
@@ -86,6 +103,7 @@ public final class StatsPoller {
     private var powerSensors: PowerSensorReader?
     private var battery: BatteryReader?
     private var procs: ProcSampler?
+    private var topProc: TopProcessReader?
     private var ping: NetPingReader?
     private var netLink: NetLinkReader?
     private var netProc: NetProcessReader?
@@ -111,6 +129,7 @@ public final class StatsPoller {
             guard timer == nil else { return }
             instantiateReaders()
             let t = DispatchSource.makeTimerSource(queue: queue)
+            currentInterval = config.baseInterval
             t.schedule(deadline: .now(), repeating: config.baseInterval, leeway: .milliseconds(100))
             t.setEventHandler { [weak self] in self?.poll() }
             timer = t
@@ -122,6 +141,7 @@ public final class StatsPoller {
         queue.async { [self] in
             timer?.cancel(); timer = nil
             procs = nil   // drop the pid cpu-time map
+            topProc = nil
             ping?.stop(); ping = nil
             netProc = nil; netLink = nil
         }
@@ -181,10 +201,19 @@ public final class StatsPoller {
         if batt, battery != nil, let b = try? battery!.read() {
             latest.battery = b
         }
-        if procFlag.get() && slow {
+        // While a popup is open (and at the faster activeInterval), refresh the
+        // process lists every tick. CPU comes from `top` so root-owned daemons (mds,
+        // kernel_task, the security agent) are included — libproc can't read them
+        // unprivileged. Memory stays on the libproc ProcSampler: it's exact for the
+        // user apps that actually dominate RAM, and the root daemons it misses are
+        // tiny on the memory axis.
+        if procFlag.get() {
             if procs == nil { procs = ProcSampler() }
-            let (byCPU, byMem) = procs!.sample(limit: 5)
-            latest.topByCPU = byCPU; latest.topByMemory = byMem
+            latest.topByMemory = procs!.sample(limit: 5).byMemory
+            if topProc == nil { topProc = TopProcessReader() }
+            topProc!.refresh(limit: 5)
+            let cpuRows = topProc!.latest()   // empty until the first top frame lands
+            if !cpuRows.isEmpty { latest.topByCPU = cpuRows }
             if enabled.contains(.network) {
                 if netProc == nil { netProc = NetProcessReader() }
                 netProc!.refresh(limit: 8)
