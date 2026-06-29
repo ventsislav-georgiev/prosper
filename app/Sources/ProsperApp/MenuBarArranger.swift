@@ -66,23 +66,45 @@ enum MenuBarArranger {
 
     /// Capture the current left→right order as the desired layout (with hashes so
     /// Tahoe items become resolvable). Async because it may index images.
-    static func snapshotCurrentOrder() async -> [MenuBarIdentity] {
+    static func snapshotCurrentOrder() async -> (order: [MenuBarIdentity], hiddenDividerIndex: Int?) {
         // Block the live enforcer from reordering mid-capture (it would shift frames
         // and the racing enumeration would record the same item twice).
         isApplying = true
         defer { isApplying = false }
-        let (items, hashes) = await revealAndIndex(reveal: true)
+        // Section membership from the STEADY state (divider positions intact) — the
+        // reveal below collapses them, so capture which band each window is in first,
+        // keyed by windowID (stable across the reveal).
+        var sectionByWindow: [CGWindowID: MenuBarSection] = [:]
+        for entry in MenuBarManager.shared.sectionedItems() {
+            sectionByWindow[entry.item.windowID] = entry.section
+        }
+        // Reveal BOTH bands so always-hidden items are on-screen too — off-screen
+        // items capture as a near-empty image that all hash to the same value
+        // ("0010"), no better than the "Item-0" title. On-screen they hash distinct.
+        let (items, hashes) = await MenuBarManager.shared.withAllRevealed { () -> ([MenuBarItem], [CGWindowID: UInt64]) in
+            let items = currentItems()
+            let hashes = await MenuBarItemIndexer.hashes(for: items)
+            lastIndexedHashes = hashes
+            return (items, hashes)
+        }
         // Dedup by identity key: a transient reflow (or two CGS windows for one item)
         // can surface the same identity twice; keep first occurrence, preserve order.
         var seen = Set<String>()
-        return items.compactMap { item in
+        var order: [MenuBarIdentity] = []
+        var hiddenCount = 0
+        for item in items {
             let id = identity(for: item, hash: hashes[item.windowID])
             // Drop items the engine can't manage on Tahoe — placeholder/unresolvable
             // foreign items ("Item-0") that we can neither name nor reliably move.
             // Own items always carry com.prosper, so they survive even pre-index.
-            guard id.isManageable else { return nil }
-            return seen.insert(id.key).inserted ? id : nil
+            guard id.isManageable, seen.insert(id.key).inserted else { continue }
+            order.append(id)
+            // Non-visible items sit leftmost (always-hidden < hidden < visible by x),
+            // so they're the leading run — count them to place the divider where the
+            // user already dragged things in the real bar.
+            if (sectionByWindow[item.windowID] ?? .visible) != .visible { hiddenCount += 1 }
         }
+        return (order, hiddenCount == 0 ? nil : hiddenCount)
     }
 
     /// Replay `desired` over the live bar. Reveals hidden items first (off-screen
@@ -190,8 +212,8 @@ enum MenuBarArranger {
     /// macOS persists status-item positions across relaunch, so this only needs to run
     /// when the marks change (and as a correction on reveal) — not on a loop. Best-
     /// effort; per-item failures are logged, never thrown (it must not wedge Settings).
-    static func applyAlwaysHidden(keys: [String]) async {
-        guard MenuBarBridge.available, MenuBarManager.shared.hasAlwaysHiddenBand else { return }
+    static func applyBands(hidden hiddenKeys: [String], alwaysHidden alwaysHiddenKeys: [String]) async {
+        guard MenuBarBridge.available else { return }
         isApplying = true
         defer { isApplying = false }
 
@@ -199,23 +221,39 @@ enum MenuBarArranger {
         defer { MenuBarManager.shared.endPlacement() }
         try? await Task.sleep(for: .milliseconds(150))   // let the collapsed bands lay out
 
-        guard let anchor = MenuBarManager.shared.alwaysHiddenAnchorWindowID(),
-              let anchorFrame = MenuBarBridge.frame(for: anchor) else { return }
+        // The hidden separator is always present; the always-hidden one only when the
+        // user has marked at least one icon. Place relative to whichever exist.
+        let hiddenAnchor = MenuBarManager.shared.hiddenAnchorWindowID()
+        let hiddenX = hiddenAnchor.flatMap(MenuBarBridge.frame(for:))?.minX
+        let altAnchor = MenuBarManager.shared.alwaysHiddenAnchorWindowID()
+        let altX = altAnchor.flatMap(MenuBarBridge.frame(for:))?.minX
 
-        let hidden = Set(keys)
+        let hidden = Set(hiddenKeys), always = Set(alwaysHiddenKeys)
         let items = currentItems()
         let hashes = await MenuBarItemIndexer.hashes(for: items)
         await MenuBarItemMover.withCursorParked {
             for item in items {
                 let key = identity(for: item, hash: hashes[item.windowID]).key
-                let isLeft = item.frame.minX < anchorFrame.minX
+                let x = item.frame.minX
+                // Target band → the single corrective move that lands it on the right
+                // side of the relevant anchor. Items already correct emit no move.
                 let dest: MenuBarItemMover.Destination?
-                if hidden.contains(key), !isLeft { dest = .leftOf(anchor) }
-                else if !hidden.contains(key), isLeft { dest = .rightOf(anchor) }
-                else { dest = nil }   // already on the correct side
+                if always.contains(key) {
+                    // Always-hidden: must sit LEFT of the always-hidden separator.
+                    if let a = altAnchor, let ax = altX, x >= ax { dest = .leftOf(a) } else { dest = nil }
+                } else if hidden.contains(key) {
+                    // Hidden: left of the chevron's hidden separator, but right of the
+                    // always-hidden one (don't over-hide). Fix whichever side is wrong.
+                    if let h = hiddenAnchor, let hx = hiddenX, x >= hx { dest = .leftOf(h) }
+                    else if let a = altAnchor, let ax = altX, x < ax { dest = .rightOf(a) }
+                    else { dest = nil }
+                } else {
+                    // Visible: right of the hidden separator.
+                    if let h = hiddenAnchor, let hx = hiddenX, x < hx { dest = .rightOf(h) } else { dest = nil }
+                }
                 guard let dest else { continue }
                 do { try await MenuBarItemMover.move(windowID: item.windowID, pid: item.pid, to: dest) }
-                catch { NSLog("prosper: always-hide placement failed for \(item.bundleID ?? "?"): \(error)") }
+                catch { NSLog("prosper: band placement failed for \(item.bundleID ?? "?"): \(error)") }
             }
         }
     }

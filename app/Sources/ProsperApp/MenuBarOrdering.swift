@@ -104,9 +104,24 @@ struct MenuBarOrderStore: Codable, Equatable, Sendable {
     /// the always-hidden separator (kept expanded) so they never show, even on the
     /// normal reveal. Empty = no always-hidden band (the separator isn't even created).
     var alwaysHidden: [String] = []
+    /// Position of the hidden divider within `desiredOrder` (left→right). Items at
+    /// index `< hiddenDividerIndex` are the HIDDEN section (left of the chevron, shown
+    /// only on reveal); items at `>= hiddenDividerIndex` stay visible. nil / 0 = nothing
+    /// hidden via the list. Captured from the live bar on "Save current order" so it
+    /// mirrors where the user ⌘-dragged the real divider, and editable by dragging the
+    /// divider row in Settings.
+    var hiddenDividerIndex: Int? = nil
 
     /// Whether `key` is marked always-hidden.
     func isAlwaysHidden(_ key: String) -> Bool { alwaysHidden.contains(key) }
+
+    /// Identity keys in the hidden section: the `desiredOrder` prefix before the
+    /// divider, minus any that are always-hidden (those go one band further left).
+    var hiddenKeys: [String] {
+        guard let i = hiddenDividerIndex, i > 0 else { return [] }
+        let hide = Set(alwaysHidden)
+        return desiredOrder.prefix(i).map(\.key).filter { !hide.contains($0) }
+    }
 
     static let `default` = MenuBarOrderStore()
 
@@ -122,6 +137,7 @@ struct MenuBarOrderStore: Codable, Equatable, Sendable {
         mode = try c.decodeIfPresent(EnforceMode.self, forKey: .mode) ?? d.mode
         desiredOrder = try c.decodeIfPresent([MenuBarIdentity].self, forKey: .desiredOrder) ?? d.desiredOrder
         alwaysHidden = try c.decodeIfPresent([String].self, forKey: .alwaysHidden) ?? d.alwaysHidden
+        hiddenDividerIndex = try c.decodeIfPresent(Int.self, forKey: .hiddenDividerIndex) ?? d.hiddenDividerIndex
     }
 }
 
