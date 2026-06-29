@@ -50,7 +50,9 @@ tag from the now-released section and put it on the new top draft.
     below stay visible. Drag the divider (or icons across it) to choose what's hidden,
     and Prosper drives the real bar to match — no more ⌘-dragging in the menu bar to
     set it. The divider's position is captured from your real bar on "Save current
-    order", so the list mirrors where you already put things.
+    order", so the list mirrors where you already put things — including icons you'd
+    already dragged behind the chevron (the divider now lands after them instead of
+    snapping to the top).
   - Marking an icon always-hidden no longer un-hides everything in your hidden
     section. The toggle used to rebuild all of Prosper's dividers from scratch, which
     reflowed the bar and popped your hidden icons back on screen; it now adds/removes

@@ -40,6 +40,13 @@ public final class SMCFanController {
     /// lowercase `F{i}md` (some AS). Probed once.
     private var modeKeyUppercase: Bool?
 
+    /// Optional per-attempt unlock trace sink. The daemon points this at its
+    /// `fanLog` so a live engage logs Ftst/mode state per round — the ONLY way to
+    /// tell a "firmware still yielding" reject apart from a "Ftst got dropped"
+    /// reject after the fact. Nil in tests / app-side.
+    public var onTrace: ((String) -> Void)?
+    private func trace(_ s: String) { onTrace?(s) }
+
     public init(_ smc: SMC) { self.smc = smc }
 
     // MARK: Read-side helpers
@@ -186,22 +193,39 @@ public final class SMCFanController {
         // whose firmware accepts it without the thermal-daemon handoff. Stats does this
         // first and only falls back to the Ftst dance when the direct write is rejected;
         // a rigid hasFtst() branch took the wrong path on some M-series chassis.
-        if (try? guardedWrite(key, manual)) != nil { return }
+        if (try? guardedWrite(key, manual)) != nil { trace("unlock(\(i)) direct ok"); return }
 
         guard hasFtst() else {
             // No Ftst and the direct write was rejected — last resort, retry it spaced.
             try retry(times: 50, delayMicros: 100_000) { try self.guardedWrite(key, manual) }
             return
         }
-        // M1–M4 layered unlock: Ftst=1, let thermalmonitord yield, then hammer the mode
-        // key with SPACED retries — the firmware rejects transiently for up to several
-        // seconds after Ftst=1, so the attempts must be spread over time, not burned in
-        // a tight loop (the old no-delay retry threw within ~1 ms → fan never engaged).
-        if (smc.read("Ftst")?.double ?? 0) != 1 {
-            try retry(times: 100, delayMicros: 50_000) { try self.guardedWrite("Ftst", [1]) }
-            usleep(3_000_000)   // 3s — thermalmonitord must relinquish before mode sticks
+        // M1–M4 layered unlock. Measured on this M4: after `Ftst=1` the firmware keeps
+        // rejecting the mode write with 0x82 for ~8s while thermalmonitord yields (the
+        // mode key READS 0 several seconds before WRITES are accepted). So the attempts
+        // must be SPACED over a window wider than that worst case.
+        //
+        // Critically, re-assert `Ftst=1` every round, not once up front: `Ftst`
+        // auto-clears on sleep and can be dropped by a concurrent reset (a sibling
+        // disable / sleep observer) mid-wait — after which every mode write rejects
+        // forever and the old single-shot unlock would burn its whole window for nothing.
+        // Re-pulsing makes the unlock self-healing and costs one extra cheap write/round.
+        try? guardedWrite("Ftst", [1])
+        usleep(500_000)                       // brief settle; the loop spans the real yield
+        var last: Error?
+        let rounds = 150                       // 150 × ~100ms ≈ 15s, past the measured ~8s
+        for n in 0..<rounds {
+            if n % 10 == 0 { try? guardedWrite("Ftst", [1]) }   // ~1s re-assert, cheap
+            do { try guardedWrite(key, manual); trace("unlock(\(i)) ok @round \(n)"); return }
+            catch { last = error }
+            if n % 20 == 0 {
+                let f = smc.read("Ftst")?.double ?? -1
+                let m = smc.read(key)?.double ?? -1
+                trace("unlock(\(i)) round \(n): Ftst=\(f) \(key)=\(m) last=\(String(describing: last))")
+            }
+            usleep(100_000)
         }
-        try retry(times: 300, delayMicros: 100_000) { try self.guardedWrite(key, manual) }
+        throw last ?? SMCError.firmwareReject(0xff)
     }
 
     private func writeTarget(_ i: Int, rpm: Double) throws {

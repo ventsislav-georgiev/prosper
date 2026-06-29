@@ -71,22 +71,23 @@ enum MenuBarArranger {
         // and the racing enumeration would record the same item twice).
         isApplying = true
         defer { isApplying = false }
-        // Section membership from the STEADY state (divider positions intact) — the
-        // reveal below collapses them, so capture which band each window is in first,
-        // keyed by windowID (stable across the reveal).
-        var sectionByWindow: [CGWindowID: MenuBarSection] = [:]
-        for entry in MenuBarManager.shared.sectionedItems() {
-            sectionByWindow[entry.item.windowID] = entry.section
-        }
-        // Reveal BOTH bands so always-hidden items are on-screen too — off-screen
-        // items capture as a near-empty image that all hash to the same value
-        // ("0010"), no better than the "Item-0" title. On-screen they hash distinct.
-        let (items, hashes) = await MenuBarManager.shared.withAllRevealed { () -> ([MenuBarItem], [CGWindowID: UInt64]) in
-            let items = currentItems()
-            let hashes = await MenuBarItemIndexer.hashes(for: items)
+        // Reveal BOTH bands, THEN classify + hash. Off-screen (collapsed) hidden items
+        // aren't enumerated by `items(onDisplay:)` (they sit off the main display, so the
+        // per-display filter drops them) AND hash to the same near-empty image ("0010").
+        // Revealed, every item is on-screen: it hashes distinct, and `section(forItemX:)`
+        // still classifies correctly — the separators collapse to their boundary x, so
+        // hidden items keep the smallest x. Classifying pre-reveal missed every off-screen
+        // hidden item, which pinned the divider to the top.
+        let (sectioned, hashes) = await MenuBarManager.shared.withAllRevealed {
+            () -> ([(item: MenuBarItem, section: MenuBarSection)], [CGWindowID: UInt64]) in
+            let sectioned = MenuBarManager.shared.sectionedItems()
+            let hashes = await MenuBarItemIndexer.hashes(for: sectioned.map(\.item))
             lastIndexedHashes = hashes
-            return (items, hashes)
+            return (sectioned, hashes)
         }
+        let items = sectioned.map(\.item)
+        var sectionByWindow: [CGWindowID: MenuBarSection] = [:]
+        for entry in sectioned { sectionByWindow[entry.item.windowID] = entry.section }
         // Dedup by identity key: a transient reflow (or two CGS windows for one item)
         // can surface the same identity twice; keep first occurrence, preserve order.
         var seen = Set<String>()
