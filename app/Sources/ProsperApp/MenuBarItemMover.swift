@@ -219,11 +219,41 @@ enum MenuBarItemMover {
         case moveFailed           // Accessibility granted but the drag didn't take effect
     }
 
+    /// Set once the probe has confirmed the move pipeline works this session. The
+    /// mechanism is a fixed OS capability — once it passes it can't stop working — so a
+    /// later caller (every Settings visit re-runs the probe) reuses this instead of
+    /// firing another synthetic ⌘-drag that can race a concurrent bar operation (the
+    /// preview reveal) and spuriously fail. `force: true` ("Run move test again")
+    /// bypasses it. Failures are NOT cached — they're often transient and must retry.
+    private static var passedThisSession = false
+
     /// Runtime gate: prove the move pipeline works on this exact OS by moving a
     /// throwaway status item we own, then tearing it down. Never throws — returns a
     /// reason the caller maps to UI. Logs each gate (the user runs with troubleshooting
     /// logs) so a failure on a new OS is diagnosable from Console.
-    static func selfProbe() async -> ProbeResult {
+    ///
+    /// Transient `.moveFailed`/`.enumerationFailed` (Tahoe timing, or a concurrent bar
+    /// op) are retried a few times before being reported, and a once-passed result is
+    /// cached for the session — so re-opening Settings doesn't re-drag and re-race.
+    static func selfProbe(force: Bool = false) async -> ProbeResult {
+        if passedThisSession && !force { return .ok }
+        // Don't drag against a bar whose separators are mid-toggle (preview refresh).
+        for _ in 0..<20 where MenuBarManager.shared.isPlacing {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        var last: ProbeResult = .moveFailed
+        for attempt in 1...3 {
+            let r = await probeOnce()
+            if r == .ok { passedThisSession = true; return r }
+            // Permanent verdicts: don't waste retries on them.
+            if r == .needsAccessibility || r == .unavailable { return r }
+            last = r
+            if attempt < 3 { try? await Task.sleep(for: .milliseconds(150)) }
+        }
+        return last
+    }
+
+    private static func probeOnce() async -> ProbeResult {
         guard MenuBarBridge.available else {
             NSLog("prosper: menu-bar ordering self-probe — CGS bridge unavailable")
             return .unavailable

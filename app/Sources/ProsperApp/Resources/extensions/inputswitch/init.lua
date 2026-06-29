@@ -92,6 +92,8 @@ function on_app(payload)
     -- sets. Residual edge: a source disabled in System Settings AFTER being picked
     -- fails to set and retries on each focus of that one app until re-picked —
     -- self-limited (2 TIS hops), no state kept to suppress it. ponytail: rare, recovers.
+    -- NB: one set_source call is enough here — the native side re-asserts a few
+    -- times over ~1s to beat macOS restoring the app's remembered source.
     host.keyboard.set_source(want)
 end
 
