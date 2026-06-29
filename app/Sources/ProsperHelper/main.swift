@@ -58,7 +58,9 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
     private let fanQ = DispatchQueue(label: "\(helperLabel).fan")
     private lazy var fan: SMCFanController? = {
         guard let smc = try? SMC() else { fanLog.error("fan: SMC open failed — fan control inert"); return nil }
-        return SMCFanController(smc)
+        let c = SMCFanController(smc)
+        c.onTrace = { fanLog.notice("fan-unlock: \($0, privacy: .public)") }
+        return c
     }()
     private lazy var fanCore = FanControlCore(reset: { [weak self] in _ = self?.fan?.resetAll() })
     // Identity of the XPC connection currently holding a manual fan pin. Fan

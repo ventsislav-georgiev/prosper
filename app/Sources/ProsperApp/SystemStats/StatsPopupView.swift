@@ -541,13 +541,19 @@ struct StatsPopupView: View {
             // Auto|Manual on its own line; the two quick buttons (min / max) sit to the
             // right and only act once manual is engaged.
             HStack(spacing: sz(6)) {
+                // Segment tracks INTENT, not just the committed state: the moment Manual
+                // is clicked it stays selected through confirm → enabling → success. Else
+                // the bound value never left 0 during the multi-second engage and the
+                // segment snapped straight back to Automatic ("resets instantly"). Locked
+                // while a write is in flight so it can't be toggled mid-unlock.
                 Picker("", selection: Binding(
-                    get: { manual ? 1 : 0 },
+                    get: { (manual || pendingManual || fanBusy) ? 1 : 0 },
                     set: { sel in sel == 1 ? selectManualAll() : selectAutoAll() })) {
                         Text("Automatic").tag(0)
                         Text("Manual").tag(1)
                     }
                     .labelsHidden().pickerStyle(.segmented).controlSize(.small)
+                    .disabled(fanBusy)
                 Button { applyFraction(0) } label: { Image(systemName: "minus.circle") }
                     .buttonStyle(.plain).foregroundStyle(manual ? Neon.textPrimary : Neon.textSecondary.opacity(0.4))
                     .disabled(!manual).help("Quietest (minimum RPM)")
@@ -567,7 +573,7 @@ struct StatsPopupView: View {
             }
         }
 
-        if pendingManual {
+        if pendingManual && !fanBusy {
             Text("Manual fan control writes speeds to hardware as root. Too low can "
                  + "overheat. Fans reset to automatic on sleep, quit, or disable.")
                 .font(Neon.font(10)).foregroundStyle(Neon.textSecondary).padding(.top, sz(2))
@@ -575,10 +581,25 @@ struct StatsPopupView: View {
                 Button("Cancel") { pendingManual = false }
                     .buttonStyle(.plain).foregroundStyle(Neon.textSecondary)
                 Spacer()
-                Button(fanBusy ? "Enabling…" : "Enable manual") { confirmManualAll() }
-                    .foregroundStyle(.red).disabled(fanBusy)
+                Button("Enable manual") { confirmManualAll() }
+                    .foregroundStyle(.red)
             }
             .font(Neon.font(.caption, weight: .semibold))
+        }
+
+        // Progress is its own block (NOT gated on pendingManual): confirmManualAll clears
+        // pendingManual on click, and unlocking the SMC fan controller takes up to ~15s
+        // (Ftst → thermalmonitord yield → spaced mode-key retries). Show a live spinner so
+        // the click is never a dead button.
+        if fanBusy {
+            HStack(spacing: sz(6)) {
+                ProgressView().controlSize(.small)
+                Text("Enabling manual control…")
+                    .font(Neon.font(.caption, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+            }
+            .padding(.top, sz(2))
+            Text("Unlocking the fan controller can take up to ~15 seconds.")
+                .font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
         }
 
         if let err = fanError {
