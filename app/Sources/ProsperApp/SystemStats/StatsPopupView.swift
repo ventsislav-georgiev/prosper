@@ -557,7 +557,7 @@ struct StatsPopupView: View {
                         Text("Manual").tag(1)
                     }
                     .labelsHidden().pickerStyle(.segmented).controlSize(.large)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .disabled(fanBusy)
                 Button { applyFraction(0) } label: { Image(systemName: "minus.circle").font(Neon.font(18)) }
                     .buttonStyle(.plain).foregroundStyle(manual ? Neon.textPrimary : Neon.textSecondary.opacity(0.4))

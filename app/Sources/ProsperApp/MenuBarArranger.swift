@@ -128,7 +128,9 @@ enum MenuBarArranger {
     /// looked like icons flickering in and out. Reveal-to-reorder (so hidden items can
     /// be dragged too) stays for explicit actions: "Apply saved order" and on-demand.
     @discardableResult
-    static func apply(desired: [MenuBarIdentity], reveal: Bool = true) async -> ApplyResult {
+    static func apply(desired: [MenuBarIdentity],
+                      hiddenKeys: [String] = [], alwaysHiddenKeys: [String] = [],
+                      reveal: Bool = true) async -> ApplyResult {
         guard !desired.isEmpty else { return ApplyResult(moved: 0, skippedUnresolved: 0, failed: 0) }
         isApplying = true
         defer { isApplying = false }
@@ -139,10 +141,55 @@ enum MenuBarArranger {
         // cursor parks off-bar during synthetic drags, "not hovering" auto-collapsed the
         // hidden zone mid-batch, shifting the visible band left by ~the hidden-zone width
         // so items landed ~2 slots too far left — sometimes across the divider into hidden.
+        //
+        // Order AND band membership are restored under the SAME reveal so the whole layout
+        // settles in one pass (no multi-click): first put the items in desired relative
+        // order, then drop the divider(s) at their band boundaries. Live mode (reveal:false)
+        // only maintains relative order of on-screen items; the divider is left alone.
         if reveal {
-            return await MenuBarManager.shared.withAllRevealed { await applyMoves(desired: desired) }
+            return await MenuBarManager.shared.withAllRevealed {
+                let r = await applyMoves(desired: desired)
+                await placeDividers(desired: desired, hiddenKeys: hiddenKeys,
+                                    alwaysHiddenKeys: alwaysHiddenKeys)
+                return r
+            }
         }
         return await applyMoves(desired: desired)
+    }
+
+    /// After the order pass the desired items sit in their saved relative order
+    /// (always-hidden, then hidden, then visible). Restore band MEMBERSHIP by dropping
+    /// the separators at their right boundaries — the hidden separator just LEFT of the
+    /// first visible item, the always-hidden separator just LEFT of the first merely-
+    /// hidden item — so on re-collapse everything to a separator's left goes off-screen.
+    /// Moving the (own) separators with `.leftOf` is reliable on Tahoe; pulling each item
+    /// across with `.rightOf` is not. No-ops when there's no hidden band to restore.
+    private static func placeDividers(desired: [MenuBarIdentity],
+                                      hiddenKeys: [String], alwaysHiddenKeys: [String]) async {
+        guard !hiddenKeys.isEmpty || !alwaysHiddenKeys.isEmpty else { return }
+        let hidden = Set(hiddenKeys), always = Set(alwaysHiddenKeys)
+        // Live key → window for the items we just ordered.
+        let items = currentItems()
+        let hashes = await MenuBarItemIndexer.hashes(for: items)
+        var win: [String: MenuBarItem] = [:]
+        for it in items {
+            let k = identity(for: it, hash: hashes[it.windowID]).key
+            if win[k] == nil { win[k] = it }
+        }
+        let firstVisible = desired.first { !hidden.contains($0.key) && !always.contains($0.key) }
+        let firstHidden = desired.first { hidden.contains($0.key) }
+        let pid = getpid()
+        await MenuBarItemMover.withCursorParked {
+            if let fv = firstVisible.flatMap({ win[$0.key] }),
+               let sep = MenuBarManager.shared.hiddenAnchorWindowID() {
+                try? await MenuBarItemMover.move(windowID: sep, pid: pid, to: .leftOf(fv.windowID))
+            }
+            if !always.isEmpty,
+               let boundary = (firstHidden ?? firstVisible).flatMap({ win[$0.key] }),
+               let altSep = MenuBarManager.shared.alwaysHiddenAnchorWindowID() {
+                try? await MenuBarItemMover.move(windowID: altSep, pid: pid, to: .leftOf(boundary.windowID))
+            }
+        }
     }
 
     /// The match + move batch. Assumes the caller already established the desired reveal
