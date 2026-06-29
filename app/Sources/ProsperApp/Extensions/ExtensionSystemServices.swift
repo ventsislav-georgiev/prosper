@@ -298,7 +298,39 @@ enum KeyboardSource {
         return s
     }
 
+    // Bumped on every setSource (main thread only). A scheduled re-assert checks
+    // this to drop itself if a newer set has happened — so a delayed re-apply for
+    // app A never clobbers a fresh switch to app B.
+    nonisolated(unsafe) private static var setGeneration = 0
+
     static func setSource(_ wantedID: String) -> Bool {
+        setGeneration += 1
+        let gen = setGeneration
+        let ok = selectSource(wantedID)
+        // macOS keeps a per-app remembered input source and restores it
+        // ASYNCHRONOUSLY up to ~1s after the app activates — clobbering the set we
+        // just did, so the layout flips to the right one then reverts a moment
+        // later. Re-assert at a few points until it sticks. Each re-apply is
+        // guarded two ways and a no-op once the current source already matches,
+        // so steady state is free:
+        //   1. generation — a newer setSource cancels stale re-asserts.
+        //   2. frontmost app — if focus moved to another app we must NOT re-apply
+        //      this app's source. The generation bump alone is not enough: on_app
+        //      skips set_source when the next app has no override/default (or its
+        //      source already matches), so generation would not advance and a
+        //      stale re-assert would clobber the now-focused app's layout.
+        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        for delay in [0.25, 0.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard gen == setGeneration else { return }
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else { return }
+                if currentSourceID() != wantedID { _ = selectSource(wantedID) }
+            }
+        }
+        return ok
+    }
+
+    private static func selectSource(_ wantedID: String) -> Bool {
         guard let list = TISCreateInputSourceList(nil, false)?.takeRetainedValue() as? [TISInputSource] else { return false }
         for src in list where id(of: src) == wantedID {
             return TISSelectInputSource(src) == noErr

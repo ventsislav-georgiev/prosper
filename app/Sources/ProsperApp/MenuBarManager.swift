@@ -387,12 +387,20 @@ final class MenuBarManager: NSObject {
     /// state. Used by Save-order (distinct hashes for off-screen items) and the
     /// preview Refresh (real icons for hidden items).
     func withAllRevealed<T>(_ body: () async -> T) async -> T {
+        isPlacing = true
+        defer { isPlacing = false }
         beginPlacement()
         try? await Task.sleep(for: .milliseconds(180))
         let result = await body()
         endPlacement()
         return result
     }
+
+    /// True while a `withAllRevealed` placement is toggling the separators. The order
+    /// self-probe waits this out: a synthetic ⌘-drag of throwaway items while the bar's
+    /// geometry is mid-collapse/restore (e.g. the Settings preview refresh, which fires
+    /// concurrently) reads stale frames and spuriously reports `.moveFailed`.
+    private(set) var isPlacing = false
 
     /// Collapse both separators so every item is on-screen — the arranger needs a
     /// valid (on-screen) drop point to move an icon into/out of the always-hidden

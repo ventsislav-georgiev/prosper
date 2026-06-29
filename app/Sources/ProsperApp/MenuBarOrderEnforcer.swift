@@ -38,12 +38,6 @@ final class MenuBarOrderEnforcer {
     /// enumeration. Reset to nil on any settings change (the desired order may now
     /// differ even though the live order is static).
     private var lastOrderFingerprint: [CGWindowID]?
-    /// Baseline of menu-bar windowIDs for the "keep new icons visible" feature. nil
-    /// until the first tick seeds it (so the user's EXISTING hidden icons are never
-    /// mistaken for newcomers). A windowID present now but absent here = freshly
-    /// launched → revealed if macOS buried it. Reset to nil on settings change so the
-    /// baseline re-seeds rather than treating the post-change bar as new.
-    private var knownWindowIDs: Set<CGWindowID>?
 
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
@@ -53,11 +47,7 @@ final class MenuBarOrderEnforcer {
         self.store = store
         self.probeOK = probeOK
         lastOrderFingerprint = nil   // settings changed → re-check on next tick
-        knownWindowIDs = nil         // re-seed; don't treat the current bar as newcomers
-        // The timer drives BOTH the live order enforcer (live mode + a saved order) and
-        // the "keep new icons visible" watcher (any mode). Arm if either wants it.
-        let wantsLiveOrder = store.mode == .live && !store.desiredOrder.isEmpty
-        let shouldRunLive = store.enabled && probeOK && (wantsLiveOrder || store.revealNewItems)
+        let shouldRunLive = store.enabled && probeOK && store.mode == .live && !store.desiredOrder.isEmpty
         shouldRunLive ? startLive() : stopLive()
     }
 
@@ -84,33 +74,10 @@ final class MenuBarOrderEnforcer {
         timer = nil
     }
 
-    /// One timer tick: keep new icons visible (any mode), then enforce order drift
-    /// (live mode only — on-demand applies on reveal, not on a timer).
+    /// One timer tick: enforce order drift (live mode only — on-demand applies on
+    /// reveal, not on a timer).
     private func tick() {
-        revealNewItemsIfNeeded()
         if store.mode == .live { enforceIfDrifted() }
-    }
-
-    // MARK: - Keep new icons visible
-
-    /// Move icons that newly appeared in the hidden band out to visible. "New" =
-    /// windowID absent from the last-seen baseline (identity-free → Tahoe-robust).
-    /// Attempt-once: the baseline adopts the current ids immediately, so a stuck item
-    /// isn't re-dragged every tick (the membership pre-gate also skips quiet ticks).
-    private func revealNewItemsIfNeeded() {
-        guard store.revealNewItems, probeOK, store.enabled,
-              !working, !MenuBarArranger.isApplying, MenuBarBridge.available else { return }
-        let cur = Set(MenuBarArranger.currentItems().map(\.windowID))
-        guard let known = knownWindowIDs else { knownWindowIDs = cur; return }  // seed, reveal nothing
-        if cur == known { return }                 // membership unchanged → nothing launched/quit
-        knownWindowIDs = cur                        // adopt now (attempt-once)
-        let newcomers = cur.subtracting(known)
-        guard !newcomers.isEmpty else { return }    // only items LEFT the bar → nothing to reveal
-        working = true
-        Task {
-            await MenuBarArranger.revealNewItems(newcomerWindowIDs: newcomers)
-            working = false
-        }
     }
 
     // MARK: - Drift → apply

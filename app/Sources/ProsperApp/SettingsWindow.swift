@@ -2561,13 +2561,6 @@ private struct MenuBarPane: View {
                 if orderStore.enabled {
                     NeonDivider()
                     probeStatusRow
-                    NeonDivider()
-                    Toggle("Keep new icons visible", isOn: Binding(
-                        get: { orderStore.revealNewItems },
-                        set: { v in mutateOrder { $0.revealNewItems = v } }))
-                        .disabled(probeOK != true)
-                    Text("When a newly-launched app's icon lands behind the chevron (macOS always inserts new items there), move it out so you see it. You can hide it again afterwards.")
-                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     if !screenRecOK {
                         NeonDivider()
                         screenRecordingRow
@@ -2753,14 +2746,14 @@ private struct MenuBarPane: View {
                 Label("Move test failed — this Mac’s menu bar didn’t accept the reorder. Ordering won’t run until it passes.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-                Button("Run move test again") { probeReason = nil; probeOK = nil; runProbe() }.buttonStyle(.neon)
+                Button("Run move test again") { probeReason = nil; probeOK = nil; runProbe(force: true) }.buttonStyle(.neon)
             }
         case .some(.enumerationFailed):
             VStack(alignment: .leading, spacing: sz(4)) {
                 Label("Move test couldn’t see its own probe items (enumeration). Ordering won’t run until it passes.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-                Button("Run move test again") { probeReason = nil; probeOK = nil; runProbe() }.buttonStyle(.neon)
+                Button("Run move test again") { probeReason = nil; probeOK = nil; runProbe(force: true) }.buttonStyle(.neon)
             }
         case .some(.unavailable):
             Label("Menu-bar bridge unavailable on this macOS — ordering is disabled.",
@@ -2795,11 +2788,11 @@ private struct MenuBarPane: View {
         return "Saved \(n) items. “Apply saved order” to restore it."
     }
 
-    private func runProbe() {
+    private func runProbe(force: Bool = false) {
         guard probeReason == nil, !probing else { return }
         probing = true
         Task {
-            let result = await MenuBarItemMover.selfProbe()
+            let result = await MenuBarItemMover.selfProbe(force: force)
             probing = false
             probeReason = result
             let ok = (result == .ok)

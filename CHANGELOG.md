@@ -53,12 +53,6 @@ tag from the now-released section and put it on the new top draft.
     order", so the list mirrors where you already put things — including icons you'd
     already dragged behind the chevron (the divider now lands after them instead of
     snapping to the top).
-  - **Keep new icons visible** (opt-in, in Item ordering). macOS always drops a
-    newly-launched app's menu-bar icon at the far left — which is behind the chevron,
-    so you never see it appear. With this on, Prosper moves a new icon out to just
-    after the hidden divider so it stays visible; you can hide it again if you want.
-    Needs the move test passed. (A new icon lands off-screen, so Prosper now reveals
-    the bar before moving it — an off-screen icon can't be grabbed otherwise.)
   - Marking an icon always-hidden no longer un-hides everything in your hidden
     section. The toggle used to rebuild all of Prosper's dividers from scratch, which
     reflowed the bar and popped your hidden icons back on screen; it now adds/removes
@@ -72,7 +66,11 @@ tag from the now-released section and put it on the new top draft.
     the orderable list — macOS pins them and they can't be moved, so listing them only
     invited a move that could never land.
   - The ordering self-test now waits for its probe icons to lay out before checking,
-    and reports a precise reason if it can't run, instead of a generic failure.
+    and reports a precise reason if it can't run, instead of a generic failure. It also
+    no longer races the live preview (which could make it spuriously fail just from
+    switching settings panes), retries a transient failure before reporting one, and
+    caches a pass for the session — so "Enforce a saved menu-bar order" stops randomly
+    unchecking itself.
   - The saved order no longer fills up with unidentifiable "Item-0" entries. macOS 26
     (Tahoe) gives some system icons generic placeholder names and won't let them be
     moved; ordering now skips those instead of listing them and retrying a move that
