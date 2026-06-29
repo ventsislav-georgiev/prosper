@@ -189,13 +189,13 @@ final class RunnerPanel {
                 setOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0, saved: nil))
             }
         case .mainScreen:
-            panel.center()
+            panel.centerOnScreen()
         }
     }
 
     /// Applies an origin, or centers (no-display fallback) when nil.
     private func setOrigin(_ origin: NSPoint?) {
-        if let origin { panel.setFrameOrigin(origin) } else { panel.center() }
+        if let origin { panel.setFrameOrigin(origin) } else { panel.centerOnScreen() }
     }
 
     /// Captures the frontmost app, positions, and shows the panel focused.

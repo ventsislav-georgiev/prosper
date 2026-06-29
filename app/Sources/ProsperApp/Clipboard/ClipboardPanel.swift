@@ -113,10 +113,10 @@ final class ClipboardPanel {
         let size = panel.frame.size
         switch Preferences.runnerPlacement {
         case .cursorScreen:
-            setOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0.1, saved: Self.savedTopLeft()))
+            setOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0, saved: Self.savedTopLeft()))
             return
         case .mainScreen:
-            panel.center()
+            panel.centerOnScreen()
             return
         case .lastPosition:
             break
@@ -124,7 +124,7 @@ final class ClipboardPanel {
         guard let tl = RunnerPanel.savedTopLeft(),
               let screen = NSScreen.containing(runnerTopLeft: tl, runnerWidth: RunnerPanel.runnerWidth) else {
             // Never moved yet (or no display) — open on the cursor screen.
-            setOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0.1, saved: nil))
+            setOrigin(NSScreen.followCursorOrigin(size: size, raiseFraction: 0, saved: nil))
             return
         }
 
@@ -137,7 +137,7 @@ final class ClipboardPanel {
 
     /// Applies an origin, or centers (no-display fallback) when nil.
     private func setOrigin(_ origin: NSPoint?) {
-        if let origin { panel.setFrameOrigin(origin) } else { panel.center() }
+        if let origin { panel.setFrameOrigin(origin) } else { panel.centerOnScreen() }
     }
 
     func dismiss() {

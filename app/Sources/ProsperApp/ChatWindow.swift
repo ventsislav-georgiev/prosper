@@ -57,7 +57,7 @@ final class ChatWindow {
         SettingsWindow.applyWindowOpacity(win)
         win.isReleasedWhenClosed = false
         win.setFrameAutosaveName("ProsperChatWindow")
-        if !win.setFrameUsingName("ProsperChatWindow") { win.center() }
+        if !win.setFrameUsingName("ProsperChatWindow") { win.centerOnScreen() }
         // A frame autosaved before the min was raised restores below contentMinSize
         // (which only blocks *user* resize, not a programmatic restore). Grow it back
         // so the 8-row suggestion popup always has room above the field.
