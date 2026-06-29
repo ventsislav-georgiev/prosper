@@ -20,6 +20,13 @@ public final class LidHelperCore {
     /// Whether the remote-session keep-awake source is currently held. Independent
     /// of `overrideOn`; the effective `disablesleep` is the OR of the two.
     public private(set) var remoteHoldOn = false
+    /// Whether the current remote hold is STICKY — set by a remote-wake promote.
+    /// A sticky hold must survive the heartbeat TTL expiry AND a session-idle soft
+    /// release (`setRemoteHold(false)`); only a hard release clears it — the user
+    /// opening the lid (`clearRemoteHold`) or an explicit sleep (`reclaimAtStartup`).
+    /// This is the rule "once the Mac is woken remotely it stays awake until the
+    /// user explicitly sleeps it".
+    public private(set) var remoteHoldSticky = false
 
     public init(apply: @escaping (Bool) -> Bool, onIdle: @escaping () -> Void) {
         self.apply = apply
@@ -64,6 +71,7 @@ public final class LidHelperCore {
         _ = applyEffective(lid: false, remote: false)
         overrideOn = false
         remoteHoldOn = false
+        remoteHoldSticky = false
     }
 
     /// Apply the lid override on explicit request. Tracks state only when the
@@ -75,13 +83,39 @@ public final class LidHelperCore {
         return ok
     }
 
-    /// Apply the remote-session keep-awake hold. Same OR semantics as `setOverride`:
-    /// turning it off leaves sleep disabled if the lid override still holds, and
-    /// vice-versa. Tracks state only on a successful apply.
+    /// Apply the transient remote-session keep-awake hold (the live-session
+    /// heartbeat). Same OR semantics as `setOverride`. `false` is a SOFT release —
+    /// ignored while a sticky promote hold is in effect, so a session going idle
+    /// (or its TTL lapsing) can't drop a Mac that was remote-woken and is meant to
+    /// stay awake until an explicit sleep. `true` never downgrades stickiness.
+    /// Tracks state only on a successful apply.
     @discardableResult
     public func setRemoteHold(_ on: Bool) -> Bool {
+        if !on && remoteHoldSticky { return true }   // soft release ignored while sticky
         let ok = applyEffective(lid: overrideOn, remote: on)
         if ok { remoteHoldOn = on }
+        return ok
+    }
+
+    /// Hold sleep open STICKILY for a remote-wake-promoted session. Unlike
+    /// `setRemoteHold(true)` this persists past the heartbeat TTL and a session-idle
+    /// soft release — only `clearRemoteHold` (lid opened) or `reclaimAtStartup`
+    /// (explicit sleep) releases it. Tracks state only on a successful apply.
+    @discardableResult
+    public func promoteRemoteHold() -> Bool {
+        let ok = applyEffective(lid: overrideOn, remote: true)
+        if ok { remoteHoldOn = true; remoteHoldSticky = true }
+        return ok
+    }
+
+    /// Hard release of the remote-session hold regardless of stickiness — the lid
+    /// was opened (the user is physically present), so the clamshell keep-awake is
+    /// meaningless and must reset. Leaves the lid override untouched (OR semantics).
+    @discardableResult
+    public func clearRemoteHold() -> Bool {
+        remoteHoldSticky = false
+        let ok = applyEffective(lid: overrideOn, remote: false)
+        if ok { remoteHoldOn = false }
         return ok
     }
 

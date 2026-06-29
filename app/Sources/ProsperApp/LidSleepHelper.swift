@@ -487,6 +487,15 @@ enum LidSleepHelper {
             TraceLog.emit("setRemoteSessionActive(true) suppressed: sleep requested")
             return false
         }
+        // The remote-session keep-awake exists only to defeat CLAMSHELL sleep, so it
+        // makes sense only with the lid closed. If the lid is definitively open (user
+        // physically present) don't hold — the lid-open observer hard-releases any
+        // existing hold. `nil` (no clamshell key: desktop / external-display Mac) is
+        // NOT "open" — allow the hold there so keep-awake still works.
+        if on && SystemInfo.lidClosed() == false {
+            TraceLog.emit("setRemoteSessionActive(true) skipped: lid open")
+            return false
+        }
         // Reuse the daemon connection remote-wake / lid already keeps open. Rebuild it
         // if it dropped — an XPC connection can be interrupted across a sleep/wake, so
         // after a remote wake the heartbeat would otherwise find `connection == nil`,
@@ -525,6 +534,39 @@ enum LidSleepHelper {
             guard let proxy else { once.resume(false); return }
             once.armTimeout()
             proxy.setRemoteSessionActive(on) { @Sendable ok in once.resume(ok) }
+        }
+    }
+
+    /// Hard-release the daemon's remote-session hold (the lid was opened). Clears a
+    /// sticky promote hold that `setRemoteSessionActive(false)` would ignore. Reuses
+    /// the resident connection; a no-op when no daemon connection exists (nothing
+    /// holds → nothing to release) — never spins the privileged daemon up just for
+    /// this. Routed through `enqueueApply` by the caller to keep order with lid /
+    /// remote-wake ops.
+    @discardableResult
+    static func clearRemoteSession() async -> Bool {
+        holdsRemoteSession = false
+        guard let c = connection else { return true }
+        let ok = await callClearRemoteSession(c)
+        TraceLog.emit("clearRemoteSession (lid open) → daemon ok=\(ok)")
+        // Drop the connection only if nothing else needs the daemon.
+        if !remoteWakeEnabled && !holdsLidOverride {
+            c.invalidate()
+            if connection === c { connection = nil }
+        }
+        return ok
+    }
+
+    private static func callClearRemoteSession(_ c: NSXPCConnection) async -> Bool {
+        await withCheckedContinuation { cont in
+            let once = ResumeOnce(cont)
+            let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
+                Self.log.error("clearRemoteSession failed: \(err.localizedDescription, privacy: .public)")
+                once.resume(false)
+            } as? ProsperHelperProtocol
+            guard let proxy else { once.resume(false); return }
+            once.armTimeout()
+            proxy.clearRemoteSession { @Sendable ok in once.resume(ok) }
         }
     }
 

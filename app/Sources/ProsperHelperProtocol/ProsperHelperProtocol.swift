@@ -46,6 +46,14 @@ public let legacyHelperLabel = "eu.illegible.prosper.lidhelper"
     /// dies the hold lapses and the Mac sleeps. `reply(true)` on a successful apply.
     func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void)
 
+    /// Hard-release the remote-session hold regardless of stickiness, WITHOUT
+    /// sleeping the Mac. Called when the lid is opened: the user is physically
+    /// present, so the clamshell keep-awake (incl. a sticky remote-wake promote
+    /// hold that `setRemoteSessionActive(false)` deliberately ignores) is
+    /// meaningless and must reset so normal power management resumes. Leaves the lid
+    /// override and remote-wake config untouched. `reply(true)` on a successful apply.
+    func clearRemoteSession(withReply reply: @escaping (Bool) -> Void)
+
     /// Sleep the Mac now, as root. Clears BOTH `disablesleep` writers (lid override
     /// + remote-session hold) FIRST — synchronously, so the setting is committed —
     /// then `pmset sleepnow`. Doing it in the daemon is the whole point: a

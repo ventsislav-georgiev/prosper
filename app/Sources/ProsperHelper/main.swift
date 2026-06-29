@@ -141,6 +141,19 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         }
     }
 
+    func clearRemoteSession(withReply reply: @escaping (Bool) -> Void) {
+        // Lid opened → user is physically present; the clamshell keep-awake is
+        // meaningless. Hard-release the hold (incl. a sticky promote hold, which
+        // setRemoteSessionActive(false) deliberately ignores) and cancel the TTL.
+        // Does NOT sleep — just lets normal power management resume.
+        q.async {
+            self.cancelRemoteHoldExpiry_locked()
+            let ok = self.core.clearRemoteHold()
+            dtrace("clearRemoteSession: lid open → remoteHold released, pmset ok=\(ok)")
+            reply(ok)
+        }
+    }
+
     func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) {
         // Force one fan to a manual RPM. SMCFanController re-clamps fail-closed to the
         // absolute floor/ceiling at its lowest write layer AND hands the fan back to
@@ -229,9 +242,22 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
     /// giving DchTerm time to dial back in. If nothing connects + heartbeats, the
     /// expiry releases it and the Mac re-sleeps next cadence.
     private func bootstrapRemoteHoldFromPromote() {
-        let ok = core.setRemoteHold(true)
-        dtrace("promote: bootstrap remoteHold pmset ok=\(ok) ttl=\(remoteHoldTTLSeconds)s (Mac held awake for client to reconnect)")
-        armRemoteHoldExpiry_locked()
+        // A remote wake fired: hold sleep open STICKILY so the woken Mac stays up for
+        // the whole remote session — until the user explicitly sleeps it
+        // (prosper://sleep) or opens the lid (clearRemoteSession). Deliberately NO
+        // lapsing TTL here (unlike the heartbeat path): the Mac must not drop back to
+        // sleep a few seconds later if the app's heartbeat is delayed or its XPC
+        // connection is still re-establishing across the wake — the reported "connect,
+        // then lose it after a few seconds". The sticky flag also makes the heartbeat's
+        // soft release (and any still-pending TTL) a no-op, so nothing but an explicit
+        // sleep / lid-open can drop it.
+        // ponytail: no expiry → a clamshell Mac woken and then abandoned (app gone,
+        // never slept, lid never opened) stays awake until the next explicit sleep or a
+        // daemon restart (reclaimAtStartup clears it). By design — the user owns this
+        // trade. Backstops: the remote-wake battery floor gates whether a promote
+        // happens at all, and opening the lid releases it.
+        let ok = core.promoteRemoteHold()
+        dtrace("promote: STICKY remoteHold pmset ok=\(ok) (held until explicit sleep / lid open)")
     }
 
     private func armRemoteHoldExpiry_locked() {
