@@ -33,7 +33,8 @@ final class StatsController {
         // B while A is open fires didClose(A)+didShow(B) in an unguaranteed order, so
         // a literal true/false could leave sampling off with a popover still shown.
         guard let self else { return }
-        self.poller?.setProcSampling(self.popover.isShown)
+        self.poller?.setPopupActive(self.popover.isShown)
+        self.updateOutsideClickMonitor()
         // Drop the hosting controller once truly closed so the SwiftUI view
         // deallocs — otherwise its per-tick subscriptions (charts, the sensor
         // fan read) keep firing against a hidden popover. Deferred + re-guarded
@@ -45,6 +46,13 @@ final class StatsController {
         }
     }
     private var openModule: StatsModule?
+    /// Global left-mouse monitor that dismisses the popover on a click outside it.
+    /// `.transient` covers clicks that activate another app, but as an accessory
+    /// (LSUIElement) app we don't reliably receive the dismissing event for clicks on
+    /// the desktop / a non-activating spot — so a global monitor closes it explicitly.
+    /// Global monitors only fire for events delivered to OTHER apps, so a click INSIDE
+    /// the popover (our own window) never triggers it.
+    private var outsideClickMonitor: Any?
     /// Process-lifetime observer token. The controller is a `static let` singleton
     /// meant to live forever, so this is intentionally never removed.
     private var configObserver: NSObjectProtocol?
@@ -171,6 +179,21 @@ final class StatsController {
         host.sizingOptions = [.preferredContentSize]
         popover.contentViewController = host
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+    }
+
+    /// Arm the monitor while the popover is shown, drop it when closed (no idle
+    /// event tap when nothing is open).
+    private func updateOutsideClickMonitor() {
+        if popover.isShown {
+            guard outsideClickMonitor == nil else { return }
+            outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                self?.popover.performClose(nil)
+            }
+        } else if let m = outsideClickMonitor {
+            NSEvent.removeMonitor(m)
+            outsideClickMonitor = nil
+        }
     }
 
     private func teardown() {
