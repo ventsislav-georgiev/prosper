@@ -340,6 +340,15 @@ tag from the now-released section and put it on the new top draft.
   screen. The release-then-sleep now happens inside the privileged helper as root:
   it clears every hold first (committed synchronously) and only then sleeps, so the
   Mac goes down on the first click and stays down.
+- **A remotely-slept Mac now stays asleep instead of waking back up seconds later.**
+  After `prosper://sleep` (or the button), the Mac would briefly drop off the network
+  and then become reachable again — because the instant it slept, something re-enabled
+  the sleep override: a `dch` client reconnecting on a momentary wake, or the "keep
+  awake while plugged in" rule re-firing. A sleep command now suppresses *both* of
+  those re-triggers until the Mac genuinely wakes again (a real wake from you, or a
+  remote wake you request), so it sleeps and stays asleep. **Remote wake is left
+  completely untouched** — an armed Mac stays wakeable, so you can sleep and wake it
+  remotely as often as you like.
 
 ### Troubleshooting
 - **New verbose trace mode (Settings → About → Troubleshooting), off by default.**
