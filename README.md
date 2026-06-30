@@ -20,11 +20,18 @@
 
 ## Why Prosper
 
-- **Inline autocomplete everywhere** — ghost-text continuations at your caret in *any* app, powered by an in-process MLX model (Gemma 4 E4B QAT 8-bit, auto-downloaded on first launch; lighter E2B/E4B variants selectable in Settings).
+**Modular by design.** Prosper ships lean and stays out of your way — most features are off until you switch them on, so you run only what you need and nothing else costs you memory, permissions, or a model download.
+
 - **A command palette that computes** — calc, units, currency, time zones, translate, base64, shell, window snapping, app launcher, file search, browser bookmarks, snippets, quicklinks, quickdirs… one hotkey, type, `⏎`.
+- **Window management** — drag-to-edge snapping plus custom drag-into-zone layouts you paint on a grid.
+- **System monitors in the menu bar** — CPU, memory, GPU, network, temps, fans, battery, and power, with rich detail popovers — no Accessibility, Screen Recording, or root.
+- **Menu-bar management** — hide icons behind a chevron, add spacing, and keep multi-icon apps ordered across relaunches.
+- **A domain-based browser router** — make Prosper your default browser and route each link to the right browser by domain.
+- **Per-app keyboard input switching** — auto-set your input source by the focused app.
+- **Lid-stay-awake** — keep your Mac running with the lid closed, no external display or charger required.
 - **Local by architecture, not by promise** — Swift with **in-process MLX inference**: no extra process, minimal CPU/memory, nothing leaves your Mac but the one-time model pull.
+- **Inline autocomplete everywhere** — ghost-text continuations at your caret in *any* app, powered by an in-process MLX model (Gemma 4 E4B QAT 8-bit; lighter E2B/E4B variants selectable in Settings).
 - **A local coding agent** — `⌥G` opens a chat window driving an on-device tool-using agent (read/edit files, run shells, MCP tools), powered by an in-process MLX model — no API key, no cloud.
-- **Beyond text — your whole Mac** — window layouts & drag-to-edge snapping, native system monitors in the menu bar, menu-bar icon hiding/ordering, per-app keyboard input switching, a domain-based browser router, and lid-stay-awake. All opt-in, most permission-free.
 - **Extensible end to end** — Lua commands without recompiling, plus MCP servers, agent lifecycle hooks, and JS/TS plugins for the coding agent.
 
 ---
@@ -74,62 +81,13 @@ brew install --cask ventsislav-georgiev/tap/prosper
 
 ---
 
-## Clipboard history
+## Clipboard history *(opt-in)*
 
 `⇧⌥A` opens a floating history (text, files, image previews). Off by default — enable in **Settings → General**. Blobs live on disk; concealed/transient types are skipped.
 
 <p align="center"><img width="960" height="724" alt="prosper-demo-clipboard" src="https://github.com/user-attachments/assets/0c54151f-ed67-4606-b104-2164e914a903" /></p>
 
 Text is auto-typed into **link / email / color** (with a color swatch preview) for at-a-glance icons and filtering. In-panel keys: `⏎` paste · `⌘.` pin (pinned entries sort to the top and survive eviction / clear-all) · `⌘E` rename · `⌘P` cycle the type filter · `⌘⌫` delete · `↑↓` navigate · `Esc` dismiss.
-
----
-
-## Inline autocomplete
-
-Type in *any* text field → Prosper shows a continuation as ghost text at the caret.
-
-<p align="center"><img width="960" height="290" alt="prosper-demo-typing" src="https://github.com/user-attachments/assets/69ba3409-27c7-469d-91c6-2e2048dc3f46" /></p>
-
-| Key | Action |
-| --- | --- |
-| `→` | accept whole suggestion |
-| `Tab` / `⌥→` | accept one word (repeat to walk word-by-word) |
-| `⌥Tab` | pass a literal Tab through (form navigation) |
-| `Esc` | dismiss + stay quiet in that field until focus moves |
-| `⌥.` | regenerate the suggestion in place |
-| `⌃` + `` ` `` | force a fresh suggestion (also lifts an `Esc` mute) |
-
-- **Type-through ghost** — keep typing what the ghost predicts and it absorbs your keystrokes in place (no flicker, no re-request); steer toward a different word and it snaps to your word instantly while the model catches up.
-- **Always suggests** — quiet only for security: password managers, Secure Input, browser address bars (plus your own `Esc` / per-app rules). Whether the context is "enough" is your call, not the model's.
-- **Screen-aware context** — nearby on-screen text and the visible conversation (local OCR), plus app/site-specific prompt context, sharpen suggestions in chat apps and browsers.
-- **Live indicator** (optional accessory icon) — pulses while thinking, shows a lock under Secure Input, turns orange when generation failed (click it, or hit `⌥.`, to retry). The menu bar names the app holding Secure Input when completions are paused.
-- **Electron/Chromium-aware caret tracking** — Slack, Discord & co. hide caret geometry from assistive tooling; Prosper unlocks their accessibility tree and pins the ghost to the real caret, baseline-aligned with your text.
-- Completion length (short/medium/long), optional trailing space after the final word-accept, custom AI instructions, per-app/per-domain rules, hide-overlays-on-click — **Settings → Completions / Apps**. The menu-bar icon also toggles completions for the app you were just using.
-- **Frees its own RAM** — the model unloads when you turn completions off, and after an idle timeout (default 2 min, configurable), reloading on demand. The inline hot path is untouched.
-
-Typing `:name` also ghost-replaces with an emoji on accept.
-
----
-
-## Coding agent
-
-`⌥G` opens a chat window with a local, tool-using coding agent — it reads and edits files, runs shell commands, and calls MCP tools, all driven by an in-process MLX model (default **Qwen3-Coder 30B-A3B**; lighter Qwen3 variants selectable in **Settings → Agent**). No API key, no cloud round-trip — the model server is loopback-only and never exposed to the network.
-
-> First agent use downloads two things on demand (so an install that never opens the agent stays slim): the model, and the ~86 MB Codex helper binary (pinned release, SHA-256-verified). Both are cached for later launches.
-
-<!-- TODO: chat window demo gif -->
-
-- **Real tool use** — file read/write, shell, and any MCP server you add; approvals surface inline so you stay in control of writes and commands.
-- **Run from the terminal** — `prosper agent [--cwd <dir>] <prompt…>` queues a one-shot run against the already-running app (sessions persist).
-- **Extensible** — bring your own **MCP servers** (`~/.config/prosper/mcp.json`), **lifecycle hooks** (`~/.config/prosper/hooks.json`, Claude Code-compatible schema), and **JS/TS plugins** (opencode-style, run on a sandboxed Bun host). Manage in **Settings → Agent**.
-
----
-
-## AI Models
-
-One place to manage every on-device model — **Settings → General → AI Models**. Download or delete models, load/unload them on demand, and watch live loaded-state and measured RAM as they come and go. Rename any model to a friendly label, or add your own from a Hugging Face URL (custom models slot in for the **coding agent**; inline autocomplete stays pinned to the Gemma 4 VLM). The picker is always sorted smallest-to-largest by RAM footprint.
-
-<p align="center"><img width="640" height="606" alt="AI Models management" src="https://github.com/user-attachments/assets/ee5a74f6-6904-448d-aa1f-67e14c434748" /></p>
 
 ---
 
@@ -169,9 +127,9 @@ Snap and tile windows without a separate window manager. Drag a window to a scre
 
 ---
 
-## Browser router
+## Browser router *(opt-in)*
 
-Make Prosper your default browser and every clicked link is routed to the right
+Ships **disabled** — it hijacks the system default browser, so turn it on in **Settings → Extensions** first, then make Prosper your default from its settings pane. Once enabled, every clicked link is routed to the right
 browser by domain — work links to Chrome, personal to Safari, a localhost rule to
 whatever you like. Set it up in **Settings → URL Dispatcher**: a one-click *Make
 Prosper the Default Browser* button, a fallback browser for unmatched links, and a
@@ -184,9 +142,9 @@ Hammerspoon URL routing — and the Hammerspoon facade runs an existing
 
 ---
 
-## OpenLid
+## OpenLid *(opt-in)*
 
-Keep your Mac awake with the lid closed — no external display or charger required. **Toggle Mac Awake** flips the clamshell-sleep override on/off, guarded by your battery, network, and AC-power state so it won't drain a disconnected laptop. **OpenLid Status** shows what's currently keeping it awake (read-only); **Toggle Display Awake** keeps the screen from sleeping / the screensaver from kicking in while the lid is open.
+Off by default. Keep your Mac awake with the lid closed — no external display or charger required. **Toggle Mac Awake** flips the clamshell-sleep override on/off, guarded by your battery, network, and AC-power state so it won't drain a disconnected laptop. **OpenLid Status** shows what's currently keeping it awake (read-only); **Toggle Display Awake** keeps the screen from sleeping / the screensaver from kicking in while the lid is open.
 
 Works **out of the box** — no `sudo`, no Terminal, no `sudoers` edit. The lid override needs root, so Prosper installs a tiny privileged helper the first time you enable it (one-time approval in **System Settings → Login Items**); it uses no memory when idle and auto-resets if the app quits or crashes. Nothing is installed unless you use the feature.
 
@@ -255,6 +213,55 @@ Add commands without recompiling — small **Lua** scripts, auto-loaded, routed 
 <p align="center"><img width="764" height="523" alt="Extensions Marketplace — browse and install signed extensions" src="https://github.com/user-attachments/assets/29ba6637-b9fa-4f2b-907d-5bee73624229" /></p>
 
 The built-in commands above (calc, currency, units, base64, quicklinks, quickdirs, snippets, window, open, find files, translate, shell, browser bookmarks, plus the OpenLid and URL-dispatcher automations) *are* Lua extensions — open them in Settings to see how they're written, or use them as templates. Extensions can also **contribute themes** (a flat 12-token palette that re-skins the whole app, including menu-bar/dock chrome — pick one in **Settings → Personalization**) and drive **system automation** — global hotkeys, key remaps, app launchers, screen/power control, filesystem watches — the Hammerspoon territory, with a facade that even loads an unmodified `~/.hammerspoon/init.lua`. See [Writing extensions](extensions.md).
+
+---
+
+## Inline autocomplete *(opt-in)*
+
+Off by default — enable it (and grant Accessibility) in **Settings → Completions**. Once on, type in *any* text field → Prosper shows a continuation as ghost text at the caret.
+
+<p align="center"><img width="960" height="290" alt="prosper-demo-typing" src="https://github.com/user-attachments/assets/69ba3409-27c7-469d-91c6-2e2048dc3f46" /></p>
+
+| Key | Action |
+| --- | --- |
+| `→` | accept whole suggestion |
+| `Tab` / `⌥→` | accept one word (repeat to walk word-by-word) |
+| `⌥Tab` | pass a literal Tab through (form navigation) |
+| `Esc` | dismiss + stay quiet in that field until focus moves |
+| `⌥.` | regenerate the suggestion in place |
+| `⌃` + `` ` `` | force a fresh suggestion (also lifts an `Esc` mute) |
+
+- **Type-through ghost** — keep typing what the ghost predicts and it absorbs your keystrokes in place (no flicker, no re-request); steer toward a different word and it snaps to your word instantly while the model catches up.
+- **Always suggests** — quiet only for security: password managers, Secure Input, browser address bars (plus your own `Esc` / per-app rules). Whether the context is "enough" is your call, not the model's.
+- **Screen-aware context** — nearby on-screen text and the visible conversation (local OCR), plus app/site-specific prompt context, sharpen suggestions in chat apps and browsers.
+- **Live indicator** (optional accessory icon) — pulses while thinking, shows a lock under Secure Input, turns orange when generation failed (click it, or hit `⌥.`, to retry). The menu bar names the app holding Secure Input when completions are paused.
+- **Electron/Chromium-aware caret tracking** — Slack, Discord & co. hide caret geometry from assistive tooling; Prosper unlocks their accessibility tree and pins the ghost to the real caret, baseline-aligned with your text.
+- Completion length (short/medium/long), optional trailing space after the final word-accept, custom AI instructions, per-app/per-domain rules, hide-overlays-on-click — **Settings → Completions / Apps**. The menu-bar icon also toggles completions for the app you were just using.
+- **Frees its own RAM** — the model unloads when you turn completions off, and after an idle timeout (default 2 min, configurable), reloading on demand. The inline hot path is untouched.
+
+Typing `:name` also ghost-replaces with an emoji on accept.
+
+---
+
+## Coding agent *(opt-in)*
+
+`⌥G` opens a chat window with a local, tool-using coding agent — it reads and edits files, runs shell commands, and calls MCP tools, all driven by an in-process MLX model (default **Qwen3-Coder 30B-A3B**; lighter Qwen3 variants selectable in **Settings → Agent**). No API key, no cloud round-trip — the model server is loopback-only and never exposed to the network.
+
+> First agent use downloads two things on demand (so an install that never opens the agent stays slim): the model, and the ~86 MB Codex helper binary (pinned release, SHA-256-verified). Both are cached for later launches.
+
+<!-- TODO: chat window demo gif -->
+
+- **Real tool use** — file read/write, shell, and any MCP server you add; approvals surface inline so you stay in control of writes and commands.
+- **Run from the terminal** — `prosper agent [--cwd <dir>] <prompt…>` queues a one-shot run against the already-running app (sessions persist).
+- **Extensible** — bring your own **MCP servers** (`~/.config/prosper/mcp.json`), **lifecycle hooks** (`~/.config/prosper/hooks.json`, Claude Code-compatible schema), and **JS/TS plugins** (opencode-style, run on a sandboxed Bun host). Manage in **Settings → Agent**.
+
+---
+
+## AI Models
+
+One place to manage every on-device model — **Settings → General → AI Models**. Download or delete models, load/unload them on demand, and watch live loaded-state and measured RAM as they come and go. Rename any model to a friendly label, or add your own from a Hugging Face URL (custom models slot in for the **coding agent**; inline autocomplete stays pinned to the Gemma 4 VLM). The picker is always sorted smallest-to-largest by RAM footprint. Nothing is downloaded until you actually use the feature that needs it.
+
+<p align="center"><img width="640" height="606" alt="AI Models management" src="https://github.com/user-attachments/assets/ee5a74f6-6904-448d-aa1f-67e14c434748" /></p>
 
 ---
 

@@ -46,7 +46,7 @@ struct SessionOptions: Sendable {
     }
 }
 
-enum ApprovalPolicy: String, Sendable { case never, onRequest = "on-request", onFailure = "on-failure", unlessTrusted = "unless-trusted" }
+enum ApprovalPolicy: String, Sendable { case never, onRequest = "on-request", onFailure = "on-failure", untrusted }
 
 enum SandboxPolicy: Sendable {
     case readOnly
