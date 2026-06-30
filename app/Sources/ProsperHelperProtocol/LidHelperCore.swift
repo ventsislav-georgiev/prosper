@@ -122,6 +122,18 @@ public final class LidHelperCore {
     /// Idle-exit timer fired: exit via `onIdle` only if no client reconnected in
     /// the window. A late reconnect leaves `connections > 0` and we stay alive.
     public func idleFired() {
-        if connections == 0 { onIdle() }
+        guard connections == 0 else { return }
+        // The daemon only reaches here with NO clients and (per its resident guard)
+        // NO remote-wake session live. A `remoteHoldOn` still set is therefore
+        // ORPHANED — once we exit, `disablesleep=1` outlives the daemon with nothing
+        // left to release it: no client reconnects to drop it, and remote-wake-off
+        // won't relaunch us to `reclaimAtStartup`. So the Mac would stay awake
+        // forever, mislabeled "held by a remote session". Clear it before exiting.
+        if remoteHoldOn {
+            _ = applyEffective(lid: false, remote: false)
+            remoteHoldOn = false
+            remoteHoldSticky = false
+        }
+        onIdle()
     }
 }
