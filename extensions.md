@@ -265,7 +265,7 @@ Pick a theme in **Settings → Personalization**; the whole app (and the AppKit 
 
 ## 8. Settings sections
 
-An extension can contribute its own pane to **Settings → Extensions** — a static **Tier-A** spec (host-rendered, host-persisted to `host.prefs`) and/or a **Tier-B** dynamic render hook. Spec: [`EXTENSION_SETTINGS_SPEC.md`](docs/EXTENSION_SETTINGS_SPEC.md); models: [`ExtensionSettingsModel.swift`](app/Sources/ProsperApp/Extensions/ExtensionSettingsModel.swift).
+An extension can contribute its own pane to **Settings → Extensions** — a static **Tier-A** spec (host-rendered, host-persisted to `host.prefs`) and/or a **Tier-B** dynamic render hook. Models: [`ExtensionSettingsModel.swift`](app/Sources/ProsperApp/Extensions/ExtensionSettingsModel.swift).
 
 ```toml
 [[contributes.settings_sections]]
@@ -405,5 +405,3 @@ The conversion engines keep a **native fallback**, so a disabled or edited exten
 
 - **From GitHub** — paste a repo/subdir URL into **Settings → Extensions** (`github.com/owner/repo`, `…/tree/<ref>/<subdir>`, `.git`, `git@` forms all parse). Prosper fetches the tarball, validates `extension.toml`, installs. ([`RemoteInstaller.swift`](app/Sources/ProsperApp/Extensions/RemoteInstaller.swift))
 - **Marketplace** — browse and one-click-install published extensions, or **Publish** your own, from **Settings → Extensions**. Manifests are signed (Ed25519) and verified on download; a freshly installed extension lands **untrusted** and runs only after you grant trust (install-then-trust gate), so privileged host APIs stay opt-in. ([`MarketClient.swift`](app/Sources/ProsperApp/Extensions/MarketClient.swift))
-
-See also: [`docs/ADR-002-extensibility.md`](docs/ADR-002-extensibility.md) (design), [`docs/EXTENSION_SETTINGS_SPEC.md`](docs/EXTENSION_SETTINGS_SPEC.md) (settings rows).
