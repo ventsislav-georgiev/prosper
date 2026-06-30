@@ -207,6 +207,26 @@ final class LidHelperCoreTests: XCTestCase {
         XCTAssertEqual(spy.calls, [true, false, true, false])
     }
 
+    func testIdleExitClearsOrphanedRemoteHold() {
+        let spy = Spy()
+        let core = make(spy)
+        _ = core.promoteRemoteHold()                    // sticky, [true]
+        // Remote wake toggled off (daemon no longer resident), no clients → idle fires.
+        core.idleFired()
+        XCTAssertEqual(spy.idleExits, 1)                // still exits
+        XCTAssertFalse(core.remoteHoldOn)               // but NOT orphaned awake
+        XCTAssertFalse(core.remoteHoldSticky)
+        XCTAssertEqual(spy.calls, [true, false])        // pmset reset before exit
+    }
+
+    func testIdleExitWithoutHoldDoesNotTouchPmset() {
+        let spy = Spy()
+        let core = make(spy)
+        core.idleFired()                                // nothing held → no spurious pmset call
+        XCTAssertEqual(spy.idleExits, 1)
+        XCTAssertEqual(spy.calls, [])
+    }
+
     /// Hot-path budget: the daemon serializes every connection/method event
     /// through the core, so a transition must be effectively free — no allocation,
     /// no locking. 1M open+set+close cycles under 500ms is ~500ns/cycle, a
