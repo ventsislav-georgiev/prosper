@@ -46,6 +46,9 @@ public final class TopProcessReader {
     private var prevWake: [Int32: Double] = [:]
     private var prevTime: Double = 0
     private let now: () -> Double
+    /// Fired (on the reader's queue) the moment a fresh non-empty result is cached,
+    /// so the poller can deliver it immediately instead of waiting for its next tick.
+    public var onUpdate: (() -> Void)?
 
     // Standard Activity Monitor energy weights (default.plist; identical across the
     // per-model plists for these two terms). Displayed value = 100 × rate.
@@ -71,6 +74,7 @@ public final class TopProcessReader {
                 if !rows.isEmpty { self.cached = rows }
                 self.running = false
             }
+            if !rows.isEmpty { self.onUpdate?() }
         }
     }
 

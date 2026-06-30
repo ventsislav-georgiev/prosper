@@ -76,7 +76,7 @@ public final class StatsPoller {
         /// charts refresh quickly for inspection then drop back to `baseInterval` (the
         /// quiet background rate) on close. Floored against baseInterval so a user who
         /// already set a sub-1.5 s base never gets slowed down.
-        public var activeInterval: TimeInterval = 1.5
+        public var activeInterval: TimeInterval = 1.0
         public init() {}
     }
 
@@ -99,6 +99,10 @@ public final class StatsPoller {
         procFlag.set(on)
         queue.async { [self] in
             guard let timer else { return }   // not running → nothing to reschedule
+            // Kick a sample at the instant of open so the ~1 s reader work (top/nettop)
+            // starts now, not at the next background tick — which may be seconds away
+            // if the user picked a slow update interval. Readers deliver via onUpdate.
+            if on { poll() }
             let target = on ? Swift.min(config.activeInterval, config.baseInterval) : config.baseInterval
             guard abs(target - currentInterval) > 0.01 else { return }
             currentInterval = target
@@ -224,7 +228,10 @@ public final class StatsPoller {
         if procFlag.get() {
             if procs == nil { procs = ProcSampler() }
             latest.topByMemory = procs!.sample(limit: 5).byMemory
-            if topProc == nil { topProc = TopProcessReader() }
+            if topProc == nil {
+                topProc = TopProcessReader()
+                topProc!.onUpdate = { [weak self] in self?.deliverProcUpdate() }
+            }
             // 12 = enough headroom that the cpu-ranked window also contains the energy
             // leaders; both lists are trimmed to 5 below.
             topProc!.refresh(limit: 12)
@@ -234,18 +241,40 @@ public final class StatsPoller {
                 latest.topByPower = Array(rows.sorted { $0.power > $1.power }.prefix(5))
             }
             if enabled.contains(.network) {
-                if netProc == nil { netProc = NetProcessReader() }
+                if netProc == nil {
+                    netProc = NetProcessReader()
+                    netProc!.onUpdate = { [weak self] in self?.deliverProcUpdate() }
+                }
                 netProc!.refresh(limit: 8)
                 latest.topByNetwork = netProc!.latest()
             }
         }
 
-        // Snapshot the rings onto the delivered value so the UI never reaches back
-        // into `queue`. Small (≤120 Doubles × 6 keys) — copied once per tick.
-        latest.histories = histories.mapValues { $0.snapshot() }
+        deliver()
+    }
 
+    /// Snapshot the rings onto the delivered value (so the UI never reaches back into
+    /// `queue`) and hand it to the delivery queue. Small (≤120 Doubles × 6 keys).
+    /// Must run on `queue`.
+    private func deliver() {
+        latest.histories = histories.mapValues { $0.snapshot() }
         let snap = latest
         deliverQueue.async { [onSnapshot] in onSnapshot?(snap) }
+    }
+
+    /// Called (off-queue) by the process/network readers the instant their async
+    /// sample lands. Pulls the fresh caches into `latest` and delivers immediately so
+    /// a just-opened popup fills in ~1 s after open instead of waiting a poll tick.
+    private func deliverProcUpdate() {
+        queue.async { [self] in
+            guard procFlag.get() else { return }   // popup closed mid-flight → drop
+            if let r = topProc?.latest(), !r.isEmpty {
+                latest.topByCPU = Array(r.prefix(5))
+                latest.topByPower = Array(r.sorted { $0.power > $1.power }.prefix(5))
+            }
+            if let n = netProc?.latest(), !n.isEmpty { latest.topByNetwork = n }
+            deliver()
+        }
     }
 
     private func push(_ key: String, _ value: Double) {

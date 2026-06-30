@@ -28,6 +28,9 @@ public final class NetProcessReader {
     private let lock = NSLock()
     private var cached: [NetProcInfo] = []
     private var running = false
+    /// Fired (on the reader's queue) the moment a fresh non-empty result is cached,
+    /// so the poller can deliver it immediately instead of waiting for its next tick.
+    public var onUpdate: (() -> Void)?
 
     public init() {}
 
@@ -44,6 +47,7 @@ public final class NetProcessReader {
                 if !rows.isEmpty { self.cached = rows }
                 self.running = false
             }
+            if !rows.isEmpty { self.onUpdate?() }
         }
     }
 
