@@ -245,7 +245,7 @@ struct PermissionsPane: View {
     @State private var roots = Preferences.agentWritableRoots
 
     private let policies: [(String, String)] = [
-        ("unless-trusted", "Ask unless trusted"),
+        ("untrusted", "Ask unless trusted"),
         ("on-request", "Ask on request"),
         ("on-failure", "Ask only on failure"),
         ("never", "Never ask"),

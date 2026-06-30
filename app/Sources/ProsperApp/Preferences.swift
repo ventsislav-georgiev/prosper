@@ -706,7 +706,10 @@ enum Preferences {
 
     /// codex approval policy when NOT bypassing. Defaults to on-request.
     static var agentApprovalPolicy: String {
-        get { defaults.string(forKey: Keys.agentApprovalPolicy) ?? "on-request" }
+        get {
+            let v = defaults.string(forKey: Keys.agentApprovalPolicy) ?? "on-request"
+            return v == "unless-trusted" ? "untrusted" : v   // legacy rename: codex dropped `unless-trusted`
+        }
         set { defaults.set(newValue, forKey: Keys.agentApprovalPolicy) }
     }
 
