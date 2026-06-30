@@ -60,11 +60,14 @@ public final class NetProcessReader {
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return [] }
 
-        // Watchdog: nettop blocks ~1 s by design, but a wedged interface can hang it.
-        // Kill it after 4 s so a stuck process can't freeze refresh() forever (running
-        // would stay true and coalesce every future refresh into a no-op).
+        // Watchdog: nettop is usually ~0.2–1 s, but a cold/contended run (DNS/route
+        // resolution, many live flows behind a VPN) can take ~5 s to emit its second
+        // delta sample. A too-tight timeout kills it before that sample flushes, so
+        // parse sees no delta rows, the cache never fills, and the popup is stuck on
+        // "Sampling…" forever. 10 s clears the worst case with headroom; a genuinely
+        // wedged process is still bounded (running stays true and coalesces until then).
         let watchdog = DispatchWorkItem { if p.isRunning { p.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 4, execute: watchdog)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10, execute: watchdog)
 
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
