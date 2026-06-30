@@ -287,6 +287,13 @@ final class MenuBarManager: NSObject {
         stopRevealMonitors()
         outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { _ in
             MainActor.assumeIsolated {
+                // A reorder pass posts a SYNTHETIC mouse-down off-bar (the cursor is
+                // parked off-screen for the ⌘-drag) — that is not a real outside click
+                // and must never collapse a section the user opened. While any apply is
+                // in flight (live tick or on-demand reveal), leave the reveal alone; the
+                // section hides only on a genuine outside click, a divider re-click, or
+                // the auto-rehide timer.
+                if MenuBarArranger.isApplying { return }
                 // A click below the menu-bar strip rehides; clicks ON the bar (to
                 // use a revealed icon) keep it open and re-arm the timer. A GLOBAL
                 // monitor has no associated window, so `event.locationInWindow` is
@@ -396,12 +403,26 @@ final class MenuBarManager: NSObject {
     /// state. Used by Save-order (distinct hashes for off-screen items) and the
     /// preview Refresh (real icons for hidden items).
     func withAllRevealed<T>(_ body: () async -> T) async -> T {
+        // Preserve a user-initiated reveal across the placement. A chevron-click
+        // reorder (on-demand mode) opens the hidden section *then* runs this to fix
+        // the order — collapsing back to the steady state here would yank the section
+        // shut the instant the user opened it. If the section was already revealed on
+        // entry, leave it revealed (its own auto-rehide timer, armed by the click,
+        // still governs); only force the collapse when we revealed it ourselves.
+        let wasRevealed = revealed
+        let wasAlwaysRevealed = revealedAlwaysHidden
         isPlacing = true
         defer { isPlacing = false }
         beginPlacement()
         try? await Task.sleep(for: .milliseconds(180))
         let result = await body()
-        endPlacement()
+        if wasRevealed {
+            revealed = true
+            revealedAlwaysHidden = wasAlwaysRevealed
+            applyDividerLengths()
+        } else {
+            endPlacement()
+        }
         return result
     }
 
