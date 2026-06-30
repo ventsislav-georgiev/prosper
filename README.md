@@ -24,6 +24,7 @@
 - **A command palette that computes** — calc, units, currency, time zones, translate, base64, shell, window snapping, app launcher, file search, browser bookmarks, snippets, quicklinks, quickdirs… one hotkey, type, `⏎`.
 - **Local by architecture, not by promise** — Swift with **in-process MLX inference**: no extra process, minimal CPU/memory, nothing leaves your Mac but the one-time model pull.
 - **A local coding agent** — `⌥G` opens a chat window driving an on-device tool-using agent (read/edit files, run shells, MCP tools), powered by an in-process MLX model — no API key, no cloud.
+- **Beyond text — your whole Mac** — window layouts & drag-to-edge snapping, native system monitors in the menu bar, menu-bar icon hiding/ordering, per-app keyboard input switching, a domain-based browser router, and lid-stay-awake. All opt-in, most permission-free.
 - **Extensible end to end** — Lua commands without recompiling, plus MCP servers, agent lifecycle hooks, and JS/TS plugins for the coding agent.
 
 ---
@@ -124,6 +125,14 @@ Typing `:name` also ghost-replaces with an emoji on accept.
 
 ---
 
+## AI Models
+
+One place to manage every on-device model — **Settings → General → AI Models**. Download or delete models, load/unload them on demand, and watch live loaded-state and measured RAM as they come and go. Rename any model to a friendly label, or add your own from a Hugging Face URL (custom models slot in for the **coding agent**; inline autocomplete stays pinned to the Gemma 4 VLM). The picker is always sorted smallest-to-largest by RAM footprint.
+
+<p align="center"><img width="640" height="606" alt="AI Models management" src="https://github.com/user-attachments/assets/ee5a74f6-6904-448d-aa1f-67e14c434748" /></p>
+
+---
+
 ## Translate
 
 `⌥L` (or just type a sentence) — best translation plus alternative renderings, entirely on-device. A single ambiguous word lists its candidate meanings; a full sentence picks up the context.
@@ -152,6 +161,14 @@ Search and open browser bookmarks from the palette — type `bm` and filter acro
 
 ---
 
+## Window management
+
+Snap and tile windows without a separate window manager. Drag a window to a screen edge (or use `win left` / `win max` in the palette, or the `⌃⌥←→↑↓` / `⌃⌥⏎` / `⌃⌥C` global hotkeys) to snap it. For more than halves and quarters, define your own **layouts**: paint a grid in **Settings → Windows**, then drag a window into a zone to drop it there. Gaps are equal on every side. A stateless take on Rectangle's drag-snapping and Mosaic's drag-into-zone layouts.
+
+<p align="center"><img width="960" alt="Window management — drag-into-zone Mosaic-style layouts" src="https://github.com/user-attachments/assets/4b288b0b-7017-4f37-a102-3e941730f3ec" /></p>
+
+---
+
 ## Browser router
 
 Make Prosper your default browser and every clicked link is routed to the right
@@ -163,6 +180,8 @@ hardcoded; rules live in your config. A stateless port of [Finicky](https://gith
 Hammerspoon URL routing — and the Hammerspoon facade runs an existing
 `hs.urlevent.httpCallback` config unmodified.
 
+<p align="center"><img width="647" height="661" alt="URL Dispatcher — domain → browser routing rules" src="https://github.com/user-attachments/assets/532cc8b4-044a-4b2f-816b-234c5423c7a5" /></p>
+
 ---
 
 ## OpenLid
@@ -173,17 +192,67 @@ Works **out of the box** — no `sudo`, no Terminal, no `sudoers` edit. The lid 
 
 Inspired by: https://github.com/openlid/openlid
 
+<p align="center"><img width="637" height="486" alt="OpenLid — keep Mac awake with the lid closed" src="https://github.com/user-attachments/assets/593086f9-089f-4e53-8431-3840aace222c" /></p>
+
+---
+
+## Input Switcher *(opt-in)*
+
+Automatically set your keyboard input source by focused app. Pick one default input for every app, then add per-app overrides — choose an app and the input source it should use; when that app comes to the front Prosper switches the layout for you, and switches back to your default elsewhere. A native take on the common Hammerspoon input-switching recipe. Ships **disabled** — turn it on in **Settings → Extensions**.
+
+<p align="center"><img width="648" height="505" alt="Input Switcher — per-app keyboard input source" src="https://github.com/user-attachments/assets/7685d8a4-b5dc-4239-b178-aea5064ac01f" /></p>
+
+---
+
+## Menu Bar Management *(opt-in)*
+
+Hide menu-bar icons behind a divider you reveal on demand, add spacing between icons, and pick the chevron style — with **no Accessibility or Screen Recording permission** for the basics. A live preview strip in Settings shows your real icons in order; mark any icon "always hidden", or drag the divider to choose what's tucked away. The clickable chevron is a separate, always-on-screen item, so showing/hiding never sweeps it (or Prosper's own icon) off screen. Optional item **ordering** keeps multi-icon apps (Stats, iStat Menus) in place across relaunches. A native take on Ice / Bartender. Ships **disabled** — turn it on in **Settings → Extensions**.
+
+<p align="center"><img width="688" alt="Menu Bar Management — hidden section revealed" src="https://github.com/user-attachments/assets/c928fc57-0174-41a3-bbcf-355061d9c0f4" /></p>
+
+---
+
+## System Stats *(opt-in)*
+
+Native menu-bar system monitors in Prosper's style — **CPU, memory, GPU, network, temperatures, fans, battery, and power**. Pick which modules show and in what order; built entirely on public, on-device APIs (no Accessibility, Screen Recording, or root just to read your stats). Every sampler runs in microseconds and the bar updates once a second, so the monitors don't add measurable load to the thing they measure. Ships **disabled** — turn on the ones you want in **Settings → System Stats**.
+
+Click any module for a live history chart and full breakdown:
+
+- **CPU** — per-core load bars, system/user/idle split, efficiency vs performance cores with live clocks, load average, uptime.
+- **Memory** — app/wired/compressed usage, cached files, real kernel memory-pressure level, swap.
+- **GPU** — utilization with renderer/tiler breakdown, a Neural-Engine estimate, VRAM, core count, FPS presented.
+- **Network** — up/down throughput, live latency & jitter with a reachability badge, connectivity-history grid, active interface + MAC + Wi-Fi signal, local & public IP with country flag, and a per-process download/upload list.
+- **Sensors** — full temperature list, fan speeds, labeled voltage/current rails.
+- **Power** — live CPU, GPU, Neural Engine, and DRAM wattage with total.
+- **Battery** — charge, health, cycle count, live draw, voltage, amperage, capacity, adapter wattage, time remaining.
+
+<p align="center">
+<img height="320" alt="System Stats — CPU popover" src="https://github.com/user-attachments/assets/226741ec-7b70-45e8-9433-ffd96bf542db" />
+<img height="320" alt="System Stats — Memory popover" src="https://github.com/user-attachments/assets/4eeff975-a974-4a00-8d33-9142a2d5ca76" />
+<img height="320" alt="System Stats — Network popover" src="https://github.com/user-attachments/assets/12c8e042-c3aa-47fe-a7e3-db7284cfdd33" />
+<img height="320" alt="System Stats — GPU popover" src="https://github.com/user-attachments/assets/100b3d91-8c3d-4ee3-a368-6112b80c7860" />
+</p>
+<p align="center">
+<img height="300" alt="System Stats — Power popover" src="https://github.com/user-attachments/assets/5c311744-5939-4b1a-a400-e558749ce180" />
+<img height="300" alt="System Stats — Sensors popover" src="https://github.com/user-attachments/assets/1860ceb7-eb05-4af6-b803-b8f0fa7298a9" />
+<img height="300" alt="System Stats — Battery popover" src="https://github.com/user-attachments/assets/40bed14b-4b2a-4575-94b6-421dfcd3a463" />
+</p>
+
 ---
 
 ## Themes
 
 Re-skin the whole app — palette, menu-bar, and dock chrome — from a flat 12-token color palette, with instant redraw. Pick one in **Settings → Personalization**. Ships with the built-in neon-blue console theme and a warm **amber** theme; extensions can contribute their own (`[[contributes.themes]]` → `theme.json`). See [Writing extensions](extensions.md).
 
+<p align="center"><img width="637" height="804" alt="Themes — re-skin the whole app from a 12-token palette" src="https://github.com/user-attachments/assets/ec16cd42-52fc-412f-be07-4cd6772e68a2" /></p>
+
 ---
 
 ## Extensions
 
-Add commands without recompiling — small **Lua** scripts, auto-loaded, routed by regex. Manage in **Settings → Extensions**: enable/disable, edit live (everything lives in `~/.config/prosper/extensions`), reset bundled extensions to original, **install from GitHub** by pasting a repo URL, or browse the **Marketplace** to one-click-install (and publish) signed extensions — fresh installs stay untrusted until you grant trust.
+Add commands without recompiling — small **Lua** scripts, auto-loaded, routed by regex. Manage in **Settings → Extensions**: enable/disable, edit live (everything lives in `~/.config/prosper/extensions`), reset bundled extensions to original, **install from GitHub** by pasting a repo URL, or browse the **Marketplace** to one-click-install (and publish) signed extensions — fresh installs stay untrusted until you grant trust. The marketplace opens in its own window with search, All / Themes / Extensions filters, and sort by recently updated or most downloaded.
+
+<p align="center"><img width="764" height="523" alt="Extensions Marketplace — browse and install signed extensions" src="https://github.com/user-attachments/assets/29ba6637-b9fa-4f2b-907d-5bee73624229" /></p>
 
 The built-in commands above (calc, currency, units, base64, quicklinks, quickdirs, snippets, window, open, find files, translate, shell, browser bookmarks, plus the OpenLid and URL-dispatcher automations) *are* Lua extensions — open them in Settings to see how they're written, or use them as templates. Extensions can also **contribute themes** (a flat 12-token palette that re-skins the whole app, including menu-bar/dock chrome — pick one in **Settings → Personalization**) and drive **system automation** — global hotkeys, key remaps, app launchers, screen/power control, filesystem watches — the Hammerspoon territory, with a facade that even loads an unmodified `~/.hammerspoon/init.lua`. See [Writing extensions](extensions.md).
 
@@ -193,7 +262,7 @@ The built-in commands above (calc, currency, units, base64, quicklinks, quickdir
 
 Prosper lives in the notification tray: toggle completions globally or per-app, switch completion length, open the runner/clipboard, check for updates, quit.
 
-A full **Settings** window (`⌥\`) covers General / Shortcuts / QuickLinks / QuickDirs / Extensions / Agent / Completions / Context / Apps / Personalization / Statistics / About — per-app enable lists, Disable-Tab list, model selector, custom AI instructions, hotkey rebinding, and usage stats.
+A full **Settings** window (`⌥\`) covers General (incl. AI Models) / Shortcuts / Windows / QuickLinks / QuickDirs / Extensions / Agent / Completions / Context / Apps / Personalization / Statistics / About — per-app enable lists, Disable-Tab list, model selector, custom AI instructions, hotkey rebinding, and usage stats.
 
 <p align="center"><img width="960" height="724" alt="prosper-demo-system" src="https://github.com/user-attachments/assets/e61519a5-1cc9-4452-ab09-aa7de9580adc" /></p>
 
@@ -232,6 +301,8 @@ Prosper auto-updates via [Sparkle](https://sparkle-project.org) straight from Gi
 Prosper is **free, and stays free** — every feature, no paywalls, no subscription. If it earns a place in your workflow and you'd like to chip in, there's an optional, pay-what-you-want supporter option in **Settings → Account** (think *buy me a coffee*). Entirely optional; nothing is gated behind it.
 
 Optionally sign in (passwordless) to sync your settings across Macs — also free, and **end-to-end encrypted with a key that never leaves your devices**. The server stores only ciphertext; no one (not even us) can read your settings.
+
+<p align="center"><img width="640" height="691" alt="Automatic end-to-end encrypted cloud settings sync" src="https://github.com/user-attachments/assets/f05b4961-9789-4043-ad2b-35047b0701cf" /></p>
 
 ---
 
