@@ -4,9 +4,11 @@
 
 # Prosper
 
-**Your Mac, autocompleted.** A local LLM at your fingertips — system-wide inline autocomplete and a command palette, 100% on-device.
+**Your Mac, autocompleted.** A local-LLM command palette and system-wide autocomplete — plus a suite of native power-tools (windows, system monitors, menu-bar control, and more). 100% on-device.
 
 [![Platform](https://img.shields.io/badge/Apple%20Silicon-black?logo=apple)](#install)
+[![Release](https://img.shields.io/github/v/release/ventsislav-georgiev/prosper?label=release)](https://github.com/ventsislav-georgiev/prosper/releases/latest)
+[![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 
 <br>
 
@@ -18,21 +20,39 @@
 
 ---
 
-## Why Prosper
+## Features
 
-**Modular by design.** Prosper ships lean and stays out of your way — most features are off until you switch them on, so you run only what you need and nothing else costs you memory, permissions, or a model download.
+**Modular by design.** Prosper ships lean and stays out of your way — most features are off until you switch them on, so you run only what you need; nothing else costs you memory, permissions, or a model download. And it's **local by architecture, not by promise**: Swift with in-process MLX inference, so nothing leaves your Mac but the one-time model pull. Jump to anything that catches your eye:
 
-- **A command palette that computes** — calc, units, currency, time zones, translate, base64, shell, window snapping, app launcher, file search, browser bookmarks, snippets, quicklinks, quickdirs… one hotkey, type, `⏎`.
-- **Window management** — drag-to-edge snapping plus custom drag-into-zone layouts you paint on a grid.
-- **System monitors in the menu bar** — CPU, memory, GPU, network, temps, fans, battery, and power, with rich detail popovers — no Accessibility, Screen Recording, or root.
-- **Menu-bar management** — hide icons behind a chevron, add spacing, and keep multi-icon apps ordered across relaunches.
-- **A domain-based browser router** — make Prosper your default browser and route each link to the right browser by domain.
-- **Per-app keyboard input switching** — auto-set your input source by the focused app.
-- **Lid-stay-awake** — keep your Mac running with the lid closed, no external display or charger required.
-- **Local by architecture, not by promise** — Swift with **in-process MLX inference**: no extra process, minimal CPU/memory, nothing leaves your Mac but the one-time model pull.
-- **Inline autocomplete everywhere** — ghost-text continuations at your caret in *any* app, powered by an in-process MLX model (Gemma 4 E4B QAT 8-bit; lighter E2B/E4B variants selectable in Settings).
-- **A local coding agent** — `⌥G` opens a chat window driving an on-device tool-using agent (read/edit files, run shells, MCP tools), powered by an in-process MLX model — no API key, no cloud.
-- **Extensible end to end** — Lua commands without recompiling, plus MCP servers, agent lifecycle hooks, and JS/TS plugins for the coding agent.
+**⌨️ The command palette**
+- [**Command palette**](#command-palette) — calc, units, currency, time zones, base64, shell, app launcher, file search… one hotkey, type, `⏎`.
+
+**🖥️ Power tools for your whole Mac**
+- [**System monitors**](#system-stats) — CPU, memory, GPU, network, temps, fans, battery & power, with rich live popovers in the menu bar.
+- [**Window management**](#window-management) — drag-to-edge snapping plus custom drag-into-zone layouts.
+- [**Menu-bar management**](#menu-bar-management) — hide, space, and reorder your menu-bar icons.
+- [**Browser router**](#browser-router) — make Prosper your default browser and route each link by domain.
+- [**Input switching**](#input-switcher) — auto-set your keyboard input source by the focused app.
+- [**Lid-stay-awake**](#openlid) — keep your Mac running with the lid closed, no charger or display required.
+
+**⚡ Instant utilities**
+- [**Clipboard history**](#clipboard-history) — searchable, pinnable history with automatic link / email / color typing.
+- [**Translate**](#translate) — best translation plus alternatives, fully on-device.
+- [**QuickLinks & QuickDirs**](#quicklinks--quickdirs) — saved URL templates and per-directory actions.
+- [**Snippets**](#snippets) — expand saved text with dynamic placeholders in any app.
+- [**Bookmarks**](#bookmarks) — search and open bookmarks across 9 browsers at once.
+
+**🎨 Make it yours**
+- [**Themes**](#themes) — re-skin the whole app from a flat 12-token color palette.
+- [**Extensions**](#extensions) — add commands in Lua with no recompile; install from the Marketplace.
+
+**🤖 On-device AI** *(experimental)*
+- [**Inline autocomplete**](#inline-autocomplete) — ghost-text continuations at your caret in *any* app.
+- [**Coding agent**](#coding-agent) — a local, tool-using agent (`⌥G`): files, shell, MCP — no API key, no cloud.
+- [**AI Models**](#ai-models) — download, load, rename, and add your own models from a Hugging Face URL.
+- [**Personalization**](#on-device-personalization) — train a private LoRA on your accepted completions.
+
+Everything is [private by design](#privacy) and [free & open source](#license) — built on a lot of great work we [gratefully credit](#acknowledgements).
 
 ---
 
@@ -81,9 +101,88 @@ brew install --cask ventsislav-georgiev/tap/prosper
 
 ---
 
-## Clipboard history *(opt-in)*
+## System Stats
 
-`⇧⌥A` opens a floating history (text, files, image previews). Off by default — enable in **Settings → General**. Blobs live on disk; concealed/transient types are skipped.
+_Opt-in — turn on the modules you want in **Settings → System Stats**._ Native menu-bar system monitors in Prosper's style — **CPU, memory, GPU, network, temperatures, fans, battery, and power**. Pick which modules show and in what order; built entirely on public, on-device APIs (no Accessibility, Screen Recording, or root just to read your stats). Every sampler runs in microseconds and the bar updates once a second, so the monitors don't add measurable load to the thing they measure.
+
+Click any module for a live history chart and full breakdown:
+
+- **CPU** — per-core load bars, system/user/idle split, efficiency vs performance cores with live clocks, load average, uptime.
+- **Memory** — app/wired/compressed usage, cached files, real kernel memory-pressure level, swap.
+- **GPU** — utilization with renderer/tiler breakdown, a Neural-Engine estimate, VRAM, core count, FPS presented.
+- **Network** — up/down throughput, live latency & jitter with a reachability badge, connectivity-history grid, active interface + MAC + Wi-Fi signal, local & public IP with country flag, and a per-process download/upload list.
+- **Sensors** — full temperature list, fan speeds, labeled voltage/current rails.
+- **Power** — live CPU, GPU, Neural Engine, and DRAM wattage with total.
+- **Battery** — charge, health, cycle count, live draw, voltage, amperage, capacity, adapter wattage, time remaining.
+
+<p align="center">
+<img height="320" alt="System Stats — CPU popover" src="https://github.com/user-attachments/assets/226741ec-7b70-45e8-9433-ffd96bf542db" />
+<img height="320" alt="System Stats — Memory popover" src="https://github.com/user-attachments/assets/4eeff975-a974-4a00-8d33-9142a2d5ca76" />
+<img height="320" alt="System Stats — Network popover" src="https://github.com/user-attachments/assets/12c8e042-c3aa-47fe-a7e3-db7284cfdd33" />
+<img height="320" alt="System Stats — GPU popover" src="https://github.com/user-attachments/assets/100b3d91-8c3d-4ee3-a368-6112b80c7860" />
+</p>
+<p align="center">
+<img height="300" alt="System Stats — Power popover" src="https://github.com/user-attachments/assets/5c311744-5939-4b1a-a400-e558749ce180" />
+<img height="300" alt="System Stats — Sensors popover" src="https://github.com/user-attachments/assets/1860ceb7-eb05-4af6-b803-b8f0fa7298a9" />
+<img height="300" alt="System Stats — Battery popover" src="https://github.com/user-attachments/assets/40bed14b-4b2a-4575-94b6-421dfcd3a463" />
+</p>
+
+---
+
+## Window management
+
+Snap and tile windows without a separate window manager. Drag a window to a screen edge (or use `win left` / `win max` in the palette, or the `⌃⌥←→↑↓` / `⌃⌥⏎` / `⌃⌥C` global hotkeys) to snap it. For more than halves and quarters, define your own **layouts**: paint a grid in **Settings → Windows**, then drag a window into a zone to drop it there. Gaps are equal on every side. A stateless take on Rectangle's drag-snapping and Mosaic's drag-into-zone layouts.
+
+<p align="center"><img width="960" alt="Window management — drag-into-zone Mosaic-style layouts" src="https://github.com/user-attachments/assets/4b288b0b-7017-4f37-a102-3e941730f3ec" /></p>
+
+---
+
+## Menu Bar Management
+
+_Opt-in — turn it on in **Settings → Extensions**._ Hide menu-bar icons behind a divider you reveal on demand, add spacing between icons, and pick the chevron style — with **no Accessibility or Screen Recording permission** for the basics. A live preview strip in Settings shows your real icons in order; mark any icon "always hidden", or drag the divider to choose what's tucked away. The clickable chevron is a separate, always-on-screen item, so showing/hiding never sweeps it (or Prosper's own icon) off screen. Optional item **ordering** keeps multi-icon apps (Stats, iStat Menus) in place across relaunches. A native take on Ice / Bartender.
+
+<p align="center"><img width="688" alt="Menu Bar Management — hidden section revealed" src="https://github.com/user-attachments/assets/c928fc57-0174-41a3-bbcf-355061d9c0f4" /></p>
+
+---
+
+## Browser router
+
+_Opt-in — it hijacks the system default browser, so turn it on in **Settings → Extensions** first, then make Prosper your default from its settings pane._ Once enabled, every clicked link is routed to the right
+browser by domain — work links to Chrome, personal to Safari, a localhost rule to
+whatever you like. Set it up in **Settings → URL Dispatcher**: a one-click *Make
+Prosper the Default Browser* button, a fallback browser for unmatched links, and a
+**domain → browser** rule list (first match wins, plain substring). Nothing is
+hardcoded; rules live in your config. A stateless port of [Finicky](https://github.com/johnste/finicky) /
+Hammerspoon URL routing — and the Hammerspoon facade runs an existing
+`hs.urlevent.httpCallback` config unmodified.
+
+<p align="center"><img width="647" height="661" alt="URL Dispatcher — domain → browser routing rules" src="https://github.com/user-attachments/assets/532cc8b4-044a-4b2f-816b-234c5423c7a5" /></p>
+
+---
+
+## Input Switcher
+
+_Opt-in — turn it on in **Settings → Extensions**._ Automatically set your keyboard input source by focused app. Pick one default input for every app, then add per-app overrides — choose an app and the input source it should use; when that app comes to the front Prosper switches the layout for you, and switches back to your default elsewhere. A native take on the common Hammerspoon input-switching recipe.
+
+<p align="center"><img width="648" height="505" alt="Input Switcher — per-app keyboard input source" src="https://github.com/user-attachments/assets/7685d8a4-b5dc-4239-b178-aea5064ac01f" /></p>
+
+---
+
+## OpenLid
+
+_Opt-in — off by default._ Keep your Mac awake with the lid closed — no external display or charger required. **Toggle Mac Awake** flips the clamshell-sleep override on/off, guarded by your battery, network, and AC-power state so it won't drain a disconnected laptop. **OpenLid Status** shows what's currently keeping it awake (read-only); **Toggle Display Awake** keeps the screen from sleeping / the screensaver from kicking in while the lid is open.
+
+Works **out of the box** — no `sudo`, no Terminal, no `sudoers` edit. The lid override needs root, so Prosper installs a tiny privileged helper the first time you enable it (one-time approval in **System Settings → Login Items**); it uses no memory when idle and auto-resets if the app quits or crashes. Nothing is installed unless you use the feature.
+
+Inspired by: https://github.com/openlid/openlid
+
+<p align="center"><img width="637" height="486" alt="OpenLid — keep Mac awake with the lid closed" src="https://github.com/user-attachments/assets/593086f9-089f-4e53-8431-3840aace222c" /></p>
+
+---
+
+## Clipboard history
+
+_Opt-in — enable in **Settings → General**._ `⇧⌥A` opens a floating history (text, files, image previews). Blobs live on disk; concealed/transient types are skipped.
 
 <p align="center"><img width="960" height="724" alt="prosper-demo-clipboard" src="https://github.com/user-attachments/assets/0c54151f-ed67-4606-b104-2164e914a903" /></p>
 
@@ -119,85 +218,6 @@ Search and open browser bookmarks from the palette — type `bm` and filter acro
 
 ---
 
-## Window management
-
-Snap and tile windows without a separate window manager. Drag a window to a screen edge (or use `win left` / `win max` in the palette, or the `⌃⌥←→↑↓` / `⌃⌥⏎` / `⌃⌥C` global hotkeys) to snap it. For more than halves and quarters, define your own **layouts**: paint a grid in **Settings → Windows**, then drag a window into a zone to drop it there. Gaps are equal on every side. A stateless take on Rectangle's drag-snapping and Mosaic's drag-into-zone layouts.
-
-<p align="center"><img width="960" alt="Window management — drag-into-zone Mosaic-style layouts" src="https://github.com/user-attachments/assets/4b288b0b-7017-4f37-a102-3e941730f3ec" /></p>
-
----
-
-## Browser router *(opt-in)*
-
-Ships **disabled** — it hijacks the system default browser, so turn it on in **Settings → Extensions** first, then make Prosper your default from its settings pane. Once enabled, every clicked link is routed to the right
-browser by domain — work links to Chrome, personal to Safari, a localhost rule to
-whatever you like. Set it up in **Settings → URL Dispatcher**: a one-click *Make
-Prosper the Default Browser* button, a fallback browser for unmatched links, and a
-**domain → browser** rule list (first match wins, plain substring). Nothing is
-hardcoded; rules live in your config. A stateless port of [Finicky](https://github.com/johnste/finicky) /
-Hammerspoon URL routing — and the Hammerspoon facade runs an existing
-`hs.urlevent.httpCallback` config unmodified.
-
-<p align="center"><img width="647" height="661" alt="URL Dispatcher — domain → browser routing rules" src="https://github.com/user-attachments/assets/532cc8b4-044a-4b2f-816b-234c5423c7a5" /></p>
-
----
-
-## OpenLid *(opt-in)*
-
-Off by default. Keep your Mac awake with the lid closed — no external display or charger required. **Toggle Mac Awake** flips the clamshell-sleep override on/off, guarded by your battery, network, and AC-power state so it won't drain a disconnected laptop. **OpenLid Status** shows what's currently keeping it awake (read-only); **Toggle Display Awake** keeps the screen from sleeping / the screensaver from kicking in while the lid is open.
-
-Works **out of the box** — no `sudo`, no Terminal, no `sudoers` edit. The lid override needs root, so Prosper installs a tiny privileged helper the first time you enable it (one-time approval in **System Settings → Login Items**); it uses no memory when idle and auto-resets if the app quits or crashes. Nothing is installed unless you use the feature.
-
-Inspired by: https://github.com/openlid/openlid
-
-<p align="center"><img width="637" height="486" alt="OpenLid — keep Mac awake with the lid closed" src="https://github.com/user-attachments/assets/593086f9-089f-4e53-8431-3840aace222c" /></p>
-
----
-
-## Input Switcher *(opt-in)*
-
-Automatically set your keyboard input source by focused app. Pick one default input for every app, then add per-app overrides — choose an app and the input source it should use; when that app comes to the front Prosper switches the layout for you, and switches back to your default elsewhere. A native take on the common Hammerspoon input-switching recipe. Ships **disabled** — turn it on in **Settings → Extensions**.
-
-<p align="center"><img width="648" height="505" alt="Input Switcher — per-app keyboard input source" src="https://github.com/user-attachments/assets/7685d8a4-b5dc-4239-b178-aea5064ac01f" /></p>
-
----
-
-## Menu Bar Management *(opt-in)*
-
-Hide menu-bar icons behind a divider you reveal on demand, add spacing between icons, and pick the chevron style — with **no Accessibility or Screen Recording permission** for the basics. A live preview strip in Settings shows your real icons in order; mark any icon "always hidden", or drag the divider to choose what's tucked away. The clickable chevron is a separate, always-on-screen item, so showing/hiding never sweeps it (or Prosper's own icon) off screen. Optional item **ordering** keeps multi-icon apps (Stats, iStat Menus) in place across relaunches. A native take on Ice / Bartender. Ships **disabled** — turn it on in **Settings → Extensions**.
-
-<p align="center"><img width="688" alt="Menu Bar Management — hidden section revealed" src="https://github.com/user-attachments/assets/c928fc57-0174-41a3-bbcf-355061d9c0f4" /></p>
-
----
-
-## System Stats *(opt-in)*
-
-Native menu-bar system monitors in Prosper's style — **CPU, memory, GPU, network, temperatures, fans, battery, and power**. Pick which modules show and in what order; built entirely on public, on-device APIs (no Accessibility, Screen Recording, or root just to read your stats). Every sampler runs in microseconds and the bar updates once a second, so the monitors don't add measurable load to the thing they measure. Ships **disabled** — turn on the ones you want in **Settings → System Stats**.
-
-Click any module for a live history chart and full breakdown:
-
-- **CPU** — per-core load bars, system/user/idle split, efficiency vs performance cores with live clocks, load average, uptime.
-- **Memory** — app/wired/compressed usage, cached files, real kernel memory-pressure level, swap.
-- **GPU** — utilization with renderer/tiler breakdown, a Neural-Engine estimate, VRAM, core count, FPS presented.
-- **Network** — up/down throughput, live latency & jitter with a reachability badge, connectivity-history grid, active interface + MAC + Wi-Fi signal, local & public IP with country flag, and a per-process download/upload list.
-- **Sensors** — full temperature list, fan speeds, labeled voltage/current rails.
-- **Power** — live CPU, GPU, Neural Engine, and DRAM wattage with total.
-- **Battery** — charge, health, cycle count, live draw, voltage, amperage, capacity, adapter wattage, time remaining.
-
-<p align="center">
-<img height="320" alt="System Stats — CPU popover" src="https://github.com/user-attachments/assets/226741ec-7b70-45e8-9433-ffd96bf542db" />
-<img height="320" alt="System Stats — Memory popover" src="https://github.com/user-attachments/assets/4eeff975-a974-4a00-8d33-9142a2d5ca76" />
-<img height="320" alt="System Stats — Network popover" src="https://github.com/user-attachments/assets/12c8e042-c3aa-47fe-a7e3-db7284cfdd33" />
-<img height="320" alt="System Stats — GPU popover" src="https://github.com/user-attachments/assets/100b3d91-8c3d-4ee3-a368-6112b80c7860" />
-</p>
-<p align="center">
-<img height="300" alt="System Stats — Power popover" src="https://github.com/user-attachments/assets/5c311744-5939-4b1a-a400-e558749ce180" />
-<img height="300" alt="System Stats — Sensors popover" src="https://github.com/user-attachments/assets/1860ceb7-eb05-4af6-b803-b8f0fa7298a9" />
-<img height="300" alt="System Stats — Battery popover" src="https://github.com/user-attachments/assets/40bed14b-4b2a-4575-94b6-421dfcd3a463" />
-</p>
-
----
-
 ## Themes
 
 Re-skin the whole app — palette, menu-bar, and dock chrome — from a flat 12-token color palette, with instant redraw. Pick one in **Settings → Personalization**. Ships with the built-in neon-blue console theme and a warm **amber** theme; extensions can contribute their own (`[[contributes.themes]]` → `theme.json`). See [Writing extensions](extensions.md).
@@ -216,9 +236,13 @@ The built-in commands above (calc, currency, units, base64, quicklinks, quickdir
 
 ---
 
-## Inline autocomplete *(opt-in)*
+## On-device AI *(experimental)*
 
-Off by default — enable it (and grant Accessibility) in **Settings → Completions**. Once on, type in *any* text field → Prosper shows a continuation as ghost text at the caret.
+The features below run a local LLM in-process. They're powerful but still maturing — quality and latency track the model and your Mac's RAM, so treat them as experimental and tune the model in **Settings → AI Models**.
+
+### Inline autocomplete
+
+_Opt-in · experimental — enable it (and grant Accessibility) in **Settings → Completions**._ Once on, type in *any* text field → Prosper shows a continuation as ghost text at the caret.
 
 <p align="center"><img width="960" height="290" alt="prosper-demo-typing" src="https://github.com/user-attachments/assets/69ba3409-27c7-469d-91c6-2e2048dc3f46" /></p>
 
@@ -241,27 +265,35 @@ Off by default — enable it (and grant Accessibility) in **Settings → Complet
 
 Typing `:name` also ghost-replaces with an emoji on accept.
 
----
+### Coding agent
 
-## Coding agent *(opt-in)*
-
-`⌥G` opens a chat window with a local, tool-using coding agent — it reads and edits files, runs shell commands, and calls MCP tools, all driven by an in-process MLX model (default **Qwen3-Coder 30B-A3B**; lighter Qwen3 variants selectable in **Settings → Agent**). No API key, no cloud round-trip — the model server is loopback-only and never exposed to the network.
+_Opt-in · experimental._ `⌥G` opens a chat window with a local, tool-using coding agent — it reads and edits files, runs shell commands, and calls MCP tools, all driven by an in-process MLX model (default **Qwen3-Coder 30B-A3B**; lighter Qwen3 variants selectable in **Settings → Agent**). No API key, no cloud round-trip — the model server is loopback-only and never exposed to the network.
 
 > First agent use downloads two things on demand (so an install that never opens the agent stays slim): the model, and the ~86 MB Codex helper binary (pinned release, SHA-256-verified). Both are cached for later launches.
 
-<!-- TODO: chat window demo gif -->
+<p align="center"><img width="640" height="506" alt="Coding agent — local tool-using chat window" src="https://github.com/user-attachments/assets/c9d12305-c91d-45ee-8ef9-687133ceef8b" /></p>
 
 - **Real tool use** — file read/write, shell, and any MCP server you add; approvals surface inline so you stay in control of writes and commands.
 - **Run from the terminal** — `prosper agent [--cwd <dir>] <prompt…>` queues a one-shot run against the already-running app (sessions persist).
 - **Extensible** — bring your own **MCP servers** (`~/.config/prosper/mcp.json`), **lifecycle hooks** (`~/.config/prosper/hooks.json`, Claude Code-compatible schema), and **JS/TS plugins** (opencode-style, run on a sandboxed Bun host). Manage in **Settings → Agent**.
 
----
-
-## AI Models
+### AI Models
 
 One place to manage every on-device model — **Settings → General → AI Models**. Download or delete models, load/unload them on demand, and watch live loaded-state and measured RAM as they come and go. Rename any model to a friendly label, or add your own from a Hugging Face URL (custom models slot in for the **coding agent**; inline autocomplete stays pinned to the Gemma 4 VLM). The picker is always sorted smallest-to-largest by RAM footprint. Nothing is downloaded until you actually use the feature that needs it.
 
 <p align="center"><img width="640" height="606" alt="AI Models management" src="https://github.com/user-attachments/assets/ee5a74f6-6904-448d-aa1f-67e14c434748" /></p>
+
+### On-device personalization
+
+_Opt-in._ With personalization on, Prosper records your **accepted** completions to a local, encrypted-at-rest store (off by default; **Delete All** any time). From those it can train a per-user **LoRA adapter** on-device — the model learns *your* phrasing without anything leaving your Mac. Everything here is opt-in and stays local. Per-app behavior (force-enable accessibility for Electron/Chromium apps, caret-mirror fallback, custom instructions) is configurable in **Settings → Apps**.
+
+---
+
+## Local LLM limitations
+
+- **Ghost text** renders in a floating overlay at the caret — macOS forbids drawing inside another app's text view. Accepting inserts via synthesized keystrokes / Accessibility.
+- Quality/latency track the model: E2B is fast and light; E4B is better but slower.
+- First launch downloads the model (~8.9 GB for the default E4B QAT 8-bit; smaller variants from ~4.3 GB) to the HuggingFace Hub cache at `~/.config/prosper/hf`; later launches are instant. (An existing `~/Documents/huggingface` cache from older builds is migrated there automatically on first run.)
 
 ---
 
@@ -275,12 +307,6 @@ A full **Settings** window (`⌥\`) covers General (incl. AI Models) / Shortcuts
 
 ---
 
-## On-device personalization *(opt-in)*
-
-With personalization on, Prosper records your **accepted** completions to a local, encrypted-at-rest store (off by default; **Delete All** any time). From those it can train a per-user **LoRA adapter** on-device — the model learns *your* phrasing without anything leaving your Mac. Everything here is opt-in and stays local. Per-app behavior (force-enable accessibility for Electron/Chromium apps, caret-mirror fallback, custom instructions) is configurable in **Settings → Apps**.
-
----
-
 ## Permissions
 
 Inline autocomplete needs one macOS privacy permission, requested when you enable the feature:
@@ -291,15 +317,9 @@ Grant in **System Settings → Privacy & Security**. Settings → Context links 
 
 ---
 
-## First launch
-
-Prosper is **Developer ID-signed and notarized by Apple**, so it opens normally — no Gatekeeper workaround, no "unidentified developer" dialog. Install via Homebrew, or download the `.zip` from the [latest release](https://github.com/ventsislav-georgiev/prosper/releases/latest), unzip, and drag `Prosper.app` to `/Applications`.
-
----
-
 ## Updates
 
-Prosper auto-updates via [Sparkle](https://sparkle-project.org) straight from GitHub Releases — use **Check for Updates** in the menu, or update via `brew` (the cask sets `auto_updates true`, so both coexist).
+Prosper is **Developer ID-signed and notarized by Apple** — it opens normally, no Gatekeeper workaround. It auto-updates via [Sparkle](https://sparkle-project.org) straight from GitHub Releases — use **Check for Updates** in the menu, or update via `brew` (the cask sets `auto_updates true`, so both coexist).
 
 ---
 
@@ -310,14 +330,6 @@ Prosper is **free, and stays free** — every feature, no paywalls, no subscript
 Optionally sign in (passwordless) to sync your settings across Macs — also free, and **end-to-end encrypted with a key that never leaves your devices**. The server stores only ciphertext; no one (not even us) can read your settings.
 
 <p align="center"><img width="640" height="691" alt="Automatic end-to-end encrypted cloud settings sync" src="https://github.com/user-attachments/assets/f05b4961-9789-4043-ad2b-35047b0701cf" /></p>
-
----
-
-## Limitations
-
-- **Ghost text** renders in a floating overlay at the caret — macOS forbids drawing inside another app's text view. Accepting inserts via synthesized keystrokes / Accessibility.
-- Quality/latency track the model: E2B is fast and light; E4B is better but slower.
-- First launch downloads the model (~8.9 GB for the default E4B QAT 8-bit; smaller variants from ~4.3 GB) to the HuggingFace Hub cache at `~/.config/prosper/hf`; later launches are instant. (An existing `~/Documents/huggingface` cache from older builds is migrated there automatically on first run.)
 
 ---
 
