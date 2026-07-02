@@ -785,10 +785,20 @@ actor MLXEngine {
 
             // Accumulate the streamed chunks into the full output, breaking early
             // on any stop sequence (keeps inline completions to one clause).
+            //
+            // Task-returning variant instead of the bare-stream `generate`: every
+            // `break outer` below abandons the stream while the library's producer
+            // task keeps stepping the model for a few more ms. We cancel + await it
+            // before leaving this closure so no MLX compute ever escapes the
+            // compute gate and no KV cache is touched after we return.
             var text = ""
-            let stream = try MLXLMCommon.generate(
-                input: lmInput, parameters: parameters, context: context
-            )
+            let iterator = try TokenIterator(
+                input: lmInput, model: context.model, parameters: parameters)
+            let (stream, loopTask) = MLXLMCommon.generateTask(
+                promptTokenCount: lmInput.text.tokens.size,
+                modelConfiguration: context.configuration,
+                tokenizer: context.tokenizer,
+                iterator: iterator)
             outer: for await generation in stream {
                 // Stop decoding the moment this request is superseded. Without this
                 // each typed character left its now-useless generation running to
@@ -814,6 +824,8 @@ actor MLXEngine {
                     }
                 }
             }
+            loopTask.cancel()
+            await loopTask.value
             return text
             }
         }
@@ -952,10 +964,17 @@ actor MLXEngine {
                 var sentCount = 0
                 var generated: [Int] = []
                 var detokenizer = NaiveStreamingDetokenizer(tokenizer: context.tokenizer)
-                let stream = try MLXLMCommon.generateTokens(
-                    input: LMInput(tokens: MLXArray(prefill)), cache: cache,
-                    parameters: parameters, context: context
-                )
+                // Task-returning variant (see `generate()`): after a `break outer`
+                // the producer task can still be mid-`cache.update` on THIS cache;
+                // we cancel + await it below before reading `offset` or persisting.
+                let iterator = try TokenIterator(
+                    input: LMInput(tokens: MLXArray(prefill)), model: context.model,
+                    cache: cache, parameters: parameters)
+                let (stream, loopTask) = MLXLMCommon.generateTokenTask(
+                    promptTokenCount: prefill.count,
+                    modelConfiguration: context.configuration,
+                    tokenizer: context.tokenizer,
+                    iterator: iterator)
                 outer: for await generation in stream {
                     if Task.isCancelled { break outer }
                     if mlxError.message != nil { break outer }
@@ -983,6 +1002,13 @@ actor MLXEngine {
                     continuation.yield(chunk)
                     sentCount = emitted.count
                 }
+
+                // Join the producer BEFORE reading `cache.offset` or handing the
+                // cache back to the box: an abandoned stream leaves it stepping
+                // this same cache (offset shrinking under `KVCacheSimple.update`
+                // → "Range requires lowerBound <= upperBound" crash).
+                loopTask.cancel()
+                await loopTask.value
 
                 if Self.agentTimingEnabled {
                     let wallMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
@@ -1121,9 +1147,17 @@ actor MLXEngine {
             var text = ""
             var info: GenerateCompletionInfo?
             let t0 = DispatchTime.now()
-            let stream = try MLXLMCommon.generate(
-                input: lmInput, cache: cache, parameters: parameters, context: context
-            )
+            // Task-returning variant (see `generate()`): the common exits below are
+            // `break outer` (stop sequence / word cap / superseded keystroke), which
+            // abandon the stream while the producer task is still stepping the model
+            // on THIS cache. We cancel + await it before the trim/persist below.
+            let iterator = try TokenIterator(
+                input: lmInput, model: context.model, cache: cache, parameters: parameters)
+            let (stream, loopTask) = MLXLMCommon.generateTask(
+                promptTokenCount: lmInput.text.tokens.size,
+                modelConfiguration: context.configuration,
+                tokenizer: context.tokenizer,
+                iterator: iterator)
             outer: for await generation in stream {
                 if Task.isCancelled { break outer }
                 // An MLX runtime error mid-decode means every further token is
@@ -1143,6 +1177,13 @@ actor MLXEngine {
                     info = i
                 }
             }
+            // Join the producer BEFORE the trim/persist below. Trimming while it is
+            // mid-step shrinks `offset` under `KVCacheSimple.update` and crashes:
+            //   Fatal error: Range requires lowerBound <= upperBound
+            // (seen live during GUI typethrough testing). After the await the cache
+            // is quiescent and `offset` is ground truth.
+            loopTask.cancel()
+            await loopTask.value
             // Objective timing, silent unless PROSPER_INLINE_TIMING is set. Logged on
             // EVERY path — including the early `break` on a stop sequence or word cap,
             // which is the common case for inline completions, so the `info`-only
@@ -1326,10 +1367,21 @@ actor MLXEngine {
                     // trimmable main+draft caches. Throws KVCacheError if a cache turns
                     // out non-trimmable, caught by the outer `catch` → fallback.
                     var text = ""
-                    let stream = try MLXLMCommon.generate(
-                        input: lmInput, parameters: parameters, context: mainContext,
-                        draftModel: draftContext.model, numDraftTokens: numDraft
-                    )
+                    // Task-returning variant (our mlx-swift-lm-speculative-task.patch
+                    // exposes it): cancel + await after the loop so the producer
+                    // never outlives the compute gate. Caches are fresh here, but
+                    // an escaped producer still computes ungated.
+                    let iterator = try SpeculativeTokenIterator(
+                        input: lmInput,
+                        mainModel: mainContext.model,
+                        draftModel: draftContext.model,
+                        parameters: parameters,
+                        numDraftTokens: numDraft)
+                    let (stream, loopTask) = MLXLMCommon.generateTask(
+                        promptTokenCount: lmInput.text.tokens.size,
+                        modelConfiguration: mainContext.configuration,
+                        tokenizer: mainContext.tokenizer,
+                        iterator: iterator)
                     outer: for await generation in stream {
                         if Task.isCancelled { break outer }
                         if mlxError.message != nil { break outer }
@@ -1345,6 +1397,8 @@ actor MLXEngine {
                             }
                         }
                     }
+                    loopTask.cancel()
+                    await loopTask.value
                     return text
                 }
                 }
@@ -1527,9 +1581,15 @@ actor MLXEngine {
 
             let lmInput = try await context.processor.prepare(input: userInput)
             var text = ""
-            let stream = try MLXLMCommon.generate(
-                input: lmInput, parameters: parameters, context: context
-            )
+            // Task-returning variant (see `generate()`): cancel + await after the
+            // loop so the producer never outlives the compute gate.
+            let iterator = try TokenIterator(
+                input: lmInput, model: context.model, parameters: parameters)
+            let (stream, loopTask) = MLXLMCommon.generateTask(
+                promptTokenCount: lmInput.text.tokens.size,
+                modelConfiguration: context.configuration,
+                tokenizer: context.tokenizer,
+                iterator: iterator)
             outer: for await generation in stream {
                 if mlxError.message != nil { break outer }
                 if let chunk = generation.chunk {
@@ -1549,6 +1609,8 @@ actor MLXEngine {
                     }
                 }
             }
+            loopTask.cancel()
+            await loopTask.value
             return text
             }
         }

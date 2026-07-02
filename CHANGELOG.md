@@ -20,6 +20,15 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.122.4 *(unreleased)*
 
+### Crash fix — generation task racing the KV cache
+- **Fixed a crash while typing** (`Range requires lowerBound <= upperBound` in
+  the model's KV cache). Ending a completion early — on a stop sequence, the
+  word cap, or a superseding keystroke, i.e. almost every inline completion —
+  abandoned the library's background generation task, which kept writing into
+  the same KV cache we were already trimming for reuse. All generation paths
+  (inline, chat, speculative, vision) now cancel and join that task before
+  touching the cache, so no model compute ever outlives its request.
+
 ### Inline autocomplete — prompt re-architecture for instant, Cotypist-class ghosts
 - **Suggestions now update instantly on each keystroke.** The prompt is
   rebuilt so everything before the text you're typing stays byte-identical

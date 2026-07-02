@@ -1,0 +1,36 @@
+diff --git a/Libraries/MLXLMCommon/Evaluate.swift b/Libraries/MLXLMCommon/Evaluate.swift
+index c59b03e..482e41f 100644
+--- a/Libraries/MLXLMCommon/Evaluate.swift
++++ b/Libraries/MLXLMCommon/Evaluate.swift
+@@ -1500,6 +1500,31 @@ public func generateTask(
+     )
+ }
+ 
++/// Speculative-decoding variant of
++/// ``generateTask(promptTokenCount:modelConfiguration:tokenizer:iterator:wiredMemoryTicket:)``:
++/// the same `AsyncStream<Generation>` plus the producer `Task`, driven by a
++/// ``SpeculativeTokenIterator``. Callers that break out of the stream early can
++/// `cancel()` + await the task to know when the model/caches are no longer in use.
++public func generateTask(
++    promptTokenCount: Int,
++    modelConfiguration: ModelConfiguration,
++    tokenizer: Tokenizer,
++    iterator: consuming SpeculativeTokenIterator,
++    wiredMemoryTicket: WiredMemoryTicket? = nil
++) -> (AsyncStream<Generation>, Task<Void, Never>) {
++    generateLoopTask(
++        promptTokenCount: promptTokenCount,
++        modelConfiguration: modelConfiguration,
++        tokenizer: tokenizer,
++        iterator: iterator,
++        wiredMemoryTicket: wiredMemoryTicket,
++        handler: TextToolTokenLoopHandler(
++            tokenizer: tokenizer,
++            format: modelConfiguration.toolCallFormat ?? .json
++        )
++    )
++}
++
+ /// Generates raw token IDs asynchronously using the provided language model input, parameters, and context.
+ ///
+ /// This is similar to `generate(input:cache:parameters:context:)`, but yields raw token IDs instead of decoded text/tool calls.

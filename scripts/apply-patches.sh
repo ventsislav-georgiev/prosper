@@ -23,6 +23,13 @@ PATCH_DIR="$ROOT/app/patches"
 PATCHES=(
   "mlx-swift-lm-qat.patch:mlx-swift-lm"
   "llama4-arch.patch:mlx-swift-lm"
+  # Expose a task-returning generateTask overload for SpeculativeTokenIterator
+  # (upstream only returns the bare stream, discarding the producer Task). We
+  # need that Task to cancel+join after breaking out of the stream — otherwise
+  # the producer keeps stepping the model/KV cache while we trim or persist it
+  # (range-inversion crash in KVCacheSimple.update) and keeps computing outside
+  # MLXComputeGate.
+  "mlx-swift-lm-speculative-task.patch:mlx-swift-lm"
 )
 
 cd "$ROOT/app"
