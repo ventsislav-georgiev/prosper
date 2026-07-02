@@ -236,6 +236,16 @@ final class CaretMovedWithKeyTests: XCTestCase {
         XCTAssertTrue(AutocompleteEngine.caretMovedWithKey(from: old, to: fresh, shift: 4))
     }
 
+    func testFarVerticalJumpRejectedAsDegenerate() {
+        // A keystroke can wrap a line or two; a read 20 lines away is a
+        // degenerate AX rect (live: ghost parked ~330px below the text).
+        let fresh = CGRect(x: 0, y: 380, width: 2, height: 16)
+        XCTAssertFalse(AutocompleteEngine.caretMovedWithKey(from: old, to: fresh, shift: -4))
+        // …but a genuine wrap (~1 line) is still accepted.
+        let wrap = CGRect(x: 10, y: 70, width: 2, height: 16)
+        XCTAssertTrue(AutocompleteEngine.caretMovedWithKey(from: old, to: wrap, shift: 4))
+    }
+
     func testDeleteRequiresLeftMovement() {
         // Reverse shift (regrow on backspace): stale unchanged read rejected,
         // real leftward move accepted.
@@ -243,5 +253,38 @@ final class CaretMovedWithKeyTests: XCTestCase {
         XCTAssertFalse(AutocompleteEngine.caretMovedWithKey(from: old, to: stale, shift: -4))
         let moved = CGRect(x: 96, y: 50, width: 2, height: 16)
         XCTAssertTrue(AutocompleteEngine.caretMovedWithKey(from: old, to: moved, shift: -4))
+    }
+}
+
+/// Per-letter typo-fix split (Cotypist-style display + minimal retype).
+final class TypoFixSplitTests: XCTestCase {
+    func testTransposition() {
+        let s = AutocompleteEngine.typoFixSplit(original: "teh", fix: "the")
+        XCTAssertEqual(s.strike, "eh"); XCTAssertEqual(s.replacement, "he")
+        XCTAssertEqual(s.replaceLength, 2)
+    }
+
+    func testMidWordInsertion() {
+        let s = AutocompleteEngine.typoFixSplit(original: "qustion", fix: "question")
+        XCTAssertEqual(s.strike, "stion"); XCTAssertEqual(s.replacement, "estion")
+        XCTAssertEqual(s.replaceLength, 5)
+    }
+
+    func testSingleWrongLetter() {
+        let s = AutocompleteEngine.typoFixSplit(original: "helo", fix: "hello")
+        XCTAssertEqual(s.strike, "o"); XCTAssertEqual(s.replacement, "lo")
+        XCTAssertEqual(s.replaceLength, 1)
+    }
+
+    func testPureTailDeletionKeepsNonEmptyReplacement() {
+        let s = AutocompleteEngine.typoFixSplit(original: "cattt", fix: "cat")
+        XCTAssertEqual(s.strike, "ttt"); XCTAssertEqual(s.replacement, "t")
+        XCTAssertEqual(s.replaceLength, 3)
+    }
+
+    func testWhollyDifferentWordStrikesAll() {
+        let s = AutocompleteEngine.typoFixSplit(original: "xyz", fix: "abc")
+        XCTAssertEqual(s.strike, "xyz"); XCTAssertEqual(s.replacement, "abc")
+        XCTAssertEqual(s.replaceLength, 3)
     }
 }

@@ -7,6 +7,9 @@ final class SuggestionWindow {
 
     private let panel: NSPanel
     private let label: NSTextField
+    /// Thin red line drawn over the user's mistyped letters in a spelling fix
+    /// (see `showFix`). Hidden for ordinary ghost renders.
+    private let strikeBar: NSView
     private let defaultFont: NSFont = .systemFont(ofSize: NSFont.systemFontSize)
 
     /// The font the ghost currently renders with. Used by the engine to measure
@@ -47,7 +50,14 @@ final class SuggestionWindow {
         label.drawsBackground = false
         label.lineBreakMode = .byTruncatingTail
 
+        strikeBar = NSView(frame: .zero)
+        strikeBar.wantsLayer = true
+        strikeBar.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.75).cgColor
+        strikeBar.layer?.cornerRadius = 0.75
+        strikeBar.isHidden = true
+
         let container = NSView(frame: initialFrame)
+        container.addSubview(strikeBar)
         container.addSubview(label)
         panel.contentView = container
     }
@@ -67,6 +77,7 @@ final class SuggestionWindow {
         // inset below, so strip it for display and instead offset the start by a
         // full space-width — the gap then matches a typed space exactly. The
         // inserted text keeps its space (handled upstream), so they stay in sync.
+        strikeBar.isHidden = true // fix-only decoration (see showFix)
         var display = text
         var leadingGap: CGFloat = 0
         if display.hasPrefix(" ") {
@@ -95,7 +106,12 @@ final class SuggestionWindow {
         // the glyphs; Chromium/Electron report the true glyph box) and validated
         // against the field bounds — see `ghostLineCenterY`.
         let lineCenterY = AutocompleteEngine.ghostLineCenterY(caret: caretRect, field: fieldRect)
-        let origin = CGPoint(x: startX, y: lineCenterY - height / 2)
+        // Whole-point origin: per-keystroke width arithmetic yields fractional
+        // positions, and each fractional move re-rasterizes the glyphs at a new
+        // subpixel phase — the strokes visibly "breathe" thicker/thinner while
+        // typing (live report). Snapping the panel to the point grid keeps the
+        // rasterization identical between nearby renders.
+        let origin = CGPoint(x: (startX).rounded(), y: (lineCenterY - height / 2).rounded())
         let frame = NSRect(origin: origin, size: NSSize(width: width, height: height))
         panel.setFrame(frame, display: true)
         label.frame = NSRect(
@@ -148,7 +164,10 @@ final class SuggestionWindow {
         // bottom edge.
         let targetBaselineY = panelHeight / 2 - baselineBelowCenter
         let y = targetBaselineY - (labelHeight - label.firstBaselineOffsetFromTop)
-        return max(0, min(y, panelHeight - labelHeight))
+        // Whole-point label y — same subpixel-rasterization stability as the
+        // panel origin (a ≤0.5pt baseline offset is invisible; stroke breathing
+        // between renders is not).
+        return (max(0, min(y, panelHeight - labelHeight))).rounded()
     }
 
     /// Clamps the ghost width so its right edge stays within the focused field
@@ -167,48 +186,56 @@ final class SuggestionWindow {
         return min(naturalWidth, max(0, available))
     }
 
-    /// Renders a suggested spelling fix: the misspelled word struck through,
-    /// followed by the proposed correction.
-    func showFix(strikethrough original: String, fix: String, at caretRect: CGRect, fieldRect: CGRect? = nil) {
-        let attr = NSMutableAttributedString()
-        let struck = NSAttributedString(string: original, attributes: [
-            .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-            .foregroundColor: NSColor.systemRed.withAlphaComponent(0.7),
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+    /// Renders a suggested spelling fix Cotypist-style, split at the first
+    /// divergent character: a thin red line strikes through the user's OWN
+    /// letters that the accept will retype (drawn over the field text, to the
+    /// LEFT of the caret — no glyphs are redrawn, just the line), and the
+    /// corrected letters render in green at the caret like a ghost. The panel
+    /// spans both regions: a transparent strike zone (red bar only) followed by
+    /// the green replacement label.
+    func showFix(strike: String, replacement: String, at caretRect: CGRect, fieldRect: CGRect? = nil) {
+        guard !replacement.isEmpty else { hide(); return }
+        let font = label.font ?? defaultFont
+        label.attributedStringValue = NSAttributedString(string: replacement, attributes: [
+            .foregroundColor: NSColor.systemGreen.withAlphaComponent(0.85),
+            .font: font,
         ])
-        let arrow = NSAttributedString(string: "  ", attributes: [
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
-        ])
-        let corrected = NSAttributedString(string: fix, attributes: [
-            .foregroundColor: NSColor.systemGreen,
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
-        ])
-        attr.append(struck)
-        attr.append(arrow)
-        attr.append(corrected)
-
-        label.attributedStringValue = attr
         label.sizeToFit()
         let size = label.frame.size
         let height = max(size.height, caretRect.height)
-        // Sit flush against the caret. `NSTextField` adds a ~2pt left cell inset,
-        // so start 2pt before the caret's right edge to cancel it — without this
-        // the ghost reads as having an extra leading space.
-        var startX = caretRect.maxX - 2
+
+        // Width of the struck letters, measured with the ghost font (mirrors the
+        // field font). A small width error only moves a bar, never glyphs.
+        let strikeWidth = strike.isEmpty
+            ? 0 : (strike as NSString).size(withAttributes: [.font: font]).width
+        var strikeStart = caretRect.maxX - strikeWidth
         if let fieldRect, fieldRect.width > 1 {
-            startX = min(max(startX, fieldRect.minX), fieldRect.maxX - 8)
+            strikeStart = min(max(strikeStart, fieldRect.minX), fieldRect.maxX - 8)
         }
-        let width = clampedWidth(naturalWidth: size.width + 4, startX: startX, fieldRect: fieldRect)
+        // Label sits where the caret is (same -2 cell-inset cancel as show()).
+        let labelX = max(0, (caretRect.maxX - 2) - strikeStart)
+        let width = clampedWidth(
+            naturalWidth: labelX + size.width + 4, startX: strikeStart, fieldRect: fieldRect
+        )
         guard width > 8 else { hide(); return }
         let lineCenterY = AutocompleteEngine.ghostLineCenterY(caret: caretRect, field: fieldRect)
-        let origin = CGPoint(x: startX, y: lineCenterY - height / 2)
-        let frame = NSRect(origin: origin, size: NSSize(width: width, height: height))
-        panel.setFrame(frame, display: true)
-        // Baseline-aligned label — see show().
+        let origin = CGPoint(x: strikeStart.rounded(), y: (lineCenterY - height / 2).rounded())
+        panel.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: true)
+        let labelY = baselineAlignedLabelY(panelHeight: height, labelHeight: size.height)
         label.frame = NSRect(
-            x: 0, y: baselineAlignedLabelY(panelHeight: height, labelHeight: size.height),
-            width: width, height: min(size.height, height)
+            x: labelX, y: labelY,
+            width: max(0, width - labelX), height: min(size.height, height)
         )
+        // Red strike bar across the letters being replaced, at strikethrough
+        // height (~half the x-height above the baseline).
+        if strikeWidth > 0 {
+            let baselineY = labelY + (size.height - label.firstBaselineOffsetFromTop)
+            let barY = (baselineY + font.xHeight * 0.55).rounded()
+            strikeBar.frame = NSRect(x: 0, y: barY, width: strikeWidth, height: 1.5)
+            strikeBar.isHidden = false
+        } else {
+            strikeBar.isHidden = true
+        }
         orderFrontFading()
     }
 

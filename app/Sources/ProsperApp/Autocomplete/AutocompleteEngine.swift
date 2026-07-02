@@ -1076,9 +1076,15 @@ final class AutocompleteEngine {
         // ("conv" → conversation) — that was suppressing all mid-word completions.
         if Self.lastWordLooksMisspelled(before), !Self.lastWordIsCompletablePrefix(before) {
             if Preferences.showSuggestedFixes,
-               let (wordLen, original, fix) = Self.spellingFix(before) {
-                currentSuggestion = fix
-                replaceLength = wordLen
+               let (_, original, fix) = Self.spellingFix(before) {
+                // Per-letter diff (Cotypist-style): a red line strikes only the
+                // typed letters that will be retyped (from the first divergent
+                // character), the replacement letters render green at the caret.
+                // Accept mechanics follow the same split — backspace just the
+                // divergent tail, not the whole word.
+                let split = Self.typoFixSplit(original: original, fix: fix)
+                currentSuggestion = split.replacement
+                replaceLength = split.replaceLength
                 isFix = true
                 requestBefore = nil  // WS6: typo fixes are not training samples
                 currentCaretRect = caretRect
@@ -1087,7 +1093,10 @@ final class AutocompleteEngine {
                     // correction text into the bubble above the field instead.
                     mirrorWindow.show(text: fix, fieldRect: fieldRect)
                 } else if let rect = caretRect {
-                    suggestionWindow.showFix(strikethrough: original, fix: fix, at: rect, fieldRect: fieldRect)
+                    suggestionWindow.showFix(
+                        strike: split.strike, replacement: split.replacement,
+                        at: rect, fieldRect: fieldRect
+                    )
                 }
                 return
             }
@@ -1260,6 +1269,20 @@ final class AutocompleteEngine {
                 // The kept ghost is live — leaving the button in .thinking would
                 // pulse forever since this response is the one that would clear it.
                 self.accessoryButton.setState(.ready)
+                // POSITION HEAL: the guard keeps the ghost's TEXT, but the panel
+                // may sit on a bad anchor (a degenerate re-anchor once parked the
+                // ghost 20 lines below and this early-return preserved it for
+                // seconds). When the live caret disagrees materially with the
+                // cached anchor, re-render the SAME text at the live caret —
+                // content is unchanged, so this cannot flicker, only relocate.
+                if let live = liveCaret, Self.hasUsableCaret(live),
+                   let cached = self.currentCaretRect,
+                   abs(live.maxX - cached.maxX) > 4 || abs(live.midY - cached.midY) > max(cached.height, 1) * 0.6 {
+                    self.currentCaretRect = live
+                    self.currentFieldRect = liveField
+                    self.caretAnchoredAt = Date()
+                    self.renderSuggestion(text: ghost, caret: live, field: liveField, useMirror: liveMirror)
+                }
                 return
             }
             // Success: ghost text is about to render at the caret.
@@ -1552,7 +1575,14 @@ final class AutocompleteEngine {
     /// `nonisolated` so it is unit-testable off the actor.
     nonisolated static func caretMovedWithKey(from old: CGRect?, to fresh: CGRect, shift: CGFloat) -> Bool {
         guard let old else { return true } // no baseline to distrust against
-        if abs(fresh.midY - old.midY) > max(old.height, 1) * 0.6 { return true }
+        let dy = abs(fresh.midY - old.midY)
+        let lineH = max(old.height, 1)
+        if dy > lineH * 0.6 {
+            // A single keystroke can wrap at most a line or two. A caret that
+            // "jumped" much farther is a degenerate AX read (live: a delete
+            // re-anchored the ghost 20 lines below the text and it stuck).
+            return dy <= lineH * 2.5
+        }
         let moved = fresh.maxX - old.maxX
         return shift >= 0 ? moved >= shift * 0.4 : moved <= shift * 0.4
     }
@@ -1566,6 +1596,26 @@ final class AutocompleteEngine {
             return remainder.isEmpty ? .reschedule : .show(remainder)
         }
         return .reschedule
+    }
+
+    /// Splits a typo correction at the first divergent character. `strike` is the
+    /// tail of what the user actually typed (gets the red strike line and the
+    /// synthetic backspaces), `replacement` is the corrected tail (rendered green,
+    /// typed on accept). Keeping the common prefix minimizes both the visual
+    /// noise and the number of synthetic key events. Pure + `nonisolated` for
+    /// unit tests.
+    nonisolated static func typoFixSplit(
+        original: String, fix: String
+    ) -> (strike: String, replacement: String, replaceLength: Int) {
+        let o = Array(original), f = Array(fix)
+        var p = 0
+        while p < o.count, p < f.count, o[p] == f[p] { p += 1 }
+        // Pure tail deletion ("cattt" → "cat") would leave an empty replacement,
+        // which downstream reads as "no suggestion" — back off one shared char so
+        // the accept still has something to type.
+        if p > 0, p == f.count { p -= 1 }
+        let strike = String(o[p...])
+        return (strike, String(f[p...]), strike.count)
     }
 
     static func applyWordBoundary(before: String, suggestion: String) -> String {
