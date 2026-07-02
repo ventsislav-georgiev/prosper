@@ -1773,22 +1773,47 @@ final class AutocompleteEngine {
             return
         }
         currentSuggestion = remainder
-        // Render at the current caret immediately so the remainder never blinks out,
-        // then reposition once the synthesized typing has landed (the caret has
-        // advanced past the inserted word, so the old rect is now a word too far
-        // left). The synthetic events are tagged and ignored by our tap, so they
-        // won't clear this suggestion.
+        // Render the remainder immediately — but PRE-SHIFTED to where it belongs
+        // AFTER the injected word lands (old caret + inserted width). Rendering at
+        // the old caret drew the remainder ON TOP of the arriving word for a few
+        // frames (overlapping smeared glyphs), and the reposition below then
+        // snapped it right — the Tab-accept "jiggle" (live recording). Pre-shifted,
+        // the injected word fills the gap underneath and nothing moves.
+        let preAcceptRect = currentCaretRect
+        let insertedWidth = (toInsert as NSString)
+            .size(withAttributes: [.font: suggestionWindow.currentFont]).width
+        if var rect = currentCaretRect {
+            rect.origin.x += insertedWidth
+            currentCaretRect = rect
+        }
         renderRemainder(remainder, bundleId: bundleId)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.currentSuggestion == remainder else { return }
-                guard let ctx = AXCaret.currentContext() else { return }
-                self.currentCaretRect = Self.effectiveCaretRect(ctx.caretScreenRect, field: ctx.fieldScreenRect)
-                self.currentFieldRect = ctx.fieldScreenRect
-                self.suggestionWindow.applyFont(ctx.caretFont)
-                self.renderRemainder(remainder, bundleId: bundleId)
+        // Reposition from a live AX read once the synthesized typing has landed —
+        // corrects the ghost-font width estimate. The read races the injection
+        // (cross-process), so accept it only when the caret actually advanced
+        // (same stale-read guard as advanceGhost); retry once, then keep the
+        // width-shifted position (drift is bounded and the next response
+        // re-anchors). The synthetic events are tagged and ignored by our tap,
+        // so they won't clear this suggestion.
+        func reposition(attempt: Int) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.04 : 0.12)) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.currentSuggestion == remainder else { return }
+                    guard let ctx = AXCaret.currentContext(),
+                          let fresh = Self.effectiveCaretRect(ctx.caretScreenRect, field: ctx.fieldScreenRect),
+                          Self.hasUsableCaret(fresh)
+                    else { if attempt == 0 { reposition(attempt: 1) }; return }
+                    guard Self.caretMovedWithKey(from: preAcceptRect, to: fresh, shift: insertedWidth) else {
+                        if attempt == 0 { reposition(attempt: 1) }
+                        return
+                    }
+                    self.currentCaretRect = fresh
+                    self.currentFieldRect = ctx.fieldScreenRect
+                    self.suggestionWindow.applyFont(ctx.caretFont)
+                    self.renderRemainder(remainder, bundleId: bundleId)
+                }
             }
         }
+        reposition(attempt: 0)
     }
 
     /// Re-renders `remainder` through the same overlay it started in: a mirrored
