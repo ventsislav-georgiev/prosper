@@ -156,17 +156,21 @@ enum HeadlessBenchCLI {
                 reservedSystemChars: system.count
             )
         }
-        // Mirror CoreBridge.complete()'s unified gemma-native ladder EXACTLY so the
-        // bench measures the shipping path: temp=1.0/top_k=64/top_p=0.95 for ALL
-        // scripts on the first rung (Cotypist's GGUF-embedded sampling), then
-        // directive rungs. PROSPER_TEMP0/PROSPER_TOPP0 still override rung-0 for A/B.
+        // Mirror CoreBridge.complete()'s ladder EXACTLY so the bench measures the
+        // shipping path: GREEDY first rung (deterministic per context — the ghost
+        // stability lever) except for transliterated Bulgarian, where greedy
+        // argmax collapses to empty on ambiguous Latin-Slavic text (regress:
+        // latinica coverage 90% vs 98%) and the gemma-native sampled rung stays.
+        // PROSPER_TEMP0/PROSPER_TOPP0 still override rung-0 for A/B.
         let env = ProcessInfo.processInfo.environment
         typealias Rung = (temperature: Float, topK: Int?, topP: Float, reprompt: Bool)
+        let defaultTemp0: Float = latinBg ? 1.0 : 0.0
+        let temp0 = Float(env["PROSPER_TEMP0"] ?? "") ?? defaultTemp0
         let attempts: [Rung] = [
-            (Float(env["PROSPER_TEMP0"] ?? "") ?? 1.0, 64, Float(env["PROSPER_TOPP0"] ?? "") ?? 0.95, false),
+            (temp0, temp0 == 0 ? nil : 64, Float(env["PROSPER_TOPP0"] ?? "") ?? (temp0 == 0 ? 1.0 : 0.95), false),
+            (1.0, 64, 0.95, false),  // plain sampled retry (recovers greedy-empty)
             (1.0, 64, 0.95, true),
             (0.8, 64, 0.95, true),
-            (1.0, 64, 0.95, true),
         ]
         for (temp, topK, topp, reprompt) in attempts {
             do {

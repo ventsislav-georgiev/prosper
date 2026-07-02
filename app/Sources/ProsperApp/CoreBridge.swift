@@ -563,6 +563,20 @@ enum CoreBridge {
     // prove to need faster conversation-OCR refresh.
     static let frozenContextTTL: TimeInterval = 30
 
+    // Sticky per-app language detection (see the call site in `complete`).
+    private static let stickyLangLock = NSLock()
+    nonisolated(unsafe) private static var stickyLangByApp: [String: String] = [:]
+    static func stickyDetectedLanguage(bundleId: String?, detected: String?) -> String? {
+        let key = bundleId ?? ""
+        stickyLangLock.lock()
+        defer { stickyLangLock.unlock() }
+        if let detected {
+            stickyLangByApp[key] = detected
+            return detected
+        }
+        return stickyLangByApp[key]
+    }
+
     static func complete(
         before: String,
         after: String,
@@ -601,9 +615,18 @@ enum CoreBridge {
         // a confident Slavic-Latin hit so it never fires on English fragments
         // (which detect as English or nil, not Croatian).
         let latinBulgarian = Self.looksLikeTransliteratedBulgarian(before)
+        // Sticky detection: on short/ambiguous context the recognizer flips
+        // between a confident language and nil on ADJACENT keystrokes, which
+        // alternated two different system-prompt wordings per request — flapping
+        // the model's instructions AND collapsing the KV prefix at the system
+        // prompt (live trace: "reuse collapsed at token 220", ~250ms re-prefill
+        // per flap). nil never downgrades a previous confident detection for the
+        // same app; a different confident detection switches immediately (a real
+        // language switch must not lag).
+        let stickyLanguage = Self.stickyDetectedLanguage(bundleId: bundleId, detected: language)
         let system = completionSystemPrompt(
             custom: AppOverrideResolver.effectivePromptAddendum(forBundleId: bundleId),
-            length: length, language: latinBulgarian ? nil : language,
+            length: length, language: latinBulgarian ? nil : stickyLanguage,
             transliteratedBulgarian: latinBulgarian, userLanguages: Self.osLanguagesList()
         )
         // Volatile context blocks (clipboard, frequent words, on-screen OCR) are
@@ -619,13 +642,22 @@ enum CoreBridge {
         // prefix survives even that. Bursts accept a stale snapshot (never pay
         // capture latency); a burst with NO snapshot goes light once and the
         // next pause freezes for everyone.
-        let personalize = Preferences.collectTypingHistory && Preferences.personalizeWordChoice > 0
-
         return Task {
-            // Cotypist-style previousUserInputs: a few short examples of the user's own
-            // recent writing (this app + across apps + longest), for voice/language
-            // grounding. Same privacy gate as frequentWords.
-            let writingSamples = personalize
+            // Personalization blocks CUT from the inline prompt (2026-07-02, user
+            // directive: "personalization can be disabled if reducing quality").
+            // Live evidence: writing samples / frequent words leaked the user's
+            // vocabulary into unrelated completions ("oncall", "the usual spot",
+            // comma-joined frequent-word lists as the whole suggestion) — the
+            // dominant junk class in the Cotypist head-to-head. The history
+            // pipeline and prefs stay; re-introduce only behind a quality eval
+            // that proves the samples help (accepted-rate A/B, like LoRA).
+            //
+            // ONE exception, evidence-backed the other way: transliterated
+            // Bulgarian ("shlyokavitsa"). There the user's own samples are what
+            // grounds the spelling style, and cutting them dropped latinica
+            // regress coverage 98% → 92% while EN/BG stayed green. Latinica is
+            // also never the context that produced the vocab-leak junk.
+            let writingSamples: [String] = latinBulgarian
                 ? await TypingHistoryStore.shared.writingSamples(bundleId: bundleId) : []
             // App context: name + writing surface (chat/email/code/…) so the model
             // matches the tone and length the situation calls for. For browsers and
@@ -680,8 +712,7 @@ enum CoreBridge {
                 // exposes little (Electron/Chromium, Qt apps like Telegram).
                 clipboard = Preferences.useClipboardContext
                     ? await MainActor.run { clipboardContextSnippet() } : nil
-                frequentWords = personalize
-                    ? await TypingHistoryStore.shared.frequentWords() : []
+                frequentWords = [] // cut with the other personalization blocks (see above)
                 let wantsScreenText = Preferences.useScreenshotContext || Preferences.useOCRContext
                 let conv = wantsScreenText && appSurface.isConversational
                 onScreenText = (wantsScreenText && caretScreenRect != nil)
@@ -776,11 +807,29 @@ enum CoreBridge {
             // ("сне,"-style garbage) that live BG typing kept hitting because
             // bursts only ever ran that rung.
             typealias Rung = (temperature: Float, topK: Int?, topP: Float, reprompt: Bool)
+            // First rung is GREEDY (argmax): the same context then always yields
+            // the same ghost, which is where Cotypist's felt stability/precision
+            // comes from — temp-1.0 first tries resampled a DIFFERENT random
+            // continuation on every refresh (live: "side of the road" → "s in
+            // the box on" → "side by side" while typing one sentence), and the
+            // ghost-stability contract then pinned whichever junk landed first.
+            // Regress: greedy keeps EN+BG fully green; only transliterated
+            // Bulgarian (latinica) loses coverage (90% vs 98%) — greedy argmax
+            // over ambiguous Latin-Slavic text collapses to empty — so THAT
+            // context keeps the gemma-native sampled first rung. Retry rungs
+            // stay sampled for recovery diversity when rung 0 gets sanitized.
+            let firstRung: Rung = latinBulgarian
+                ? (1.0, 64, 0.95, false)   // gemma-native (latinica needs it)
+                : (0.0, nil, 1.0, false)   // greedy — deterministic per context
+            // Rung 1 is the plain gemma-native SAMPLED retry (no directive):
+            // when greedy argmax collapses to empty (borderline transliterated
+            // text the latinica detector missed), this recovers exactly the old
+            // first-rung behavior before the reprompt rungs change the prompt.
             let ladder: [Rung] = [
-                (1.0, 64,  0.95, false),  // gemma-native, first try
+                firstRung,
+                (1.0, 64,  0.95, false),  // gemma-native, plain retry
                 (1.0, 64,  0.95, true),   // + must-continue directive
                 (0.8, 64,  0.95, true),   // slightly tighter nucleus
-                (1.0, 64,  0.95, true),   // retry
             ]
             // Burst request (fired mid-typing): only the first rung. It must land
             // inside a typing gap to be showable at all; climbing the ladder there
