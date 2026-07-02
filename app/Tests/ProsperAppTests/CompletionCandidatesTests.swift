@@ -214,15 +214,18 @@ final class CompletionCandidatesTests: XCTestCase {
         XCTAssertFalse(CoreBridge.isLatinScript("как си брат"))
     }
 
-    func testBuildPromptMidWordInjectsCandidates() {
+    func testBuildPromptMidWordInjectsNoHint() {
         let c = CompletionCandidates.derive(before: "website d", lexicon: makeLexicon())
         let prompt = CoreBridge.buildCompletionPrompt(
             before: "website d", after: "", clipboard: nil, candidates: c
         )
-        // Mid-word: a SINGLE target word (not a list — the small model echoes lists).
-        XCTAssertTrue(prompt.contains("starts with \"d\""))
-        XCTAssertTrue(prompt.contains("most likely"))
-        XCTAssertTrue(prompt.contains("Output only the letters that come after"))
+        // No mid-word hint: it changed per keystroke BEFORE the text (KV-cache
+        // thrash = typing lag) and the small model mangled it into garbage
+        // completions. The prompt simply ends mid-word; the model finishes the
+        // word naturally, and the prompt must end exactly at the cursor.
+        XCTAssertFalse(prompt.contains("starts with"))
+        XCTAssertFalse(prompt.contains("most likely"))
+        XCTAssertTrue(prompt.hasSuffix("website d"))
     }
 
     func testBuildPromptBoundaryOmitsCandidateList() {
@@ -446,5 +449,22 @@ final class CompletionCandidatesTests: XCTestCase {
         )
         XCTAssertTrue(prompt.contains("On-screen text near the cursor"))
         XCTAssertFalse(prompt.contains("conversation visible on screen"))
+    }
+
+    func testBuildPromptCapsAfterCursorHead() {
+        // Mid-document typing: the post-caret rest of a long file must not ship
+        // whole — it would blow the token window and behead the system prompt.
+        let longAfter = String(repeating: "later paragraph text ", count: 100) // ~2100 chars
+        let prompt = CoreBridge.buildCompletionPrompt(
+            before: "The fix is ", after: longAfter, clipboard: nil
+        )
+        XCTAssertTrue(prompt.contains("After cursor:"))
+        let afterSection = prompt.components(separatedBy: "After cursor:").last ?? ""
+        XCTAssertLessThanOrEqual(afterSection.count, 420, "after-cursor head not capped: \(afterSection.count) chars")
+        // Short after passes through untouched.
+        let short = CoreBridge.buildCompletionPrompt(
+            before: "The fix is ", after: " and that is all.", clipboard: nil
+        )
+        XCTAssertTrue(short.contains(" and that is all."))
     }
 }

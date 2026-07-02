@@ -101,8 +101,13 @@ enum HeadlessBenchCLI {
         let length = Preferences.completionLength
         let maxTokens = length.maxTokens
         let maxWords = length.maxWords
-        let language = CoreBridge.dominantLanguageName(of: before)
+        let detected = CoreBridge.dominantLanguageName(of: before)
+        // Mirror CoreBridge.complete()'s Bulgarian-Cyrillic pin (short Cyrillic
+        // context detects as nil/Russian and the model completes in Russian).
+        let language = CoreBridge.shouldPinBulgarianCyrillic(before: before, detected: detected)
+            ? "Bulgarian" : detected
         let latinBg = CoreBridge.looksLikeTransliteratedBulgarian(before)
+        let bgCyrillic = language == "Bulgarian" && CoreBridge.isCyrillicScript(before)
         // A/B: PROSPER_MINIMAL=1 strips all language rules / candidate hints / persona
         // to test whether Gemma continues (esp. latinica) MORE naturally when we stop
         // instructing it — the "Cotypist got it first try, same model" hypothesis.
@@ -119,59 +124,60 @@ enum HeadlessBenchCLI {
         }()
         let system: String
         let prompt: String
-        if minimal {
-            system = "Continue the user's text inline, like a phone keyboard. Output ONLY "
-                + "the few words that come next in the SAME language and script — nothing else."
-            prompt = before
-        } else {
-            system = CoreBridge.completionSystemPrompt(
-                custom: "", length: length,
-                language: latinBg ? nil : language, transliteratedBulgarian: latinBg,
-                userLanguages: CoreBridge.osLanguagesList()
-            )
-            let candidates = CompletionCandidates.derive(
-                before: before, after: after, lexicon: Lexicon.shared
-            )
-            prompt = CoreBridge.buildCompletionPrompt(
-                before: before, after: after, clipboard: nil, candidates: candidates,
-                writingSamples: seedSamples
-            )
-        }
+        let nudgedPrompt: String
         let nudge = "IMPORTANT: You must output a continuation — returning "
             + "nothing or an empty answer is not allowed. Even if the text "
             + "already reads as complete, write the next few words the user "
             + "would most plausibly type (up to \(maxWords) words). Do not "
             + "repeat words already in the text. Write in the same language "
             + "as the text\(language.map { " (\($0))" } ?? "").\n\n"
-        // Mirror CoreBridge.complete()'s two-tier, script-aware ladder EXACTLY so the
-        // bench measures the shipping path. Gemma-native temp=1.0/top_k=64/top_p=0.95
-        // bounds every high-temp rung; latinica starts there (skips the temp-0.2
-        // fragment/Cyrillic-drift trap). PROSPER_TEMP0/PROSPER_TOPP0 still override
-        // rung-0 for A/B.
+        if minimal {
+            system = "Continue the user's text inline, like a phone keyboard. Output ONLY "
+                + "the few words that come next in the SAME language and script — nothing else."
+            prompt = before
+            nudgedPrompt = nudge + before
+        } else {
+            system = CoreBridge.completionSystemPrompt(
+                custom: "", length: length,
+                language: latinBg ? nil : language, transliteratedBulgarian: latinBg,
+                userLanguages: CoreBridge.osLanguagesList()
+            )
+            prompt = CoreBridge.buildCompletionPrompt(
+                before: before, after: after, clipboard: nil,
+                writingSamples: seedSamples,
+                reservedSystemChars: system.count
+            )
+            // Reprompt rungs carry the nudge as a `directive` INSIDE the prompt
+            // (shared context prefix, KV-cache-friendly) — same as CoreBridge.
+            nudgedPrompt = CoreBridge.buildCompletionPrompt(
+                before: before, after: after, clipboard: nil,
+                writingSamples: seedSamples,
+                directive: nudge,
+                reservedSystemChars: system.count
+            )
+        }
+        // Mirror CoreBridge.complete()'s unified gemma-native ladder EXACTLY so the
+        // bench measures the shipping path: temp=1.0/top_k=64/top_p=0.95 for ALL
+        // scripts on the first rung (Cotypist's GGUF-embedded sampling), then
+        // directive rungs. PROSPER_TEMP0/PROSPER_TOPP0 still override rung-0 for A/B.
         let env = ProcessInfo.processInfo.environment
         typealias Rung = (temperature: Float, topK: Int?, topP: Float, reprompt: Bool)
-        let baseLadder: [Rung] = [
-            (Float(env["PROSPER_TEMP0"] ?? "") ?? 0.2, nil, Float(env["PROSPER_TOPP0"] ?? "") ?? 0.9, false),
-            (0.6, 64, 0.95, false),
-            (1.0, 64, 0.95, true),
-            (1.0, 64, 0.95, true),
-        ]
-        let latinLadder: [Rung] = [
-            (1.0, 64, 0.95, false),
+        let attempts: [Rung] = [
+            (Float(env["PROSPER_TEMP0"] ?? "") ?? 1.0, 64, Float(env["PROSPER_TOPP0"] ?? "") ?? 0.95, false),
             (1.0, 64, 0.95, true),
             (0.8, 64, 0.95, true),
             (1.0, 64, 0.95, true),
         ]
-        let attempts = latinBg ? latinLadder : baseLadder
         for (temp, topK, topp, reprompt) in attempts {
             do {
                 let raw = try await MLXEngine.shared.generateInlineRouted(
-                    prompt: reprompt ? nudge + prompt : prompt, system: system,
+                    prompt: reprompt ? nudgedPrompt : prompt, system: system,
                     maxTokens: maxTokens, temperature: temp, topP: topp, stop: ["\n"],
                     maxWords: maxWords, topK: topK
                 )
                 if let s = CoreBridge.sanitizeCompletion(raw, before: before, after: after,
-                                                         transliterateCyrillic: latinBg), !s.isEmpty,
+                                                         transliterateCyrillic: latinBg,
+                                                         bulgarianCyrillic: bgCyrillic), !s.isEmpty,
                    !CoreBridge.echoesWritingSample(s, samples: seedSamples) {
                     return (s, language, latinBg)
                 }

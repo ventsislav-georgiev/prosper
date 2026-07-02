@@ -254,9 +254,12 @@ actor LoRATrainer {
             let configuration = ModelConfiguration(id: modelId)
             let downloader = #hubDownloader()
             let loader = #huggingFaceTokenizerLoader()
-            container = try await LLMModelFactory.shared.loadContainer(
-                from: downloader, using: loader, configuration: configuration
-            ) { _ in }
+            // Gated: see MLXComputeGate — never load weights under a live eval.
+            container = try await MLXComputeGate.shared.run {
+                try await LLMModelFactory.shared.loadContainer(
+                    from: downloader, using: loader, configuration: configuration
+                ) { _ in }
+            }
         } catch {
             return .failed(message: "model load: \(error.localizedDescription)")
         }
@@ -268,7 +271,13 @@ actor LoRATrainer {
         let cancelFlag = self.cancelFlag
 
         do {
-            let outcome: TrainResult = try await container.perform(
+            // Gated for the whole training run: LoRATrain.train evals on the GPU
+            // continuously and must never overlap another engine's eval (see
+            // MLXComputeGate). ponytail: this blocks inline completions for the
+            // duration of a training run — acceptable; training is an explicit,
+            // rare user action.
+            let outcome: TrainResult = try await MLXComputeGate.shared.run {
+            try await container.perform(
                 values: TrainArgs(
                     train: trainSet, valid: validSet, cfg: cfg,
                     iterations: iterations, weightsURL: weightsURL
@@ -319,6 +328,7 @@ actor LoRATrainer {
                     finalTrainLoss: lastTrainLoss,
                     finalValidLoss: lastValidLoss
                 )
+            }
             }
 
             // Write adapter_config.json beside the weights so the serve-side

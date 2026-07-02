@@ -182,7 +182,8 @@ final class CompletionPersonaTests: XCTestCase {
             CoreBridge.ContextPiece(name: "clipboard", length: 500, order: 2),
             CoreBridge.ContextPiece(name: "frequent", length: 100, order: 1),
         ]
-        // cap 100 tokens ⇒ 400 total chars; tail 400 ⇒ remaining 0.
+        // cap 100 tokens − 24 template reserve ⇒ 76 user tokens ⇒ 304 total
+        // chars; tail (400 ≥ 304) consumes it all ⇒ remaining 0.
         let budget = CoreBridge.contextCharBudgets(
             recentTextChars: 400,
             pieces: pieces,
@@ -200,13 +201,14 @@ final class CompletionPersonaTests: XCTestCase {
             CoreBridge.ContextPiece(name: "clipboard", length: 500, order: 2),
             CoreBridge.ContextPiece(name: "frequent", length: 40, order: 1),
         ]
-        // cap 100 tokens ⇒ 400 total chars; tail 320 (== floor) ⇒ remaining 80.
-        // best-keep first: frequent (order 1) takes its full 40, leaving 40 for
-        // clipboard (order 2), which is the one that gets truncated.
+        // cap 124 tokens − 24 template reserve ⇒ 100 user tokens ⇒ 400 total
+        // chars; tail 320 (== floor) ⇒ remaining 80. best-keep first: frequent
+        // (order 1) takes its full 40, leaving 40 for clipboard (order 2),
+        // which is the one that gets truncated.
         let budget = CoreBridge.contextCharBudgets(
             recentTextChars: 320,
             pieces: pieces,
-            maxPromptTokens: 100,
+            maxPromptTokens: 124,
             tailFloorChars: 320
         )
         XCTAssertEqual(budget["frequent"], 40)

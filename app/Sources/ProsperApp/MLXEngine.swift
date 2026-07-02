@@ -51,6 +51,57 @@ final class MLXErrorCapture: @unchecked Sendable {
     var message: String? { lock.withLock { first } }
 }
 
+/// Process-wide FIFO gate serializing every MLX GPU compute section — generation,
+/// model/adapter load — across ALL `MLXEngine` instances and containers. MLX's
+/// C++ `CompilerCache` is a process-global `unordered_map` with no per-access
+/// mutex; two concurrent evals (inline engine vs agent engine, LM vs VLM
+/// container) racing a compile corrupt its buckets and crash with
+/// EXC_BAD_ACCESS in `CompilerCache::find` (7 identical field crashes,
+/// 2026-07-02). The `MLXEngine` actor only serializes work on the SAME
+/// instance/container; this gate makes one-in-flight-eval true process-wide.
+final class MLXComputeGate: @unchecked Sendable {
+    static let shared = MLXComputeGate()
+    private let lock = NSLock()
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquire() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if busy {
+                waiters.append(cont)
+                lock.unlock()
+            } else {
+                busy = true
+                lock.unlock()
+                cont.resume()
+            }
+        }
+    }
+
+    private func release() {
+        lock.lock()
+        if waiters.isEmpty {
+            busy = false
+            lock.unlock()
+        } else {
+            let next = waiters.removeFirst()
+            lock.unlock()
+            next.resume()
+        }
+    }
+
+    /// Run `body` holding the gate. NOT reentrant — never call `run` from inside
+    /// `body` (audited: loads happen before generation guards, never within).
+    /// Waiting is not cancellation-aware; a cancelled waiter still acquires
+    /// briefly and exits via its own `Task.isCancelled` fast-out.
+    func run<T>(_ body: () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await body()
+    }
+}
+
 /// Run `body` with a scoped MLX error handler so C++-level MLX errors (shape
 /// mismatches inside scaled_dot_product_attention, impossible reshapes, …)
 /// surface as a thrown `MLXEngineError.mlxRuntime` instead of the library
@@ -67,17 +118,21 @@ final class MLXErrorCapture: @unchecked Sendable {
 private func withMLXErrorGuard<R>(
     _ label: String, _ body: (MLXErrorCapture) async throws -> R
 ) async throws -> R {
-    let capture = MLXErrorCapture()
-    let result = try await MLX.withErrorHandler(
-        { message in
-            capture.record(message)
-            NSLog("prosper mlx: runtime error in %@: %@", label, message)
-        },
-        { try await body(capture) })
-    if let message = capture.message {
-        throw MLXEngineError.mlxRuntime("\(label): \(message)")
+    // Every MLX eval funnels through this guard, so it doubles as the single
+    // choke point for the process-wide compute gate (see `MLXComputeGate`).
+    try await MLXComputeGate.shared.run {
+        let capture = MLXErrorCapture()
+        let result = try await MLX.withErrorHandler(
+            { message in
+                capture.record(message)
+                NSLog("prosper mlx: runtime error in %@: %@", label, message)
+            },
+            { try await body(capture) })
+        if let message = capture.message {
+            throw MLXEngineError.mlxRuntime("\(label): \(message)")
+        }
+        return result
     }
-    return result
 }
 
 /// Thread-safe holder for the live download `Progress`. The Hugging Face Hub
@@ -356,11 +411,18 @@ actor MLXEngine {
             // AutoTokenizer (backed by swift-transformers).
             let downloader = #hubDownloader()
             let loader = #huggingFaceTokenizerLoader()
-            return try await LLMModelFactory.shared.loadContainer(
-                from: downloader,
-                using: loader,
-                configuration: configuration
-            ) { p in box.set(p) }
+            // Gated: weight materialization is GPU compute and must never overlap
+            // another engine's eval (see MLXComputeGate — the crash window here was
+            // the agent model loading while an inline generation still decoded).
+            // ponytail: gate also spans a first-time download; split download from
+            // load if that stall ever matters.
+            return try await MLXComputeGate.shared.run {
+                try await LLMModelFactory.shared.loadContainer(
+                    from: downloader,
+                    using: loader,
+                    configuration: configuration
+                ) { p in box.set(p) }
+            }
         }
         loadTask = task
         let poll = Self.startProgressPoll(box, modelId: id, fallback: "Downloading model\u{2026}", progress)
@@ -445,11 +507,14 @@ actor MLXEngine {
             let configuration = ModelConfiguration(id: id)
             let downloader = #hubDownloader()
             let loader = #huggingFaceTokenizerLoader()
-            return try await LLMModelFactory.shared.loadContainer(
-                from: downloader,
-                using: loader,
-                configuration: configuration
-            ) { p in box.set(p) }
+            // Gated: see MLXComputeGate — never load weights under a live eval.
+            return try await MLXComputeGate.shared.run {
+                try await LLMModelFactory.shared.loadContainer(
+                    from: downloader,
+                    using: loader,
+                    configuration: configuration
+                ) { p in box.set(p) }
+            }
         }
         draftLoadTask = task
         let poll = Self.startProgressPoll(box, modelId: id, fallback: "Downloading draft model\u{2026}", progress)
@@ -1007,9 +1072,24 @@ actor MLXEngine {
             messages.append(.user(prompt))
             let prepared = try await context.processor.prepare(input: UserInput(chat: messages))
             var promptTokens = prepared.text.tokens.asArray(Int32.self).map(Int.init)
-            // Prompt cap (same as `generate`): keep the most recent tokens for speed.
+            // Prompt cap: keep the most recent tokens (window/trim constraint, see
+            // `maxPromptTokens`). Cut from the FRONT in 128-token blocks rather
+            // than a per-token `suffix(maxPrompt)`: a sliding suffix shifts the
+            // window start on EVERY keystroke, so no two consecutive prompts share
+            // a prefix and the KV cache re-prefills from scratch each key (the
+            // live typing lag). A block-quantized cut point stays fixed for ~128
+            // tokens of typing, so the incremental-prefill path keeps working;
+            // crossing a block boundary costs one full re-prefill.
             if promptTokens.count > maxPrompt {
-                promptTokens = Array(promptTokens.suffix(maxPrompt))
+                let overflow = promptTokens.count - maxPrompt
+                let cut = ((overflow / 128) + 1) * 128
+                promptTokens = Array(promptTokens.dropFirst(min(cut, promptTokens.count - 1)))
+                // This backstop cuts the templated head — i.e. the SYSTEM prompt —
+                // so it must never fire: CoreBridge's char budget is sized to keep
+                // the whole prompt under `maxPromptTokens`. Firing means the
+                // chars/token density estimate missed for this script; shout so
+                // bench logs and live traces catch it instead of silent garbage.
+                NSLog("prosper inline: prompt overflow backstop fired (cut %d of %d tokens) — char budget density miss", cut, overflow + maxPrompt)
             }
             guard !promptTokens.isEmpty else { return "" }
             if Task.isCancelled { return "" }
@@ -1310,14 +1390,17 @@ actor MLXEngine {
             NSLog("prosper-lora: no adapter to serve at %@", dir.path)
             return
         }
-        let loaded: Bool = await container.perform { context in
-            do {
-                let adapter = try LoRAContainer.from(directory: dir)
-                try context.model.load(adapter: adapter)
-                return true
-            } catch {
-                NSLog("prosper-lora: adapter load failed: %@", "\(error)")
-                return false
+        // Gated: adapter load rewrites live weights — never under a concurrent eval.
+        let loaded: Bool = await MLXComputeGate.shared.run {
+            await container.perform { context in
+                do {
+                    let adapter = try LoRAContainer.from(directory: dir)
+                    try context.model.load(adapter: adapter)
+                    return true
+                } catch {
+                    NSLog("prosper-lora: adapter load failed: %@", "\(error)")
+                    return false
+                }
             }
         }
         if loaded {
@@ -1337,9 +1420,11 @@ actor MLXEngine {
             isAdapterLoaded = false
             return
         }
-        await container.perform { context in
-            if let adapter = try? LoRAContainer.from(directory: dir) {
-                context.model.unload(adapter: adapter)
+        await MLXComputeGate.shared.run {
+            await container.perform { context in
+                if let adapter = try? LoRAContainer.from(directory: dir) {
+                    context.model.unload(adapter: adapter)
+                }
             }
         }
         isAdapterLoaded = false
@@ -1378,11 +1463,14 @@ actor MLXEngine {
             let configuration = ModelConfiguration(id: id)
             let downloader = #hubDownloader()
             let loader = #huggingFaceTokenizerLoader()
-            return try await VLMModelFactory.shared.loadContainer(
-                from: downloader,
-                using: loader,
-                configuration: configuration
-            ) { p in box.set(p) }
+            // Gated: see MLXComputeGate — never load weights under a live eval.
+            return try await MLXComputeGate.shared.run {
+                try await VLMModelFactory.shared.loadContainer(
+                    from: downloader,
+                    using: loader,
+                    configuration: configuration
+                ) { p in box.set(p) }
+            }
         }
         vlmLoadTask = task
         let poll = Self.startProgressPoll(box, modelId: id, fallback: "Downloading vision model\u{2026}", progress)

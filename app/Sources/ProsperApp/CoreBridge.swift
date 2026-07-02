@@ -570,7 +570,13 @@ enum CoreBridge {
         // Pin the completion language to the language the user is typing in —
         // detection is on-device and stable while typing the same text, so the
         // system prompt (KV-cache prefix) only re-prefills on a genuine switch.
-        let language = dominantLanguageName(of: before)
+        let detectedLanguage = dominantLanguageName(of: before)
+        // Cyrillic mirror of the shlyokavitsa redirect below: on short Cyrillic
+        // context detection is nil (or "Russian" for shared words) and the model
+        // completes in Russian. If the OS languages say the user writes Bulgarian
+        // (and not Russian), pin Bulgarian from the first keystroke.
+        let language = Self.shouldPinBulgarianCyrillic(before: before, detected: detectedLanguage)
+            ? "Bulgarian" : detectedLanguage
         // Bulgarian typed in Latin letters ("shlyokavitsa") is read by the
         // recognizer as another Latin-script Slavic language (Croatian, Serbian,
         // Czech…) — and the model then happily continues in THAT language. When the
@@ -584,7 +590,16 @@ enum CoreBridge {
             length: length, language: latinBulgarian ? nil : language,
             transliteratedBulgarian: latinBulgarian, userLanguages: Self.osLanguagesList()
         )
-        let clipboard = Preferences.useClipboardContext ? clipboardContextSnippet() : nil
+        // Burst requests (fired on the keystroke, mid-typing) get a LIGHT prompt:
+        // no clipboard, no frequent-words hint, no on-screen OCR block. Those
+        // blocks sit EARLY in the prompt and their bytes churn while typing (the
+        // OCR cache refreshes, the clipboard changes) — every churn invalidates
+        // the whole KV prefix, turning the ~150ms warm-cache keystroke path into
+        // a 400–1200ms full re-prefill (measured live; Cotypist stays 125–225ms
+        // on a tiny stable prompt). They are also the latch targets the model
+        // parrots on short context. The pause-snap full ladder (burst == false)
+        // keeps the rich context where its one-off prefill cost is invisible.
+        let clipboard = (!burst && Preferences.useClipboardContext) ? clipboardContextSnippet() : nil
         let personalize = Preferences.collectTypingHistory && Preferences.personalizeWordChoice > 0
         // On-screen text context: recognize text near the caret (Vision/ANE) and
         // feed it to the *text* model — recovers context in Electron/Chromium apps
@@ -594,25 +609,17 @@ enum CoreBridge {
         // dead. OCR is captured through `ScreenContextCache` (throttled + cached),
         // so the hot path never blocks on a screenshot. Requires Screen Recording
         // permission; off by default.
-        let wantsScreenText = Preferences.useScreenshotContext || Preferences.useOCRContext
+        let wantsScreenText = !burst
+            && (Preferences.useScreenshotContext || Preferences.useOCRContext)
 
         return Task {
-            let frequentWords = personalize ? await TypingHistoryStore.shared.frequentWords() : []
+            let frequentWords = (personalize && !burst)
+                ? await TypingHistoryStore.shared.frequentWords() : []
             // Cotypist-style previousUserInputs: a few short examples of the user's own
             // recent writing (this app + across apps + longest), for voice/language
             // grounding. Same privacy gate as frequentWords.
             let writingSamples = personalize
                 ? await TypingHistoryStore.shared.writingSamples(bundleId: bundleId) : []
-            // Non-LLM candidates: bundled-lexicon prefix/bigram/typo prediction +
-            // the OS lexicon, fed to the model as hints (it always runs). This is
-            // what keeps "website d" continuing as "ownload" instead of the model
-            // regurgitating a word already on screen. See CompletionCandidates.
-            let fragment = CompletionCandidates.trailingWord(before)
-            let osCompletions = fragment.isEmpty ? [] : await osLexiconCompletions(for: fragment)
-            let candidates = CompletionCandidates.derive(
-                before: before, after: after,
-                lexicon: Lexicon.shared, osCompletions: osCompletions
-            )
             // App context: name + writing surface (chat/email/code/…) so the model
             // matches the tone and length the situation calls for. For browsers and
             // Electron apps the active web host is the most specific context (e.g.
@@ -650,10 +657,10 @@ enum CoreBridge {
                 clipboard: clipboard, frequentWords: frequentWords,
                 hasImage: false, onScreenText: onScreenText,
                 onScreenIsConversation: onScreenIsConversation && onScreenText != nil,
-                candidates: candidates,
                 appName: appName, appSurface: appSurface, siteHost: siteHost,
                 fieldLabel: fieldLabel, windowTitle: windowTitle,
-                writingSamples: writingSamples
+                writingSamples: writingSamples,
+                reservedSystemChars: system.count
             )
             // Quality tuning: low temperature for determinism, nucleus sampling,
             // hard stop at the first newline so a completion stays on one line, and
@@ -693,37 +700,46 @@ enum CoreBridge {
                 + "would most plausibly type (up to \(maxWords) words). Do not "
                 + "repeat words already in the text. Write in the same language "
                 + "as the text\(language.map { " (\($0))" } ?? "").\n\n"
+            // Reprompt rungs place the nudge as a `directive` INSIDE the prompt,
+            // right before the final instruction line — the context prefix stays
+            // byte-identical, so the KV cache re-prefills only the short
+            // instruction+tail instead of the whole prompt (the old `nudge + prompt`
+            // prepend invalidated everything).
+            let nudgedPrompt = buildCompletionPrompt(
+                before: before, after: after,
+                clipboard: clipboard, frequentWords: frequentWords,
+                hasImage: false, onScreenText: onScreenText,
+                onScreenIsConversation: onScreenIsConversation && onScreenText != nil,
+                appName: appName, appSurface: appSurface, siteHost: siteHost,
+                fieldLabel: fieldLabel, windowTitle: windowTitle,
+                writingSamples: writingSamples,
+                directive: nudge,
+                reservedSystemChars: system.count
+            )
             // Ladder rungs carry per-rung sampling. Gemma 4's own GGUF recommends
             // temp=1.0 / top_k=64 / top_p=0.95; that bounded-nucleus high-temp is what
             // keeps completions COHERENT (esp. low-resource scripts) instead of the
             // fragment/echo collapse a sharp temp=0.2 distribution produces. So every
             // high-temp rung is capped by top_k=64/top_p=0.95 rather than left unbounded.
             //
-            // EN / Cyrillic-BG / generic: keep the proven deterministic first rung
-            //   (0.2, cached, fast) for high-confidence short completions, then climb
-            //   into the bounded temp-1.0 region only when it yields nothing.
-            // Latinica (shlyokavitsa): START at temp-1.0/top_k=64 — at temp 0.2 the
-            //   model drifts to Cyrillic and emits fragments; the gemma-native nucleus
-            //   produces natural, script-consistent latinica on the first try.
+            // ALL scripts start at gemma-native sampling — this is what Cotypist
+            // runs for everything (it is the sampling embedded in their GGUF), and
+            // it is what produces natural first-try completions in Bulgarian too;
+            // the old deterministic 0.2 first rung was the fragment/echo regime
+            // ("сне,"-style garbage) that live BG typing kept hitting because
+            // bursts only ever ran that rung.
             typealias Rung = (temperature: Float, topK: Int?, topP: Float, reprompt: Bool)
-            let baseLadder: [Rung] = [
-                (0.2, nil, 0.9,  false),  // deterministic, cached prompt prefix
-                (0.6, 64,  0.95, false),  // bounded resample
-                (1.0, 64,  0.95, true),   // gemma-native + must-continue directive
-                (1.0, 64,  0.95, true),   // retry at the recommended sampling
-            ]
-            let latinLadder: [Rung] = [
-                (1.0, 64,  0.95, false),  // gemma-native shlyokavitsa, first try
-                (1.0, 64,  0.95, true),   // + directive
+            let ladder: [Rung] = [
+                (1.0, 64,  0.95, false),  // gemma-native, first try
+                (1.0, 64,  0.95, true),   // + must-continue directive
                 (0.8, 64,  0.95, true),   // slightly tighter nucleus
                 (1.0, 64,  0.95, true),   // retry
             ]
-            // Burst request (fired mid-typing by the maxWait throttle): only the
-            // first rung. It must land inside a typing gap to be showable at all;
-            // climbing the ladder there can't finish in time and just keeps the
-            // GPU saturated while the user types (felt as system-wide input lag).
-            // The pause-fire (trailing debounce) still runs the full ladder.
-            let ladder = latinBulgarian ? latinLadder : baseLadder
+            // Burst request (fired mid-typing): only the first rung. It must land
+            // inside a typing gap to be showable at all; climbing the ladder there
+            // can't finish in time and just keeps the GPU saturated while the user
+            // types (felt as system-wide input lag). The pause-fire (trailing
+            // debounce) still runs the full ladder.
             let attempts = burst ? Array(ladder.prefix(1)) : ladder
             var result: String?
             var rungsRun = 0
@@ -741,23 +757,40 @@ enum CoreBridge {
                     // enabled+draft-loaded, else this same single-model
                     // `generateInline` — so this call site is unchanged.
                     let raw = try await MLXEngine.shared.generateInlineRouted(
-                        prompt: attempt.reprompt ? nudge + prompt : prompt,
+                        prompt: attempt.reprompt ? nudgedPrompt : prompt,
                         system: system,
                         maxTokens: maxTokens, temperature: attempt.temperature,
                         topP: attempt.topP, stop: ["\n"], maxWords: maxWords,
                         topK: attempt.topK
                     )
-                    benchLog(system: system, prompt: attempt.reprompt ? nudge + prompt : prompt,
+                    benchLog(system: system, prompt: attempt.reprompt ? nudgedPrompt : prompt,
                              raw: raw, temp: attempt.temperature)
-                    if let suggestion = sanitizeCompletion(raw, before: before, after: after,
-                                                           transliterateCyrillic: latinBulgarian),
+                    if let suggestion = sanitizeCompletion(
+                        raw, before: before, after: after,
+                        transliterateCyrillic: latinBulgarian,
+                        bulgarianCyrillic: language == "Bulgarian"
+                            && Self.isCyrillicScript(before)),
                        !suggestion.isEmpty,
                        // Small quantized models latch onto few-shot example lines and
                        // return them VERBATIM at low temperature (same failure that
                        // killed candidate word-lists). Reject any suggestion that is
                        // just a copy of a writing sample; the next rung's higher
                        // temperature escapes the latch.
-                       !echoesWritingSample(suggestion, samples: writingSamples) {
+                       !echoesWritingSample(suggestion, samples: writingSamples),
+                       // The frequent-words hint line gets parroted the same way on
+                       // very short context ("side, spot, usual, oncall, …" offered
+                       // as a ghost for "к"). Same normalized-containment check
+                       // against the joined hint list.
+                       !echoesWritingSample(
+                           suggestion,
+                           samples: frequentWords.isEmpty
+                               ? [] : [frequentWords.joined(separator: ", ")]),
+                       // Same latch, other context block: with conversation OCR in
+                       // the prompt the model sometimes "continues" by quoting a
+                       // message visible on screen (live BG failure: suggested
+                       // "1. чекиран на твое име" — verbatim from the OCR'd chat).
+                       // A real continuation is new text, never a screen line.
+                       !echoesScreenContext(suggestion, screen: onScreenText) {
                         result = suggestion
                         break
                     }
@@ -804,6 +837,22 @@ enum CoreBridge {
         return instructionEchoMarkers.contains { $0.hasPrefix(n) || n.hasPrefix($0) }
     }
 
+    /// True when the suggestion is a verbatim copy of text visible on screen (the
+    /// conversation-OCR block), not a continuation. Normalized substring match like
+    /// `echoesWritingSample`, gated at ≥12 letters/digits so short natural overlaps
+    /// (a name, "не знам") are never rejected — only whole quoted lines are.
+    /// ponytail: normalization drops spaces, so a match may span an OCR line break;
+    /// a ≥12-char cross-line coincidence is unlikely enough to ignore.
+    static func echoesScreenContext(_ suggestion: String, screen: String?) -> Bool {
+        guard let screen, !screen.isEmpty else { return false }
+        let norm = { (s: String) -> String in
+            s.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        let n = norm(suggestion)
+        guard n.count >= 12 else { return false }
+        return norm(screen).contains(n)
+    }
+
     /// Bulgarian Cyrillic → Latin (shlyokavitsa) transliteration, matching the
     /// convention the completion system prompt teaches (щ→sht, я→q, ъ→a, ж→zh,
     /// ч→ch, ш→sh, ю→yu; NO č/š/ž). Multi-char maps first. Non-Cyrillic passes
@@ -843,7 +892,8 @@ enum CoreBridge {
     /// - collapses runaway whitespace and trims trailing blank lines
     static func sanitizeCompletion(
         _ raw: String, before: String, after: String = "",
-        transliterateCyrillic: Bool = false
+        transliterateCyrillic: Bool = false,
+        bulgarianCyrillic: Bool = false
     ) -> String? {
         var s = raw
 
@@ -869,6 +919,24 @@ enum CoreBridge {
                 s = String(s.dropFirst().dropLast())
             }
         }
+
+        // Markdown/junk markers: a chat-tuned model occasionally emits emphasis
+        // syntax ("**tato") — never wanted in plain-text ghost text. Trim marker
+        // runs off the edges (the words are usually fine); reject a completion
+        // still carrying one mid-string as real markdown and let the retry rung
+        // rewrite it.
+        // ponytail: also rejects legit code like `f(**kwargs)` — rare in inline
+        // typing; whitelist code surfaces if it ever matters.
+        let junkMarkers = ["**", "__", "~~", "||", ">>", "<<"]
+        var trimmedJunk = true
+        while trimmedJunk {
+            trimmedJunk = false
+            for m in junkMarkers {
+                if s.hasPrefix(m) { s = String(s.dropFirst(m.count)); trimmedJunk = true }
+                if s.hasSuffix(m) { s = String(s.dropLast(m.count)); trimmedJunk = true }
+            }
+        }
+        if junkMarkers.contains(where: { s.contains($0) }) { return nil }
 
         // Prompt-scaffold guard: with near-empty context (a single word in a web
         // form) small instruct models sometimes parrot the INSTRUCTION instead of
@@ -925,6 +993,35 @@ enum CoreBridge {
         // noise that `mismatchedScript` can't see because those blocks aren't counted.
         if Self.containsForeignScript(s, before: before) { return nil }
 
+        // Mid-word capital guard: continuing an unfinished lowercase word with an
+        // uppercase letter glued on ("иска" + "Мнение…") is never a continuation
+        // of that word — it is the model starting a fresh sentence mid-word
+        // (observed live). A new-word suggestion legitimately starts with its
+        // separating space, so only the glued capital is rejected.
+        // ponytail: also fires on camelCase code identifiers ("my" + "Name");
+        // acceptable — prose is the product, revisit if code fields complain.
+        if let lastBefore = before.last, lastBefore.isLowercase,
+           let first = s.first, first.isUppercase {
+            return nil
+        }
+
+        // Mixed-script word guard: a single word blending Cyrillic and Latin
+        // letters ("овrição") is always high-temperature garbage — a legitimate
+        // loanword is a PURE-Latin token ("купих си iPhone"). `mismatchedScript`
+        // can't catch it: such words are shorter than the ≥8-letter drift
+        // threshold that protects proper nouns.
+        if Self.mixesScriptsWithinWord(s) { return nil }
+
+        // Russian-marker guard: the letters ы/э/ё do not exist in Bulgarian. When
+        // the user is writing Bulgarian Cyrillic (language pin above), a suggestion
+        // containing one is the model drifting into Russian ("запустить тестовый…"
+        // observed live on short context) — mismatchedScript can't see it (same
+        // script), so reject on the marker letters that make it unambiguous.
+        if bulgarianCyrillic,
+           s.unicodeScalars.contains(where: { "ыэёЫЭЁ".unicodeScalars.contains($0) }) {
+            return nil
+        }
+
         // Regurgitation guard #3: interior echo. The leading-span guard above only
         // inspects the completion's HEAD; a suggestion can start fresh and then
         // lift a phrase verbatim from earlier text ("…thanks for the report. I
@@ -944,6 +1041,12 @@ enum CoreBridge {
         // such an echo this leaves it empty and the final emptiness check rejects.
         if !after.isEmpty {
             s = Self.dropTrailingOverlap(s, afterHead: String(after.prefix(400)))
+            // Near-echo net: the exact-overlap trim is defeated by a one-word
+            // variant ("…the deployment" vs after's "…the deploy."), leaving a
+            // suggestion that only paraphrases what already sits after the
+            // caret. First 3 words matching the after-head word-for-word means
+            // it adds nothing at the gap — reject so the ladder retries.
+            if Self.echoesAfterHead(s, afterHead: String(after.prefix(400))) { return nil }
         }
 
         // Trim trailing blank lines, keep at most a single trailing newline run.
@@ -1196,6 +1299,39 @@ enum CoreBridge {
         return isSlavicLatinLanguage(name)
     }
 
+    /// True when the recent text is dominantly Cyrillic-script. Threshold is ONE
+    /// letter (not isLatinScript's 3): the Bulgarian pin below must hold from the
+    /// very first keystroke — that is exactly when the recognizer is blind and the
+    /// model free-falls into Russian (the dominant Cyrillic language in training).
+    static func isCyrillicScript(_ text: String) -> Bool {
+        var cyr = 0, other = 0
+        for scalar in text.suffix(300).unicodeScalars where scalar.properties.isAlphabetic {
+            if (0x0400...0x052F).contains(scalar.value) { cyr += 1 } else { other += 1 }
+        }
+        let total = cyr + other
+        return total >= 1 && Double(cyr) / Double(total) >= 0.7
+    }
+
+    /// Detected-language names the recognizer confuses Bulgarian Cyrillic with.
+    private static let cyrillicConfusables: Set<String> = [
+        "Russian", "Macedonian", "Ukrainian", "Serbian", "Belarusian",
+    ]
+
+    /// True when Cyrillic text should be pinned to Bulgarian despite the detector:
+    /// the user's OS languages include Bulgarian (and NOT Russian), the text is
+    /// Cyrillic, and detection is absent or a known Cyrillic confusable. On 1–3
+    /// keystrokes of context the recognizer returns nil (or "Russian" for words
+    /// both languages share, "как ти") and the unpinned model completes in Russian
+    /// ("запустить тестовый сценарий") — observed live. The pin is soft ("trust
+    /// the text itself over this guess"), so a genuinely-Russian paste still wins.
+    static func shouldPinBulgarianCyrillic(before: String, detected: String?) -> Bool {
+        guard isCyrillicScript(before) else { return false }
+        let langs = osLanguagesList()
+        guard langs.contains("Bulgarian"), !langs.contains("Russian") else { return false }
+        guard let detected else { return true }
+        return cyrillicConfusables.contains(detected)
+    }
+
     /// True when the recent text is dominantly Latin-script (≥3 letters, ≥70%).
     static func isLatinScript(_ text: String) -> Bool {
         var lat = 0, other = 0
@@ -1246,6 +1382,27 @@ enum CoreBridge {
         return beforeScript.script != sugScript.script
     }
 
+    /// True when any single letter-run mixes two scripts (≥2 letters of each) —
+    /// always model garbage ("овrição", "могամ"), never a loanword: loanwords are
+    /// pure-Latin tokens, and hyphenated compounds ("IT-специалист") split into
+    /// separate pure runs at the hyphen. Bucket-based so it also catches mixes
+    /// `containsForeignScript` misses when the foreign run is under its ≥3-letter
+    /// threshold (observed live: "могամ" — 2 Armenian letters inside a BG word).
+    static func mixesScriptsWithinWord(_ s: String) -> Bool {
+        var counts: [String: Int] = [:]
+        for scalar in s.unicodeScalars {
+            guard let bucket = scriptBucket(scalar) else {
+                counts.removeAll(keepingCapacity: true)
+                continue
+            }
+            counts[bucket, default: 0] += 1
+            if counts.count >= 2, counts.values.filter({ $0 >= 2 }).count >= 2 {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Classify a scalar into a coarse script bucket, or nil if it is not a letter.
     /// Unlisted alphabetic blocks (Devanagari, Thai, …) fall into "other" — a small
     /// quantized model at high temperature occasionally emits a burst of these as
@@ -1292,21 +1449,43 @@ enum CoreBridge {
     /// unchanged when there is no overlap.
     static func dropTrailingOverlap(_ s: String, afterHead: String) -> String {
         let sChars = Array(s)
-        let headChars = Array(afterHead)
-        var overlap = min(headChars.count, sChars.count)
-        while overlap > 0 {
-            if Array(sChars.suffix(overlap)) == Array(headChars.prefix(overlap)) {
-                // Only cut at a word boundary: the whole suggestion, or the cut
-                // point touches whitespace. A bare shared letter ("dog" vs after
-                // "great") must NOT shave characters off the final word.
-                let boundaryOK = overlap == sChars.count
-                    || sChars[sChars.count - overlap - 1].isWhitespace
-                    || sChars[sChars.count - overlap].isWhitespace
-                if boundaryOK { return String(sChars.dropLast(overlap)) }
+        // Match against the head as-is AND with its leading whitespace dropped:
+        // `after` usually starts with the separator (" was caused…"), so a
+        // suggestion echoing it verbatim ("was caused…") never aligns with the
+        // raw head — the regress fill-gap case shipped the whole after-text as
+        // the "completion" because of exactly this one-space offset.
+        let heads = [Array(afterHead), Array(afterHead.drop(while: { $0.isWhitespace }))]
+        for headChars in heads {
+            var overlap = min(headChars.count, sChars.count)
+            while overlap > 0 {
+                if Array(sChars.suffix(overlap)) == Array(headChars.prefix(overlap)) {
+                    // Only cut at a word boundary: the whole suggestion, or the cut
+                    // point touches whitespace. A bare shared letter ("dog" vs after
+                    // "great") must NOT shave characters off the final word.
+                    let boundaryOK = overlap == sChars.count
+                        || sChars[sChars.count - overlap - 1].isWhitespace
+                        || sChars[sChars.count - overlap].isWhitespace
+                    if boundaryOK { return String(sChars.dropLast(overlap)) }
+                }
+                overlap -= 1
             }
-            overlap -= 1
         }
         return s
+    }
+
+    /// True when the suggestion's first 3+ words duplicate the after-head's first
+    /// words (word-normalized, case/punctuation-insensitive) — a near-echo of the
+    /// text after the caret that the exact-overlap trim can't catch.
+    static func echoesAfterHead(_ s: String, afterHead: String) -> Bool {
+        func words(_ t: String) -> [String] {
+            t.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+        }
+        let sw = words(s), aw = words(afterHead)
+        let n = min(3, sw.count)
+        guard n >= 3, aw.count >= n else { return false }
+        return Array(sw.prefix(n)) == Array(aw.prefix(n))
     }
 
     // MARK: generate
@@ -1603,15 +1782,30 @@ enum CoreBridge {
         recentTextChars: Int,
         pieces: [ContextPiece],
         maxPromptTokens: Int = maxPromptTokensMirror,
-        tailFloorChars: Int = 320
+        tailFloorChars: Int = 320,
+        reservedSystemChars: Int = 0,
+        cyrillicTail: Bool = false
     ) -> [String: Int] {
-        let totalChars = max(0, maxPromptTokens * charsPerToken)
+        // Honest window math. The 480-token cap covers system prompt + chat
+        // template + user prompt TOGETHER; budgeting the user prompt as if it
+        // owned the whole window overflowed it live, and the engine's front-cut
+        // then beheaded the system prompt — the model lost its instructions and
+        // hallucinated. Subtract the system share (English, ~4 chars/token) and
+        // template overhead first, and convert with a script-honest ratio:
+        // Cyrillic runs ~2 chars/token, half the English density.
+        let templateTokens = 24
+        let systemTokens = reservedSystemChars / charsPerToken
+        let userTokens = max(0, maxPromptTokens - systemTokens - templateTokens)
+        let perToken = cyrillicTail ? 2 : charsPerToken
+        let totalChars = max(0, userTokens * perToken)
         // Reserve the tail first: at least the floor, but never more than the whole
         // budget. The tail is allowed to consume everything if it is long enough.
         let tailReserved = min(totalChars, max(tailFloorChars, min(recentTextChars, totalChars)))
         var remaining = max(0, totalChars - tailReserved)
 
-        var result: [String: Int] = [:]
+        // The tail reservation is now ENFORCED by the caller (the tail used to be
+        // reserved-but-unclipped, so a long document blew the window regardless).
+        var result: [String: Int] = ["tail": tailReserved]
         // Best-keep first (lowest cut order): these get fed before the easy-to-cut
         // pieces, so a tie on budget exhaustion starves clipboard/OCR last-fed.
         for piece in pieces.sorted(by: { $0.order < $1.order }) {
@@ -1644,7 +1838,9 @@ enum CoreBridge {
         appName: String? = nil, appSurface: AppProfile.Surface? = nil,
         siteHost: String? = nil,
         fieldLabel: String? = nil, windowTitle: String? = nil,
-        writingSamples: [String] = []
+        writingSamples: [String] = [],
+        directive: String? = nil,
+        reservedSystemChars: Int = 0
     ) -> String {
         var ctx = ""
         // Situational context: where the user is typing (app, and the web site if
@@ -1693,7 +1889,21 @@ enum CoreBridge {
         let samplesJoined = scriptMatchedSamples.isEmpty
             ? ""
             : scriptMatchedSamples.map { "- \($0)" }.joined(separator: "\n")
-        let tailChars = before.count + after.count
+        // The after-cursor side gets a fixed HEAD cap: mid-document typing in a
+        // long file would otherwise ship the entire rest of the document and blow
+        // the token window (the same beheading failure the before-tail cut fixes).
+        // 400 chars matches dropTrailingOverlap's window — the model only needs
+        // enough to make the gap read naturally. The cap point never moves while
+        // typing at the caret (insertions land in `before`), so it is KV-stable.
+        let afterHead = after.count > 400 ? String(after.prefix(400)) : after
+        let tailChars = before.count + afterHead.count
+        // Script-honest budgeting: Cyrillic tokenizes ~2 chars/token vs ~4 for
+        // Latin, so a char budget sized for English overflows the token window
+        // on Bulgarian text.
+        let recentTail = before.suffix(300)
+        let cyrLetters = recentTail.unicodeScalars.filter { (0x0400...0x04FF).contains($0.value) }.count
+        let allLetters = max(1, recentTail.unicodeScalars.filter { $0.properties.isAlphabetic }.count)
+        let cyrillicTail = Double(cyrLetters) / Double(allLetters) > 0.3
         let budget = contextCharBudgets(
             recentTextChars: tailChars,
             pieces: [
@@ -1701,8 +1911,29 @@ enum CoreBridge {
                 ContextPiece(name: "clipboard", length: clipboard?.count ?? 0, order: 2),
                 ContextPiece(name: "samples", length: samplesJoined.count, order: 2),
                 ContextPiece(name: "frequent", length: frequentWordsJoined.count, order: 1),
-            ]
+            ],
+            reservedSystemChars: reservedSystemChars,
+            cyrillicTail: cyrillicTail
         )
+        // ENFORCE the tail reservation with a KV-stable cut. The tail was
+        // reserved-but-never-clipped, so a long document pushed the tokenized
+        // prompt past the window cap and the engine's front-cut beheaded the
+        // system prompt. Cut the tail's FRONT in 256-char blocks (not a sliding
+        // `suffix()`): the cut point stays fixed while the user types, so
+        // consecutive prompts share their prefix and the KV cache stays
+        // incremental; it jumps one block only every ~256 typed chars.
+        let tailAllowance = budget["tail"] ?? tailChars
+        // The allowance covers BOTH tail sides; charge afterHead first so a short
+        // `before` plus a 400-char afterHead can't ride over the reservation
+        // (only the engine's system-beheading backstop would catch it). Floor at
+        // 256 so `before` — the side the model actually continues — never starves.
+        let beforeAllowance = max(tailAllowance - afterHead.count, 256)
+        var beforeTail = before
+        if before.count > beforeAllowance {
+            let overflow = before.count - beforeAllowance
+            let cut = ((overflow / 256) + 1) * 256
+            beforeTail = String(before.dropFirst(min(cut, before.count - 1)))
+        }
         if let onScreenText, let clipped = clip(onScreenText, to: "onScreen", in: budget) {
             if onScreenIsConversation {
                 ctx += "The conversation visible on screen so far (oldest first, the "
@@ -1729,33 +1960,29 @@ enum CoreBridge {
             ctx += "The user frequently writes these words; prefer them when natural: "
                 + clipped + ".\n\n"
         }
-        // Mid-word only: name the partial word so the model finishes it. We do NOT
-        // inject a candidate word-list any more — this small (2B/4-bit) model
-        // regurgitates such lists VERBATIM as its "completion" (e.g. prompt
-        // "Suggested words: on, loss, from, the, and" → output "on loss from the and")
-        // instead of continuing the text. The dictionary candidates remain available
-        // for the non-LLM fallback path, just never as an echo-prone prompt hint.
-        if let candidates, !candidates.isEmpty, !candidates.atBoundary,
-           let best = candidates.words.first {
-            // Give ONE likely target word (not a list — lists get echoed). The model
-            // finishes the fragment toward it; sanitizeCompletion strips any overlap
-            // if the model re-emits the letters already typed.
-            ctx += "The user is typing a word that starts with \"\(candidates.fragment)\" "
-                + "— most likely \"\(best)\". Output only the letters that come after "
-                + "\"\(candidates.fragment)\", then continue the sentence naturally.\n\n"
+        // NO mid-word hint. The old "typing a word that starts with …" block changed
+        // on EVERY keystroke and sat BEFORE the text, invalidating the KV-cache
+        // suffix per key (full re-prefill = the live typing lag), and the small
+        // model mangled/regurgitated it as garbage completions ("сне,",
+        // "1. чекиран…"). A raw continuation prompt that simply ENDS mid-word is
+        // what makes the model finish the word naturally ("дне" → "с?") — that is
+        // Cotypist's behavior. Dictionary candidates remain for the non-LLM
+        // instant-ghost path only.
+        if let directive {
+            ctx += directive
         }
-        if after.isEmpty {
-            return "\(ctx)Continue this text. Output only the continuation:\n\(before)"
+        if afterHead.isEmpty {
+            return "\(ctx)Continue this text. Output only the continuation:\n\(beforeTail)"
         }
         return """
         \(ctx)Fill the gap at the cursor (between the two parts). Output only the \
         text that belongs at the cursor — it must read naturally before "After cursor".
 
         Before cursor:
-        \(before)
+        \(beforeTail)
 
         After cursor:
-        \(after)
+        \(afterHead)
         """
     }
 

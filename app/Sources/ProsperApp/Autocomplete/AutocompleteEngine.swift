@@ -162,7 +162,7 @@ final class AutocompleteEngine {
         case escSuppressed, addressBar, textBeforeEmpty, staleAX, midlineDisabled
         case secureInput, suppressOnTypo, staleResponseToken, staleNoContext
         case diverged, midWord, modelEmpty, agentPaused, acceptDiverged
-        case liveEcho
+        case liveEcho, ghostStable
     }
     private(set) var noShowCounts: [NoShowReason: Int] = [:]
     private func recordNoShow(_ reason: NoShowReason) {
@@ -651,7 +651,21 @@ final class AutocompleteEngine {
                 // suggestion and paying a full LLM round trip. A silent background
                 // refresh is still scheduled so the model can extend/correct.
                 if self.typeThrough(typed: typed) {
-                    self.scheduleSuggestion() // refresh WITHOUT clearing the ghost
+                    // Ghost-stability contract (Cotypist parity): a keystroke the
+                    // ghost absorbed keeps the SAME ghost. Scheduling a refresh here
+                    // swapped it for a different temp-1.0 sample every ~200ms while
+                    // the user was following it — pure flicker (live trace + user
+                    // report). Refresh only when the ghost is nearly consumed, so
+                    // the next suggestion lands right as this one runs out; and
+                    // disarm any pending pause-snap so it can't swap a healthy ghost.
+                    // Lexicon ghosts (requestBefore == nil) are provisional — they
+                    // must keep the model refresh so the LLM can replace them.
+                    if self.ghostNearlyExhausted || self.requestBefore == nil {
+                        self.scheduleSuggestion()
+                    } else {
+                        self.lastTypedAt = Date()
+                        self.debounceTimer?.invalidate()
+                    }
                     return
                 }
                 // Otherwise: instant lexicon ghost for immediate feedback
@@ -664,6 +678,14 @@ final class AutocompleteEngine {
             }
         }
         return false
+    }
+
+    /// True when the visible ghost is almost consumed (under two words left) —
+    /// the ONE moment a background refresh is welcome, so the next suggestion
+    /// lands just as this one runs out. Everywhere else a healthy ghost stays.
+    private var ghostNearlyExhausted: Bool {
+        guard let s = currentSuggestion, !s.isEmpty else { return true }
+        return s.split(whereSeparator: { $0.isWhitespace }).count < 2
     }
 
     /// Attempts to consume `typed` from the front of the live suggestion.
@@ -1205,6 +1227,23 @@ final class AutocompleteEngine {
                 // hits the deterministic first rung and returns the same new-word
                 // suggestion → another midWord → spin loop burning the GPU while the
                 // user is idle. The next real keystroke re-triggers naturally.
+                return
+            }
+            // Ghost-stability contract, response side: while the user is actively
+            // consuming a healthy LLM ghost (type-through keeps lastRenderedBefore
+            // anchored at the live text), an in-flight refresh landing now must
+            // NOT swap it for a different sample — that mid-flight text swap is
+            // the flicker users notice. Lexicon ghosts (requestBefore == nil) stay
+            // replaceable: they are provisional guesses awaiting the model.
+            if let ghost = self.currentSuggestion, !ghost.isEmpty,
+               self.requestBefore != nil, spaced != ghost,
+               self.lastRenderedBefore == liveBefore,
+               !self.ghostNearlyExhausted {
+                Self.e2elog("keep ghost: \"\(ghost.prefix(24))\" over \"\(spaced.prefix(24))\"")
+                self.recordNoShow(.ghostStable)
+                // The kept ghost is live — leaving the button in .thinking would
+                // pulse forever since this response is the one that would clear it.
+                self.accessoryButton.setState(.ready)
                 return
             }
             // Success: ghost text is about to render at the caret.

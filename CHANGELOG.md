@@ -18,7 +18,77 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.122.3 *(unreleased)*
+## v2.122.4 *(unreleased)*
+
+### Inline autocomplete — prompt re-architecture for instant, Cotypist-class ghosts
+- **Suggestions now update instantly on each keystroke.** The prompt is
+  rebuilt so everything before the text you're typing stays byte-identical
+  between keystrokes, letting the model's KV cache carry over — each new key
+  costs only a tiny incremental prefill instead of re-reading the whole
+  prompt. Previously, several prompt pieces silently changed on every key
+  (mid-word candidate hints, retry nudge placement, sliding context cuts),
+  forcing a full re-read each time and making the ghost lag far behind typing.
+- **Fixed garbage Bulgarian suggestions** ("сне,", numbered-list leaks,
+  clipboard echoes). The context budget double-booked the model's 512-token
+  window: it ignored the system prompt's size and never clipped the typed
+  text, so with writing samples and clipboard loaded the system prompt was
+  silently cut off mid-sentence — the model was completing without its
+  instructions. The budget now accounts for every piece, and Cyrillic text
+  gets a realistic characters-per-token estimate (≈2, not 4).
+- **First-try quality in Bulgarian now matches the paused-quality pass.**
+  Mid-typing burst requests were locked to a sharp deterministic sampling
+  rung that produces fragments/echoes in Bulgarian; all scripts now start at
+  Gemma's own recommended sampling (temp 1.0 / top-k 64 / top-p 0.95) — the
+  same configuration Cotypist ships for everything.
+- **Removed mid-word candidate word-lists from the prompt.** Letting the raw
+  text end mid-word makes the model finish the word naturally ("дне" → "с
+  деня?"); the injected hint lists both thrashed the cache and caused the
+  small model to parrot hint text.
+- When context outgrows the window, it is now trimmed in large stable blocks
+  instead of sliding one token per keystroke, preserving cache reuse.
+
+### Inline autocomplete — stable, Cotypist-class ghost UX (live-traced)
+- **The ghost no longer flickers to a different suggestion while you type it
+  out.** A keystroke that matches the ghost now consumes it in place (a few
+  ms, no model call) and the suggestion STAYS; a background refresh is
+  scheduled only when the ghost is nearly used up, so the next suggestion
+  lands right as the current one runs out. Previously every keystroke fired a
+  refresh that replaced the ghost with a different random sample every
+  ~200 ms — accurate but maddening to watch.
+- **Mid-typing suggestions are much faster.** Keystroke-time (burst) requests
+  now use a light, byte-stable prompt (no clipboard/on-screen-OCR/frequent-word
+  blocks — those bytes churn while typing and invalidated the model cache,
+  turning ~150 ms keystrokes into 400–1200 ms re-reads). The rich context still
+  powers the full-quality pass when you pause.
+- **Bulgarian no longer drifts into Russian on the first few letters.** Short
+  Cyrillic context defeats language detection; when your system languages say
+  Bulgarian (and not Russian), completions are pinned to Bulgarian from the
+  first keystroke, and any suggestion containing the Russian-only letters
+  ы/э/ё is rejected outright.
+- **More garbage classes rejected before they render:** suggestions quoting
+  text visible on screen (the OCR'd conversation) instead of continuing yours;
+  the frequent-words hint list parroted verbatim; words blending two alphabets
+  ("могամ"); a capitalized new sentence glued onto your unfinished word;
+  markdown junk markers at the edges (trimmed) or interior (rejected).
+- **Editing mid-document no longer overflows the model window.** The text
+  after the cursor is now capped to a short head (the model only needs enough
+  for the gap to read naturally); previously the entire rest of a long
+  document was sent, silently cutting off the system prompt. Suggestions that
+  merely re-type the text already after your cursor (even with a one-word
+  variation) are rejected instead of shown. The suggestion indicator also no
+  longer sticks on "thinking" when a refresh is dropped in favor of the ghost
+  you're already typing through.
+
+### Stability
+- **Fixed a crash when inline autocomplete and the coding agent (or translate,
+  OCR, LoRA training) computed at the same time.** MLX's compiled-kernel cache
+  is process-global and not thread-safe; two concurrent evaluations could
+  corrupt it (`CompilerCache::find` EXC_BAD_ACCESS — 7 identical crash logs in
+  one day). All MLX compute — generation, weight loading, adapter load/unload,
+  training — now runs through one process-wide gate, so exactly one evaluation
+  touches the GPU at a time.
+
+## v2.122.3
 
 ### Inline autocomplete — instant, always-on suggestions
 - **The first ghost now fires on the first keystroke** — no debounce, no

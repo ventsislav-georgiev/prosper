@@ -252,6 +252,153 @@ final class CoreBridgeSanitizeTests: XCTestCase {
         XCTAssertFalse(CoreBridge.mismatchedScript("iPhone", before: before))
     }
 
+    func testTrimsEdgeMarkdownMarkersKeepsWords() {
+        // "**tato" — model emitting markdown emphasis at the edge; the word
+        // itself is salvageable, so the marker is trimmed rather than rejected.
+        XCTAssertEqual(
+            CoreBridge.sanitizeCompletion("**tato", before: "kupih si edin lap"),
+            "tato"
+        )
+        // Leading-space completions keep their space after edge trimming.
+        XCTAssertEqual(
+            CoreBridge.sanitizeCompletion(" until Friday", before: "I will be away"),
+            " until Friday"
+        )
+    }
+
+    func testRejectsInteriorMarkdownEmphasis() {
+        // Interior markers are real markdown the trim can't salvage — reject so
+        // the retry ladder rewrites it.
+        XCTAssertNil(
+            CoreBridge.sanitizeCompletion("this is **very** important", before: "note that ")
+        )
+    }
+
+    func testRejectsMixedScriptWord() {
+        // A single word blending Cyrillic and Latin letters is sampling garbage
+        // ("овrição") — too short for mismatchedScript's ≥8-letter drift
+        // threshold, so the dedicated mixed-word guard must catch it.
+        XCTAssertTrue(CoreBridge.mixesScriptsWithinWord("овrição"))
+        let before = "Ще отсъствам от офиса до "
+        XCTAssertNil(CoreBridge.sanitizeCompletion("овrição", before: before))
+    }
+
+    func testMixedScriptGuardAllowsPureLatinLoanwordAndHyphenCompound() {
+        // Pure-Latin loanword and hyphenated compound both keep each letter-run
+        // single-script — never rejected.
+        XCTAssertFalse(CoreBridge.mixesScriptsWithinWord("купих си iPhone"))
+        XCTAssertFalse(CoreBridge.mixesScriptsWithinWord("IT-специалист в отдела"))
+    }
+
+    func testRejectsGluedCapitalMidWord() {
+        // Live report: mid-word, the model started a fresh capitalized sentence
+        // glued onto the unfinished word ("иска" + "Мнение…"). Never a valid
+        // continuation of a lowercase fragment.
+        XCTAssertNil(CoreBridge.sanitizeCompletion("Мнение за това", before: "иска"))
+        XCTAssertNil(CoreBridge.sanitizeCompletion("Note that this", before: "I wi"))
+        // Lowercase word-finish stays allowed…
+        XCTAssertNotNil(CoreBridge.sanitizeCompletion("ll check tomorrow", before: "I wi"))
+        // …a new word after its separating space may be capitalized…
+        XCTAssertNotNil(CoreBridge.sanitizeCompletion(" Иван ще дойде", before: "утре с"))
+        // …and after a boundary (trailing space) a capital start is fine.
+        XCTAssertNotNil(CoreBridge.sanitizeCompletion("Понеделник е добре", before: "до "))
+    }
+
+    func testRejectsMixedScriptWordBeyondLatinCyrillic() {
+        // Observed live: "могամ" — a Bulgarian word with 2 Armenian letters glued
+        // in. Under containsForeignScript's ≥3-letter threshold, so the per-word
+        // mix guard must catch it via script buckets, not just Latin/Cyrillic.
+        XCTAssertTrue(CoreBridge.mixesScriptsWithinWord("могամ ли?"))
+        XCTAssertNil(CoreBridge.sanitizeCompletion("могամ ли?", before: "искам да те по"))
+    }
+
+    func testBulgarianCyrillicRejectsRussianMarkerLetters() {
+        // ы/э/ё do not exist in Bulgarian; with the Bulgarian pin active a
+        // suggestion containing one is Russian drift (live: "запустить тестовый
+        // сценарий" on 3 chars of context). Same script, so mismatchedScript is
+        // blind — the marker guard must reject, and only when the pin is on.
+        let before = "как "
+        XCTAssertNil(CoreBridge.sanitizeCompletion(
+            "запустить тестовый сценарий", before: before, bulgarianCyrillic: true))
+        XCTAssertNotNil(CoreBridge.sanitizeCompletion(
+            "запустить тестовый сценарий", before: before, bulgarianCyrillic: false))
+        // Clean Bulgarian passes with the pin on (ь is legitimate Bulgarian).
+        XCTAssertNotNil(CoreBridge.sanitizeCompletion(
+            "ти върви денят с кьорав късмет", before: before, bulgarianCyrillic: true))
+    }
+
+    func testBulgarianCyrillicPinHelpers() {
+        // The pin must hold from the FIRST Cyrillic keystroke (detector is blind
+        // there) — that is where the Russian free-fall was observed.
+        XCTAssertTrue(CoreBridge.isCyrillicScript("к"))
+        XCTAssertTrue(CoreBridge.isCyrillicScript("как ти върви"))
+        XCTAssertFalse(CoreBridge.isCyrillicScript("kak ti"))
+        XCTAssertFalse(CoreBridge.isCyrillicScript("купих си iPhone 15 Pro Max ot Amazon"))
+    }
+
+    func testEchoesScreenContextRejectsQuotedScreenLine() {
+        // Live BG failure: with conversation OCR in the prompt the model "continued"
+        // by quoting a message visible on screen ("1. чекиран на твое име").
+        let screen = """
+        имаме 3 варианта
+        1. чекиран на твое име и всичко в него
+        2. двамата сме с ръчни
+        """
+        XCTAssertTrue(CoreBridge.echoesScreenContext("1. чекиран на твое име", screen: screen))
+        // Short natural overlaps (a name, "не знам") stay under the ≥12 gate.
+        XCTAssertFalse(CoreBridge.echoesScreenContext("не знам", screen: screen))
+        // Fresh text is never rejected, and absent screen context is a no-op.
+        XCTAssertFalse(CoreBridge.echoesScreenContext("утре ще ти пиша пак", screen: screen))
+        XCTAssertFalse(CoreBridge.echoesScreenContext("1. чекиран на твое име", screen: nil))
+    }
+
+    func testFillGapRejectsAfterTextEcho() {
+        // Regress fill-gap find (gap01): `after` starts with its separator space,
+        // so a suggestion echoing the after-text verbatim never aligned with the
+        // raw head and shipped whole. The trimmed-head match must eat it entirely.
+        XCTAssertNil(CoreBridge.sanitizeCompletion(
+            "was caused by the deploy.",
+            before: "I checked the logs and the ",
+            after: " was caused by the deploy."
+        ))
+        // Partial trailing echo still trims at the word boundary, keeping the head.
+        XCTAssertEqual(CoreBridge.sanitizeCompletion(
+            "outage was caused by the deploy.",
+            before: "I checked the logs and the ",
+            after: " was caused by the deploy."
+        ), "outage")
+        // No overlap → untouched.
+        XCTAssertEqual(CoreBridge.sanitizeCompletion(
+            "outage happened",
+            before: "I checked the logs and the ",
+            after: " was caused by the deploy."
+        ), "outage happened")
+    }
+
+    func testFillGapRejectsAfterTextNearEcho() {
+        // Regress find round 2: a one-word variant defeats the exact-overlap trim
+        // ("…the deployment" vs after's "…the deploy.") — the near-echo guard
+        // rejects when the first 3 words duplicate the after-head.
+        XCTAssertNil(CoreBridge.sanitizeCompletion(
+            "was caused by the deployment",
+            before: "I checked the logs and the ",
+            after: " was caused by the deploy."
+        ))
+        // Genuine gap fill sharing fewer than 3 leading words survives.
+        XCTAssertEqual(CoreBridge.sanitizeCompletion(
+            "outage was severe",
+            before: "I checked the logs and the ",
+            after: " was caused by the deploy."
+        ), "outage was severe")
+    }
+
+    func testEchoesAfterHead() {
+        XCTAssertTrue(CoreBridge.echoesAfterHead("Was caused, by them", afterHead: " was caused by the deploy."))
+        XCTAssertFalse(CoreBridge.echoesAfterHead("was caused", afterHead: " was caused by the deploy."))
+        XCTAssertFalse(CoreBridge.echoesAfterHead("outage was caused", afterHead: " was caused by the deploy."))
+        XCTAssertFalse(CoreBridge.echoesAfterHead("", afterHead: "anything at all here"))
+    }
+
     func testEnglishToEnglishIsNotMismatch() {
         XCTAssertFalse(CoreBridge.mismatchedScript("continue the text", before: "please do "))
     }

@@ -3,6 +3,7 @@
 **/*.rs.bk
 
 # Swift / SwiftPM
+/.build/
 /app/.build/
 /app/.swiftpm/
 *.xcodeproj/xcuserdata/
