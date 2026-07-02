@@ -961,6 +961,14 @@ final class AutocompleteEngine {
         }
 
         requestToken &+= 1
+        // Past the single-flight gate: any in-flight request is now superseded.
+        // Reset the pipeline state here so early-return branches below (emoji,
+        // spelling-fix, typo-suppress) can't strand a stale anchor — the stale
+        // callback hits the token guard before the anchor cleanup and would
+        // otherwise leave the gate skip-firing with no task running.
+        inFlightAnchor = nil
+        pendingRefire = false
+        completionTask?.cancel()
         let token = requestToken
         let caretRect = Self.effectiveCaretRect(context.caretScreenRect, field: fieldRect)
         currentFieldRect = fieldRect
@@ -1059,11 +1067,9 @@ final class AutocompleteEngine {
 
         let requestStart = Date()
         lastRequestFiredAt = requestStart
-        // Supersede a DIVERGED generation still in flight (backspace, caret move —
-        // the forward-typing case was already pipelined above and never reaches
-        // here). CoreBridge.complete checks Task.isCancelled + cancels the
-        // server-side generation, so the stale one stops prefill/decode at once.
-        completionTask?.cancel()
+        // Any diverged in-flight generation was already cancelled at the token
+        // bump above (CoreBridge.complete checks Task.isCancelled + cancels the
+        // server-side generation, so the stale one stops prefill/decode at once).
         inFlightAnchor = before
         inFlightSince = requestStart
         pendingRefire = false
@@ -1103,6 +1109,10 @@ final class AutocompleteEngine {
                     // there is routine (the pause-fire retries the full ladder),
                     // so don't flash the error badge mid-typing.
                     self.accessoryButton.setState(burst ? .idle : .error)
+                } else {
+                    // A still-valid ghost is on screen: drop the .thinking spinner
+                    // back to .ready instead of leaving it stuck until next fire.
+                    self.accessoryButton.setState(.ready)
                 }
                 return
             }

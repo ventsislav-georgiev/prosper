@@ -18,7 +18,19 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.122.2 *(unreleased)*
+## v2.122.3 *(unreleased)*
+
+### Inline autocomplete — review hardening
+- **Fixed a latent stuck-state** where an abandoned suggestion request (emoji,
+  spelling-fix, or typo paths) could leave autocomplete idle for up to 3 seconds:
+  the in-flight tracking is now reset the moment a request is superseded.
+- **Echo suppression now only checks recently written text** (the context the
+  model actually saw), so reusing a phrase written much earlier in a long
+  document no longer blocks a legitimate suggestion.
+- The suggestion indicator no longer stays stuck on "thinking" when a retry
+  comes back empty while a valid ghost is already on screen.
+
+## v2.122.2
 
 ### Inline autocomplete — faster, more reliable ghost suggestions
 - **Fixed typing lag while autocomplete is on** (noticeable in Safari and other

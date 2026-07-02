@@ -254,6 +254,8 @@ actor TypingHistoryStore {
     // (several per second while typing) but its inputs only change when the user
     // finishes writing something (record()). Serve from a short-lived cache so
     // the request hot path skips 3 SQLCipher reads + 1 write; record() invalidates.
+    // ponytail: cache keyed on bundleId only — the sole caller (CoreBridge) uses
+    // the default shape params. Add them to the key if a second caller appears.
     private var samplesCache: (bundleId: String?, samples: [String], at: Date)?
     private var lastLRUTouch: Date = .distantPast
     private static let samplesCacheTTL: TimeInterval = 20

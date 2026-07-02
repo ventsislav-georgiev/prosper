@@ -180,6 +180,21 @@ final class CoreBridgeSanitizeTests: XCTestCase {
             "добре, а ти как прекара деня", liveBefore: "Здравей, как си? Аз съм "))
     }
 
+    func testEchoesAnywhereIgnoresPhraseReuseFromDistantText() {
+        // A 3-word phrase written far earlier in a long document must NOT
+        // suppress a legitimate continuation that reuses it — only the recent
+        // tail (what the model actually saw as context) counts as echo source.
+        let distant = "the quarterly revenue report shows strong growth. "
+        let filler = String(repeating: "Later we discussed unrelated planning topics in detail. ", count: 20)
+        XCTAssertFalse(CoreBridge.echoesAnywhere(
+            "update the quarterly revenue report with new numbers",
+            before: distant + filler + "As a next step we should "))
+        // Same phrase inside the recent tail IS an echo.
+        XCTAssertTrue(CoreBridge.echoesAnywhere(
+            "update the quarterly revenue report with new numbers",
+            before: filler + distant + "As a next step we should "))
+    }
+
     // MARK: - Internal loop guard (cutImmediateRepeat)
 
     func testCutsStutteredWord() {
