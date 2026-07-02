@@ -104,6 +104,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // drain prompts queued while the app was down. See AgentCLI.
         AgentCLI.observeAndDrain()
 
+        // Debug completion endpoint (env-gated, no-op unless PROSPER_DEBUG_ENDPOINT=1):
+        // headless warm-cache latency measurement against the resident model.
+        DebugCompletionEndpoint.observeIfEnabled()
+
         // Warm the bundled completion lexicon (prefix/bigram/typo dictionaries)
         // off the main thread so it's ready before the first keystroke. Degrades
         // to the OS lexicon if the bundle is missing. See Autocomplete/Lexicon.

@@ -632,13 +632,30 @@ actor MLXEngine {
         temperature: Float,
         topP: Float,
         repetitionPenalty: Float?,
-        kvBits: Int? = nil
+        kvBits: Int? = nil,
+        topK: Int? = nil,
+        minP: Float? = nil
     ) -> GenerateParameters {
         var parameters = GenerateParameters(
             maxTokens: maxTokens,
             temperature: temperature,
             topP: topP
         )
+        // Gemma 4's recommended sampling is temp≈1.0 with top_k=64 shaping (the value
+        // baked into the model's own GGUF: general.sampling.top_k=64/top_p=0.95/temp=1.0).
+        // top_k caps the candidate set so a higher temperature stays in-language without
+        // admitting garbled low-probability tokens — this is what keeps latinica/BG
+        // coherent at temp 1.0 instead of collapsing to fragments at temp 0.2. The
+        // per-rung `topK`/`minP` args carry the ladder's choice; PROSPER_TOPK/PROSPER_MINP
+        // still override for A/B.
+        if let tk = topK, tk > 0 { parameters.topK = tk }
+        if let mp = minP, mp > 0 { parameters.minP = mp }
+        if let tk = Int(ProcessInfo.processInfo.environment["PROSPER_TOPK"] ?? ""), tk > 0 {
+            parameters.topK = tk
+        }
+        if let mp = Float(ProcessInfo.processInfo.environment["PROSPER_MINP"] ?? ""), mp > 0 {
+            parameters.minP = mp
+        }
         if let repetitionPenalty {
             parameters.repetitionPenalty = repetitionPenalty
         }
@@ -963,14 +980,16 @@ actor MLXEngine {
         temperature: Float,
         topP: Float = 1.0,
         stop: [String] = [],
-        maxWords: Int = 0
+        maxWords: Int = 0,
+        topK: Int? = nil,
+        minP: Float? = nil
     ) async throws -> String {
         guard let container else { throw MLXEngineError.notLoaded }
         if Task.isCancelled { return "" }
 
         let parameters = Self.makeParameters(
             maxTokens: maxTokens, temperature: temperature, topP: topP,
-            repetitionPenalty: nil, kvBits: Self.configuredKVBits
+            repetitionPenalty: nil, kvBits: Self.configuredKVBits, topK: topK, minP: minP
         )
         let box = inlineBox
         // Cap the prompt for speed (shorter prefill → faster keystroke response) and
@@ -1105,7 +1124,9 @@ actor MLXEngine {
         temperature: Float,
         topP: Float = 1.0,
         stop: [String] = [],
-        maxWords: Int = 0
+        maxWords: Int = 0,
+        topK: Int? = nil,
+        minP: Float? = nil
     ) async throws -> String {
         // Tracked so a forced unload (autocomplete-disable) arriving mid-completion
         // defers instead of freeing GPU buffers under the inline compute. Cost is two
@@ -1118,14 +1139,22 @@ actor MLXEngine {
         ) {
             return try await generateInlineSpeculative(
                 prompt: prompt, system: system, maxTokens: maxTokens,
-                temperature: temperature, topP: topP, stop: stop, maxWords: maxWords
+                temperature: temperature, topP: topP, stop: stop, maxWords: maxWords,
+                topK: topK, minP: minP
             )
         }
         return try await generateInline(
             prompt: prompt, system: system, maxTokens: maxTokens,
-            temperature: temperature, topP: topP, stop: stop, maxWords: maxWords
+            temperature: temperature, topP: topP, stop: stop, maxWords: maxWords,
+            topK: topK, minP: minP
         )
     }
+
+    /// Drop the primed inline KV-cache prefix. The live app resets implicitly when
+    /// the caret jumps to unrelated text; the headless bench feeds unrelated
+    /// prefixes back-to-back, so it must reset between cases (a stale prefix makes
+    /// the prefill-trim math invalid and MLX aborts).
+    func resetInlineCache() { inlineBox.reset() }
 
     /// Inline-completion generation via the library's **turnkey speculative decoding**
     /// (WS2). The draft model proposes `Preferences.numDraftTokens` cheap tokens per
@@ -1162,20 +1191,23 @@ actor MLXEngine {
         temperature: Float,
         topP: Float = 1.0,
         stop: [String] = [],
-        maxWords: Int = 0
+        maxWords: Int = 0,
+        topK: Int? = nil,
+        minP: Float? = nil
     ) async throws -> String {
         guard let container, let draftContainer else {
             // Draft (or main) not loaded — fall back to the single-model path.
             return try await generateInline(
                 prompt: prompt, system: system, maxTokens: maxTokens,
-                temperature: temperature, topP: topP, stop: stop, maxWords: maxWords
+                temperature: temperature, topP: topP, stop: stop, maxWords: maxWords,
+                topK: topK, minP: minP
             )
         }
         if Task.isCancelled { return "" }
 
         let parameters = Self.makeParameters(
             maxTokens: maxTokens, temperature: temperature, topP: topP,
-            repetitionPenalty: nil, kvBits: Self.configuredKVBits
+            repetitionPenalty: nil, kvBits: Self.configuredKVBits, topK: topK, minP: minP
         )
         let maxPrompt = Self.maxPromptTokens
         let numDraft = Preferences.numDraftTokens

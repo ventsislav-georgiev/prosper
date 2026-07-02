@@ -26,6 +26,15 @@ struct CaretContext {
     /// single-line fields (logins, search boxes, spreadsheet cells) are where
     /// completions annoy more than help.
     let isSingleLineField: Bool
+    /// A short label describing the FIELD (not its value): its AXDescription /
+    /// placeholder / title — e.g. "Message to Plamen Redjov", "Search", "To". This
+    /// is the strongest cheap grounding signal (Cotypist stores it as
+    /// textFieldProperties.description): it tells the model who/what the user is
+    /// writing to. nil when the element exposes no such label.
+    let fieldLabel: String?
+    /// The focused window's title — e.g. "Plamen Redjov (DM) - Payhawk - Slack". A
+    /// second cheap grounding signal (Cotypist stores it as appProperties.windowTitle).
+    let windowTitle: String?
 }
 
 /// Reads caret / text context from the focused UI element via the Accessibility API.
@@ -129,6 +138,17 @@ enum AXCaret {
         let role = copyString(focused, kAXRoleAttribute) ?? ""
         let singleLineRoles: Set<String> = [kAXTextFieldRole as String, "AXComboBox", "AXSearchField"]
 
+        // Cheap grounding: field label + window title (see CaretContext). Prefer the
+        // field's DESCRIPTION/placeholder/title (never its value); the value is the
+        // user's text, already carried by textBefore/textAfter.
+        let fieldLabel = [
+            kAXDescriptionAttribute as String,
+            kAXPlaceholderValueAttribute as String,
+            kAXTitleAttribute as String,
+        ].lazy.compactMap { cleanLabel(copyString(focused, $0)) }.first
+        let windowTitle = copyElement(focused, kAXWindowAttribute as String)
+            .flatMap { cleanLabel(copyString($0, kAXTitleAttribute as String)) }
+
         return CaretContext(
             textBefore: textBefore,
             textAfter: textAfter,
@@ -136,7 +156,9 @@ enum AXCaret {
             fieldScreenRect: field,
             isAddressBarLike: addressBarLike(focused),
             caretFont: font,
-            isSingleLineField: singleLineRoles.contains(role)
+            isSingleLineField: singleLineRoles.contains(role),
+            fieldLabel: fieldLabel,
+            windowTitle: windowTitle
         )
     }
 
@@ -254,6 +276,16 @@ enum AXCaret {
     }
 
     // MARK: - AX helpers
+
+    /// Normalizes an AX label/title for prompt grounding: trims, collapses newlines,
+    /// truncates to a sane length, and rejects empties. Returns nil for unusable text.
+    private static func cleanLabel(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let s = raw.replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard s.count >= 2 else { return nil }
+        return s.count > 120 ? String(s.prefix(120)) : s
+    }
 
     private static func copyElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
         var value: CFTypeRef?

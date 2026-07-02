@@ -18,14 +18,23 @@ actor TypingHistoryStore {
     private var dbQueue: DatabaseQueue?
     private var didSetup = false
 
+    /// ponytail: hard cap on stored accepted-completion rows so the on-device
+    /// history file can't grow without bound (the disk guard). Pruned lazily
+    /// every `pruneEvery` inserts, not per-write. Bump if retrieval wants deeper
+    /// history; ~5k short rows is well under a megabyte.
+    private let entryCap = 5000
+    private let pruneEvery = 200
+    private var insertsSincePrune = 0
+
     /// One recorded accepted completion.
     private struct Entry: Codable, FetchableRecord, PersistableRecord {
         static let databaseTableName = "entries"
         var id: Int64?
-        var ts: Double      // seconds since 1970
+        var ts: Double      // seconds since 1970 (creation — drives "most recent")
         var text: String
         var wordCount: Int
         var bundleId: String?  // frontmost app at accept time (per-app counts)
+        var lastUsed: Double = 0  // seconds since 1970; bumped when surfaced in retrieval — LRU eviction key
     }
 
     /// One recorded (prompt, completion) training pair for on-device LoRA (WS6).
@@ -104,12 +113,21 @@ actor TypingHistoryStore {
                     t.column("text", .text).notNull()
                     t.column("wordCount", .integer).notNull()
                     t.column("bundleId", .text)
+                    t.column("lastUsed", .double).notNull().defaults(to: 0)
                 }
                 // Migration for stores created before bundleId existed.
                 if try !db.columns(in: Entry.databaseTableName).contains(where: { $0.name == "bundleId" }) {
                     try db.alter(table: Entry.databaseTableName) { t in
                         t.add(column: "bundleId", .text)
                     }
+                }
+                // Migration: LRU eviction key. Backfill lastUsed = ts so pre-existing
+                // rows start with a sane recency instead of 0 (evict-first).
+                if try !db.columns(in: Entry.databaseTableName).contains(where: { $0.name == "lastUsed" }) {
+                    try db.alter(table: Entry.databaseTableName) { t in
+                        t.add(column: "lastUsed", .double).notNull().defaults(to: 0)
+                    }
+                    try db.execute(sql: "UPDATE \(Entry.databaseTableName) SET lastUsed = ts WHERE lastUsed = 0")
                 }
                 // WS6: (prompt, completion) training pairs for on-device LoRA.
                 try db.create(table: Sample.databaseTableName, options: [.ifNotExists]) { t in
@@ -139,11 +157,28 @@ actor TypingHistoryStore {
         setupIfNeeded()
         guard let dbQueue else { return }
         let words = trimmed.split { $0.isWhitespace }.count
+        let now = Date().timeIntervalSince1970
         let entry = Entry(
-            id: nil, ts: Date().timeIntervalSince1970,
-            text: trimmed, wordCount: words, bundleId: bundleId
+            id: nil, ts: now,
+            text: trimmed, wordCount: words, bundleId: bundleId, lastUsed: now
         )
         try? dbQueue.write { db in try entry.insert(db) }
+        insertsSincePrune += 1
+        if insertsSincePrune >= pruneEvery { insertsSincePrune = 0; pruneEntries() }
+    }
+
+    /// LRU eviction: keeps the `entryCap` most-recently-USED entries (retrieval bumps
+    /// `lastUsed`, so frequently-surfaced writing survives even if old). Runs off the
+    /// accept path's hot loop (only every `pruneEvery` inserts). Samples aren't pruned
+    /// here — the LoRA trainer already caps its own read at `limit`.
+    private func pruneEntries() {
+        guard let dbQueue else { return }
+        try? dbQueue.write { db in
+            try db.execute(sql: """
+                DELETE FROM \(Entry.databaseTableName) WHERE id NOT IN
+                  (SELECT id FROM \(Entry.databaseTableName) ORDER BY lastUsed DESC LIMIT \(entryCap))
+                """)
+        }
     }
 
     /// Records one (prompt, completion) training pair if collection is enabled
@@ -205,6 +240,60 @@ actor TypingHistoryStore {
             .sorted { $0.value > $1.value }
             .prefix(limit)
             .map { $0.key }
+    }
+
+    /// Short examples of the user's OWN recent writing, for the completion prompt's
+    /// few-shot voice grounding — Prosper's port of Cotypist's `previousUserInputs`.
+    /// Blends most-recent-in-this-app + most-recent-across-apps + a couple of the
+    /// longest stored samples (the richest voice/language examples), deduped and
+    /// length-gated so trivial one-word accepts and huge pastes are skipped. Returns
+    /// plain strings — in-app-recent first, then across-apps, then longest — capped
+    /// by both count and a rough char budget. Same privacy gate as `record`.
+    func writingSamples(
+        bundleId: String?,
+        recentInApp: Int = 3, recentAcrossApps: Int = 2, longest: Int = 2,
+        minChars: Int = 16, maxChars: Int = 120, charBudget: Int = 600
+    ) -> [String] {
+        guard Preferences.collectTypingHistory else { return [] }
+        setupIfNeeded()
+        guard let dbQueue else { return [] }
+        // Over-fetch (×3) per bucket so dedup + length filtering still leaves enough.
+        let pool: [Entry] = (try? dbQueue.read { db in
+            var picked: [Entry] = []
+            if let bundleId {
+                picked += try Entry.filter(Column("bundleId") == bundleId)
+                    .order(Column("ts").desc).limit(recentInApp * 3).fetchAll(db)
+            }
+            picked += try Entry.order(Column("ts").desc).limit(recentAcrossApps * 3).fetchAll(db)
+            picked += try Entry.order(Column("wordCount").desc).limit(longest * 3).fetchAll(db)
+            return picked
+        }) ?? []
+        guard !pool.isEmpty else { return [] }
+        let cap = recentInApp + recentAcrossApps + longest
+        var seen = Set<String>(), out: [String] = [], usedIds: [Int64] = [], used = 0
+        for e in pool {
+            let t = e.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard t.count >= minChars, t.count <= maxChars else { continue }
+            guard seen.insert(t.lowercased()).inserted else { continue }
+            if used + t.count > charBudget { continue }
+            out.append(t); used += t.count
+            if let id = e.id { usedIds.append(id) }
+            if out.count >= cap { break }
+        }
+        // LRU touch: surfacing a sample counts as a use, so it survives eviction.
+        if !usedIds.isEmpty {
+            let now = Date().timeIntervalSince1970
+            let placeholders = usedIds.map { _ in "?" }.joined(separator: ",")
+            var args: [any DatabaseValueConvertible] = [now]
+            args.append(contentsOf: usedIds)
+            try? dbQueue.write { db in
+                try db.execute(
+                    sql: "UPDATE \(Entry.databaseTableName) SET lastUsed = ? WHERE id IN (\(placeholders))",
+                    arguments: StatementArguments(args)
+                )
+            }
+        }
+        return out
     }
 
     /// Number of stored entries (shown in Settings → Personalization).
