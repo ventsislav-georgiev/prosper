@@ -288,3 +288,42 @@ final class TypoFixSplitTests: XCTestCase {
         XCTAssertEqual(s.replaceLength, 3)
     }
 }
+
+/// Session recall of recently written sentences (retype-priority source).
+@MainActor
+final class RecentSentencesTests: XCTestCase {
+    override func setUp() async throws { RecentSentences.shared.reset() }
+
+    func testRetypedSentenceCompletesFromRecall() {
+        RecentSentences.shared.ingest(before: "the quick brown fox jumps over the lazy dog. ")
+        let cont = RecentSentences.shared.continuation(for: "irrelevant. the qui")
+        XCTAssertEqual(cont, "ck brown fox jumps over the lazy dog.")
+    }
+
+    func testUnfinishedTailIsNotStored() {
+        RecentSentences.shared.ingest(before: "complete sentence here. partial tail without end")
+        XCTAssertNil(RecentSentences.shared.continuation(for: "partial tail w"))
+        XCTAssertNotNil(RecentSentences.shared.continuation(for: "complete sen"))
+    }
+
+    func testCaseInsensitivePrefixKeepsStoredCasing() {
+        RecentSentences.shared.ingest(before: "The meeting moved to Friday.\n")
+        XCTAssertEqual(RecentSentences.shared.continuation(for: "the meet"), "ing moved to Friday.")
+    }
+
+    func testShortFragmentsAndShortSentencesIgnored() {
+        RecentSentences.shared.ingest(before: "ok done. yes. the quick brown fox jumps over it. ")
+        XCTAssertNil(RecentSentences.shared.continuation(for: "ok"), "fragment under 4 chars")
+        XCTAssertNil(RecentSentences.shared.continuation(for: "yes."), "short sentences not stored")
+    }
+
+    func testNewestMatchWins() {
+        RecentSentences.shared.ingest(before: "the plan is to ship tomorrow. the plan is to wait a week. ")
+        XCTAssertEqual(RecentSentences.shared.continuation(for: "the plan"), " is to wait a week.")
+    }
+
+    func testExactSentenceGivesNoRemainder() {
+        RecentSentences.shared.ingest(before: "we should talk soon. ")
+        XCTAssertNil(RecentSentences.shared.continuation(for: "we should talk soon"))
+    }
+}

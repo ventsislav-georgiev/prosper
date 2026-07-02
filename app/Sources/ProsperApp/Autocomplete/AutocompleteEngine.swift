@@ -1050,7 +1050,16 @@ final class AutocompleteEngine {
                 // Accept mechanics follow the same split — backspace just the
                 // divergent tail, not the whole word.
                 let split = Self.typoFixSplit(original: original, fix: fix)
-                currentSuggestion = split.replacement
+                // Gray continuation after the green correction (Cotypist-style:
+                // the fix flows into the rest of the sentence). Source order:
+                // the recall buffer on the CORRECTED text (instant, the user's
+                // own recent phrasing), else a chained LLM request below.
+                let corrected = String(before.dropLast(original.count)) + fix
+                let recallCont = RecentSentences.shared.continuation(for: corrected)
+                let continuation = recallCont.map {
+                    Self.applyWordBoundary(before: corrected, suggestion: $0)
+                } ?? ""
+                currentSuggestion = split.replacement + continuation
                 replaceLength = split.replaceLength
                 isFix = true
                 requestBefore = nil  // WS6: typo fixes are not training samples
@@ -1058,12 +1067,38 @@ final class AutocompleteEngine {
                 if useMirror, let fieldRect {
                     // No usable caret to strike through inline — mirror the proposed
                     // correction text into the bubble above the field instead.
-                    mirrorWindow.show(text: fix, fieldRect: fieldRect)
+                    mirrorWindow.show(text: fix + continuation, fieldRect: fieldRect)
                 } else if let rect = caretRect {
                     suggestionWindow.showFix(
                         strike: split.strike, replacement: split.replacement,
-                        at: rect, fieldRect: fieldRect
+                        continuation: continuation, at: rect, fieldRect: fieldRect
                     )
+                }
+                // No recall hit: chain the model on the corrected text so the
+                // ghost continues the FIXED word ("brw"→"own" + " fox jumped…").
+                // Guarded by the request token; rendered only while the same
+                // typo is still on screen.
+                if continuation.isEmpty {
+                    let token = requestToken
+                    completionTask = CoreBridge.complete(
+                        before: corrected, after: context.textAfter,
+                        bundleId: bundleId, caretScreenRect: caretRect,
+                        fieldLabel: context.fieldLabel, windowTitle: context.windowTitle,
+                        burst: true
+                    ) { [weak self] cont in
+                        guard let self, token == self.requestToken, self.isFix,
+                              let cont, !cont.isEmpty,
+                              let live = AXCaret.currentContext()?.textBefore,
+                              live.hasSuffix(original) else { return }
+                        let spaced = Self.applyWordBoundary(before: corrected, suggestion: cont)
+                        self.currentSuggestion = split.replacement + spaced
+                        if let rect = self.currentCaretRect {
+                            self.suggestionWindow.showFix(
+                                strike: split.strike, replacement: split.replacement,
+                                continuation: spaced, at: rect, fieldRect: fieldRect
+                            )
+                        }
+                    }
                 }
                 return
             }
@@ -1072,9 +1107,31 @@ final class AutocompleteEngine {
 
         applyAppearance(for: caretRect)
 
+        // Recall (highest-priority source): people retype recently written
+        // sentences — to a second person, or rewriting a line they deleted.
+        // When the current fragment prefixes a recently written sentence, its
+        // remainder is the user's OWN phrasing: render it INSTANTLY (no model
+        // wait) and let the LLM refresh run underneath — the ghost-stability
+        // guard keeps this ghost unless the model EXTENDS it.
+        RecentSentences.shared.ingest(before: before)
+        if currentSuggestion == nil,
+           let recall = RecentSentences.shared.continuation(for: before) {
+            let spaced = Self.applyWordBoundary(before: before, suggestion: recall)
+            currentSuggestion = spaced
+            replaceLength = 0
+            isFix = false
+            requestBefore = before // full-fledged ghost: model must not swap it
+            currentCaretRect = caretRect
+            caretAnchoredAt = Date()
+            lastRenderedBefore = before
+            accessoryButton.setState(.ready)
+            Self.e2elog("recall ghost=\"\(spaced.prefix(32))\"")
+            renderSuggestion(text: spaced, caret: caretRect, field: fieldRect, useMirror: useMirror)
+        }
+
         // LLM request in flight: pulse the indicator so the user can see Prosper
         // is thinking (vs. having decided to stay quiet).
-        accessoryButton.setState(.thinking)
+        if currentSuggestion == nil { accessoryButton.setState(.thinking) }
 
         let requestStart = Date()
         // Any diverged in-flight generation was already cancelled at the token

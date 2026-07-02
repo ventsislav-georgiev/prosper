@@ -246,13 +246,25 @@ final class SuggestionWindow {
     /// corrected letters render in green at the caret like a ghost. The panel
     /// spans both regions: a transparent strike zone (red bar only) followed by
     /// the green replacement label.
-    func showFix(strike: String, replacement: String, at caretRect: CGRect, fieldRect: CGRect? = nil) {
+    func showFix(
+        strike: String, replacement: String, continuation: String = "",
+        at caretRect: CGRect, fieldRect: CGRect? = nil
+    ) {
         guard !replacement.isEmpty else { hide(); return }
         let font = label.font ?? defaultFont
-        label.attributedStringValue = NSAttributedString(string: replacement, attributes: [
+        // Green corrected letters, then the ordinary gray ghost continuing the
+        // sentence after the fixed word (recall buffer or chained model).
+        let attr = NSMutableAttributedString(string: replacement, attributes: [
             .foregroundColor: NSColor.systemGreen.withAlphaComponent(0.85),
             .font: font,
         ])
+        if !continuation.isEmpty {
+            attr.append(NSAttributedString(string: continuation, attributes: [
+                .foregroundColor: ghostColor,
+                .font: font,
+            ]))
+        }
+        label.attributedStringValue = attr
         label.sizeToFit()
         let size = label.frame.size
         let height = max(size.height, caretRect.height)
