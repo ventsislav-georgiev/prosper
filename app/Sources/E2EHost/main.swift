@@ -107,9 +107,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     /// Install a minimal standard Edit menu so the system can dispatch ⌘X/⌘C/⌘V/⌘A
-    /// key-equivalents to the focused field's responder (paste: etc.).
+    /// key-equivalents to the focused field's responder (paste: etc.), plus an app
+    /// menu with Quit. The window pins itself frontmost and re-steals focus on
+    /// resign-active (see `present`), so without an escape hatch a stuck host is
+    /// unkillable from the keyboard — ⌘Q and Esc both terminate it. Esc is safe
+    /// here: the harness never synthesizes Esc (it puts engines into a suppressed
+    /// state), so only a human pressing it can trigger the quit.
     private func installEditMenu() {
         let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit E2EHost", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 { NSApp.terminate(nil); return nil }  // Esc
+            return event
+        }
         let editItem = NSMenuItem()
         mainMenu.addItem(editItem)
         let edit = NSMenu(title: "Edit")

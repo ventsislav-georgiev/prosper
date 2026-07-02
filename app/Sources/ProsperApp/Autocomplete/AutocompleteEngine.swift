@@ -206,6 +206,11 @@ final class AutocompleteEngine {
     // without an AX read on the hot path.
     private var lastRenderedBefore: String?
 
+    // When `currentCaretRect` last came from a REAL AX read (vs the width-shift
+    // arithmetic in advanceGhost). Lets advanceGhost re-anchor from AX once the
+    // cached anchor ages, bounding ghost drift during long type-through runs.
+    private var caretAnchoredAt = Date.distantPast
+
     // Stamped onto the `.eventSourceUserData` field of every CGEvent we synthesize
     // (accept insertion / backspaces). The tap callback ignores events carrying it
     // so our own typing never re-enters the engine — which would otherwise clear
@@ -670,11 +675,15 @@ final class AutocompleteEngine {
                 }
                 // Otherwise: instant lexicon ghost for immediate feedback
                 // (model-free), then (re)schedule the debounced model to
-                // refine/replace it.
+                // refine/replace it. Deletes get NO immediate burst: firing one
+                // re-rendered essentially the same ghost the user was deleting
+                // away from ~300ms later ("old ghost keeps coming back" — live
+                // report). While erasing, only the debounced pause-snap runs,
+                // so the ghost returns once the user settles, not per-delete.
                 if !self.showInstantGhost(typed: typed) {
                     self.clearSuggestion()
                 }
-                self.scheduleSuggestion()
+                self.scheduleSuggestion(allowBurst: keyCode != Self.kDelete)
             }
         }
         return false
@@ -772,18 +781,19 @@ final class AutocompleteEngine {
             guard let ctx = AXCaret.currentContext() else { return false }
             currentCaretRect = Self.effectiveCaretRect(ctx.caretScreenRect, field: ctx.fieldScreenRect)
             currentFieldRect = ctx.fieldScreenRect
+            caretAnchoredAt = now
             guard Self.hasUsableCaret(currentCaretRect) else { return false }
         }
         let cands = CompletionCandidates.derive(before: shadow, after: "", lexicon: Lexicon.shared)
-        guard let word = cands.words.first else { return false }
-        let remainder: String
-        if cands.atBoundary {
-            remainder = " " + word
-        } else {
-            let frag = cands.fragment
-            guard word.hasPrefix(frag), word != frag else { return false }
-            remainder = String(word.dropFirst(frag.count))
-        }
+        // ponytail: no boundary guesses. At a word boundary the lexicon's "first
+        // frequent word" (" same", " been", " that") is pure noise the user reads
+        // as bad quality — and after a trailing space it double-spaced on accept.
+        // The model's burst ghost lands ~200ms later anyway; show nothing until
+        // then. Mid-word fragment completion stays — that one is genuinely useful.
+        guard !cands.atBoundary else { return false }
+        let frag = cands.fragment
+        guard let word = cands.words.first, word.hasPrefix(frag), word != frag else { return false }
+        let remainder = String(word.dropFirst(frag.count))
         guard !remainder.isEmpty else { return false }
         requestBefore = nil            // provisional guess, not an LLM training pair
         currentSuggestion = remainder
@@ -797,7 +807,32 @@ final class AutocompleteEngine {
     }
 
     private func advanceGhost(by text: String, remainder: String) {
-        if var rect = currentCaretRect {
+        // Re-anchor from a LIVE AX read whenever the cached anchor has aged.
+        // Width arithmetic alone drifts (overlay font only approximates the
+        // field's, Electron sub-pixel advances), and the ghost-stability
+        // contract suppresses the response-side re-anchors that used to mask
+        // it — long type-through runs accumulated drift until the ghost drew
+        // OVER the user's own text (live report). This runs on the deferred
+        // main-queue hop, after the app inserted the keystroke, so the caret
+        // is post-key — exactly where the remainder belongs. Throttled to the
+        // same ~12/s as the instant-ghost path; between reads the width shift
+        // still applies, so drift is bounded to ~0.12s of typing.
+        var reanchored = false
+        let now = Date()
+        if now.timeIntervalSince(caretAnchoredAt) > 0.12,
+           now.timeIntervalSince(lastInstantCaretRead) > 0.08 {
+            lastInstantCaretRead = now
+            if let ctx = AXCaret.currentContext() {
+                let fresh = Self.effectiveCaretRect(ctx.caretScreenRect, field: ctx.fieldScreenRect)
+                if Self.hasUsableCaret(fresh) {
+                    currentCaretRect = fresh
+                    currentFieldRect = ctx.fieldScreenRect
+                    caretAnchoredAt = now
+                    reanchored = true
+                }
+            }
+        }
+        if !reanchored, var rect = currentCaretRect {
             let font = suggestionWindow.currentFont
             let width = (text as NSString).size(withAttributes: [.font: font]).width
             rect.origin.x += width
@@ -813,7 +848,7 @@ final class AutocompleteEngine {
 
     // MARK: - Suggestion flow (main thread)
 
-    private func scheduleSuggestion() {
+    private func scheduleSuggestion(allowBurst: Bool = true) {
         lastTypedAt = Date()
         debounceTimer?.invalidate()
         // Zero built-in waiting: the user must NEVER have to pause typing for a
@@ -822,8 +857,9 @@ final class AutocompleteEngine {
         // no debounce. While one is in flight, the single-flight gate inside
         // requestSuggestion queues a refire that chains the moment it lands, so
         // continuous typing gets a fresh completion every ~gen-latency with at
-        // most one generation on the GPU at a time.
-        if inFlightAnchor == nil || Date().timeIntervalSince(inFlightSince) >= 3.0 {
+        // most one generation on the GPU at a time. (`allowBurst: false` on
+        // deletes — see the keystroke handler.)
+        if allowBurst, inFlightAnchor == nil || Date().timeIntervalSince(inFlightSince) >= 3.0 {
             requestSuggestion(burst: true)
         }
         // Pause snap: once typing stops for a debounce gap, run the FULL retry
@@ -1258,6 +1294,7 @@ final class AutocompleteEngine {
             self.abAcceptedForCurrent = false
             LoRAEvaluator.recordShown(adapterActive: LoRAEvaluator.sessionServesAdapter)
             self.currentCaretRect = liveCaret
+            self.caretAnchoredAt = Date() // fresh AX anchor (see advanceGhost)
             self.lastRenderedBefore = liveBefore // arms type-through for this ghost
             Self.e2elog("render ghost=\"\(spaced.prefix(32))\"")
             self.renderSuggestion(text: spaced, caret: liveCaret, field: liveField, useMirror: liveMirror)
