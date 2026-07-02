@@ -200,3 +200,48 @@ final class AutocompleteDebounceTests: XCTestCase {
         XCTAssertLessThanOrEqual(interval, AutocompleteEngine.debounceMax)
     }
 }
+
+/// Stale-read guard for type-through re-anchoring: a fresh AX caret rect is
+/// only trusted when it moved WITH the keystroke (see `caretMovedWithKey`).
+final class CaretMovedWithKeyTests: XCTestCase {
+    private let old = CGRect(x: 100, y: 50, width: 2, height: 16)
+
+    func testNoBaselineAlwaysAccepts() {
+        let fresh = CGRect(x: 90, y: 50, width: 2, height: 16)
+        XCTAssertTrue(AutocompleteEngine.caretMovedWithKey(from: nil, to: fresh, shift: 4))
+    }
+
+    func testStalePreKeyReadRejectedForwardSpace() {
+        // App hasn't inserted the space yet: caret unchanged (± jitter) — the
+        // "glued after pressing space" report. Must be rejected.
+        let fresh = CGRect(x: 100.5, y: 50, width: 2, height: 16)
+        XCTAssertFalse(AutocompleteEngine.caretMovedWithKey(from: old, to: fresh, shift: 4))
+    }
+
+    func testRealAdvanceAccepted() {
+        let fresh = CGRect(x: 104, y: 50, width: 2, height: 16)
+        XCTAssertTrue(AutocompleteEngine.caretMovedWithKey(from: old, to: fresh, shift: 4))
+    }
+
+    func testDriftCorrectionStillAccepted() {
+        // Our width estimate overshoots (shift 6, real advance 3): the read
+        // still moved well past the 40% threshold — accept so drift heals.
+        let fresh = CGRect(x: 103, y: 50, width: 2, height: 16)
+        XCTAssertTrue(AutocompleteEngine.caretMovedWithKey(from: old, to: fresh, shift: 6))
+    }
+
+    func testLineWrapAcceptedDespiteLeftJump() {
+        // Wrap: x jumps far left, y moves a line — legitimate.
+        let fresh = CGRect(x: 10, y: 70, width: 2, height: 16)
+        XCTAssertTrue(AutocompleteEngine.caretMovedWithKey(from: old, to: fresh, shift: 4))
+    }
+
+    func testDeleteRequiresLeftMovement() {
+        // Reverse shift (regrow on backspace): stale unchanged read rejected,
+        // real leftward move accepted.
+        let stale = CGRect(x: 100, y: 50, width: 2, height: 16)
+        XCTAssertFalse(AutocompleteEngine.caretMovedWithKey(from: old, to: stale, shift: -4))
+        let moved = CGRect(x: 96, y: 50, width: 2, height: 16)
+        XCTAssertTrue(AutocompleteEngine.caretMovedWithKey(from: old, to: moved, shift: -4))
+    }
+}

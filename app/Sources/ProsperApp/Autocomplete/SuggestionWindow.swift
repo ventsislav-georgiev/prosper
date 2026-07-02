@@ -102,7 +102,25 @@ final class SuggestionWindow {
             x: 0, y: baselineAlignedLabelY(panelHeight: height, labelHeight: size.height),
             width: width, height: min(size.height, height)
         )
+        orderFrontFading()
+    }
+
+    /// Brings the panel front. On the hidden→visible transition the ghost fades
+    /// in fast (~90ms) instead of popping — the appear is what the eye catches;
+    /// updates while already visible swap the label in place with no animation,
+    /// and hide stays instant (a lingering wrong ghost is worse than a pop-out).
+    private func orderFrontFading() {
+        if panel.isVisible {
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            return
+        }
+        panel.alphaValue = 0
         panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.09
+            panel.animator().alphaValue = 1
+        }
     }
 
     /// The label's panel-local y that puts the ghost glyphs' BASELINE where the
@@ -191,7 +209,7 @@ final class SuggestionWindow {
             x: 0, y: baselineAlignedLabelY(panelHeight: height, labelHeight: size.height),
             width: width, height: min(size.height, height)
         )
-        panel.orderFrontRegardless()
+        orderFrontFading()
     }
 
     /// Adapts the ghost text color to a sampled background luminance so it stays

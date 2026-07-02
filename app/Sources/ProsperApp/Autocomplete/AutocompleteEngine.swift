@@ -673,6 +673,17 @@ final class AutocompleteEngine {
                     }
                     return
                 }
+                // Reverse type-through: a plain backspace restores the deleted
+                // character onto the FRONT of the ghost, in place — deleting
+                // must never trigger a different suggestion or flicker, only a
+                // genuine mismatch may (user directive). ⌥/⌘/⌃-deletes remove
+                // more than one char, so they fall through to the clear path.
+                if keyCode == Self.kDelete, !optionHeld, !commandHeld, !controlHeld,
+                   self.regrowGhostOnDelete() {
+                    self.lastTypedAt = Date()
+                    self.debounceTimer?.invalidate()
+                    return
+                }
                 // Otherwise: hide the ghost and (re)schedule the model. Pure-LLM
                 // ghosts — the instant lexicon guess was removed (Cotypist-style):
                 // its frequency-word output read as junk next to model completions,
@@ -736,11 +747,32 @@ final class AutocompleteEngine {
         return false
     }
 
+    /// Reverse of typeThrough: a plain backspace prepends the just-deleted
+    /// character back onto the ghost and shifts it left — the ghost regrows in
+    /// place instead of vanishing and being replaced by a fresh (flickering)
+    /// suggestion. Returns false when there is no healthy anchored LLM ghost to
+    /// regrow, or the restored character would not render inline (newline).
+    private func regrowGhostOnDelete() -> Bool {
+        guard let suggestion = currentSuggestion, !suggestion.isEmpty,
+              !isFix, replaceLength == 0,
+              requestBefore != nil, // LLM ghost with a known anchor
+              let anchor = lastRenderedBefore,
+              let restored = anchor.last,
+              !restored.isNewline
+        else { return false }
+        lastRenderedBefore = String(anchor.dropLast())
+        requestBefore = requestBefore.map { String($0.dropLast()) }
+        let grown = String(restored) + suggestion
+        currentSuggestion = grown
+        advanceGhost(by: String(restored), remainder: grown, reverse: true)
+        return true
+    }
+
     /// Shifts the ghost right by the rendered width of `text` and re-renders
     /// `remainder` there. Width is measured with the ghost's current font (which
     /// mirrors the field's font), so drift across a few characters is negligible;
     /// every full refresh (debounced LLM response) re-anchors from a fresh AX read.
-    private func advanceGhost(by text: String, remainder: String) {
+    private func advanceGhost(by text: String, remainder: String, reverse: Bool = false) {
         // Re-anchor from a LIVE AX read whenever the cached anchor has aged.
         // Width arithmetic alone drifts (overlay font only approximates the
         // field's, Electron sub-pixel advances), and the ghost-stability
@@ -751,6 +783,17 @@ final class AutocompleteEngine {
         // is post-key — exactly where the remainder belongs. Throttled to the
         // same ~12/s as the instant-ghost path; between reads the width shift
         // still applies, so drift is bounded to ~0.12s of typing.
+        //
+        // STALE-READ GUARD: the target app inserts the key cross-process, so a
+        // fresh AX read can still describe the PRE-key caret (and some fields
+        // never advance the caret rect for a trailing space). Accepting such a
+        // read yanked the ghost back flush against the previous character —
+        // the "glued after pressing space" report. Only accept a read whose
+        // caret actually moved with the keystroke; otherwise keep the
+        // deterministic width shift and retry on a later key.
+        let font = suggestionWindow.currentFont
+        let width = (text as NSString).size(withAttributes: [.font: font]).width
+        let shift = reverse ? -width : width
         var reanchored = false
         let now = Date()
         if now.timeIntervalSince(caretAnchoredAt) > 0.12,
@@ -758,8 +801,9 @@ final class AutocompleteEngine {
             lastInstantCaretRead = now
             if let ctx = AXCaret.currentContext() {
                 let fresh = Self.effectiveCaretRect(ctx.caretScreenRect, field: ctx.fieldScreenRect)
-                if Self.hasUsableCaret(fresh) {
-                    currentCaretRect = fresh
+                if let freshRect = fresh, Self.hasUsableCaret(fresh),
+                   Self.caretMovedWithKey(from: currentCaretRect, to: freshRect, shift: shift) {
+                    currentCaretRect = freshRect
                     currentFieldRect = ctx.fieldScreenRect
                     caretAnchoredAt = now
                     reanchored = true
@@ -767,9 +811,7 @@ final class AutocompleteEngine {
             }
         }
         if !reanchored, var rect = currentCaretRect {
-            let font = suggestionWindow.currentFont
-            let width = (text as NSString).size(withAttributes: [.font: font]).width
-            rect.origin.x += width
+            rect.origin.x += shift
             currentCaretRect = rect
         }
         let useMirror = Self.shouldUseMirror(
@@ -1205,8 +1247,12 @@ final class AutocompleteEngine {
             // NOT swap it for a different sample — that mid-flight text swap is
             // the flicker users notice. Lexicon ghosts (requestBefore == nil) stay
             // replaceable: they are provisional guesses awaiting the model.
+            // An EXTENSION of the visible ghost falls through to render: the
+            // prefix on screen stays put and new characters appear on the
+            // right — an in-place update, not a swap, so no flicker.
             if let ghost = self.currentSuggestion, !ghost.isEmpty,
                self.requestBefore != nil, spaced != ghost,
+               !spaced.hasPrefix(ghost),
                self.lastRenderedBefore == liveBefore,
                !self.ghostNearlyExhausted {
                 Self.e2elog("keep ghost: \"\(ghost.prefix(24))\" over \"\(spaced.prefix(24))\"")
@@ -1499,6 +1545,18 @@ final class AutocompleteEngine {
     /// - (c) `anchor` extends `live` (backspace/deletion) → reschedule.
     /// - (d) anything else (genuine divergence, paste, caret jump, script switch)
     ///       → reschedule.
+    /// Whether a fresh AX caret read is consistent with the keystroke that just
+    /// happened: the caret must have moved at least ~40% of the typed width in
+    /// the key's direction (real advances land near 100%; a stale pre-key read
+    /// sits at ~0 ± a pt of jitter), or jumped lines (wrap / newline). Pure +
+    /// `nonisolated` so it is unit-testable off the actor.
+    nonisolated static func caretMovedWithKey(from old: CGRect?, to fresh: CGRect, shift: CGFloat) -> Bool {
+        guard let old else { return true } // no baseline to distrust against
+        if abs(fresh.midY - old.midY) > max(old.height, 1) * 0.6 { return true }
+        let moved = fresh.maxX - old.maxX
+        return shift >= 0 ? moved >= shift * 0.4 : moved <= shift * 0.4
+    }
+
     nonisolated static func reconcile(suggestion: String, anchor: String, live: String) -> ReconcileOutcome {
         if live == anchor { return .show(suggestion) }
         if live.hasPrefix(anchor) {
