@@ -1041,7 +1041,7 @@ final class AutocompleteEngine {
         // a completion that would extend a likely typo. BUT never treat a word the
         // user is mid-typing as a typo when it's a valid prefix of real words
         // ("conv" → conversation) — that was suppressing all mid-word completions.
-        if Self.lastWordLooksMisspelled(before), !Self.lastWordIsCompletablePrefix(before) {
+        if Self.lastWordLooksSuspicious(before), !Self.lastWordIsCompletablePrefix(before) {
             if Preferences.showSuggestedFixes,
                let (_, original, fix) = Self.spellingFix(before) {
                 // Per-letter diff (Cotypist-style): a red line strikes only the
@@ -1725,7 +1725,33 @@ final class AutocompleteEngine {
     static func startsNewWordAgainstUnfinishedFragment(before: String, spaced: String) -> Bool {
         guard let last = before.last, last.isLetter else { return false }
         guard spaced.first == " " else { return false }
-        return lastWordLooksMisspelled(before)
+        return lastWordLooksSuspicious(before)
+    }
+
+    /// The trailing word deserves typo treatment: flagged by the system spell
+    /// checker, OR a short all-ASCII lowercase token the checker tolerates as a
+    /// known abbreviation ("tte" = transesophageal echo) but our lexicon doesn't
+    /// know — provided the checker can propose a real-word correction, so
+    /// intentional tokens (identifiers, nicknames) stay untouched. Transliterated
+    /// Bulgarian is exempt: latinica words are all lexicon-unknown by nature.
+    /// Live report driving this: "tte" showed no correction AND got a spaced
+    /// garbage continuation — both gates keyed off the too-lenient checker.
+    static func lastWordLooksSuspicious(_ before: String) -> Bool {
+        if lastWordLooksMisspelled(before) { return true }
+        var word = ""
+        for ch in before.reversed() { if ch.isLetter { word.append(ch) } else { break } }
+        let trailing = String(word.reversed())
+        guard trailing.count >= 3, trailing.count <= 6,
+              trailing.allSatisfy({ $0.isASCII && $0.isLowercase }),
+              !Lexicon.shared.isKnownWord(trailing),
+              !CoreBridge.looksLikeTransliteratedBulgarian(before)
+        else { return false }
+        let checker = NSSpellChecker.shared
+        let range = NSRange(location: 0, length: (trailing as NSString).length)
+        let guesses = checker.guesses(
+            forWordRange: range, in: trailing, language: nil, inSpellDocumentWithTag: 0
+        ) ?? []
+        return guesses.contains { Lexicon.shared.isKnownWord($0.lowercased()) }
     }
 
     /// Whether the trailing word of `before` is flagged misspelled by the system
@@ -1784,9 +1810,12 @@ final class AutocompleteEngine {
         let range = NSRange(location: 0, length: (original as NSString).length)
         guard let guesses = checker.guesses(
             forWordRange: range, in: original, language: nil, inSpellDocumentWithTag: 0
-        ), let best = guesses.first, best.lowercased() != original.lowercased() else {
-            return nil
-        }
+        ) else { return nil }
+        // Prefer a correction the lexicon knows as a common word ("tte" guesses
+        // may lead with an abbreviation; the user almost always meant "the").
+        let best = guesses.first { Lexicon.shared.isKnownWord($0.lowercased()) }
+            ?? guesses.first
+        guard let best, best.lowercased() != original.lowercased() else { return nil }
         return (original.count, original, best)
     }
 
