@@ -20,6 +20,16 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.122.3 *(unreleased)*
 
+### Inline autocomplete — instant, always-on suggestions
+- **The first ghost now fires on the first keystroke** — no debounce, no
+  throttle window. When no request is running, every keystroke launches the
+  fast completion pass immediately; while one runs, the next is queued and
+  chains the moment it lands. You never have to pause typing for a suggestion
+  to appear; pausing only upgrades the current one with a full-quality pass.
+- **Removed the orange "failed" indicator for empty results.** The model
+  finding nothing to suggest is a normal outcome, not an error — the accessory
+  now stays quiet instead of flashing orange.
+
 ### Inline autocomplete — review hardening
 - **Fixed a latent stuck-state** where an abandoned suggestion request (emoji,
   spelling-fix, or typo paths) could leave autocomplete idle for up to 3 seconds:
