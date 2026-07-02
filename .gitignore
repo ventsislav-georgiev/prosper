@@ -44,3 +44,6 @@ scripts/embedded.provisionprofile
 # Signing keys (never commit)
 *.jwk
 server/.signing-key.jwk
+
+# Local benchmark harness (not tracked)
+bench/
