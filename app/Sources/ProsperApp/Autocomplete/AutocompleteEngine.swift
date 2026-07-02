@@ -1839,8 +1839,27 @@ final class AutocompleteEngine {
     /// Accepts only the first word (plus its trailing whitespace) of the current
     /// suggestion, keeping the remainder visible as a fresh suggestion (⌥→).
     private func acceptFirstWord() {
-        // Emoji replacements / typo fixes are atomic — accept the whole thing.
-        if replaceLength > 0 { acceptCurrentSuggestion(); return }
+        if replaceLength > 0 {
+            // Typo fix: Tab accepts ONLY the corrected word (live report: the
+            // whole ghost including the gray continuation was injected).
+            // Backspace the divergent typed tail, type the corrected word, then
+            // re-suggest — the recall buffer usually re-serves the same
+            // continuation instantly as a normal word-walkable ghost.
+            if isFix, let suggestion = currentSuggestion, !suggestion.isEmpty {
+                let (head, tail) = Self.splitFirstWord(suggestion)
+                let replaceLen = replaceLength
+                let bundleId = requestBundleId
+                clearSuggestion()
+                typedShadow = String(typedShadow.dropLast(replaceLen))
+                sendBackspaces(replaceLen)
+                CompletionStats.recordAccept(head)
+                insert(head, bundleId: bundleId)
+                if !tail.isEmpty { scheduleSuggestion() }
+                return
+            }
+            // Emoji replacements stay atomic — accept the whole thing.
+            acceptCurrentSuggestion(); return
+        }
         // Accept-safety guard (P0.1b): same reconcile as the whole-line accept, so a
         // word-accept on a drifted ghost trims to the live text or refreshes instead
         // of typing a stale word.
