@@ -66,6 +66,12 @@ final class SuggestionWindow {
     /// (the focused field's bounds, when known) is used to keep the ghost from
     /// spilling past the right edge of the field/window — the text truncates with
     /// an ellipsis instead of overflowing into neighbouring UI or off-screen.
+    ///
+    /// This ANCHORS the ghost: the panel and every glyph in it are laid out once,
+    /// here, and stay put. Type-through/deletes mutate visibility of a prefix
+    /// (`consumeGhost`/`unconsumeGhost`) without touching the frame or re-laying
+    /// out the text, so the remainder is pixel-identical between keystrokes —
+    /// no shimmer, no drift, no left-right wiggle (Cotypist's observed model).
     func show(text: String, at caretRect: CGRect, fieldRect: CGRect? = nil) {
         guard !text.isEmpty else {
             hide()
@@ -78,13 +84,16 @@ final class SuggestionWindow {
         // full space-width — the gap then matches a typed space exactly. The
         // inserted text keeps its space (handled upstream), so they stay in sync.
         strikeBar.isHidden = true // fix-only decoration (see showFix)
+        ghostFull = text
+        ghostConsumed = 0
         var display = text
         var leadingGap: CGFloat = 0
         if display.hasPrefix(" ") {
             display = String(display.drop(while: { $0 == " " }))
             leadingGap = (" " as NSString).size(withAttributes: [.font: label.font as Any]).width
         }
-        label.stringValue = display
+        ghostStrippedLeading = text.count - display.count
+        applyGhostColors()
         label.sizeToFit()
 
         let size = label.frame.size
@@ -106,11 +115,7 @@ final class SuggestionWindow {
         // the glyphs; Chromium/Electron report the true glyph box) and validated
         // against the field bounds — see `ghostLineCenterY`.
         let lineCenterY = AutocompleteEngine.ghostLineCenterY(caret: caretRect, field: fieldRect)
-        // Whole-point origin: per-keystroke width arithmetic yields fractional
-        // positions, and each fractional move re-rasterizes the glyphs at a new
-        // subpixel phase — the strokes visibly "breathe" thicker/thinner while
-        // typing (live report). Snapping the panel to the point grid keeps the
-        // rasterization identical between nearby renders.
+        // Whole-point origin so the glyph rasterization phase is stable.
         let origin = CGPoint(x: (startX).rounded(), y: (lineCenterY - height / 2).rounded())
         let frame = NSRect(origin: origin, size: NSSize(width: width, height: height))
         panel.setFrame(frame, display: true)
@@ -119,6 +124,54 @@ final class SuggestionWindow {
             width: width, height: min(size.height, height)
         )
         orderFrontFading()
+    }
+
+    // MARK: - Anchored ghost consumption (type-through / delete-regrow)
+
+    /// Full anchored suggestion text, how many of its leading characters the user
+    /// has typed through (they render CLEAR — the app's own text shows through in
+    /// the gap), and how many leading spaces were stripped from display.
+    private var ghostFull: String = ""
+    private var ghostConsumed: Int = 0
+    private var ghostStrippedLeading: Int = 0
+
+    /// The user typed the next `n` predicted characters: make them transparent
+    /// in place. NOTHING moves — the frame and the remaining glyphs keep their
+    /// exact screen positions, so consumption is visually just the user's real
+    /// text filling the gap the cleared glyphs leave behind.
+    func consumeGhost(by n: Int) {
+        guard panel.isVisible, !ghostFull.isEmpty else { return }
+        ghostConsumed = min(ghostConsumed + n, ghostFull.count)
+        applyGhostColors()
+    }
+
+    /// Reverse of `consumeGhost` for a single backspace. Returns false when
+    /// there is nothing consumed to restore (the delete goes past the ghost's
+    /// birth point — the engine then regrows by re-anchoring).
+    @discardableResult
+    func unconsumeGhost() -> Bool {
+        guard panel.isVisible, ghostConsumed > 0 else { return false }
+        ghostConsumed -= 1
+        applyGhostColors()
+        return true
+    }
+
+    /// Recolors the anchored ghost text: consumed prefix clear, remainder in the
+    /// ghost color. Layout (string, font, frame) is untouched, so glyph positions
+    /// and rasterization stay pixel-identical.
+    private func applyGhostColors() {
+        let display = String(ghostFull.dropFirst(ghostStrippedLeading))
+        guard !display.isEmpty else { return }
+        let clearLen = max(0, min(ghostConsumed - ghostStrippedLeading, display.count))
+        let attr = NSMutableAttributedString(string: display, attributes: [
+            .font: label.font ?? defaultFont,
+            .foregroundColor: ghostColor,
+        ])
+        if clearLen > 0 {
+            let head = NSRange(location: 0, length: (String(display.prefix(clearLen)) as NSString).length)
+            attr.addAttribute(.foregroundColor, value: NSColor.clear, range: head)
+        }
+        label.attributedStringValue = attr
     }
 
     /// Brings the panel front. On the hidden→visible transition the ghost fades
@@ -239,13 +292,18 @@ final class SuggestionWindow {
         orderFrontFading()
     }
 
+    /// Current ghost text color (adaptive — see `adaptColor`). Attributed renders
+    /// (the anchored ghost) read this; plain-label renders use `label.textColor`.
+    private var ghostColor: NSColor = NSColor.secondaryLabelColor.withAlphaComponent(0.6)
+
     /// Adapts the ghost text color to a sampled background luminance so it stays
     /// legible on dark or light surfaces.
     func adaptColor(toBackground bg: NSColor) {
         let rgb = bg.usingColorSpace(.deviceRGB) ?? bg
         let luminance = 0.299 * rgb.redComponent + 0.587 * rgb.greenComponent + 0.114 * rgb.blueComponent
         let base: NSColor = luminance < 0.5 ? .white : .black
-        label.textColor = base.withAlphaComponent(0.55)
+        ghostColor = base.withAlphaComponent(0.55)
+        label.textColor = ghostColor
     }
 
     func hide() {

@@ -736,7 +736,14 @@ final class AutocompleteEngine {
                 return false
             }
             currentSuggestion = remainder
-            advanceGhost(by: typed, remainder: remainder)
+            // Anchored ghost: the typed prefix goes transparent IN PLACE — no
+            // AX read, no width arithmetic, nothing on screen moves. (Mirror
+            // bubbles re-render; they live above the field, not on the line.)
+            if mirrorWindow.isVisible, let field = currentFieldRect {
+                mirrorWindow.show(text: remainder, fieldRect: field)
+            } else {
+                suggestionWindow.consumeGhost(by: typed.count)
+            }
             return true
         }
 
@@ -764,62 +771,22 @@ final class AutocompleteEngine {
         requestBefore = requestBefore.map { String($0.dropLast()) }
         let grown = String(restored) + suggestion
         currentSuggestion = grown
-        advanceGhost(by: String(restored), remainder: grown, reverse: true)
-        return true
-    }
-
-    /// Shifts the ghost right by the rendered width of `text` and re-renders
-    /// `remainder` there. Width is measured with the ghost's current font (which
-    /// mirrors the field's font), so drift across a few characters is negligible;
-    /// every full refresh (debounced LLM response) re-anchors from a fresh AX read.
-    private func advanceGhost(by text: String, remainder: String, reverse: Bool = false) {
-        // Re-anchor from a LIVE AX read whenever the cached anchor has aged.
-        // Width arithmetic alone drifts (overlay font only approximates the
-        // field's, Electron sub-pixel advances), and the ghost-stability
-        // contract suppresses the response-side re-anchors that used to mask
-        // it — long type-through runs accumulated drift until the ghost drew
-        // OVER the user's own text (live report). This runs on the deferred
-        // main-queue hop, after the app inserted the keystroke, so the caret
-        // is post-key — exactly where the remainder belongs. Throttled to the
-        // same ~12/s as the instant-ghost path; between reads the width shift
-        // still applies, so drift is bounded to ~0.12s of typing.
-        //
-        // STALE-READ GUARD: the target app inserts the key cross-process, so a
-        // fresh AX read can still describe the PRE-key caret (and some fields
-        // never advance the caret rect for a trailing space). Accepting such a
-        // read yanked the ghost back flush against the previous character —
-        // the "glued after pressing space" report. Only accept a read whose
-        // caret actually moved with the keystroke; otherwise keep the
-        // deterministic width shift and retry on a later key.
-        let font = suggestionWindow.currentFont
-        let width = (text as NSString).size(withAttributes: [.font: font]).width
-        let shift = reverse ? -width : width
-        var reanchored = false
-        let now = Date()
-        if now.timeIntervalSince(caretAnchoredAt) > 0.12,
-           now.timeIntervalSince(lastInstantCaretRead) > 0.08 {
-            lastInstantCaretRead = now
-            if let ctx = AXCaret.currentContext() {
-                let fresh = Self.effectiveCaretRect(ctx.caretScreenRect, field: ctx.fieldScreenRect)
-                if let freshRect = fresh, Self.hasUsableCaret(fresh),
-                   Self.caretMovedWithKey(from: currentCaretRect, to: freshRect, shift: shift) {
-                    currentCaretRect = freshRect
-                    currentFieldRect = ctx.fieldScreenRect
-                    caretAnchoredAt = now
-                    reanchored = true
-                }
+        if mirrorWindow.isVisible, let field = currentFieldRect {
+            mirrorWindow.show(text: grown, fieldRect: field)
+        } else if !suggestionWindow.unconsumeGhost() {
+            // Deleting past the ghost's birth point: the anchored panel has no
+            // consumed prefix left to reveal, so re-anchor one character to the
+            // left. Width arithmetic is acceptable here — this is the rare tail
+            // of a delete-run, and the next response re-anchors from live AX.
+            if var rect = currentCaretRect {
+                let width = (String(restored) as NSString)
+                    .size(withAttributes: [.font: suggestionWindow.currentFont]).width
+                rect.origin.x -= width
+                currentCaretRect = rect
+                suggestionWindow.show(text: grown, at: rect, fieldRect: currentFieldRect)
             }
         }
-        if !reanchored, var rect = currentCaretRect {
-            rect.origin.x += shift
-            currentCaretRect = rect
-        }
-        let useMirror = Self.shouldUseMirror(
-            caret: currentCaretRect, field: currentFieldRect, bundleId: requestBundleId
-        )
-        renderSuggestion(
-            text: remainder, caret: currentCaretRect, field: currentFieldRect, useMirror: useMirror
-        )
+        return true
     }
 
     // MARK: - Suggestion flow (main thread)
@@ -1180,7 +1147,11 @@ final class AutocompleteEngine {
             if !self.typedShadow.isEmpty, !liveBefore.hasSuffix(self.typedShadow) {
                 self.recordNoShow(.staleAX)
                 Self.e2elog("stale-AX reschedule: live=\"\(liveBefore.suffix(24))\" shadow=\"\(self.typedShadow.suffix(12))\"")
-                self.scheduleSuggestion()
+                // Same quiet-reschedule rule as reconcile-.reschedule below: a
+                // visible ghost stays; no burst (the causing keystroke burst).
+                if self.currentSuggestion == nil {
+                    self.scheduleSuggestion(allowBurst: false)
+                }
                 return
             }
             // P0.2 reconcile (was a binary drop). The suggestion continues `before`
@@ -1194,7 +1165,17 @@ final class AutocompleteEngine {
             case .reschedule:
                 self.recordNoShow(.diverged)
                 Self.e2elog("reconcile reschedule: live=\"\(liveBefore.suffix(24))\" req=\"\(before.suffix(24))\"")
-                self.scheduleSuggestion()
+                // A stale response must never SWAP a live ghost, and its
+                // reschedule must not burst: the keystroke that caused the
+                // divergence already fired its own burst, and during a
+                // delete-run (regrow keeps the ghost, anchor extends live →
+                // reschedule) an immediate burst here replaced the regrown
+                // ghost with an unrelated suggestion mid-erase (live report:
+                // retyping the ghost's own next char after deleting swapped
+                // the whole ghost). Healthy visible ghost → just stay quiet.
+                if self.currentSuggestion == nil {
+                    self.scheduleSuggestion(allowBurst: false)
+                }
                 return
             }
 
@@ -1437,8 +1418,11 @@ final class AutocompleteEngine {
             typedShadow = String(typedShadow.dropLast(replaceLen)) // mirror synthetic deletes
             sendBackspaces(replaceLen)
         }
-        _ = wasFix
         insert(suggestion, bundleId: bundleId)
+        // Accepting a typo fix leaves the caret after the corrected word with no
+        // ghost — chain straight into a completion so the continuation appears
+        // immediately (Cotypist-style: correction flows into the next words).
+        if wasFix { scheduleSuggestion() }
     }
 
     /// Inserts text via the per-app insertion path: synthesized unicode typing,
@@ -1823,59 +1807,15 @@ final class AutocompleteEngine {
             return
         }
         currentSuggestion = remainder
-        // Render the remainder immediately — but PRE-SHIFTED to where it belongs
-        // AFTER the injected word lands (old caret + inserted width). Rendering at
-        // the old caret drew the remainder ON TOP of the arriving word for a few
-        // frames (overlapping smeared glyphs), and the reposition below then
-        // snapped it right — the Tab-accept "jiggle" (live recording). Pre-shifted,
-        // the injected word fills the gap underneath and nothing moves.
-        let preAcceptRect = currentCaretRect
-        let insertedWidth = (toInsert as NSString)
-            .size(withAttributes: [.font: suggestionWindow.currentFont]).width
-        if var rect = currentCaretRect {
-            rect.origin.x += insertedWidth
-            currentCaretRect = rect
+        // Anchored ghost: the accepted word goes transparent IN PLACE and the
+        // injected text fills the gap underneath — the remainder's glyphs never
+        // move, so a Tab-walk down the suggestion is visually static (the old
+        // render-then-reposition dance smeared and jiggled — live recordings).
+        if mirrorWindow.isVisible, let field = currentFieldRect {
+            mirrorWindow.show(text: remainder, fieldRect: field)
+        } else {
+            suggestionWindow.consumeGhost(by: head.count)
         }
-        renderRemainder(remainder, bundleId: bundleId)
-        // Reposition from a live AX read once the synthesized typing has landed —
-        // corrects the ghost-font width estimate. The read races the injection
-        // (cross-process), so accept it only when the caret actually advanced
-        // (same stale-read guard as advanceGhost); retry once, then keep the
-        // width-shifted position (drift is bounded and the next response
-        // re-anchors). The synthetic events are tagged and ignored by our tap,
-        // so they won't clear this suggestion.
-        func reposition(attempt: Int) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.04 : 0.12)) { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, self.currentSuggestion == remainder else { return }
-                    guard let ctx = AXCaret.currentContext(),
-                          let fresh = Self.effectiveCaretRect(ctx.caretScreenRect, field: ctx.fieldScreenRect),
-                          Self.hasUsableCaret(fresh)
-                    else { if attempt == 0 { reposition(attempt: 1) }; return }
-                    guard Self.caretMovedWithKey(from: preAcceptRect, to: fresh, shift: insertedWidth) else {
-                        if attempt == 0 { reposition(attempt: 1) }
-                        return
-                    }
-                    self.currentCaretRect = fresh
-                    self.currentFieldRect = ctx.fieldScreenRect
-                    self.suggestionWindow.applyFont(ctx.caretFont)
-                    self.renderRemainder(remainder, bundleId: bundleId)
-                }
-            }
-        }
-        reposition(attempt: 0)
-    }
-
-    /// Re-renders `remainder` through the same overlay it started in: a mirrored
-    /// suggestion (no usable caret + opted-in app) stays in the bubble; everything
-    /// else stays inline at the caret.
-    private func renderRemainder(_ remainder: String, bundleId: String?) {
-        let useMirror = Self.shouldUseMirror(
-            caret: currentCaretRect, field: currentFieldRect, bundleId: bundleId
-        )
-        renderSuggestion(
-            text: remainder, caret: currentCaretRect, field: currentFieldRect, useMirror: useMirror
-        )
     }
 
     /// Splits a string into (first word + trailing run of whitespace, remainder).
