@@ -1083,7 +1083,11 @@ enum CoreBridge {
                 .map { String($0.filter { $0.isLetter || $0.isNumber }) }
                 .filter { !$0.isEmpty }
         }
-        let beforeNorm = norm(before).joined(separator: " ")
+        // Scan only the recent tail: echo regurgitation lifts from the context
+        // the model just saw, while a legitimate continuation in a LONG document
+        // may reuse a 3-word phrase written pages earlier — scanning the whole
+        // field would suppress those as false positives.
+        let beforeNorm = norm(String(before.suffix(600))).joined(separator: " ")
         guard !beforeNorm.isEmpty else { return false }
         let words = norm(s)
         guard words.count >= 3 else { return false }
