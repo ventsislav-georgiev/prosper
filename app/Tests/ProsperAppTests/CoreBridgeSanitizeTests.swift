@@ -149,6 +149,37 @@ final class CoreBridgeSanitizeTests: XCTestCase {
         XCTAssertFalse(CoreBridge.echoesAnywhere("so we go on", before: "and so we went"))
     }
 
+    // MARK: - Punctuation-insensitive echo (BG live-echo regression)
+
+    func testEchoesEarlierSpanIgnoresPunctuationDifferences() {
+        // Model echo differs from the typed text only by a comma — must still reject.
+        XCTAssertTrue(CoreBridge.echoesEarlierSpan(
+            "Здравей как си днес", before: "Здравей, как си днес? Аз съм "))
+    }
+
+    func testEchoesAnywhereIgnoresPunctuationDifferences() {
+        XCTAssertTrue(CoreBridge.echoesAnywhere(
+            "ще прегледам доклада утре сутрин", before: "Прегледах доклада, утре сутрин ще пиша"))
+    }
+
+    // MARK: - Render-time live-echo guard (stale-AX duplicate ghost)
+
+    func testEchoesLiveContextRejectsFullTailEcho() {
+        // AX lagged: request-time `before` missed "как си", the model produced
+        // exactly those words — at render time they ARE the live text's tail.
+        XCTAssertTrue(CoreBridge.echoesLiveContext("как си", liveBefore: "Здравей, как си"))
+    }
+
+    func testEchoesLiveContextRejectsRestatement() {
+        XCTAssertTrue(CoreBridge.echoesLiveContext(
+            "Здравей как си днес", liveBefore: "Здравей, как си днес? "))
+    }
+
+    func testEchoesLiveContextKeepsGenuineContinuation() {
+        XCTAssertFalse(CoreBridge.echoesLiveContext(
+            "добре, а ти как прекара деня", liveBefore: "Здравей, как си? Аз съм "))
+    }
+
     // MARK: - Internal loop guard (cutImmediateRepeat)
 
     func testCutsStutteredWord() {

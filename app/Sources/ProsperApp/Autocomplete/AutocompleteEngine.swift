@@ -57,6 +57,14 @@ final class AutocompleteEngine {
     // keystroke so a superseded generation stops prefill/decode immediately
     // instead of running to completion on the serialized MLX actor.
     private var completionTask: Task<Void, Never>?
+    // Pipelined single-flight (see requestSuggestion): the `before` text of the
+    // request currently in flight, and whether a fresh request should fire as
+    // soon as it lands. Replaces the old cancel-on-every-fire, which meant that
+    // during continuous typing every response was cancelled before it could
+    // land — so no ghost ever appeared until the user paused.
+    private var inFlightAnchor: String?
+    private var inFlightSince: Date = .distantPast
+    private var pendingRefire = false
 
     /// Shadow of the printable characters typed since the last caret-moving
     /// event (click, arrow/Tab/Return, app switch). Electron apps (Slack) update
@@ -153,6 +161,7 @@ final class AutocompleteEngine {
         case escSuppressed, addressBar, textBeforeEmpty, staleAX, midlineDisabled
         case secureInput, suppressOnTypo, staleResponseToken, staleNoContext
         case diverged, midWord, modelEmpty, agentPaused, acceptDiverged
+        case liveEcho
     }
     private(set) var noShowCounts: [NoShowReason: Int] = [:]
     private func recordNoShow(_ reason: NoShowReason) {
@@ -625,24 +634,34 @@ final class AutocompleteEngine {
             if typedShadow.count > 64 { typedShadow = String(typedShadow.suffix(64)) }
         }
 
-        // Type-through: the user typed exactly what the ghost predicted next —
-        // consume it from the ghost locally instead of killing the suggestion and
-        // paying a full LLM round trip. The ghost visually "absorbs" the
-        // keystroke; a silent background refresh is still scheduled so the model
-        // can extend/correct, and it replaces the ghost seamlessly when it lands.
-        if typeThrough(typed: typed) {
-            scheduleSuggestion() // refresh WITHOUT clearing the visible ghost
-            return false
+        // Ghost work is DEFERRED off the tap callback. This closure runs inside
+        // the CGEventTap callback, and the OS delays delivering the keystroke to
+        // the frontmost app until we return — so anything slow here is felt as
+        // system-wide typing lag (observed in Safari). typeThrough/showInstantGhost
+        // do lexicon scans, AX caret reads, and overlay window renders; none of
+        // them affect the swallow decision (this path always passes the key
+        // through), so hop them onto the next main-runloop tick. main.async is
+        // FIFO, so per-keystroke ordering is preserved.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Type-through: the user typed exactly what the ghost predicted
+                // next — consume it from the ghost locally instead of killing the
+                // suggestion and paying a full LLM round trip. A silent background
+                // refresh is still scheduled so the model can extend/correct.
+                if self.typeThrough(typed: typed) {
+                    self.scheduleSuggestion() // refresh WITHOUT clearing the ghost
+                    return
+                }
+                // Otherwise: instant lexicon ghost for immediate feedback
+                // (model-free), then (re)schedule the debounced model to
+                // refine/replace it.
+                if !self.showInstantGhost(typed: typed) {
+                    self.clearSuggestion()
+                }
+                self.scheduleSuggestion()
+            }
         }
-
-        // Any other keystroke: show an INSTANT lexicon ghost for immediate feedback
-        // (model-free — see showInstantGhost), then (re)schedule the debounced model
-        // to refine/replace it. Falls back to clearing when we can't cheaply place a
-        // ghost yet. This is what makes typing feel live instead of "ghost only on pause".
-        if !showInstantGhost(typed: typed) {
-            clearSuggestion()
-        }
-        scheduleSuggestion()
         return false
     }
 
@@ -783,7 +802,10 @@ final class AutocompleteEngine {
         // overloaded the engine). Otherwise fall back to the short trailing debounce so
         // a brief pause still snaps quickly.
         if Date().timeIntervalSince(lastRequestFiredAt) >= Self.debounceMaxWait {
-            requestSuggestion()
+            // Burst fire: the user is mid-typing. Run only the fast deterministic
+            // first rung — a full retry ladder here can't land inside a typing
+            // gap and just burns GPU (felt as system-wide lag).
+            requestSuggestion(burst: true)
             return
         }
         debounceTimer = Timer.scheduledTimer(
@@ -807,7 +829,7 @@ final class AutocompleteEngine {
         requestSuggestion()
     }
 
-    private func requestSuggestion() {
+    private func requestSuggestion(burst: Bool = false) {
         // Never autocomplete inside Prosper's own UI (command runner, translate
         // panel, settings). The indicator/ghost must not appear over our own
         // windows, so bail when we are the frontmost app.
@@ -924,6 +946,20 @@ final class AutocompleteEngine {
             return
         }
 
+        // Pipelined single-flight: when a request is already in flight and the
+        // user has only typed FORWARD since it fired, let it land — reconcile()
+        // trims the consumed prefix, so the response is still showable. The old
+        // cancel-on-every-fire meant continuous typing cancelled every response
+        // before it arrived (ghosts only appeared on pause). A fresh request is
+        // queued to fire the moment the in-flight one completes. The age bound
+        // covers lost completions (cancelled tasks return without calling back).
+        if let anchor = inFlightAnchor,
+           Date().timeIntervalSince(inFlightSince) < 3.0,
+           before.hasPrefix(anchor) {
+            pendingRefire = before != anchor
+            return
+        }
+
         requestToken &+= 1
         let token = requestToken
         let caretRect = Self.effectiveCaretRect(context.caretScreenRect, field: fieldRect)
@@ -1023,20 +1059,33 @@ final class AutocompleteEngine {
 
         let requestStart = Date()
         lastRequestFiredAt = requestStart
-        // Supersede any generation still in flight from a prior keystroke: the
-        // maxWait throttle fires the model DURING a typing burst, so without this
-        // the engine would stack overlapping generations (the old per-keystroke
-        // overload). CoreBridge.complete checks Task.isCancelled + cancels the
+        // Supersede a DIVERGED generation still in flight (backspace, caret move —
+        // the forward-typing case was already pipelined above and never reaches
+        // here). CoreBridge.complete checks Task.isCancelled + cancels the
         // server-side generation, so the stale one stops prefill/decode at once.
         completionTask?.cancel()
+        inFlightAnchor = before
+        inFlightSince = requestStart
+        pendingRefire = false
         completionTask = CoreBridge.complete(
             before: before, after: context.textAfter,
             bundleId: bundleId, caretScreenRect: caretRect,
-            fieldLabel: context.fieldLabel, windowTitle: context.windowTitle
+            fieldLabel: context.fieldLabel, windowTitle: context.windowTitle,
+            burst: burst
         ) { [weak self] suggestion in
             guard let self else { return }
             // Single-flight: ignore stale responses.
             guard token == self.requestToken else { self.recordNoShow(.staleResponseToken); return }
+            // This request is no longer in flight; if forward typing queued a
+            // refresh while it ran, fire that refresh after this response is
+            // processed (whether or not it produced a showable ghost).
+            self.inFlightAnchor = nil
+            let refire = self.pendingRefire
+            self.pendingRefire = false
+            // Closure-level defer: runs on EVERY exit path below, after the
+            // response is fully processed, so the queued refresh never races the
+            // state mutations of this one.
+            defer { if refire { self.scheduleSuggestion() } }
             guard let suggestion, !suggestion.isEmpty else {
                 // Model produced nothing even after CoreBridge's retry/reprompt
                 // ladder. Distinguish the causes (P2.2): when the agent owns the
@@ -1050,7 +1099,10 @@ final class AutocompleteEngine {
                     self.accessoryButton.setState(.paused)
                 } else if self.currentSuggestion == nil {
                     self.recordNoShow(.modelEmpty)
-                    self.accessoryButton.setState(.error)
+                    // A burst request ran only the fast first rung — an empty
+                    // there is routine (the pause-fire retries the full ladder),
+                    // so don't flash the error badge mid-typing.
+                    self.accessoryButton.setState(burst ? .idle : .error)
                 }
                 return
             }
@@ -1105,6 +1157,19 @@ final class AutocompleteEngine {
             // user's text ends flush against a finished word (no trailing space),
             // so "brown" + "fox" renders/inserts as "brown fox" not "brownfox".
             let spaced = Self.applyWordBoundary(before: liveBefore, suggestion: shown)
+            // Live-echo guard: sanitizeCompletion's echo guards compared against
+            // the REQUEST-time text; when AX lagged the keyboard, the words the
+            // user typed last were missing from it, so a suggestion that echoes
+            // exactly those words sails through and renders the user's own text
+            // as a ghost (observed live in Bulgarian). Re-run the echo checks
+            // against the RENDER-time text. Decline without rescheduling (same
+            // reasoning as midWord: the text is unchanged, a refire would loop).
+            if CoreBridge.echoesLiveContext(spaced, liveBefore: liveBefore) {
+                Self.e2elog("suppress: echoes live text \"\(spaced.prefix(24))\"")
+                self.recordNoShow(.liveEcho)
+                if self.currentSuggestion == nil { self.accessoryButton.setState(.idle) }
+                return
+            }
             // Mid-word guard (P0.3): the caret sits against an unfinished word but
             // the model started a NEW word ("wri" + " recording"). Inserting it
             // would orphan the fragment. Don't error+clear (that destroys a kept
@@ -1172,6 +1237,8 @@ final class AutocompleteEngine {
         requestToken &+= 1 // invalidate any in-flight request
         completionTask?.cancel() // stop a superseded generation mid-flight
         completionTask = nil
+        inFlightAnchor = nil     // cancelled tasks never call back; unblock the next fire
+        pendingRefire = false
         currentSuggestion = nil
         currentCaretRect = nil
         currentFieldRect = nil
