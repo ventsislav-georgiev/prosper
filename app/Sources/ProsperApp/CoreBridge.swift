@@ -1343,25 +1343,34 @@ enum CoreBridge {
         // Latin letters / "shlyokavitsa" is read as English or Croatian, and the
         // model then switches to that language). Naming the detected language as a
         // soft hint still helps the confident cases without forcing a wrong one.
-        let languageRule = transliteratedBulgarian ? (
-            "The text is Bulgarian written in Latin letters (transliteration / "
-                + "\"shlyokavitsa\") — it is NOT Croatian, Serbian, Russian, Czech, or "
-                + "English. Continue in that SAME transliterated Bulgarian: keep Latin "
-                + "letters and spell Bulgarian words phonetically (щ→sht, я/ъ→q, ж→zh, "
-                + "ч→ch, ш→sh). Write Bulgarian words like \"blagodarq\", \"shte\", "
-                + "\"kakvo\", \"molq\" — NEVER their Croatian/Russian equivalents "
-                + "(\"hvala\", \"ćemo\", \"dlya\", \"da li\") and never diacritics "
-                + "(č/š/ž). Never translate to English. Match the user's tone and casing."
-        ) : language.map {
-            "Continue in the SAME language and writing system as the text (it looks "
-                + "like \($0), but trust the text itself over this guess). Never "
-                + "translate it, switch languages, or change its script/spelling "
-                + "style — if it is written in Latin letters keep Latin letters, if "
-                + "Cyrillic keep Cyrillic. Match the user's tone, casing, and punctuation."
-        } ?? "Continue in the EXACT same language, script and spelling style as the "
-            + "text. Never translate it or switch to another language — if it is "
-            + "written in Latin letters keep Latin letters even when the words are "
-            + "not English (e.g. transliterated Bulgarian). Match tone and casing."
+        let languageRule: String
+        if transliteratedBulgarian {
+            languageRule = """
+            The text is Bulgarian written in Latin letters (transliteration / \
+            "shlyokavitsa") — it is NOT Croatian, Serbian, Russian, Czech, or \
+            English. Continue in that SAME transliterated Bulgarian: keep Latin \
+            letters and spell Bulgarian words phonetically (щ→sht, я/ъ→q, ж→zh, \
+            ч→ch, ш→sh). Write Bulgarian words like "blagodarq", "shte", \
+            "kakvo", "molq" — NEVER their Croatian/Russian equivalents \
+            ("hvala", "ćemo", "dlya", "da li") and never diacritics \
+            (č/š/ž). Never translate to English. Match the user's tone and casing.
+            """
+        } else if let lang = language {
+            languageRule = """
+            Continue in the SAME language and writing system as the text (it looks \
+            like \(lang), but trust the text itself over this guess). Never \
+            translate it, switch languages, or change its script/spelling \
+            style — if it is written in Latin letters keep Latin letters, if \
+            Cyrillic keep Cyrillic. Match the user's tone, casing, and punctuation.
+            """
+        } else {
+            languageRule = """
+            Continue in the EXACT same language, script and spelling style as the \
+            text. Never translate it or switch to another language — if it is \
+            written in Latin letters keep Latin letters even when the words are \
+            not English (e.g. transliterated Bulgarian). Match tone and casing.
+            """
+        }
         // Length steering. maxWords/maxTokens only HARD-CAP the output; without a
         // matching instruction gemma defaults to the shortest possible continuation
         // (one word), so the "Long" setting never produced longer suggestions. This
