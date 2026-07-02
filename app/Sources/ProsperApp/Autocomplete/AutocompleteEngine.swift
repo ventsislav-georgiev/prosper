@@ -1278,6 +1278,30 @@ final class AutocompleteEngine {
             // ponytail: skipped the lexicon "try-align" remedy — the snap already
             // runs on the hot path in typeThrough(); add it here only if mid-word
             // misses prove common.
+            // Typo-tolerant conversion BEFORE the suppression below: when the
+            // new word the model wants to start is a close edit of the broken
+            // trailing token ("fx" + " fox jumps…"), it isn't junk to hide —
+            // it is the correction, shown as strike + green + gray.
+            if let conv = Self.typoFixFromSuggestion(before: liveBefore, spaced: spaced) {
+                Self.e2elog("typo-convert: \"\(liveBefore.suffix(8))\" → \(conv.fixWord)")
+                self.currentSuggestion = conv.replacement + conv.continuation
+                self.replaceLength = conv.replaceLength
+                self.isFix = true
+                self.requestBefore = nil // fixes are not training samples
+                self.currentCaretRect = liveCaret
+                self.caretAnchoredAt = Date()
+                self.lastRenderedBefore = liveBefore
+                self.accessoryButton.setState(.ready)
+                if liveMirror, let field = liveField {
+                    self.mirrorWindow.show(text: conv.fixWord + conv.continuation, fieldRect: field)
+                } else if let rect = liveCaret {
+                    self.suggestionWindow.showFix(
+                        strike: conv.strike, replacement: conv.replacement,
+                        continuation: conv.continuation, at: rect, fieldRect: liveField
+                    )
+                }
+                return
+            }
             if Self.startsNewWordAgainstUnfinishedFragment(before: liveBefore, spaced: spaced) {
                 Self.e2elog("suppress: new word against unfinished fragment \"\(liveBefore.suffix(12))\"")
                 self.recordNoShow(.midWord)
@@ -1725,7 +1749,72 @@ final class AutocompleteEngine {
     static func startsNewWordAgainstUnfinishedFragment(before: String, spaced: String) -> Bool {
         guard let last = before.last, last.isLetter else { return false }
         guard spaced.first == " " else { return false }
-        return lastWordLooksSuspicious(before)
+        if lastWordLooksSuspicious(before) { return true }
+        // A trailing token that is neither a known word nor a completable
+        // prefix is broken even when it is too short for the typo machinery
+        // ("tt" — under the 3-char floor, and the checker tolerates it). A
+        // ghost that starts a NEW word after it endorses the junk
+        // ("attached tt" + " test file"). Real short words (to/is/of) are
+        // lexicon-known; latinica is exempt as everywhere else.
+        var word = ""
+        for ch in before.reversed() { if ch.isLetter { word.append(ch) } else { break } }
+        let trailing = String(word.reversed())
+        guard trailing.count >= 2, trailing.allSatisfy({ $0.isASCII && $0.isLowercase }),
+              !Lexicon.shared.isKnownWord(trailing),
+              !CoreBridge.looksLikeTransliteratedBulgarian(before)
+        else { return false }
+        return !lastWordIsCompletablePrefix(before)
+    }
+
+    /// Typo-tolerant conversion (Cotypist parity). The model often re-emits the
+    /// word the user MEANT as a fresh word after a broken trailing token —
+    /// "fx" + " fox jumps over…", "tt" + " test file". Rendered as-is that
+    /// endorses the typo; suppressed it wastes a correct prediction. When the
+    /// suggestion's first word is a close edit of the broken token, convert the
+    /// whole thing into an inline correction: strike the divergent typed tail,
+    /// green the corrected letters, gray the rest of the suggestion.
+    static func typoFixFromSuggestion(
+        before: String, spaced: String
+    ) -> (strike: String, replacement: String, replaceLength: Int, continuation: String, fixWord: String)? {
+        guard spaced.first == " " else { return nil }
+        var word = ""
+        for ch in before.reversed() { if ch.isLetter { word.append(ch) } else { break } }
+        let trailing = String(word.reversed())
+        guard trailing.count >= 2, trailing.count <= 12,
+              trailing.allSatisfy({ $0.isASCII && $0.isLetter }),
+              !Lexicon.shared.isKnownWord(trailing),
+              !CoreBridge.looksLikeTransliteratedBulgarian(before) else { return nil }
+        let rest = String(spaced.dropFirst())
+        let (head, tail) = splitFirstWord(rest)
+        let fixWord = head.trimmingCharacters(in: .whitespaces)
+        guard fixWord.count >= trailing.count, fixWord.count <= trailing.count + 4,
+              fixWord.allSatisfy({ $0.isLetter }),
+              fixWord.first?.lowercased() == trailing.first?.lowercased(),
+              editDistance(trailing.lowercased(), fixWord.lowercased()) <= 2,
+              trailing.lowercased() != fixWord.lowercased() else { return nil }
+        let split = typoFixSplit(original: trailing, fix: fixWord)
+        guard !split.replacement.isEmpty else { return nil }
+        let continuation = String(head.dropFirst(fixWord.count)) + tail
+        return (split.strike, split.replacement, split.replaceLength, continuation, fixWord)
+    }
+
+    /// Plain Levenshtein, inputs already length-capped by the caller.
+    nonisolated static func editDistance(_ a: String, _ b: String) -> Int {
+        let x = Array(a), y = Array(b)
+        if x.isEmpty { return y.count }
+        if y.isEmpty { return x.count }
+        var prev = Array(0...y.count)
+        var cur = [Int](repeating: 0, count: y.count + 1)
+        for i in 1...x.count {
+            cur[0] = i
+            for j in 1...y.count {
+                cur[j] = x[i - 1] == y[j - 1]
+                    ? prev[j - 1]
+                    : Swift.min(prev[j - 1], prev[j], cur[j - 1]) + 1
+            }
+            swap(&prev, &cur)
+        }
+        return prev[y.count]
     }
 
     /// The trailing word deserves typo treatment: flagged by the system spell

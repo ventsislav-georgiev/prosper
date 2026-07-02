@@ -327,3 +327,50 @@ final class RecentSentencesTests: XCTestCase {
         XCTAssertNil(RecentSentences.shared.continuation(for: "we should talk soon"))
     }
 }
+
+/// Typo-tolerant conversion: a new-word suggestion that is a close edit of the
+/// broken trailing token becomes an inline correction, not junk to endorse/hide.
+@MainActor
+final class TypoFixFromSuggestionTests: XCTestCase {
+    func testFxConvertsToFox() {
+        let c = AutocompleteEngine.typoFixFromSuggestion(
+            before: "the quick brown fx", spaced: " fox jumps over the lazy dog")
+        XCTAssertEqual(c?.fixWord, "fox")
+        XCTAssertEqual(c?.strike, "x")
+        XCTAssertEqual(c?.replacement, "ox")
+        XCTAssertEqual(c?.replaceLength, 1)
+        XCTAssertEqual(c?.continuation, " jumps over the lazy dog")
+    }
+
+    func testTtConvertsToTest() {
+        let c = AutocompleteEngine.typoFixFromSuggestion(
+            before: "Please find the attached tt", spaced: " test file")
+        XCTAssertEqual(c?.fixWord, "test")
+        XCTAssertEqual(c?.strike, "t")
+        XCTAssertEqual(c?.replacement, "est")
+        XCTAssertEqual(c?.continuation, " file")
+    }
+
+    func testUnrelatedWordDoesNotConvert() {
+        XCTAssertNil(AutocompleteEngine.typoFixFromSuggestion(
+            before: "the quick brown fx", spaced: " dog barks"))
+    }
+
+    func testCompleteWordDoesNotConvert() {
+        // Trailing token is a real word — model starting a new word is normal.
+        XCTAssertNil(AutocompleteEngine.typoFixFromSuggestion(
+            before: "the quick brown fox", spaced: " jumps over"))
+    }
+
+    func testNonSpacedSuggestionDoesNotConvert() {
+        XCTAssertNil(AutocompleteEngine.typoFixFromSuggestion(
+            before: "the quick brown f", spaced: "ox jumps"))
+    }
+
+    func testEditDistance() {
+        XCTAssertEqual(AutocompleteEngine.editDistance("fx", "fox"), 1)
+        XCTAssertEqual(AutocompleteEngine.editDistance("tt", "test"), 2)
+        XCTAssertEqual(AutocompleteEngine.editDistance("same", "same"), 0)
+        XCTAssertEqual(AutocompleteEngine.editDistance("", "abc"), 3)
+    }
+}
