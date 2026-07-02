@@ -673,16 +673,19 @@ final class AutocompleteEngine {
                     }
                     return
                 }
-                // Otherwise: clear and (re)schedule the model. Pure-LLM ghosts —
-                // the instant lexicon guess was removed (Cotypist-style): its
-                // frequency-word output read as junk next to model completions,
+                // Otherwise: hide the ghost and (re)schedule the model. Pure-LLM
+                // ghosts — the instant lexicon guess was removed (Cotypist-style):
+                // its frequency-word output read as junk next to model completions,
                 // and with the frozen-context prompt the burst ghost lands fast
-                // enough to not need a placeholder. Deletes get NO immediate
-                // burst: firing one re-rendered essentially the same ghost the
-                // user was deleting away from ~300ms later ("old ghost keeps
-                // coming back" — live report). While erasing, only the debounced
-                // pause-snap runs, so the ghost returns once the user settles.
-                self.clearSuggestion()
+                // enough to not need a placeholder. clearGhost, NOT clearSuggestion:
+                // the in-flight burst usually anchors a prefix of the live text and
+                // must be allowed to land + reconcile (see clearGhost). Deletes get
+                // NO immediate burst: firing one re-rendered essentially the same
+                // ghost the user was deleting away from ~300ms later ("old ghost
+                // keeps coming back" — live report). While erasing, only the
+                // debounced pause-snap runs, so the ghost returns once the user
+                // settles.
+                self.clearGhost()
                 self.scheduleSuggestion(allowBurst: keyCode != Self.kDelete)
             }
         }
@@ -1264,6 +1267,19 @@ final class AutocompleteEngine {
         completionTask = nil
         inFlightAnchor = nil     // cancelled tasks never call back; unblock the next fire
         pendingRefire = false
+        clearGhost()
+    }
+
+    /// Hide the ghost and reset render state WITHOUT cancelling the request
+    /// pipeline. Ordinary typing with no (or a mismatching) ghost lands here:
+    /// the in-flight completion usually anchors a PREFIX of the live text, so
+    /// hard-cancelling it (the old clearSuggestion on this path) killed every
+    /// burst mid-prefill during continuous typing — the first ghost could only
+    /// appear after the user stopped. Left alive, the response reconciles
+    /// against the live text (trims the typed delta) and shows mid-typing;
+    /// a genuinely diverged response reconciles to `.reschedule` and renders
+    /// nothing (so deletes still never resurrect a stale ghost).
+    private func clearGhost() {
         currentSuggestion = nil
         currentCaretRect = nil
         currentFieldRect = nil
