@@ -138,6 +138,16 @@ actor TypingHistoryStore {
                     t.column("accepted", .boolean).notNull()
                     t.column("bundleId", .text)
                 }
+                // Scrub synthetic-host rows recorded before the write-side guard
+                // existed: bench runs typed corpus sentences into the e2e host and
+                // they became the user's "writing samples"/"frequent words" (live:
+                // ghost suggesting "side, usual, spot, oncall, pagerduty,").
+                try db.execute(sql: """
+                    DELETE FROM \(Entry.databaseTableName) WHERE bundleId LIKE 'com.prosper.%'
+                    """)
+                try db.execute(sql: """
+                    DELETE FROM \(Sample.databaseTableName) WHERE bundleId LIKE 'com.prosper.%'
+                    """)
             }
             dbQueue = queue
         } catch {
@@ -148,10 +158,16 @@ actor TypingHistoryStore {
 
     // MARK: - Write
 
+    /// Bench/e2e hosts (`com.prosper.*`) type synthetic corpus text; recording it
+    /// as the user's writing poisons samples, frequent words, and LoRA pairs.
+    private static func isSyntheticHost(_ bundleId: String?) -> Bool {
+        bundleId?.hasPrefix("com.prosper.") ?? false
+    }
+
     /// Records one accepted completion if collection is enabled. No-op otherwise.
     /// `bundleId` is the frontmost app, used for per-app input counts.
     func record(_ text: String, bundleId: String? = nil) {
-        guard Preferences.collectTypingHistory else { return }
+        guard Preferences.collectTypingHistory, !Self.isSyntheticHost(bundleId) else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         setupIfNeeded()
@@ -189,7 +205,7 @@ actor TypingHistoryStore {
     func recordTrainingSample(
         prompt: String, completion: String, accepted: Bool, bundleId: String? = nil
     ) {
-        guard Preferences.collectTypingHistory else { return }
+        guard Preferences.collectTypingHistory, !Self.isSyntheticHost(bundleId) else { return }
         let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let c = completion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !p.isEmpty, !c.isEmpty else { return }

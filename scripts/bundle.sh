@@ -10,6 +10,14 @@ if [[ ! -x "$BIN" ]]; then
   exit 1
 fi
 
+# Staging a stale binary is silent poison: a dev bundle once shipped a 5h-old
+# build and every validation "passed" against code that wasn't there. If any
+# source is newer than the built binary, rebuild before staging.
+if [[ -n "$(find "$ROOT/app/Sources" -name '*.swift' -newer "$BIN" -print -quit)" ]]; then
+  echo "bundle: sources newer than $BIN — rebuilding ($PROFILE)…" >&2
+  bash "$ROOT/scripts/build.sh" "$PROFILE"
+fi
+
 APP="$ROOT/dist/Prosper.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
