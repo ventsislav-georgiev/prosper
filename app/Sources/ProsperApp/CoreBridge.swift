@@ -554,6 +554,7 @@ enum CoreBridge {
         caretScreenRect: CGRect? = nil,
         fieldLabel: String? = nil,
         windowTitle: String? = nil,
+        burst: Bool = false,
         completion: @escaping @MainActor @Sendable (String?) -> Void
     ) -> Task<Void, Never> {
         // Agent mode owns the GPU + RAM: the inline model is unloaded while a coding
@@ -717,7 +718,13 @@ enum CoreBridge {
                 (0.8, 64,  0.95, true),   // slightly tighter nucleus
                 (1.0, 64,  0.95, true),   // retry
             ]
-            let attempts = latinBulgarian ? latinLadder : baseLadder
+            // Burst request (fired mid-typing by the maxWait throttle): only the
+            // first rung. It must land inside a typing gap to be showable at all;
+            // climbing the ladder there can't finish in time and just keeps the
+            // GPU saturated while the user types (felt as system-wide input lag).
+            // The pause-fire (trailing debounce) still runs the full ladder.
+            let ladder = latinBulgarian ? latinLadder : baseLadder
+            let attempts = burst ? Array(ladder.prefix(1)) : ladder
             var result: String?
             var rungsRun = 0
             for attempt in attempts {
@@ -971,6 +978,22 @@ enum CoreBridge {
     ///   * otherwise: only an exact repeat of the immediately preceding word.
     /// First words shorter than 3 characters (a, to, the, …) are ignored, since
     /// short-word repeats are frequently legitimate.
+    /// Render-time echo re-check against the LIVE text. sanitizeCompletion's
+    /// guards compare against the REQUEST-time `before`; when the AX read lagged
+    /// the keyboard, the words the user typed last are missing from it, so a
+    /// suggestion echoing exactly those words passes every request-time guard and
+    /// renders the user's own words back as a ghost. Called by the engine with
+    /// the fresh render-time text just before showing.
+    static func echoesLiveContext(_ s: String, liveBefore: String) -> Bool {
+        // Whole-suggestion tail echo: everything the model produced is already
+        // the tail of what's on screen.
+        if let stripped = dropLeadingOverlap(s, tail: Array(liveBefore.suffix(400))),
+           stripped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return echoesEarlierSpan(s, before: liveBefore) || echoesAnywhere(s, before: liveBefore)
+    }
+
     static func echoesRecentWord(_ s: String, before: String) -> Bool {
         let head = s.drop { $0 == " " || $0 == "\t" }
         let firstWord = String(head.prefix { $0.isLetter || $0.isNumber }).lowercased()
@@ -995,8 +1018,13 @@ enum CoreBridge {
     /// the span is ≥12 chars AND ≥2 words, so legitimate short connectors
     /// ("of the", "and so") are not rejected. Returns true → caller shows nothing.
     static func echoesEarlierSpan(_ s: String, before: String) -> Bool {
+        // Punctuation-insensitive: the model's echo often differs from the typed
+        // text only by a comma or period ("Здравей, как си" vs "Здравей как си"),
+        // which defeated the previous exact-substring compare.
         func norm(_ t: String) -> String {
             t.lowercased().split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" })
+                .map { $0.filter { $0.isLetter || $0.isNumber } }
+                .filter { !$0.isEmpty }
                 .joined(separator: " ")
         }
         let nBefore = norm(before)
@@ -1048,10 +1076,12 @@ enum CoreBridge {
     }
 
     static func echoesAnywhere(_ s: String, before: String) -> Bool {
+        // Punctuation-insensitive (same rationale as echoesEarlierSpan).
         func norm(_ t: String) -> [String] {
             t.lowercased()
                 .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" })
-                .map(String.init)
+                .map { String($0.filter { $0.isLetter || $0.isNumber }) }
+                .filter { !$0.isEmpty }
         }
         let beforeNorm = norm(before).joined(separator: " ")
         guard !beforeNorm.isEmpty else { return false }

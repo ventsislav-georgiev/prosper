@@ -18,6 +18,30 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.122.2 *(unreleased)*
+
+### Inline autocomplete — faster, more reliable ghost suggestions
+- **Fixed typing lag while autocomplete is on** (noticeable in Safari and other
+  heavy apps). Suggestion work — lexicon lookups, accessibility reads, ghost
+  rendering — was running inside the keyboard event tap callback, delaying every
+  keystroke system-wide. That work is now deferred off the tap; key delivery is
+  no longer blocked by suggestion computation.
+- **Ghost completions now appear while you type, not only after you pause.**
+  Every new keystroke used to cancel the in-flight model request, so during
+  continuous typing no request ever survived long enough to land. Requests are
+  now pipelined: a request whose context you've merely extended keeps running,
+  and a fresh one is fired as soon as it lands.
+- **Mid-typing requests are lighter.** Burst-throttled requests use only the fast
+  first sampling pass instead of the full retry ladder, keeping the model
+  responsive; an empty burst result no longer flashes the orange error accessory.
+- **Fixed suggestions echoing what you just wrote** (most visible in Bulgarian).
+  The echo guards compared against a stale snapshot of the text and were
+  punctuation-sensitive; they now check the live field content at render time and
+  ignore punctuation differences.
+- **Reduced per-request database work.** Writing-style samples are cached for a
+  short window instead of being re-queried from the history store on every
+  suggestion request.
+
 ## v2.122.1
 
 ### Inline autocomplete — smarter, more coherent suggestions

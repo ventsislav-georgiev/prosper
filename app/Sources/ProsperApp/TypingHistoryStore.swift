@@ -163,6 +163,7 @@ actor TypingHistoryStore {
             text: trimmed, wordCount: words, bundleId: bundleId, lastUsed: now
         )
         try? dbQueue.write { db in try entry.insert(db) }
+        samplesCache = nil  // new sample → retrieval must see it
         insertsSincePrune += 1
         if insertsSincePrune >= pruneEvery { insertsSincePrune = 0; pruneEntries() }
     }
@@ -249,12 +250,25 @@ actor TypingHistoryStore {
     /// length-gated so trivial one-word accepts and huge pastes are skipped. Returns
     /// plain strings — in-app-recent first, then across-apps, then longest — capped
     /// by both count and a rough char budget. Same privacy gate as `record`.
+    // Retrieval cache: writingSamples is called on EVERY completion request
+    // (several per second while typing) but its inputs only change when the user
+    // finishes writing something (record()). Serve from a short-lived cache so
+    // the request hot path skips 3 SQLCipher reads + 1 write; record() invalidates.
+    private var samplesCache: (bundleId: String?, samples: [String], at: Date)?
+    private var lastLRUTouch: Date = .distantPast
+    private static let samplesCacheTTL: TimeInterval = 20
+    private static let lruTouchInterval: TimeInterval = 60
+
     func writingSamples(
         bundleId: String?,
         recentInApp: Int = 3, recentAcrossApps: Int = 2, longest: Int = 2,
         minChars: Int = 16, maxChars: Int = 120, charBudget: Int = 600
     ) -> [String] {
         guard Preferences.collectTypingHistory else { return [] }
+        if let c = samplesCache, c.bundleId == bundleId,
+           Date().timeIntervalSince(c.at) < Self.samplesCacheTTL {
+            return c.samples
+        }
         setupIfNeeded()
         guard let dbQueue else { return [] }
         // Over-fetch (×3) per bucket so dedup + length filtering still leaves enough.
@@ -281,7 +295,10 @@ actor TypingHistoryStore {
             if out.count >= cap { break }
         }
         // LRU touch: surfacing a sample counts as a use, so it survives eviction.
-        if !usedIds.isEmpty {
+        // Throttled: a touch per completion request is pure disk churn — once a
+        // minute is plenty for an eviction key.
+        if !usedIds.isEmpty, Date().timeIntervalSince(lastLRUTouch) > Self.lruTouchInterval {
+            lastLRUTouch = Date()
             let now = Date().timeIntervalSince1970
             let placeholders = usedIds.map { _ in "?" }.joined(separator: ",")
             var args: [any DatabaseValueConvertible] = [now]
@@ -293,6 +310,7 @@ actor TypingHistoryStore {
                 )
             }
         }
+        samplesCache = (bundleId, out, Date())
         return out
     }
 
