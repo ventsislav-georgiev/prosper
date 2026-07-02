@@ -18,6 +18,27 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.122.0 *(unreleased)*
+
+### Inline autocomplete — smarter, more coherent suggestions
+- **Rebuilt the completion sampling around Gemma 4's own recommended settings**
+  (temperature 1.0 with top-k/top-p nucleus shaping). The suggestion engine now
+  uses a two-tier, language-aware ladder: it keeps a fast, deterministic first pass
+  for high-confidence completions in English and Cyrillic Bulgarian, and switches to
+  the model's native sampling when a pass comes back empty — so suggestions read
+  more naturally and stop collapsing into repeated or fragmentary text.
+- **Fixed Latin-script Bulgarian ("shlyokavitsa") drifting into Cyrillic.** Typing
+  Bulgarian in Latin letters no longer produces mixed-script or Cyrillic suggestions;
+  coverage in this mode now matches the rest.
+- **Suggestions can now be grounded in how you actually write.** When typing history
+  is enabled, Prosper draws on a rolling sample of your own recent phrasing (kept
+  on-device, capped, and evicted least-recently-used) to better match your voice,
+  tone, and language — including Latin-script text. It never copies your samples back
+  verbatim, and never leaks its own internal instructions into a suggestion.
+- **Snappier while typing.** Completion requests are throttled with a bounded max-wait
+  so keystrokes stay responsive under load, and the language of the surrounding text
+  is inferred more reliably.
+
 ## v2.121.0
 
 ### Menu Bar Management

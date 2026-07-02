@@ -19,6 +19,8 @@ final class AutocompleteEngine {
     private let mirrorWindow = MirrorOverlayWindow()
     private let accessoryButton = AccessoryButton()
     private var debounceTimer: Timer?
+    /// Throttle for the instant-ghost fresh caret read (bounds heavy AX cost).
+    private var lastInstantCaretRead = Date.distantPast
 
     /// Invoked when the floating accessory button is clicked (set by AppDelegate).
     var onAccessoryClicked: (() -> Void)? {
@@ -81,10 +83,18 @@ final class AutocompleteEngine {
     // model debounces longer so we stop spamming it; a fast one stays snappy.
     // Type-through absorbs most mid-suggestion keystrokes, so the debounce only
     // gates fresh requests.
-    private var debounceInterval: TimeInterval = 0.12
+    private var debounceInterval: TimeInterval = 0.10
     private var latencyEMA: TimeInterval = 0.12
-    nonisolated static let debounceMin: TimeInterval = 0.08
-    nonisolated static let debounceMax: TimeInterval = 0.6
+    nonisolated static let debounceMin: TimeInterval = 0.06
+    // Cap the trailing debounce well below the old 0.6s: warm-cache inline gen is
+    // ~120ms, so a pause longer than ~250ms already felt like "waiting". The maxWait
+    // throttle below handles continuous typing; this only bounds the pause case.
+    nonisolated static let debounceMax: TimeInterval = 0.25
+    // Force a model request at least this often during a continuous typing burst
+    // (see scheduleSuggestion) so the ghost updates WHILE typing, not only on pause.
+    nonisolated static let debounceMaxWait: TimeInterval = 0.22
+    /// When the last real model request was fired (throttle clock for maxWait).
+    private var lastRequestFiredAt: Date = .distantPast
     private func updateDebounce(_ elapsed: TimeInterval) {
         let next = Self.nextDebounce(ema: latencyEMA, elapsed: elapsed)
         latencyEMA = next.ema
@@ -104,6 +114,34 @@ final class AutocompleteEngine {
         let newEMA = ema * 0.7 + sample * 0.3
         let interval = min(max(newEMA * 0.6, debounceMin), debounceMax)
         return (newEMA, interval)
+    }
+
+    /// Pure model of the schedule (see `scheduleSuggestion`) — `nonisolated static`
+    /// so the emergent "does the ghost update WHILE typing?" behavior is testable
+    /// off the actor. Given the keystroke timestamps (seconds), returns the times a
+    /// model request fires: immediately when ≥ `maxWait` since the last fire (the
+    /// throttle that lets the ghost keep up during a continuous burst), otherwise a
+    /// trailing debounce reset per keystroke. A PURE trailing debounce (maxWait = ∞)
+    /// collapses to a single fire after the burst — the bug this fixes.
+    nonisolated static func plannedFires(
+        keystrokes: [TimeInterval], debounce: TimeInterval, maxWait: TimeInterval
+    ) -> [TimeInterval] {
+        var fires: [TimeInterval] = []
+        var lastFired: TimeInterval = -1e9   // finite (models `.distantPast`): a finite
+                                             // maxWait fires on the first keystroke, an
+                                             // infinite one (pure trailing) never does.
+        var pendingTrailing: TimeInterval? = nil
+        for t in keystrokes {
+            // A trailing timer armed by an earlier keystroke elapses before this one.
+            if let p = pendingTrailing, p <= t { fires.append(p); lastFired = p; pendingTrailing = nil }
+            if t - lastFired >= maxWait {
+                fires.append(t); lastFired = t; pendingTrailing = nil    // immediate (throttle)
+            } else {
+                pendingTrailing = t + debounce                          // reset trailing debounce
+            }
+        }
+        if let p = pendingTrailing { fires.append(p) }                  // trailing fire after the burst
+        return fires
     }
 
     /// Diagnostics (P2.1): why a keystroke produced no ghost. VSCode tags every
@@ -597,8 +635,13 @@ final class AutocompleteEngine {
             return false
         }
 
-        // Any other keystroke: hide current suggestion and (re)schedule a request.
-        clearSuggestion()
+        // Any other keystroke: show an INSTANT lexicon ghost for immediate feedback
+        // (model-free — see showInstantGhost), then (re)schedule the debounced model
+        // to refine/replace it. Falls back to clearing when we can't cheaply place a
+        // ghost yet. This is what makes typing feel live instead of "ghost only on pause".
+        if !showInstantGhost(typed: typed) {
+            clearSuggestion()
+        }
         scheduleSuggestion()
         return false
     }
@@ -657,6 +700,60 @@ final class AutocompleteEngine {
     /// `remainder` there. Width is measured with the ghost's current font (which
     /// mirrors the field's font), so drift across a few characters is negligible;
     /// every full refresh (debounced LLM response) re-anchors from a fresh AX read.
+    /// Instant, model-FREE ghost for immediate feedback while typing (Cotypist shows
+    /// a suggestion on every keystroke; Prosper previously showed nothing until the
+    /// debounced model returned ~pause+latency later). Uses the cheap `typedShadow`
+    /// (no AX read) for a bundled-lexicon prediction and the cached caret advanced by
+    /// the typed width (same technique as the mid-word snap; drift re-anchors on the
+    /// next model refresh). Returns false when it can't cheaply place one (no caret
+    /// established yet, or no lexicon hit) — the caller then clears and waits for the
+    /// debounced model. Model-free by design: scheduling the model per keystroke
+    /// overloads the engine (it hung/crashed), so instant feedback must be lexicon-only.
+    private func showInstantGhost(typed: String) -> Bool {
+        guard !typed.isEmpty,
+              typed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+        else { return false }
+        let shadow = typedShadow
+        guard shadow.count >= 2 else { return false }
+        // Need a caret to place the ghost. Prefer the cached one (free); otherwise
+        // read it fresh from AX. The model is fast (~200ms) and this read is only on
+        // the "no live ghost" path (not every keystroke of a running ghost — those go
+        // through type-through), so the added AX cost is bounded.
+        if !Self.hasUsableCaret(currentCaretRect) {
+            // Throttle the fresh AX read: currentContext() is the heavy call the
+            // debounce exists to avoid, so cap it to ~12/s. During a fast burst the
+            // skipped keystrokes just don't get an instant ghost (the debounced model
+            // still runs) — keeps typing responsive on slow-AX apps (Electron/Slack).
+            let now = Date()
+            guard now.timeIntervalSince(lastInstantCaretRead) > 0.08 else { return false }
+            lastInstantCaretRead = now
+            guard let ctx = AXCaret.currentContext() else { return false }
+            currentCaretRect = Self.effectiveCaretRect(ctx.caretScreenRect, field: ctx.fieldScreenRect)
+            currentFieldRect = ctx.fieldScreenRect
+            guard Self.hasUsableCaret(currentCaretRect) else { return false }
+        }
+        let cands = CompletionCandidates.derive(before: shadow, after: "", lexicon: Lexicon.shared)
+        guard let word = cands.words.first else { return false }
+        let remainder: String
+        if cands.atBoundary {
+            remainder = " " + word
+        } else {
+            let frag = cands.fragment
+            guard word.hasPrefix(frag), word != frag else { return false }
+            remainder = String(word.dropFirst(frag.count))
+        }
+        guard !remainder.isEmpty else { return false }
+        requestBefore = nil            // provisional guess, not an LLM training pair
+        currentSuggestion = remainder
+        // Render at the fresh caret (advanceGhost would double-count the just-typed
+        // char since this caret is already post-keystroke).
+        let useMirror = Self.shouldUseMirror(
+            caret: currentCaretRect, field: currentFieldRect, bundleId: requestBundleId
+        )
+        renderSuggestion(text: remainder, caret: currentCaretRect, field: currentFieldRect, useMirror: useMirror)
+        return true
+    }
+
     private func advanceGhost(by text: String, remainder: String) {
         if var rect = currentCaretRect {
             let font = suggestionWindow.currentFont
@@ -676,6 +773,19 @@ final class AutocompleteEngine {
 
     private func scheduleSuggestion() {
         debounceTimer?.invalidate()
+        // Throttle with maxWait (Cotypist parity). A PURE trailing debounce resets on
+        // every keystroke, so during continuous typing it never fires — the ghost only
+        // appears once the user pauses (their "nothing while typing, then a wait"). Fire
+        // the model straight away when it has been ≥ debounceMaxWait since the last real
+        // request, so the ghost updates WHILE typing; the in-flight generation is
+        // cancelled and superseded (see requestSuggestion), which is what makes running
+        // the model per-burst safe now (the old per-keystroke attempt lacked that and
+        // overloaded the engine). Otherwise fall back to the short trailing debounce so
+        // a brief pause still snaps quickly.
+        if Date().timeIntervalSince(lastRequestFiredAt) >= Self.debounceMaxWait {
+            requestSuggestion()
+            return
+        }
         debounceTimer = Timer.scheduledTimer(
             withTimeInterval: debounceInterval,
             repeats: false
@@ -882,8 +992,10 @@ final class AutocompleteEngine {
         }
 
         // Misspelled trailing word: either suggest a fix (if enabled) or suppress
-        // a completion that would extend a likely typo.
-        if Self.lastWordLooksMisspelled(before) {
+        // a completion that would extend a likely typo. BUT never treat a word the
+        // user is mid-typing as a typo when it's a valid prefix of real words
+        // ("conv" → conversation) — that was suppressing all mid-word completions.
+        if Self.lastWordLooksMisspelled(before), !Self.lastWordIsCompletablePrefix(before) {
             if Preferences.showSuggestedFixes,
                let (wordLen, original, fix) = Self.spellingFix(before) {
                 currentSuggestion = fix
@@ -910,9 +1022,17 @@ final class AutocompleteEngine {
         accessoryButton.setState(.thinking)
 
         let requestStart = Date()
+        lastRequestFiredAt = requestStart
+        // Supersede any generation still in flight from a prior keystroke: the
+        // maxWait throttle fires the model DURING a typing burst, so without this
+        // the engine would stack overlapping generations (the old per-keystroke
+        // overload). CoreBridge.complete checks Task.isCancelled + cancels the
+        // server-side generation, so the stale one stops prefill/decode at once.
+        completionTask?.cancel()
         completionTask = CoreBridge.complete(
             before: before, after: context.textAfter,
-            bundleId: bundleId, caretScreenRect: caretRect
+            bundleId: bundleId, caretScreenRect: caretRect,
+            fieldLabel: context.fieldLabel, windowTitle: context.windowTitle
         ) { [weak self] suggestion in
             guard let self else { return }
             // Single-flight: ignore stale responses.
@@ -1366,6 +1486,32 @@ final class AutocompleteEngine {
         let range = checker.checkSpelling(of: trailing, startingAt: 0)
         // location == NSNotFound means no misspelling found.
         return range.location != NSNotFound
+    }
+
+    /// True when the trailing fragment is a valid PREFIX of real words (the user is
+    /// mid-typing a word, e.g. "conv" → conversation/convert), as opposed to a genuine
+    /// typo ("teh"). Used to keep typo-suppression from silencing completions on the
+    /// word the user is actively typing — the spell checker flags any incomplete word
+    /// as "misspelled", which was suppressing every mid-word completion.
+    static func lastWordIsCompletablePrefix(_ before: String) -> Bool {
+        var word = ""
+        for ch in before.reversed() { if ch.isLetter { word.append(ch) } else { break } }
+        let frag = String(word.reversed())
+        guard frag.count >= 2 else { return false }
+        // Use the SAME sources that actually produce completions (bundled lexicon +
+        // OS spell checker), so this agrees with the lexicon snap. NSSpellChecker
+        // alone misses common prefixes like "conv"; the bundled Lexicon has them.
+        let fl = frag.lowercased()
+        let lex = CompletionCandidates.derive(before: frag, after: "", lexicon: Lexicon.shared)
+        if lex.words.contains(where: { $0.count > frag.count && $0.lowercased().hasPrefix(fl) }) {
+            return true
+        }
+        let checker = NSSpellChecker.shared
+        let range = NSRange(location: 0, length: (frag as NSString).length)
+        let completions = checker.completions(
+            forPartialWordRange: range, in: frag, language: nil, inSpellDocumentWithTag: 0
+        ) ?? []
+        return completions.contains { $0.count > frag.count && $0.lowercased().hasPrefix(fl) }
     }
 
     /// For a misspelled trailing word, returns (wordLength, original, bestFix) or

@@ -145,8 +145,8 @@ final class AutocompleteDebounceTests: XCTestCase {
         // First sample at the seed EMA (0.12) with a ~120ms latency stays snappy.
         let (ema, interval) = AutocompleteEngine.nextDebounce(ema: 0.12, elapsed: 0.12)
         XCTAssertEqual(ema, 0.12, accuracy: 0.001)
-        // 0.12 * 0.6 = 0.072 → clamped up to debounceMin (0.08).
-        XCTAssertEqual(interval, 0.08, accuracy: 0.001)
+        // 0.12 * 0.6 = 0.072, above debounceMin (0.06) → not clamped.
+        XCTAssertEqual(interval, 0.072, accuracy: 0.001)
     }
 
     func testFastModelClampsToMin() {
@@ -154,15 +154,16 @@ final class AutocompleteDebounceTests: XCTestCase {
         var ema = 0.12
         var interval = 0.12
         for _ in 0..<50 { (ema, interval) = AutocompleteEngine.nextDebounce(ema: ema, elapsed: 0.02) }
-        XCTAssertEqual(interval, 0.08, accuracy: 0.001) // debounceMin
+        XCTAssertEqual(interval, 0.06, accuracy: 0.001) // debounceMin
     }
 
     func testSlowModelRaisesInterval() {
-        // A steady 500ms model debounces longer (0.5*0.6 = 0.3) so we stop spamming it.
+        // A steady 500ms model wants 0.5*0.6 = 0.3, but the interval is capped at
+        // debounceMax (0.25) so a slow model still can't stall the ghost past that.
         var ema = 0.12
         var interval = 0.12
         for _ in 0..<50 { (ema, interval) = AutocompleteEngine.nextDebounce(ema: ema, elapsed: 0.5) }
-        XCTAssertEqual(interval, 0.3, accuracy: 0.01)
+        XCTAssertEqual(interval, 0.25, accuracy: 0.01)
     }
 
     func testColdLoadSampleDoesNotPinAtMax() {
@@ -172,6 +173,23 @@ final class AutocompleteDebounceTests: XCTestCase {
         XCTAssertEqual(ema, 0.384, accuracy: 0.001)
         XCTAssertLessThan(interval, AutocompleteEngine.debounceMax)
         XCTAssertEqual(interval, 0.2304, accuracy: 0.001)
+    }
+
+    func testThrottleFiresDuringContinuousTyping() {
+        // A continuous burst: a keystroke every 150ms for 2s (no pause).
+        let keystrokes = stride(from: 0.0, through: 2.0, by: 0.15).map { $0 }
+        // Old behavior: the debounce EMA grew toward the old 0.6s cap, which is LONGER
+        // than the 150ms inter-keystroke gap, so a pure trailing debounce (no maxWait)
+        // resets every keystroke and fires only ONCE, after the burst ends.
+        let old = AutocompleteEngine.plannedFires(keystrokes: keystrokes, debounce: 0.6, maxWait: .infinity)
+        XCTAssertEqual(old.count, 1, "grown trailing debounce should fire once, on pause")
+        XCTAssertGreaterThan(old[0], 2.0, "…and only after the last keystroke")
+
+        // New behavior (maxWait 0.22): the ghost updates WHILE typing — a fire roughly
+        // every maxWait across the 2s burst, not just at the end.
+        let new = AutocompleteEngine.plannedFires(keystrokes: keystrokes, debounce: 0.10, maxWait: 0.22)
+        XCTAssertGreaterThanOrEqual(new.count, 7, "should fire repeatedly during the burst")
+        XCTAssertLessThan(new[1], 1.0, "and start firing early, not only after the pause")
     }
 
     func testNeverExceedsMax() {

@@ -187,15 +187,31 @@ final class CompletionCandidatesTests: XCTestCase {
 
     func testSystemPromptHasRobustRules() {
         let p = CoreBridge.completionSystemPrompt(custom: "")
-        XCTAssertTrue(p.contains("NEVER repeat"))
+        XCTAssertTrue(p.contains("never restate what the user already typed"))
         XCTAssertTrue(p.contains("mid-word"))
-        XCTAssertTrue(p.contains("Suggested words"))
+        XCTAssertTrue(p.contains("phone keyboard"))
     }
 
     func testSystemPromptAppendsCustomInstructions() {
         let p = CoreBridge.completionSystemPrompt(custom: "Write in British English.")
-        XCTAssertTrue(p.contains("Additional user instructions:"))
+        XCTAssertTrue(p.contains("About the user"))
         XCTAssertTrue(p.contains("British English"))
+    }
+
+    func testSystemPromptTransliteratedBulgarianSteersShlyokavitsa() {
+        let p = CoreBridge.completionSystemPrompt(custom: "", transliteratedBulgarian: true)
+        XCTAssertTrue(p.contains("shlyokavitsa"))
+        XCTAssertTrue(p.contains("NOT Croatian"))
+    }
+
+    func testLatinBulgarianDetection() {
+        // Confident Slavic-Latin detection over Latin-script text → treat as
+        // transliterated Bulgarian. English / Cyrillic must NOT trigger it.
+        XCTAssertTrue(CoreBridge.isSlavicLatinLanguage("Croatian"))
+        XCTAssertFalse(CoreBridge.isSlavicLatinLanguage("English"))
+        XCTAssertFalse(CoreBridge.isSlavicLatinLanguage(nil))
+        XCTAssertTrue(CoreBridge.isLatinScript("kak si bratle"))
+        XCTAssertFalse(CoreBridge.isLatinScript("как си брат"))
     }
 
     func testBuildPromptMidWordInjectsCandidates() {
@@ -203,19 +219,21 @@ final class CompletionCandidatesTests: XCTestCase {
         let prompt = CoreBridge.buildCompletionPrompt(
             before: "website d", after: "", clipboard: nil, candidates: c
         )
-        XCTAssertTrue(prompt.contains("partial word"))
-        XCTAssertTrue(prompt.contains("\"d\""))
-        XCTAssertTrue(prompt.contains("download"))
-        XCTAssertTrue(prompt.contains("only the letters that finish the word"))
+        // Mid-word: a SINGLE target word (not a list — the small model echoes lists).
+        XCTAssertTrue(prompt.contains("starts with \"d\""))
+        XCTAssertTrue(prompt.contains("most likely"))
+        XCTAssertTrue(prompt.contains("Output only the letters that come after"))
     }
 
-    func testBuildPromptBoundaryInjectsSuggestedWords() {
+    func testBuildPromptBoundaryOmitsCandidateList() {
         let c = CompletionCandidates.derive(before: "the website ", lexicon: makeLexicon())
         let prompt = CoreBridge.buildCompletionPrompt(
             before: "the website ", after: "", clipboard: nil, candidates: c
         )
-        XCTAssertTrue(prompt.contains("Suggested words"))
-        XCTAssertTrue(prompt.contains("design"))
+        // At a word boundary we no longer inject any candidate word-list: the
+        // 2B/4-bit model regurgitated such lists verbatim. Only mid-word gets a hint.
+        XCTAssertFalse(prompt.contains("Suggested words"))
+        XCTAssertFalse(prompt.contains("most likely"))
     }
 
     func testBuildPromptOmitsCandidateBlockWhenEmpty() {
@@ -225,6 +243,92 @@ final class CompletionCandidatesTests: XCTestCase {
         )
         XCTAssertFalse(prompt.contains("Suggested words"))
         XCTAssertFalse(prompt.contains("partial word"))
+    }
+
+    func testBuildPromptInjectsGroundingContext() {
+        let prompt = CoreBridge.buildCompletionPrompt(
+            before: "Hey ", after: "", clipboard: nil,
+            fieldLabel: "Message to Plamen Redjov", windowTitle: "Plamen Redjov (DM) - Slack"
+        )
+        XCTAssertTrue(prompt.contains("Field: Message to Plamen Redjov"))
+        XCTAssertTrue(prompt.contains("Window: Plamen Redjov (DM) - Slack"))
+    }
+
+    func testBuildPromptOmitsGroundingWhenAbsent() {
+        let prompt = CoreBridge.buildCompletionPrompt(before: "Hey ", after: "", clipboard: nil)
+        XCTAssertFalse(prompt.contains("Field:"))
+        XCTAssertFalse(prompt.contains("Window:"))
+    }
+
+    func testBuildPromptInjectsWritingSamples() {
+        let prompt = CoreBridge.buildCompletionPrompt(
+            before: "Zdr, ", after: "", clipboard: nil,
+            writingSamples: ["kak si bratle, vsichko nared li e", "shte se vidim utre v ofisa"]
+        )
+        XCTAssertTrue(prompt.contains("Examples of how the user usually writes"))
+        XCTAssertTrue(prompt.contains("- kak si bratle, vsichko nared li e"))
+        XCTAssertTrue(prompt.contains("- shte se vidim utre v ofisa"))
+    }
+
+    func testBuildPromptOmitsWritingSamplesWhenAbsent() {
+        let prompt = CoreBridge.buildCompletionPrompt(before: "Zdr, ", after: "", clipboard: nil)
+        XCTAssertFalse(prompt.contains("Examples of how the user usually writes"))
+    }
+
+    func testTransliterateCyrillicToLatinShlyokavitsa() {
+        XCTAssertEqual(CoreBridge.transliterateCyrillicToLatin("благодаря"), "blagodarq")
+        XCTAssertEqual(CoreBridge.transliterateCyrillicToLatin("моля"), "molq")
+        XCTAssertEqual(CoreBridge.transliterateCyrillicToLatin("ще"), "shte")
+        // Mixed script (model half-transliterated) still normalizes to all-Latin.
+        XCTAssertEqual(CoreBridge.transliterateCyrillicToLatin("на обqd"), "na obqd")
+        // Latin passes through untouched.
+        XCTAssertEqual(CoreBridge.transliterateCyrillicToLatin("kak si"), "kak si")
+        // Casing: uppercase source capitalizes the multigraph.
+        XCTAssertEqual(CoreBridge.transliterateCyrillicToLatin("Що"), "Shto")
+    }
+
+    func testSanitizeTransliteratesWhenLatinBulgarian() {
+        let out = CoreBridge.sanitizeCompletion("помогна", before: "Molq ", after: "",
+                                                transliterateCyrillic: true)
+        XCTAssertEqual(out, "pomogna")
+    }
+
+    func testEchoesWritingSampleGuard() {
+        let samples = ["shte se vidim utre v ofisa"]
+        XCTAssertTrue(CoreBridge.echoesWritingSample("shte se vidim utre", samples: samples))
+        XCTAssertFalse(CoreBridge.echoesWritingSample("da", samples: samples))  // too short
+        XCTAssertFalse(CoreBridge.echoesWritingSample("kak si bratle", samples: samples))
+    }
+
+    func testEchoesWritingSampleRejectsInstructionHeaderLeak() {
+        let samples = ["shte se vidim utre v ofisa"]
+        // High-temp small-model leak: continuing the injected instruction header
+        // instead of the user text. Must be rejected as an echo.
+        XCTAssertTrue(CoreBridge.echoesWritingSample("Examples of how the user", samples: samples))
+        XCTAssertTrue(CoreBridge.echoesWritingSample("match their voice", samples: samples))
+        XCTAssertTrue(CoreBridge.echoesWritingSample("The user frequently writes", samples: samples))
+        // Guard is inert when no samples were injected (header never rendered).
+        XCTAssertFalse(CoreBridge.echoesWritingSample("Examples of how the user", samples: []))
+        // A genuine completion that merely shares a common word is NOT rejected.
+        XCTAssertFalse(CoreBridge.echoesWritingSample("voice message", samples: samples))
+    }
+
+    func testCutImmediateRepeatIgnoresTrailingPunctuation() {
+        // "je je." — the trailing period must not hide the stutter.
+        XCTAssertEqual(CoreBridge.cutImmediateRepeat("da obsa je je."), "da obsa je")
+        XCTAssertEqual(CoreBridge.cutImmediateRepeat("the the"), "the")
+        XCTAssertEqual(CoreBridge.cutImmediateRepeat("all good here"), "all good here")
+    }
+
+    func testContainsForeignScriptRejectsGarbageBurst() {
+        // Cyrillic prompt, suggestion carries a Devanagari burst → reject.
+        XCTAssertTrue(CoreBridge.containsForeignScript("заर्डर", before: "Молq, потвардете вашата"))
+        // Pure Cyrillic continuation of Cyrillic text → allowed.
+        XCTAssertFalse(CoreBridge.containsForeignScript("поръчка", before: "Молq, потвардете вашата"))
+        // Latin loanword inside Cyrillic text → allowed (Latin always permitted).
+        XCTAssertFalse(CoreBridge.containsForeignScript("iPhone Pro", before: "Купих си нов"))
+        // Latinica: Latin suggestion on Latin prefix → allowed.
+        XCTAssertFalse(CoreBridge.containsForeignScript("shte doida utre", before: "Zdravei, kak si"))
     }
 
     func testBuildPromptFimShapeWithAfterText() {

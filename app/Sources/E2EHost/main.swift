@@ -75,6 +75,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         case "nstextview":
             let tv = LoggingTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
             tv.isRichText = true; tv.isEditable = true
+            // Benchmark fidelity: kill macOS "smart" substitutions so typed text lands
+            // byte-for-byte (straight quotes/dashes), otherwise ' → ' breaks prefix
+            // matching when we diff the accepted completion against the seeded prefix.
+            tv.isAutomaticQuoteSubstitutionEnabled = false
+            tv.isAutomaticDashSubstitutionEnabled = false
+            tv.isAutomaticTextReplacementEnabled = false
+            tv.isAutomaticSpellingCorrectionEnabled = false
             window.contentView = tv
             observe(name: NSText.didChangeNotification, object: tv) { [weak tv] in tv?.string ?? "" }
             present(firstResponder: tv)

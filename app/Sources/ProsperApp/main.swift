@@ -12,6 +12,10 @@ ModelPaths.bootstrap()
 // guard or the guard would just activate the app and drop the arguments.
 AgentCLI.runIfRequested()
 
+// Headless inline-completion bench (env-gated): runs the real completion pipeline
+// over a corpus and exits, no GUI/AX/ghost. For fast content/quality iteration.
+HeadlessBenchCLI.runIfRequested()
+
 // Single-instance guard. A second running copy of the SAME bundle cannot claim
 // the Carbon global hotkeys (RegisterEventHotKey gives the combo to whoever
 // registered first → eventHotKeyExistsErr), so a stale duplicate silently kills

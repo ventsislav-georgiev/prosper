@@ -537,11 +537,23 @@ enum CoreBridge {
     /// cancellation propagates into `MLXEngine.generate`, which aborts prefill/decode
     /// rather than draining the GPU on output that will be discarded anyway.
     @discardableResult
+    /// Benchmark-only: dump the exact (system, prompt, raw model output) to the file
+    /// named by PROSPER_BENCH_LOG, so we can see the ground truth of what the model
+    /// receives and returns without guessing. No-op unless the env var is set.
+    static func benchLog(system: String, prompt: String, raw: String, temp: Float) {
+        guard let path = ProcessInfo.processInfo.environment["PROSPER_BENCH_LOG"] else { return }
+        let block = "\n===== temp=\(temp) =====\n--- SYSTEM ---\n\(system)\n--- PROMPT ---\n\(prompt)\n--- RAW ---\n\(raw)\n--- END ---\n"
+        if let h = FileHandle(forWritingAtPath: path) { h.seekToEndOfFile(); h.write(Data(block.utf8)); try? h.close() }
+        else { try? block.write(toFile: path, atomically: true, encoding: .utf8) }
+    }
+
     static func complete(
         before: String,
         after: String,
         bundleId: String? = nil,
         caretScreenRect: CGRect? = nil,
+        fieldLabel: String? = nil,
+        windowTitle: String? = nil,
         completion: @escaping @MainActor @Sendable (String?) -> Void
     ) -> Task<Void, Never> {
         // Agent mode owns the GPU + RAM: the inline model is unloaded while a coding
@@ -558,9 +570,18 @@ enum CoreBridge {
         // detection is on-device and stable while typing the same text, so the
         // system prompt (KV-cache prefix) only re-prefills on a genuine switch.
         let language = dominantLanguageName(of: before)
+        // Bulgarian typed in Latin letters ("shlyokavitsa") is read by the
+        // recognizer as another Latin-script Slavic language (Croatian, Serbian,
+        // Czech…) — and the model then happily continues in THAT language. When the
+        // detector confidently lands on such a language over Latin-script text,
+        // treat it as transliterated Bulgarian and steer the model there. Gated on
+        // a confident Slavic-Latin hit so it never fires on English fragments
+        // (which detect as English or nil, not Croatian).
+        let latinBulgarian = Self.looksLikeTransliteratedBulgarian(before)
         let system = completionSystemPrompt(
             custom: AppOverrideResolver.effectivePromptAddendum(forBundleId: bundleId),
-            length: length, language: language
+            length: length, language: latinBulgarian ? nil : language,
+            transliteratedBulgarian: latinBulgarian, userLanguages: Self.osLanguagesList()
         )
         let clipboard = Preferences.useClipboardContext ? clipboardContextSnippet() : nil
         let personalize = Preferences.collectTypingHistory && Preferences.personalizeWordChoice > 0
@@ -576,6 +597,11 @@ enum CoreBridge {
 
         return Task {
             let frequentWords = personalize ? await TypingHistoryStore.shared.frequentWords() : []
+            // Cotypist-style previousUserInputs: a few short examples of the user's own
+            // recent writing (this app + across apps + longest), for voice/language
+            // grounding. Same privacy gate as frequentWords.
+            let writingSamples = personalize
+                ? await TypingHistoryStore.shared.writingSamples(bundleId: bundleId) : []
             // Non-LLM candidates: bundled-lexicon prefix/bigram/typo prediction +
             // the OS lexicon, fed to the model as hints (it always runs). This is
             // what keeps "website d" continuing as "ownload" instead of the model
@@ -624,7 +650,9 @@ enum CoreBridge {
                 hasImage: false, onScreenText: onScreenText,
                 onScreenIsConversation: onScreenIsConversation && onScreenText != nil,
                 candidates: candidates,
-                appName: appName, appSurface: appSurface, siteHost: siteHost
+                appName: appName, appSurface: appSurface, siteHost: siteHost,
+                fieldLabel: fieldLabel, windowTitle: windowTitle,
+                writingSamples: writingSamples
             )
             // Quality tuning: low temperature for determinism, nucleus sampling,
             // hard stop at the first newline so a completion stays on one line, and
@@ -664,14 +692,32 @@ enum CoreBridge {
                 + "would most plausibly type (up to \(maxWords) words). Do not "
                 + "repeat words already in the text. Write in the same language "
                 + "as the text\(language.map { " (\($0))" } ?? "").\n\n"
-            let attempts: [(temperature: Float, reprompt: Bool)] = [
-                (0.2, false),  // normal: deterministic, cached prompt prefix
-                (0.5, false),  // resample: same prompt, more diverse sampling
-                (0.7, true),   // reprompt: explicit must-continue directive
-                (0.8, true),
-                (0.9, true),
-                (1.0, true),   // last try: maximum diversity + directive
+            // Ladder rungs carry per-rung sampling. Gemma 4's own GGUF recommends
+            // temp=1.0 / top_k=64 / top_p=0.95; that bounded-nucleus high-temp is what
+            // keeps completions COHERENT (esp. low-resource scripts) instead of the
+            // fragment/echo collapse a sharp temp=0.2 distribution produces. So every
+            // high-temp rung is capped by top_k=64/top_p=0.95 rather than left unbounded.
+            //
+            // EN / Cyrillic-BG / generic: keep the proven deterministic first rung
+            //   (0.2, cached, fast) for high-confidence short completions, then climb
+            //   into the bounded temp-1.0 region only when it yields nothing.
+            // Latinica (shlyokavitsa): START at temp-1.0/top_k=64 — at temp 0.2 the
+            //   model drifts to Cyrillic and emits fragments; the gemma-native nucleus
+            //   produces natural, script-consistent latinica on the first try.
+            typealias Rung = (temperature: Float, topK: Int?, topP: Float, reprompt: Bool)
+            let baseLadder: [Rung] = [
+                (0.2, nil, 0.9,  false),  // deterministic, cached prompt prefix
+                (0.6, 64,  0.95, false),  // bounded resample
+                (1.0, 64,  0.95, true),   // gemma-native + must-continue directive
+                (1.0, 64,  0.95, true),   // retry at the recommended sampling
             ]
+            let latinLadder: [Rung] = [
+                (1.0, 64,  0.95, false),  // gemma-native shlyokavitsa, first try
+                (1.0, 64,  0.95, true),   // + directive
+                (0.8, 64,  0.95, true),   // slightly tighter nucleus
+                (1.0, 64,  0.95, true),   // retry
+            ]
+            let attempts = latinBulgarian ? latinLadder : baseLadder
             var result: String?
             var rungsRun = 0
             for attempt in attempts {
@@ -691,10 +737,20 @@ enum CoreBridge {
                         prompt: attempt.reprompt ? nudge + prompt : prompt,
                         system: system,
                         maxTokens: maxTokens, temperature: attempt.temperature,
-                        topP: 0.9, stop: ["\n"], maxWords: maxWords
+                        topP: attempt.topP, stop: ["\n"], maxWords: maxWords,
+                        topK: attempt.topK
                     )
-                    if let suggestion = sanitizeCompletion(raw, before: before, after: after),
-                       !suggestion.isEmpty {
+                    benchLog(system: system, prompt: attempt.reprompt ? nudge + prompt : prompt,
+                             raw: raw, temp: attempt.temperature)
+                    if let suggestion = sanitizeCompletion(raw, before: before, after: after,
+                                                           transliterateCyrillic: latinBulgarian),
+                       !suggestion.isEmpty,
+                       // Small quantized models latch onto few-shot example lines and
+                       // return them VERBATIM at low temperature (same failure that
+                       // killed candidate word-lists). Reject any suggestion that is
+                       // just a copy of a writing sample; the next rung's higher
+                       // temperature escapes the latch.
+                       !echoesWritingSample(suggestion, samples: writingSamples) {
                         result = suggestion
                         break
                     }
@@ -711,14 +767,88 @@ enum CoreBridge {
         }
     }
 
+    /// Fixed instruction phrases the writing-samples block injects. A small quantized
+    /// model at high temperature occasionally CONTINUES the instruction header instead
+    /// of the user's text (observed: latinica case → "Examples of how the user").
+    /// Guarded so that leak never surfaces as a suggestion. Normalized (letters/numbers
+    /// only) prefixes of the rendered header text.
+    private static let instructionEchoMarkers: [String] = [
+        "examplesofhowtheuser",   // "Examples of how the user usually writes…"
+        "matchtheirvoice",
+        "donotcopyorrepeat",
+        "clipboardcontext",
+        "theuserfrequentlywrites",
+    ]
+
+    /// True when the suggestion is essentially a copy of one of the writing-sample
+    /// example lines (the few-shot voice block) OR an echo of the block's own
+    /// instruction header, rather than a continuation of the user's text. Normalized
+    /// substring match, gated at ≥8 letters so short natural overlaps ("blagodarq")
+    /// are never rejected.
+    static func echoesWritingSample(_ suggestion: String, samples: [String]) -> Bool {
+        guard !samples.isEmpty else { return false }
+        let norm = { (s: String) -> String in
+            s.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        let n = norm(suggestion)
+        guard n.count >= 8 else { return false }
+        if samples.contains(where: { norm($0).contains(n) }) { return true }
+        // Instruction-header leak: the suggestion IS (a prefix of) an injected marker.
+        return instructionEchoMarkers.contains { $0.hasPrefix(n) || n.hasPrefix($0) }
+    }
+
+    /// Bulgarian Cyrillic → Latin (shlyokavitsa) transliteration, matching the
+    /// convention the completion system prompt teaches (щ→sht, я→q, ъ→a, ж→zh,
+    /// ч→ch, ш→sh, ю→yu; NO č/š/ž). Multi-char maps first. Non-Cyrillic passes
+    /// through unchanged, so a mixed "на обqd" becomes "na obqd". Casing preserved
+    /// for single-letter maps; multigraphs follow the leading letter's case.
+    static func transliterateCyrillicToLatin(_ text: String) -> String {
+        // Order matters only in that each Cyrillic scalar maps independently; there
+        // are no multi-Cyrillic-letter source keys, so a straight per-character walk
+        // is correct and keeps Latin/punctuation/spacing intact.
+        let map: [Character: String] = [
+            "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ж": "zh",
+            "з": "z", "и": "i", "й": "i", "к": "k", "л": "l", "м": "m", "н": "n",
+            "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f",
+            "х": "h", "ц": "c", "ч": "ch", "ш": "sh", "щ": "sht", "ъ": "a", "ь": "y",
+            "ю": "yu", "я": "q",
+        ]
+        var out = ""
+        out.reserveCapacity(text.count)
+        for ch in text {
+            let lower = Character(ch.lowercased())
+            guard let latin = map[lower] else { out.append(ch); continue }
+            if ch.isUppercase {
+                // Uppercase source → capitalize the multigraph's first letter.
+                out.append(latin.prefix(1).uppercased() + latin.dropFirst())
+            } else {
+                out.append(latin)
+            }
+        }
+        return out
+    }
+
     /// Cleans raw model output into a usable inline continuation, or nil.
     /// - strips surrounding quotes/backticks and a leading restatement of `before`
     /// - removes a leading overlap where the model re-emits the tail of `before`
     /// - rejects any echo of text already written (leading, interior, or of the
     ///   text after the caret) and cuts internal word/phrase loops
     /// - collapses runaway whitespace and trims trailing blank lines
-    static func sanitizeCompletion(_ raw: String, before: String, after: String = "") -> String? {
+    static func sanitizeCompletion(
+        _ raw: String, before: String, after: String = "",
+        transliterateCyrillic: Bool = false
+    ) -> String? {
         var s = raw
+
+        // Shlyokavitsa salvage: when the user is typing transliterated Bulgarian
+        // (Latin-script), this small model often produces the RIGHT Bulgarian words
+        // in the WRONG script (Cyrillic, or mixed "на обqd") — the mismatchedScript
+        // guard can't catch the mixed case. Transliterating Cyrillic→Latin here turns
+        // that coherent-but-wrong-script output into valid shlyokavitsa instead of
+        // burning a retry rung. No-op on all-Latin text.
+        if transliterateCyrillic {
+            s = transliterateCyrillicToLatin(s)
+        }
 
         // Strip a leading code fence the model may have wrapped output in.
         if s.hasPrefix("```") {
@@ -782,6 +912,11 @@ enum CoreBridge {
         // user's text (Bulgarian typed, English suggested) is never wanted —
         // reject so the retry ladder reprompts instead of showing it.
         if Self.mismatchedScript(s, before: before) { return nil }
+
+        // Foreign-script garbage guard: reject a burst of letters from a script the
+        // user isn't writing (e.g. Devanagari in Cyrillic text) — high-temperature
+        // noise that `mismatchedScript` can't see because those blocks aren't counted.
+        if Self.containsForeignScript(s, before: before) { return nil }
 
         // Regurgitation guard #3: interior echo. The leading-span guard above only
         // inspects the completion's HEAD; a suggestion can start fresh and then
@@ -941,14 +1076,18 @@ enum CoreBridge {
             .split(whereSeparator: { $0 == " " || $0 == "\t" })
             .map(String.init)
         guard words.count >= 2 else { return s }
+        // Compare punctuation-stripped, lowercased forms so a trailing mark doesn't
+        // hide a stutter ("je je." → tokens "je","je." must still register as a repeat).
+        func key(_ w: String) -> String { w.lowercased().filter { $0.isLetter || $0.isNumber } }
+        let k = words.map(key)
         var cut = words.count
         for i in 0 ..< words.count - 1 {
-            let a = words[i].lowercased()
-            if a.count >= 2, a == words[i + 1].lowercased() { cut = i + 1; break }
+            let a = k[i]
+            if a.count >= 2, a == k[i + 1] { cut = i + 1; break }
             if i + 3 < words.count,
-               a == words[i + 2].lowercased(),
-               words[i + 1].lowercased() == words[i + 3].lowercased(),
-               (a + words[i + 1]).count >= 4 {
+               a == k[i + 2],
+               k[i + 1] == k[i + 3],
+               (a + k[i + 1]).count >= 4 {
                 cut = i + 2
                 break
             }
@@ -979,6 +1118,60 @@ enum CoreBridge {
               let confidence = recognizer.languageHypotheses(withMaximum: 1)[lang],
               confidence >= 0.8 else { return nil }
         return Locale(identifier: "en").localizedString(forLanguageCode: lang.rawValue)
+    }
+
+    /// English-localized names of the Latin-script Slavic languages the recognizer
+    /// tends to pick for Bulgarian written in Latin letters. Used only to redirect
+    /// such text back to transliterated Bulgarian.
+    private static let slavicLatinLanguageNames: Set<String> = [
+        "Croatian", "Serbian", "Bosnian", "Slovenian", "Czech", "Slovak", "Polish",
+    ]
+    static func isSlavicLatinLanguage(_ name: String?) -> Bool {
+        guard let name else { return false }
+        return slavicLatinLanguageNames.contains(name)
+    }
+
+    /// True when the text looks like Bulgarian written in Latin letters
+    /// ("shlyokavitsa"). Two independent signals, either sufficient:
+    ///   1. The recognizer's TOP hypothesis over Latin-script text is a Slavic-Latin
+    ///      language (Croatian/Czech/Slovak…). We deliberately do NOT require the 0.8
+    ///      confidence `dominantLanguageName` uses — shlyokavitsa lands there but
+    ///      diffusely (Slovak 0.48, Czech 0.39…), and that low confidence is itself
+    ///      the tell that it isn't real English (English dominates strongly).
+    ///   2. Orthographic markers real English essentially never has: a `q` not
+    ///      followed by `u` (Bulgarian я/ъ → "q": "vashiq", "prosledq") or the "sht"
+    ///      digraph (щ → "sht": "shte", "oshte"). Catches cases the recognizer misreads
+    ///      as English/Danish outright (e.g. "tragnah, shte sam…").
+    static func looksLikeTransliteratedBulgarian(_ text: String) -> Bool {
+        guard isLatinScript(text) else { return false }
+        let sample = String(text.suffix(300)).lowercased()
+        guard sample.count >= 6 else { return false }
+        // Marker signal (cheap, checked first).
+        if sample.contains("sht") { return true }
+        let chars = Array(sample)
+        for (i, ch) in chars.enumerated() where ch == "q" {
+            let next = i + 1 < chars.count ? chars[i + 1] : " "
+            if next != "u" { return true }
+        }
+        // Recognizer signal: top hypothesis is Slavic-Latin (no 0.8 floor).
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(sample)
+        guard let top = recognizer.languageHypotheses(withMaximum: 1).first, top.value >= 0.30
+        else { return false }
+        let name = Locale(identifier: "en").localizedString(forLanguageCode: top.key.rawValue)
+        return isSlavicLatinLanguage(name)
+    }
+
+    /// True when the recent text is dominantly Latin-script (≥3 letters, ≥70%).
+    static func isLatinScript(_ text: String) -> Bool {
+        var lat = 0, other = 0
+        for scalar in text.suffix(300).unicodeScalars where scalar.properties.isAlphabetic {
+            if (0x0041...0x024F).contains(scalar.value) || (0x1E00...0x1EFF).contains(scalar.value) {
+                lat += 1
+            } else { other += 1 }
+        }
+        let total = lat + other
+        return total >= 3 && Double(lat) / Double(total) >= 0.7
     }
 
     /// True when the completion's script visibly disagrees with the script the
@@ -1017,6 +1210,45 @@ enum CoreBridge {
               // language drift worth rejecting.
               sugScript.letters >= 8 else { return false }
         return beforeScript.script != sugScript.script
+    }
+
+    /// Classify a scalar into a coarse script bucket, or nil if it is not a letter.
+    /// Unlisted alphabetic blocks (Devanagari, Thai, …) fall into "other" — a small
+    /// quantized model at high temperature occasionally emits a burst of these as
+    /// pure garbage (observed: Cyrillic prompt → "заर्डर."), and they must never ship.
+    private static func scriptBucket(_ scalar: Unicode.Scalar) -> String? {
+        guard scalar.properties.isAlphabetic else { return nil }
+        switch scalar.value {
+        case 0x0041...0x024F, 0x1E00...0x1EFF: return "latin"
+        case 0x0400...0x052F: return "cyrillic"
+        case 0x0370...0x03FF: return "greek"
+        case 0x0590...0x05FF: return "hebrew"
+        case 0x0600...0x06FF, 0x0750...0x077F: return "arabic"
+        case 0x4E00...0x9FFF, 0x3040...0x30FF: return "cjk"
+        case 0xAC00...0xD7AF: return "hangul"
+        default: return "other"
+        }
+    }
+
+    /// True when the suggestion contains a run of letters from a script FOREIGN to the
+    /// user's text — a script neither present in `before` nor Latin (Latin is always
+    /// allowed: loanwords, latinica, code, URLs). Catches the high-temperature garbage
+    /// bursts that `mismatchedScript` misses, since those tokens live in Unicode blocks
+    /// it doesn't count at all. Threshold ≥3 foreign letters so a lone stray accent or
+    /// emoji-adjacent mark never trips it.
+    static func containsForeignScript(_ s: String, before: String) -> Bool {
+        var allowed: Set<String> = ["latin"]
+        for scalar in before.suffix(300).unicodeScalars {
+            if let b = scriptBucket(scalar) { allowed.insert(b) }
+        }
+        var foreign = 0
+        for scalar in s.unicodeScalars {
+            if let b = scriptBucket(scalar), !allowed.contains(b) {
+                foreign += 1
+                if foreign >= 3 { return true }
+            }
+        }
+        return false
     }
 
     /// Returns `s` with its longest trailing run removed that equals a prefix of
@@ -1082,20 +1314,54 @@ enum CoreBridge {
 
     /// Inline-completion system prompt, optionally augmented with the user's
     /// custom instructions (tone/language/style) from Preferences.
+    /// The user's habitual languages, from OS preferences (e.g. "English, Bulgarian").
+    /// Cotypist injects exactly this (`osLanguagesString`) so the model reads
+    /// Latin-script Slavic text as the user's actual language (Bulgarian
+    /// transliteration) instead of guessing Croatian/Russian — no per-text detection.
+    static func osLanguagesList() -> String {
+        var seen = Set<String>(), names: [String] = []
+        for id in Locale.preferredLanguages.prefix(4) {
+            let code = Locale(identifier: id).language.languageCode?.identifier ?? id
+            guard let name = Locale(identifier: "en").localizedString(forLanguageCode: code),
+                  seen.insert(name).inserted else { continue }
+            names.append(name)
+        }
+        return names.joined(separator: ", ")
+    }
+
     static func completionSystemPrompt(
-        custom: String, length: CompletionLength = .medium, language: String? = nil
+        custom: String, length: CompletionLength = .medium, language: String? = nil,
+        transliteratedBulgarian: Bool = false, userLanguages: String? = nil
     ) -> String {
         // Language pinning. The generic "match the user's language" rule is not
         // enough for a small model — with English few-shot examples it drifts to
         // English on non-English text. Naming the detected language as a hard
         // rule (and disclaiming the examples) holds it.
-        let languageRule = language.map {
-            "The text is written in \($0). Your continuation MUST be in \($0) — "
-                + "never switch to another language. The examples below are "
-                + "English only to demonstrate the FORMAT, not the language. "
-                + "Match the user's tone, casing, and punctuation."
-        } ?? "Match the user's language, tone, casing, and punctuation. Never "
-            + "switch to a different language than the text is written in."
+        // Mirror the text's EXACT language, script and spelling style — do not
+        // translate, romanize, or de-romanize it. A hard "must be in <detected>"
+        // pin backfires when detection mislabels the input (e.g. Bulgarian typed in
+        // Latin letters / "shlyokavitsa" is read as English or Croatian, and the
+        // model then switches to that language). Naming the detected language as a
+        // soft hint still helps the confident cases without forcing a wrong one.
+        let languageRule = transliteratedBulgarian ? (
+            "The text is Bulgarian written in Latin letters (transliteration / "
+                + "\"shlyokavitsa\") — it is NOT Croatian, Serbian, Russian, Czech, or "
+                + "English. Continue in that SAME transliterated Bulgarian: keep Latin "
+                + "letters and spell Bulgarian words phonetically (щ→sht, я/ъ→q, ж→zh, "
+                + "ч→ch, ш→sh). Write Bulgarian words like \"blagodarq\", \"shte\", "
+                + "\"kakvo\", \"molq\" — NEVER their Croatian/Russian equivalents "
+                + "(\"hvala\", \"ćemo\", \"dlya\", \"da li\") and never diacritics "
+                + "(č/š/ž). Never translate to English. Match the user's tone and casing."
+        ) : language.map {
+            "Continue in the SAME language and writing system as the text (it looks "
+                + "like \($0), but trust the text itself over this guess). Never "
+                + "translate it, switch languages, or change its script/spelling "
+                + "style — if it is written in Latin letters keep Latin letters, if "
+                + "Cyrillic keep Cyrillic. Match the user's tone, casing, and punctuation."
+        } ?? "Continue in the EXACT same language, script and spelling style as the "
+            + "text. Never translate it or switch to another language — if it is "
+            + "written in Latin letters keep Latin letters even when the words are "
+            + "not English (e.g. transliterated Bulgarian). Match tone and casing."
         // Length steering. maxWords/maxTokens only HARD-CAP the output; without a
         // matching instruction gemma defaults to the shortest possible continuation
         // (one word), so the "Long" setting never produced longer suggestions. This
@@ -1143,54 +1409,40 @@ enum CoreBridge {
                 """
             }
         }()
-        let base = """
-        You are the inline autocomplete engine inside Prosper, a macOS typing \
-        assistant. A real person is typing on their Mac right now, in whatever app \
-        they have focused — sending a chat message, writing an email, jotting a \
-        note, or editing code. As they type, you predict the small next piece of \
-        text they are about to write and show it inline as grey "ghost text" they \
-        can accept with the Tab key. So your output is not an answer or a reply — \
-        it is the words this same person would type next, in their own voice.
+        // Kept deliberately SHORT. A 2B/4-bit model treats a long instruction wall +
+        // few-shot examples as content to imitate — it was echoing the example
+        // sentences ("Visit the website and downlo…") and any word-list verbatim.
+        // A few crisp rules continue the text far more reliably than a page of them.
+        _ = examples
+        // OS-languages grounding (Cotypist's `osLanguagesString`): naming the user's
+        // habitual languages lets the model read Latin-script Slavic text as the user's
+        // own language (Bulgarian in Latin / "shlyokavitsa") rather than defaulting to
+        // Croatian/Russian — this is what makes latinica work without per-text pinning.
+        let languagesContext = (userLanguages?.isEmpty == false)
+            ? "The user commonly writes in these languages: \(userLanguages!). Continue in "
+                + "whichever language and writing system the text is already in — if it is in "
+                + "Latin letters but looks Slavic, it is almost certainly one of the user's "
+                + "languages written in Latin (e.g. Bulgarian transliteration), NOT Croatian "
+                + "or Russian.\n\n"
+            : ""
+        let base = languagesContext + """
+        Complete the user's text inline, like a phone keyboard's next-word suggestion. \
+        You are given the text up to the cursor; output ONLY the text that comes next — \
+        the words this person would type, in their own voice. Not an answer, not a reply.
 
-        What you get to work with: the text immediately before the cursor (→) and \
-        sometimes the text after it, which app they are in and what kind of writing \
-        that implies, optionally nearby on-screen text or their clipboard, and a \
-        list of dictionary-derived suggested words. Use all of it to make the \
-        continuation fit the person, the app, and the moment. Predict the most \
-        likely continuation from exactly where the cursor stops.
-
-        How to use the hints:
-        - A "Suggested words" list may be provided. It is computed from a dictionary \
-        (word frequencies and which words commonly follow the previous word) and is \
-        ordered best-first. Treat it as strong guidance, not a constraint: pick the \
-        entry that best fits the sentence, or ignore the list if none fit.
-        - If the text ends mid-word, the suggestions are full words that the partial \
-        word should become. Output ONLY the missing letters (and a natural \
-        continuation after), never the letters already typed.
-
-        Hard rules:
-        - Output ONLY the raw continuation text that comes after the cursor. No \
-        quotes, no code fences, no commentary, no labels, no leading "...".
-        - NEVER repeat any word the user already typed. Continue from the exact \
-        cursor position. If the text ends mid-word, your output must begin with the \
-        very next character of that same word (e.g. after "downlo" output "ad"), \
-        never restart the word ("download") and never glue a new word onto the \
-        fragment ("downloadwebsite").
+        Rules:
+        - Output only the raw continuation. No quotes, no labels, no commentary, and \
+        never restate what the user already typed.
+        - If the text ends mid-word, output only the letters that finish that word \
+        (after "downlo" → "ad"); do not restart the word or glue on a new one.
+        - If the text already ends with a space, do NOT begin your output with a space.
         - \(languageRule)
-        - \(lengthDirective) Keep it on one line.
-        - ALWAYS output a continuation. Never output nothing — even when the text \
-        reads as complete, predict the next words the person would most plausibly \
-        type. Whether the text is finished is the user's decision, not yours.
-        - Spacing: when your continuation begins a NEW word and the text does not \
-        already end with a space, START your output with a single space. When you \
-        are finishing the word the text ends in, start immediately with its \
-        remaining letters, no space.
-
-        \(examples)
+        - \(lengthDirective) Keep it to one line.
+        - Always give a plausible continuation; never reply with nothing.
         """
         let trimmed = custom.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return base }
-        return base + "\n\nAdditional user instructions:\n" + trimmed
+        return base + "\n\nAbout the user (for voice/topic only, do not quote):\n" + trimmed
     }
 
     /// Build the stage-1 user prompt: just translate, no JSON envelope.
@@ -1347,7 +1599,9 @@ enum CoreBridge {
         onScreenIsConversation: Bool = false,
         candidates: CompletionCandidates? = nil,
         appName: String? = nil, appSurface: AppProfile.Surface? = nil,
-        siteHost: String? = nil
+        siteHost: String? = nil,
+        fieldLabel: String? = nil, windowTitle: String? = nil,
+        writingSamples: [String] = []
     ) -> String {
         var ctx = ""
         // Situational context: where the user is typing (app, and the web site if
@@ -1356,6 +1610,19 @@ enum CoreBridge {
         if let line = situationLine(appName: appName, siteHost: siteHost, surface: appSurface) {
             let hint = (appSurface ?? .generic).promptHint
             ctx += hint.isEmpty ? "\(line)\n\n" : "\(line) \(hint)\n\n"
+        }
+        // Grounding context (cheap AX reads — see CaretContext.fieldLabel/windowTitle):
+        // WHO/WHAT the user is writing to. This is Cotypist's strongest edge — it feeds
+        // the field label ("Message to Plamen Redjov") + window title so the model
+        // continues in the right register AND the right language, without us pinning a
+        // (mis)detected language. Keep it terse; it precedes the text so the model reads
+        // it as scene-setting, not content to echo.
+        let grounding = [
+            windowTitle.map { "Window: \($0)" },
+            fieldLabel.map { "Field: \($0)" },
+        ].compactMap { $0 }.joined(separator: " · ")
+        if !grounding.isEmpty {
+            ctx += "\(grounding)\n\n"
         }
         if hasImage {
             ctx += "A screenshot of the area around the cursor is attached for "
@@ -1374,12 +1641,22 @@ enum CoreBridge {
         let frequentWordsJoined = frequentWords.isEmpty
             ? ""
             : frequentWords.joined(separator: ", ")
+        // Only feed examples written in the SAME script as the current text. A
+        // Cyrillic example under a Latin-script (e.g. transliterated-Bulgarian)
+        // prefix drags the model cross-script — observed as "помощь"/"че сте"
+        // continuations of shlyokavitsa. Same-script examples steer voice without
+        // flipping the alphabet.
+        let scriptMatchedSamples = writingSamples.filter { !mismatchedScript($0, before: before) }
+        let samplesJoined = scriptMatchedSamples.isEmpty
+            ? ""
+            : scriptMatchedSamples.map { "- \($0)" }.joined(separator: "\n")
         let tailChars = before.count + after.count
         let budget = contextCharBudgets(
             recentTextChars: tailChars,
             pieces: [
                 ContextPiece(name: "onScreen", length: onScreenText?.count ?? 0, order: 2),
                 ContextPiece(name: "clipboard", length: clipboard?.count ?? 0, order: 2),
+                ContextPiece(name: "samples", length: samplesJoined.count, order: 2),
                 ContextPiece(name: "frequent", length: frequentWordsJoined.count, order: 1),
             ]
         )
@@ -1398,22 +1675,31 @@ enum CoreBridge {
         if let clipboard, let clipped = clip(clipboard, to: "clipboard", in: budget) {
             ctx += "Clipboard context (may be relevant):\n\(clipped)\n\n"
         }
+        if !samplesJoined.isEmpty,
+           let clipped = clip(samplesJoined, to: "samples", in: budget) {
+            ctx += "Examples of how the user usually writes — match their voice, tone, "
+                + "and language (including transliterated/Latin-script text); do not "
+                + "copy or repeat these lines:\n\(clipped)\n\n"
+        }
         if !frequentWordsJoined.isEmpty,
            let clipped = clip(frequentWordsJoined, to: "frequent", in: budget) {
             ctx += "The user frequently writes these words; prefer them when natural: "
                 + clipped + ".\n\n"
         }
-        // Non-LLM candidate hints (dictionary prefix/bigram/typo). Strong guidance.
-        if let candidates, !candidates.isEmpty {
-            let list = candidates.words.joined(separator: ", ")
-            if candidates.atBoundary {
-                ctx += "Suggested words (likely to come next, best first): \(list).\n\n"
-            } else {
-                ctx += "The text ends mid-word with the partial word "
-                    + "\"\(candidates.fragment)\". Suggested completions of that word "
-                    + "(full words, best first): \(list). Output only the letters that "
-                    + "finish the word, not the whole word.\n\n"
-            }
+        // Mid-word only: name the partial word so the model finishes it. We do NOT
+        // inject a candidate word-list any more — this small (2B/4-bit) model
+        // regurgitates such lists VERBATIM as its "completion" (e.g. prompt
+        // "Suggested words: on, loss, from, the, and" → output "on loss from the and")
+        // instead of continuing the text. The dictionary candidates remain available
+        // for the non-LLM fallback path, just never as an echo-prone prompt hint.
+        if let candidates, !candidates.isEmpty, !candidates.atBoundary,
+           let best = candidates.words.first {
+            // Give ONE likely target word (not a list — lists get echoed). The model
+            // finishes the fragment toward it; sanitizeCompletion strips any overlap
+            // if the model re-emits the letters already typed.
+            ctx += "The user is typing a word that starts with \"\(candidates.fragment)\" "
+                + "— most likely \"\(best)\". Output only the letters that come after "
+                + "\"\(candidates.fragment)\", then continue the sentence naturally.\n\n"
         }
         if after.isEmpty {
             return "\(ctx)Continue this text. Output only the continuation:\n\(before)"
