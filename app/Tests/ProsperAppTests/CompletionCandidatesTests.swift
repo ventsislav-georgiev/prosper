@@ -467,4 +467,23 @@ final class CompletionCandidatesTests: XCTestCase {
         )
         XCTAssertTrue(short.contains(" and that is all."))
     }
+
+    func testAfterHeadChargedAgainstTailAllowance() {
+        // The tail reservation covers BOTH sides of the caret: a long `before`
+        // plus a 400-char afterHead must yield a SHORTER before-section than the
+        // same `before` with a tiny after — otherwise the combined tail rides
+        // over the budget and only the system-beheading backstop catches it.
+        func beforeSection(after: String) -> Int {
+            let p = CoreBridge.buildCompletionPrompt(
+                before: String(repeating: "word ", count: 1200), // 6000 chars
+                after: after, clipboard: nil
+            )
+            let body = p.components(separatedBy: "Before cursor:\n").last ?? ""
+            return (body.components(separatedBy: "\n\nAfter cursor:").first ?? "").count
+        }
+        let withBigAfter = beforeSection(after: String(repeating: "x", count: 800))
+        let withTinyAfter = beforeSection(after: " ok.")
+        XCTAssertLessThan(withBigAfter, withTinyAfter,
+                          "before-section not charged for afterHead: \(withBigAfter) vs \(withTinyAfter)")
+    }
 }
