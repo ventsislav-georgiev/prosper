@@ -65,6 +65,9 @@ final class AutocompleteEngine {
     private var inFlightAnchor: String?
     private var inFlightSince: Date = .distantPast
     private var pendingRefire = false
+    /// Last keystroke that scheduled a suggestion — used at refire time to pick
+    /// burst (still typing) vs full ladder (paused).
+    private var lastTypedAt: Date = .distantPast
 
     /// Shadow of the printable characters typed since the last caret-moving
     /// event (click, arrow/Tab/Return, app switch). Electron apps (Slack) update
@@ -101,8 +104,6 @@ final class AutocompleteEngine {
     // Force a model request at least this often during a continuous typing burst
     // (see scheduleSuggestion) so the ghost updates WHILE typing, not only on pause.
     nonisolated static let debounceMaxWait: TimeInterval = 0.22
-    /// When the last real model request was fired (throttle clock for maxWait).
-    private var lastRequestFiredAt: Date = .distantPast
     private func updateDebounce(_ elapsed: TimeInterval) {
         let next = Self.nextDebounce(ema: latencyEMA, elapsed: elapsed)
         latencyEMA = next.ema
@@ -791,23 +792,23 @@ final class AutocompleteEngine {
     // MARK: - Suggestion flow (main thread)
 
     private func scheduleSuggestion() {
+        lastTypedAt = Date()
         debounceTimer?.invalidate()
-        // Throttle with maxWait (Cotypist parity). A PURE trailing debounce resets on
-        // every keystroke, so during continuous typing it never fires — the ghost only
-        // appears once the user pauses (their "nothing while typing, then a wait"). Fire
-        // the model straight away when it has been ≥ debounceMaxWait since the last real
-        // request, so the ghost updates WHILE typing; the in-flight generation is
-        // cancelled and superseded (see requestSuggestion), which is what makes running
-        // the model per-burst safe now (the old per-keystroke attempt lacked that and
-        // overloaded the engine). Otherwise fall back to the short trailing debounce so
-        // a brief pause still snaps quickly.
-        if Date().timeIntervalSince(lastRequestFiredAt) >= Self.debounceMaxWait {
-            // Burst fire: the user is mid-typing. Run only the fast deterministic
-            // first rung — a full retry ladder here can't land inside a typing
-            // gap and just burns GPU (felt as system-wide lag).
+        // Zero built-in waiting: the user must NEVER have to pause typing for a
+        // ghost to appear. When no request is in flight, fire the fast burst rung
+        // IMMEDIATELY on the keystroke — the first ghost costs pure model latency,
+        // no debounce. While one is in flight, the single-flight gate inside
+        // requestSuggestion queues a refire that chains the moment it lands, so
+        // continuous typing gets a fresh completion every ~gen-latency with at
+        // most one generation on the GPU at a time.
+        if inFlightAnchor == nil || Date().timeIntervalSince(inFlightSince) >= 3.0 {
             requestSuggestion(burst: true)
-            return
         }
+        // Pause snap: once typing stops for a debounce gap, run the FULL retry
+        // ladder for a quality pass (bursts run only the fast first rung). If the
+        // burst is still in flight when this fires, the gate converts it into a
+        // queued refire; the refire itself picks burst-vs-full by how recently
+        // the user typed (see completion callback).
         debounceTimer = Timer.scheduledTimer(
             withTimeInterval: debounceInterval,
             repeats: false
@@ -1066,7 +1067,6 @@ final class AutocompleteEngine {
         accessoryButton.setState(.thinking)
 
         let requestStart = Date()
-        lastRequestFiredAt = requestStart
         // Any diverged in-flight generation was already cancelled at the token
         // bump above (CoreBridge.complete checks Task.isCancelled + cancels the
         // server-side generation, so the stale one stops prefill/decode at once).
@@ -1090,8 +1090,16 @@ final class AutocompleteEngine {
             self.pendingRefire = false
             // Closure-level defer: runs on EVERY exit path below, after the
             // response is fully processed, so the queued refresh never races the
-            // state mutations of this one.
-            defer { if refire { self.scheduleSuggestion() } }
+            // state mutations of this one. Burst while the user is still typing
+            // (fast rung, chains the pipeline); full ladder once they paused
+            // (quality pass). Direct requestSuggestion — scheduleSuggestion would
+            // stamp lastTypedAt and misread the refire as a keystroke.
+            defer {
+                if refire {
+                    let stillTyping = Date().timeIntervalSince(self.lastTypedAt) < Self.debounceMaxWait
+                    self.requestSuggestion(burst: stillTyping)
+                }
+            }
             guard let suggestion, !suggestion.isEmpty else {
                 // Model produced nothing even after CoreBridge's retry/reprompt
                 // ladder. Distinguish the causes (P2.2): when the agent owns the
@@ -1105,10 +1113,10 @@ final class AutocompleteEngine {
                     self.accessoryButton.setState(.paused)
                 } else if self.currentSuggestion == nil {
                     self.recordNoShow(.modelEmpty)
-                    // A burst request ran only the fast first rung — an empty
-                    // there is routine (the pause-fire retries the full ladder),
-                    // so don't flash the error badge mid-typing.
-                    self.accessoryButton.setState(burst ? .idle : .error)
+                    // "Nothing to suggest" is a normal outcome, not a failure —
+                    // never surface the orange error badge for it. The counter
+                    // above keeps the telemetry; the badge stays quiet.
+                    self.accessoryButton.setState(.idle)
                 } else {
                     // A still-valid ghost is on screen: drop the .thinking spinner
                     // back to .ready instead of leaving it stuck until next fire.
