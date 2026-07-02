@@ -547,6 +547,22 @@ enum CoreBridge {
         else { try? block.write(toFile: path, atomically: true, encoding: .utf8) }
     }
 
+    /// One frozen capture of the volatile prompt blocks, shared by every inline
+    /// request within an app+site so the prompt HEAD stays byte-identical and
+    /// the KV prefix survives (see the freeze logic in `complete`).
+    struct FrozenInlineContext {
+        let key: String            // bundleId|siteHost
+        let capturedAt: Date
+        let clipboard: String?
+        let frequentWords: [String]
+        let onScreenText: String?
+        let onScreenIsConversation: Bool
+    }
+    @MainActor static var frozenInlineContext: FrozenInlineContext?
+    // ponytail: fixed 30s staleness window; make it a pref if chat contexts
+    // prove to need faster conversation-OCR refresh.
+    static let frozenContextTTL: TimeInterval = 30
+
     static func complete(
         before: String,
         after: String,
@@ -590,31 +606,22 @@ enum CoreBridge {
             length: length, language: latinBulgarian ? nil : language,
             transliteratedBulgarian: latinBulgarian, userLanguages: Self.osLanguagesList()
         )
-        // Burst requests (fired on the keystroke, mid-typing) get a LIGHT prompt:
-        // no clipboard, no frequent-words hint, no on-screen OCR block. Those
-        // blocks sit EARLY in the prompt and their bytes churn while typing (the
-        // OCR cache refreshes, the clipboard changes) — every churn invalidates
-        // the whole KV prefix, turning the ~150ms warm-cache keystroke path into
-        // a 400–1200ms full re-prefill (measured live; Cotypist stays 125–225ms
-        // on a tiny stable prompt). They are also the latch targets the model
-        // parrots on short context. The pause-snap full ladder (burst == false)
-        // keeps the rich context where its one-off prefill cost is invisible.
-        let clipboard = (!burst && Preferences.useClipboardContext) ? clipboardContextSnippet() : nil
+        // Volatile context blocks (clipboard, frequent words, on-screen OCR) are
+        // FROZEN per app+site and shared by EVERY request — burst and pause
+        // alike. They sit EARLY in the prompt, so re-capturing them per request
+        // changed the head bytes and invalidated the whole KV prefix: live
+        // traces showed "reused 0/480, prefilled 480" on nearly every request
+        // (~250–410ms each; bursts died cancelled mid-prefill) because typing
+        // alternates burst↔pause constantly and each pause re-captured. One
+        // frozen snapshot gives every request the SAME prompt shape and head →
+        // ~30-token incremental prefills. Pause requests refresh an expired
+        // snapshot (TTL below); if the re-captured bytes come back identical the
+        // prefix survives even that. Bursts accept a stale snapshot (never pay
+        // capture latency); a burst with NO snapshot goes light once and the
+        // next pause freezes for everyone.
         let personalize = Preferences.collectTypingHistory && Preferences.personalizeWordChoice > 0
-        // On-screen text context: recognize text near the caret (Vision/ANE) and
-        // feed it to the *text* model — recovers context in Electron/Chromium apps
-        // where AX exposes little. Both the "screenshots" and "OCR" toggles now feed
-        // this single cheap channel: inline completion never runs the multimodal
-        // VLM image path, which costs seconds per keystroke and made typing feel
-        // dead. OCR is captured through `ScreenContextCache` (throttled + cached),
-        // so the hot path never blocks on a screenshot. Requires Screen Recording
-        // permission; off by default.
-        let wantsScreenText = !burst
-            && (Preferences.useScreenshotContext || Preferences.useOCRContext)
 
         return Task {
-            let frequentWords = (personalize && !burst)
-                ? await TypingHistoryStore.shared.frequentWords() : []
             // Cotypist-style previousUserInputs: a few short examples of the user's own
             // recent writing (this app + across apps + longest), for voice/language
             // grounding. Same privacy gate as frequentWords.
@@ -637,21 +644,61 @@ enum CoreBridge {
             let appSurface = siteHost != nil
                 ? AppProfile.surface(forHost: siteHost)
                 : AppProfile.surface(for: bundleId, kind: profile.kind)
-            // OCR context. On a conversational surface (chat/email/social) the dialog
-            // scrolls *above* the input field, so capture a tall region reaching
-            // upward and feed it as conversation history; elsewhere grab the thin
-            // band hugging the caret. Recovers context where AX exposes little
-            // (Electron/Chromium, Qt apps like Telegram desktop). Read through the
-            // throttled cache so repeated keystrokes reuse one capture instead of
-            // OCR-ing the screen every time.
-            let onScreenIsConversation = wantsScreenText && appSurface.isConversational
-            let onScreenText: String? = (wantsScreenText && caretScreenRect != nil)
-                ? await MainActor.run {
-                    ScreenContextCache.shared.onScreenText(
-                        around: caretScreenRect!, conversation: onScreenIsConversation
-                    )
-                }
-                : nil
+            // Frozen volatile blocks (see the comment above the Task). Key on
+            // app+site so a tab/app switch re-freezes; content only refreshes on
+            // a pause request once the TTL lapses.
+            let key = (bundleId ?? "") + "|" + (siteHost ?? "")
+            let cached: FrozenInlineContext? = await MainActor.run {
+                if let f = Self.frozenInlineContext, f.key == key { return f }
+                return nil
+            }
+            let cachedFresh = cached.map {
+                Date().timeIntervalSince($0.capturedAt) < Self.frozenContextTTL
+            } ?? false
+            let clipboard: String?
+            let frequentWords: [String]
+            let onScreenText: String?
+            let onScreenIsConversation: Bool
+            if let cached, burst || cachedFresh {
+                clipboard = cached.clipboard
+                frequentWords = cached.frequentWords
+                onScreenText = cached.onScreenText
+                onScreenIsConversation = cached.onScreenIsConversation
+            } else if burst {
+                // Cold snapshot on a mid-typing keystroke: never pay capture
+                // latency here. Light prompt once; the next pause freezes.
+                clipboard = nil
+                frequentWords = []
+                onScreenText = nil
+                onScreenIsConversation = false
+            } else {
+                // Pause request with no (or expired) snapshot: capture + freeze.
+                // OCR: on a conversational surface (chat/email/social) the dialog
+                // scrolls *above* the input field, so capture a tall region
+                // reaching upward and feed it as conversation history; elsewhere
+                // the thin band hugging the caret. Recovers context where AX
+                // exposes little (Electron/Chromium, Qt apps like Telegram).
+                clipboard = Preferences.useClipboardContext
+                    ? await MainActor.run { clipboardContextSnippet() } : nil
+                frequentWords = personalize
+                    ? await TypingHistoryStore.shared.frequentWords() : []
+                let wantsScreenText = Preferences.useScreenshotContext || Preferences.useOCRContext
+                let conv = wantsScreenText && appSurface.isConversational
+                onScreenText = (wantsScreenText && caretScreenRect != nil)
+                    ? await MainActor.run {
+                        ScreenContextCache.shared.onScreenText(
+                            around: caretScreenRect!, conversation: conv
+                        )
+                    }
+                    : nil
+                onScreenIsConversation = conv
+                let snapshot = FrozenInlineContext(
+                    key: key, capturedAt: Date(), clipboard: clipboard,
+                    frequentWords: frequentWords, onScreenText: onScreenText,
+                    onScreenIsConversation: onScreenIsConversation
+                )
+                await MainActor.run { Self.frozenInlineContext = snapshot }
+            }
             let prompt = buildCompletionPrompt(
                 before: before, after: after,
                 clipboard: clipboard, frequentWords: frequentWords,

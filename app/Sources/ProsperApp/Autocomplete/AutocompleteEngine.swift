@@ -643,11 +643,11 @@ final class AutocompleteEngine {
         // Ghost work is DEFERRED off the tap callback. This closure runs inside
         // the CGEventTap callback, and the OS delays delivering the keystroke to
         // the frontmost app until we return — so anything slow here is felt as
-        // system-wide typing lag (observed in Safari). typeThrough/showInstantGhost
-        // do lexicon scans, AX caret reads, and overlay window renders; none of
-        // them affect the swallow decision (this path always passes the key
-        // through), so hop them onto the next main-runloop tick. main.async is
-        // FIFO, so per-keystroke ordering is preserved.
+        // system-wide typing lag (observed in Safari). typeThrough does AX caret
+        // reads and overlay window renders; none of them affect the swallow
+        // decision (this path always passes the key through), so hop them onto
+        // the next main-runloop tick. main.async is FIFO, so per-keystroke
+        // ordering is preserved.
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -673,16 +673,16 @@ final class AutocompleteEngine {
                     }
                     return
                 }
-                // Otherwise: instant lexicon ghost for immediate feedback
-                // (model-free), then (re)schedule the debounced model to
-                // refine/replace it. Deletes get NO immediate burst: firing one
-                // re-rendered essentially the same ghost the user was deleting
-                // away from ~300ms later ("old ghost keeps coming back" — live
-                // report). While erasing, only the debounced pause-snap runs,
-                // so the ghost returns once the user settles, not per-delete.
-                if !self.showInstantGhost(typed: typed) {
-                    self.clearSuggestion()
-                }
+                // Otherwise: clear and (re)schedule the model. Pure-LLM ghosts —
+                // the instant lexicon guess was removed (Cotypist-style): its
+                // frequency-word output read as junk next to model completions,
+                // and with the frozen-context prompt the burst ghost lands fast
+                // enough to not need a placeholder. Deletes get NO immediate
+                // burst: firing one re-rendered essentially the same ghost the
+                // user was deleting away from ~300ms later ("old ghost keeps
+                // coming back" — live report). While erasing, only the debounced
+                // pause-snap runs, so the ghost returns once the user settles.
+                self.clearSuggestion()
                 self.scheduleSuggestion(allowBurst: keyCode != Self.kDelete)
             }
         }
@@ -726,86 +726,17 @@ final class AutocompleteEngine {
             return true
         }
 
-        // Mismatch: instant lexicon snap. Only mid-word (the user is steering the
-        // current word somewhere else); boundary mismatches mean a genuinely new
-        // direction — let the LLM handle those.
-        guard let before = lastRenderedBefore else { return false }
-        let newBefore = before + typed
-        let fragment = CompletionCandidates.trailingWord(newBefore)
-        guard !fragment.isEmpty else { return false }
-        let candidates = CompletionCandidates.derive(
-            before: newBefore, after: "", lexicon: Lexicon.shared
-        )
-        guard let snap = candidates.words.first(where: { $0.hasPrefix(fragment) && $0 != fragment }) else {
-            return false
-        }
-        let remainder = String(snap.dropFirst(fragment.count))
-        lastRenderedBefore = newBefore
-        requestBefore = nil // lexicon snap is not an LLM training pair
-        currentSuggestion = remainder
-        advanceGhost(by: typed, remainder: remainder)
-        return true
+        // Mismatch: fall through to clear + reschedule. (The lexicon "snap" that
+        // used to re-predict the word here was removed with the rest of the
+        // lexicon ghosts — pure-LLM, Cotypist-style; the mismatch burst refresh
+        // is the replacement.)
+        return false
     }
 
     /// Shifts the ghost right by the rendered width of `text` and re-renders
     /// `remainder` there. Width is measured with the ghost's current font (which
     /// mirrors the field's font), so drift across a few characters is negligible;
     /// every full refresh (debounced LLM response) re-anchors from a fresh AX read.
-    /// Instant, model-FREE ghost for immediate feedback while typing (Cotypist shows
-    /// a suggestion on every keystroke; Prosper previously showed nothing until the
-    /// debounced model returned ~pause+latency later). Uses the cheap `typedShadow`
-    /// (no AX read) for a bundled-lexicon prediction and the cached caret advanced by
-    /// the typed width (same technique as the mid-word snap; drift re-anchors on the
-    /// next model refresh). Returns false when it can't cheaply place one (no caret
-    /// established yet, or no lexicon hit) — the caller then clears and waits for the
-    /// debounced model. Model-free by design: scheduling the model per keystroke
-    /// overloads the engine (it hung/crashed), so instant feedback must be lexicon-only.
-    private func showInstantGhost(typed: String) -> Bool {
-        guard !typed.isEmpty,
-              typed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
-        else { return false }
-        let shadow = typedShadow
-        guard shadow.count >= 2 else { return false }
-        // Need a caret to place the ghost. Prefer the cached one (free); otherwise
-        // read it fresh from AX. The model is fast (~200ms) and this read is only on
-        // the "no live ghost" path (not every keystroke of a running ghost — those go
-        // through type-through), so the added AX cost is bounded.
-        if !Self.hasUsableCaret(currentCaretRect) {
-            // Throttle the fresh AX read: currentContext() is the heavy call the
-            // debounce exists to avoid, so cap it to ~12/s. During a fast burst the
-            // skipped keystrokes just don't get an instant ghost (the debounced model
-            // still runs) — keeps typing responsive on slow-AX apps (Electron/Slack).
-            let now = Date()
-            guard now.timeIntervalSince(lastInstantCaretRead) > 0.08 else { return false }
-            lastInstantCaretRead = now
-            guard let ctx = AXCaret.currentContext() else { return false }
-            currentCaretRect = Self.effectiveCaretRect(ctx.caretScreenRect, field: ctx.fieldScreenRect)
-            currentFieldRect = ctx.fieldScreenRect
-            caretAnchoredAt = now
-            guard Self.hasUsableCaret(currentCaretRect) else { return false }
-        }
-        let cands = CompletionCandidates.derive(before: shadow, after: "", lexicon: Lexicon.shared)
-        // ponytail: no boundary guesses. At a word boundary the lexicon's "first
-        // frequent word" (" same", " been", " that") is pure noise the user reads
-        // as bad quality — and after a trailing space it double-spaced on accept.
-        // The model's burst ghost lands ~200ms later anyway; show nothing until
-        // then. Mid-word fragment completion stays — that one is genuinely useful.
-        guard !cands.atBoundary else { return false }
-        let frag = cands.fragment
-        guard let word = cands.words.first, word.hasPrefix(frag), word != frag else { return false }
-        let remainder = String(word.dropFirst(frag.count))
-        guard !remainder.isEmpty else { return false }
-        requestBefore = nil            // provisional guess, not an LLM training pair
-        currentSuggestion = remainder
-        // Render at the fresh caret (advanceGhost would double-count the just-typed
-        // char since this caret is already post-keystroke).
-        let useMirror = Self.shouldUseMirror(
-            caret: currentCaretRect, field: currentFieldRect, bundleId: requestBundleId
-        )
-        renderSuggestion(text: remainder, caret: currentCaretRect, field: currentFieldRect, useMirror: useMirror)
-        return true
-    }
-
     private func advanceGhost(by text: String, remainder: String) {
         // Re-anchor from a LIVE AX read whenever the cached anchor has aged.
         // Width arithmetic alone drifts (overlay font only approximates the

@@ -1128,9 +1128,27 @@ actor MLXEngine {
                 let plan = Self.inlinePrefillPlan(previous: box.tokens, current: promptTokens)
                 if plan.trim > 0 { trimPromptCache(cache, numTokens: plan.trim) }
                 prefill = Array(promptTokens[plan.commonPrefix...])
+                // Reuse collapsed (live shows "reused 0/480" storms): dump WHERE
+                // consecutive prompts diverge so the unstable prompt block can be
+                // identified from a trace. Diagnostic only, timing-gated.
+                if Self.inlineTimingEnabled, plan.commonPrefix * 2 < promptTokens.count {
+                    let cp = plan.commonPrefix
+                    let lo = max(0, cp - 8)
+                    let prevSlice: [Int] = cp < box.tokens.count
+                        ? Array(box.tokens[lo ..< min(box.tokens.count, cp + 16)]) : []
+                    let curSlice: [Int] = Array(promptTokens[lo ..< min(promptTokens.count, cp + 16)])
+                    let prevTxt = context.tokenizer.decode(tokenIds: prevSlice)
+                    let curTxt = context.tokenizer.decode(tokenIds: curSlice)
+                    let msg = "prosper inline: reuse collapsed at token \(cp)/\(promptTokens.count) prev=\"\(prevTxt)\" cur=\"\(curTxt)\""
+                    NSLog("%@", msg.replacingOccurrences(of: "\n", with: "\\n"))
+                }
             } else {
                 cache = context.model.newCache(parameters: parameters)
                 prefill = promptTokens
+                if Self.inlineTimingEnabled {
+                    NSLog("prosper inline: fresh prefill — %@",
+                          box.caches == nil ? "box empty (no prior cache)" : "prior cache not trimmable")
+                }
             }
 
             // Prefill only the divergent suffix against the (possibly reused) cache.
