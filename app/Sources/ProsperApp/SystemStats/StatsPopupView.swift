@@ -78,6 +78,7 @@ struct StatsPopupView: View {
 
     /// Sensor the user pinned as the headline (menu bar + big readout); nil = auto.
     @State private var headlineSensor = Preferences.sensorsHeadlineSensor
+    @State private var namedOrder = Preferences.sensorsNamedOrder
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(12)) {
@@ -532,12 +533,16 @@ struct StatsPopupView: View {
     }
 
     private var sensorDetail: some View {
-        let temps = (store.snapshot.temperatures ?? []).sorted { $0.celsius > $1.celsius }
+        // Named order = the order the sensors resolve in (CPU cores, GPU, memory,
+        // misc, aggregates last) — exelban's grouped list. Value order = ours.
+        let raw = store.snapshot.temperatures ?? []
+        let temps = namedOrder ? raw : raw.sorted { $0.celsius > $1.celsius }
         return VStack(alignment: .leading, spacing: sz(6)) {
             if !fans.isEmpty { fanSection }
             if !temps.isEmpty {
                 section("Temperature")
                 headlinePicker(temps)
+                orderPicker
                 // offset id, not name: duplicate sensor names (e.g. several "PMU tdie") are common.
                 let rows = ForEach(Array(temps.enumerated()), id: \.offset) { _, t in kv(t.name, StatsFormat.tempDetail(t.celsius)) }
                 if temps.count > 8 {
@@ -988,6 +993,31 @@ struct StatsPopupView: View {
                     .labelsHidden().pickerStyle(.inline)
             } label: {
                 Text(headlineSensor ?? "Auto (hottest)")
+                    .font(Neon.font(.caption, weight: .semibold)).lineLimit(1)
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+        }
+    }
+
+    /// Temperature list order: hottest-first (ours) or the named resolve order
+    /// (CPU cores, GPU, memory, misc — exelban's grouped list, aggregates last).
+    private var orderPicker: some View {
+        HStack {
+            Text("Order").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            Spacer(minLength: sz(8))
+            Menu {
+                Picker("", selection: Binding(
+                    get: { namedOrder },
+                    set: { v in
+                        namedOrder = v
+                        Preferences.sensorsNamedOrder = v
+                    })) {
+                        Text("Hottest first").tag(false)
+                        Text("By name").tag(true)
+                    }
+                    .labelsHidden().pickerStyle(.inline)
+            } label: {
+                Text(namedOrder ? "By name" : "Hottest first")
                     .font(Neon.font(.caption, weight: .semibold)).lineLimit(1)
             }
             .menuStyle(.borderlessButton).fixedSize()

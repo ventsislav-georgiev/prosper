@@ -144,6 +144,7 @@ enum Preferences {
         static let fanHoldUnlock = "fanHoldUnlock"
         static let statsRefreshInterval = "statsRefreshInterval"
         static let sensorsHeadlineSensor = "sensorsHeadlineSensor"
+        static let sensorsNamedOrder = "sensorsNamedOrder"
         static let dragSnapEnabled = "dragSnapEnabled"
         static let dragSnapStyle = "dragSnapStyle"
         static let dragSnapModifier = "dragSnapModifier"
@@ -866,6 +867,14 @@ enum Preferences {
     static var fanHoldUnlock: Bool {
         get { defaults.bool(forKey: Keys.fanHoldUnlock) }   // absent → false
         set { defaults.set(newValue, forKey: Keys.fanHoldUnlock) }
+    }
+
+    /// Temperature list order in the Sensors popup. false (default) → hottest
+    /// first (ours); true → the curated named order the sensors resolve in
+    /// (CPU efficiency/performance cores, GPU, memory, misc — exelban-style).
+    static var sensorsNamedOrder: Bool {
+        get { defaults.bool(forKey: Keys.sensorsNamedOrder) }   // absent → false
+        set { defaults.set(newValue, forKey: Keys.sensorsNamedOrder) }
     }
 
     /// Name of the temperature sensor the user pinned as the Sensors headline (menu
