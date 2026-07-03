@@ -19,14 +19,20 @@ final class LidHelperCoreTests: XCTestCase {
         LidHelperCore(apply: spy.apply, onIdle: spy.onIdle)
     }
 
+    /// Distinct, stable connection identities (kept alive so ObjectIdentifiers
+    /// can't be reused by a fresh allocation at the same address).
+    private let tokA = NSObject(), tokB = NSObject()
+    private var a: ObjectIdentifier { ObjectIdentifier(tokA) }
+    private var b: ObjectIdentifier { ObjectIdentifier(tokB) }
+
     func testLastCloseWhileOnResetsOverride() {
         let spy = Spy()
         let core = make(spy)
-        core.connectionOpened()
+        core.connectionOpened(a)
         XCTAssertTrue(core.setOverride(true))
         XCTAssertTrue(core.overrideOn)
 
-        XCTAssertTrue(core.connectionClosed())          // last client → arm idle
+        XCTAssertTrue(core.connectionClosed(a))          // last client → arm idle
         XCTAssertFalse(core.overrideOn)                 // override cleared
         XCTAssertEqual(spy.calls, [true, false])        // applied on, then off
     }
@@ -34,19 +40,19 @@ final class LidHelperCoreTests: XCTestCase {
     func testLastCloseWhileOffDoesNotApply() {
         let spy = Spy()
         let core = make(spy)
-        core.connectionOpened()
-        XCTAssertTrue(core.connectionClosed())          // arm idle
+        core.connectionOpened(a)
+        XCTAssertTrue(core.connectionClosed(a))          // arm idle
         XCTAssertEqual(spy.calls, [])                   // never touched pmset
     }
 
     func testNonLastCloseKeepsOverride() {
         let spy = Spy()
         let core = make(spy)
-        core.connectionOpened()
-        core.connectionOpened()
+        core.connectionOpened(a)
+        core.connectionOpened(b)
         _ = core.setOverride(true)
 
-        XCTAssertFalse(core.connectionClosed())         // one client remains
+        XCTAssertFalse(core.connectionClosed(a))         // one client remains
         XCTAssertTrue(core.overrideOn)                  // override held
         XCTAssertEqual(core.connections, 1)
         XCTAssertEqual(spy.calls, [true])               // no reset yet
@@ -56,11 +62,11 @@ final class LidHelperCoreTests: XCTestCase {
         let spy = Spy()
         spy.result = false
         let core = make(spy)
-        core.connectionOpened()
+        core.connectionOpened(a)
         XCTAssertFalse(core.setOverride(true))          // pmset failed
         XCTAssertFalse(core.overrideOn)                 // not claimed as held
 
-        _ = core.connectionClosed()
+        _ = core.connectionClosed(a)
         XCTAssertEqual(spy.calls, [true])               // no spurious reset(false)
     }
 
@@ -72,7 +78,7 @@ final class LidHelperCoreTests: XCTestCase {
         XCTAssertFalse(core.overrideOn)
 
         // A client that still wants it on re-applies cleanly afterwards.
-        core.connectionOpened()
+        core.connectionOpened(a)
         XCTAssertTrue(core.setOverride(true))
         XCTAssertTrue(core.overrideOn)
         XCTAssertEqual(spy.calls, [false, true])
@@ -81,20 +87,42 @@ final class LidHelperCoreTests: XCTestCase {
     func testIdleFiresOnlyWhenNoClients() {
         let spy = Spy()
         let core = make(spy)
-        core.connectionOpened()
+        core.connectionOpened(a)
         core.idleFired()
         XCTAssertEqual(spy.idleExits, 0)                // client present → stay alive
 
-        _ = core.connectionClosed()
+        _ = core.connectionClosed(a)
         core.idleFired()
         XCTAssertEqual(spy.idleExits, 1)                // no clients → exit
     }
 
-    func testConnectionCountNeverGoesNegative() {
+    func testSpuriousCloseIsANoOp() {
         let spy = Spy()
         let core = make(spy)
-        XCTAssertTrue(core.connectionClosed())          // spurious close, count was 0
+        XCTAssertFalse(core.connectionClosed(a))        // unknown id → no-op, no idle re-arm
         XCTAssertEqual(core.connections, 0)
+        XCTAssertEqual(spy.calls, [])
+    }
+
+    func testDuplicateCloseDoesNotReleaseOtherClientsOverride() {
+        // NSXPCConnection fires BOTH interruption and invalidation for one dying
+        // connection. With a bare counter the double-decrement zeroed the count and
+        // released the OTHER client's live override; identity dedupe must hold it.
+        let spy = Spy()
+        let core = make(spy)
+        core.connectionOpened(a)                        // fan connection
+        core.connectionOpened(b)                        // lid connection, holds override
+        _ = core.setOverride(true)
+
+        XCTAssertFalse(core.connectionClosed(a))        // interruption fires…
+        XCTAssertFalse(core.connectionClosed(a))        // …then invalidation, same conn
+        XCTAssertEqual(core.connections, 1)             // lid client still counted
+        XCTAssertTrue(core.overrideOn)                  // override survives
+        XCTAssertEqual(spy.calls, [true])               // sleep never re-enabled
+
+        XCTAssertTrue(core.connectionClosed(b))         // real last close still resets
+        XCTAssertFalse(core.overrideOn)
+        XCTAssertEqual(spy.calls, [true, false])
     }
 
     // MARK: - remote-session hold (OR'd with the lid override at the pmset layer)
@@ -112,10 +140,10 @@ final class LidHelperCoreTests: XCTestCase {
         let spy = Spy()
         let core = make(spy)
         _ = core.setRemoteHold(true)                    // [true]
-        core.connectionOpened()
+        core.connectionOpened(a)
         _ = core.setOverride(true)                      // still true (OR), [true,true]
 
-        XCTAssertTrue(core.connectionClosed())          // last lid client drops
+        XCTAssertTrue(core.connectionClosed(a))          // last lid client drops
         XCTAssertFalse(core.overrideOn)                 // lid override cleared
         XCTAssertTrue(core.remoteHoldOn)                // remote hold untouched
         // connectionClosed re-applies OR(false, true)=true, not false → Mac stays awake.
@@ -126,7 +154,7 @@ final class LidHelperCoreTests: XCTestCase {
     func testReleasingOneSourceKeepsOtherHeld() {
         let spy = Spy()
         let core = make(spy)
-        core.connectionOpened()
+        core.connectionOpened(a)
         _ = core.setOverride(true)                      // [true]
         _ = core.setRemoteHold(true)                    // OR still true, [true,true]
         _ = core.setRemoteHold(false)                   // lid still holds → OR true, [..,true]
@@ -174,7 +202,7 @@ final class LidHelperCoreTests: XCTestCase {
     func testClearRemoteHoldKeepsLidOverride() {
         let spy = Spy()
         let core = make(spy)
-        core.connectionOpened()
+        core.connectionOpened(a)
         _ = core.setOverride(true)                      // [true]
         _ = core.promoteRemoteHold()                    // OR still true, [true,true]
         XCTAssertTrue(core.clearRemoteHold())           // lid override keeps OR true, [..,true]
@@ -205,6 +233,23 @@ final class LidHelperCoreTests: XCTestCase {
         XCTAssertTrue(core.setRemoteHold(false))        // honored now, [..,false]
         XCTAssertFalse(core.remoteHoldOn)
         XCTAssertEqual(spy.calls, [true, false, true, false])
+    }
+
+    func testDemoteStickyHoldKeepsHoldButAllowsSoftRelease() {
+        // Remote wake disarmed while a sticky promote hold is live: the hold must
+        // survive the demote (a session may be mid-command) but become TTL/heartbeat
+        // governed — a later soft release (idle / TTL) now actually releases.
+        let spy = Spy()
+        let core = make(spy)
+        _ = core.promoteRemoteHold()                    // sticky, [true]
+        core.demoteStickyHold()
+        XCTAssertTrue(core.remoteHoldOn)                // still held, no pmset churn
+        XCTAssertFalse(core.remoteHoldSticky)
+        XCTAssertEqual(spy.calls, [true])
+
+        XCTAssertTrue(core.setRemoteHold(false))        // TTL/idle release now honored
+        XCTAssertFalse(core.remoteHoldOn)
+        XCTAssertEqual(spy.calls, [true, false])
     }
 
     func testIdleExitClearsOrphanedRemoteHold() {
@@ -240,9 +285,9 @@ final class LidHelperCoreTests: XCTestCase {
         let iterations = 1_000_000
         let start = DispatchTime.now()
         for _ in 0..<iterations {
-            core.connectionOpened()
+            core.connectionOpened(a)
             _ = core.setOverride(true)
-            _ = core.connectionClosed()
+            _ = core.connectionClosed(a)
         }
         let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
         XCTAssertLessThan(ms, 500, "core transitions too slow: \(ms)ms for \(iterations) cycles")

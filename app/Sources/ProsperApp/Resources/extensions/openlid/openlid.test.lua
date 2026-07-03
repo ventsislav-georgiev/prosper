@@ -314,6 +314,18 @@ do
     h.eq(ui and ui.kind, "settings.ui", "sleep-now returns a re-rendered settings UI")
 end
 
+-- ── Status HUD tells the truth about a hold we didn't set ─────────────────────
+do
+    local host, env = h.makeHost { power = "AC Power" }
+    local G = h.load(INIT, host)
+    env.shellOut = " SleepDisabled\t\t1\n"                   -- real pmset = held, but not by us
+    local msg = G.openlid_status("")
+    assert(msg:find("remote session"), "HUD names the external hold instead of claiming normal sleep")
+    env.shellOut = " SleepDisabled\t\t0\n"
+    msg = G.openlid_status("")
+    assert(msg:find("sleeps normally"), "HUD back to normal once nothing holds")
+end
+
 -- ── on_wake reconciles the lid override both ways ──────────────────────────────
 do
     local host, env = h.makeHost { power = "AC Power" }

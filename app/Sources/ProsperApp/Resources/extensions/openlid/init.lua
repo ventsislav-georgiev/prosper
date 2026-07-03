@@ -412,10 +412,19 @@ function openlid_caffeine(query)
     return load_state().caffeine and "\u{2615} Display awake" or "\u{1F4A4} Display sleeps normally"
 end
 
--- Read-only status HUD (cmd+alt+ctrl+shift+L). No state change.
+-- Read-only status HUD (cmd+alt+ctrl+shift+L). No state change. Reads the REAL
+-- pmset state (user-invoked, so the one shell-out is fine) — without it the HUD
+-- said "sleeps normally" while a remote-session hold kept the Mac awake.
 function openlid_status(query)
     local s = load_state()
-    local head = s.active and awake_line(s) or SLEEP_LINE
+    local head
+    if s.active then
+        head = awake_line(s)
+    elseif real_disablesleep() then
+        head = "\u{1F513} Mac awake \u{2014} held by a remote session or another app"
+    else
+        head = SLEEP_LINE
+    end
     local msg = string.format("%s\nBattery: %d%% (%s)\nExt display: %s",
         head, battery_pct(), running_on_battery() and "battery" or "AC",
         host.screen.count() > 1 and "yes" or "no")
@@ -747,6 +756,7 @@ function settings_render(section_id, state)
     local remotewake = s.section{
         id = "remotewake", title = "Remote wake",
         footer = "Off by default. Lets you wake this Mac from another device while it sleeps. "
+            .. "Needs you signed in to your Prosper account (it stays off until you are). "
             .. "Pick or type the address the remote app uses to reach this Mac (Tailscale recommended; "
             .. "a local-network IP works if you only ever wake it from the same network). Tap ⓘ for "
             .. "how it works and its limits.",
@@ -787,7 +797,7 @@ function settings_render(section_id, state)
                 .. "• Only someone signed into YOUR Prosper account can trigger a wake (the request is "
                 .. "rejected otherwise), and it exposes only what dch already gates (whois). Checking "
                 .. "for a request needs no sign-in and only ever reads (it can't change or cancel anything). "
-                .. "Your Mac acts on each request once, never repeatedly (a ~25h backstop expires an unseen request).\n"
+                .. "Your Mac acts on each request once, never repeatedly (an unseen request expires after ~7 days).\n"
                 .. "• Drain is negligible in testing (≈0 over a full night) but not zero in theory." },
         },
     }

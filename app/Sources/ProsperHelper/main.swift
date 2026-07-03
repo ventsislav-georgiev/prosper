@@ -81,7 +81,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         conn.invalidationHandler = { [weak self] in self?.connectionClosed(cid) }
         conn.interruptionHandler  = { [weak self] in self?.connectionClosed(cid) }
         q.sync {
-            core.connectionOpened()
+            core.connectionOpened(cid)
             cancelIdleExit_locked()
         }
         conn.resume()
@@ -90,9 +90,10 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
 
     private func connectionClosed(_ cid: ObjectIdentifier) {
         // App quit or crashed — core resets the lid override here so the lid is NEVER
-        // left wedged awake; arm the idle exit once no client remains.
+        // left wedged awake; arm the idle exit once no client remains. The core
+        // dedupes by identity (interruption + invalidation both fire for one drop).
         q.async {
-            if self.core.connectionClosed() { self.armIdleExit_locked() }
+            if self.core.connectionClosed(cid) { self.armIdleExit_locked() }
         }
         // Fan crash-safety is tracked independently on `fanQ`: if the FAN client that
         // set a manual pin is the one that just dropped, reset every fan to auto —
@@ -116,7 +117,20 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // down (unless a lid client still holds a connection).
         q.async {
             let resident = self.remoteWake.apply(json: json)
-            if !resident && self.core.connections == 0 { self.armIdleExit_locked() }
+            if !resident {
+                // Remote wake just disarmed. A sticky promote hold belongs to that
+                // feature — demote it to a plain transient hold and (re)arm the TTL
+                // so a live session's heartbeat keeps the Mac awake but an abandoned
+                // hold lapses, instead of holding disablesleep forever while a lid
+                // client keeps the daemon resident (where the orphan idle-exit
+                // safety net never runs).
+                if self.core.remoteHoldSticky {
+                    self.core.demoteStickyHold()
+                    self.armRemoteHoldExpiry_locked()
+                    dtrace("setRemoteWake off: sticky hold demoted to TTL-governed")
+                }
+                if self.core.connections == 0 { self.armIdleExit_locked() }
+            }
             reply(resident)
         }
     }
@@ -261,6 +275,10 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
     }
 
     private func armRemoteHoldExpiry_locked() {
+        // cancel+create per heartbeat ON PURPOSE (not reschedule-in-place): cancel()
+        // guarantees a pending-but-undelivered fire is dropped, while schedule() on a
+        // live timer does not retract one — a stale expiry sneaking in right after a
+        // refresh would flap the hold. One timer alloc per ~10s beat is nothing.
         cancelRemoteHoldExpiry_locked()
         let t = DispatchSource.makeTimerSource(queue: q)
         t.schedule(deadline: .now() + .seconds(remoteHoldTTLSeconds))

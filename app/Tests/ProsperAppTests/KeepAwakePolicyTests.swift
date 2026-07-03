@@ -66,6 +66,30 @@ final class KeepAwakePolicyTests: XCTestCase {
         XCTAssertEqual(releases, 1, "should release exactly once at the grace boundary")
     }
 
+    // MARK: - watch mode (post-release: re-hold on resumed activity)
+
+    func testWatchReholdsWhenSessionResumesOutput() {
+        // The mid-build quiet-phase case: hold released after the grace, then the
+        // detached session prints again → must re-acquire, not sleep mid-work.
+        XCTAssertEqual(KeepAwakePolicy.watch(clientConnected: false, sessionActive: true,
+                                             sessionsExist: true), .rehold)
+    }
+
+    func testWatchReholdsOnClientReconnect() {
+        XCTAssertEqual(KeepAwakePolicy.watch(clientConnected: true, sessionActive: false,
+                                             sessionsExist: true), .rehold)
+    }
+
+    func testWatchKeepsTickingWhileQuietSessionsExist() {
+        XCTAssertEqual(KeepAwakePolicy.watch(clientConnected: false, sessionActive: false,
+                                             sessionsExist: true), .keepWatching)
+    }
+
+    func testWatchStopsWhenNothingLeftToWatch() {
+        XCTAssertEqual(KeepAwakePolicy.watch(clientConnected: false, sessionActive: false,
+                                             sessionsExist: false), .stop)
+    }
+
     /// Hot-ish path budget: `step` runs every tick for the life of every remote
     /// session and must be branch-only — no allocation, no clock, no I/O. 2M calls
     /// under 600ms on a DEBUG build (~300ns ceiling, in line with LidHelperCore's

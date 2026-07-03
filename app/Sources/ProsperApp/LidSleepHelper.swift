@@ -587,6 +587,13 @@ enum LidSleepHelper {
         // isn't pinned open by a stale flag.
         holdsLidOverride = false
         holdsRemoteSession = false
+        // Same connection hygiene as every other release path: with no feature
+        // needing the daemon, drop the connection so the daemon can idle-exit
+        // instead of staying pinned resident across the sleep by our open conn.
+        if !remoteWakeEnabled {
+            c.invalidate()
+            if connection === c { connection = nil }
+        }
         return ok
     }
 

@@ -234,7 +234,14 @@ public final class RemoteWakeCore {
             return .ignored
         }
         lastWakeTs = t
-        defer { schedule(interval(onAC: onAC)) }   // every acted wake re-arms the next
+        defer {
+            // Stamp the debounce clock AGAIN after the (injected, up to ~22s) poll:
+            // powerd's later capability notifications for the SAME wake are measured
+            // from when we finish, so a slow GET can't age the first stamp past the
+            // window and trigger a duplicate poll of the same wake.
+            lastWakeTs = now()
+            schedule(interval(onAC: onAC))         // every acted wake re-arms the next
+        }
 
         if config.trace { trace("onWake: onAC=\(onAC) batt=\(battPct)% floor=\(config.batteryFloor)%") }
         guard canPromote(onAC: onAC, battPct: battPct) else {

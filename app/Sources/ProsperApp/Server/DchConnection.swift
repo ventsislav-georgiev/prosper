@@ -287,6 +287,18 @@ enum DchCommand {
         return false
     }
 
+    /// True if ANY detached session exists at all (its socket is present),
+    /// regardless of activity. Drives the keep-awake watch mode: with no sessions
+    /// there is nothing whose resumed output could re-acquire the hold, so the
+    /// watcher tick can stop. Same no-fork sidecar-scan approach as
+    /// `anySessionActive` (a `.sock.act` sidecar ends in ".act", so the suffix
+    /// filter below sees only the live sockets).
+    static func anySessionExists() -> Bool {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: socketDir)
+        else { return false }
+        return names.contains { $0.hasSuffix(".sock") }
+    }
+
     /// Per-session keep-awake view for the OpenLid Status UI: every live session
     /// plus whether it stamped pty output within `seconds` — the exact per-session
     /// signal `anySessionActive` OR's into the keep-awake hold. (A session running a

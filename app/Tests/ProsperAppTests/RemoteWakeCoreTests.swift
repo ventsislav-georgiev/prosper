@@ -244,6 +244,25 @@ final class RemoteWakeCoreTests: XCTestCase {
         XCTAssertFalse(cfg(enabled: false).sanitized().enabled)
     }
 
+    func testSlowPollDoesNotDefeatDebounce() {
+        // The injected poll can block ~22s (10s timeout + retry) inside onWake.
+        // powerd's NEXT capability notification for the SAME wake then arrives with
+        // the first timestamp already >debounce old — it must still be collapsed,
+        // so the debounce clock is re-stamped after the poll completes.
+        let spy = Spy()
+        let slowSpyPoll: () -> String? = { spy.polls += 1; spy.tick(22); return spy.pollToken }
+        let slow = RemoteWakeCore(
+            schedule: { spy.scheduled.append($0) }, cancelAll: { spy.cancels += 1 },
+            poll: slowSpyPoll, promote: { spy.promotes += 1 },
+            now: { spy.clock }, debounce: 10)
+        _ = slow.applyConfig(cfg(), onAC: false)
+
+        XCTAssertEqual(slow.onWake(onAC: false, battPct: 80), .slept)  // poll took 22s
+        spy.tick(1)                                                    // powerd's 2nd notify, 1s later
+        XCTAssertEqual(slow.onWake(onAC: false, battPct: 80), .ignored) // collapsed, no 2nd poll
+        XCTAssertEqual(spy.polls, 1)
+    }
+
     func testSanitizeRejectionPreservesTrace() {
         // The disable / refuse-to-arm paths are exactly what the verbose log
         // debugs; sanitize must not silently drop the flag on its way to disabled.

@@ -14,7 +14,14 @@ public final class LidHelperCore {
     private let apply: (Bool) -> Bool
     private let onIdle: () -> Void
 
-    public private(set) var connections = 0
+    /// Identities of the currently open client connections. Identity-based (not a
+    /// bare counter) because NSXPCConnection fires BOTH its interruption handler
+    /// AND its invalidation handler for the same dying connection — a bare counter
+    /// double-decrements, and with two clients open (the app holds SEPARATE lid and
+    /// fan connections) one connection's double-close would zero the count and
+    /// release the OTHER client's live override. Duplicate closes are no-ops here.
+    private var openConnections = Set<ObjectIdentifier>()
+    public var connections: Int { openConnections.count }
     /// Whether the lid (clamshell) sleep override source is currently held.
     public private(set) var overrideOn = false
     /// Whether the remote-session keep-awake source is currently held. Independent
@@ -22,10 +29,11 @@ public final class LidHelperCore {
     public private(set) var remoteHoldOn = false
     /// Whether the current remote hold is STICKY — set by a remote-wake promote.
     /// A sticky hold must survive the heartbeat TTL expiry AND a session-idle soft
-    /// release (`setRemoteHold(false)`); only a hard release clears it — the user
-    /// opening the lid (`clearRemoteHold`) or an explicit sleep (`reclaimAtStartup`).
-    /// This is the rule "once the Mac is woken remotely it stays awake until the
-    /// user explicitly sleeps it".
+    /// release (`setRemoteHold(false)`); it ends only on a hard release — the user
+    /// opening the lid (`clearRemoteHold`), an explicit sleep (`reclaimAtStartup`) —
+    /// or a demote to TTL-governed (`demoteStickyHold`, when remote-wake itself is
+    /// disarmed). This is the rule "once the Mac is woken remotely it stays awake
+    /// until the user explicitly sleeps it".
     public private(set) var remoteHoldSticky = false
 
     public init(apply: @escaping (Bool) -> Bool, onIdle: @escaping () -> Void) {
@@ -42,8 +50,8 @@ public final class LidHelperCore {
     }
 
     /// A client connected. Caller must cancel any pending idle-exit timer.
-    public func connectionOpened() {
-        connections += 1
+    public func connectionOpened(_ id: ObjectIdentifier) {
+        openConnections.insert(id)
     }
 
     /// A client disconnected (clean OR crash). Releases the LID override when the
@@ -51,10 +59,12 @@ public final class LidHelperCore {
     /// remote-session hold is NOT touched here — it isn't tied to a client (the
     /// daemon is resident with zero clients during the poll loop) and has its own
     /// timed expiry. Returns true when no clients remain → caller arms idle-exit.
+    /// A duplicate close for an already-removed id (interruption + invalidation
+    /// both firing) is a pure no-op — it must not re-arm idle-exit either.
     @discardableResult
-    public func connectionClosed() -> Bool {
-        connections = max(0, connections - 1)
-        guard connections == 0 else { return false }
+    public func connectionClosed(_ id: ObjectIdentifier) -> Bool {
+        guard openConnections.remove(id) != nil else { return false }
+        guard openConnections.isEmpty else { return false }
         if overrideOn {
             _ = applyEffective(lid: false, remote: remoteHoldOn)
             overrideOn = false
@@ -106,6 +116,17 @@ public final class LidHelperCore {
         let ok = applyEffective(lid: overrideOn, remote: true)
         if ok { remoteHoldOn = true; remoteHoldSticky = true }
         return ok
+    }
+
+    /// Downgrade a sticky promote hold to a plain transient one, WITHOUT releasing
+    /// it. For remote-wake being disarmed: the sticky rule ("stay awake until an
+    /// explicit sleep") belongs to the remote-wake feature, so turning the feature
+    /// off hands the hold back to the heartbeat/TTL — a live session keeps the Mac
+    /// awake, an abandoned one lapses within the TTL instead of holding forever
+    /// (the daemon can stay resident on a lid client, so the orphan idle-exit
+    /// safety net never fires in that state). No pmset call — state is unchanged.
+    public func demoteStickyHold() {
+        remoteHoldSticky = false
     }
 
     /// Hard release of the remote-session hold regardless of stickiness — the lid

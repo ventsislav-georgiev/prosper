@@ -46,6 +46,21 @@ enum KeepAwakePolicy {
         }
         return Step(hold: true, release: false, idleTicks: n)
     }
+
+    /// Post-release watch mode: the hold was released (grace elapsed) but detached
+    /// sessions may still exist — a long-running command with a quiet phase (>grace
+    /// of silence, then output resumes) must RE-ACQUIRE the hold, or the Mac sleeps
+    /// mid-build. So after a release the tick keeps running, deciding per tick:
+    enum WatchAction: Equatable {
+        case rehold        // activity resumed → hold again
+        case keepWatching  // sessions exist but quiet → keep ticking, no hold
+        case stop          // no sessions at all → nothing left to watch, stop the timer
+    }
+
+    static func watch(clientConnected: Bool, sessionActive: Bool, sessionsExist: Bool) -> WatchAction {
+        if clientConnected || sessionActive { return .rehold }
+        return sessionsExist ? .keepWatching : .stop
+    }
 }
 
 final class DchSessionServer: @unchecked Sendable {
@@ -155,14 +170,14 @@ final class DchSessionServer: @unchecked Sendable {
 
     // MARK: - Keep-awake (drives the daemon's remote-session hold)
 
-    /// A client attached: ensure the hold is held now and the tick is running. The
-    /// tick is what later releases it once neither a client nor an active detached
-    /// session wants the Mac awake.
+    /// A client attached (or watched activity resumed): ensure the hold is held now
+    /// and the tick is running. The tick is what later releases it once neither a
+    /// client nor an active detached session wants the Mac awake.
     private func startKeepAwake() {
         idleTicks = 0
-        sendKeepAwake(true)
-        if keepAwakeActive { return }
         keepAwakeActive = true
+        sendKeepAwake(true)
+        if holdTimer != nil { return }   // already ticking (hold or watch mode)
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + .seconds(Self.tickSeconds), repeating: .seconds(Self.tickSeconds))
         t.setEventHandler { [weak self] in self?.tick() }
@@ -175,18 +190,42 @@ final class DchSessionServer: @unchecked Sendable {
     private func tick() {
         let active = connections.isEmpty
             && DchCommand.anySessionActive(within: KeepAwakePolicy.activeWindowSeconds)
+        guard keepAwakeActive else {
+            // Watch mode: the hold was released after the idle grace, but detached
+            // sessions may still exist. A resumed session (long quiet phase, then
+            // output) re-acquires the hold; the timer stops only once nothing is
+            // left to watch. Without this, a build that goes quiet >grace and then
+            // resumes printing would sleep the Mac mid-work.
+            switch KeepAwakePolicy.watch(clientConnected: !connections.isEmpty,
+                                         sessionActive: active,
+                                         sessionsExist: DchCommand.anySessionExists()) {
+            case .rehold:
+                TraceLog.emit("keepAwake watch: activity resumed → re-hold")
+                startKeepAwake()
+            case .keepWatching:
+                break
+            case .stop:
+                holdTimer?.cancel(); holdTimer = nil
+            }
+            return
+        }
         let step = KeepAwakePolicy.step(
             clientConnected: !connections.isEmpty, sessionActive: active, idleTicks: idleTicks)
         TraceLog.emit("keepAwake tick: clients=\(connections.count) activeSession=\(active) "
             + "idleTicks=\(idleTicks)→\(step.idleTicks) hold=\(step.hold) release=\(step.release)")
         idleTicks = step.idleTicks
         if step.release {
-            stopKeepAwake()
+            // Release the hold but KEEP the timer — drop to watch mode; the watch
+            // branch above stops it once no sessions remain.
+            keepAwakeActive = false
+            idleTicks = 0
+            sendKeepAwake(false)
         } else if step.hold {
             sendKeepAwake(true)        // hold / refresh the TTL (incl. grace window)
         }
     }
 
+    /// Full stop (server stop): release the hold AND the timer.
     private func stopKeepAwake() {
         holdTimer?.cancel(); holdTimer = nil
         guard keepAwakeActive else { return }
