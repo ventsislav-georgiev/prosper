@@ -205,14 +205,25 @@ final class SuggestionWindow {
     /// in fast (~90ms) instead of popping — the appear is what the eye catches;
     /// updates while already visible swap the label in place with no animation,
     /// and hide stays instant (a lingering wrong ghost is worse than a pop-out).
+    /// When the panel last went visible→hidden; drives the re-show fade skip below.
+    private var lastHiddenAt = Date.distantPast
+
     private func orderFrontFading() {
         if panel.isVisible {
             panel.alphaValue = 1
             panel.orderFrontRegardless()
             return
         }
-        panel.alphaValue = 0
         panel.orderFrontRegardless()
+        // A re-show within a keystroke of the hide is the SAME ghost being
+        // recomputed (the typo-fix keystroke path clears then re-renders every
+        // key) — fading again reads as blink. Appear instantly there; animate
+        // only genuine appears.
+        if Date().timeIntervalSince(lastHiddenAt) < 0.15 {
+            panel.alphaValue = 1
+            return
+        }
+        panel.alphaValue = 0
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.09
             panel.animator().alphaValue = 1
@@ -346,6 +357,7 @@ final class SuggestionWindow {
     }
 
     func hide() {
+        if panel.isVisible { lastHiddenAt = Date() }
         panel.orderOut(nil)
     }
 

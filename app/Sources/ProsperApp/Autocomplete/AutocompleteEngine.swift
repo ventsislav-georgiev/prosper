@@ -14,6 +14,7 @@ final class AutocompleteEngine {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var activationObserver: NSObjectProtocol?
+    private var scrollMonitor: Any?
 
     private let suggestionWindow = SuggestionWindow()
     private let mirrorWindow = MirrorOverlayWindow()
@@ -60,7 +61,8 @@ final class AutocompleteEngine {
     // fresh (different) answer. `expectSuffix` is the text the accept injected;
     // the next request only serves the carry-over if the live text still ends
     // with it (anything else means the user typed on and it's stale).
-    private var pendingFixContinuation: (expectSuffix: String, text: String)?
+    private var pendingFixContinuation:
+        (expectSuffix: String, text: String, bundleId: String?, at: Date)?
 
     // Prompt of the last ghost-extension request fired (live text + remaining
     // ghost), so consuming several keystrokes near the ghost's end fires ONE
@@ -216,6 +218,11 @@ final class AutocompleteEngine {
     // Keyed on the field rect (fuzzy-compared); cleared on app switch or when a
     // different field produces a context.
     private var escSuppressedFieldRect: CGRect?
+    /// When the Esc suppression was recorded. Only consulted for the fieldless
+    /// `.infinite` fallback (Electron/degenerate-caret hosts): that sentinel
+    /// matches EVERY field, so left unbounded one Esc would silence autocomplete
+    /// everywhere until an app switch — time-box it instead.
+    private var escSuppressedAt = Date.distantPast
     // Ctrl+` pressed: override the idle heuristics (small field / too little
     // context) for THIS field until focus moves elsewhere.
     private var forceActivatedFieldRect: CGRect?
@@ -368,6 +375,18 @@ final class AutocompleteEngine {
             }
         }
 
+        // Scrolling moves the text (and the caret's field) under the ghost, and
+        // nothing else re-anchors until the next keystroke — the ghost floats
+        // over unrelated content. Dismiss on scroll like on click. A PASSIVE
+        // NSEvent global monitor, never the CGEvent tap: an active tap would put
+        // this process on the latency path of every scroll tick systemwide.
+        scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.suggestionWindow.isVisible || self.mirrorWindow.isVisible else { return }
+                self.dismissOverlays()
+            }
+        }
+
         isRunning = true
         return true
     }
@@ -417,6 +436,8 @@ final class AutocompleteEngine {
             NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
         }
         activationObserver = nil
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+        scrollMonitor = nil
         clearSuggestion()
         accessoryButton.hide()
         ScreenContextCache.shared.invalidate() // drop cached OCR text + sampled color
@@ -601,6 +622,7 @@ final class AutocompleteEngine {
         if keyCode == Self.kEscape {
             if currentSuggestion != nil {
                 escSuppressedFieldRect = currentFieldRect ?? .infinite
+                escSuppressedAt = Date()
                 dismissOverlays()
             }
             return false
@@ -715,8 +737,14 @@ final class AutocompleteEngine {
                 // keeps coming back" — live report). While erasing, only the
                 // debounced pause-snap runs, so the ghost returns once the user
                 // settles.
+                // Deletes get no burst (the just-deleted ghost would come right
+                // back) — EXCEPT over a typo fix: the user is deleting toward
+                // the typo, and the recomputed fix is local (spell checker, no
+                // LLM wait), so make it reappear immediately instead of after
+                // the debounce pause.
+                let wasFix = self.isFix
                 self.clearGhost()
-                self.scheduleSuggestion(allowBurst: keyCode != Self.kDelete)
+                self.scheduleSuggestion(allowBurst: keyCode != Self.kDelete || wasFix)
             }
         }
         return false
@@ -975,13 +1003,18 @@ final class AutocompleteEngine {
 
         // Esc suppression: the user dismissed a suggestion here with Esc — stay
         // quiet in this field until focus moves to a different one (or app switch).
+        // The fieldless `.infinite` fallback matches every field, so it expires
+        // after a short window instead of silencing everything until an app switch.
         if let suppressed = escSuppressedFieldRect {
-            if Self.sameField(suppressed, fieldRect) {
+            if suppressed == .infinite, Date().timeIntervalSince(escSuppressedAt) > 10 {
+                escSuppressedFieldRect = nil
+            } else if Self.sameField(suppressed, fieldRect) {
                 recordNoShow(.escSuppressed)
                 accessoryButton.setState(.idle)
                 return
+            } else {
+                escSuppressedFieldRect = nil
             }
-            escSuppressedFieldRect = nil
         }
         // Force-activation is likewise scoped to the field it was invoked in.
         if let forced = forceActivatedFieldRect, !Self.sameField(forced, fieldRect) {
@@ -1244,9 +1277,20 @@ final class AutocompleteEngine {
         // refresh still runs underneath; the stability guard (requestBefore set)
         // lets it only EXTEND this ghost, never replace it.
         if currentSuggestion == nil, let pending = pendingFixContinuation {
-            pendingFixContinuation = nil
-            if before.hasSuffix(pending.expectSuffix)
-                || before.hasSuffix(pending.expectSuffix.trimmingCharacters(in: .whitespaces)) {
+            // Scope + TTL: the carry-over belongs to the injection that armed it.
+            // A bail path between arm and consume must not let it graft onto an
+            // unrelated later word/field ("own " matching "brown "). Kept while
+            // fresh and unmatched — one lagged AX read must not discard it.
+            // NBSP-insertion hosts (per-app knobs) write the boundary space as
+            // \u{00A0}; normalize before the suffix test or the chain silently
+            // breaks in exactly the composers the fix targets.
+            let normBefore = before.replacingOccurrences(of: "\u{00A0}", with: " ")
+            let matches = normBefore.hasSuffix(pending.expectSuffix)
+                || normBefore.hasSuffix(pending.expectSuffix.trimmingCharacters(in: .whitespaces))
+            if Date().timeIntervalSince(pending.at) > 5 || pending.bundleId != requestBundleId {
+                pendingFixContinuation = nil
+            } else if matches {
+                pendingFixContinuation = nil
                 let spaced = Self.applyWordBoundary(before: before, suggestion: pending.text)
                 currentSuggestion = spaced
                 replaceLength = 0
@@ -1602,6 +1646,10 @@ final class AutocompleteEngine {
         currentFieldRect = nil
         replaceLength = 0
         isFix = false
+        // Every fresh ghost gets its own A/B accept credit — recall/carryover/
+        // candidate ghosts re-enter through here, and without the reset a prior
+        // accepted LLM ghost swallowed their accepts (under-counted telemetry).
+        abAcceptedForCurrent = false
         lastRenderedBefore = nil
         ghostExtensionPrompt = nil
         suggestionWindow.hide()
@@ -1998,6 +2046,10 @@ final class AutocompleteEngine {
         let trailing = String(word.reversed())
         guard trailing.count >= 2, trailing.count <= 12,
               trailing.allSatisfy({ $0.isASCII && $0.isLetter }),
+              // Capitalized token = proper-noun signal (a name, a brand the
+              // lexicon doesn't know) — never strike the user's deliberate word
+              // red because the model emitted a near-spelling.
+              trailing.first?.isUppercase != true,
               !Lexicon.shared.isKnownWord(trailing),
               !CoreBridge.looksLikeTransliteratedBulgarian(before) else { return nil }
         let rest = String(spaced.dropFirst())
@@ -2049,6 +2101,10 @@ final class AutocompleteEngine {
         guard trailing.count >= 3, trailing.count <= 6,
               trailing.allSatisfy({ $0.isASCII && $0.isLowercase }),
               !Lexicon.shared.isKnownWord(trailing),
+              // Session vocabulary: a token the user has already written in a
+              // completed sentence ("dto", "impl", "repo") is their word, not a
+              // typo — the checker-tolerated-junk branch must not strike it.
+              !RecentSentences.shared.hasRecentWord(trailing),
               !CoreBridge.looksLikeTransliteratedBulgarian(before)
         else { return false }
         let checker = NSSpellChecker.shared
@@ -2160,7 +2216,8 @@ final class AutocompleteEngine {
                 CompletionStats.recordAccept(head)
                 insert(head, bundleId: bundleId)
                 if !tail.isEmpty {
-                    pendingFixContinuation = (expectSuffix: head, text: tail)
+                    pendingFixContinuation =
+                        (expectSuffix: head, text: tail, bundleId: bundleId, at: Date())
                     scheduleSuggestion()
                 }
                 return
@@ -2206,7 +2263,10 @@ final class AutocompleteEngine {
         // accepts already carry their separator via splitFirstWord.
         var toInsert = head
         if remainder.isEmpty, Preferences.trailingSpaceAfterWordAccept,
-           !(head.last?.isWhitespace ?? false) {
+           !(head.last?.isWhitespace ?? false),
+           // A pure-punctuation final token (".") must not become ". " — the
+           // trailing space is for continuing prose after a word.
+           head.contains(where: { $0.isLetter || $0.isNumber }) {
             toInsert += " "
         }
         insert(toInsert, bundleId: bundleId)
@@ -2214,6 +2274,9 @@ final class AutocompleteEngine {
 
         requestToken &+= 1 // invalidate any in-flight request
         if remainder.isEmpty {
+            // The token bump already orphans any in-flight extend request; cancel
+            // it too so the abandoned generation stops burning the GPU.
+            completionTask?.cancel()
             currentSuggestion = nil
             suggestionWindow.hide()
             mirrorWindow.hide()

@@ -90,6 +90,20 @@ final class RecentSentences {
         return String(fragment.reversed()).trimmingCharacters(in: .whitespaces)
     }
 
+    /// Word-boundary containment over the recall buffer: session evidence the
+    /// user deliberately writes this token ("dto", "impl") rather than it being
+    /// a typo. Rare-path only (lexicon-unknown short tokens), so the O(entries)
+    /// scan is fine.
+    func hasRecentWord(_ w: String) -> Bool {
+        let needle = Substring(w.lowercased())
+        return entries.contains { entry in
+            entry.key.split(whereSeparator: { !$0.isLetter }).contains(needle)
+        }
+    }
+
     /// Test seam.
-    func reset() { entries.removeAll() }
+    func reset() {
+        entries.removeAll()
+        lastHarvestedRegion = ""
+    }
 }

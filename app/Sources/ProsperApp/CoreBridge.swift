@@ -975,7 +975,15 @@ enum CoreBridge {
         }
         let n = norm(suggestion)
         guard n.count >= 8 else { return false }
-        if samples.contains(where: { norm($0).contains(n) }) { return true }
+        // Verbatim-lift guard, not a phrase ban: the samples ARE the user's own
+        // stock phrases, and the model reproducing one is often the RIGHT
+        // completion (their sign-off, their thanks line). Reject only when the
+        // suggestion is long or covers most of a sample line — the observed
+        // failure was whole example lines returned verbatim.
+        if samples.contains(where: { sample in
+            let ns = norm(sample)
+            return ns.contains(n) && (n.count >= 24 || n.count * 5 >= ns.count * 3)
+        }) { return true }
         // Instruction-header leak: the suggestion IS (a prefix of) an injected marker.
         // A truncated echo must cover most of the marker — a lone real word that
         // happens to open one ("clipboard" vs "clipboardcontext") is not an echo.
@@ -1072,8 +1080,6 @@ enum CoreBridge {
         // runs off the edges (the words are usually fine); reject a completion
         // still carrying one mid-string as real markdown and let the retry rung
         // rewrite it.
-        // ponytail: also rejects legit code like `f(**kwargs)` — rare in inline
-        // typing; whitelist code surfaces if it ever matters.
         let junkMarkers = ["**", "__", "~~", "||", ">>", "<<"]
         var trimmedJunk = true
         while trimmedJunk {
@@ -1083,7 +1089,11 @@ enum CoreBridge {
                 if s.hasSuffix(m) { s = String(s.dropLast(m.count)); trimmedJunk = true }
             }
         }
-        if junkMarkers.contains(where: { s.contains($0) }) { return nil }
+        // Mid-string, only markdown EMPHASIS pairs are junk ("**tato"). `||`,
+        // `<<`, `>>` are ordinary code operators — rejecting them killed every
+        // `a || b` / `std::cout << x` completion in code fields; they stay
+        // edge-trimmed above but allowed in the body.
+        if ["**", "__", "~~"].contains(where: { s.contains($0) }) { return nil }
 
         // Prompt-scaffold guard: with near-empty context (a single word in a web
         // form) small instruct models sometimes parrot the INSTRUCTION instead of
@@ -1147,9 +1157,16 @@ enum CoreBridge {
         // separating space, so only the glued capital is rejected.
         // ponytail: also fires on camelCase code identifiers ("my" + "Name");
         // acceptable — prose is the product, revisit if code fields complain.
+        // Scope: only when the trailing token is an UNFINISHED fragment. The model
+        // often omits the leading space on a legit new word ("and"+"Docker",
+        // "das"+"Auto") — `applyWordBoundary` adds it downstream; a capital after
+        // a complete lexicon-known word is that case, not mid-word glue.
         if let lastBefore = before.last, lastBefore.isLowercase,
            let first = s.first, first.isUppercase {
-            return nil
+            var word = ""
+            for ch in before.reversed() { if ch.isLetter { word.append(ch) } else { break } }
+            let trailing = String(word.reversed())
+            if !Lexicon.shared.isKnownWord(trailing.lowercased()) { return nil }
         }
 
         // Mixed-script word guard: a single word blending Cyrillic and Latin
@@ -1242,6 +1259,13 @@ enum CoreBridge {
 
         // Strip trailing openers/separators (possibly several: "… (", "…, —").
         while let last = body.last, danglingTrailingPunct.contains(last) {
+            // An apostrophe/straight quote directly after a letter is a plural
+            // possessive ("the players'") or a closer, not a dangling opener.
+            if last == "'" || last == "\"",
+               body.count >= 2,
+               body[body.index(body.endIndex, offsetBy: -2)].isLetter {
+                break
+            }
             body.removeLast()
             rstripWhitespace()
             if body.isEmpty { return s }
@@ -1408,6 +1432,13 @@ enum CoreBridge {
     /// repeats ("a a") are left alone (can be legitimate, and are harmless).
     /// Preserves the suggestion's leading whitespace (it carries word-boundary
     /// meaning for insertion).
+    /// Deliberate doublings that must survive the stutter cut ("very very good",
+    /// "ha ha", BG "много много"). Genuine decode loops ("je je.") stay cut.
+    private static let legitReduplications: Set<String> = [
+        "very", "so", "no", "really", "ha", "haha",
+        "много", "така", "ха", "не", "да",
+    ]
+
     static func cutImmediateRepeat(_ s: String) -> String {
         let lead = String(s.prefix { $0 == " " || $0 == "\t" })
         let words = s.dropFirst(lead.count)
@@ -1421,7 +1452,7 @@ enum CoreBridge {
         var cut = words.count
         for i in 0 ..< words.count - 1 {
             let a = k[i]
-            if a.count >= 2, a == k[i + 1] { cut = i + 1; break }
+            if a.count >= 2, a == k[i + 1], !Self.legitReduplications.contains(a) { cut = i + 1; break }
             if i + 3 < words.count,
                a == k[i + 2],
                k[i + 1] == k[i + 3],
@@ -1543,11 +1574,24 @@ enum CoreBridge {
     /// full cache just resets (session-scoped scratch, not a durable store).
     @MainActor private static var russianWordVerdicts: [String: Bool] = [:]
 
+    /// One-shot disarm warning: the gate FAILS OPEN when the spell server is
+    /// unreachable (headless runs, XPC failure) or the bg/ru dictionaries are
+    /// missing — Russian words then ship silently ("завтра." observed in bench).
+    /// Shout once so a disarmed gate is visible in logs instead of masquerading
+    /// as a model-quality problem.
+    @MainActor private static var warnedRussianGateDisarmed = false
+
     @MainActor
     static func containsRussianOnlyCyrillicWord(_ s: String) -> Bool {
         let checker = NSSpellChecker.shared
-        guard checker.availableLanguages.contains("bg"),
-              checker.availableLanguages.contains("ru") else { return false }
+        let langs = checker.availableLanguages
+        guard langs.contains("bg"), langs.contains("ru") else {
+            if !warnedRussianGateDisarmed {
+                warnedRussianGateDisarmed = true
+                NSLog("prosper: ru-word gate DISARMED — spellchecker languages missing bg/ru (%d available)", langs.count)
+            }
+            return false
+        }
         func isWord(_ w: String, _ lang: String) -> Bool {
             checker.checkSpelling(of: w, startingAt: 0, language: lang, wrap: false,
                                   inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
