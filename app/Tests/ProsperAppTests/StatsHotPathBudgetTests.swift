@@ -167,4 +167,20 @@ final class StatsHotPathBudgetTests: XCTestCase {
         XCTAssertTrue(tempAggregates([TempSensor(name: "CPU performance core 1", celsius: 50)]).isEmpty)
         XCTAssertTrue(tempAggregates([]).isEmpty)
     }
+
+    func testChipGenerationParse() {
+        XCTAssertEqual(PowerSensorReader.chipGeneration(brand: "Apple M1"), 1)
+        XCTAssertEqual(PowerSensorReader.chipGeneration(brand: "Apple M4 Pro"), 4)
+        XCTAssertEqual(PowerSensorReader.chipGeneration(brand: "Apple M4 Max"), 4)
+        XCTAssertEqual(PowerSensorReader.chipGeneration(brand: "Apple M12 Ultra"), 12)
+        XCTAssertNil(PowerSensorReader.chipGeneration(brand: "Intel(R) Core(TM) i9-9980HK"))
+        XCTAssertNil(PowerSensorReader.chipGeneration(brand: ""))
+        // Every generation's key table must be collision-free WITHIN itself —
+        // the same key on two labels would double-list one die.
+        for (gen, table) in PowerSensorReader.asTemperatureKeys {
+            var keys = Set<String>(), dupes: [String] = []
+            for (key, _) in table where !keys.insert(key).inserted { dupes.append(key) }
+            XCTAssertTrue(dupes.isEmpty, "M\(gen) table has duplicate keys: \(dupes)")
+        }
+    }
 }

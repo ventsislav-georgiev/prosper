@@ -214,9 +214,16 @@ public final class StatsPoller {
             if enabled.contains(.power) { push("power", p.totalWatts) }
         }
         if slow {
-            // HID die sensors + the named SMC set (Airflow/NAND/Battery/Airport) —
-            // together they match exelban/stats' temperature list.
-            let temps = (sensors?.read() ?? []) + (powerSensors?.temperatures() ?? [])
+            // exelban/stats parity: their default list is the NAMED SMC set only
+            // (per-core CPU/GPU tables gated by chip generation + Airflow/NAND/
+            // Battery/Airport); the raw HID list ("PMU tcal", "PMU tdie 28", …) is
+            // behind a default-off toggle there — it's noise once the named rows
+            // resolve. Keep HID as the fallback so an unknown future chip (no
+            // generation table) still shows die temps instead of an empty pane.
+            let smcTemps = powerSensors?.temperatures() ?? []
+            let temps = smcTemps.contains { $0.name.hasPrefix("CPU ") }
+                ? smcTemps
+                : smcTemps + (sensors?.read() ?? [])
             if !temps.isEmpty { latest.temperatures = temps + tempAggregates(temps) }
         }
         if slow, let vi = powerSensors?.read(), !vi.isEmpty {
