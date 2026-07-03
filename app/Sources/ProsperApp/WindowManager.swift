@@ -48,7 +48,7 @@ enum WindowManager {
     // action resets it back to a half.
     private static var lastAction: WindowAction?
     private static var lastWindow: AXUIElement?
-    private static var cycleStep = 1            // 1 → 2 → 3 → 1 …
+    private static var cycleStep = 1            // 1 → 2 → 1 … (one step per fraction)
     /// Fraction of the visible dimension for each step: a half, then a half of
     /// that half (a quarter), then back to a half.
     private static let cycleFractions: [CGFloat] = [1.0 / 2.0, 1.0 / 4.0]
@@ -454,8 +454,10 @@ enum WindowManager {
         let center = CGPoint(x: winRectAX.midX, y: winRectAX.midY)
         var best: NSScreen?
         var bestArea: CGFloat = 0
-        for screen in NSScreen.screens {
-            let fAX = toAX(screen.frame)
+        let screens = NSScreen.screens
+        let primaryHeight = screens.first?.frame.height ?? 0
+        for screen in screens {
+            let fAX = toAX(screen.frame, primaryHeight: primaryHeight)
             if fAX.contains(center) { best = screen; break }
             let overlap = fAX.intersection(winRectAX)
             let area = overlap.isNull ? 0 : overlap.width * overlap.height
@@ -485,7 +487,11 @@ enum WindowManager {
     /// and falling back to the wrong screen for a point in the dead gap between
     /// mismatched displays would snap the window to a screen the cursor isn't on.
     static func screenContaining(axPoint p: CGPoint) -> NSScreen? {
-        for screen in NSScreen.screens where toAX(screen.frame).contains(p) {
+        // Runs per drag event: snapshot the screen list once and hoist the primary
+        // height instead of re-reading `NSScreen.screens` inside toAX per screen.
+        let screens = NSScreen.screens
+        let primaryHeight = screens.first?.frame.height ?? 0
+        for screen in screens where toAX(screen.frame, primaryHeight: primaryHeight).contains(p) {
             return screen
         }
         return nil
@@ -498,9 +504,14 @@ enum WindowManager {
     /// one that matters; secondary displays extend into ±Y and round-trip exactly.
     /// Do NOT "fix" this to `.main` — it would break every multi-monitor placement.
     static func toAX(_ r: CGRect) -> CGRect {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        return CGRect(x: r.origin.x, y: primaryHeight - r.origin.y - r.height,
-                      width: r.width, height: r.height)
+        toAX(r, primaryHeight: NSScreen.screens.first?.frame.height ?? 0)
+    }
+
+    /// Same flip with the primary height hoisted — for per-event loops over
+    /// multiple screens that shouldn't re-read `NSScreen.screens` per rect.
+    static func toAX(_ r: CGRect, primaryHeight: CGFloat) -> CGRect {
+        CGRect(x: r.origin.x, y: primaryHeight - r.origin.y - r.height,
+               width: r.width, height: r.height)
     }
 
     /// Flip an AX top-left rect back into the AppKit bottom-left global space — for

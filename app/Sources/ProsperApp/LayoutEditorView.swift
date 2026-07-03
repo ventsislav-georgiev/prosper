@@ -41,7 +41,7 @@ struct LayoutEditorView: View {
         VStack(alignment: .leading, spacing: 0) {
             List(selection: $selectedLayoutId) {
                 ForEach(store.groups) { group in
-                    Section(group.name) {
+                    Section {
                         ForEach(group.layouts) { layout in
                             HStack {
                                 Text(layout.name)
@@ -56,6 +56,11 @@ struct LayoutEditorView: View {
                                 Button("Duplicate") { duplicate(layout, in: group.id) }
                                 Button("Delete", role: .destructive) { deleteLayout(layout.id) }
                             }
+                        }
+                    } header: {
+                        // Groups were creatable but never deletable — a one-way trap.
+                        Text(group.name).contextMenu {
+                            Button("Delete Group", role: .destructive) { deleteGroup(group.id) }
                         }
                     }
                 }
@@ -239,6 +244,17 @@ struct LayoutEditorView: View {
         copy.zones = copy.zones.map { LayoutZone(rect: $0.rect, label: $0.label) }
         store.groups[gi].layouts.append(copy)
         selectedLayoutId = copy.id
+    }
+
+    private func deleteGroup(_ id: UUID) {
+        store.groups.removeAll { $0.id == id }
+        // Heal dangling references the same way deleteLayout does.
+        if let sel = selectedLayoutId, !store.allLayouts.contains(where: { $0.id == sel }) {
+            selectedLayoutId = store.allLayouts.first?.id
+        }
+        if let act = store.activeLayoutId, !store.allLayouts.contains(where: { $0.id == act }) {
+            store.activeLayoutId = store.allLayouts.first?.id
+        }
     }
 
     private func deleteLayout(_ id: UUID) {

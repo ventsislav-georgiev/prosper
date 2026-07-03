@@ -120,12 +120,15 @@ final class LayoutPaletteWindow {
     /// Topmost cell under the cursor (AX top-left global), or nil. Reverse scan so a
     /// later overlapping zone wins (within one layout's thumbnail — different layouts'
     /// thumbnails never overlap), matching `LayoutStore.hitZone`'s last-wins rule.
-    func hitTest(cursorAX p: CGPoint) -> Int? {
+    /// Pure + static so the hover hot path is unit-testable and budget-tested.
+    static func hitIndex(cells: [Cell], cursorAX p: CGPoint) -> Int? {
         for i in stride(from: cells.count - 1, through: 0, by: -1) where cells[i].axRect.contains(p) {
             return i
         }
         return nil
     }
+
+    func hitTest(cursorAX p: CGPoint) -> Int? { Self.hitIndex(cells: cells, cursorAX: p) }
 
     /// Hot-path highlight update: recolor existing cells + update the label only.
     func setHighlight(_ idx: Int?) {
@@ -135,34 +138,47 @@ final class LayoutPaletteWindow {
 
     // MARK: - Build / draw
 
+    /// Pure strip geometry: the panel frame (AppKit global) and one thumbnail frame
+    /// per layout (flipped-container coords, top-left origin) for `count` thumbnails
+    /// on a screen whose visible frame is `vf`. Thumbnails wrap into rows that fit
+    /// the visible width; the panel centers horizontally and clamps inside `vf`.
+    /// Split out from `rebuild` so wrap/centering/clamping are unit-testable without
+    /// a live screen. `count` must be ≥ 1 (show() guards empty).
+    static func stripGeometry(count: Int, visible vf: CGRect) -> (panel: CGRect, thumbs: [CGRect]) {
+        let t = thumb, gap = thumbGap, pad = Self.pad
+        let maxRowW = max(t.width, vf.width - 80)
+        let perRow = max(1, Int((maxRowW - 2 * pad + gap) / (t.width + gap)))
+        let cols = min(count, perRow)
+        let rows = (count + perRow - 1) / perRow
+        let contentW = 2 * pad + CGFloat(cols) * t.width + CGFloat(cols - 1) * gap
+        let contentH = 2 * pad + CGFloat(rows) * t.height + CGFloat(rows - 1) * gap + labelH
+
+        var px = vf.midX - contentW / 2
+        px = min(max(vf.minX + 4, px), vf.maxX - contentW - 4)
+        let panel = CGRect(x: px, y: vf.maxY - contentH - 8, width: contentW, height: contentH)
+        let thumbs = (0..<count).map { i -> CGRect in
+            CGRect(x: pad + CGFloat(i % perRow) * (t.width + gap),
+                   y: pad + CGFloat(i / perRow) * (t.height + gap),
+                   width: t.width, height: t.height)
+        }
+        return (panel, thumbs)
+    }
+
     private func rebuild(layouts: [WindowLayout], screen: NSScreen) {
         cellViews.forEach { $0.removeFromSuperview() }
         cellViews = []
         cells = []
 
         let vf = screen.visibleFrame                       // AppKit global
-        let t = Self.thumb, gap = Self.thumbGap, pad = Self.pad
-        // Wrap thumbnails into rows that fit the visible width (minus a margin).
-        let maxRowW = max(t.width, vf.width - 80)
-        let perRow = max(1, Int((maxRowW - 2 * pad + gap) / (t.width + gap)))
-        let cols = min(layouts.count, perRow)
-        let rows = (layouts.count + perRow - 1) / perRow
-        let contentW = 2 * pad + CGFloat(cols) * t.width + CGFloat(cols - 1) * gap
-        let contentH = 2 * pad + CGFloat(rows) * t.height + CGFloat(rows - 1) * gap + Self.labelH
-
-        var px = vf.midX - contentW / 2
-        px = min(max(vf.minX + 4, px), vf.maxX - contentW - 4)
-        let pf = NSRect(x: px, y: vf.maxY - contentH - 8, width: contentW, height: contentH)
+        let (pf, thumbFrames) = Self.stripGeometry(count: layouts.count, visible: vf)
         panel.setFrame(pf, display: true)
         container.frame = NSRect(origin: .zero, size: pf.size)
         background.frame = container.bounds
-        label.frame = NSRect(x: pad, y: contentH - Self.labelH, width: contentW - 2 * pad, height: Self.labelH)
+        label.frame = NSRect(x: Self.pad, y: pf.height - Self.labelH,
+                             width: pf.width - 2 * Self.pad, height: Self.labelH)
 
         for (li, layout) in layouts.enumerated() {
-            let row = li / perRow, col = li % perRow
-            let tx = pad + CGFloat(col) * (t.width + gap)
-            let ty = pad + CGFloat(row) * (t.height + gap)
-            let thumb = NSView(frame: NSRect(x: tx, y: ty, width: t.width, height: t.height))
+            let thumb = NSView(frame: thumbFrames[li])
             thumb.wantsLayer = true
             thumb.layer?.cornerRadius = Self.corner
             // Black fill shows through the inter-cell gaps as crisp black outlining;
@@ -210,7 +226,10 @@ final class LayoutPaletteWindow {
         let v = r.midY < 0.4 ? "Top" : (r.midY > 0.6 ? "Bottom" : "")
         let h = r.midX < 0.4 ? "Left" : (r.midX > 0.6 ? "Right" : "")
         let parts = [v, h].filter { !$0.isEmpty }
-        if parts.isEmpty { return "Full" }
+        // Centered on both axes: a genuinely screen-filling rect is "Full", but a
+        // centered band/tile (center third, center quarter…) is "Center" — calling
+        // a 1/3-wide column "Full" misdescribes the drop.
+        if parts.isEmpty { return (hBand || vBand) ? "Center" : "Full" }
         if vBand && hBand { return parts.joined(separator: " ") }     // quarter
         return parts.joined(separator: " ") + (hBand || vBand ? " Half" : "")
     }

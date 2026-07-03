@@ -179,6 +179,91 @@ final class WindowLayoutTests: XCTestCase {
         XCTAssertEqual(name(0, 0.5, 1, 0.5), "Bottom Half")
         XCTAssertEqual(name(0.5, 0.5, 0.5, 0.5), "Bottom Right")
         XCTAssertEqual(name(0, 0, 0.5, 0.5), "Top Left")
+        // Centered-but-not-full zones must NOT read "Full" (the regression this
+        // fixed: the Thirds middle column hovered as "Full" in the palette).
+        XCTAssertEqual(name(1.0 / 3, 0, 1.0 / 3, 1), "Center")     // center third
+        XCTAssertEqual(name(0.375, 0.375, 0.25, 0.25), "Center")   // centered tile
+        XCTAssertEqual(name(0, 0.25, 1, 0.5), "Center")            // centered band
+    }
+
+    // MARK: - Palette strip geometry (pure)
+
+    func testPaletteStripSingleRowCenteredAndClamped() {
+        let vf = CGRect(x: 0, y: 0, width: 1440, height: 875)
+        let g = LayoutPaletteWindow.stripGeometry(count: 4, visible: vf)
+        XCTAssertEqual(g.thumbs.count, 4)
+        XCTAssertEqual(g.panel.midX, vf.midX, accuracy: 0.5)          // centered
+        XCTAssertGreaterThanOrEqual(g.panel.minX, vf.minX)
+        XCTAssertLessThanOrEqual(g.panel.maxX, vf.maxX)
+        XCTAssertEqual(g.panel.maxY, vf.maxY - 8, accuracy: 0.5)      // hugs the top
+        // Single row: all thumbs share one y and sit inside the panel.
+        XCTAssertEqual(Set(g.thumbs.map(\.minY)).count, 1)
+        for t in g.thumbs {
+            XCTAssertGreaterThanOrEqual(t.minX, 0)
+            XCTAssertLessThanOrEqual(t.maxX, g.panel.width)
+            XCTAssertLessThanOrEqual(t.maxY, g.panel.height)
+        }
+    }
+
+    func testPaletteStripWrapsOnNarrowScreen() {
+        let vf = CGRect(x: 0, y: 0, width: 400, height: 800)
+        let g = LayoutPaletteWindow.stripGeometry(count: 8, visible: vf)
+        XCTAssertEqual(g.thumbs.count, 8)
+        XCTAssertLessThanOrEqual(g.panel.width, vf.width)             // never wider than the screen
+        XCTAssertGreaterThan(Set(g.thumbs.map(\.minY)).count, 1, "8 thumbs on 400px must wrap rows")
+        for i in g.thumbs.indices {
+            for j in g.thumbs.indices where j > i {
+                XCTAssertFalse(g.thumbs[i].intersects(g.thumbs[j]), "thumbs \(i)/\(j) overlap")
+            }
+        }
+    }
+
+    func testPaletteStripSingleThumbNeverBelowMinimum() {
+        // Degenerate visible frame narrower than one thumbnail: perRow clamps to 1,
+        // the strip stays one-per-row and the math never divides by zero.
+        let vf = CGRect(x: 0, y: 0, width: 60, height: 600)
+        let g = LayoutPaletteWindow.stripGeometry(count: 3, visible: vf)
+        XCTAssertEqual(g.thumbs.count, 3)
+        XCTAssertEqual(Set(g.thumbs.map(\.minX)).count, 1)            // one column
+    }
+
+    // MARK: - Palette hit-test (pure)
+
+    private func paletteCell(_ r: CGRect, layout: Int = 0, zone: Int = 0) -> LayoutPaletteWindow.Cell {
+        LayoutPaletteWindow.Cell(layout: layout, zone: zone, axRect: r, label: "")
+    }
+
+    func testPaletteHitIndexLastWinsAndMisses() {
+        let cells = [paletteCell(CGRect(x: 0, y: 0, width: 100, height: 100)),
+                     paletteCell(CGRect(x: 50, y: 0, width: 100, height: 100))]
+        // Overlap: the later (visually on-top) cell wins — matches hitZone's rule.
+        XCTAssertEqual(LayoutPaletteWindow.hitIndex(cells: cells, cursorAX: CGPoint(x: 60, y: 10)), 1)
+        XCTAssertEqual(LayoutPaletteWindow.hitIndex(cells: cells, cursorAX: CGPoint(x: 10, y: 10)), 0)
+        XCTAssertNil(LayoutPaletteWindow.hitIndex(cells: cells, cursorAX: CGPoint(x: 500, y: 500)))
+        XCTAssertNil(LayoutPaletteWindow.hitIndex(cells: [], cursorAX: .zero))
+    }
+
+    // Palette hover hot path (~120 Hz while dragging in .palette mode): hitIndex
+    // over a LARGE palette (12 layouts × 5 zones = 60 cells) must stay ≈ sub-µs
+    // per event — pure rect scans, no allocation. Same gate style as the other
+    // hot-path budgets: it fails loudly if allocation/IPC sneaks in.
+    func testPaletteHitIndexBudget() {
+        var cells: [LayoutPaletteWindow.Cell] = []
+        for i in 0..<60 {
+            cells.append(paletteCell(CGRect(x: CGFloat(i % 10) * 80, y: CGFloat(i / 10) * 52,
+                                            width: 78, height: 50), layout: i / 5, zone: i % 5))
+        }
+        let iterations = 100_000
+        var hits = 0
+        let t0 = DispatchTime.now()
+        for i in 0..<iterations {
+            // Sweep across the strip so hits and misses (full reverse scan) both occur.
+            let p = CGPoint(x: CGFloat(i % 900), y: CGFloat(i % 340))
+            if LayoutPaletteWindow.hitIndex(cells: cells, cursorAX: p) != nil { hits += 1 }
+        }
+        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+        XCTAssertGreaterThan(hits, 0)
+        XCTAssertLessThan(elapsedMs, 200, "palette hit-test too slow: \(elapsedMs) ms for \(iterations) iters")
     }
 
     // MARK: - Hot-path budget

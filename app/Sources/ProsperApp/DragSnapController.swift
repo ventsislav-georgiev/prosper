@@ -104,6 +104,10 @@ final class DragSnapController {
     private var winID: CGWindowID?
     private var winInitialOrigin: CGPoint?
     private var winInitialServerOrigin: CGPoint?
+    /// Window size captured at drag start (same axFrame read as winInitialOrigin).
+    /// A moveOnly palette-cell preview needs the size; the window can't resize while
+    /// the user is dragging it, so caching kills a per-hover AX IPC.
+    private var winSize: CGSize?
     private var moveConfirmed = false
     private var preConfirmPolls = 0
     private var currentZone: SnapZone?
@@ -119,6 +123,18 @@ final class DragSnapController {
     private var dragLayouts: [WindowLayout] = []
     private var currentCell: Int?
     private var paletteDisplay: CGDirectDisplayID?
+    // Everything a drag needs from Preferences/theme, snapshotted once at drag
+    // start: (a) a mid-drag settings/theme change can't swap behavior under the
+    // user, and (b) the ~120 Hz event path never touches UserDefaults.
+    private var dragEdgeMargin: CGFloat = 8
+    private var dragCornerSize: CGFloat = 70
+    private var dragStyle: FootprintWindow.Style = .vibrancy
+    private var dragAccent: NSColor = .controlAccentColor
+    /// `WindowManager.displayID(of:)` builds the deviceDescription dictionary — too
+    /// heavy for per-event use. Cache by screen identity; AppKit occasionally vends
+    /// a fresh NSScreen for the same display, which just misses the cache and
+    /// recomputes (correctness never depends on the identity check).
+    private var cachedDisplay: (screen: NSScreen, id: CGDirectDisplayID)?
     // (display, layout) the overlay tiles are currently built for. A value-type
     // struct, not a String — comparing it on the ~120 Hz path must not allocate.
     // gap is intentionally omitted: it's snapshotted immutable at drag start, so a
@@ -214,6 +230,10 @@ final class DragSnapController {
             dragLayout = dragMode == .layouts ? Preferences.layoutStore.activeLayout : nil
             dragLayouts = dragMode == .palette ? Preferences.layoutStore.allLayouts.filter { !$0.zones.isEmpty } : []
             dragGap = Preferences.layoutGap
+            dragEdgeMargin = Preferences.dragSnapEdgeMargin
+            dragCornerSize = Preferences.dragSnapCornerSize
+            dragStyle = Preferences.dragSnapStyle
+            dragAccent = NSColor(ThemeRuntime.palette.blue)
             // No usable layout(s) → fall back to classic edge snapping rather than
             // silently no-op'ing the whole drag.
             if dragMode == .layouts && (dragLayout?.zones.isEmpty ?? true) {
@@ -231,7 +251,9 @@ final class DragSnapController {
             dragging = true
             win = el
             winID = hit.windowID
-            winInitialOrigin = WindowManager.axFrame(el)?.origin
+            let frame0 = WindowManager.axFrame(el)
+            winInitialOrigin = frame0?.origin
+            winSize = frame0?.size
             winInitialServerOrigin = winID.flatMap { WindowManager.serverFrame(of: $0)?.origin }
         }
 
@@ -273,8 +295,8 @@ final class DragSnapController {
         case .edges:
             guard let screen else { setZone(nil, screen: nil); return }
             let zone = SnapZone.at(cursorAX: cur, screenAX: WindowManager.toAX(screen.frame),
-                                   edgeMargin: Preferences.dragSnapEdgeMargin,
-                                   cornerSize: Preferences.dragSnapCornerSize)
+                                   edgeMargin: dragEdgeMargin,
+                                   cornerSize: dragCornerSize)
             setZone(zone, screen: screen)
         case .layouts:
             updateLayoutDrag(cur: cur, screen: screen)
@@ -290,17 +312,17 @@ final class DragSnapController {
     private func updatePaletteDrag(cur: CGPoint, screen: NSScreen?) {
         // Gated on moveConfirmed (the window's origin has actually moved) so a drag
         // that never moves the window — e.g. selecting text in a terminal — doesn't
-        // pop the palette. Reliability comes from NOT aborting these modes (see the
-        // pre-confirm block): a real window drag keeps polling until it moves, then
-        // the strip appears the instant the window starts moving.
+        // pop the palette. A real window drag confirms within the first couple of
+        // events (well inside the pre-confirm cap), so the strip appears the instant
+        // the window starts moving; a non-window drag hits the cap and aborts
+        // before ever showing it.
         guard moveConfirmed, !dragLayouts.isEmpty else { return }
         if let screen {
-            let disp = WindowManager.displayID(of: screen)
+            let disp = displayID(of: screen)
             if disp != paletteDisplay || !palette.isShowing {
                 paletteDisplay = disp
                 currentScreen = screen
-                palette.show(layouts: dragLayouts, screen: screen,
-                             accent: NSColor(ThemeRuntime.palette.blue))
+                palette.show(layouts: dragLayouts, screen: screen, accent: dragAccent)
             }
         }
         // Cursor in a dead gap between displays (screen nil): keep the last palette up.
@@ -326,14 +348,15 @@ final class DragSnapController {
                                                  visible: v, gap: dragGap)
         // moveOnly layouts keep the window's size and only reposition — preview that,
         // not the full zone, so the footprint matches where the window actually lands.
-        if layout.isMoveOnly, let el = win, let cur = WindowManager.axFrame(el) {
+        // Size comes from the drag-start snapshot (winSize): no AX IPC per hover.
+        if layout.isMoveOnly, let size = winSize {
             targetAX = CGRect(origin: WindowManager.moveOnlyOrigin(zoneOrigin: targetAX.origin,
-                                                                   size: cur.size, visible: v),
-                              size: cur.size)
+                                                                   size: size, visible: v),
+                              size: size)
         }
         footprint.show(frameAppKit: WindowManager.axToAppKit(targetAX),
-                       style: Preferences.dragSnapStyle,
-                       accent: NSColor(ThemeRuntime.palette.blue),
+                       style: dragStyle,
+                       accent: dragAccent,
                        zoneChanged: true)
     }
 
@@ -357,9 +380,10 @@ final class DragSnapController {
         currentZoneIdx = idx
 
         // Gated on moveConfirmed (the window actually moved) so selecting text or
-        // dragging a scrollbar doesn't pop the zone overlay. Reliability comes from
-        // NOT aborting these modes (see the pre-confirm block): a real window drag
-        // keeps polling until it moves, then the overlay appears immediately.
+        // dragging a scrollbar doesn't pop the zone overlay. A real window drag
+        // confirms within the first couple of events (well inside the pre-confirm
+        // cap), so the overlay appears the instant the window starts moving; a
+        // non-window drag hits the cap and aborts before ever showing it.
         guard moveConfirmed else { return }
         guard let layout = dragLayout, !layout.zones.isEmpty else {
             layoutOverlay.hide(); layoutSig = nil; return
@@ -377,13 +401,13 @@ final class DragSnapController {
         // zone. Recompute frames + rebuild the overlay ONLY when that signature
         // changes (or the overlay isn't up yet); a plain hover change on the
         // ~120 Hz flood takes the cheap recolor path with zero allocation.
-        let sig = LayoutSig(display: WindowManager.displayID(of: screen), layout: layout.id)
+        let sig = LayoutSig(display: displayID(of: screen), layout: layout.id)
         if sig != layoutSig || !layoutOverlay.isShowing {
             layoutSig = sig
             let v = WindowManager.visibleFrameAX(for: screen)
             let framesAX = WindowManager.targetFrames(layout: layout.zones, visible: v, gap: dragGap)
             layoutOverlay.show(zones: layout.zones, framesAX: framesAX, highlight: idx,
-                               screen: screen, accent: NSColor(ThemeRuntime.palette.blue))
+                               screen: screen, accent: dragAccent)
             return
         }
         guard changed else { return }
@@ -409,8 +433,8 @@ final class DragSnapController {
         let v = WindowManager.visibleFrameAX(for: screen)
         let targetAX = WindowManager.targetFrame(for: zone.action, visible: v, current: .zero)
         footprint.show(frameAppKit: WindowManager.axToAppKit(targetAX),
-                       style: Preferences.dragSnapStyle,
-                       accent: NSColor(ThemeRuntime.palette.blue),
+                       style: dragStyle,
+                       accent: dragAccent,
                        zoneChanged: changed)
     }
 
@@ -438,6 +462,14 @@ final class DragSnapController {
         }
     }
 
+    /// Identity-cached `WindowManager.displayID(of:)` for the per-event paths.
+    private func displayID(of screen: NSScreen) -> CGDirectDisplayID {
+        if let c = cachedDisplay, c.screen === screen { return c.id }
+        let id = WindowManager.displayID(of: screen)
+        cachedDisplay = (screen, id)
+        return id
+    }
+
     private func resetDrag() {
         mouseDownAX = nil
         dragging = false
@@ -446,6 +478,8 @@ final class DragSnapController {
         winID = nil
         winInitialOrigin = nil
         winInitialServerOrigin = nil
+        winSize = nil
+        cachedDisplay = nil
         moveConfirmed = false
         preConfirmPolls = 0
         currentZone = nil
