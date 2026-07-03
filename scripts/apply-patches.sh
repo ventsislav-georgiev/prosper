@@ -41,27 +41,43 @@ if [[ ! -d .build/checkouts ]]; then
   swift package resolve
 fi
 
+# Two checkout roots: swift build's, and xcodebuild's separate SourcePackages
+# (the metallib step in build.sh compiles the WHOLE app from that second tree —
+# unpatched, mlx-swift-lm fails with 'SpeculativeTokenIterator' type errors).
+# The xcode tree only exists after its first resolve; optional until then —
+# build.sh re-runs this script right before xcodebuild.
+CHECKOUT_ROOTS=(".build/checkouts")
+XCODE_CHECKOUTS=".build/xcode-metallib/SourcePackages/checkouts"
+if [[ -d "$XCODE_CHECKOUTS" ]]; then
+  CHECKOUT_ROOTS+=("$XCODE_CHECKOUTS")
+fi
+
 for entry in "${PATCHES[@]}"; do
   patch="${entry%%:*}"
-  checkout=".build/checkouts/${entry##*:}"
   patch_path="$PATCH_DIR/$patch"
   if [[ ! -f "$patch_path" ]]; then
     echo "error: patch not found: $patch_path" >&2
     exit 1
   fi
-  if [[ ! -d "$checkout" ]]; then
-    echo "error: checkout not found: $checkout (dependency resolution failed?)" >&2
-    exit 1
-  fi
-  if git -C "$checkout" apply --reverse --check "$patch_path" >/dev/null 2>&1; then
-    echo "==> $patch already applied to $checkout — skipping"
-    continue
-  fi
-  if ! git -C "$checkout" apply --check "$patch_path" >/dev/null 2>&1; then
-    echo "error: $patch does not apply cleanly to $checkout" >&2
-    echo "       (upstream pin may have changed; regenerate the patch)" >&2
-    exit 1
-  fi
-  git -C "$checkout" apply "$patch_path"
-  echo "==> Applied $patch to $checkout"
+  for root in "${CHECKOUT_ROOTS[@]}"; do
+    checkout="$root/${entry##*:}"
+    if [[ ! -d "$checkout" ]]; then
+      if [[ "$root" == ".build/checkouts" ]]; then
+        echo "error: checkout not found: $checkout (dependency resolution failed?)" >&2
+        exit 1
+      fi
+      continue  # xcode tree may not have resolved this dep yet
+    fi
+    if git -C "$checkout" apply --reverse --check "$patch_path" >/dev/null 2>&1; then
+      echo "==> $patch already applied to $checkout — skipping"
+      continue
+    fi
+    if ! git -C "$checkout" apply --check "$patch_path" >/dev/null 2>&1; then
+      echo "error: $patch does not apply cleanly to $checkout" >&2
+      echo "       (upstream pin may have changed; regenerate the patch)" >&2
+      exit 1
+    fi
+    git -C "$checkout" apply "$patch_path"
+    echo "==> Applied $patch to $checkout"
+  done
 done

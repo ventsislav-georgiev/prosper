@@ -947,18 +947,64 @@ struct AIModelSection: View {
         return [("", "None — no model downloaded (inline completions off)")] + Self.models
     }
 
+    /// GGUF picker state (llama engine). Mirrors `LlamaInlineEngine.selectedModelId`;
+    /// selecting an un-downloaded model kicks off its download in place.
+    @State private var ggufSelection = LlamaInlineEngine.selectedModelId
+    @State private var ggufStatus: String?
+
     var body: some View {
-        NeonSection("AI Model", footer: "Switching downloads the model if needed, then reloads it — no restart required.") {
-            Picker("Model", selection: $model.coreModel) {
-                ForEach(modelOptions, id: \.0) {
-                    Text(ModelFiles.pickerLabel(for: $0.0, base: CustomModelStore.label(for: $0.0, fallback: $0.1))).tag($0.0)
+        if LlamaInlineEngine.isEnabled {
+            NeonSection("AI Model", footer: "Inline autocomplete and the Translate extension share this GGUF (llama.cpp engine). Switching downloads the model if needed, then swaps it — no restart required.") {
+                Picker("Model", selection: $ggufSelection) {
+                    ForEach(LlamaInlineEngine.catalog) { m in
+                        Text("\(m.label), \(m.sizeLabel) — \(m.detail)").tag(m.id)
+                    }
+                }
+                .onChange(of: ggufSelection) { switchGGUF(ggufSelection) }
+                if let s = ggufStatus {
+                    NeonDivider()
+                    Text(s).font(Neon.font(.caption)).foregroundStyle(Neon.blue)
+                }
+                NeonDivider()
+                HStack {
+                    Spacer()
+                    Button("Reveal Model Files in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([LlamaInlineEngine.modelFileURL])
+                    }.buttonStyle(.neon)
                 }
             }
-            NeonDivider()
-            HStack {
-                Spacer()
-                Button("Reveal Model Files in Finder") { ModelFiles.reveal() }
-                    .buttonStyle(.neon)
+        } else {
+            NeonSection("AI Model", footer: "Switching downloads the model if needed, then reloads it — no restart required.") {
+                Picker("Model", selection: $model.coreModel) {
+                    ForEach(modelOptions, id: \.0) {
+                        Text(ModelFiles.pickerLabel(for: $0.0, base: CustomModelStore.label(for: $0.0, fallback: $0.1))).tag($0.0)
+                    }
+                }
+                NeonDivider()
+                HStack {
+                    Spacer()
+                    Button("Reveal Model Files in Finder") { ModelFiles.reveal() }
+                        .buttonStyle(.neon)
+                }
+            }
+        }
+    }
+
+    private func switchGGUF(_ id: String) {
+        LlamaInlineEngine.selectModel(id)
+        guard let m = LlamaInlineEngine.catalog.first(where: { $0.id == id }),
+              !LlamaInlineEngine.isDownloaded(m) else { ggufStatus = nil; return }
+        ggufStatus = "Starting download…"
+        Task {
+            do {
+                try await LlamaInlineEngine.downloadModel(m) { _, status in
+                    Task { @MainActor in ggufStatus = status }
+                }
+                await MainActor.run { ggufStatus = nil }
+            } catch {
+                await MainActor.run {
+                    ggufStatus = "Download failed: \(error.localizedDescription)"
+                }
             }
         }
     }

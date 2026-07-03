@@ -475,6 +475,26 @@ final class RunnerModel: ObservableObject {
     /// latest. Caps total work at 2 regardless of how much editing happened.
     private var isRunning = false
     private var pendingText: String?
+    /// Set for a progress-driven re-invoke (staged translate milestones): the
+    /// prior partial result stays on screen instead of flashing back to the
+    /// spinner while the handler re-reads the pipeline snapshot.
+    private var keepOutcomeOnce = false
+    init() {
+        // Staged translate: each pipeline milestone re-invokes the locked
+        // handler, which returns the newest snapshot (primary first, then the
+        // enriched alternatives).
+        // ponytail: observer never removed — the runner model lives for the app
+        // lifetime, and [weak self] makes a stray token inert anyway.
+        NotificationCenter.default.addObserver(
+            forName: CoreBridge.translateProgress, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, case .ext = self.mode else { return }
+                self.keepOutcomeOnce = true
+                self.rerun()
+            }
+        }
+    }
 
     func reset() {
         input = ""
@@ -596,8 +616,11 @@ final class RunnerModel: ObservableObject {
         let activeMode = mode
         // In a locked extension mode the handler is async and often slow (an LLM
         // call, http, shell). Clear the prior result so the loading spinner shows
-        // immediately instead of leaving the stale previous result on screen.
-        if case .ext = activeMode { outcome = nil }
+        // immediately instead of leaving the stale previous result on screen —
+        // except on a progress-driven re-invoke, where the partial result must
+        // stay put while the handler fetches the next milestone.
+        if case .ext = activeMode, !keepOutcomeOnce { outcome = nil }
+        keepOutcomeOnce = false
 
         Task { [weak self] in
             let result = await CommandRouter.run(text, mode: activeMode)
@@ -653,6 +676,7 @@ struct ResultRow: Identifiable {
     var enterMode: RunnerMode? = nil   // when set, Enter locks the runner into this command's input mode
     var actions: [RowAction] = []      // file/extension actions; when non-empty, Enter runs actions[0]
     var filePath: String? = nil        // backing file path for the row's actions (Quick Look, default payload)
+    var spinning: Bool = false         // in-progress placeholder: show a small spinner next to the title
 }
 
 // MARK: - Row builder
@@ -877,7 +901,8 @@ private func buildRows(from outcome: RunnerOutcome) -> [ResultRow] {
                           copyValue: item.url ?? item.title, isMeta: false,
                           appURL: appURL, iconImage: iconImage,
                           openTarget: item.url, label: item.accessory,
-                          actions: actions, filePath: item.launch)
+                          actions: actions, filePath: item.launch,
+                          spinning: item.isLoading)
             }
         }
         switch node {
@@ -1712,11 +1737,16 @@ private struct ExtCardRow: View {
             // below), and SwiftUI's text-selection machinery swallows the FIRST
             // click to place a cursor, so the first tap on a fresh list did nothing
             // and only the second opened the row (the bookmark "first click dead" bug).
-            Text(row.primary)
-                .font(Neon.font(17, weight: .medium))
-                .foregroundColor(Neon.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: sz(8)) {
+                if row.spinning {
+                    ProgressView().controlSize(.small)
+                }
+                Text(row.primary)
+                    .font(Neon.font(17, weight: .medium))
+                    .foregroundColor(row.spinning ? Neon.textSecondary : Neon.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             if (row.label?.isEmpty == false) || !row.secondary.isEmpty {
                 HStack(alignment: .top, spacing: sz(6)) {

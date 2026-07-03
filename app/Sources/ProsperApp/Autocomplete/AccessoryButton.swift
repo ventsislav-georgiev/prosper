@@ -7,7 +7,7 @@ import AppKit
 final class AccessoryButton {
 
     /// Visual state of the indicator — the user-facing signal of what Prosper is
-    /// doing in the focused field (Cotypist-parity: the per-field icon is the
+    /// doing in the focused field (reference-parity: the per-field icon is the
     /// "am I active here, and is anything happening?" affordance).
     enum State {
         /// Field supported, nothing in flight and no ghost on screen (fresh
@@ -96,7 +96,7 @@ final class AccessoryButton {
         panel.orderFrontRegardless()
     }
 
-    /// Cotypist-style indicator: a small icon pinned just outside the leading
+    /// reference-style indicator: a small icon pinned just outside the leading
     /// (left) edge of a focused text field, on the line the user is typing. Both
     /// rects are in AppKit screen coords (bottom-left origin). Signals "Prosper can
     /// complete here" even before the ghost text appears.

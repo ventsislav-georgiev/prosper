@@ -10,7 +10,7 @@ import AppKit
 /// only thing we know is the field's bounding rect. Rather than fall back to the
 /// bare `AccessoryButton`, this window mirrors the suggestion text into a small
 /// labelled bubble floated just above the field, so the user still sees the
-/// completion (the "text mirroring" technique Cotypist uses). It is OPT-IN per app
+/// completion (the "text mirroring" technique the reference app uses). It is OPT-IN per app
 /// (`AppOverrideResolver.textMirroring == true`).
 ///
 /// Construction mirrors `SuggestionWindow`: a `.statusBar`-level, clear,

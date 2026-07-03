@@ -43,13 +43,21 @@ enum HeadlessBenchCLI {
         // mutable state crosses the actor boundary (Swift 6 Sendable). main just
         // parks on the semaphore; the Task terminates the process itself.
         Task {
-            do { try await MLXEngine.shared.load { _, _ in } }
-            catch { FileHandle.standardError.write(Data("headless: model load failed: \(error)\n".utf8)); exit(1) }
+            // Engine flag mirrors the live path: PROSPER_INLINE_ENGINE=llama +
+            // PROSPER_LLAMA_GGUF benches the llama beam; default benches MLX.
+            let llamaActive = LlamaInlineEngine.isEnabled && LlamaInlineEngine.modelIsDownloaded
+            if llamaActive {
+                do { try await LlamaInlineEngine.shared.ensureLoaded(params: LlamaInlineEngine.tunedParams()) }
+                catch { FileHandle.standardError.write(Data("headless: llama load failed: \(error)\n".utf8)); exit(1) }
+            } else {
+                do { try await MLXEngine.shared.load { _, _ in } }
+                catch { FileHandle.standardError.write(Data("headless: model load failed: \(error)\n".utf8)); exit(1) }
+            }
             var out: [[String: Any]] = []
             for c in frozen {
                 // Each case is an unrelated prefix; drop the primed KV prefix so the
                 // reuse-trim math can't go stale (that aborts MLX).
-                await MLXEngine.shared.resetInlineCache()
+                if !llamaActive { await MLXEngine.shared.resetInlineCache() }
                 let start = Date()
                 let (completion, detected, latinBg) = await complete(before: c.prefix, after: c.after ?? "")
                 let ms = Int(Date().timeIntervalSince(start) * 1000)
@@ -70,6 +78,10 @@ enum HeadlessBenchCLI {
                 try? json.write(to: URL(fileURLWithPath: outPath))
                 print("headless: wrote \(outPath)")
             }
+            // Free llama BEFORE exit: exit() runs the framework's C++ static
+            // destructors, and ggml's Metal teardown aborts (SIGABRT) if the
+            // device is still alive at that point.
+            if llamaActive { await LlamaInlineEngine.shared.unload() }
             exit(0)
         }
         // Block forever; the Task above calls exit().
@@ -110,7 +122,7 @@ enum HeadlessBenchCLI {
         let bgCyrillic = language == "Bulgarian" && CoreBridge.isCyrillicScript(before)
         // A/B: PROSPER_MINIMAL=1 strips all language rules / candidate hints / persona
         // to test whether Gemma continues (esp. latinica) MORE naturally when we stop
-        // instructing it — the "Cotypist got it first try, same model" hypothesis.
+        // instructing it — the "got it first try, same model" hypothesis.
         let minimal = ProcessInfo.processInfo.environment["PROSPER_MINIMAL"] == "1"
         // A/B: PROSPER_SEED_SAMPLES=<file> feeds newline-delimited examples of the
         // user's own writing straight into the prompt (the previousUserInputs
@@ -123,8 +135,8 @@ enum HeadlessBenchCLI {
                 .filter { !$0.isEmpty }
         }()
         let system: String
-        let prompt: String
-        let nudgedPrompt: String
+        let prompt: (user: String, prefill: String?)
+        let nudgedPrompt: (user: String, prefill: String?)
         let nudge = "IMPORTANT: You must output a continuation — returning "
             + "nothing or an empty answer is not allowed. Even if the text "
             + "already reads as complete, write the next few words the user "
@@ -134,27 +146,52 @@ enum HeadlessBenchCLI {
         if minimal {
             system = "Continue the user's text inline, like a phone keyboard. Output ONLY "
                 + "the few words that come next in the SAME language and script — nothing else."
-            prompt = before
-            nudgedPrompt = nudge + before
+            prompt = (before, nil)
+            nudgedPrompt = (nudge + before, nil)
         } else {
             system = CoreBridge.completionSystemPrompt(
                 custom: "", length: length,
                 language: latinBg ? nil : language, transliteratedBulgarian: latinBg,
                 userLanguages: CoreBridge.osLanguagesList()
             )
-            prompt = CoreBridge.buildCompletionPrompt(
+            // Same reservation at BOTH sites as CoreBridge.complete(): the nudge
+            // length is budgeted into rung-0 too, so plain and nudged prompts clip
+            // context identically (shared KV prefix, no overflow on reprompt rungs).
+            prompt = CoreBridge.buildCompletionPromptParts(
                 before: before, after: after, clipboard: nil,
                 writingSamples: seedSamples,
-                reservedSystemChars: system.count
+                reservedSystemChars: system.count + nudge.count + 240
             )
             // Reprompt rungs carry the nudge as a `directive` INSIDE the prompt
             // (shared context prefix, KV-cache-friendly) — same as CoreBridge.
-            nudgedPrompt = CoreBridge.buildCompletionPrompt(
+            nudgedPrompt = CoreBridge.buildCompletionPromptParts(
                 before: before, after: after, clipboard: nil,
                 writingSamples: seedSamples,
                 directive: nudge,
-                reservedSystemChars: system.count
+                reservedSystemChars: system.count + nudge.count + 240
             )
+        }
+        // Llama beam path (mirrors the CoreBridge llama pass): ONE beam call,
+        // ranked candidates through the same sanitize gate, first survivor wins.
+        // NO ladder fallback — an empty here is the confidence gate speaking,
+        // and the bench must measure exactly what the live path would show.
+        if LlamaInlineEngine.isEnabled, LlamaInlineEngine.modelIsDownloaded {
+            // Same Phase D split as the CoreBridge llama pass: the partial
+            // word rides as the byte-level required prefix.
+            let split = LlamaInlineEngine.splitRequiredPrefix(prompt.prefill ?? "")
+            let cands = (try? await LlamaInlineEngine.shared.complete(
+                system: system, user: prompt.user,
+                prefill: split.prefill, requiredPrefix: split.required,
+                params: LlamaInlineEngine.tunedParams())) ?? []
+            for c in cands {
+                if let s = CoreBridge.sanitizeCompletion(c.text, before: before, after: after,
+                                                         transliterateCyrillic: latinBg,
+                                                         bulgarianCyrillic: bgCyrillic), !s.isEmpty,
+                   !CoreBridge.echoesWritingSample(s, samples: seedSamples) {
+                    return (s, language, latinBg)
+                }
+            }
+            return (nil, language, latinBg)
         }
         // Mirror CoreBridge.complete()'s ladder EXACTLY so the bench measures the
         // shipping path: GREEDY first rung (deterministic per context — the ghost
@@ -174,10 +211,11 @@ enum HeadlessBenchCLI {
         ]
         for (temp, topK, topp, reprompt) in attempts {
             do {
+                let parts = reprompt ? nudgedPrompt : prompt
                 let raw = try await MLXEngine.shared.generateInlineRouted(
-                    prompt: reprompt ? nudgedPrompt : prompt, system: system,
+                    prompt: parts.user, system: system,
                     maxTokens: maxTokens, temperature: temp, topP: topp, stop: ["\n"],
-                    maxWords: maxWords, topK: topK
+                    maxWords: maxWords, topK: topK, prefillText: parts.prefill
                 )
                 if let s = CoreBridge.sanitizeCompletion(raw, before: before, after: after,
                                                          transliterateCyrillic: latinBg,

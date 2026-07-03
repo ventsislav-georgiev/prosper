@@ -73,6 +73,26 @@ final class AutocompleteReconcileTests: XCTestCase {
         )
     }
 
+    // NBSP tolerance: hosts store the space we typed/injected as NBSP
+    // (contenteditable editors; the A2 nonBreakingSpace knob). Space KIND alone
+    // is never a divergence — live Telegram: every Tab after the first accept
+    // swallowed forever because "…е\u{00A0}" ≠ "…е ".
+    func testNBSPInLiveMatchesSpaceAnchor() {
+        XCTAssertEqual(
+            AutocompleteEngine.reconcile(
+                suggestion: "по-лесно.", anchor: "ще ни е ", live: "ще ни е\u{00A0}"),
+            .show("по-лесно.")
+        )
+    }
+
+    func testNBSPForwardTypeTrimsDelta() {
+        XCTAssertEqual(
+            AutocompleteEngine.reconcile(
+                suggestion: " fox jumps", anchor: "the quick brown", live: "the quick brown\u{00A0}f"),
+            .show("ox jumps") // delta " f" (NBSP≡space) consumed the suggestion's " f"
+        )
+    }
+
     // type-through composition: anchor must be `lastRenderedBefore` (the post-
     // type-through text the visible ghost is glued to), so a refresh reconciles
     // against the advanced anchor without double-trimming.
@@ -256,7 +276,7 @@ final class CaretMovedWithKeyTests: XCTestCase {
     }
 }
 
-/// Per-letter typo-fix split (Cotypist-style display + minimal retype).
+/// Per-letter typo-fix split (reference-style display + minimal retype).
 final class TypoFixSplitTests: XCTestCase {
     func testTransposition() {
         let s = AutocompleteEngine.typoFixSplit(original: "teh", fix: "the")

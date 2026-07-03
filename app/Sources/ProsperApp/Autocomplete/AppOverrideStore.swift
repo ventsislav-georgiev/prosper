@@ -42,7 +42,7 @@ struct AppOverride: Codable, FetchableRecord, PersistableRecord, Equatable, Send
 
     // MARK: Insertion workarounds (A2 — chat/web composers eat plain paste)
     //
-    // Recovered from Cotypist's `AppOverrides` knobs. Each is optional so nil ==
+    // Recovered from the reference app's `AppOverrides` knobs. Each is optional so nil ==
     // inherit today's behavior; the resolver falls back to a seed then to false/0.
     /// Paste with `Cmd-Shift-V` (paste-and-match-style) instead of `Cmd-V`, for
     /// rich/web editors that would otherwise inject styled text or reject the paste.

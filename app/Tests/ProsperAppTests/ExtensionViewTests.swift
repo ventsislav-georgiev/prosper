@@ -57,6 +57,21 @@ final class ExtensionViewTests: XCTestCase {
         XCTAssertNil(list.items[1].launch)
     }
 
+    func testDecodeListItemLoadingFlag() throws {
+        // Translate's staged pipeline marks its "Finding alternatives…" row with
+        // `loading = true`; the host renders an inline indeterminate spinner.
+        // Absent for ordinary items.
+        let json = """
+        {"type":"list","title":"Translation",
+         "items":[{"id":"0","title":"въплъщение"},
+                  {"id":"progress","title":"Finding alternatives…","loading":true}]}
+        """
+        let node = try ExtensionViewNode.decode(json: json)
+        guard case .list(let list) = node else { return XCTFail("expected list") }
+        XCTAssertFalse(list.items[0].isLoading)
+        XCTAssertTrue(list.items[1].isLoading)
+    }
+
     func testDecodeFormAndGridAndDetail() throws {
         XCTAssertNoThrow(try ExtensionViewNode.decode(json:
             ##"{"type":"detail","title":"Doc","markdown":"# Hi"}"##))

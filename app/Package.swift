@@ -56,7 +56,22 @@ let package = Package(
         // stamped "sent" on enqueue with no cross-launch persistence, so an offline
         // send was silently dropped; the self-POST stamps only on confirmed delivery.
     ],
+    // llama.cpp (prebuilt xcframework, pinned release + checksum) backs the
+    // INLINE-AUTOCOMPLETE engine only (LlamaInlineEngine): reference-style
+    // multi-sequence threshold beam needs llama_batch multi-seq decode +
+    // llama_memory_seq_cp KV forks, which mlx-swift-lm has no equivalent for.
+    // MLX remains the engine for agent/chat/VLM. The framework is ~6MB (arm64
+    // slice); the runtime memory rule is swap-not-add (only one inline model
+    // resident). See the binaryTarget below and Autocomplete/LlamaInlineEngine.swift.
     targets: [
+        // Prebuilt llama.cpp (see the note above `targets`). Pinned to release
+        // b9866 by checksum; bump BOTH url and checksum together
+        // (`swift package compute-checksum <zip>`).
+        .binaryTarget(
+            name: "llama",
+            url: "https://github.com/ggml-org/llama.cpp/releases/download/b9866/llama-b9866-xcframework.zip",
+            checksum: "b7285442515df927ae34e3e9dbcd82696b259e9d43e91656ffaaa583daeee09d"
+        ),
         // Vendored Lua 5.4.7 interpreter (pure C99) backing the extension runtime.
         // See docs/ADR-002-extensibility.md. Pure bytecode VM — no JIT, no
         // MAP_JIT, so Hardened Runtime/notarization need no extra entitlements.
@@ -90,6 +105,7 @@ let package = Package(
                 "ProsperHelperProtocol",
                 "StatsCore",
                 "SMCKit",
+                "llama",
             ],
             // NOTE: no `resources:` here on purpose. SwiftPM's generated
             // `Bundle.module` accessor resolves resources at

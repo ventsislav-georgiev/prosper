@@ -21,7 +21,9 @@ final class LoadedModelMonitor: ObservableObject {
         task = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let inline = MLXEngine.isInlineModelLoaded
+                let inline = LlamaInlineEngine.isEnabled
+                    ? LlamaInlineEngine.isLoadedSnapshot
+                    : MLXEngine.isInlineModelLoaded
                 let agent = ModelResidencyCoordinator.isAgentActive
                 // Skip the Metal allocator read when nothing is resident — it's 0 then.
                 let bytes = (inline || agent) ? MLXEngine.residentMemoryBytes : 0
@@ -77,11 +79,21 @@ struct AIModelsPane: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            NeonSection("Inline & Translate models",
-                        footer: "The Gemma-4 family used for inline autocomplete and the Translate extension. Switching the active one lives in Completions → AI Model.") {
-                catalogRows(AIModelSection.models.map {
-                    Row(id: $0.0, fallbackLabel: $0.1, subtitle: nil, isCustom: false)
-                }, role: .inline)
+            if LlamaInlineEngine.isEnabled {
+                NeonSection("Inline & Translate models",
+                            footer: "Inline autocomplete and the Translate extension run on the selected GGUF via the built-in llama.cpp engine. Gemma-4 family only — the inline decode machinery is tuned against this tokenizer.") {
+                    ForEach(LlamaInlineEngine.catalog) { m in
+                        if m.id != LlamaInlineEngine.catalog.first?.id { NeonDivider() }
+                        ggufRow(m)
+                    }
+                }
+            } else {
+                NeonSection("Inline & Translate models",
+                            footer: "The Gemma-4 family used for inline autocomplete and the Translate extension. Switching the active one lives in Completions → AI Model.") {
+                    catalogRows(AIModelSection.models.map {
+                        Row(id: $0.0, fallbackLabel: $0.1, subtitle: nil, isCustom: false)
+                    }, role: .inline)
+                }
             }
 
             NeonSection("Coding-agent models",
@@ -112,13 +124,76 @@ struct AIModelsPane: View {
         }
     }
 
+    // MARK: GGUF (llama engine)
+
+    /// Per-model download progress, keyed by catalog id.
+    @State private var ggufProgress: [String: (Double, String)] = [:]
+
+    @ViewBuilder
+    private func ggufRow(_ m: LlamaInlineEngine.CatalogModel) -> some View {
+        let downloaded = LlamaInlineEngine.isDownloaded(m)
+        let isCurrent = LlamaInlineEngine.selectedModelId == m.id
+        let _ = refresh  // re-render on select/delete
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: sz(2)) {
+                HStack(spacing: sz(6)) {
+                    Text(m.label).foregroundStyle(Neon.textPrimary).lineLimit(1)
+                    if isCurrent { tag("In use", Neon.blue) }
+                }
+                if let (_, status) = ggufProgress[m.id] {
+                    Text(status).font(Neon.font(.caption)).foregroundStyle(Neon.blue)
+                } else {
+                    Text("\(m.detail) — \(downloaded ? "downloaded" : "not downloaded"), \(m.sizeLabel)")
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                }
+            }
+            Spacer(minLength: sz(12))
+            if let (fraction, _) = ggufProgress[m.id] {
+                ProgressView(value: fraction).controlSize(.small).frame(width: sz(80))
+            } else {
+                HStack(spacing: sz(6)) {
+                    if downloaded {
+                        if !isCurrent {
+                            Button("Use") {
+                                LlamaInlineEngine.selectModel(m.id); refresh += 1
+                            }.buttonStyle(.neon)
+                        }
+                        Button("Delete") {
+                            Task { await LlamaInlineEngine.deleteModel(m); refresh += 1 }
+                        }.buttonStyle(.neonDestructive)
+                    } else {
+                        // One download at a time keeps disk/network sane.
+                        Button("Download") { downloadGGUF(m) }.buttonStyle(.neon)
+                            .disabled(!ggufProgress.isEmpty)
+                    }
+                }
+            }
+        }
+    }
+
+    private func downloadGGUF(_ m: LlamaInlineEngine.CatalogModel) {
+        ggufProgress[m.id] = (0, "Starting download…")
+        Task {
+            do {
+                try await LlamaInlineEngine.downloadModel(m) { fraction, status in
+                    Task { @MainActor in ggufProgress[m.id] = (fraction, status) }
+                }
+            } catch {
+                NSLog("prosper: gguf download failed: %@", String(describing: error))
+            }
+            await MainActor.run { ggufProgress[m.id] = nil; refresh += 1 }
+        }
+    }
+
     // MARK: Live status
 
     private var statusSection: some View {
         NeonSection("Status",
                     footer: "Only one model is resident at a time — starting the agent frees the inline model, and it reloads afterwards. Memory shown is what MLX is actively using.") {
             statusRow(title: "Inline & Translate",
-                      id: model.coreModel,
+                      id: LlamaInlineEngine.isEnabled
+                          ? "\(LlamaInlineEngine.selectedModel.label) — GGUF, llama.cpp"
+                          : model.coreModel,
                       loaded: monitor.inlineLoaded,
                       role: .inline)
             NeonDivider()
@@ -176,7 +251,13 @@ struct AIModelsPane: View {
         loadingRoles.insert(role)
         Task {
             switch role {
-            case .inline: try? await MLXEngine.shared.load { _, _ in }
+            case .inline:
+                if LlamaInlineEngine.isEnabled {
+                    try? await LlamaInlineEngine.shared.ensureLoaded(
+                        params: LlamaInlineEngine.tunedParams())
+                } else {
+                    try? await MLXEngine.shared.load { _, _ in }
+                }
             case .agent:  _ = try? await ModelResidencyCoordinator.shared.acquireAgent { _, _ in }
             }
             await MainActor.run { loadingRoles.remove(role) }
@@ -186,7 +267,12 @@ struct AIModelsPane: View {
     private func unload(_ role: ModelRole) {
         Task {
             switch role {
-            case .inline: await MLXEngine.shared.requestUnload()
+            case .inline:
+                if LlamaInlineEngine.isEnabled {
+                    await LlamaInlineEngine.shared.unload()
+                } else {
+                    await MLXEngine.shared.requestUnload()
+                }
             case .agent:  await ModelResidencyCoordinator.shared.releaseAgent()
             }
         }

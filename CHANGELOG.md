@@ -18,120 +18,112 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.123.0 *(unreleased)*
+## v2.123.0
 
-### Crash fix — generation task racing the KV cache
-- **Fixed a crash while typing** (`Range requires lowerBound <= upperBound` in
-  the model's KV cache). Ending a completion early — on a stop sequence, the
-  word cap, or a superseding keystroke, i.e. almost every inline completion —
-  abandoned the library's background generation task, which kept writing into
-  the same KV cache we were already trimming for reuse. All generation paths
-  (inline, chat, speculative, vision) now cancel and join that task before
-  touching the cache, so no model compute ever outlives its request.
-
-### Inline autocomplete — prompt re-architecture for instant, Cotypist-class ghosts
-- **Suggestions now update instantly on each keystroke.** The prompt is
-  rebuilt so everything before the text you're typing stays byte-identical
-  between keystrokes, letting the model's KV cache carry over — each new key
-  costs only a tiny incremental prefill instead of re-reading the whole
-  prompt. Previously, several prompt pieces silently changed on every key
-  (mid-word candidate hints, retry nudge placement, sliding context cuts),
-  forcing a full re-read each time and making the ghost lag far behind typing.
-- **Fixed garbage Bulgarian suggestions** ("сне,", numbered-list leaks,
-  clipboard echoes). The context budget double-booked the model's 512-token
-  window: it ignored the system prompt's size and never clipped the typed
-  text, so with writing samples and clipboard loaded the system prompt was
-  silently cut off mid-sentence — the model was completing without its
-  instructions. The budget now accounts for every piece, and Cyrillic text
-  gets a realistic characters-per-token estimate (≈2, not 4).
-- **First-try quality in Bulgarian now matches the paused-quality pass.**
-  Mid-typing burst requests were locked to a sharp deterministic sampling
-  rung that produces fragments/echoes in Bulgarian; all scripts now start at
-  Gemma's own recommended sampling (temp 1.0 / top-k 64 / top-p 0.95) — the
-  same configuration Cotypist ships for everything.
-- **Removed mid-word candidate word-lists from the prompt.** Letting the raw
-  text end mid-word makes the model finish the word naturally ("дне" → "с
-  деня?"); the injected hint lists both thrashed the cache and caused the
-  small model to parrot hint text.
-- When context outgrows the window, it is now trimmed in large stable blocks
-  instead of sliding one token per keystroke, preserving cache reuse.
-
-### Inline autocomplete — stable, Cotypist-class ghost UX (live-traced)
-- **The ghost no longer flickers to a different suggestion while you type it
-  out.** A keystroke that matches the ghost now consumes it in place (a few
-  ms, no model call) and the suggestion STAYS; a background refresh is
-  scheduled only when the ghost is nearly used up, so the next suggestion
-  lands right as the current one runs out. Previously every keystroke fired a
-  refresh that replaced the ghost with a different random sample every
-  ~200 ms — accurate but maddening to watch.
-- **Mid-typing suggestions are much faster.** Keystroke-time (burst) requests
-  now use a light, byte-stable prompt (no clipboard/on-screen-OCR/frequent-word
-  blocks — those bytes churn while typing and invalidated the model cache,
-  turning ~150 ms keystrokes into 400–1200 ms re-reads). The rich context still
-  powers the full-quality pass when you pause.
-- **Bulgarian no longer drifts into Russian on the first few letters.** Short
-  Cyrillic context defeats language detection; when your system languages say
-  Bulgarian (and not Russian), completions are pinned to Bulgarian from the
-  first keystroke, and any suggestion containing the Russian-only letters
-  ы/э/ё is rejected outright.
-- **More garbage classes rejected before they render:** suggestions quoting
-  text visible on screen (the OCR'd conversation) instead of continuing yours;
-  the frequent-words hint list parroted verbatim; words blending two alphabets
-  ("могամ"); a capitalized new sentence glued onto your unfinished word;
-  markdown junk markers at the edges (trimmed) or interior (rejected).
+### Inline autocomplete — a new completion engine
+- **Completions now run on a purpose-built llama.cpp engine.** Each request
+  explores several continuations in parallel (threshold beam search), ranks
+  them by model confidence, and shows the winner only when it clears a
+  confidence gate — when the model isn't sure, you see nothing instead of
+  junk. The word under your cursor is enforced byte-by-byte, so a suggestion
+  always continues exactly what you typed.
+- **Suggestions update instantly on each keystroke.** The prompt is built so
+  everything before the text you're typing stays byte-identical between
+  keystrokes, letting the model's cache carry over — each key costs a tiny
+  incremental prefill instead of re-reading the whole prompt. Median
+  suggestion latency is ~300 ms end-to-end.
+- **One model now powers both inline autocomplete and Translate — and you
+  can pick its size.** Settings → AI Models offers a Gemma 4 GGUF catalog
+  (E2B/E4B, 4-bit and 8-bit, 3.3–8 GB) with per-model download, delete and
+  switch; the Completions and Translate settings share the same picker and
+  swap models without a restart. Bigger models translate noticeably better
+  at some cost in suggestion latency. The MLX engine and its model catalog
+  remain dedicated to the coding agent and chat.
+- **Translate produces proper results again** (e.g. "incarnation" gives
+  въплъщение with alternatives and explanations): the new engine was framing
+  its translation prompts with the wrong chat markers for this model's
+  vocabulary, so the model saw them as literal text and answered nonsense or
+  nothing.
+- **Translate now shows results as they arrive.** The best translation
+  appears the moment it's ready (typically ~1 s), with a live progress row
+  — inline spinner plus honest stage labels ("Loading model…",
+  "Translating…", "Finding alternatives…") — while alternatives and
+  explanations are still generating; no more generic "(done)" placeholder
+  flashing between keystrokes. Candidates gluing Latin and Cyrillic letters
+  into one word (model garbage) are filtered out, and the "Detected:"
+  language chip now comes from the on-device recognizer instead of the
+  model's often-wrong guess. Entering translate mode also no longer loads
+  the 4 GB chat model it never uses.
 - **Editing mid-document no longer overflows the model window.** The text
-  after the cursor is now capped to a short head (the model only needs enough
-  for the gap to read naturally); previously the entire rest of a long
-  document was sent, silently cutting off the system prompt. Suggestions that
-  merely re-type the text already after your cursor (even with a one-word
-  variation) are rejected instead of shown. The suggestion indicator also no
-  longer sticks on "thinking" when a refresh is dropped in favor of the ghost
-  you're already typing through.
+  after the cursor is capped to a short head, and the context budget accounts
+  for every prompt piece (with a realistic Cyrillic characters-per-token
+  estimate), so the model never loses its instructions mid-request.
 
-### Stability
-- **Fixed a crash when inline autocomplete and the coding agent (or translate,
-  OCR, LoRA training) computed at the same time.** MLX's compiled-kernel cache
-  is process-global and not thread-safe; two concurrent evaluations could
-  corrupt it (`CompilerCache::find` EXC_BAD_ACCESS — 7 identical crash logs in
-  one day). All MLX compute — generation, weight loading, adapter load/unload,
-  training — now runs through one process-wide gate, so exactly one evaluation
-  touches the GPU at a time.
-
-### Inline autocomplete — typo correction, Cotypist-style
-- **Typos are now corrected inline while you type.** A misspelled word gets a
-  red strike bar with the corrected word in green after it, followed by the
-  gray continuation — Tab accepts just the corrected word, and the suggestion
-  keeps flowing from there instead of restarting.
-- A suggestion that is a close edit of the word you just typed (same first
-  letter, a letter or two off, not in the dictionary) is treated as a
-  correction of that word instead of being glued on as a spaced new word.
-- Abbreviation-like tokens the system spell checker tolerates (e.g. "tte")
-  now get a proper fix instead of a garbage spaced suggestion.
-
-### Inline autocomplete — steadier, smarter ghost
-- **The ghost is now visually static while you type through it.** Its glyphs
-  are laid out once; typing a matching key or accepting with Tab just turns
-  the consumed prefix transparent in place — no wiggle, no re-layout, no
-  breathing. Backspace un-consumes, and deleting then retyping no longer
-  swaps in a different suggestion.
+### Inline autocomplete — steady ghost, inline typo correction
+- **The ghost no longer flickers or swaps while you type it out.** Its glyphs
+  are laid out once; a matching keystroke or Tab just turns the consumed
+  prefix transparent in place — no wiggle, no re-layout, no breathing.
+  Backspace un-consumes, deleting then retyping keeps the same suggestion,
+  and accepting a word with Tab can no longer pull in a different ghost or
+  make the remaining text jiggle.
 - **The ghost extends itself instead of running dry:** when you've nearly
   typed through it, a continuation is appended in place and the panel grows —
   no gap while a new suggestion is fetched.
+- **Typos are corrected inline while you type.** A misspelled word gets a red
+  strike bar with the corrected word in green after it, followed by the gray
+  continuation — Tab accepts just the corrected word and the suggestion keeps
+  flowing. A suggestion that is a close edit of the word you just typed is
+  treated as a correction rather than glued on as a new word, and
+  abbreviation-like tokens the system spell checker tolerates (e.g. "tte")
+  get a proper fix instead of garbage.
 - **Sentences you've already written this session complete instantly** — a
   retyped opening recalls the rest of the sentence with no model call. The
   recall buffer is per-app and never leaves the machine.
+- **Accepting suggestions now always inserts plain spaces.** In some apps the
+  insertion path used non-breaking spaces, which made every later Tab appear
+  swallowed and leaked odd spaces into sent messages.
+- **The ghost now renders at the right size and position in Slack** (and
+  other Chromium-based apps): the font size is derived from the caret box
+  with the correct scale factor, plus a per-app baseline nudge — and a
+  per-character glyph mirror handles fields that report no caret geometry,
+  including full-screen auxiliary windows.
+
+### Inline autocomplete — language discipline
 - **Suggestions are constrained to your keyboard languages.** The model can
   only produce words in the languages you actually have input sources for
-  (e.g. English + Bulgarian), and Russian-lookalike words are rejected when
-  your languages say Bulgarian.
-- Suggestions now appear only at the end of a line — never injected into the
-  middle of a sentence you're still editing.
-- Every suggestion attempt now has a hard ~1 second budget; slow retry
-  ladders are cut off instead of arriving after you've moved on.
-- The ghost now positions correctly in more apps: a per-character glyph
-  mirror handles fields that report no caret geometry, and full-screen
-  auxiliary windows are supported.
-- Accepting a word with Tab no longer makes the remaining text jiggle.
+  (e.g. English + Bulgarian), and Bulgarian no longer drifts into Russian —
+  suggestions containing Russian-only letters (ы/э/ё) are rejected from the
+  first keystroke.
+- Suggestions appear only at the end of a line — never injected into the
+  middle of a sentence you're still editing — and every attempt has a hard
+  ~1 second budget, so slow retries are cut off instead of arriving after
+  you've moved on.
+- **More garbage classes rejected before they render:** suggestions quoting
+  text visible on screen (the OCR'd conversation) instead of continuing
+  yours; words blending two alphabets ("могամ"); a capitalized new sentence
+  glued onto your unfinished word; markdown junk at the edges or interior;
+  suggestions that merely re-type the text already after your cursor.
+
+### Translate — sharper output
+- **Translations can no longer drift into a sister language's alphabet.**
+  Letters that don't exist in the target language (e.g. Russian-only ы/э/ё
+  in Bulgarian output) are banned at decode time — the model cannot produce
+  them at all, instead of being cleaned up afterwards.
+- Translate runs on the same llama.cpp engine and model as inline
+  autocomplete, so one download serves both and the coding agent's models
+  stay untouched.
+
+### Stability
+- **Fixed a crash while typing** (`Range requires lowerBound <= upperBound`
+  in the model's KV cache). Ending a completion early abandoned the
+  library's background generation task, which kept writing into the same KV
+  cache being trimmed for reuse; all generation paths now cancel and join
+  that task before touching the cache.
+- **Fixed a crash when inline autocomplete and the coding agent (or
+  translate, OCR, LoRA training) computed at the same time.** MLX's
+  compiled-kernel cache is process-global and not thread-safe; all MLX
+  compute now runs through one process-wide gate, so exactly one evaluation
+  touches the GPU at a time.
 
 ### System Stats — sensors & fan control
 - **Temperature sensors now have proper names** matching exelban/Stats:

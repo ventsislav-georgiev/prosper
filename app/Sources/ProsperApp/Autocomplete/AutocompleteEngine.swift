@@ -214,7 +214,7 @@ final class AutocompleteEngine {
     }
 
     // Esc pressed with a live suggestion: suppress completions in THIS field until
-    // focus moves elsewhere (Cotypist's Esc semantics — "not here, not now").
+    // focus moves elsewhere (the reference app's Esc semantics — "not here, not now").
     // Keyed on the field rect (fuzzy-compared); cleared on app switch or when a
     // different field produces a context.
     private var escSuppressedFieldRect: CGRect?
@@ -617,7 +617,7 @@ final class AutocompleteEngine {
         }
 
         // Esc with a live suggestion: dismiss it AND stay quiet in this field
-        // until focus moves elsewhere (Cotypist's Esc semantics). The key still
+        // until focus moves elsewhere (the reference app's Esc semantics). The key still
         // passes through — apps use Esc for their own dismissals.
         if keyCode == Self.kEscape {
             if currentSuggestion != nil {
@@ -696,7 +696,7 @@ final class AutocompleteEngine {
                 // suggestion and paying a full LLM round trip. A silent background
                 // refresh is still scheduled so the model can extend/correct.
                 if self.typeThrough(typed: typed) {
-                    // Ghost-stability contract (Cotypist parity): a keystroke the
+                    // Ghost-stability contract (reference parity): a keystroke the
                     // ghost absorbed keeps the SAME ghost. Scheduling a refresh here
                     // swapped it for a different temp-1.0 sample every ~200ms while
                     // the user was following it — pure flicker (live trace + user
@@ -726,7 +726,7 @@ final class AutocompleteEngine {
                     return
                 }
                 // Otherwise: hide the ghost and (re)schedule the model. Pure-LLM
-                // ghosts — the instant lexicon guess was removed (Cotypist-style):
+                // ghosts — the instant lexicon guess was removed (reference-style):
                 // its frequency-word output read as junk next to model completions,
                 // and with the frozen-context prompt the burst ghost lands fast
                 // enough to not need a placeholder. clearGhost, NOT clearSuggestion:
@@ -750,14 +750,6 @@ final class AutocompleteEngine {
         return false
     }
 
-    /// True when the visible ghost is almost consumed (under two words left) —
-    /// the ONE moment a background refresh is welcome, so the next suggestion
-    /// lands just as this one runs out. Everywhere else a healthy ghost stays.
-    private var ghostNearlyExhausted: Bool {
-        guard let s = currentSuggestion, !s.isEmpty else { return true }
-        return s.split(whereSeparator: { $0.isWhitespace }).count < 2
-    }
-
     /// True when only whitespace sits between the caret and the end of its
     /// line — the ONLY caret position where a ghost may render. Empty tail and
     /// trailing spaces count; any letter/punctuation before the newline is
@@ -770,7 +762,7 @@ final class AutocompleteEngine {
         return true
     }
 
-    /// Cotypist parity: as the user types toward the END of a healthy ghost,
+    /// reference parity: as the user types toward the END of a healthy ghost,
     /// ask the model to continue PAST it (prompt = live text + remaining ghost —
     /// a warm KV prefix, so this is cheap) and append the words to the same
     /// ghost. The suggestion stays long instead of running dry and being
@@ -856,7 +848,7 @@ final class AutocompleteEngine {
 
         // Mismatch: fall through to clear + reschedule. (The lexicon "snap" that
         // used to re-predict the word here was removed with the rest of the
-        // lexicon ghosts — pure-LLM, Cotypist-style; the mismatch burst refresh
+        // lexicon ghosts — pure-LLM, reference-style; the mismatch burst refresh
         // is the replacement.)
         return false
     }
@@ -1047,7 +1039,8 @@ final class AutocompleteEngine {
         // a debounce tick for AX to catch up. Bounded: apps that legitimately
         // rewrite text (autocorrect, markdown transforms) proceed after a few
         // retries with the shadow reset.
-        if !typedShadow.isEmpty, !before.hasSuffix(typedShadow) {
+        if !typedShadow.isEmpty,
+           !Self.spaceNormalized(before).hasSuffix(Self.spaceNormalized(typedShadow)) {
             if staleAXRetries < 3 {
                 staleAXRetries += 1
                 recordNoShow(.staleAX)
@@ -1156,7 +1149,7 @@ final class AutocompleteEngine {
             caret: context.caretScreenRect, field: fieldRect, bundleId: bundleId
         )
 
-        // Cotypist-style indicator: pin a small icon to the leading edge of the
+        // reference-style indicator: pin a small icon to the leading edge of the
         // focused field so the user knows Prosper can complete here. This is the
         // opt-in accessory — it must stay hidden unless the user enabled it in
         // Settings ("Show accessory button near the active text field"); inline
@@ -1208,13 +1201,13 @@ final class AutocompleteEngine {
         if Self.lastWordLooksSuspicious(before), !Self.lastWordIsCompletablePrefix(before) {
             if Preferences.showSuggestedFixes,
                let (_, original, fix) = Self.spellingFix(before) {
-                // Per-letter diff (Cotypist-style): a red line strikes only the
+                // Per-letter diff (reference-style): a red line strikes only the
                 // typed letters that will be retyped (from the first divergent
                 // character), the replacement letters render green at the caret.
                 // Accept mechanics follow the same split — backspace just the
                 // divergent tail, not the whole word.
                 let split = Self.typoFixSplit(original: original, fix: fix)
-                // Gray continuation after the green correction (Cotypist-style:
+                // Gray continuation after the green correction (reference-style:
                 // the fix flows into the rest of the sentence). Source order:
                 // the recall buffer on the CORRECTED text (instant, the user's
                 // own recent phrasing), else a chained LLM request below.
@@ -1328,7 +1321,7 @@ final class AutocompleteEngine {
             renderSuggestion(text: spaced, caret: caretRect, field: fieldRect, useMirror: useMirror)
         }
 
-        // Word-finish rung (Cotypist parity, live report 2026-07-03): the model
+        // Word-finish rung (reference parity, live report 2026-07-03): the model
         // reliably fumbles long rare Cyrillic fragments ("прахосму" → restarts
         // with a fresh word), but the spelling dictionary knows the finish
         // ("качка"). Render the word remainder INSTANTLY; the LLM refresh
@@ -1425,7 +1418,8 @@ final class AutocompleteEngine {
             // with the typed shadow we watched the user type; otherwise wait a
             // debounce tick for AX to catch up (else a prompt built from stale
             // text duplicates words — "по всяко" + ghost "по всяко").
-            if !self.typedShadow.isEmpty, !liveBefore.hasSuffix(self.typedShadow) {
+            if !self.typedShadow.isEmpty,
+               !Self.spaceNormalized(liveBefore).hasSuffix(Self.spaceNormalized(self.typedShadow)) {
                 self.recordNoShow(.staleAX)
                 Self.e2elog("stale-AX reschedule: live=\"\(liveBefore.suffix(24))\" shadow=\"\(self.typedShadow.suffix(12))\"")
                 // Same quiet-reschedule rule as reconcile-.reschedule below: a
@@ -1545,11 +1539,16 @@ final class AutocompleteEngine {
             // An EXTENSION of the visible ghost falls through to render: the
             // prefix on screen stays put and new characters appear on the
             // right — an in-place update, not a swap, so no flicker.
+            // NO nearly-exhausted escape: it let a landing response swap any
+            // short (<2-word) anchored ghost — exactly the BG word-finish /
+            // recall ghosts — ~1s after the keystroke with the user idle
+            // ("first suggestion looked better", live report). Run-dry is
+            // handled by extendGhostIfRunningLow appending in place; a swap
+            // is never the right refresh for a ghost the text still matches.
             if let ghost = self.currentSuggestion, !ghost.isEmpty,
                self.requestBefore != nil, spaced != ghost,
                !spaced.hasPrefix(ghost),
-               self.lastRenderedBefore == liveBefore,
-               !self.ghostNearlyExhausted {
+               self.lastRenderedBefore.map(Self.spaceNormalized) == Self.spaceNormalized(liveBefore) {
                 Self.e2elog("keep ghost: \"\(ghost.prefix(24))\" over \"\(spaced.prefix(24))\"")
                 self.recordNoShow(.ghostStable)
                 // The kept ghost is live — leaving the button in .thinking would
@@ -1771,7 +1770,7 @@ final class AutocompleteEngine {
         insert(suggestion, bundleId: bundleId)
         // Accepting a typo fix leaves the caret after the corrected word with no
         // ghost — chain straight into a completion so the continuation appears
-        // immediately (Cotypist-style: correction flows into the next words).
+        // immediately (reference-style: correction flows into the next words).
         if wasFix { scheduleSuggestion() }
     }
 
@@ -1936,11 +1935,24 @@ final class AutocompleteEngine {
         return shift >= 0 ? moved >= shift * 0.4 : moved <= shift * 0.4
     }
 
-    nonisolated static func reconcile(suggestion: String, anchor: String, live: String) -> ReconcileOutcome {
+    /// Hosts don't always store the exact space character we typed or injected:
+    /// contenteditable editors keep word separators as NBSP, and the A2
+    /// `nonBreakingSpace` insertion knob types one on purpose — so an AX re-read
+    /// can differ from our bookkeeping by space KIND alone (live Telegram: every
+    /// Tab after the first accept swallowed forever, "…е\u{00A0}" ≠ "…е ").
+    /// Space kind is never a real divergence — normalize before COMPARING only,
+    /// never before rendering or inserting.
+    nonisolated static func spaceNormalized(_ s: String) -> String {
+        s.contains("\u{00A0}") ? s.replacingOccurrences(of: "\u{00A0}", with: " ") : s
+    }
+
+    nonisolated static func reconcile(suggestion: String, anchor rawAnchor: String, live rawLive: String) -> ReconcileOutcome {
+        // NBSP↔space is 1:1, so the normalized delta count still indexes `suggestion`.
+        let anchor = spaceNormalized(rawAnchor), live = spaceNormalized(rawLive)
         if live == anchor { return .show(suggestion) }
         if live.hasPrefix(anchor) {
             let delta = String(live.dropFirst(anchor.count))
-            guard !delta.isEmpty, suggestion.hasPrefix(delta) else { return .reschedule }
+            guard !delta.isEmpty, spaceNormalized(suggestion).hasPrefix(delta) else { return .reschedule }
             let remainder = String(suggestion.dropFirst(delta.count))
             return remainder.isEmpty ? .reschedule : .show(remainder)
         }
@@ -2076,7 +2088,7 @@ final class AutocompleteEngine {
         return !lastWordIsCompletablePrefix(before)
     }
 
-    /// Typo-tolerant conversion (Cotypist parity). The model often re-emits the
+    /// Typo-tolerant conversion (reference parity). The model often re-emits the
     /// word the user MEANT as a fresh word after a broken trailing token —
     /// "fx" + " fox jumps over…", "tt" + " test file". Rendered as-is that
     /// endorses the typo; suppressed it wastes a correct prediction. When the
@@ -2351,6 +2363,12 @@ final class AutocompleteEngine {
         lastRenderedBefore = lastRenderedBefore.map { $0 + toInsert }
 
         requestToken &+= 1 // invalidate any in-flight request
+        // A Tab-accept is not new input: a debounce timer still pending from the
+        // last real keystroke would fire a full re-request right after the accept
+        // and change the ghost the user is walking down (live report). Kill it —
+        // post-accept the ghost may only shrink (consume) or grow (extend below).
+        debounceTimer?.invalidate()
+        pendingRefire = false
         if remainder.isEmpty {
             // The token bump already orphans any in-flight extend request; cancel
             // it too so the abandoned generation stops burning the GPU.
@@ -2391,7 +2409,7 @@ final class AutocompleteEngine {
     }
 
     /// Synthesizes typing of a string via CGEvent unicode keyboard events. The
-    /// `chunkSize` knob mirrors Cotypist's recovered string-injection override
+    /// `chunkSize` knob mirrors the reference app's recovered string-injection override
     /// (A2/A4): `0` = post the whole string at once; `>1` = that many UTF-16 units
     /// per event (Qt/Telegram composers silently drop one large injection); `-1` =
     /// inject only the first word (+ its trailing whitespace) — for fields that choke
@@ -2449,7 +2467,7 @@ final class AutocompleteEngine {
 
     /// Custom pasteboard type stamped on our own writes so a clipboard-watching host
     /// (or our own restore) can tell our paste apart from user-copied text — the
-    /// self-marker Cotypist writes as `writeTextToPasteboardWithSelfMarker`.
+    /// self-marker the reference app writes as `writeTextToPasteboardWithSelfMarker`.
     private static let selfMarkerPasteboardType =
         NSPasteboard.PasteboardType("com.prosper.autocomplete.self")
 

@@ -46,11 +46,14 @@ final class AppOverrideResolverTests: XCTestCase {
         XCTAssertEqual(k, AppOverrideResolver.InsertionKnobs())
     }
 
-    /// The Telegram (Qt) seed carries chunked injection + non-breaking space.
+    /// The Telegram seed carries chunked injection but NOT non-breaking space:
+    /// injected NBSPs diverged every AX re-read from our space-based
+    /// bookkeeping (post-accept Tabs swallowed forever) and leaked NBSPs into
+    /// sent messages.
     func testInsertionKnobsTelegramSeed() {
         AppOverrideCache.shared.replace(with: [])
         let k = AppOverrideResolver.insertionKnobs(forBundleId: "ru.keepcoder.Telegram")
-        XCTAssertTrue(k.nonBreakingSpace)
+        XCTAssertFalse(k.nonBreakingSpace)
         XCTAssertEqual(k.injectionChunkSize, 8)
         XCTAssertFalse(k.pasteAndMatchStyle)
     }

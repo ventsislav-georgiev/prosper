@@ -1064,17 +1064,21 @@ struct ExtensionHost {
 
     -- Upgrade host.llm.translate to return a structured table instead of the raw
     -- JSON string the native bridge produces. Shape:
-    --   { primary = "...", detected = "EN"|nil,
+    --   { status = "loading"|"translating"|"enriching"|"done"|"failed"|nil,
+    --     primary = "...", detected = "EN"|nil,
     --     candidates = { { text=, label=, note= }, ... } }
-    -- Empty/failed translation => nil. This is the rich surface extensions use to
-    -- build result views (host.ui.list of candidates + detected-language header).
+    -- A staged snapshot (status present) is passed through even with an empty
+    -- primary — the extension renders the stage as a progress row. Only a
+    -- status-less empty result (legacy bridge) becomes nil.
     do
         local raw_translate = host.llm.translate
         host.llm.translate = function(text, target, source)
             local raw = raw_translate(text, target, source)
             if raw == nil or raw == "" then return nil end
             local t = json_decode(raw)
-            if type(t) ~= "table" or t.primary == nil or t.primary == "" then return nil end
+            if type(t) ~= "table" then return nil end
+            if (t.status == nil or t.status == "")
+                and (t.primary == nil or t.primary == "") then return nil end
             if t.detected == "" then t.detected = nil end
             t.candidates = t.candidates or {}
             return t

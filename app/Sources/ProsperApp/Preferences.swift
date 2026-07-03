@@ -1110,7 +1110,7 @@ enum Preferences {
     }
 
     /// Whether Sparkle checks for updates automatically in the background.
-    /// Default true (matches Cotypist); user-controllable in Settings → About.
+    /// Default true (matches the reference app); user-controllable in Settings → About.
     static var automaticUpdateChecks: Bool {
         get {
             if defaults.object(forKey: Keys.automaticUpdateChecks) == nil { return true }

@@ -1,8 +1,11 @@
+// UNUSED by default: part of the MLX inline fallback path — the llama.cpp
+// engine (LlamaInlineEngine, default-on) does not use this. Kept compiling
+// for the inlineEngineLlama=false / PROSPER_INLINE_ENGINE=mlx escape hatch.
 import Foundation
 
 /// B5 (SC) — a bounded LRU cache of next-token logit distributions keyed by the exact
 /// token sequence that produced them, so a repeated context can skip a forward pass
-/// (Cotypist's `SC_Entry.normalizedLogits`). Cotypist stores Float16; Swift's array
+/// (the reference app's `SC_Entry.normalizedLogits`). The reference implementation stores Float16; Swift's array
 /// story for Float16 is uneven, so this keeps `[Float]` — the halved memory is a
 /// live-tuning refinement, not a correctness point.
 ///

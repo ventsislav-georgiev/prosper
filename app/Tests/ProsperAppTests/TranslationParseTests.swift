@@ -59,7 +59,8 @@ final class TranslationParseTests: XCTestCase {
     }
 
     func testFilterKeepsLatinAndDigitsForBulgarian() {
-        // Mixed-script / non-Cyrillic content must not be policed.
+        // Whole-Latin words and digits must not be policed (only a Latin+Cyrillic
+        // mix inside one word is — see the mixed-script test below).
         let cands = [
             TranslationCandidate(text: "OK 123", label: nil, explanation: nil),
             TranslationCandidate(text: "въплътен #1", label: nil, explanation: nil),
@@ -102,5 +103,19 @@ final class TranslationParseTests: XCTestCase {
         ]
         let kept = CoreBridge.filterForeignCandidates(cands, target: "Bulgarian")
         XCTAssertEqual(kept.map(\.text), ["евангелие", "Gospel"])
+    }
+
+    func testFilterDropsMixedScriptWordsForBulgarian() {
+        // The reported bug: translating "incarnation" to Bulgarian, the model
+        // leaked "embodене" — a single word gluing Latin and Cyrillic letters.
+        // Whole-Latin words (names, codes) stay legitimate; the mix inside ONE
+        // word is always garbage.
+        let cands = [
+            TranslationCandidate(text: "въплъщение", label: nil, explanation: nil),
+            TranslationCandidate(text: "embodене", label: nil, explanation: nil),   // mixed word
+            TranslationCandidate(text: "Swift език", label: nil, explanation: nil), // separate words — kept
+        ]
+        let kept = CoreBridge.filterForeignCandidates(cands, target: "Bulgarian")
+        XCTAssertEqual(kept.map(\.text), ["въплъщение", "Swift език"])
     }
 }

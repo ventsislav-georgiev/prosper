@@ -13,7 +13,7 @@ import Foundation
 /// Pure and deterministic: `train` ingests token-id sequences, `biases(context:)`
 /// returns a sparse `{tokenId: logitDelta}` map for the current context using the
 /// longest matching suffix (back-off), scaled by `strength`. Constants
-/// (`maxOrder`, `strength`) are unrecovered from Cotypist and meant to be tuned live.
+/// (`maxOrder`, `strength`) are unrecovered from the reference app and meant to be tuned live.
 struct NgramModel: Equatable {
 
     /// Highest context order kept (a 3-gram model looks at up to the last 2 tokens).

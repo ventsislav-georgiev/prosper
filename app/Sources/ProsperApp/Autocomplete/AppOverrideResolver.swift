@@ -40,13 +40,17 @@ enum AppOverrideResolver {
         "com.hnc.discord": AppOverride(
             bundleId: "com.hnc.discord", enabled: true, forceEnhancedUI: true
         ),
-        // Telegram is Qt: a single large synthesized injection is silently dropped,
-        // and it sends-on-space, so a plain trailing space can fire the message.
-        // Chunk the injection and use a non-breaking space (A2). textMirroring on
-        // because Qt exposes no usable caret geometry (glyph-mirror tier 3 anchors it).
+        // Telegram macOS: chunk the injection (its composer has dropped large
+        // single injections). NO nonBreakingSpace knob: its NSTextView-based
+        // composer keeps a plain trailing space fine, and the NBSPs we injected
+        // diverged every AX re-read from our space-based bookkeeping — after the
+        // first Tab-accept, every later Tab reconciled as "diverged" and
+        // swallowed forever (live report), plus real messages accumulated NBSPs.
+        // textMirroring on because it exposes no usable caret geometry
+        // (glyph-mirror tier 3 anchors it).
         "ru.keepcoder.Telegram": AppOverride(
             bundleId: "ru.keepcoder.Telegram", enabled: true, textMirroring: true,
-            nonBreakingSpace: true, injectionChunkSize: 8
+            injectionChunkSize: 8
         ),
     ]
 

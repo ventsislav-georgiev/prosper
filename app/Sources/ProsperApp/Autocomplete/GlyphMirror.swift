@@ -4,7 +4,7 @@ import AppKit
 /// seeded with the host line's text and font, read back for the caret glyph's
 /// bounding rect. This yields a true *inline* caret origin for apps whose AX
 /// bounds are degenerate or wrong (Telegram/Qt, some Electron composers) — the
-/// technique Cotypist calls `TextMirrorView`.
+/// technique the reference app calls `TextMirrorView`.
 ///
 /// Prosper's `MirrorOverlayWindow` is a *bubble above the field*, not a glyph
 /// measurer; this is the missing inline tier. It runs only when AX tiers 1–2

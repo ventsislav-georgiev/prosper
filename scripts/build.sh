@@ -47,6 +47,15 @@ else
     xcodebuild -downloadComponent MetalToolchain
   fi
   DD="$ROOT/app/.build/xcode-metallib"
+  # xcodebuild compiles from its OWN SourcePackages tree — resolve it first,
+  # then re-apply the mlx-swift-lm patches there (apply-patches.sh covers the
+  # xcode tree only once it exists). Skipping this fails the build with
+  # unpatched-checkout type errors ('SpeculativeTokenIterator').
+  xcodebuild -resolvePackageDependencies \
+    -scheme ProsperApp \
+    -destination 'platform=macOS' \
+    -derivedDataPath "$DD"
+  "$ROOT/scripts/apply-patches.sh"
   xcodebuild build \
     -scheme ProsperApp \
     -configuration Release \

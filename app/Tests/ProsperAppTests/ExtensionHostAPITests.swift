@@ -29,10 +29,12 @@ private final class FakeServices: ExtensionHostServices, @unchecked Sendable {
         if llmDelay > 0 { try? await Task.sleep(nanoseconds: UInt64(llmDelay * 1_000_000_000)) }
         return "completed:\(prompt)"
     }
+    /// When set, llmTranslate returns this verbatim (staged-snapshot tests).
+    var translateJSON: String?
     func llmTranslate(_ text: String, target: String, source: String?) async -> String {
         // Mirrors the live service: a JSON object the host.llm.translate Lua
-        // wrapper decodes into { primary, detected, candidates }.
-        "{\"primary\":\"[\(target)]\(text)\",\"detected\":\"\",\"candidates\":[]}"
+        // wrapper decodes into { status, primary, detected, candidates }.
+        translateJSON ?? "{\"primary\":\"[\(target)]\(text)\",\"detected\":\"\",\"candidates\":[]}"
     }
     func shellRun(_ command: String) async -> String { "ran:\(command)" }
     func httpRequest(method: String, url: String, headers: [String: String],
@@ -259,6 +261,29 @@ final class ExtensionHostAPITests: XCTestCase {
             XCTAssertEqual(try lua.callGlobal("t_llm"), "completed:hi")
             XCTAssertEqual(try lua.callGlobal("t_tr"), "[French]x")
             XCTAssertEqual(try lua.callGlobal("t_sh"), "ran:date")
+        }
+    }
+
+    func testTranslateWrapperPassesStagedSnapshotWithEmptyPrimary() throws {
+        // A staged pipeline snapshot carries `status` before any translation
+        // exists; the wrapper must hand it to the extension (which renders a
+        // progress row) instead of nil-ing it — nil made the runner show its
+        // generic "(done)" placeholder. A status-LESS empty result stays nil.
+        let lua = try LuaRuntime()
+        let svc = FakeServices()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        offMain {
+            try lua.run("""
+            function t_st()
+                local r = host.llm.translate('x', 'French')
+                if r == nil then return 'nil' end
+                return (r.status or '?') .. '|' .. (r.primary or '')
+            end
+            """)
+            svc.translateJSON = #"{"status":"translating","primary":"","detected":"","candidates":[]}"#
+            XCTAssertEqual(try lua.callGlobal("t_st"), "translating|")
+            svc.translateJSON = #"{"primary":"","detected":"","candidates":[]}"#
+            XCTAssertEqual(try lua.callGlobal("t_st"), "nil")
         }
     }
 

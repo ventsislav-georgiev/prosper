@@ -186,6 +186,22 @@ enum CoreBridge {
     ) {
         Task {
             do {
+                // llama path: the inline/translate model is the GGUF — download
+                // if missing, load, done. No MLX residency, no draft, no LoRA
+                // (both are MLX-inline machinery).
+                if LlamaInlineEngine.isEnabled {
+                    try await LlamaInlineEngine.downloadModel { fraction, status in
+                        let update = SetupProgress(
+                            phase: fraction >= 1.0 ? "done" : "download",
+                            status: status, completed: nil, total: nil,
+                            percent: max(0.0, min(fraction, 1.0)) * 100.0)
+                        Task { @MainActor in progress(update) }
+                    }
+                    try await LlamaInlineEngine.shared.ensureLoaded(
+                        params: LlamaInlineEngine.tunedParams())
+                    await MainActor.run { completion(true) }
+                    return
+                }
                 try await MLXEngine.shared.load { fraction, status in
                     let pct = max(0.0, min(fraction, 1.0)) * 100.0
                     let phase = fraction >= 1.0 ? "done" : "download"
@@ -259,84 +275,176 @@ enum CoreBridge {
 
     // MARK: translate
 
-    static func translate(
-        _ input: String,
-        target: String,
-        source: String?,
-        completion: @escaping @MainActor @Sendable (TranslationResult?) -> Void
-    ) {
-        Task {
-            do {
-                // Lazy-load: the model is resident only while inline autocomplete is
-                // on, so a host.llm/Translate call may arrive cold. `load` is
-                // idempotent (no-op when already resident).
+    /// Letters that are FOREIGN to a Cyrillic target language (sister-language
+    /// alphabets sharing the script). On the llama path these become a
+    /// decode-time constraint: tokens containing them are masked to -inf, so a
+    /// Russian/Ukrainian spelling can never be sampled into a Bulgarian
+    /// translation — strictly stronger than detecting the leak afterwards and
+    /// asking the model to proofread itself (stage 3, which stays as the net
+    /// for same-alphabet misspellings). Keyed like `nativeTargetDirectives`.
+    private static let bannedForeignCharacters: [String: String] = {
+        let table: [(chars: String, keys: [String])] = [
+            ("ыэёіїєґЫЭЁІЇЄҐ", ["bulgarian", "bg", "bul", "български"]),
+            ("іїєґІЇЄҐ", ["russian", "ru", "rus", "русский"]),
+            ("ыэёъЫЭЁЪ", ["ukrainian", "uk", "ua", "ukr", "українська"]),
+        ]
+        var map: [String: String] = [:]
+        for entry in table { for key in entry.keys { map[key] = entry.chars } }
+        return map
+    }()
+
+    private static func bannedCharacters(forTarget target: String) -> String {
+        bannedForeignCharacters[target.trimmingCharacters(in: .whitespaces).lowercased()] ?? ""
+    }
+
+    /// One generation call for the Translate pipeline. When the llama inline
+    /// engine is active, translate runs on the SAME resident GGUF (no MLX
+    /// residency at all — one runtime, one copy of the weights, plus the
+    /// decode-time script ban). Otherwise the legacy MLX path, where the
+    /// post-hoc refinement remains the only sister-language defense.
+    private static func translateGenerate(
+        prompt: String, system: String, maxTokens: Int, bannedCharacters: String = ""
+    ) async throws -> String {
+        if LlamaInlineEngine.isEnabled, LlamaInlineEngine.modelIsDownloaded {
+            return try await LlamaInlineEngine.shared.generate(
+                system: system, user: prompt,
+                maxTokens: maxTokens, bannedCharacters: bannedCharacters)
+        }
+        // Lazy-load: the model is resident only while inline autocomplete is
+        // on, so a host.llm/Translate call may arrive cold. `load` is
+        // idempotent (no-op when already resident).
+        try await MLXEngine.shared.load { _, _ in }
+        return try await MLXEngine.shared.generate(
+            prompt: prompt, system: system, maxTokens: maxTokens, temperature: 0)
+    }
+
+    /// One translate request's observable state. `status` walks
+    /// loading → translating → enriching → done (or failed); `result` carries
+    /// the primary translation from the "enriching" milestone on, so the UI can
+    /// show the word the user actually wants while alternatives are still
+    /// generating.
+    struct TranslateSnapshot: Sendable {
+        var status: String
+        var result: TranslationResult?
+    }
+
+    /// Posted (main thread) whenever the active translate job reaches a new
+    /// milestone. The runner re-invokes the handler on it and picks up the
+    /// current snapshot.
+    static let translateProgress = Notification.Name("ProsperTranslateProgress")
+
+    @MainActor
+    private static var translateJob: (key: String, snapshot: TranslateSnapshot, task: Task<Void, Never>)?
+
+    /// Snapshot-returning translate. First call for a given request starts the
+    /// staged pipeline and returns immediately; repeat calls (triggered by
+    /// `translateProgress`) return the latest milestone. A different request
+    /// cancels the previous job. ponytail: single job slot — the runner is
+    /// single-flight anyway, concurrent translates can't happen.
+    @MainActor
+    static func translateStaged(_ input: String, target: String, source: String?) -> TranslateSnapshot {
+        let key = "\(target)|\(source ?? "")|\(input)"
+        if let job = translateJob, job.key == key { return job.snapshot }
+        translateJob?.task.cancel()
+        let snapshot = TranslateSnapshot(status: "loading", result: nil)
+        let task = Task {
+            await runTranslateJob(key: key, input: input, target: target, source: source)
+        }
+        translateJob = (key, snapshot, task)
+        return snapshot
+    }
+
+    @MainActor
+    private static func advanceTranslate(_ key: String, _ mutate: (inout TranslateSnapshot) -> Void) {
+        guard var job = translateJob, job.key == key else { return }
+        mutate(&job.snapshot)
+        translateJob = job
+        NotificationCenter.default.post(name: translateProgress, object: nil)
+    }
+
+    private static func runTranslateJob(
+        key: String, input: String, target: String, source: String?
+    ) async {
+        do {
+            // Explicit load step so the "loading" milestone is honest: while the
+            // model is cold the UI says so; once resident this is a no-op.
+            if LlamaInlineEngine.isEnabled, LlamaInlineEngine.modelIsDownloaded {
+                try await LlamaInlineEngine.shared.ensureLoaded(params: LlamaInlineEngine.tunedParams())
+            } else {
                 try await MLXEngine.shared.load { _, _ in }
-                // Stage 1 — the single best translation, on a focused pass for
-                // maximum orthographic accuracy (this is the word the user pastes).
-                let primaryPrompt = buildPrimaryTranslationPrompt(
-                    input: input, target: target, source: source)
-                let primaryRaw = try await MLXEngine.shared.generate(
-                    prompt: primaryPrompt,
-                    system: primaryTranslationSystemPrompt,
-                    maxTokens: 96,
-                    temperature: 0
-                )
-                let primary = cleanPrimaryTranslation(primaryRaw)
+            }
+            if Task.isCancelled { return }
+            await advanceTranslate(key) { $0.status = "translating" }
 
-                // Stage 2 — alternatives + detected language (best-effort
-                // enrichment). A leak here is cosmetic: extras are deduped against
-                // the authoritative stage-1 primary and shown only as suggestions.
-                let prompt = buildTranslationPrompt(input: input, target: target, source: source)
-                let raw = try await MLXEngine.shared.generate(
-                    prompt: prompt,
-                    system: translationSystemPrompt,
-                    maxTokens: 320,
-                    temperature: 0
-                )
-                var enriched = parseTranslation(raw)
-
-                // Stage 3 — refinement. Small models leak sister-language spellings
-                // into the alternatives (Ukrainian/Russian into Bulgarian, …). A
-                // character check is a cheap leak *detector*, but dropping the
-                // offenders shrinks the list and can't see same-alphabet
-                // misspellings. So when a leak is detected we hand the draft back to
-                // the model to REWRITE every field in correct target language —
-                // fixing the words while preserving their number and sense. The
-                // common (clean) case skips this entirely, so it costs nothing then.
-                let isForeign = foreignTextDetector(forTarget: target)
-                let leaked = isForeign.map { f in
-                    enriched.candidates.contains { f($0.text) }
-                } ?? false
-                if leaked, let refined = await refineTranslation(enriched, target: target) {
-                    enriched = refined
-                }
-
-                // Final safety net: if refinement still left a foreign-letter
-                // candidate (or no refinement ran), drop the residue so a clearly
-                // wrong-alphabet word never reaches the user.
-                let candidates = filterForeignCandidates(enriched.candidates, target: target)
-
-                // Authoritative primary from stage 1; fall back to stage 2 only if
-                // stage 1 produced nothing usable.
-                let result = primary.isEmpty
-                    ? TranslationResult(
-                        detectedLanguage: enriched.detectedLanguage,
-                        primary: enriched.primary,
-                        candidates: candidates)
-                    : TranslationResult(
-                        detectedLanguage: enriched.detectedLanguage,
-                        primary: primary,
-                        candidates: candidates)
-                await MainActor.run {
-                    ModelIdleUnloader.shared.noteUsage()
-                    completion(result)
-                }
-            } catch {
-                await MainActor.run {
-                    ModelIdleUnloader.shared.noteUsage()
-                    completion(nil)
+            let banned = bannedCharacters(forTarget: target)
+            // Stage 1 — the single best translation, on a focused pass for
+            // maximum orthographic accuracy (this is the word the user pastes).
+            let primaryPrompt = buildPrimaryTranslationPrompt(
+                input: input, target: target, source: source)
+            let primaryRaw = try await translateGenerate(
+                prompt: primaryPrompt,
+                system: primaryTranslationSystemPrompt,
+                maxTokens: 96,
+                bannedCharacters: banned
+            )
+            let primary = cleanPrimaryTranslation(primaryRaw)
+            if Task.isCancelled { return }
+            if !primary.isEmpty {
+                await advanceTranslate(key) {
+                    $0.status = "enriching"
+                    $0.result = TranslationResult(
+                        detectedLanguage: nil, primary: primary, candidates: [])
                 }
             }
+
+            // Stage 2 — alternatives + detected language (best-effort
+            // enrichment). A leak here is cosmetic: extras are deduped against
+            // the authoritative stage-1 primary and shown only as suggestions.
+            let prompt = buildTranslationPrompt(input: input, target: target, source: source)
+            let raw = try await translateGenerate(
+                prompt: prompt,
+                system: translationSystemPrompt,
+                maxTokens: 320,
+                bannedCharacters: banned
+            )
+            var enriched = parseTranslation(raw)
+            if Task.isCancelled { return }
+
+            // Stage 3 — refinement. Small models leak sister-language spellings
+            // into the alternatives (Ukrainian/Russian into Bulgarian, …). A
+            // character check is a cheap leak *detector*, but dropping the
+            // offenders shrinks the list and can't see same-alphabet
+            // misspellings. So when a leak is detected we hand the draft back to
+            // the model to REWRITE every field in correct target language —
+            // fixing the words while preserving their number and sense. The
+            // common (clean) case skips this entirely, so it costs nothing then.
+            let isForeign = foreignTextDetector(forTarget: target)
+            let leaked = isForeign.map { f in
+                enriched.candidates.contains { f($0.text) }
+            } ?? false
+            if leaked, let refined = await refineTranslation(enriched, target: target) {
+                enriched = refined
+            }
+
+            // Final safety net: if refinement still left a foreign-letter
+            // candidate (or no refinement ran), drop the residue so a clearly
+            // wrong-alphabet word never reaches the user.
+            let candidates = filterForeignCandidates(enriched.candidates, target: target)
+
+            // Authoritative primary from stage 1; fall back to stage 2 only if
+            // stage 1 produced nothing usable. The detected-language chip comes
+            // from the on-device recognizer, NOT the model — small models
+            // hallucinate it (typo'd English reported as "ru"). Low confidence
+            // (short/ambiguous input) → nil → chip hidden.
+            let result = TranslationResult(
+                detectedLanguage: dominantLanguageName(of: input),
+                primary: primary.isEmpty ? enriched.primary : primary,
+                candidates: candidates)
+            await MainActor.run { ModelIdleUnloader.shared.noteUsage() }
+            await advanceTranslate(key) { $0.status = "done"; $0.result = result }
+        } catch {
+            await MainActor.run { ModelIdleUnloader.shared.noteUsage() }
+            await advanceTranslate(key) { $0.status = "failed" }
         }
     }
 
@@ -358,11 +466,11 @@ enum CoreBridge {
 
         \(payload)
         """
-        guard let raw = try? await MLXEngine.shared.generate(
+        guard let raw = try? await translateGenerate(
             prompt: prompt,
             system: refineTranslationSystemPrompt,
             maxTokens: 320,
-            temperature: 0
+            bannedCharacters: bannedCharacters(forTarget: resolvedTarget)
         ) else { return nil }
         let refined = parseTranslation(raw)
         // Guard against a degenerate refinement that returned nothing usable.
@@ -489,15 +597,28 @@ enum CoreBridge {
         let key = target.trimmingCharacters(in: .whitespaces).lowercased()
         guard let allowed = cyrillicAlphabets[key] else { return nil }
         return { text in
-            for ch in text.lowercased() {
-                for scalar in ch.unicodeScalars {
-                    let v = scalar.value
-                    // Whole-other-script leak (the common small-model failure that
-                    // the Cyrillic-only check below could never see).
-                    if isHardForeignScalar(v) { return true }
-                    // A Cyrillic letter not in this language's alphabet.
-                    if (0x0400...0x04FF).contains(v), !allowed.contains(ch) { return true }
+            for word in text.lowercased().split(whereSeparator: { !$0.isLetter }) {
+                var hasLatin = false
+                var hasCyrillic = false
+                for ch in word {
+                    for scalar in ch.unicodeScalars {
+                        let v = scalar.value
+                        // Whole-other-script leak (the common small-model failure
+                        // that the Cyrillic-only check below could never see).
+                        if isHardForeignScalar(v) { return true }
+                        // A Cyrillic letter not in this language's alphabet.
+                        if (0x0400...0x04FF).contains(v) {
+                            hasCyrillic = true
+                            if !allowed.contains(ch) { return true }
+                        } else if (0x61...0x7A).contains(v) {
+                            hasLatin = true
+                        }
+                    }
                 }
+                // One word mixing Latin and Cyrillic letters ("embodене") is
+                // model garbage, not a loanword — whole-Latin words (names,
+                // codes, "Swift") remain legitimate.
+                if hasLatin && hasCyrillic { return true }
             }
             return false
         }
@@ -685,7 +806,7 @@ enum CoreBridge {
             // Live evidence: writing samples / frequent words leaked the user's
             // vocabulary into unrelated completions ("oncall", "the usual spot",
             // comma-joined frequent-word lists as the whole suggestion) — the
-            // dominant junk class in the Cotypist head-to-head. The history
+            // dominant junk class in the reference-app head-to-head. The history
             // pipeline and prefs stay; re-introduce only behind a quality eval
             // that proves the samples help (accepted-rate A/B, like LoRA).
             //
@@ -791,7 +912,20 @@ enum CoreBridge {
             // End-of-line typing (the primary trigger; `after` empty/stable) keeps
             // the full prefix. Fixing this means a FIM-style prompt reorder — a
             // model-behavior change, not a caching tweak. Documented, not fixed.
-            let prompt = buildCompletionPrompt(
+            // Ladder reprompt directive (used by nudgedPromptLazy below). Declared
+            // BEFORE the prompt build because its length is reserved in the char
+            // budget, so rung-0 and reprompt prompts clip context identically and
+            // share a KV prefix.
+            let nudge = "IMPORTANT: You must output a continuation — returning "
+                + "nothing or an empty answer is not allowed. Even if the text "
+                + "already reads as complete, write the next few words the user "
+                + "would most plausibly type (up to \(maxWords) words). Do not "
+                + "repeat words already in the text. Write in the same language "
+                + "as the text\(language.map { " (\($0))" } ?? "").\n\n"
+            // Proper-port split: `user` carries instructions/context (frozen per
+            // burst — KV-stable), `prefill` carries the text tail seeded into the
+            // MODEL turn so the reply is its continuation by construction.
+            let promptParts = buildCompletionPromptParts(
                 before: before, after: after,
                 clipboard: clipboard, frequentWords: frequentWords,
                 hasImage: false, onScreenText: onScreenText,
@@ -799,8 +933,15 @@ enum CoreBridge {
                 appName: appName, appSurface: appSurface, siteHost: siteHost,
                 fieldLabel: promptFieldLabel, windowTitle: promptWindowTitle,
                 writingSamples: writingSamples,
-                reservedSystemChars: system.count
+                // Reserve the reprompt directive too: the nudged rungs add ~70
+                // tokens to the SAME budget, and without the reservation they
+                // overflowed `maxPromptTokens` — the front-cut then beheaded the
+                // system prompt and every reprompt rung decoded garbage (bench:
+                // "prompt overflow backstop fired" on rungs 2-3 only). The +240
+                // pad covers the echo-latch CRITICAL block (~235 chars worst case).
+                reservedSystemChars: system.count + nudge.count + 240
             )
+            let prompt = promptParts.user + (promptParts.prefill ?? "")
             // Quality tuning: low temperature for determinism, nucleus sampling,
             // hard stop at the first newline so a completion stays on one line, and
             // a word cap (maxWords) so decode stops as soon as the target word count
@@ -822,8 +963,13 @@ enum CoreBridge {
             // generation would race the next keystroke's cancel and silently drop.
             // load() is idempotent and coalesced (no-op once resident), so the warm
             // path pays nothing; the accessory stays `.thinking` meanwhile.
-            do { try await MLXEngine.shared.load { _, _ in } }
-            catch { if Task.isCancelled { return } }
+            // Swap-not-add: while the llama inline engine is active the MLX
+            // inline model stays UNLOADED — only one inline model resident.
+            let llamaActive = LlamaInlineEngine.isEnabled && LlamaInlineEngine.modelIsDownloaded
+            if !llamaActive {
+                do { try await MLXEngine.shared.load { _, _ in } }
+                catch { if Task.isCancelled { return } }
+            }
             if Task.isCancelled { return }
             // Always-suggest contract: whether the text is "enough" is the USER's
             // decision, never the model's. If a generation comes back empty (or
@@ -833,12 +979,6 @@ enum CoreBridge {
             // never races a fresh request; the nudged prompt changes the cached
             // prefix (one extra prefill) only on the retry rungs, so the common
             // first-try path is byte-identical to before.
-            let nudge = "IMPORTANT: You must output a continuation — returning "
-                + "nothing or an empty answer is not allowed. Even if the text "
-                + "already reads as complete, write the next few words the user "
-                + "would most plausibly type (up to \(maxWords) words). Do not "
-                + "repeat words already in the text. Write in the same language "
-                + "as the text\(language.map { " (\($0))" } ?? "").\n\n"
             // Reprompt rungs place the nudge as a `directive` INSIDE the prompt,
             // right before the final instruction line — the context prefix stays
             // byte-identical, so the KV cache re-prefills only the short
@@ -846,10 +986,27 @@ enum CoreBridge {
             // prepend invalidated everything). Built LAZILY on the first reprompt
             // rung: bursts (1 rung) and fast rung-0/1 successes never use it, and
             // an eager build ran the full budget/clip pipeline on every keystroke.
-            var nudgedPrompt: String?
-            func nudgedPromptLazy() -> String {
+            var nudgedPrompt: (user: String, prefill: String?)?
+            func nudgedPromptLazy(rejects: [String]) -> (user: String, prefill: String?) {
                 if let nudgedPrompt { return nudgedPrompt }
-                let built = buildCompletionPrompt(
+                // Echo latch: greedy AND sampled rungs can all return the message's
+                // own opening verbatim (live: every rung echoed "дали може днес да
+                // пуснем "). The generic "do not repeat" line is ignored — name the
+                // banned opening explicitly; small models do respect a concrete
+                // "never begin with X".
+                var directive = nudge
+                if rejects.contains(where: { $0.localizedCaseInsensitiveContains("echo") }) {
+                    let opening = before
+                        .split(whereSeparator: { $0.isWhitespace })
+                        .prefix(4).joined(separator: " ")
+                    if !opening.isEmpty {
+                        directive += "CRITICAL: your previous attempt repeated the "
+                            + "text itself. NEVER begin with \"\(opening)\" — those "
+                            + "words are already written. Output only the NEW words "
+                            + "that come after the END of the text.\n\n"
+                    }
+                }
+                let built = buildCompletionPromptParts(
                     before: before, after: after,
                     clipboard: clipboard, frequentWords: frequentWords,
                     hasImage: false, onScreenText: onScreenText,
@@ -857,8 +1014,10 @@ enum CoreBridge {
                     appName: appName, appSurface: appSurface, siteHost: siteHost,
                     fieldLabel: promptFieldLabel, windowTitle: promptWindowTitle,
                     writingSamples: writingSamples,
-                    directive: nudge,
-                    reservedSystemChars: system.count
+                    directive: directive,
+                    // SAME reservation as rung-0: identical context clipping keeps
+                    // the KV prefix shared between the plain and nudged prompts.
+                    reservedSystemChars: system.count + nudge.count + 240
                 )
                 nudgedPrompt = built
                 return built
@@ -869,7 +1028,7 @@ enum CoreBridge {
             // fragment/echo collapse a sharp temp=0.2 distribution produces. So every
             // high-temp rung is capped by top_k=64/top_p=0.95 rather than left unbounded.
             //
-            // ALL scripts start at gemma-native sampling — this is what Cotypist
+            // ALL scripts start at gemma-native sampling — this is what the reference app
             // runs for everything (it is the sampling embedded in their GGUF), and
             // it is what produces natural first-try completions in Bulgarian too;
             // the old deterministic 0.2 first rung was the fragment/echo regime
@@ -877,7 +1036,7 @@ enum CoreBridge {
             // bursts only ever ran that rung.
             typealias Rung = (temperature: Float, topK: Int?, topP: Float, reprompt: Bool)
             // First rung is GREEDY (argmax): the same context then always yields
-            // the same ghost, which is where Cotypist's felt stability/precision
+            // the same ghost, which is where the reference app's felt stability/precision
             // comes from — temp-1.0 first tries resampled a DIFFERENT random
             // continuation on every refresh (live: "side of the road" → "s in
             // the box on" → "side by side" while typing one sentence), and the
@@ -979,18 +1138,69 @@ enum CoreBridge {
                 return suggestion
             }
 
+            // reference-machinery pass (llama.cpp threshold beam, ON by default —
+            // see LlamaInlineEngine.isEnabled): ONE beam call returns
+            // ranked n-best candidates behind a confidence gate, so it replaces
+            // both the MLX n-best pass and the ladder below. When the gate
+            // yields nothing, nothing is shown — with beam alternatives behind
+            // it that is a legitimate answer (the reference app behavior), not the
+            // banned-EOT forced-junk failure the single greedy path had; the
+            // always-suggest ladder must NOT run after it or the junk returns.
+            var llamaHandled = false
+            if llamaActive, !Task.isCancelled {
+                do {
+                    // Phase D: the partial word under the caret rides as the
+                    // byte-level required prefix, not as prompt text — see
+                    // splitRequiredPrefix. Candidates come back continuing the
+                    // FULL `before`, so accept()/sanitize see the usual shape.
+                    let split = LlamaInlineEngine.splitRequiredPrefix(promptParts.prefill ?? "")
+                    let cands = try await LlamaInlineEngine.shared.complete(
+                        system: system, user: promptParts.user,
+                        prefill: split.prefill, requiredPrefix: split.required,
+                        params: LlamaInlineEngine.tunedParams())
+                    llamaHandled = true
+                    var accepted: [CandidateBuffer.Candidate] = []
+                    var seen = Set<String>()
+                    for c in cands {
+                        benchLog(system: system, prompt: prompt, raw: c.text, temp: 0)
+                        if let s = await accept(c.text), seen.insert(s).inserted {
+                            accepted.append(.init(text: s, avgLogprob: c.avgLogprob))
+                        }
+                    }
+                    if !accepted.isEmpty {
+                        let buffer = CandidateBuffer(anchorBefore: before, candidates: accepted)
+                        // B2 instant-swap stays OPT-IN (nBestCandidates > 1): handing
+                        // the beam's alternates over unconditionally armed
+                        // tryCandidateSwap for every llama user — a keystroke rendered
+                        // a stale alternate that the burst response then replaced ~1s
+                        // later (live report: BG double ghost swap, "first suggestion
+                        // looked better").
+                        if let onCandidates, Preferences.nBestCandidates > 1 {
+                            await MainActor.run { onCandidates(buffer) }
+                        }
+                        result = buffer.best
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // Engine unavailable/decode failure: fall through to MLX.
+                    NSLog("prosper complete: llama pass failed: %@", String(describing: error))
+                }
+            }
+
             // N-best pause pass (B2, opt-in): generate several continuations sharing
             // the prompt prefill, keep the accepted ones ranked by avg-logprob, show
             // the best and hand the rest to the engine's `CandidateBuffer` so a
             // diverging keystroke can swap without a model round trip. Pause-only —
             // bursts must land in a typing gap and can't afford K decodes.
             let nBest = Preferences.nBestCandidates
-            if !burst, nBest > 1, !Task.isCancelled {
+            if !burst, nBest > 1, !llamaHandled, !Task.isCancelled { // UNUSED by default: MLX inline fallback (llama engine disabled)
                 do {
                     let cands = try await MLXEngine.shared.generateInlineCandidates(
-                        prompt: prompt, system: system, maxTokens: maxTokens,
+                        prompt: promptParts.user, system: system, maxTokens: maxTokens,
                         temperature: 1.0, topP: 0.95, stop: ["\n"], maxWords: maxWords,
-                        topK: 64, requiredScript: requiredScript, k: nBest)
+                        topK: 64, requiredScript: requiredScript, k: nBest,
+                        prefillText: promptParts.prefill)
                     var accepted: [CandidateBuffer.Candidate] = []
                     var seen = Set<String>()
                     for c in cands {
@@ -1013,7 +1223,9 @@ enum CoreBridge {
             // Ladder: the single-candidate path (or the fallback when n-best found
             // nothing acceptable). `generateInlineRouted` reuses the KV cache and
             // picks the decode path internally (WS2 speculative when enabled).
-            if result == nil {
+            // Skipped when the llama beam ran: its empty is the confidence gate
+            // speaking, and the MLX model isn't resident anyway (swap-not-add).
+            if result == nil, !llamaHandled { // UNUSED by default: MLX inline fallback (llama engine disabled)
                 for attempt in attempts {
                     if Task.isCancelled { return }
                     if rungsRun > 0, Date() > ladderDeadline {
@@ -1021,16 +1233,17 @@ enum CoreBridge {
                         break
                     }
                     rungsRun += 1
-                    let rungPrompt = attempt.reprompt ? nudgedPromptLazy() : prompt
+                    let rungParts = attempt.reprompt ? nudgedPromptLazy(rejects: rungRejects) : promptParts
                     do {
                         let raw = try await MLXEngine.shared.generateInlineRouted(
-                            prompt: rungPrompt,
+                            prompt: rungParts.user,
                             system: system,
                             maxTokens: maxTokens, temperature: attempt.temperature,
                             topP: attempt.topP, stop: ["\n"], maxWords: maxWords,
-                            topK: attempt.topK, requiredScript: requiredScript
+                            topK: attempt.topK, requiredScript: requiredScript,
+                            prefillText: rungParts.prefill
                         )
-                        benchLog(system: system, prompt: rungPrompt,
+                        benchLog(system: system, prompt: rungParts.user + (rungParts.prefill ?? ""),
                                  raw: raw, temp: attempt.temperature)
                         if let suggestion = await accept(raw) {
                             result = suggestion
@@ -1598,6 +1811,9 @@ enum CoreBridge {
     private static let promptScaffoldPhrases: [String] = [
         "continue this text",
         "output only the continuation",
+        "unfinished text begins your reply",
+        "continue it seamlessly",
+        "next few words the user would type",
         "output only the text",
         "fill the gap at the cursor",
         "before cursor",
@@ -2081,7 +2297,7 @@ enum CoreBridge {
     /// Inline-completion system prompt, optionally augmented with the user's
     /// custom instructions (tone/language/style) from Preferences.
     /// The user's habitual languages, from OS preferences (e.g. "English, Bulgarian").
-    /// Cotypist injects exactly this (`osLanguagesString`) so the model reads
+    /// The reference app injects exactly this (`osLanguagesString`) so the model reads
     /// Latin-script Slavic text as the user's actual language (Bulgarian
     /// transliteration) instead of guessing Croatian/Russian — no per-text detection.
     static func osLanguagesList() -> String {
@@ -2221,7 +2437,7 @@ enum CoreBridge {
         // sentences ("Visit the website and downlo…") and any word-list verbatim.
         // A few crisp rules continue the text far more reliably than a page of them.
         _ = examples
-        // OS-languages grounding (Cotypist's `osLanguagesString`): naming the user's
+        // OS-languages grounding (the reference app's `osLanguagesString`): naming the user's
         // habitual languages lets the model read Latin-script Slavic text as the user's
         // own language (Bulgarian in Latin / "shlyokavitsa") rather than defaulting to
         // Croatian/Russian — this is what makes latinica work without per-text pinning.
@@ -2419,6 +2635,9 @@ enum CoreBridge {
 
     /// Build a continuation prompt from the text surrounding the caret, with
     /// optional clipboard context prepended.
+    /// Legacy single-string form: user content + prefill concatenated. Byte-identical
+    /// to the pre-split prompt, so tests, echo markers, and KV prefixes are unchanged
+    /// for callers that don't thread the model-turn prefill (debug endpoint, LoRA).
     static func buildCompletionPrompt(
         before: String, after: String,
         clipboard: String?, frequentWords: [String] = [],
@@ -2432,6 +2651,43 @@ enum CoreBridge {
         directive: String? = nil,
         reservedSystemChars: Int = 0
     ) -> String {
+        let parts = buildCompletionPromptParts(
+            before: before, after: after,
+            clipboard: clipboard, frequentWords: frequentWords,
+            hasImage: hasImage, onScreenText: onScreenText,
+            onScreenIsConversation: onScreenIsConversation,
+            candidates: candidates,
+            appName: appName, appSurface: appSurface, siteHost: siteHost,
+            fieldLabel: fieldLabel, windowTitle: windowTitle,
+            writingSamples: writingSamples,
+            directive: directive,
+            reservedSystemChars: reservedSystemChars,
+            split: false
+        )
+        return parts.user + (parts.prefill ?? "")
+    }
+
+    /// Proper-port prompt split (the reference app mechanism): the instruction/context lives
+    /// in the USER turn (`user`); the text being continued is returned separately
+    /// (`prefill`) so the engine can seed it into the MODEL turn token-level. The
+    /// model's reply then IS the continuation — echoing the text back is impossible
+    /// by construction, and the per-keystroke prompt delta is a pure suffix append
+    /// (maximal KV reuse). `prefill` is nil for the gap-fill (after-cursor) case,
+    /// which keeps the instruction-style prompt.
+    static func buildCompletionPromptParts(
+        before: String, after: String,
+        clipboard: String?, frequentWords: [String] = [],
+        hasImage: Bool = false, onScreenText: String? = nil,
+        onScreenIsConversation: Bool = false,
+        candidates: CompletionCandidates? = nil,
+        appName: String? = nil, appSurface: AppProfile.Surface? = nil,
+        siteHost: String? = nil,
+        fieldLabel: String? = nil, windowTitle: String? = nil,
+        writingSamples: [String] = [],
+        directive: String? = nil,
+        reservedSystemChars: Int = 0,
+        split: Bool = true
+    ) -> (user: String, prefill: String?) {
         var ctx = ""
         // Situational context: where the user is typing (app, and the web site if
         // it's a browser/Electron surface) and what kind of writing that implies.
@@ -2441,7 +2697,7 @@ enum CoreBridge {
             ctx += hint.isEmpty ? "\(line)\n\n" : "\(line) \(hint)\n\n"
         }
         // Grounding context (cheap AX reads — see CaretContext.fieldLabel/windowTitle):
-        // WHO/WHAT the user is writing to. This is Cotypist's strongest edge — it feeds
+        // WHO/WHAT the user is writing to. This is the reference app's strongest edge — it feeds
         // the field label ("Message to Plamen Redjov") + window title so the model
         // continues in the right register AND the right language, without us pinning a
         // (mis)detected language. Keep it terse; it precedes the text so the model reads
@@ -2556,15 +2812,31 @@ enum CoreBridge {
         // model mangled/regurgitated it as garbage completions ("сне,",
         // "1. чекиран…"). A raw continuation prompt that simply ENDS mid-word is
         // what makes the model finish the word naturally ("дне" → "с?") — that is
-        // Cotypist's behavior. Dictionary candidates remain for the non-LLM
+        // the reference app's behavior. Dictionary candidates remain for the non-LLM
         // instant-ghost path only.
         if let directive {
             ctx += directive
         }
         if afterHead.isEmpty {
-            return "\(ctx)Continue this text. Output only the continuation:\n\(beforeTail)"
+            if split {
+                // Split form (proper reference port): the text tail is prefilled
+                // into the MODEL turn, so the instruction must name that contract
+                // — an instruct model otherwise reads its prefilled turn as a
+                // finished answer and emits end-of-turn immediately (live: empty
+                // rung-0 outputs). No separating newline: the prefill continues
+                // the model turn mid-stream, and a blank line reads as "answer
+                // complete".
+                return ("\(ctx)The user's unfinished text begins your reply. "
+                        + "Continue it seamlessly from exactly where it stops — "
+                        + "add the next few words the user would type.",
+                        beforeTail)
+            }
+            // Legacy concatenated form: exact pre-split bytes (tests, KV prefixes,
+            // scaffold markers).
+            return ("\(ctx)Continue this text. Output only the continuation:",
+                    "\n\(beforeTail)")
         }
-        return """
+        return ("""
         \(ctx)Fill the gap at the cursor (between the two parts). Output only the \
         text that belongs at the cursor — it must read naturally before "After cursor".
 
@@ -2573,7 +2845,7 @@ enum CoreBridge {
 
         After cursor:
         \(afterHead)
-        """
+        """, nil)
     }
 
     /// Reads a capped snippet of the current clipboard text for completion context.

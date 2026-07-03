@@ -260,7 +260,7 @@ actor TypingHistoryStore {
     }
 
     /// Short examples of the user's OWN recent writing, for the completion prompt's
-    /// few-shot voice grounding — Prosper's port of Cotypist's `previousUserInputs`.
+    /// few-shot voice grounding — Prosper's port of the reference app's `previousUserInputs`.
     /// Blends most-recent-in-this-app + most-recent-across-apps + a couple of the
     /// longest stored samples (the richest voice/language examples), deduped and
     /// length-gated so trivial one-word accepts and huge pastes are skipped. Returns

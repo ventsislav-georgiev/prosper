@@ -37,9 +37,38 @@ function translate_run(query)
         source = nil
     end
 
+    -- Staged: translate returns the pipeline's current milestone immediately
+    -- (status "loading" / "translating" / "enriching" / "done"); the host
+    -- re-invokes this handler on each milestone, so partial results render as
+    -- they arrive — primary first, alternatives when enrichment lands.
     local result = host.llm.translate(text, target, source)
-    if result == nil or result.primary == nil or trim(result.primary) == "" then
-        return nil
+    if result == nil then return nil end
+
+    local status = result.status or "done"
+    local primary = result.primary and trim(result.primary) or ""
+
+    -- Nothing translated yet: a single row naming the actual stage. A finished
+    -- pipeline with no usable output must still render a real row — returning
+    -- nil here would surface the runner's generic "(done)" placeholder.
+    if primary == "" then
+        local label
+        if status == "done" or status == "failed" then
+            label = "No translation"
+        elseif status == "loading" then
+            label = "Loading model…"
+        else
+            label = "Translating…"
+        end
+        local finished = status == "done" or status == "failed"
+        return host.ui.render(host.ui.list{
+            title = "Translation",
+            items = { {
+                id = "0",
+                title = label,
+                icon = finished and "globe" or "hourglass",
+                loading = not finished,   -- host renders an inline spinner
+            } },
+        })
     end
 
     -- Build the inline result: a list whose first item is the primary
@@ -48,10 +77,10 @@ function translate_run(query)
     local items = {}
     items[#items + 1] = {
         id = "0",
-        title = trim(result.primary),
+        title = primary,
         icon = "globe",
     }
-    local seen = { [trim(result.primary)] = true }
+    local seen = { [primary] = true }
     for _, cand in ipairs(result.candidates or {}) do
         local t = cand.text and trim(cand.text) or ""
         if t ~= "" and not seen[t] then
@@ -64,6 +93,14 @@ function translate_run(query)
                 icon = "globe",
             }
         end
+    end
+    if status ~= "done" then
+        items[#items + 1] = {
+            id = "progress",
+            title = "Finding alternatives…",
+            icon = "hourglass",
+            loading = true,   -- host renders an inline spinner
+        }
     end
 
     local detected = result.detected

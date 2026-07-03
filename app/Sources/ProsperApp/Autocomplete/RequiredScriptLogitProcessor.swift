@@ -1,3 +1,6 @@
+// UNUSED by default: part of the MLX inline fallback path — the llama.cpp
+// engine (LlamaInlineEngine, default-on) does not use this. Kept compiling
+// for the inlineEngineLlama=false / PROSPER_INLINE_ENGINE=mlx escape hatch.
 import Foundation
 import MLX
 import MLXLMCommon
@@ -5,7 +8,7 @@ import MLXLMCommon
 /// Decode-time script constraint (B1): masks the logits of every vocabulary token
 /// whose text piece is out-of-script for the target, so the model can only emit
 /// in-script (or script-neutral / Latin) tokens. This is the guided-decoding
-/// mechanism the recovered Cotypist source uses, in its pragmatic Prosper form —
+/// mechanism the recovered reference source uses, in its pragmatic Prosper form —
 /// see `ScriptClassifier` for the (deliberately coarse) allow rule and its limits.
 ///
 /// Plugged into `MLXLMCommon.TokenIterator` via its

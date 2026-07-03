@@ -12,7 +12,7 @@ struct OCRLine: Sendable {
 
 /// On-device text recognition over a captured screen region, using the Vision
 /// framework's `VNRecognizeTextRequest`. At `.accurate` level this runs on the
-/// Apple Neural Engine — the same path Cotypist uses (its logs show
+/// Apple Neural Engine — the same path the reference app uses (its logs show
 /// `CoreRecognition` / `futhark_recognizer` on the ANE) to read text out of
 /// surfaces where the Accessibility API returns nothing (Electron/Chromium).
 ///

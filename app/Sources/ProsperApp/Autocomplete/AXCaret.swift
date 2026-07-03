@@ -28,17 +28,32 @@ struct CaretContext {
     let isSingleLineField: Bool
     /// A short label describing the FIELD (not its value): its AXDescription /
     /// placeholder / title — e.g. "Message to Plamen Redjov", "Search", "To". This
-    /// is the strongest cheap grounding signal (Cotypist stores it as
+    /// is the strongest cheap grounding signal (the reference app stores it as
     /// textFieldProperties.description): it tells the model who/what the user is
     /// writing to. nil when the element exposes no such label.
     let fieldLabel: String?
     /// The focused window's title — e.g. "Plamen Redjov (DM) - Payhawk - Slack". A
-    /// second cheap grounding signal (Cotypist stores it as appProperties.windowTitle).
+    /// second cheap grounding signal (the reference app stores it as appProperties.windowTitle).
     let windowTitle: String?
 }
 
 /// Reads caret / text context from the focused UI element via the Accessibility API.
 enum AXCaret {
+
+    /// Per-app ghost baseline nudge in ems (positive = DOWN). Chromium's
+    /// caret box top overshoots the glyph top; only apps with a measured
+    /// residual offset are listed.
+    private static let verticalNudgeEm: [String: CGFloat] = [
+        "com.tinyspeck.slackmacgap": 0.1,
+    ]
+
+    /// Owning app's bundle id for a focused AX element (cheap: one pid read
+    /// + running-app lookup per caret query).
+    private static func bundleId(of element: AXUIElement) -> String? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+        return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier?.lowercased()
+    }
 
     /// Diagnostic logging for caret-geometry resolution, off by default. Enable with
     /// `defaults write com.prosper.app axDebug -bool true`; lines append to
@@ -93,7 +108,7 @@ enum AXCaret {
             // usable `kAXValue` for their contenteditable areas — the text lives
             // behind the WebKit text-marker APIs. Without this fallback the focused
             // element produced an empty/nil value and completion never fired there.
-            // (This is how Cotypist reads Slack's message box.)
+            // (This is how the reference app reads Slack's message box.)
             textBefore = marker.before
             textAfter = marker.after
             // No integer offset in the marker world; keep the before-length for the
@@ -123,7 +138,7 @@ enum AXCaret {
         let caretAtEnd = textAfter
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
-        let rect = caretRect(
+        var rect = caretRect(
             focused, offset: clamped, preferMarker: preferMarker, caretAtEnd: caretAtEnd
         ).map(flippedToAppKit)
         let field = elementRect(focused).map(flippedToAppKit)
@@ -132,9 +147,36 @@ enum AXCaret {
         // glyph font is unknown; fall back to a size derived from the caret rect's
         // height (≈ line height) so the ghost matches the field's text size instead
         // of an oversized system default.
-        let font = caretFont(focused, offset: clamped, textCount: totalLength)
-            ?? markerCaretFont(focused)
-            ?? rect.flatMap { fontForCaretHeight($0.height) }
+        let attrFont = caretFont(focused, offset: clamped, textCount: totalLength)
+        let markerFont = attrFont == nil ? markerCaretFont(focused) : nil
+        let heightFont = (attrFont ?? markerFont) == nil
+            ? rect.flatMap { fontForCaretHeight($0.height) } : nil
+        var font = attrFont ?? markerFont ?? heightFont
+        // Chromium: the AX-reported CSS size ignores page zoom (Slack zoomed
+        // out: AX says 15, caret box 13). When the caret box is SMALLER than
+        // the reported point size, the page is scaled down — derive the size
+        // from the caret box instead. The box is ~1.3× the rendered em, not
+        // 1.0× (measured from a live Slack screenshot: ghost at 13pt rendered
+        // 1.27× the field's own glyphs), so divide it out. NOT gated on
+        // preferMarker: Slack's composer serves kAXValue (native path) yet
+        // still reports the unscaled CSS size. Native AppKit line-box carets
+        // are taller than the point size, so this never fires there.
+        if let f = font, let r = rect, r.height >= 8, r.height < f.pointSize {
+            let scaled = min(max((r.height / 1.3).rounded(), 9), 24)
+            font = NSFont(descriptor: f.fontDescriptor, size: scaled) ?? f
+        }
+        // Per-app baseline nudge, in ems (positive = ghost DOWN; AppKit y is
+        // up). The Chromium caret box's TOP edge sits above the real glyph
+        // top, so even at the corrected size the ghost rides ~0.1em high in
+        // Slack (screenshot-measured: 2px at ~10pt rendered).
+        if let f = font, let r = rect,
+           let bundle = bundleId(of: focused),
+           let em = Self.verticalNudgeEm[bundle] {
+            rect = r.offsetBy(dx: 0, dy: -(f.pointSize * em).rounded())
+        }
+        dbg("font attr=\(attrFont?.pointSize ?? -1) marker=\(markerFont?.pointSize ?? -1) "
+            + "height=\(heightFont?.pointSize ?? -1) rectH=\(rect?.height ?? -1) "
+            + "final=\(font?.pointSize ?? -1) offset=\(clamped)")
 
         let role = copyString(focused, kAXRoleAttribute) ?? ""
         let singleLineRoles: Set<String> = [kAXTextFieldRole as String, "AXComboBox", "AXSearchField"]
@@ -367,13 +409,13 @@ enum AXCaret {
     /// a zero-length range — but they DO report bounds for a non-empty range. So
     /// when the primary query is unusable, fall back to the PREVIOUS character's
     /// bounds and take its trailing edge as the caret position (the technique
-    /// Cotypist labels `cursorRectIsFromPreviousCharacter`).
+    /// the reference app labels `cursorRectIsFromPreviousCharacter`).
     ///
     /// Pure Chromium/Electron text areas (Slack, Notion, VSCode) answer NEITHER
     /// integer-range query — they expose caret geometry only through the WebKit
     /// text-marker APIs. So as a final fallback we read `AXSelectedTextMarkerRange`
     /// and ask for `AXBoundsForTextMarkerRange`, which returns a real caret rect in
-    /// those surfaces. (This is how Cotypist positions correctly in Slack.)
+    /// those surfaces. (This is how the reference app positions correctly in Slack.)
     private static func caretRect(
         _ element: AXUIElement, offset: Int, preferMarker: Bool, caretAtEnd: Bool
     ) -> CGRect? {

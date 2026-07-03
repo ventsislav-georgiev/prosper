@@ -39,9 +39,20 @@ func markerBounds(_ el: AXUIElement, label: String) {
     print("    AXSelectedTextMarkerRange: ok")
     let selBounds = rect(param(el, "AXBoundsForTextMarkerRange", sel))
     print("    bounds(selRange): \(selBounds.map(String.init(describing:)) ?? "nil")")
-    guard let caretStart = param(el, "AXStartTextMarkerForTextMarkerRange", sel) else {
-        print("    AXStartTextMarkerForTextMarkerRange: nil"); return
+    // WebKit answers AXStartTextMarkerForTextMarkerRange; Chromium doesn't
+    // (-25212) but supports AXTextMarkerForPosition — recover the caret marker
+    // from the caret rect's screen position instead.
+    var caretStart = param(el, "AXStartTextMarkerForTextMarkerRange", sel)
+    if caretStart == nil {
+        print("    AXStartTextMarkerForTextMarkerRange: nil — trying AXTextMarkerForPosition")
+        if let b = selBounds {
+            var pt = CGPoint(x: b.midX, y: b.midY)
+            if let pv = AXValueCreate(.cgPoint, &pt) {
+                caretStart = param(el, "AXTextMarkerForPosition", pv)
+            }
+        }
     }
+    guard let caretStart else { print("    caret marker: unavailable"); return }
     print("    caretStart marker: ok")
     if let prev = param(el, "AXPreviousTextMarkerForTextMarker", caretStart) {
         print("    prev marker: ok")
@@ -86,10 +97,24 @@ func markerBounds(_ el: AXUIElement, label: String) {
     }
 }
 
-func probe() {
-    let systemWide = AXUIElementCreateSystemWide()
+func probe(bundleSubstring: String? = nil) {
+    // Per-app AX works from spawned shells (and reads the app-LOCAL focused
+    // element even when the app is not frontmost); the systemwide focus query
+    // fails there with -25204. `app <substring>` mode targets the app directly.
     var focusedRef: CFTypeRef?
-    let ferr = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef)
+    var ferr = AXError.cannotComplete
+    if let want = bundleSubstring?.lowercased() {
+        guard let target = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier?.lowercased().contains(want) == true
+        }) else { print("no running app matching \"\(want)\""); return }
+        ferr = AXUIElementCopyAttributeValue(
+            AXUIElementCreateApplication(target.processIdentifier),
+            kAXFocusedUIElementAttribute as CFString, &focusedRef)
+    } else {
+        ferr = AXUIElementCopyAttributeValue(
+            AXUIElementCreateSystemWide(),
+            kAXFocusedUIElementAttribute as CFString, &focusedRef)
+    }
     guard ferr == .success,
           let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
         print("no focused element (err \(ferr.rawValue), frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"))")
@@ -127,6 +152,23 @@ func probe() {
                 print("  boundsForRange(\(loc),\(len)): \(b.map(String.init(describing:)) ?? "nil")")
             }
         }
+        // Integer-range attributed string — Chromium lists it; dump the font attrs.
+        var ar = CFRange(location: max(0, selRange.location - 1), length: min(1, max(selRange.location, 1)))
+        if let arv = AXValueCreate(.cfRange, &ar),
+           let out = param(el, kAXAttributedStringForRangeParameterizedAttribute as String, arv),
+           CFGetTypeID(out) == CFAttributedStringGetTypeID() {
+            let a = out as! NSAttributedString
+            if a.length > 0 {
+                let attrs = a.attributes(at: 0, effectiveRange: nil)
+                print("  attrStrForRange keys: \(attrs.keys.map(\.rawValue).sorted().joined(separator: ", "))")
+                if let f = attrs[.font] as? NSFont { print("  .font: \(f.fontName) \(f.pointSize)") }
+                for key in ["AXFont", "NSFont"] {
+                    if let d = attrs[NSAttributedString.Key(key)] as? [String: Any] {
+                        print("  \(key) dict: \(d)")
+                    }
+                }
+            } else { print("  attrStrForRange: empty") }
+        } else { print("  attrStrForRange: unavailable") }
     } else {
         print("  selectedTextRange: nil")
     }
@@ -159,12 +201,29 @@ guard AXIsProcessTrusted() else {
 // `axprobe wait <bundle-substring>`: poll quietly until the focused app matches,
 // then take samples. Default: 5s lead, 8 samples.
 let args = CommandLine.arguments
+// `axprobe app <bundle-substring>`: probe the app's own focused element right
+// now, no focus dance — works even when the app is in the background.
+if args.count >= 3, args[1] == "app" {
+    for _ in 0..<3 { probe(bundleSubstring: args[2]); Thread.sleep(forTimeInterval: 1) }
+    exit(0)
+}
 if args.count >= 3, args[1] == "wait" {
     let want = args[2].lowercased()
     print("waiting for focus in an app matching \"\(want)\" (15min max)…\n")
     let deadline = Date().addingTimeInterval(900)
     while Date() < deadline {
-        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.lowercased() ?? ""
+        // NSWorkspace.frontmostApplication never refreshes without a run loop and
+        // the systemwide AX focus query fails from spawned shells (-25204) —
+        // CGWindowList works run-loop-free: frontmost app owns the first layer-0
+        // window in z-order.
+        var front = ""
+        if let wins = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                 kCGNullWindowID) as? [[String: Any]],
+           let top = wins.first(where: { ($0[kCGWindowLayer as String] as? Int) == 0 }),
+           let pid = top[kCGWindowOwnerPID as String] as? pid_t {
+            front = NSRunningApplication(processIdentifier: pid)?
+                .bundleIdentifier?.lowercased() ?? ""
+        }
         if front.contains(want) {
             for _ in 0..<6 { probe(); Thread.sleep(forTimeInterval: 2) }
             exit(0)

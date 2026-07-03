@@ -216,7 +216,7 @@ actor MLXEngine {
     func setInlineNgramModel(_ model: NgramModel?) { inlineNgramModel = model }
 
     /// Minimum accepted-completion pairs before NB is worth training — below this the
-    /// n-gram is too sparse to bias usefully. Tunable; unrecovered from Cotypist.
+    /// n-gram is too sparse to bias usefully. Tunable; unrecovered from the reference app.
     private static let ngramMinSamples = 20
 
     /// B5 (NB): (re)train the inline n-gram personalization model from the user's
@@ -226,8 +226,8 @@ actor MLXEngine {
     ///
     /// Tokenization runs on the already-loaded inline container's tokenizer (cheap,
     /// CPU-only string work — no forward pass), so this is safe to call from the LoRA
-    /// background scheduler tick. A4 (`.omc/research/cotypist-a4-spike.md`) found
-    /// Cotypist keys its corpus by (app, domain); we train one global model for now and
+    /// background scheduler tick. A4 spike found
+    /// the reference app keys its corpus by (app, domain); we train one global model for now and
     /// leave per-(app,domain) keying as a documented tuning refinement (needs the
     /// frontmost bundle id threaded into `generateInline`).
     func refreshInlineNgramModel() async {
@@ -654,7 +654,14 @@ actor MLXEngine {
     /// never about rotation; it was a token-array rank bug in the inline prefill (a
     /// 2-D `[1, N]` token array fed where the library expects 1-D `[N]`). See the
     /// `LMInput(tokens:)` construction in `generateInline`.
-    private static let maxPromptTokens = 480
+    /// 560 not 480: the reprompt (nudge) rungs are STRUCTURALLY ~510-525 tokens
+    /// (system+instruction ~444 + directive ~67 + tail) with zero clippable
+    /// context, so a 480 cap forced the front-cut backstop to behead the system
+    /// prompt on every reprompt rung (bench: instruction-echo garbage). Slightly
+    /// crossing the 512 sliding window only rotates the oldest few tokens out of
+    /// the sliding-attention layers — global layers still see them — which is
+    /// harmless next to losing the first 128 tokens outright.
+    private static let maxPromptTokens = 560
 
     /// Gate for the inline timing log: on only when `PROSPER_INLINE_TIMING` is set
     /// in the environment, so normal runs stay silent and pay nothing.
@@ -1112,6 +1119,7 @@ actor MLXEngine {
     /// cache, model reload, or the sliding window having filled so the cache is no
     /// longer trimmable) falls back to a full fresh prefill — never worse than the
     /// stateless path. Honors the same cancellation checks as `generate`.
+    /// UNUSED by default: MLX inline fallback. The llama.cpp engine (LlamaInlineEngine) is the default; this path runs only with inlineEngineLlama=false or PROSPER_INLINE_ENGINE=mlx.
     func generateInline(
         prompt: String,
         system: String?,
@@ -1123,7 +1131,8 @@ actor MLXEngine {
         topK: Int? = nil,
         minP: Float? = nil,
         requiredScript: ScriptClassifier.Target? = nil,
-        recorder: LogprobRecorder? = nil
+        recorder: LogprobRecorder? = nil,
+        prefillText: String? = nil
     ) async throws -> String {
         guard let container else { throw MLXEngineError.notLoaded }
         if Task.isCancelled { return "" }
@@ -1151,6 +1160,21 @@ actor MLXEngine {
             messages.append(.user(prompt))
             let prepared = try await context.processor.prepare(input: UserInput(chat: messages))
             var promptTokens = prepared.text.tokens.asArray(Int32.self).map(Int.init)
+            // Model-turn prefill (proper reference port): the chat template ends with
+            // the model-turn opener (`<start_of_turn>model\n`), so appending the raw
+            // text tokens here seeds the reply with the text being continued — the
+            // model can only CONTINUE it, never echo it. No special tokens: this is
+            // mid-turn text, a BOS would restart the sequence.
+            if let prefillText, !prefillText.isEmpty {
+                let templated = promptTokens.count
+                promptTokens += context.tokenizer.encode(text: prefillText, addSpecialTokens: false)
+                if ProcessInfo.processInfo.environment["PROSPER_PREFILL_DEBUG"] != nil {
+                    let tail = promptTokens.suffix(promptTokens.count - templated + 6)
+                    NSLog("prosper prefill-debug: template=%d prefill=%d total=%d join=\"%@\"",
+                          templated, promptTokens.count - templated, promptTokens.count,
+                          context.tokenizer.decode(tokenIds: Array(tail)).replacingOccurrences(of: "\n", with: "\\n"))
+                }
+            }
             // Prompt cap: keep the most recent tokens (window/trim constraint, see
             // `maxPromptTokens`). Cut from the FRONT in 128-token blocks rather
             // than a per-token `suffix(maxPrompt)`: a sliding suffix shifts the
@@ -1216,6 +1240,11 @@ actor MLXEngine {
             let reusedPrefix = promptTokens.count - prefill.count
             let lmInput = LMInput(tokens: MLXArray(prefill))
             var text = ""
+            // TEMP (prefill debug): capture raw chunks BEFORE the stop-cut so an
+            // empty `raw` can be attributed to what the model actually emitted.
+            var debugChunks: [String]? =
+                (prefillText != nil && ProcessInfo.processInfo.environment["PROSPER_PREFILL_DEBUG"] != nil)
+                ? [] : nil
             var info: GenerateCompletionInfo?
             let t0 = DispatchTime.now()
             // Task-returning variant (see `generate()`): the common exits below are
@@ -1246,8 +1275,55 @@ actor MLXEngine {
                 // One tiny encode per request (not per token); 48 chars is plenty for
                 // a (maxOrder-1)-token window and keeps BPE boundary effects at the
                 // cut away from the tail.
-                let rawTail = context.tokenizer.encode(text: String(prompt.suffix(48)))
+                let rawTail = context.tokenizer.encode(
+                    text: String(((prefillText?.isEmpty == false) ? prefillText! : prompt).suffix(48)))
                 stages.append(NgramBiasLogitProcessor(model: ngramModel, promptTail: rawTail))
+            }
+            if prefillText?.isEmpty == false {
+                // Prefill seeds the model turn with the user's unfinished text;
+                // chat-tuned Gemma then often emits <end_of_turn> as the FIRST
+                // token (it reads the prefill as a finished answer) and every
+                // ladder rung comes back empty. Ban end tokens for the first few
+                // decodes — see MinTokensLogitProcessor.
+                var endIds: [Int] = []
+                if let id = context.tokenizer.eosTokenId { endIds.append(id) }
+                // The turn markers can't be looked up by NAME: convertTokenToId
+                // maps added specials to <unk>, and this vocab's pieces aren't
+                // "<end_of_turn>" anyway (bench: 106=<turn|>, 105=<|turn>). So
+                // recover them by SHAPE from the templated prompt itself: every
+                // control marker in the template decodes to a <...> piece.
+                for id in Set(promptTokens) {
+                    guard let piece = context.tokenizer.convertIdToToken(id),
+                          piece.count > 2, piece.hasPrefix("<"), piece.hasSuffix(">")
+                    else { continue }
+                    endIds.append(id)
+                }
+                // Newline is the stop sequence, so a bare-newline first token is
+                // the same escape hatch as EOT (bench: raw="" with EOT banned).
+                // Gemma's vocab has a whole FAMILY of newline-run pieces ("\n",
+                // "\n\n", "\n\n\n", …) — ban every single-piece run, not just the
+                // first two (bench: EN escaped via a longer run).
+                for k in 1...8 {
+                    let ids = context.tokenizer.encode(
+                        text: String(repeating: "\n", count: k), addSpecialTokens: false)
+                    if ids.count == 1 { endIds.append(ids[0]) }
+                }
+                if ProcessInfo.processInfo.environment["PROSPER_PREFILL_DEBUG"] != nil {
+                    let pieces = endIds.map {
+                        "\($0)=\((context.tokenizer.convertIdToToken($0) ?? "?").replacingOccurrences(of: "\n", with: "\\n"))"
+                    }
+                    let tail = promptTokens.suffix(40).filter { $0 < 1000 }.map {
+                        "\($0)=\((context.tokenizer.convertIdToToken($0) ?? "?").replacingOccurrences(of: "\n", with: "\\n"))"
+                    }
+                    NSLog("prosper prefill-debug: banned=[%@] eos=%@ extra=%@ tailSpecials=[%@]",
+                          pieces.joined(separator: ","),
+                          String(describing: context.tokenizer.eosTokenId),
+                          context.configuration.extraEOSTokens.joined(separator: ","),
+                          tail.joined(separator: ","))
+                }
+                if !endIds.isEmpty {
+                    stages.append(MinTokensLogitProcessor(bannedIds: endIds, minTokens: 3))
+                }
             }
             if let recorder { stages.append(recorder) }
             let composed: LogitProcessor? = stages.reduce(nil) { acc, next in
@@ -1273,6 +1349,7 @@ actor MLXEngine {
                 // garbage — bail immediately (the guard throws on scope exit).
                 if mlxError.message != nil { break outer }
                 if let chunk = generation.chunk {
+                    debugChunks?.append(chunk)
                     text += chunk
                     for s in stop where !s.isEmpty {
                         if let r = text.range(of: s) {
@@ -1314,6 +1391,13 @@ actor MLXEngine {
                 NSLog("%@", line)
             }
 
+            if prefillText != nil, ProcessInfo.processInfo.environment["PROSPER_PREFILL_DEBUG"] != nil {
+                let chunks = (debugChunks ?? []).prefix(6)
+                    .map { $0.replacingOccurrences(of: "\n", with: "\\n") }
+                    .joined(separator: "|")
+                NSLog("prosper prefill-debug: raw=\"%@\" chunks=[%@]",
+                      text.replacingOccurrences(of: "\n", with: "\\n"), chunks)
+            }
             // Restore the cache to exactly `promptTokens` by trimming the tokens we
             // just generated, so the next keystroke matches prompt-to-prompt. If the
             // window filled mid-decode (no longer trimmable), drop the cache and let
@@ -1348,11 +1432,13 @@ actor MLXEngine {
     /// cost roughly one prefill + K decodes. Sampling (temperature > 0) supplies the
     /// diversity; a greedy temperature yields K identical candidates. Completions are
     /// raw (unsanitized) — the caller sanitizes and builds the `CandidateBuffer`.
+    /// UNUSED by default: MLX inline fallback. The llama.cpp engine (LlamaInlineEngine) is the default; this path runs only with inlineEngineLlama=false or PROSPER_INLINE_ENGINE=mlx.
     func generateInlineCandidates(
         prompt: String, system: String?, maxTokens: Int, temperature: Float,
         topP: Float = 1.0, stop: [String] = [], maxWords: Int = 0,
         topK: Int? = nil, minP: Float? = nil,
-        requiredScript: ScriptClassifier.Target? = nil, k: Int
+        requiredScript: ScriptClassifier.Target? = nil, k: Int,
+        prefillText: String? = nil
     ) async throws -> [(text: String, avgLogprob: Float)] {
         activeGenerations += 1
         defer { endGeneration() }
@@ -1363,7 +1449,8 @@ actor MLXEngine {
             let text = try await generateInline(
                 prompt: prompt, system: system, maxTokens: maxTokens,
                 temperature: temperature, topP: topP, stop: stop, maxWords: maxWords,
-                topK: topK, minP: minP, requiredScript: requiredScript, recorder: rec)
+                topK: topK, minP: minP, requiredScript: requiredScript, recorder: rec,
+                prefillText: prefillText)
             out.append((text, rec.averageLogprob))
         }
         return out.sorted { $0.avgLogprob > $1.avgLogprob }
@@ -1375,6 +1462,7 @@ actor MLXEngine {
     /// (`Self.shouldUseSpeculative`); otherwise — and on ANY speculative failure — it
     /// uses the proven single-model `generateInline`. So enabling the feature is never
     /// worse than today: a missing/broken/incompatible draft transparently degrades.
+    /// UNUSED by default: MLX inline fallback. The llama.cpp engine (LlamaInlineEngine) is the default; this path runs only with inlineEngineLlama=false or PROSPER_INLINE_ENGINE=mlx.
     func generateInlineRouted(
         prompt: String,
         system: String?,
@@ -1385,7 +1473,8 @@ actor MLXEngine {
         maxWords: Int = 0,
         topK: Int? = nil,
         minP: Float? = nil,
-        requiredScript: ScriptClassifier.Target? = nil
+        requiredScript: ScriptClassifier.Target? = nil,
+        prefillText: String? = nil
     ) async throws -> String {
         // Tracked so a forced unload (autocomplete-disable) arriving mid-completion
         // defers instead of freeing GPU buffers under the inline compute. Cost is two
@@ -1396,7 +1485,10 @@ actor MLXEngine {
         // iterator doesn't expose — so a live script constraint routes to the
         // single-model path (the constraint matters more than the draft's speed-up).
         let guided = requiredScript != nil && requiredScript != .unconstrained
-        if !guided, Self.shouldUseSpeculative(
+        // The speculative iterator assembles its own prompt and has no model-turn
+        // prefill seam — a prefill request routes to the single-model path.
+        let hasPrefill = prefillText?.isEmpty == false
+        if !guided, !hasPrefill, Self.shouldUseSpeculative(
             enabled: Preferences.speculativeDecodingEnabled,
             draftLoaded: draftContainer != nil
         ) {
@@ -1415,7 +1507,8 @@ actor MLXEngine {
         return try await generateInline(
             prompt: prompt, system: system, maxTokens: maxTokens,
             temperature: temperature, topP: topP, stop: stop, maxWords: maxWords,
-            topK: topK, minP: minP, requiredScript: requiredScript
+            topK: topK, minP: minP, requiredScript: requiredScript,
+            prefillText: prefillText
         )
     }
 
@@ -1453,6 +1546,7 @@ actor MLXEngine {
     /// fresh prefill per request and do NOT reuse the `InlineCacheBox` prefix cache (the
     /// non-speculative path keeps its prefix reuse, untouched).
     /// TODO(WS2): unify with InlineCacheBox prefix reuse.
+    /// UNUSED by default: MLX inline fallback. The llama.cpp engine (LlamaInlineEngine) is the default; this path runs only with inlineEngineLlama=false or PROSPER_INLINE_ENGINE=mlx.
     func generateInlineSpeculative(
         prompt: String,
         system: String?,

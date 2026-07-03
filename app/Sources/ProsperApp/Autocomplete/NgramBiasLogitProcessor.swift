@@ -1,3 +1,6 @@
+// UNUSED by default: part of the MLX inline fallback path — the llama.cpp
+// engine (LlamaInlineEngine, default-on) does not use this. Kept compiling
+// for the inlineEngineLlama=false / PROSPER_INLINE_ENGINE=mlx escape hatch.
 import Foundation
 import MLX
 import MLXLMCommon

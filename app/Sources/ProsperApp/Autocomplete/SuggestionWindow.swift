@@ -75,7 +75,7 @@ final class SuggestionWindow {
     /// here, and stay put. Type-through/deletes mutate visibility of a prefix
     /// (`consumeGhost`/`unconsumeGhost`) without touching the frame or re-laying
     /// out the text, so the remainder is pixel-identical between keystrokes —
-    /// no shimmer, no drift, no left-right wiggle (Cotypist's observed model).
+    /// no shimmer, no drift, no left-right wiggle (the reference app's observed model).
     func show(text: String, at caretRect: CGRect, fieldRect: CGRect? = nil) {
         guard !text.isEmpty else {
             hide()
@@ -122,8 +122,14 @@ final class SuggestionWindow {
         // the glyphs; Chromium/Electron report the true glyph box) and validated
         // against the field bounds — see `ghostLineCenterY`.
         let lineCenterY = AutocompleteEngine.ghostLineCenterY(caret: caretRect, field: fieldRect)
-        // Whole-point origin so the glyph rasterization phase is stable.
-        let origin = CGPoint(x: (startX).rounded(), y: (lineCenterY - height / 2).rounded())
+        // Device-pixel origin so the glyph rasterization phase is stable and the
+        // ghost doesn't sit up to half a point off the host glyphs on retina
+        // (the reference app: round(x·scale)/scale, CompletionBackdropManager).
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let origin = CGPoint(
+            x: (startX * scale).rounded() / scale,
+            y: ((lineCenterY - height / 2) * scale).rounded() / scale
+        )
         let frame = NSRect(origin: origin, size: NSSize(width: width, height: height))
         panel.setFrame(frame, display: true)
         label.frame = NSRect(
@@ -160,7 +166,7 @@ final class SuggestionWindow {
     /// Appends text to the anchored ghost WITHOUT touching the existing layout:
     /// the frame origin, the consumed prefix, and every glyph already on screen
     /// keep their exact positions — the panel only grows to the right. This is
-    /// how the ghost stays LONG while the user types toward its end (Cotypist
+    /// how the ghost stays LONG while the user types toward its end (reference
     /// parity): the model's continuation of the ghost attaches to it instead of
     /// a fresh suggestion replacing it.
     func extendGhost(appending text: String) {
@@ -290,7 +296,7 @@ final class SuggestionWindow {
         return min(naturalWidth, max(0, available))
     }
 
-    /// Renders a suggested spelling fix Cotypist-style, split at the first
+    /// Renders a suggested spelling fix reference-style, split at the first
     /// divergent character: a thin red line strikes through the user's OWN
     /// letters that the accept will retype (drawn over the field text, to the
     /// LEFT of the caret — no glyphs are redrawn, just the line), and the

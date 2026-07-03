@@ -19,7 +19,7 @@ struct AppProfile: Sendable, Equatable {
         /// caret path and Chromium-pasteboard / OCR context extraction.
         case electron
         /// A terminal emulator — monospaced, command-oriented; completion should be
-        /// conservative (see `TerminalCompletionMode` in Cotypist's design).
+        /// conservative (see `TerminalCompletionMode` in the reference app's design).
         case terminal
         /// A native web browser chrome (address bar etc.); page text fields still
         /// complete, but the omnibox is handled separately by `BrowserURL`.
@@ -197,7 +197,7 @@ struct AppProfile: Sendable, Equatable {
 
     // MARK: - Bundle-id tables (lowercased for case-insensitive match)
 
-    /// Chromium/Electron apps confirmed to expose poor AX text. Cotypist
+    /// Chromium/Electron apps confirmed to expose poor AX text. The reference app
     /// special-cases the same family (Slack, Notion observed reading Chromium
     /// pasteboard flavors). A generic `"electron"` substring check in
     /// `profile(for:)` catches unlisted ones.

@@ -63,27 +63,27 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     }
 
     /// Translate, returning a JSON object string the Lua `host.llm.translate`
-    /// wrapper decodes into a table: `{ primary, detected, candidates = [{ text,
-    /// label, note }] }`. The full structure (alternatives + detected language) is
-    /// surfaced so extensions can build rich result views, not just a flat string.
+    /// wrapper decodes into a table: `{ status, primary, detected, candidates =
+    /// [{ text, label, note }] }`. Staged: the first call starts the pipeline
+    /// and returns the current milestone immediately (status "loading" /
+    /// "translating"); the runner re-invokes the handler on each
+    /// `CoreBridge.translateProgress` notification until status is "done".
     /// Empty string on failure (the Lua wrapper maps that to nil).
     func llmTranslate(_ text: String, target: String, source: String?) async -> String {
-        let result: TranslationResult? = await withCheckedContinuation { cont in
-            Task { @MainActor in
-                CoreBridge.translate(text, target: target, source: source) { cont.resume(returning: $0) }
-            }
+        let snap = await MainActor.run {
+            CoreBridge.translateStaged(text, target: target, source: source)
         }
-        guard let result, !result.primary.isEmpty else { return "" }
-        let obj: [String: Any] = [
-            "primary": result.primary,
-            "detected": result.detectedLanguage ?? "",
-            "candidates": result.candidates.map { c -> [String: String] in
-                var item = ["text": c.text]
-                if let l = c.label { item["label"] = l }
-                if let e = c.explanation { item["note"] = e }
-                return item
-            },
+        var obj: [String: Any] = [
+            "status": snap.status,
+            "primary": snap.result?.primary ?? "",
+            "detected": snap.result?.detectedLanguage ?? "",
         ]
+        obj["candidates"] = (snap.result?.candidates ?? []).map { c -> [String: String] in
+            var item = ["text": c.text]
+            if let l = c.label { item["label"] = l }
+            if let e = c.explanation { item["note"] = e }
+            return item
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: obj),
               let json = String(data: data, encoding: .utf8) else { return "" }
         return json

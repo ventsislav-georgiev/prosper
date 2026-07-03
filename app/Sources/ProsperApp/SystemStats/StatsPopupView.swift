@@ -345,27 +345,35 @@ struct StatsPopupView: View {
         .frame(height: sz(70))
     }
 
-    // Mirrored about the centre line — upload fills upward, download downward — each
-    // normalised to its own peak, with the peak rates labelled top-left/bottom-left.
-    // exelban's network history.
+    // Mirrored about the centre line — upload fills upward, download downward — both
+    // normalised to the SAME shared peak so KB/s and MB/s heights are comparable.
+    // The per-direction peak rates within the visible window label top-left/bottom-left.
     private var networkChart: some View {
         let up = store.history("net.up"), down = store.history("net.down")
         let cfg = store.style.config(.network)
         let upPeak = up.max() ?? 0, downPeak = down.max() ?? 0
+        let peak = max(upPeak, downPeak)
         return ZStack(alignment: .leading) {
-            MirrorNetChart(up: up, upPeak: upPeak, upColor: cfg.up.color,
-                           down: down, downPeak: downPeak, downColor: cfg.down.color)
+            MirrorNetChart(up: up, upColor: cfg.up.color,
+                           down: down, downColor: cfg.down.color, peak: peak)
                 .frame(height: sz(90))
             VStack(alignment: .leading) {
-                Text(StatsFormat.rateMenu(upPeak))
+                chartPeakLabel("↑ " + StatsFormat.rateMenu(upPeak))
                 Spacer()
-                Text(StatsFormat.rateMenu(downPeak))
+                chartPeakLabel("↓ " + StatsFormat.rateMenu(downPeak))
             }
-            .font(Neon.font(10).monospacedDigit())
-            .foregroundStyle(Neon.textSecondary)
             .padding(sz(4))
         }
         .frame(height: sz(90))
+    }
+
+    // Peak-rate chip readable over the chart fill.
+    private func chartPeakLabel(_ s: String) -> some View {
+        Text(s)
+            .font(Neon.font(10).monospacedDigit())
+            .foregroundStyle(Neon.textPrimary)
+            .padding(.horizontal, sz(4)).padding(.vertical, sz(1))
+            .background(RoundedRectangle(cornerRadius: sz(3)).fill(.black.opacity(0.45)))
     }
 
     // MARK: - Per-module detail
@@ -1192,17 +1200,18 @@ private struct StatusBadge: View {
 }
 
 /// Mirrored network history: upload fills upward from the centre, download
-/// downward, each normalised to its own peak. exelban's network chart.
+/// downward, both normalised to one shared peak so the two halves are comparable.
 private struct MirrorNetChart: View {
-    let up: [Double]; let upPeak: Double; let upColor: Color
-    let down: [Double]; let downPeak: Double; let downColor: Color
+    let up: [Double]; let upColor: Color
+    let down: [Double]; let downColor: Color
+    let peak: Double
 
     var body: some View {
         Canvas { ctx, size in
             let mid = size.height / 2
-            func fillArea(_ vals: [Double], _ peak: Double, _ color: Color, up: Bool) {
+            let maxV = Swift.max(peak, 0.0001)
+            func fillArea(_ vals: [Double], _ color: Color, up: Bool) {
                 guard vals.count > 1 else { return }
-                let maxV = Swift.max(peak, 0.0001)
                 let n = vals.count
                 var p = Path()
                 p.move(to: CGPoint(x: 0, y: mid))
@@ -1217,8 +1226,8 @@ private struct MirrorNetChart: View {
                 ctx.fill(p, with: .color(color.opacity(0.5)))
                 ctx.stroke(p, with: .color(color), lineWidth: 1)
             }
-            fillArea(up, upPeak, upColor, up: true)
-            fillArea(down, downPeak, downColor, up: false)
+            fillArea(up, upColor, up: true)
+            fillArea(down, downColor, up: false)
         }
     }
 }

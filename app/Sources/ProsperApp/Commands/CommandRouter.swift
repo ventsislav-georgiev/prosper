@@ -708,7 +708,13 @@ enum CommandRouter {
             let c = registry?.command(id: id)?.command
             return (c?.requiresModel ?? false, c?.prefix)
         }
-        if info.requiresModel && !modelReady {
+        // Translate on the llama engine loads its own GGUF inside the staged
+        // pipeline (with an honest "Loading model…" milestone) — preloading MLX
+        // here would block the first render AND waste ~4 GB on a model translate
+        // never touches.
+        let llamaServesTranslate = id == "translate.run"
+            && LlamaInlineEngine.isEnabled && LlamaInlineEngine.modelIsDownloaded
+        if info.requiresModel && !modelReady && !llamaServesTranslate {
             // The model is loaded lazily (it is NOT preloaded just because a
             // model-requiring extension like Translate is enabled — that would
             // cost ~4 GB at idle). The user has explicitly entered this locked

@@ -7,7 +7,7 @@ import Foundation
 /// guards (`mismatchedScript`, `containsForeignScript`) that reject a finished
 /// completion and burn a retry rung. The decode-time analogue is to never let the
 /// model emit an out-of-script token in the first place — the "guided decoding"
-/// mechanism the recovered Cotypist source uses.
+/// mechanism the recovered reference source uses.
 ///
 /// This is the pure, testable core: given a target script and a token's text piece,
 /// decide whether that piece may be generated. `RequiredScriptLogitProcessor` turns

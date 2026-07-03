@@ -121,8 +121,13 @@ struct ListItem: Decodable, Equatable, Identifiable {
     /// Quicklinks, so http(s) rows show the page's favicon. Distinct from
     /// `launch` (which is treated as a file/app-bundle path).
     let url: String?
+    /// True marks an in-progress placeholder row: the host renders a small
+    /// indeterminate spinner next to the title (Translate's "Finding
+    /// alternatives…" while enrichment streams in).
+    let loading: Bool?
 
     var allActions: [ExtensionAction] { actions ?? [] }
+    var isLoading: Bool { loading ?? false }
 }
 
 struct DetailNode: Decodable, Equatable {

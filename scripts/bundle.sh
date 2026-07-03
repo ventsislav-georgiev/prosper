@@ -207,6 +207,23 @@ else
   echo "warn: Sparkle.framework not found under .build/artifacts — auto-update will not load." >&2
 fi
 
+# Bundle the llama framework (llama.cpp binaryTarget backing LlamaInlineEngine).
+# Same @rpath story as Sparkle above. macOS slice only; ditto follows the
+# Versions/A symlink layout correctly.
+LLAMA_FW=$(/usr/bin/find "$ROOT/app/.build/artifacts" \
+  -path '*/llama.xcframework/macos-*/llama.framework' -type d 2>/dev/null | /usr/bin/head -n1)
+if [[ -n "$LLAMA_FW" ]]; then
+  mkdir -p "$APP/Contents/Frameworks"
+  /usr/bin/ditto "$LLAMA_FW" "$APP/Contents/Frameworks/llama.framework"
+  if ! otool -l "$APP/Contents/MacOS/ProsperApp" | grep -q "@executable_path/../Frameworks"; then
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/ProsperApp"
+  fi
+  codesign "${SIGN_FLAGS[@]}" --deep "$APP/Contents/Frameworks/llama.framework" >/dev/null 2>&1 || \
+    echo "warn: codesign llama.framework failed." >&2
+else
+  echo "warn: llama.framework not found under .build/artifacts — llama inline engine will not load." >&2
+fi
+
 # Optional coding-agent helper: the Codex binary at Contents/Helpers/codex (resolved
 # first by AgentController.resolveCodexExecutable). On-demand by design — a missing
 # helper is expected, not a failure: the app downloads the pinned, SHA-256-verified
