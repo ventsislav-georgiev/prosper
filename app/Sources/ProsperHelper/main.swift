@@ -182,16 +182,53 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         let cid = ObjectIdentifier(conn)
         fanQ.async {
             guard let fan = self.fan else { fanLog.error("setFanManualRPM: no SMC fan controller — inert"); reply(false); return }
+            // Arm crash-safety BEFORE the risky write, not after. If setManual
+            // half-succeeds (mode flipped, target write throws) AND its own fail-closed
+            // setAuto cleanup ALSO fails, the fan is left manual — with post-hoc arming
+            // the daemon would then skip didSetManual and a client drop would find
+            // nothing to reset. Over-arming on a clean failure is harmless (resetAll is
+            // idempotent and cheap); under-arming is the strand hazard.
+            self.fanCore.didSetManual()
+            self.fanHolderID = cid
+            self.armFanKillSwitch_fanQ()
             do {
                 try fan.setManual(index, rpm: rpm)
-                self.fanCore.didSetManual()
-                self.fanHolderID = cid
                 fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) ok")
                 reply(true)
             } catch {
                 fanLog.error("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)")
                 reply(false)
             }
+        }
+    }
+
+    // MARK: Fan temperature kill-switch
+
+    /// Supervision timer, live only while a manual pin is held. Every 30 s it reads
+    /// the hottest SMC temperature and, past FanControlCore.killSwitchCelsius, forces
+    /// every fan back to auto — the active backstop for a fan pinned low under
+    /// sustained load (the 200 RPM floor + SoC self-throttle are passive ones).
+    /// Runs on `fanQ` like every other fan mutation; disarms itself the moment
+    /// nothing manual is held, so an idle daemon has zero timer wakeups.
+    private var fanKillTimer: DispatchSourceTimer?
+    private func armFanKillSwitch_fanQ() {
+        guard fanKillTimer == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: fanQ)
+        t.schedule(deadline: .now() + 30, repeating: 30, leeway: .seconds(5))
+        t.setEventHandler { [weak self] in self?.fanKillTick_fanQ() }
+        fanKillTimer = t
+        t.resume()
+    }
+    private func fanKillTick_fanQ() {
+        guard fanCore.manualHeld else {
+            fanKillTimer?.cancel(); fanKillTimer = nil
+            return
+        }
+        let mx = fan?.maxTemperature()
+        if fanCore.temperatureTick(maxCelsius: mx) {
+            fanHolderID = nil
+            fanLog.fault("fan kill-switch FIRED: \(mx ?? .nan, privacy: .public)°C ≥ \(FanControlCore.killSwitchCelsius, privacy: .public)°C — all fans reset to auto")
+            fanKillTimer?.cancel(); fanKillTimer = nil
         }
     }
 

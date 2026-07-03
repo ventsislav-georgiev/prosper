@@ -199,8 +199,11 @@ public final class StatsPoller {
             latest.netLatency = ping?.latest()
             if let c = ping?.connectivity() { latest.connectivity = c }
             // netLink recomputes off-queue (CoreWLAN RSSI can block ~tens of ms) and
-            // we read its cache here — never blocks this serial tick.
-            if slow { netLink?.refresh(interface: s.interfaceName) }
+            // we read its cache here — never blocks this serial tick. POPUP-GATED:
+            // its refresh also owns the public-IP fetch (api.country.is), and an idle
+            // menu-bar app must make no third-party requests — link details are only
+            // shown in the popup anyway.
+            if procFlag.get() { netLink?.refresh(interface: s.interfaceName) }
             latest.netLink = netLink?.latest()
         }
         if gpu != nil, let s = try? gpu!.read() {
@@ -210,8 +213,11 @@ public final class StatsPoller {
             latest.power = p
             if enabled.contains(.power) { push("power", p.totalWatts) }
         }
-        if slow, let temps = sensors?.read() {
-            latest.temperatures = temps
+        if slow {
+            // HID die sensors + the named SMC set (Airflow/NAND/Battery/Airport) —
+            // together they match exelban/stats' temperature list.
+            let temps = (sensors?.read() ?? []) + (powerSensors?.temperatures() ?? [])
+            if !temps.isEmpty { latest.temperatures = temps + tempAggregates(temps) }
         }
         if slow, let vi = powerSensors?.read(), !vi.isEmpty {
             latest.powerSensors = vi

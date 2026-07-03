@@ -95,7 +95,7 @@ public final class SMCFanController {
         // re-clamped to the absolute rails HERE, so no in-module caller can write
         // an out-of-rail speed by reaching guardedWrite directly — the value bound
         // no longer depends on every caller routing through setManual.
-        let safeBytes = key.hasSuffix("Tg") ? clampTargetBytes(bytes) : bytes
+        let safeBytes = key.hasSuffix("Tg") ? clampTargetBytes(key, bytes) : bytes
         // Tag the failing key onto a firmware rejection so the daemon log names WHICH
         // write the chassis refused (Ftst unlock / F{i}Md mode / F{i}Tg target) — the
         // bare result byte alone can't tell those apart.
@@ -103,16 +103,20 @@ public final class SMCFanController {
         catch SMCError.firmwareReject(let r) { throw SMCError.writeReject(key, r) }
     }
 
-    /// Decode an RPM target (format depends on platform), clamp to the absolute
-    /// floor/ceiling, re-encode. Floor is the thermal hazard, so it's hard-guarded.
-    private func clampTargetBytes(_ bytes: [UInt8]) -> [UInt8] {
-        let ftst = hasFtst()
-        let rpm = ftst ? Double(SMCDecode.decodeFloatLE(bytes))
-                       : Double(SMCDecode.decodeFPE2(bytes))
-        guard rpm.isFinite else { return ftst ? SMCDecode.encodeFloatLE(Float(Self.absoluteFloorRPM))
-                                              : SMCDecode.encodeFPE2(Int(Self.absoluteFloorRPM)) }
+    /// Decode an RPM target, clamp to the absolute floor/ceiling, re-encode. Floor is
+    /// the thermal hazard, so it's hard-guarded. The encoding is derived from the
+    /// key's ACTUAL dataType — the same source `writeTarget` uses — so the clamp
+    /// re-encodes in the format the bytes were written in; deriving it from a
+    /// hasFtst() guess instead would corrupt the value on any board where the two
+    /// disagree (Ftst present but an `fpe2` target, or vice-versa).
+    private func clampTargetBytes(_ key: String, _ bytes: [UInt8]) -> [UInt8] {
+        let fpe2 = (smc.read(key)?.type ?? (hasFtst() ? "flt " : "fpe2")) == "fpe2"
+        let rpm = fpe2 ? Double(SMCDecode.decodeFPE2(bytes))
+                       : Double(SMCDecode.decodeFloatLE(bytes))
+        guard rpm.isFinite else { return fpe2 ? SMCDecode.encodeFPE2(Int(Self.absoluteFloorRPM))
+                                              : SMCDecode.encodeFloatLE(Float(Self.absoluteFloorRPM)) }
         let safe = Swift.min(Swift.max(rpm, Self.absoluteFloorRPM), Self.absoluteCeilRPM)
-        return ftst ? SMCDecode.encodeFloatLE(Float(safe)) : SMCDecode.encodeFPE2(Int(safe))
+        return fpe2 ? SMCDecode.encodeFPE2(Int(safe)) : SMCDecode.encodeFloatLE(Float(safe))
     }
 
     // MARK: Manual / auto
@@ -179,9 +183,36 @@ public final class SMCFanController {
         }
         if hasFtst() {
             do { try guardedWrite("Ftst", [0]) } catch { ok = false }   // M1–M4 master unlock-clear
+        } else if n == 0 {
+            // No Ftst master-clear exists AND FNum read 0 (transient SMC fail or a
+            // fanless board) — nothing was provably cleared, so fail CLOSED: the
+            // caller keeps crash-safety armed and retries, instead of disarming on a
+            // reset that touched no key. On M1–M4 the Ftst=0 above covers this case.
+            ok = false
         }
         try? guardedWrite("FS! ", [0, 0]) // Intel force bitmask (best effort)
         return ok
+    }
+
+    // MARK: Temperature kill-switch read-side
+
+    /// Hottest SMC temperature in °C, or nil if none readable. Key list is probed
+    /// ONCE (firmware key set is static for a boot): every `T…` key whose value
+    /// decodes to a plausible die/skin temperature. Each subsequent call is a plain
+    /// read of that cached list — cheap enough for a 30 s supervision tick.
+    private var tempKeys: [String]?
+    public func maxTemperature() -> Double? {
+        if tempKeys == nil {
+            tempKeys = smc.allKeys().filter { key in
+                guard key.hasPrefix("T"), let v = smc.read(key)?.double else { return false }
+                return v.isFinite && v > 10 && v < 130
+            }
+        }
+        var mx = -Double.infinity
+        for k in tempKeys ?? [] {
+            if let v = smc.read(k)?.double, v.isFinite, v > 10, v < 130 { mx = Swift.max(mx, v) }
+        }
+        return mx > 0 ? mx : nil
     }
 
     // MARK: AS unlock sequence

@@ -18,6 +18,21 @@ import CoreFoundation
 public struct TempSensor: Sendable, Equatable {
     public let name: String
     public let celsius: Double
+    public init(name: String, celsius: Double) { self.name = name; self.celsius = celsius }
+}
+
+/// exelban/stats-style synthetic aggregate rows: "Average CPU" / "Hottest CPU"
+/// over the per-core CPU sensors, same for GPU. Appended after the real sensors
+/// so the popup reads like Stats' Temperature list. Pure — unit-tested.
+public func tempAggregates(_ temps: [TempSensor]) -> [TempSensor] {
+    var out: [TempSensor] = []
+    for (prefix, label) in [("CPU ", "CPU"), ("GPU ", "GPU")] {
+        let vals = temps.filter { $0.name.hasPrefix(prefix) }.map(\.celsius)
+        guard vals.count > 1, let mx = vals.max() else { continue }
+        out.append(TempSensor(name: "Average \(label)", celsius: vals.reduce(0, +) / Double(vals.count)))
+        out.append(TempSensor(name: "Hottest \(label)", celsius: mx))
+    }
+    return out
 }
 
 /// A labeled voltage or current rail (SMC `flt ` sensor). `unit` distinguishes
@@ -47,7 +62,12 @@ public final class IOHIDSensors {
     private let copyEvt: CopyEvtT
     private let getFloat: GetFloatT
     private let copyProp: CopyPropT
-    private var services: [AnyObject] = []
+    /// Services with their PRE-COMPUTED labels. The service set and its "Product"
+    /// names are stable for a boot, so the pattern-matching/label work runs once at
+    /// refresh — not 77 sensors × 11 patterns of string splitting every slow tick.
+    /// Numbering from the full service list (not just currently-readable sensors)
+    /// also keeps labels stable when a sensor transiently reads 0.
+    private var services: [(service: AnyObject, name: String)] = []
 
     public init?() {
         guard let h = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else { return nil }
@@ -75,9 +95,15 @@ public final class IOHIDSensors {
         refreshServices()
     }
 
-    /// Service list is stable for a boot; cache it and refresh only if empty.
+    /// Service list is stable for a boot; cache it (labels included) and refresh
+    /// only if empty.
     private func refreshServices() {
-        services = (copySvc(client)?.takeRetainedValue() as? [AnyObject]) ?? []
+        let list = (copySvc(client)?.takeRetainedValue() as? [AnyObject]) ?? []
+        var counters = [Int: Int]()   // per-pattern running index for the % placeholder
+        services = list.map { s in
+            let raw = (copyProp(s, "Product" as CFString)?.takeRetainedValue() as? String) ?? "Sensor"
+            return (s, Self.label(raw, counters: &counters))
+        }
     }
 
     /// Snapshot all readable temperature sensors (named, > 0 °C).
@@ -85,13 +111,11 @@ public final class IOHIDSensors {
         if services.isEmpty { refreshServices() }
         var out = [TempSensor]()
         out.reserveCapacity(services.count)
-        var counters = [Int: Int]()   // per-pattern running index for the % placeholder
-        for s in services {
+        for (s, name) in services {
             guard let ev = copyEvt(s, Int64(Self.kTemperature), 0, 0)?.takeRetainedValue() else { continue }
             let v = getFloat(ev, Int64(Self.kTemperature) << 16)
             guard v > 0, v < 150 else { continue }   // reject bogus/unpopulated
-            let raw = (copyProp(s, "Product" as CFString)?.takeRetainedValue() as? String) ?? "Sensor"
-            out.append(TempSensor(name: Self.label(raw, counters: &counters), celsius: v))
+            out.append(TempSensor(name: name, celsius: v))
         }
         return out
     }

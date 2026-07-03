@@ -25,6 +25,26 @@ public final class FanControlCore {
     /// A manual write succeeded — arm the crash-safety reset.
     public func didSetManual() { manualHeld = true }
 
+    /// Temperature kill-switch threshold. Above this, a manual pin is presumed to be
+    /// starving the chassis and the OS gets the fans back unconditionally. 95 °C is
+    /// past any AS steady-state target (die temps throttle ~105 °C) but below damage
+    /// territory — the switch fires before the SoC is forced into hard throttle.
+    public static let killSwitchCelsius: Double = 95
+
+    /// Periodic temperature check while a manual pin is held. `maxCelsius` is the
+    /// hottest sensor the daemon could read (nil = unreadable → no decision; the
+    /// 200 RPM floor + the SoC's own throttle remain the backstop). Fires the full
+    /// reset and disarms when the threshold is crossed; returns whether it fired so
+    /// the daemon can clear its holder and log.
+    @discardableResult
+    public func temperatureTick(maxCelsius: Double?) -> Bool {
+        guard manualHeld, let t = maxCelsius, t.isFinite,
+              t >= Self.killSwitchCelsius else { return false }
+        reset()
+        manualHeld = false
+        return true
+    }
+
     /// An explicit full reset (app disabled fan control / pre-sleep) succeeded —
     /// nothing left wedged, so disarm. A single-fan auto does NOT call this: other
     /// fans may still be manual, and over-resetting on a later drop is harmless while

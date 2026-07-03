@@ -109,13 +109,27 @@ enum FanControlHelper {
         return ok
     }
 
+    /// Ceiling for a COLD first engage: the AS unlock is 0.5 s settle + 150 spaced
+    /// mode-key retries (~15 s) + up to 100 spaced target retries (~5 s) ≈ 20.5 s
+    /// worst case. The steady-commit default (12 s) times out mid-dance and reports
+    /// a slow-but-succeeding engage as failure. Shared by every cold path (popup
+    /// first engage, launch/wake reapply).
+    static let firstEngageTimeout: TimeInterval = 35
+
     /// Re-apply the user's saved manual targets — on app launch and after wake.
     /// No-op (and never spins up the daemon) when manual control is off.
     static func reapplyFromPreferences() async {
         guard Preferences.fanManualEnabled else { return }
         let targets = Preferences.fanTargets
         guard !targets.isEmpty else { return }
-        for (index, rpm) in targets { _ = await setManual(index, rpm: rpm) }
+        // Launch/wake IS a cold engage: sleep hardware-clears Ftst, so the daemon
+        // re-runs the full unlock. First fan gets the cold ceiling; once it lands the
+        // unlock is live and the siblings commit at the steady default.
+        var first = true
+        for (index, rpm) in targets {
+            _ = await setManual(index, rpm: rpm, timeout: first ? firstEngageTimeout : 12)
+            first = false
+        }
     }
 
     // MARK: - Sleep / wake (thermal safety across the sleep transition)

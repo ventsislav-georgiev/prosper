@@ -50,4 +50,41 @@ final class FanControlCoreTests: XCTestCase {
         core.lastClientGone()              // a second invalidation callback
         XCTAssertEqual(resets(), 1, "reset fires once per manual session, not per stray callback")
     }
+
+    // MARK: - Temperature kill-switch
+
+    func testKillSwitchFiresAtThresholdAndDisarms() {
+        let (core, resets) = makeCore()
+        core.didSetManual()
+        XCTAssertTrue(core.temperatureTick(maxCelsius: FanControlCore.killSwitchCelsius),
+                      "at/above threshold while manual held must fire")
+        XCTAssertEqual(resets(), 1, "kill-switch hands fans back to the OS")
+        XCTAssertFalse(core.manualHeld, "fired kill-switch disarms the manual hold")
+        core.lastClientGone()
+        XCTAssertEqual(resets(), 1, "post-fire client drop must not double-reset")
+    }
+
+    func testKillSwitchIgnoresBelowThreshold() {
+        let (core, resets) = makeCore()
+        core.didSetManual()
+        XCTAssertFalse(core.temperatureTick(maxCelsius: FanControlCore.killSwitchCelsius - 0.1))
+        XCTAssertEqual(resets(), 0)
+        XCTAssertTrue(core.manualHeld, "below threshold keeps the manual hold (and crash-safety) armed")
+    }
+
+    func testKillSwitchIgnoresWhenNotHeld() {
+        let (core, resets) = makeCore()
+        XCTAssertFalse(core.temperatureTick(maxCelsius: 120),
+                       "no manual hold → nothing to kill, never fight the OS")
+        XCTAssertEqual(resets(), 0)
+    }
+
+    func testKillSwitchIgnoresNilAndNonFiniteReadings() {
+        let (core, resets) = makeCore()
+        core.didSetManual()
+        XCTAssertFalse(core.temperatureTick(maxCelsius: nil), "unreadable sensors must not fire")
+        XCTAssertFalse(core.temperatureTick(maxCelsius: .nan))
+        XCTAssertEqual(resets(), 0)
+        XCTAssertTrue(core.manualHeld, "bad readings leave the hold (and crash-safety) intact")
+    }
 }

@@ -151,10 +151,33 @@ final class StatsController {
         resizeItems()
     }
 
+    /// Width-probe memo: item width only moves when its width-driving TEXT moves
+    /// (non-network widgets reserve a fixed hidden width-sample; network's two rate
+    /// strings vary), or when the style/theme scale changes. Without this, every
+    /// status item paid a forced `layoutSubtreeIfNeeded` every tick forever.
+    private var lastWidthKeys: [StatsModule: String] = [:]
+    private var lastWidthStyle: StatsWidgetStyle?
+    private var lastWidthScale: CGFloat = 0
+
     /// Sync each item's width to its content. Only writes when it actually changed
     /// — every length write relayouts the whole menu bar.
     private func resizeItems() {
-        for (_, pair) in items {
+        if lastWidthStyle != store.style || lastWidthScale != ThemeRuntime.scale {
+            lastWidthKeys = [:]                    // style/scale change → re-probe all once
+            lastWidthStyle = store.style
+            lastWidthScale = ThemeRuntime.scale
+        }
+        for (m, pair) in items {
+            let key: String
+            if m == .network {
+                let n = store.snapshot.network
+                key = StatsFormat.rateMenu(n?.uploadBytesPerSec ?? 0)
+                    + StatsFormat.rateMenu(n?.downloadBytesPerSec ?? 0)
+            } else {
+                key = m.primaryText(store.snapshot, showUnit: store.style.config(m).showUnit)
+            }
+            guard lastWidthKeys[m] != key else { continue }
+            lastWidthKeys[m] = key
             // Resolve any pending SwiftUI invalidation so fittingSize reflects the
             // string just published (else the item lags a tick when a digit-count
             // boundary changes the width). The cost that matters — the `length`

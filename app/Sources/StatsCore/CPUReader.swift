@@ -29,7 +29,7 @@ public struct CPUReader: StatsReader {
         var cpuCount: natural_t = 0
         var info: processor_info_array_t?
         var infoCount: mach_msg_type_number_t = 0
-        let kr = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO,
+        let kr = host_processor_info(statsHostPort, PROCESSOR_CPU_LOAD_INFO,
                                      &cpuCount, &info, &infoCount)
         guard kr == KERN_SUCCESS, let info else { throw StatsError.machCall(kr) }
         defer {

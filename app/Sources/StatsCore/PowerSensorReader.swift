@@ -33,12 +33,24 @@ public final class PowerSensorReader {
         ("IDBR", "Display"),   // backlight rail (validated present on M4 Pro)
     ]
 
+    // Named SMC temperature sensors (exelban/stats' Apple Silicon set). These are
+    // the friendly rows Stats shows that the HID sensor list can't provide —
+    // airflow, NAND, battery packs, the wireless module. The per-core CPU/GPU die
+    // temps already come from IOHIDSensors, so this stays a small curated list.
+    private static let temperatureKeys: [(String, String)] = [
+        ("TaLP", "Airflow left"), ("TaRF", "Airflow right"),
+        ("TH0x", "NAND"),
+        ("TB1T", "Battery 1"), ("TB2T", "Battery 2"),
+        ("TW0P", "Airport"),
+    ]
+
     // A rail resolved as present on THIS machine: which key to read, its label,
     // and the unit. Built once (the SMC key set is static for a boot) so steady
     // reads never pay a syscall for an absent key — a failed SMC lookup is NOT
     // cached by the SMC layer, so re-probing absent keys every tick is pure waste.
     private struct Rail { let key: String; let label: String; let unit: VISensor.Unit }
     private var resolved: [Rail]?
+    private var resolvedTemps: [(key: String, label: String)]?
 
     public init?() {
         guard let smc = try? SMC() else { return nil }
@@ -77,6 +89,27 @@ public final class PowerSensorReader {
             case .amp:  guard v.double >= 0 && v.double < 100 else { continue }
             }
             out.append(VISensor(name: r.label, value: v.double, unit: r.unit))
+        }
+        return out
+    }
+
+    /// Named SMC temperatures present on this Mac. Same resolve-once pattern as
+    /// the rails: probe the curated keys with a sanity range (a key can exist but
+    /// read 0 on a model without that sensor), then read only the live ones.
+    public func temperatures() -> [TempSensor] {
+        let list = resolvedTemps ?? {
+            let r = Self.temperatureKeys.filter { key, _ in
+                guard let v = smc.read(key)?.double else { return false }
+                return v > 10 && v < 130
+            }
+            resolvedTemps = r
+            return r
+        }()
+        var out: [TempSensor] = []
+        out.reserveCapacity(list.count)
+        for (key, label) in list {
+            guard let v = smc.read(key)?.double, v > 10, v < 130 else { continue }
+            out.append(TempSensor(name: label, celsius: v))
         }
         return out
     }

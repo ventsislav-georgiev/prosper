@@ -146,4 +146,25 @@ final class StatsHotPathBudgetTests: XCTestCase {
         // A pinned sensor always wins, even a calibration one.
         XCTAssertEqual(snap.headlineTemperature(pinned: "PMU tcal"), 52)
     }
+
+    func testTempAggregates() {
+        let temps = [
+            TempSensor(name: "CPU performance core 1", celsius: 50),
+            TempSensor(name: "CPU efficiency core 1", celsius: 40),
+            TempSensor(name: "GPU core 1", celsius: 44),
+            TempSensor(name: "GPU core 2", celsius: 52),
+            TempSensor(name: "Battery 1", celsius: 33),   // never aggregated
+            TempSensor(name: "Airport", celsius: 43),
+        ]
+        let agg = tempAggregates(temps)
+        XCTAssertEqual(agg, [
+            TempSensor(name: "Average CPU", celsius: 45),
+            TempSensor(name: "Hottest CPU", celsius: 50),
+            TempSensor(name: "Average GPU", celsius: 48),
+            TempSensor(name: "Hottest GPU", celsius: 52),
+        ])
+        // A single sensor per group is not an "aggregate" — no synthetic rows.
+        XCTAssertTrue(tempAggregates([TempSensor(name: "CPU performance core 1", celsius: 50)]).isEmpty)
+        XCTAssertTrue(tempAggregates([]).isEmpty)
+    }
 }

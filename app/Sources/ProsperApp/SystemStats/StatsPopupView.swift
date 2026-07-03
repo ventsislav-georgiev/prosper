@@ -35,6 +35,22 @@ struct StatsPopupView: View {
     /// Live fan readout for the sensors popover. Refreshed every few store ticks
     /// while open — an unprivileged SMC open/close, never the write path.
     @State private var fans: [FanReading] = []
+    @State private var fanTick = 0
+    @State private var fanReadInFlight = false
+
+    /// One unprivileged SMC read on a background task; result hops back to main.
+    /// Coalesced: a read still in flight skips the kick (SMC mailbox is serial anyway).
+    private func refreshFans() {
+        guard !fanReadInFlight else { return }
+        fanReadInFlight = true
+        Task.detached(priority: .utility) {
+            let r = FanInfo.read()
+            await MainActor.run {
+                fans = r
+                fanReadInFlight = false
+            }
+        }
+    }
 
     // Fan manual control (sensors popup only). Default OFF, opt-in, confirmation-
     // gated inline (a modal alert would dismiss the transient popover).
@@ -61,13 +77,14 @@ struct StatsPopupView: View {
         .frame(width: sz(320))
         .background(Neon.bgTop)
         .foregroundStyle(Neon.textPrimary)
-        .onAppear { if module == .sensors { fans = FanInfo.read() } }
+        .onAppear { if module == .sensors { refreshFans() } }
         .onReceive(store.$snapshot) { _ in
             guard module == .sensors else { return }
-            // Re-read every tick: a cheap unprivileged SMC read, only while this popup
-            // is open, and the readout must track real RPM closely enough to expose a
-            // fan that isn't responding to a manual write.
-            fans = FanInfo.read()
+            // Every 3rd tick, off-main: an SMC open/read/close is a full IOKit round
+            // trip — cheap, but not main-thread-per-second cheap. 3 ticks still tracks
+            // real RPM closely enough to expose a fan ignoring a manual write.
+            fanTick += 1
+            if fanTick % 3 == 0 { refreshFans() }
         }
     }
 
@@ -692,7 +709,8 @@ struct StatsPopupView: View {
             // since the call never reaches the daemon. Race the whole engage so the
             // button always resolves and surfaces the actionable error.
             let ok = await withFanTimeout(45) {
-                await FanControlHelper.setManual(first.key, rpm: first.value, timeout: 35)
+                await FanControlHelper.setManual(first.key, rpm: first.value,
+                                                 timeout: FanControlHelper.firstEngageTimeout)
             }
             guard ok else {
                 fanBusy = false
@@ -718,11 +736,13 @@ struct StatsPopupView: View {
     }
 
     /// Map a single 0…1 fraction onto every fan's own range and commit them together.
+    /// Only the in-memory @State updates per drag frame; the defaults persist rides
+    /// the debounced commit (writing defaults per frame churned disk for no reader).
     private func applyFraction(_ frac: Double) {
         let f = Swift.min(1, Swift.max(0, frac))
-        var t = Preferences.fanTargets
+        var t = fanTargets
         for fan in fansAdjustable { t[fan.id] = fan.min + f * (fan.max - fan.min) }
-        Preferences.fanTargets = t; fanTargets = t
+        fanTargets = t
         commitAll(t)
     }
 
@@ -730,11 +750,13 @@ struct StatsPopupView: View {
         Swift.min(Swift.max(v, fan.min), fan.max)
     }
 
-    /// Persist immediately (cheap) but debounce the slow root SMC writes; one
-    /// debounced burst sets all fans so a slider drag doesn't hammer the daemon.
+    /// Debounce BOTH the slow root SMC writes and the UserDefaults persist: a slider
+    /// drag emits a value per frame, and neither the daemon nor defaults should see
+    /// that stream — one burst on settle sets all fans and persists the final targets.
     private func commitAll(_ targets: [Int: Double]) {
         fanCommitWork?.cancel()
         let work = DispatchWorkItem {
+            Preferences.fanTargets = targets
             Task { for (i, rpm) in targets { await FanControlHelper.setManual(i, rpm: rpm) } }
         }
         fanCommitWork = work

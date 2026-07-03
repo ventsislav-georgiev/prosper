@@ -11,6 +11,13 @@ public enum StatsError: Error, Equatable {
     case unavailable(String)       // API/source absent on this machine
 }
 
+/// Cached host port for `host_processor_info`/`host_statistics64`. Unlike the
+/// global `mach_task_self_`, `mach_host_self()` mints a NEW send right on every
+/// call — calling it per poll tick slowly grows the task's port-name space over a
+/// menu-bar app's weeks of uptime. One right, shared by all readers, deliberately
+/// never deallocated (lives exactly as long as the process).
+let statsHostPort: host_t = mach_host_self()
+
 public protocol StatsReader {
     associatedtype Sample
     /// One snapshot. Throws on a hard failure (API gone); a soft/partial read
