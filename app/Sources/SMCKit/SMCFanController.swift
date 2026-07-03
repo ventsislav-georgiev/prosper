@@ -157,14 +157,15 @@ public final class SMCFanController {
     }
 
     /// Whether fan `i` is currently engaged in manual mode at the firmware level —
-    /// the mode key reads 1 (and on Ftst boards the master unlock is still set).
-    /// This is the reclaim probe: thermalmonitord/firmware can silently take fans
-    /// back (thermal event; sleep hardware-clears Ftst), leaving our state stale.
-    /// Readable unprivileged, so the app UI can poll it too.
+    /// the mode key reads 1. This is the reclaim probe: thermalmonitord/firmware
+    /// can silently take fans back (thermal event, sleep), which zeroes the mode
+    /// key. Deliberately does NOT check `Ftst`: when the DIRECT mode write
+    /// succeeds (this M4 Pro), the unlock dance never runs and Ftst stays 0 while
+    /// the fan is genuinely manual — requiring Ftst==1 made every healthy manual
+    /// fan read as "reclaimed" (permanent red-text flip to Automatic). Readable
+    /// unprivileged, so the app UI can poll it too.
     public func isManualEngaged(_ i: Int) -> Bool {
-        guard (smc.read(modeKey(i))?.double ?? 0) == 1 else { return false }
-        if hasFtst() { return (smc.read("Ftst")?.double ?? 0) == 1 }
-        return true
+        (smc.read(modeKey(i))?.double ?? 0) == 1
     }
 
     /// Return fan `i` to OS thermal control. `holdUnlock` (M1–M4 only) keeps
@@ -224,8 +225,13 @@ public final class SMCFanController {
     public func maxTemperature() -> Double? {
         if tempKeys == nil {
             tempKeys = smc.allKeys().filter { key in
-                guard key.hasPrefix("T"), let v = smc.read(key)?.double else { return false }
-                return v.isFinite && v > 10 && v < 130
+                guard key.hasPrefix("T"), let v = smc.read(key) else { return false }
+                // flt-only: every Apple Silicon die/skin temperature is LE Float32.
+                // Other T-typed keys aren't temperatures — live M4 Pro has `TR1d`
+                // (ioft) hovering 110–135, which sneaked past the range filter at
+                // probe time and false-fired the 95° kill-switch on every manual
+                // engage ("fan kill-switch FIRED: 116.3°C").
+                return v.type == "flt " && v.double.isFinite && v.double > 10 && v.double < 130
             }
         }
         var mx = -Double.infinity

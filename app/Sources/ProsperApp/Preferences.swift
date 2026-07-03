@@ -869,11 +869,11 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.fanHoldUnlock) }
     }
 
-    /// Temperature list order in the Sensors popup. false (default) → hottest
-    /// first (ours); true → the curated named order the sensors resolve in
-    /// (CPU efficiency/performance cores, GPU, memory, misc — exelban-style).
+    /// Temperature list order in the Sensors popup. true (default) → the curated
+    /// named order the sensors resolve in (CPU efficiency/performance cores, GPU,
+    /// memory, misc — exelban-style); false → hottest first.
     static var sensorsNamedOrder: Bool {
-        get { defaults.bool(forKey: Keys.sensorsNamedOrder) }   // absent → false
+        get { defaults.object(forKey: Keys.sensorsNamedOrder) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Keys.sensorsNamedOrder) }
     }
 
