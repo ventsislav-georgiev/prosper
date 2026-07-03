@@ -424,6 +424,45 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(div, 1)
     }
 
+    func testMergeNewItemBetweenHiddenNeighborsGrowsDivider() {
+        // New icon appears BETWEEN two saved hidden entries (revealed bar). It must
+        // join the hidden prefix — and the divider must GROW, or the last hidden
+        // entry would be pushed across the boundary into visible.
+        let desired = [ident("x", "h1"), ident("x", "h2"), ident("x", "v")]
+        let live = [ident("x", "h1"), ident("x", "new"), ident("x", "h2"), ident("x", "v")]
+        let (out, div) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                          hiddenDividerIndex: 2)
+        XCTAssertEqual(out.map(\.key), ["x#h1", "x#new", "x#h2", "x#v"])
+        XCTAssertEqual(div, 3)
+    }
+
+    func testMergePhysicallyHiddenNewItemJoinsHiddenPrefix() {
+        // Icon reappears with a changed identity at its old spot INSIDE the hidden
+        // band, right of the last saved hidden entry. The neighbor rule would file
+        // it visible (its nearest neighbor is the LAST hidden entry, at == divider);
+        // the physical signal must win and grow the prefix.
+        let desired = [ident("x", "h"), ident("x", "v")]
+        let live = [ident("x", "h"), ident("x", "new"), ident("x", "v")]
+        let (out, div) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                          hiddenDividerIndex: 1,
+                                                          liveHiddenKeys: ["x#h", "x#new"])
+        XCTAssertEqual(out.map(\.key), ["x#h", "x#new", "x#v"])
+        XCTAssertEqual(div, 2)
+    }
+
+    func testMergeVisibleNewItemNeverLandsInsideHiddenPrefix() {
+        // The new icon's nearest saved live neighbor sits DEEP in the hidden prefix
+        // (multi-display edge: later hidden entries drop from the enumeration).
+        // Physical signal says visible → clamp to the divider, don't grow it.
+        let desired = [ident("x", "h1"), ident("x", "h2"), ident("x", "v")]
+        let live = [ident("x", "h1"), ident("x", "new"), ident("x", "v")]
+        let (out, div) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                          hiddenDividerIndex: 2,
+                                                          liveHiddenKeys: ["x#h1"])
+        XCTAssertEqual(out.map(\.key), ["x#h1", "x#h2", "x#new", "x#v"])
+        XCTAssertEqual(div, 2)
+    }
+
     func testMergeSkipsUnresolvedAndKnownItems() {
         let desired = [ident("x", "a")]
         // Unresolved (bundle-only) + already-known items must not be inserted.

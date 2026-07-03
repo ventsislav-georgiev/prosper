@@ -339,12 +339,15 @@ enum MenuBarArranger {
             for i in stride(from: placed.count - 2, through: 0, by: -1) {
                 // The user grabbed the mouse mid-batch → stop dragging NOW and give
                 // the pointer back (the tick re-converges once they're idle). Compare
-                // the mouseMoved counter against the batch start so the click that
-                // triggered an explicit Apply doesn't count as "moving".
-                let sinceMove = CGEventSource.secondsSinceLastEventType(
-                    .combinedSessionState, eventType: .mouseMoved)
+                // the event counters against the batch start so the click that
+                // triggered an explicit Apply doesn't count as "moving". Drag + scroll
+                // count too (trackpad scrolling emits no mouseMoved); our own synthetic
+                // events are leftMouseDown/Up only, so none of these self-trigger.
+                let sinceUser = [CGEventType.mouseMoved, .leftMouseDragged, .scrollWheel]
+                    .map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }
+                    .min() ?? .infinity
                 let e = batchStart.duration(to: .now).components
-                if sinceMove < Double(e.seconds) + Double(e.attoseconds) * 1e-18 { break }
+                if sinceUser < Double(e.seconds) + Double(e.attoseconds) * 1e-18 { break }
                 let item = placed[i], anchor = placed[i + 1]
                 // RELATIVE-order skip, NOT physical adjacency: skip when `item` already
                 // appears anywhere BEFORE `anchor` among the placed items in the live
@@ -376,60 +379,6 @@ enum MenuBarArranger {
             }
         }
         return ApplyResult(moved: moved, skippedUnresolved: skippedUnresolved, failed: failed)
-    }
-
-    /// Apply the user's always-hidden marks: move each marked live item to the LEFT
-    /// of the always-hidden separator (which stays expanded → off-screen), and pull
-    /// any unmarked item that drifted left of it back to the right. Reveals both bands
-    /// first so the drop points are on-screen, then restores the hidden state.
-    ///
-    /// macOS persists status-item positions across relaunch, so this only needs to run
-    /// when the marks change (and as a correction on reveal) — not on a loop. Best-
-    /// effort; per-item failures are logged, never thrown (it must not wedge Settings).
-    static func applyBands(hidden hiddenKeys: [String], alwaysHidden alwaysHiddenKeys: [String]) async {
-        guard MenuBarBridge.available else { return }
-        isApplying = true
-        defer { isApplying = false }
-
-        MenuBarManager.shared.beginPlacement()
-        defer { MenuBarManager.shared.endPlacement() }
-        try? await Task.sleep(for: .milliseconds(150))   // let the collapsed bands lay out
-
-        // The hidden separator is always present; the always-hidden one only when the
-        // user has marked at least one icon. Place relative to whichever exist.
-        let hiddenAnchor = MenuBarManager.shared.hiddenAnchorWindowID()
-        let hiddenX = hiddenAnchor.flatMap(MenuBarBridge.frame(for:))?.minX
-        let altAnchor = MenuBarManager.shared.alwaysHiddenAnchorWindowID()
-        let altX = altAnchor.flatMap(MenuBarBridge.frame(for:))?.minX
-
-        let hidden = Set(hiddenKeys), always = Set(alwaysHiddenKeys)
-        let items = currentItems()
-        let hashes = await MenuBarItemIndexer.hashes(for: items)
-        await MenuBarItemMover.withCursorParked {
-            for item in items {
-                let key = identity(for: item, hash: hashes[item.windowID]).key
-                let x = item.frame.minX
-                // Target band → the single corrective move that lands it on the right
-                // side of the relevant anchor. Items already correct emit no move.
-                let dest: MenuBarItemMover.Destination?
-                if always.contains(key) {
-                    // Always-hidden: must sit LEFT of the always-hidden separator.
-                    if let a = altAnchor, let ax = altX, x >= ax { dest = .leftOf(a) } else { dest = nil }
-                } else if hidden.contains(key) {
-                    // Hidden: left of the chevron's hidden separator, but right of the
-                    // always-hidden one (don't over-hide). Fix whichever side is wrong.
-                    if let h = hiddenAnchor, let hx = hiddenX, x >= hx { dest = .leftOf(h) }
-                    else if let a = altAnchor, let ax = altX, x < ax { dest = .rightOf(a) }
-                    else { dest = nil }
-                } else {
-                    // Visible: right of the hidden separator.
-                    if let h = hiddenAnchor, let hx = hiddenX, x < hx { dest = .rightOf(h) } else { dest = nil }
-                }
-                guard let dest else { continue }
-                do { try await MenuBarItemMover.move(windowID: item.windowID, pid: item.pid, to: dest) }
-                catch { NSLog("prosper: band placement failed for \(item.bundleID ?? "?"): \(error)") }
-            }
-        }
     }
 
     /// Hash-only fallback when a desired item's exact key isn't live: among the same

@@ -2446,6 +2446,8 @@ private struct MenuBarPane: View {
     @State private var probeReason: MenuBarItemMover.ProbeResult? = nil   // why the probe passed/failed
     @State private var probing = false
     @State private var applying = false
+    /// An editor commit landed while a pass was in flight — run one more pass after.
+    @State private var applyQueued = false
     @State private var saving = false
     @State private var screenRecOK = MenuBarItemIndexer.hasPermission()
     @State private var previewImages: [CGWindowID: NSImage] = [:]   // live per-item captures (Tahoe: only way to show real icons)
@@ -2689,14 +2691,31 @@ private struct MenuBarPane: View {
         applyBandsNow()
     }
 
-    /// Push the current hidden / always-hidden membership to the real bar (best-effort).
+    /// Push the saved order + hidden / always-hidden membership to the real bar
+    /// (best-effort). Full apply, not the old band-only pass: bands alone used
+    /// `.rightOf` drops (unreliable on Tahoe — the item snaps its RIGHT edge to the
+    /// cursor and can land a slot off), while apply() converges order and seats the
+    /// dividers with `.leftOf`-anchored moves only. Also means a row drag in the
+    /// editor reorders the real bar immediately, matching what the list shows.
     private func applyBandsNow() {
-        guard probeOK == true, !applying, !saving else { return }
+        guard probeOK == true, !saving else { return }
+        // A pass is in flight: don't drop this commit (the edit IS persisted, but the
+        // bar would silently not update until the next explicit action) — queue one
+        // re-run; the loop re-reads the store, so N queued edits collapse into one.
+        guard !applying else { applyQueued = true; return }
         applying = true
         Task {
-            MenuBarManager.shared.ensureAlwaysHiddenBand(!orderStore.alwaysHidden.isEmpty)
-            await MenuBarArranger.applyBands(hidden: orderStore.hiddenKeys,
-                                             alwaysHidden: orderStore.alwaysHidden)
+            repeat {
+                applyQueued = false
+                // Fresh read: mutateOrder just persisted; the @State copy may lag
+                // until the auto-save notification lands.
+                let s = Preferences.menuBarOrderStore
+                MenuBarManager.shared.ensureAlwaysHiddenBand(!s.alwaysHidden.isEmpty)
+                await MenuBarArranger.apply(desired: s.desiredOrder,
+                                            hiddenKeys: s.hiddenKeys,
+                                            alwaysHiddenKeys: s.alwaysHidden,
+                                            reveal: true)
+            } while applyQueued
             applying = false
         }
     }
@@ -2838,7 +2857,9 @@ private struct MenuBarPane: View {
     /// Toggle an icon's always-hidden mark, then create/destroy the always-hidden
     /// separator to match and (re)place items behind it.
     private func toggleAlwaysHidden(_ id: MenuBarIdentity) {
-        guard !applying, !saving else { return }
+        // Mid-apply is fine: the mutation persists immediately and applyBandsNow
+        // queues a follow-up pass that re-reads it. Only a capture-save blocks.
+        guard !saving else { return }
         let key = id.key
         mutateOrder { s in
             if let i = s.alwaysHidden.firstIndex(of: key) { s.alwaysHidden.remove(at: i) }

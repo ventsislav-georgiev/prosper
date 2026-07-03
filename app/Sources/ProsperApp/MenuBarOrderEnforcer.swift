@@ -119,6 +119,10 @@ final class MenuBarOrderEnforcer {
         // The move pipeline can degrade mid-session (CGS bridge down). Stop rather
         // than feed the breaker forever.
         guard MenuBarBridge.available else { stopLive(); return }
+        // Display asleep (lid closed, idle sleep): the bar can't drift and nobody can
+        // see it — skip the whole tick so an overnight Mac pays one syscall per 2s,
+        // not CGS reads. One boolean_t read, no notification plumbing needed.
+        if !userInitiated, CGDisplayIsAsleep(CGMainDisplayID()) != 0 { return }
         // Never look at (or act on) the bar mid-gesture: a user ⌘-drag in flight
         // reads as a half-done permutation, and an apply pass would fight the mouse.
         // The fingerprint is left alone, so the change is classified on the first
@@ -149,22 +153,31 @@ final class MenuBarOrderEnforcer {
         let curKeySet = Set(curKeys)
         let liveBundles = Set(cur.map { $0.bundleID ?? "unknown" })
 
+        // Physical band per live item — an x-vs-separator comparison that works
+        // COLLAPSED too: off-screen items keep enumerating (displayID(for:) falls
+        // back to the main display for off-screen frames) with minX left of the
+        // expanded separator, so hidden/visible membership reads correctly whether
+        // the bar is revealed or not. nil until the separator lays out (then
+        // "everything visible" would be a lie, not a signal). Shared by both
+        // auto-save paths below.
+        // Ceiling: with a second display arranged to the LEFT, off-screen frames
+        // resolve to that display instead and drop from `cur`; those items are
+        // then classified by their old side of the divider until the next reveal.
+        let liveHidden: Set<String>? = MenuBarManager.shared.hiddenSeparatorLaidOut
+            ? Set(MenuBarManager.shared.sectionedItems(cur)
+                .filter { $0.section != .visible }
+                .map { MenuBarArranger.identity(for: $0.item, hash: hashes[$0.item.windowID]).key })
+            : nil
+
         // AUTO-SAVE, part 1 — user reorder: the same windowIDs in a different order
         // can only come from a user ⌘-drag (apps don't permute themselves, a relaunch
         // mints a new windowID, and our own apply resets the fingerprint to nil so
         // `previous` can't be a mid-apply frame). Adopt the live order into the saved
         // one and do NOT enforce — the user just told us what they want.
         if let previous, previous != order, Set(previous) == Set(order) {
-            // Physical band per live item (only meaningful while revealed; collapsed
-            // bands aren't enumerated so this is empty then, and the divider keeps
-            // counting the off-screen entries by their old side). Lets a revealed
-            // ⌘-drag ACROSS the divider auto-save its new hidden/visible membership.
-            let liveHidden = Set(MenuBarManager.shared.sectionedItems()
-                .filter { $0.section != .visible }
-                .map { MenuBarArranger.identity(for: $0.item, hash: hashes[$0.item.windowID]).key })
             let adopted = MenuBarOrderDiff.adoptLiveOrder(desired: store.desiredOrder,
                                                           liveKeys: curKeys,
-                                                          liveHiddenKeys: liveHidden,
+                                                          liveHiddenKeys: liveHidden ?? [],
                                                           hiddenDividerIndex: store.hiddenDividerIndex)
             store.desiredOrder = adopted.order
             store.hiddenDividerIndex = adopted.hiddenDividerIndex
@@ -178,7 +191,8 @@ final class MenuBarOrderEnforcer {
         // membership confusion caused). No moves here; pure bookkeeping.
         let (merged, dividerIdx) = MenuBarOrderDiff.mergingNewItems(
             desired: store.desiredOrder, live: curIdentities,
-            hiddenDividerIndex: store.hiddenDividerIndex)
+            hiddenDividerIndex: store.hiddenDividerIndex,
+            liveHiddenKeys: liveHidden)
         if merged.count != store.desiredOrder.count {
             store.desiredOrder = merged
             store.hiddenDividerIndex = dividerIdx

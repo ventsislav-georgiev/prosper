@@ -276,11 +276,19 @@ enum MenuBarOrderDiff {
     /// Auto-save newly-appeared icons: insert each `live` identity (left→right) whose
     /// key is missing from `desired` right after its nearest LEFT live neighbor that
     /// is already saved (or at the divider boundary — the top of the visible band —
-    /// when it has none). Keeps `hiddenDividerIndex` pointing at the same boundary by
-    /// bumping it for insertions that land inside the hidden prefix. Pure; skips
-    /// unresolved/unmanageable identities (they can't be re-found across relaunch).
+    /// when it has none). Pure; skips unresolved/unmanageable identities (they can't
+    /// be re-found across relaunch).
+    ///
+    /// `liveHiddenKeys` is the PHYSICAL band signal (item x vs separator x), nil when
+    /// the separator isn't laid out. With it, a new item's band comes from where it
+    /// actually SITS — not from its neighbor's side: on a collapsed bar a new icon
+    /// spawns immediately right of the off-screen hidden band, so its nearest live
+    /// neighbor is a hidden entry, and the neighbor rule would file the (visible!)
+    /// icon into the hidden prefix — the next reveal-apply then drags it off-screen
+    /// and the sections ping-pong. Without the signal, the neighbor-side rule stands.
     static func mergingNewItems(desired: [MenuBarIdentity], live: [MenuBarIdentity],
-                                hiddenDividerIndex: Int?) -> (order: [MenuBarIdentity], hiddenDividerIndex: Int?) {
+                                hiddenDividerIndex: Int?,
+                                liveHiddenKeys: Set<String>? = nil) -> (order: [MenuBarIdentity], hiddenDividerIndex: Int?) {
         var out = desired
         var divider = hiddenDividerIndex
         var known = Set(desired.map(\.key))
@@ -290,9 +298,18 @@ enum MenuBarOrderDiff {
             // Nearest saved neighbor to the LEFT in the live bar → insert after it.
             let leftNeighbor = live[..<i].reversed().first { known.contains($0.key) && $0.key != id.key }
                 .flatMap { n in out.firstIndex { $0.key == n.key } }
-            let at = leftNeighbor.map { $0 + 1 } ?? (divider ?? 0)
+            var at = leftNeighbor.map { $0 + 1 } ?? (divider ?? 0)
+            if let d = divider, let hiddenKeys = liveHiddenKeys {
+                if hiddenKeys.contains(id.key) {
+                    at = min(at, d)        // stay inside the hidden prefix…
+                    divider = d + 1        // …which grows to absorb it
+                } else {
+                    at = max(at, d)        // visible: never land inside the prefix
+                }
+            } else if let d = divider, at < d {
+                divider = d + 1            // no physical signal: neighbor-side rule
+            }
             out.insert(id, at: min(at, out.count))
-            if let d = divider, at < d { divider = d + 1 }
         }
         return (out, divider)
     }

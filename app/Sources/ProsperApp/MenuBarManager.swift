@@ -333,9 +333,11 @@ final class MenuBarManager: NSObject {
     }
 
     /// Section assignment for the live menu bar, for the Settings list. Compares
-    /// each item's x against the divider window x-positions.
-    func sectionedItems() -> [(item: MenuBarItem, section: MenuBarSection)] {
-        let items = currentItems()
+    /// each item's x against the divider window x-positions. Pass `precomputed`
+    /// when the caller already enumerated the bar this tick (the enforcer's adopt
+    /// path does) — saves a duplicate CGWindowListCopyWindowInfo pass.
+    func sectionedItems(_ precomputed: [MenuBarItem]? = nil) -> [(item: MenuBarItem, section: MenuBarSection)] {
+        let items = precomputed ?? currentItems()
         guard let hiddenX = dividerFrameX(hiddenSeparator) else {
             return items.map { ($0, .visible) }
         }
@@ -344,6 +346,11 @@ final class MenuBarManager: NSObject {
                                                       hiddenDividerX: hiddenX,
                                                       alwaysHiddenDividerX: altX)) }
     }
+
+    /// True once the hidden separator has a laid-out window frame — only then is the
+    /// x-comparison in `sectionedItems` a real hidden/visible signal (before layout it
+    /// reports everything visible, which callers must treat as "no signal").
+    var hiddenSeparatorLaidOut: Bool { dividerFrameX(hiddenSeparator) != nil }
 
     /// Whether the live preview can be trusted (CGS enumeration still sees our own
     /// dividers). Hide/show + spacing don't depend on this — only the Settings
