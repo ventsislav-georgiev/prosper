@@ -156,9 +156,29 @@ public final class SMCFanController {
         try setManual(i, rpm: b.max)
     }
 
-    /// Return fan `i` to OS thermal control.
-    public func setAuto(_ i: Int) throws {
+    /// Whether fan `i` is currently engaged in manual mode at the firmware level —
+    /// the mode key reads 1 (and on Ftst boards the master unlock is still set).
+    /// This is the reclaim probe: thermalmonitord/firmware can silently take fans
+    /// back (thermal event; sleep hardware-clears Ftst), leaving our state stale.
+    /// Readable unprivileged, so the app UI can poll it too.
+    public func isManualEngaged(_ i: Int) -> Bool {
+        guard (smc.read(modeKey(i))?.double ?? 0) == 1 else { return false }
+        if hasFtst() { return (smc.read("Ftst")?.double ?? 0) == 1 }
+        return true
+    }
+
+    /// Return fan `i` to OS thermal control. `holdUnlock` (M1–M4 only) keeps
+    /// `Ftst=1` while zeroing the mode key — exelban/Stats' behaviour — so the next
+    /// manual engage skips the ~8 s thermalmonitord yield. CALLER CONTRACT: a held
+    /// unlock suppresses OS reclaim and MUST stay supervised (kill-switch) and be
+    /// fully cleared (resetAll) on client drop / sleep / disable — the daemon's
+    /// FanControlCore tracks this as `unlockHeld`.
+    public func setAuto(_ i: Int, holdUnlock: Bool = false) throws {
         if hasFtst() {
+            if holdUnlock {
+                try guardedWrite(modeKey(i), [0])   // mode back to auto, unlock kept
+                return
+            }
             // M1–M4: clearing Ftst hands all fans back. Also zero this fan's mode.
             try? guardedWrite(modeKey(i), [0])
             try guardedWrite("Ftst", [0])

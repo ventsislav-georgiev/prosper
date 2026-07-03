@@ -68,6 +68,13 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
     // (the app opens SEPARATE connections for lid vs fans): the fan must reset when
     // ITS client drops, even while a lid-sleep connection is still held.
     private var fanHolderID: ObjectIdentifier?
+    // Intended manual targets (fan index → RPM), fanQ-owned. The supervision tick
+    // compares these against the hardware's actual mode: if thermalmonitord/firmware
+    // reclaims a fan (thermal event; sleep clears Ftst), the daemon re-asserts the
+    // target ONCE per incident, then gives up honestly (full reset) so the app's UI
+    // flips to Automatic instead of silently lying. Budget refills on a healthy tick.
+    private var fanHeldTargets: [Int: Double] = [:]
+    private var fanReassertBudget = 0
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
         // The OS invalidates the connection automatically if the peer fails this
@@ -103,6 +110,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             if self.fanHolderID == cid {
                 self.fanCore.lastClientGone()
                 self.fanHolderID = nil
+                self.fanHeldTargets = [:]
             }
         }
     }
@@ -190,6 +198,10 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             // idempotent and cheap); under-arming is the strand hazard.
             self.fanCore.didSetManual()
             self.fanHolderID = cid
+            // Record the intended target BEFORE the write too (same arm-early logic):
+            // the supervision tick re-asserts from this map after an OS reclaim.
+            self.fanHeldTargets[index] = rpm
+            self.fanReassertBudget = 1
             self.armFanKillSwitch_fanQ()
             do {
                 try fan.setManual(index, rpm: rpm)
@@ -220,26 +232,70 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         t.resume()
     }
     private func fanKillTick_fanQ() {
-        guard fanCore.manualHeld else {
+        guard fanCore.needsSupervision else {
             fanKillTimer?.cancel(); fanKillTimer = nil
             return
         }
         let mx = fan?.maxTemperature()
         if fanCore.temperatureTick(maxCelsius: mx) {
             fanHolderID = nil
+            fanHeldTargets = [:]
             fanLog.fault("fan kill-switch FIRED: \(mx ?? .nan, privacy: .public)°C ≥ \(FanControlCore.killSwitchCelsius, privacy: .public)°C — all fans reset to auto")
+            fanKillTimer?.cancel(); fanKillTimer = nil
+            return
+        }
+        // Reclaim watch: while a manual pin is held, verify each pinned fan is still
+        // actually manual on the hardware. thermalmonitord/firmware can take fans back
+        // (thermal event; sleep clears Ftst) without telling anyone. Re-assert the
+        // recorded target once per incident; if it keeps getting reclaimed, the OS
+        // wants the fans — give up honestly with a full reset so the app's poll sees
+        // auto everywhere and flips the UI, instead of fighting the thermal manager.
+        guard fanCore.manualHeld, let fan = self.fan, !fanHeldTargets.isEmpty else { return }
+        let reclaimed = fanHeldTargets.keys.filter { !fan.isManualEngaged($0) }
+        if reclaimed.isEmpty {
+            fanReassertBudget = 1
+            return
+        }
+        if fanReassertBudget > 0 {
+            fanReassertBudget -= 1
+            fanLog.notice("fan reclaim detected on \(reclaimed.sorted(), privacy: .public) — re-asserting targets")
+            for i in reclaimed.sorted() {
+                guard let rpm = fanHeldTargets[i] else { continue }
+                do { try fan.setManual(i, rpm: rpm) }
+                catch {
+                    fanLog.error("fan re-assert(\(i, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)")
+                }
+            }
+        } else {
+            fanLog.fault("fan reclaim persists on \(reclaimed.sorted(), privacy: .public) — OS wants control, releasing all fans")
+            if fan.resetAll() { fanCore.didResetAll() }
+            fanHolderID = nil
+            fanHeldTargets = [:]
             fanKillTimer?.cancel(); fanKillTimer = nil
         }
     }
 
-    func setFanAuto(_ index: Int, withReply reply: @escaping (Bool) -> Void) {
+    func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) {
         // Hand one fan back to the OS. Does NOT clear the crash-reset arm or holder: a
         // sibling fan may still be manual, and over-resetting on a later drop is
-        // harmless while under-resetting is the hazard.
+        // harmless while under-resetting is the hazard. With `holdUnlock` (opt-in
+        // fast-re-engage pref) the controller unlock is kept once NO fan remains
+        // manual — a latent hazard the core then supervises exactly like a pin.
         fanQ.async {
             guard let fan = self.fan else { reply(false); return }
-            do { try fan.setAuto(index); fanLog.notice("setFanAuto(\(index, privacy: .public)) ok"); reply(true) }
-            catch { fanLog.error("setFanAuto(\(index, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)"); reply(false) }
+            do {
+                try fan.setAuto(index, holdUnlock: holdUnlock)
+                self.fanHeldTargets[index] = nil
+                if self.fanHeldTargets.isEmpty, holdUnlock, fan.hasFtst() {
+                    self.fanCore.didAutoWithHold()
+                    self.armFanKillSwitch_fanQ()
+                }
+                fanLog.notice("setFanAuto(\(index, privacy: .public), hold=\(holdUnlock, privacy: .public)) ok")
+                reply(true)
+            } catch {
+                fanLog.error("setFanAuto(\(index, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)")
+                reply(false)
+            }
         }
     }
 
@@ -251,7 +307,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         fanQ.async {
             guard let fan = self.fan else { reply(false); return }
             let ok = fan.resetAll()
-            if ok { self.fanCore.didResetAll(); self.fanHolderID = nil }
+            if ok { self.fanCore.didResetAll(); self.fanHolderID = nil; self.fanHeldTargets = [:] }
             fanLog.notice("resetAllFans ok=\(ok, privacy: .public)")
             reply(ok)
         }

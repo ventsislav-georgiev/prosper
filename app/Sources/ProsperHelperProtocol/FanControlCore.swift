@@ -20,10 +20,25 @@ public final class FanControlCore {
     /// `resetAllFans` ever arrived.
     public private(set) var manualHeld = false
 
+    /// Fast-re-engage hold: the client switched fans back to auto but asked to keep
+    /// the controller unlocked (`Ftst=1` stays set) so the next manual engage skips
+    /// the ~8 s thermalmonitord yield. An unlock hold is a latent hazard exactly like
+    /// a manual pin (reclaim is suppressed), so it gets the SAME supervision: the
+    /// kill-switch watches it and any client drop / reset / cold start clears it.
+    public private(set) var unlockHeld = false
+
+    /// True while anything latent needs the supervision timer.
+    public var needsSupervision: Bool { manualHeld || unlockHeld }
+
     public init(reset: @escaping () -> Void) { self.reset = reset }
 
-    /// A manual write succeeded — arm the crash-safety reset.
-    public func didSetManual() { manualHeld = true }
+    /// A manual write succeeded — arm the crash-safety reset. Manual supersedes a
+    /// standing unlock hold (it's strictly more held).
+    public func didSetManual() { manualHeld = true; unlockHeld = false }
+
+    /// Fans went back to auto but the controller unlock was kept (fast re-engage
+    /// pref). Coarse like `manualHeld`: the UI drives all fans together.
+    public func didAutoWithHold() { manualHeld = false; unlockHeld = true }
 
     /// Temperature kill-switch threshold. Above this, a manual pin is presumed to be
     /// starving the chassis and the OS gets the fans back unconditionally. 95 °C is
@@ -38,10 +53,11 @@ public final class FanControlCore {
     /// the daemon can clear its holder and log.
     @discardableResult
     public func temperatureTick(maxCelsius: Double?) -> Bool {
-        guard manualHeld, let t = maxCelsius, t.isFinite,
+        guard needsSupervision, let t = maxCelsius, t.isFinite,
               t >= Self.killSwitchCelsius else { return false }
         reset()
         manualHeld = false
+        unlockHeld = false
         return true
     }
 
@@ -49,14 +65,16 @@ public final class FanControlCore {
     /// nothing left wedged, so disarm. A single-fan auto does NOT call this: other
     /// fans may still be manual, and over-resetting on a later drop is harmless while
     /// under-resetting is the hazard.
-    public func didResetAll() { manualHeld = false }
+    public func didResetAll() { manualHeld = false; unlockHeld = false }
 
-    /// Last client gone (clean OR crash). Reset every fan if any manual was held.
-    /// Idempotent: a second call with nothing held is a no-op.
+    /// Last client gone (clean OR crash). Reset every fan if a manual pin OR an
+    /// unlock hold was outstanding (both are latent hazards nobody supervises once
+    /// the client is gone). Idempotent: a second call with nothing held is a no-op.
     public func lastClientGone() {
-        guard manualHeld else { return }
+        guard needsSupervision else { return }
         reset()
         manualHeld = false
+        unlockHeld = false
     }
 
     /// Daemon cold start: force every fan back to auto, self-healing a manual state
@@ -66,5 +84,6 @@ public final class FanControlCore {
     public func reclaimAtStartup() {
         reset()
         manualHeld = false
+        unlockHeld = false
     }
 }

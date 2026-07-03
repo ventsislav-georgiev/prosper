@@ -87,4 +87,57 @@ final class FanControlCoreTests: XCTestCase {
         XCTAssertEqual(resets(), 0)
         XCTAssertTrue(core.manualHeld, "bad readings leave the hold (and crash-safety) intact")
     }
+
+    // MARK: - Held unlock (fast re-engage) — same supervision as a manual pin
+
+    func testAutoWithHoldStaysSupervised() {
+        let (core, _) = makeCore()
+        core.didSetManual()
+        core.didAutoWithHold()
+        XCTAssertFalse(core.manualHeld)
+        XCTAssertTrue(core.unlockHeld)
+        XCTAssertTrue(core.needsSupervision, "a held unlock is a latent hazard — timer must stay armed")
+    }
+
+    func testUnlockHeldLastClientGoneResets() {
+        let (core, resets) = makeCore()
+        core.didSetManual()
+        core.didAutoWithHold()
+        core.lastClientGone()
+        XCTAssertEqual(resets(), 1, "client drop with a held unlock must clear Ftst via full reset")
+        XCTAssertFalse(core.unlockHeld)
+    }
+
+    func testKillSwitchFiresOnUnlockHeldAlone() {
+        let (core, resets) = makeCore()
+        core.didAutoWithHold()
+        XCTAssertTrue(core.temperatureTick(maxCelsius: FanControlCore.killSwitchCelsius))
+        XCTAssertEqual(resets(), 1)
+        XCTAssertFalse(core.unlockHeld, "fired kill-switch clears the held unlock too")
+    }
+
+    func testExplicitResetClearsUnlockHold() {
+        let (core, resets) = makeCore()
+        core.didAutoWithHold()
+        core.didResetAll()
+        XCTAssertFalse(core.unlockHeld)
+        core.lastClientGone()
+        XCTAssertEqual(resets(), 0, "cleanly reset → no double-reset on drop")
+    }
+
+    func testColdStartClearsUnlockHold() {
+        let (core, resets) = makeCore()
+        core.didAutoWithHold()
+        core.reclaimAtStartup()
+        XCTAssertEqual(resets(), 1)
+        XCTAssertFalse(core.unlockHeld)
+    }
+
+    func testManualSupersedesUnlockHold() {
+        let (core, _) = makeCore()
+        core.didAutoWithHold()
+        core.didSetManual()
+        XCTAssertTrue(core.manualHeld)
+        XCTAssertFalse(core.unlockHeld, "manual is strictly more held — no dual flags")
+    }
 }

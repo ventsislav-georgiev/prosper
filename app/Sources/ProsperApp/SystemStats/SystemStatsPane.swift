@@ -15,6 +15,7 @@ struct SystemStatsPane: View {
     /// frame) into a single commit, so we don't JSON-encode + reconfigure the live
     /// controller dozens of times a second mid-drag.
     @State private var commitWork: DispatchWorkItem?
+    @State private var fanHoldUnlock = Preferences.fanHoldUnlock
 
     var body: some View {
         NeonScroll {
@@ -76,6 +77,22 @@ struct SystemStatsPane: View {
                 }
                 NeonDivider()
                 colorControls(m, cfg)
+                if m == .sensors {
+                    NeonDivider()
+                    NeonRow("Fast manual fan re-engage",
+                            subtitle: "Keeps the fan controller unlocked after switching back to Automatic, so re-enabling Manual is near-instant. Supervised by the helper; fully released on quit, sleep or disable.") {
+                        Toggle("", isOn: $fanHoldUnlock).labelsHidden()
+                            .onChange(of: fanHoldUnlock) { _, v in
+                                Preferences.fanHoldUnlock = v
+                                // Turning it OFF while a held unlock may be standing:
+                                // release it now (full reset is safe — manual mode is
+                                // driven from the popup, which re-asserts if enabled).
+                                if !v, !Preferences.fanManualEnabled {
+                                    Task { await FanControlHelper.resetAll(teardown: true) }
+                                }
+                            }
+                    }
+                }
             }
         }
     }

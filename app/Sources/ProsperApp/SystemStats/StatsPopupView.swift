@@ -48,8 +48,23 @@ struct StatsPopupView: View {
             await MainActor.run {
                 fans = r
                 fanReadInFlight = false
+                detectReclaim(r)
             }
         }
+    }
+
+    /// Honest-UI check: the user thinks fans are manual, but the hardware says every
+    /// adjustable fan is back on auto — thermalmonitord/firmware reclaimed them (a
+    /// thermal event, or the daemon gave up re-asserting). Flip the toggle to
+    /// Automatic and say why, instead of showing a manual state that isn't real.
+    /// Skipped while an engage is in flight (mode keys are mid-dance then).
+    private func detectReclaim(_ r: [FanReading]) {
+        guard fanManual, !fanBusy, !pendingManual else { return }
+        let adjustable = r.filter { $0.max > $0.min }
+        guard !adjustable.isEmpty, adjustable.allSatisfy({ !$0.manual }) else { return }
+        fanManual = false
+        Preferences.fanManualEnabled = false
+        fanError = "macOS reclaimed fan control (thermal event or sleep)."
     }
 
     // Fan manual control (sensors popup only). Default OFF, opt-in, confirmation-
@@ -82,9 +97,12 @@ struct StatsPopupView: View {
             guard module == .sensors else { return }
             // Every 3rd tick, off-main: an SMC open/read/close is a full IOKit round
             // trip — cheap, but not main-thread-per-second cheap. 3 ticks still tracks
-            // real RPM closely enough to expose a fan ignoring a manual write.
+            // real RPM closely enough to expose a fan ignoring a manual write. While
+            // manual is on (or an engage is in flight) poll EVERY tick: the RPM ramp
+            // is the only feedback the user gets that the engage took, and reclaim
+            // detection should flip the UI within a second, not three.
             fanTick += 1
-            if fanTick % 3 == 0 { refreshFans() }
+            if fanManual || fanBusy || fanTick % 3 == 0 { refreshFans() }
         }
     }
 
@@ -727,12 +745,20 @@ struct StatsPopupView: View {
         }
     }
 
-    /// Hand every fan back to the OS and tear the daemon connection down.
+    /// Hand every fan back to the OS. Default: full reset + tear the daemon
+    /// connection down. With the fast-re-engage pref: per-fan auto that keeps the
+    /// controller unlock AND the connection alive, so flipping back to Manual is
+    /// near-instant (the daemon supervises the held unlock like a pin).
     private func selectAutoAll() {
         fanManual = false
         Preferences.fanManualEnabled = false
         Preferences.fanTargets = [:]; fanTargets = [:]
-        Task { await FanControlHelper.resetAll(teardown: true) }
+        if Preferences.fanHoldUnlock {
+            let ids = fansAdjustable.map(\.id)
+            Task { for i in ids { _ = await FanControlHelper.setAuto(i) } }
+        } else {
+            Task { await FanControlHelper.resetAll(teardown: true) }
+        }
     }
 
     /// Map a single 0…1 fraction onto every fan's own range and commit them together.

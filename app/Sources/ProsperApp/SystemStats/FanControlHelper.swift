@@ -11,6 +11,10 @@ struct FanReading: Identifiable, Equatable {
     let min: Double
     let max: Double
     let current: Double
+    /// Whether the fan is manually engaged on the HARDWARE right now (mode key +
+    /// Ftst, unprivileged reads). Lets the UI detect an OS reclaim: user thinks
+    /// manual, hardware says auto → flip the toggle honestly.
+    let manual: Bool
 }
 
 /// Unprivileged fan enumeration for the UI. Opens a throwaway SMC connection,
@@ -26,7 +30,8 @@ enum FanInfo {
         guard n > 0 else { return [] }
         return (0..<n).compactMap { i in
             guard let b = fc.bounds(i) else { return nil }   // degenerate bounds → skip (write would fail closed anyway)
-            return FanReading(id: i, min: b.min, max: b.max, current: fc.currentRPM(i) ?? 0)
+            return FanReading(id: i, min: b.min, max: b.max, current: fc.currentRPM(i) ?? 0,
+                              manual: fc.isManualEngaged(i))
         }
     }
 }
@@ -85,14 +90,17 @@ enum FanControlHelper {
         return await call(c, timeout: timeout) { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }
     }
 
-    /// Hand one fan back to OS thermal control (other fans unaffected).
+    /// Hand one fan back to OS thermal control (other fans unaffected). Honors the
+    /// opt-in fast-re-engage pref: the daemon keeps the controller unlock held (and
+    /// supervised) so the next manual engage skips the ~8 s thermalmonitord yield.
     @discardableResult
     static func setAuto(_ index: Int) async -> Bool {
         let c: NSXPCConnection
         if let existing = connection { c = existing }
         else if let opened = await ensureConnection() { c = opened }
         else { return false }
-        return await call(c) { proxy, done in proxy.setFanAuto(index) { done($0) } }
+        let hold = Preferences.fanHoldUnlock
+        return await call(c) { proxy, done in proxy.setFanAuto(index, holdUnlock: hold) { done($0) } }
     }
 
     /// Reset every fan to auto. Used on explicit disable and before sleep. On disable

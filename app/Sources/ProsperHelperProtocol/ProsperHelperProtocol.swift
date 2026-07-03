@@ -76,8 +76,11 @@ public let legacyHelperLabel = "eu.illegible.prosper.lidhelper"
     /// `reply(true)` on a successful write.
     func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void)
 
-    /// Hand fan `index` back to OS thermal control. `reply(true)` on success.
-    func setFanAuto(_ index: Int, withReply reply: @escaping (Bool) -> Void)
+    /// Hand fan `index` back to OS thermal control. `holdUnlock=true` (opt-in pref)
+    /// keeps the M1–M4 fan-controller unlock (`Ftst=1`) so the next manual engage is
+    /// near-instant; the daemon supervises the held unlock exactly like a manual pin
+    /// (kill-switch + full clear on client drop / reset). `reply(true)` on success.
+    func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void)
 
     /// Reset EVERY fan to OS thermal control — the thermal-safety primitive. Called
     /// by the app on explicit disable and on system sleep, and by the daemon itself

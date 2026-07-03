@@ -141,6 +141,7 @@ enum Preferences {
         static let fanManualEnabled = "fanManualEnabled"
         static let fanManualConsent = "fanManualConsent"
         static let fanTargets = "fanTargets"
+        static let fanHoldUnlock = "fanHoldUnlock"
         static let statsRefreshInterval = "statsRefreshInterval"
         static let sensorsHeadlineSensor = "sensorsHeadlineSensor"
         static let dragSnapEnabled = "dragSnapEnabled"
@@ -854,6 +855,17 @@ enum Preferences {
             let raw = Dictionary(uniqueKeysWithValues: newValue.map { (String($0.key), $0.value) })
             defaults.set(raw, forKey: Keys.fanTargets)
         }
+    }
+
+    /// Opt-in fast manual re-engage: switching fans back to Automatic keeps the
+    /// M1–M4 fan-controller unlock (`Ftst=1`) so the next manual engage skips the
+    /// ~8 s thermalmonitord yield. Default OFF — the held unlock suppresses part of
+    /// the OS's fan reclaim while it stands, so it's a deliberate trade the user
+    /// makes; the daemon supervises it like a manual pin and fully releases it on
+    /// app quit/crash, sleep, disable, and daemon cold start.
+    static var fanHoldUnlock: Bool {
+        get { defaults.bool(forKey: Keys.fanHoldUnlock) }   // absent → false
+        set { defaults.set(newValue, forKey: Keys.fanHoldUnlock) }
     }
 
     /// Name of the temperature sensor the user pinned as the Sensors headline (menu
