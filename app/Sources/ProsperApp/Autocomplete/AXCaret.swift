@@ -133,6 +133,7 @@ enum AXCaret {
         // height (≈ line height) so the ghost matches the field's text size instead
         // of an oversized system default.
         let font = caretFont(focused, offset: clamped, textCount: totalLength)
+            ?? markerCaretFont(focused)
             ?? rect.flatMap { fontForCaretHeight($0.height) }
 
         let role = copyString(focused, kAXRoleAttribute) ?? ""
@@ -183,12 +184,16 @@ enum AXCaret {
               CFGetTypeID(out) == CFAttributedStringGetTypeID() else { return nil }
         let attr = out as! NSAttributedString
         guard attr.length > 0 else { return nil }
-        let attrs = attr.attributes(at: 0, effectiveRange: nil)
+        return font(fromAXAttributes: attr.attributes(at: 0, effectiveRange: nil))
+    }
+
+    /// Rebuilds an NSFont from AX attributed-string attributes. AppKit apps
+    /// (TextEdit, Notes, Mail) and WebKit/Chromium report the font as an "AXFont"
+    /// dictionary — {AXFontName, AXFontFamily, AXFontSize} — not as an NSFont
+    /// under .font. Without this the overlay falls through to the caret-height
+    /// heuristic and renders the ghost at the wrong size.
+    private static func font(fromAXAttributes attrs: [NSAttributedString.Key: Any]) -> NSFont? {
         if let font = attrs[.font] as? NSFont { return font }
-        // AppKit apps (TextEdit, Notes, Mail) report the font as an "AXFont"
-        // dictionary — {AXFontName, AXFontFamily, AXFontSize} — not as an NSFont
-        // under .font. Rebuild the NSFont from it, or the overlay falls through to
-        // the caret-height heuristic and renders the ghost at the wrong size.
         if let dict = attrs[NSAttributedString.Key("AXFont")] as? [String: Any],
            let size = (dict["AXFontSize"] as? NSNumber).map({ CGFloat(truncating: $0) }),
            size > 1 {
@@ -204,6 +209,42 @@ enum AXCaret {
             return .systemFont(ofSize: size)
         }
         return nil
+    }
+
+    /// Font via the WebKit/Chromium text-marker attributed-string API, for
+    /// Electron/web fields (Slack, Notion) where the integer-range
+    /// `kAXAttributedStringForRange` query fails and the caret-height heuristic
+    /// over/undershoots the real text size (live report 2026-07-03: Slack ghost
+    /// rendered visibly larger than the composer text). Mirrors `markerCaretRect`:
+    /// undocumented string-referenced attributes, opaque marker CFTypes passed
+    /// straight back. Queries the character BEFORE the caret; Chromium lacks
+    /// `AXStartTextMarkerForTextMarkerRange`, so fall back to the document-end
+    /// marker (live typing puts the caret there anyway).
+    private static func markerCaretFont(_ element: AXUIElement) -> NSFont? {
+        func attr(_ name: String) -> CFTypeRef? {
+            var out: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, name as CFString, &out) == .success
+            else { return nil }
+            return out
+        }
+        func param(_ name: String, _ arg: CFTypeRef) -> CFTypeRef? {
+            var out: CFTypeRef?
+            guard AXUIElementCopyParameterizedAttributeValue(
+                element, name as CFString, arg, &out) == .success else { return nil }
+            return out
+        }
+        guard let selRange = attr("AXSelectedTextMarkerRange") else { return nil }
+        let caretMarker = param("AXStartTextMarkerForTextMarkerRange", selRange)
+            ?? attr("AXEndTextMarker")
+        guard let caretMarker,
+              let prev = param("AXPreviousTextMarkerForTextMarker", caretMarker),
+              let range = param(
+                  "AXTextMarkerRangeForUnorderedTextMarkers", [prev, caretMarker] as CFArray),
+              let out = param("AXAttributedStringForTextMarkerRange", range),
+              CFGetTypeID(out) == CFAttributedStringGetTypeID() else { return nil }
+        let attrStr = out as! NSAttributedString
+        guard attrStr.length > 0 else { return nil }
+        return font(fromAXAttributes: attrStr.attributes(at: 0, effectiveRange: nil))
     }
 
     /// Heuristic: does the focused element look like a browser omnibox? Chromium

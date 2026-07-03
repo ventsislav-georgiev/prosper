@@ -80,6 +80,94 @@ final class SanitizerPolishTests: XCTestCase {
     }
 }
 
+/// Outgoing-message contract: never answer the user's own question, and start
+/// new sentences with a capital (live reports 2026-07-03).
+final class OutgoingMessageContractTests: XCTestCase {
+    func testAnswerToOwnQuestionRejected() {
+        XCTAssertNil(CoreBridge.sanitizeCompletion(
+            "I'm doing fine, thanks", before: "Hey, how are you doing? "))
+        XCTAssertEqual(CoreBridge.lastRejectReason, "answersOwnQuestion")
+        XCTAssertNil(CoreBridge.sanitizeCompletion(
+            "Yes, of course", before: "Can you send the file? "))
+    }
+
+    func testSenderContinuationAfterQuestionAllowed() {
+        XCTAssertNotNil(CoreBridge.sanitizeCompletion(
+            "I hope this message finds you well", before: "Hey, how are you doing? "))
+        XCTAssertNotNil(CoreBridge.sanitizeCompletion(
+            "Let me know when you have a minute", before: "Hey, how are you doing? "))
+    }
+
+    func testNoQuestionMeansNoAnswerGuard() {
+        XCTAssertNotNil(CoreBridge.sanitizeCompletion(
+            "I'm heading out for lunch", before: "Quick update. "))
+    }
+
+    func testNewSentenceCapitalized() {
+        XCTAssertEqual(
+            CoreBridge.capitalizeNewSentence(
+                "the fence was low", before: "The quick brown fox jumps over the lazy dog. "),
+            "The fence was low")
+        XCTAssertEqual(
+            CoreBridge.capitalizeNewSentence(
+                " утре ще дойда", before: "Готово е. "),
+            " Утре ще дойда")
+    }
+
+    func testGluedContinuationAfterPeriodNotCapitalized() {
+        // Domain/decimal glue: no whitespace after the terminator and none
+        // opening the completion — not a new sentence.
+        XCTAssertEqual(
+            CoreBridge.capitalizeNewSentence("com today", before: "visit example."),
+            "com today")
+        XCTAssertEqual(
+            CoreBridge.capitalizeNewSentence(" the next thing", before: "I am done."),
+            " The next thing")
+    }
+
+    func testMidSentenceAndEllipsisLeftAlone() {
+        XCTAssertEqual(
+            CoreBridge.capitalizeNewSentence("the fence", before: "jumps over "),
+            "the fence")
+        XCTAssertEqual(
+            CoreBridge.capitalizeNewSentence("maybe tomorrow", before: "I was thinking... "),
+            "maybe tomorrow")
+        XCTAssertEqual(
+            CoreBridge.capitalizeNewSentence("Already capital", before: "Done. "),
+            "Already capital")
+    }
+}
+
+/// Russian-word gate on mid-word continuations: a glued fragment must be judged
+/// as part of the word it completes, not as a standalone token (live report
+/// 2026-07-03: Telegram "прахосму" + "качка" — "качка" alone is Russian-only,
+/// joined "прахосмукачка" is plain Bulgarian).
+@MainActor
+final class RussianGateFragmentTests: XCTestCase {
+    private func requireDictionaries() throws {
+        let langs = NSSpellChecker.shared.availableLanguages
+        try XCTSkipUnless(
+            langs.contains("bg") && langs.contains("ru"),
+            "bg/ru spellcheck dictionaries unavailable — gate fails open here")
+    }
+
+    func testGluedFragmentJudgedAsJoinedWord() throws {
+        try requireDictionaries()
+        XCTAssertFalse(CoreBridge.containsRussianOnlyCyrillicWord(
+            "качка", before: "дали може днес да пуснем прахосму"))
+        XCTAssertFalse(CoreBridge.containsRussianOnlyCyrillicWord(
+            "качката и мопа", before: "дали може днес да пуснем прахосму"))
+    }
+
+    func testStandaloneRussianWordStillRejected() throws {
+        try requireDictionaries()
+        XCTAssertTrue(CoreBridge.containsRussianOnlyCyrillicWord(
+            "качка", before: "дали може днес да пуснем "))
+        XCTAssertTrue(CoreBridge.containsRussianOnlyCyrillicWord(
+            " завтра ще дойда", before: "дали може днес да пуснем прахосму"))
+    }
+}
+
 /// Latinica-detector marker gating: bare `q` counts only in all-lowercase words,
 /// so English tech prose with acronyms never gets steered into the latinica path.
 final class LatinicaMarkerGatingTests: XCTestCase {

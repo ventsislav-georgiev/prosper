@@ -934,7 +934,7 @@ enum CoreBridge {
                 // erases exactly the evidence the gate keys on ("хочу" → "hochu"
                 // passes every downstream check as plausible latinica).
                 if rejectRussianWords, latinBulgarian,
-                   await MainActor.run(body: { Self.containsRussianOnlyCyrillicWord(raw) }) {
+                   await MainActor.run(body: { Self.containsRussianOnlyCyrillicWord(raw, before: before) }) {
                     TraceLog.emit("complete: rejected Russian word in raw latinica output")
                     return Self.reject("russianWordRaw")
                 }
@@ -964,7 +964,7 @@ enum CoreBridge {
                 // Sister-language word gate: a Bulgarian user (no Russian layout)
                 // must never be offered a Russian word.
                 if rejectRussianWords,
-                   await MainActor.run(body: { Self.containsRussianOnlyCyrillicWord(suggestion) }) {
+                   await MainActor.run(body: { Self.containsRussianOnlyCyrillicWord(suggestion, before: before) }) {
                     TraceLog.emit("complete: rejected Russian-only word in \"\(suggestion.prefix(24))\"")
                     return Self.reject("russianWord")
                 }
@@ -1313,6 +1313,16 @@ enum CoreBridge {
         // wants to be offered words they already wrote.
         if Self.echoesAnywhere(s, before: before) { return Self.reject("echoAnywhere") }
 
+        // Answer-mode guard: the text is the user's own OUTGOING message, so a
+        // trailing question is ADDRESSED to someone — the model must never
+        // continue with the recipient's reply ("how are you doing?" →
+        // "I'm doing fine, thanks", observed live). The system prompt says so
+        // too, but the chat-tuned model's answer bias wins often enough that a
+        // reply must be a hard reject (user directive: no-go, lowest rank).
+        if Self.answersPrecedingQuestion(s, before: before) {
+            return Self.reject("answersOwnQuestion")
+        }
+
         // Internal loop guard: small models sometimes stutter ("the the", "in the
         // in the …"). Cut the suggestion at the first immediate word/bigram repeat
         // so at least the clean head survives instead of showing the loop.
@@ -1341,6 +1351,12 @@ enum CoreBridge {
         // complete phrase. Conservative: never empties a completion, keeps ≥1 word.
         s = Self.trimDanglingTail(s)
 
+        // New-sentence casing: after a sentence terminator the continuation must
+        // start with a capital ("…lazy dog. " → "The fence…", never "the fence…",
+        // observed live). Deterministic transform, not a reject — burning a
+        // ladder rung on casing wastes 100ms+ for a one-character fix.
+        s = Self.capitalizeNewSentence(s, before: before)
+
         // Trim trailing blank lines, keep at most a single trailing newline run.
         s = s.replacingOccurrences(of: "\r\n", with: "\n")
         while s.hasSuffix("\n\n") { s = String(s.dropLast()) }
@@ -1349,6 +1365,78 @@ enum CoreBridge {
         return trimmedEnds.isEmpty
             ? Self.reject("emptyAfterTrim")
             : s.hasPrefix(" ") || s.hasPrefix("\n") ? s : trimmedEnds
+    }
+
+    /// Terminator tails after which a lowercase continuation is legitimate (the
+    /// sentence has not actually ended). ponytail: tiny fixed list, extend if
+    /// live traces surface more.
+    private static let nonTerminalTails: [String] = [
+        "...", "…", "e.g.", "i.e.", "vs.", "т.е.", "напр.",
+    ]
+
+    /// Uppercase the first letter of a completion that starts a NEW sentence
+    /// (the text before the caret ends with . ! or ?). The model sometimes
+    /// continues lowercase after a full stop; fix it deterministically instead
+    /// of rejecting. Leaves the completion alone when it does not begin at a
+    /// plain sentence start (leading digits/quotes) or when the terminator is
+    /// an ellipsis/abbreviation.
+    static func capitalizeNewSentence(_ s: String, before: String) -> String {
+        guard let last = before.last(where: { !$0.isWhitespace }),
+              ".!?".contains(last) else { return s }
+        // No whitespace after the terminator and none opening the completion:
+        // glued continuation ("example." + "com"), not a new sentence.
+        if before.last?.isWhitespace != true && s.first?.isWhitespace != true { return s }
+        let beforeTail = String(before.suffix(16))
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if nonTerminalTails.contains(where: { beforeTail.hasSuffix($0) }) { return s }
+        guard let idx = s.firstIndex(where: { $0.isLetter }),
+              s[s.startIndex..<idx].allSatisfy({ $0.isWhitespace }),
+              s[idx].isLowercase else { return s }
+        return s.replacingCharacters(in: idx...idx, with: s[idx].uppercased())
+    }
+
+    /// Words that OPEN a reply to a question ("Yes, …", "Добре, …"). First-word
+    /// match after a trailing "?" is treated as answer-mode.
+    private static let answerOpeners: Set<String> = [
+        "yes", "no", "sure", "fine", "да", "не", "добре",
+    ]
+
+    /// Function words excluded from the content-overlap test below.
+    private static let questionStopwords: Set<String> = [
+        "how", "are", "you", "your", "what", "when", "where", "why", "who",
+        "is", "was", "do", "does", "did", "can", "could", "will", "would",
+        "the", "a", "an", "to", "of", "in", "on", "for", "and", "or", "it",
+        "как", "какво", "кога", "къде", "защо", "кой", "ли", "си", "сте", "е",
+        "да", "не", "на", "в", "за", "и", "или", "ти", "те", "ви", "аз",
+    ]
+
+    /// True when the completion reads as the RECIPIENT's answer to a question
+    /// the user just asked ("how are you doing?" → "I'm doing fine"). Two
+    /// signals, both requiring `before` to end with "?": a classic answer
+    /// opener as the first word, or a first-person start that echoes a content
+    /// word of the question ("doing"). A first-person continuation that shares
+    /// nothing with the question ("I hope this message finds you") passes.
+    /// ponytail: word-match heuristic, no stemming/POS — extend from live
+    /// traces if answer-mode slips through in other shapes.
+    static func answersPrecedingQuestion(_ s: String, before: String) -> Bool {
+        guard before.last(where: { !$0.isWhitespace }) == "?" else { return false }
+        let words = s.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "'" })
+        guard let first = words.first else { return false }
+        if answerOpeners.contains(String(first)) { return true }
+        let firstPerson = ["i", "i'm", "im", "съм"].contains(String(first))
+        guard firstPerson else { return false }
+        // Question sentence = text after the previous terminator, sans the "?".
+        let tail = String(before.suffix(200))
+        // Last non-blank segment: the trailing "? " leaves a whitespace-only
+        // segment after the terminator, which is not the question.
+        let question = tail.split(whereSeparator: { ".!?\n".contains($0) })
+            .last(where: { $0.contains(where: { $0.isLetter }) }) ?? ""
+        let qContent = Set(
+            question.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "'" })
+                .map(String.init)
+                .filter { $0.count >= 3 && !questionStopwords.contains($0) })
+        guard !qContent.isEmpty else { return false }
+        return words.prefix(8).contains { qContent.contains(String($0)) }
     }
 
     /// Common clause connectors (EN + BG/Cyrillic) that read as unfinished when a
@@ -1712,7 +1800,7 @@ enum CoreBridge {
     @MainActor private static var warnedRussianGateDisarmed = false
 
     @MainActor
-    static func containsRussianOnlyCyrillicWord(_ s: String) -> Bool {
+    static func containsRussianOnlyCyrillicWord(_ s: String, before: String = "") -> Bool {
         let checker = NSSpellChecker.shared
         let langs = checker.availableLanguages
         guard langs.contains("bg"), langs.contains("ru") else {
@@ -1726,7 +1814,18 @@ enum CoreBridge {
             checker.checkSpelling(of: w, startingAt: 0, language: lang, wrap: false,
                                   inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
         }
+        // Mid-word continuation: when the completion glues onto an unfinished word
+        // ("прахосму" + "качка"), the leading token is a FRAGMENT — spellcheck the
+        // joined word, not the fragment ("качка" alone is Russian-only, joined
+        // "прахосмукачка" is valid Bulgarian).
+        let beforeFragment = (s.first?.isLetter == true)
+            ? String(before.reversed().prefix(while: { $0.isLetter }).reversed()) : ""
+        var isFirst = true
         for word in s.split(whereSeparator: { !$0.isLetter }) {
+            let joined = (isFirst && word.startIndex == s.startIndex && !beforeFragment.isEmpty)
+                ? Substring(beforeFragment + word) : word
+            isFirst = false
+            let word = joined
             guard word.count >= 3 else { continue }
             let scalars = word.unicodeScalars
             guard scalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) }) else { continue }
@@ -2111,6 +2210,11 @@ enum CoreBridge {
         - If the text ends mid-word, output only the letters that finish that word \
         (after "downlo" → "ad"); do not restart the word or glue on a new one.
         - If the text already ends with a space, do NOT begin your output with a space.
+        - The text is the user's own OUTGOING message. If it ends with a question, \
+        the user is asking someone else — NEVER answer it; continue with what the \
+        sender would write next in the same message, not the recipient's response.
+        - After sentence-ending punctuation (". " "! " "? ") start a NEW sentence \
+        with a capital letter.
         - \(languageRule)
         - \(lengthDirective) Keep it to one line.
         - Always give a plausible continuation; never reply with nothing.

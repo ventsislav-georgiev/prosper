@@ -64,6 +64,26 @@ func markerBounds(_ el: AXUIElement, label: String) {
     if let idxRef = param(el, "AXIndexForTextMarker", caretStart) {
         print("    AXIndexForTextMarker: \(idxRef)")
     }
+    // Font at the caret via the marker attributed-string API (what
+    // AXCaret.markerCaretFont relies on for Electron ghost sizing):
+    if let prev = param(el, "AXPreviousTextMarkerForTextMarker", caretStart),
+       let range = param(el, "AXTextMarkerRangeForUnorderedTextMarkers", [prev, caretStart] as CFArray),
+       let out = param(el, "AXAttributedStringForTextMarkerRange", range),
+       CFGetTypeID(out) == CFAttributedStringGetTypeID() {
+        let a = out as! NSAttributedString
+        if a.length > 0 {
+            let attrs = a.attributes(at: 0, effectiveRange: nil)
+            print("    attrStr(prevChar) keys: \(attrs.keys.map(\.rawValue).sorted().joined(separator: ", "))")
+            if let f = attrs[.font] as? NSFont { print("    .font: \(f.fontName) \(f.pointSize)") }
+            if let d = attrs[NSAttributedString.Key("AXFont")] as? [String: Any] {
+                print("    AXFont dict: \(d)")
+            }
+        } else {
+            print("    attrStr(prevChar): empty")
+        }
+    } else {
+        print("    attrStr(prevChar): unavailable")
+    }
 }
 
 func probe() {

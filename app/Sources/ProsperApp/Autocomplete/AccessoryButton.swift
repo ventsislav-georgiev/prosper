@@ -63,8 +63,6 @@ final class AccessoryButton {
         panel.hidesOnDeactivate = false
 
         button = NSButton(frame: frame)
-        // Unobtrusive attribution mark: a small template glyph, no bezel, reduced
-        // opacity — reads as a quiet presence indicator, not clickable chrome.
         button.bezelStyle = .regularSquare
         button.isBordered = false
         let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
@@ -72,9 +70,16 @@ final class AccessoryButton {
             .withSymbolConfiguration(config)
         button.image?.isTemplate = true
         button.imagePosition = .imageOnly
-        button.alphaValue = 0.5
+        button.alphaValue = 1.0
 
+        // Opaque rounded backing: a bare translucent glyph over busy app chrome
+        // was hard to read (live report 2026-07-03) — give it a solid card.
         let container = NSView(frame: frame)
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        container.layer?.cornerRadius = 5
+        container.layer?.borderWidth = 0.5
+        container.layer?.borderColor = NSColor.separatorColor.cgColor
         button.autoresizingMask = [.width, .height]
         container.addSubview(button)
         panel.contentView = container
@@ -105,14 +110,15 @@ final class AccessoryButton {
         // Panel/hit-box size. The glyph stays 12pt — the extra points are click
         // padding (a 14pt target was too fiddly to hit).
         let size: CGFloat = 20
-        // Sit to the LEFT of the field so the icon never overlaps the text. Clamp
-        // to the screen's left edge so it can't be pushed off-screen when the field
-        // hugs the display edge.
+        // Sit at the LEFT edge of the field, hugging the line start (fields pad
+        // their text, so the icon rides the padding without covering glyphs).
+        // Clamp to the screen's left edge so it can't be pushed off-screen when
+        // the field hugs the display edge.
         let screenLeft = NSScreen.screens
             .first(where: { $0.frame.intersects(fieldRect) })?
             .visibleFrame.minX
             ?? NSScreen.main?.visibleFrame.minX ?? 0
-        let x = max(screenLeft + 1, fieldRect.minX - size - 3)
+        let x = max(screenLeft + 1, fieldRect.minX - size + 2)
         // Vertical line center. When a caret rect is known, align to the actual
         // glyph line: AppKit text views report a caret box ~half a line-height
         // above the rendered text, so the true line center is `minY - height/2`
@@ -147,23 +153,23 @@ final class AccessoryButton {
         switch newState {
         case .idle:
             applySymbol("character.bubble")
-            button.alphaValue = 0.5
+            button.alphaValue = 0.8
         case .thinking:
             applySymbol("character.bubble")
-            button.alphaValue = 0.5
+            button.alphaValue = 0.8
             startPulse()
         case .ready:
             applySymbol("character.bubble", tint: .systemGreen)
-            button.alphaValue = 0.9
+            button.alphaValue = 1.0
         case .error:
             applySymbol("exclamationmark.bubble", tint: .systemOrange)
-            button.alphaValue = 0.9
+            button.alphaValue = 1.0
         case .blocked:
             applySymbol("lock.fill")
-            button.alphaValue = 0.6
+            button.alphaValue = 0.9
         case .paused:
             applySymbol("pause.circle")
-            button.alphaValue = 0.4
+            button.alphaValue = 0.7
         }
     }
 
@@ -186,8 +192,8 @@ final class AccessoryButton {
             MainActor.assumeIsolated {
                 guard let self, self.state == .thinking else { return }
                 phase += 0.18
-                // Oscillate 0.25...0.75 around the idle 0.5.
-                self.button.alphaValue = 0.5 + 0.25 * CGFloat(sin(phase))
+                // Oscillate 0.6...1.0 around the idle 0.8.
+                self.button.alphaValue = 0.8 + 0.2 * CGFloat(sin(phase))
             }
         }
         RunLoop.main.add(timer, forMode: .common)
