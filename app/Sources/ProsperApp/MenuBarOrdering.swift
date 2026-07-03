@@ -231,6 +231,49 @@ enum MenuBarOrderDiff {
         return out
     }
 
+    /// Auto-save (adopt) a user-made reorder: re-arrange the entries of `desired`
+    /// whose keys appear in `liveKeys` into the live left→right order, keeping every
+    /// other entry (hidden/off-screen/quit apps) at its exact position. Pure — the
+    /// enforcer calls this when it detects a same-membership permutation of the bar
+    /// (only a user ⌘-drag produces that) so the saved order follows the user
+    /// instead of fighting them.
+    static func adoptLiveOrder(desired: [MenuBarIdentity], liveKeys: [String]) -> [MenuBarIdentity] {
+        // keep-first on duplicates: two unindexed same-bundle items share a
+        // degenerate key and must not trap the dictionary build.
+        let rank = Dictionary(liveKeys.enumerated().map { ($1, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        // Slots in `desired` occupied by live items, and those items sorted live-wise.
+        let slots = desired.indices.filter { rank[desired[$0].key] != nil }
+        let sorted = slots.map { desired[$0] }.sorted { (rank[$0.key] ?? 0) < (rank[$1.key] ?? 0) }
+        var out = desired
+        for (slot, item) in zip(slots, sorted) { out[slot] = item }
+        return out
+    }
+
+    /// Auto-save newly-appeared icons: insert each `live` identity (left→right) whose
+    /// key is missing from `desired` right after its nearest LEFT live neighbor that
+    /// is already saved (or at the divider boundary — the top of the visible band —
+    /// when it has none). Keeps `hiddenDividerIndex` pointing at the same boundary by
+    /// bumping it for insertions that land inside the hidden prefix. Pure; skips
+    /// unresolved/unmanageable identities (they can't be re-found across relaunch).
+    static func mergingNewItems(desired: [MenuBarIdentity], live: [MenuBarIdentity],
+                                hiddenDividerIndex: Int?) -> (order: [MenuBarIdentity], hiddenDividerIndex: Int?) {
+        var out = desired
+        var divider = hiddenDividerIndex
+        var known = Set(desired.map(\.key))
+        for (i, id) in live.enumerated() {
+            guard id.isManageable, id.isResolved, !known.contains(id.key) else { continue }
+            known.insert(id.key)
+            // Nearest saved neighbor to the LEFT in the live bar → insert after it.
+            let leftNeighbor = live[..<i].reversed().first { known.contains($0.key) && $0.key != id.key }
+                .flatMap { n in out.firstIndex { $0.key == n.key } }
+            let at = leftNeighbor.map { $0 + 1 } ?? (divider ?? 0)
+            out.insert(id, at: min(at, out.count))
+            if let d = divider, at < d { divider = d + 1 }
+        }
+        return (out, divider)
+    }
+
     /// Live-mode drift check: are the desired items that are present in `current`
     /// in the correct RELATIVE order (a subsequence of current)? This is laxer than
     /// `reorderMoves` (which also demands contiguity) on purpose — the live loop

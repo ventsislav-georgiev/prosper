@@ -42,19 +42,21 @@ final class MenuBarOrderEnforcer {
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     /// Reconfigure from settings. Call on enable/disable, mode change, probe result,
-    /// and when the saved order changes. Starts/stops the live timer to match.
+    /// and when the saved order changes. Starts/stops the poll timer to match.
+    /// The timer runs in BOTH modes now: on-demand still never auto-applies, but the
+    /// cheap tick is how manual ⌘-drags and new icons get auto-saved.
     func update(store: MenuBarOrderStore, probeOK: Bool) {
         self.store = store
         self.probeOK = probeOK
         lastOrderFingerprint = nil   // settings changed → re-check on next tick
-        let shouldRunLive = store.enabled && probeOK && store.mode == .live && !store.desiredOrder.isEmpty
-        shouldRunLive ? startLive() : stopLive()
+        let shouldRun = store.enabled && probeOK && !store.desiredOrder.isEmpty
+        shouldRun ? startLive() : stopLive()
     }
 
     /// On-demand hook: the bar was revealed. Apply once (drift-gated, throttled).
     func onReveal() {
         guard store.enabled, probeOK, store.mode == .onDemand, !store.desiredOrder.isEmpty else { return }
-        enforceIfDrifted()
+        enforceIfDrifted(userInitiated: true)
     }
 
     // MARK: - Live timer
@@ -64,6 +66,8 @@ final class MenuBarOrderEnforcer {
         let t = Timer(timeInterval: Self.livePollInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        // Let macOS coalesce the fire with other wakeups (battery).
+        t.tolerance = Self.livePollInterval / 4
         // .common so it keeps firing during menu tracking / scrolling.
         RunLoop.main.add(t, forMode: .common)
         timer = t
@@ -74,44 +78,101 @@ final class MenuBarOrderEnforcer {
         timer = nil
     }
 
-    /// One timer tick: enforce order drift (live mode only — on-demand applies on
-    /// reveal, not on a timer).
+    /// One timer tick: auto-save user changes (both modes), then enforce order
+    /// drift (live mode only — on-demand applies on reveal, not on a timer).
     private func tick() {
-        if store.mode == .live { enforceIfDrifted() }
+        enforceIfDrifted()
     }
 
-    // MARK: - Drift → apply
+    /// True while the user is actively mousing (button held, or a move/drag/scroll
+    /// within the last second). The tick defers entirely while this holds: a
+    /// synthetic ⌘-drag pass parks/warps the REAL cursor, so running one mid-gesture
+    /// visibly hijacks the pointer (and could eat a click on our own chevron). Our
+    /// own synthetic events are leftMouseDown/Up only — they never touch the
+    /// mouseMoved/dragged/scroll counters, so this can't self-trigger.
+    /// Cheap: three counter reads + a button-state read, no event tap.
+    nonisolated static func userMouseActive(within seconds: Double = 1.0) -> Bool {
+        if CGEventSource.buttonState(.combinedSessionState, button: .left) { return true }
+        let types: [CGEventType] = [.mouseMoved, .leftMouseDragged, .scrollWheel]
+        return types.contains {
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) < seconds
+        }
+    }
 
-    /// Cheap drift check, then a throttled apply if (and only if) the order is wrong.
-    private func enforceIfDrifted() {
+    // MARK: - Drift → adopt or apply
+
+    /// Cheap drift check, then: adopt user-made changes into the saved order
+    /// (auto-save), or a throttled apply if (and only if) the order is wrong.
+    /// `userInitiated` marks the on-demand reveal path: the user just clicked the
+    /// chevron, so their own click/move must not defer the pass, and the apply runs
+    /// regardless of mode.
+    private func enforceIfDrifted(userInitiated: Bool = false) {
         guard !working, !MenuBarArranger.isApplying,
               probeOK, store.enabled, !store.desiredOrder.isEmpty else { return }
         // The move pipeline can degrade mid-session (CGS bridge down). Stop rather
         // than feed the breaker forever.
         guard MenuBarBridge.available else { stopLive(); return }
-        let n = now
-        if !policy.canApply(now: n, onBattery: Self.onBattery()) { return }
+        // Never look at (or act on) the bar mid-gesture: a user ⌘-drag in flight
+        // reads as a half-done permutation, and an apply pass would fight the mouse.
+        // The fingerprint is left alone, so the change is classified on the first
+        // quiet tick after the gesture ends.
+        if !userInitiated, Self.userMouseActive() { return }
 
         // Cheap pre-gate: the foreign-item windowID order, read via CGS only (no
         // system-wide CGWindowListCopyWindowInfo). Identical to the last full check ⇒
         // no POSITIONAL or MEMBERSHIP drift (no reorder, relaunch, quit, or launch) ⇒
         // skip the expensive identity rebuild below, keeping the 2s main-thread tick
         // off the heavy window-enumeration path in steady state (typing-latency
-        // sensitive). The one drift it can't see — an item becoming resolvable in
-        // place after a re-index — is covered by clearing the fingerprint after every
-        // apply (see below). Main-display only, matching `desiredOrder` capture and
+        // sensitive). Main-display only, matching `desiredOrder` capture and
         // `currentItems`; secondary-display items aren't managed.
         let order = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
-        if lastOrderFingerprint == order { return }   // bar unchanged (incl. empty) → skip
+        // Bar unchanged (incl. empty) → skip. A user-initiated reveal bypasses this:
+        // the background tick stamps the fingerprint on every change WITHOUT applying
+        // in on-demand mode, so "unchanged since last tick" does not mean "in order".
+        if !userInitiated, lastOrderFingerprint == order { return }
+        let previous = lastOrderFingerprint
         lastOrderFingerprint = order
 
         // Capture-free drift signal: build live keys from titles + the last index's
         // cached hashes. Items we can't yet identify are excluded from the order check.
         let hashes = MenuBarArranger.lastIndexedHashes
         let cur = MenuBarArranger.currentItems()
-        let curKeys = cur.map { MenuBarArranger.identity(for: $0, hash: hashes[$0.windowID]).key }
+        let curIdentities = cur.map { MenuBarArranger.identity(for: $0, hash: hashes[$0.windowID]) }
+        let curKeys = curIdentities.map(\.key)
         let curKeySet = Set(curKeys)
         let liveBundles = Set(cur.map { $0.bundleID ?? "unknown" })
+
+        // AUTO-SAVE, part 1 — user reorder: the same windowIDs in a different order
+        // can only come from a user ⌘-drag (apps don't permute themselves, a relaunch
+        // mints a new windowID, and our own apply resets the fingerprint to nil so
+        // `previous` can't be a mid-apply frame). Adopt the live order into the saved
+        // one and do NOT enforce — the user just told us what they want.
+        if let previous, previous != order, Set(previous) == Set(order) {
+            store.desiredOrder = MenuBarOrderDiff.adoptLiveOrder(desired: store.desiredOrder,
+                                                                 liveKeys: curKeys)
+            persistStore()
+            return
+        }
+
+        // AUTO-SAVE, part 2 — new icons: merge freshly-appeared identities into the
+        // saved order at their observed position, so the engine KNOWS them instead of
+        // treating every later tick as unexplained drift (the back-and-forth the
+        // membership confusion caused). No moves here; pure bookkeeping.
+        let (merged, dividerIdx) = MenuBarOrderDiff.mergingNewItems(
+            desired: store.desiredOrder, live: curIdentities,
+            hiddenDividerIndex: store.hiddenDividerIndex)
+        if merged.count != store.desiredOrder.count {
+            store.desiredOrder = merged
+            store.hiddenDividerIndex = dividerIdx
+            persistStore()
+        }
+
+        // ENFORCE — live mode, or the user-initiated on-demand reveal. The plain
+        // background tick in on-demand mode stops here: it only auto-saves.
+        guard store.mode == .live || userInitiated else { return }
+        let n = now
+        if !policy.canApply(now: n, onBattery: Self.onBattery()) { return }
+
         let resolvedDesired = store.desiredOrder.filter { $0.isResolved }
         let desiredKeys = resolvedDesired.map { $0.key }
 
@@ -159,15 +220,24 @@ final class MenuBarOrderEnforcer {
             } else {
                 policy.stampThrottleOnly(now: n)
             }
-            // Invalidate the fingerprint: apply() re-ran the indexer (refreshing
-            // `lastIndexedHashes`), which can make a previously-unresolvable item
-            // resolvable WITHOUT changing the windowID order — invisible to the
-            // order-only pre-gate. Forcing one full check next tick re-evaluates
-            // identity. Costs nothing extra on the happy path (a real move already
-            // changed the order, so the next tick wouldn't have skipped anyway).
-            lastOrderFingerprint = nil
+            // Fingerprint after an apply: an ACTIONABLE pass invalidates it — apply()
+            // re-ran the indexer (refreshing `lastIndexedHashes`), which can make a
+            // previously-unresolvable item resolvable WITHOUT changing the windowID
+            // order, invisible to the order-only pre-gate. A NO-OP pass instead stamps
+            // the CURRENT order: nothing changed and nothing was placeable, so
+            // re-checking every tick until the bar actually changes only burns CPU
+            // (each wasted pass re-captures for hashes) — the old unconditional nil
+            // here was that loop.
+            lastOrderFingerprint = actionable ? nil
+                : MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
             working = false
         }
+    }
+
+    /// Persist an auto-saved store mutation (adopt / merge). Writes Preferences so
+    /// it survives relaunch; the Settings pane re-reads on open.
+    private func persistStore() {
+        Preferences.menuBarOrderStore = store
     }
 
     /// True when running on battery (gentler cadence). Fail-open to AC on error.

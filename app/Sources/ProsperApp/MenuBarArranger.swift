@@ -308,7 +308,18 @@ enum MenuBarArranger {
         }
 
         let placedIDs = Set(placed.map { $0.windowID })
+        // Nothing to drag? Return BEFORE parking the cursor. A pass that ends up
+        // all relative-order skips used to still hide + warp the cursor — the
+        // "reorder that changes nothing briefly hijacks my mouse" bug.
+        let liveSeq = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
+            .filter { placedIDs.contains($0) }
+        if MenuBarOrderDiff.isRelativeOrderSatisfied(
+            current: liveSeq.map(String.init),
+            desired: placed.map { String($0.windowID) }) {
+            return ApplyResult(moved: 0, skippedUnresolved: skippedUnresolved, failed: 0)
+        }
         var moved = 0, failed = 0
+        let batchStart = ContinuousClock.now
         // Park the cursor once around the whole batch (not per move).
         await MenuBarItemMover.withCursorParked {
             // Build the order RIGHT-TO-LEFT using ONLY `.leftOf`. `.rightOf` (drop at
@@ -319,6 +330,14 @@ enum MenuBarArranger {
             // the only direction the self-probe exercises (and proves works), so anchor
             // each item against the already-correct neighbor to its right.
             for i in stride(from: placed.count - 2, through: 0, by: -1) {
+                // The user grabbed the mouse mid-batch → stop dragging NOW and give
+                // the pointer back (the tick re-converges once they're idle). Compare
+                // the mouseMoved counter against the batch start so the click that
+                // triggered an explicit Apply doesn't count as "moving".
+                let sinceMove = CGEventSource.secondsSinceLastEventType(
+                    .combinedSessionState, eventType: .mouseMoved)
+                let e = batchStart.duration(to: .now).components
+                if sinceMove < Double(e.seconds) + Double(e.attoseconds) * 1e-18 { break }
                 let item = placed[i], anchor = placed[i + 1]
                 // RELATIVE-order skip, NOT physical adjacency: skip when `item` already
                 // appears anywhere BEFORE `anchor` among the placed items in the live

@@ -338,6 +338,78 @@ final class MenuBarTests: XCTestCase {
         assertConverges(current: ["a", "b"], desired: ["q", "b", "a"])
     }
 
+    // MARK: - Ordering engine: auto-save (adopt user reorder + merge new icons)
+
+    private func ident(_ bundle: String, _ title: String) -> MenuBarIdentity {
+        MenuBarIdentity(bundleID: bundle, title: title)
+    }
+
+    func testAdoptLiveOrderReordersLiveSubsetInPlace() {
+        // h1/h2 are hidden (not live); the user swapped a and b in the real bar.
+        let desired = [ident("x", "h1"), ident("x", "h2"),
+                       ident("x", "a"), ident("x", "b"), ident("x", "c")]
+        let out = MenuBarOrderDiff.adoptLiveOrder(desired: desired,
+                                                  liveKeys: ["x#b", "x#a", "x#c"])
+        XCTAssertEqual(out.map(\.key), ["x#h1", "x#h2", "x#b", "x#a", "x#c"],
+                       "live subset follows live order; hidden entries keep their slots")
+    }
+
+    func testAdoptLiveOrderNoChangeIsIdentity() {
+        let desired = [ident("x", "a"), ident("x", "b")]
+        XCTAssertEqual(MenuBarOrderDiff.adoptLiveOrder(desired: desired,
+                                                       liveKeys: ["x#a", "x#b"]),
+                       desired)
+    }
+
+    func testAdoptLiveOrderIgnoresUnknownLiveKeys() {
+        // Live has an icon we never saved — adopt must not lose or duplicate anything.
+        let desired = [ident("x", "a"), ident("x", "b")]
+        let out = MenuBarOrderDiff.adoptLiveOrder(desired: desired,
+                                                  liveKeys: ["x#new", "x#b", "x#a"])
+        XCTAssertEqual(out.map(\.key), ["x#b", "x#a"])
+    }
+
+    func testMergeNewItemInsertsAfterItsLiveLeftNeighbor() {
+        let desired = [ident("x", "a"), ident("x", "c")]
+        let live = [ident("x", "a"), ident("x", "b"), ident("x", "c")]
+        let (out, div) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                          hiddenDividerIndex: nil)
+        XCTAssertEqual(out.map(\.key), ["x#a", "x#b", "x#c"])
+        XCTAssertNil(div)
+    }
+
+    func testMergeNewItemWithoutKnownNeighborLandsAtVisibleTop() {
+        // h is the hidden prefix (divider index 1); the new icon has no saved
+        // neighbor to its left → it goes to the top of the VISIBLE band, and the
+        // divider must not swallow it into the hidden section.
+        let desired = [ident("x", "h"), ident("x", "a")]
+        let live = [ident("x", "new"), ident("x", "a")]
+        let (out, div) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                          hiddenDividerIndex: 1)
+        XCTAssertEqual(out.map(\.key), ["x#h", "x#new", "x#a"])
+        XCTAssertEqual(div, 1)
+    }
+
+    func testMergeSkipsUnresolvedAndKnownItems() {
+        let desired = [ident("x", "a")]
+        // Unresolved (bundle-only) + already-known items must not be inserted.
+        let live = [MenuBarIdentity(bundleID: "y"), ident("x", "a")]
+        let (out, div) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                          hiddenDividerIndex: nil)
+        XCTAssertEqual(out.map(\.key), ["x#a"])
+        XCTAssertNil(div)
+    }
+
+    func testMergeIsStableAcrossRepeatedTicks() {
+        let desired = [ident("x", "a")]
+        let live = [ident("x", "a"), ident("x", "b")]
+        let (once, _) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                         hiddenDividerIndex: nil)
+        let (twice, _) = MenuBarOrderDiff.mergingNewItems(desired: once, live: live,
+                                                          hiddenDividerIndex: nil)
+        XCTAssertEqual(once, twice, "second tick with the same bar must be a no-op")
+    }
+
     // MARK: - Ordering engine: arranger identity mapping
 
     @MainActor

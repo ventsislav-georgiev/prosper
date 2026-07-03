@@ -409,16 +409,17 @@ final class MenuBarManager: NSObject {
         // shut the instant the user opened it. If the section was already revealed on
         // entry, leave it revealed (its own auto-rehide timer, armed by the click,
         // still governs); only force the collapse when we revealed it ourselves.
-        let wasRevealed = revealed
-        let wasAlwaysRevealed = revealedAlwaysHidden
         isPlacing = true
         defer { isPlacing = false }
         beginPlacement()
         try? await Task.sleep(for: .milliseconds(180))
         let result = await body()
-        if wasRevealed {
-            revealed = true
-            revealedAlwaysHidden = wasAlwaysRevealed
+        // Restore from the CURRENT `revealed` flag, not the one captured at entry:
+        // the user can click the chevron mid-pass (setRevealed updates the flag), and
+        // restoring the stale capture re-opened a section they had just collapsed —
+        // "I click to hide and it shows the hidden part again". `revealed` always
+        // holds the latest user intent, so just re-derive the divider lengths from it.
+        if revealed {
             applyDividerLengths()
         } else {
             endPlacement()
