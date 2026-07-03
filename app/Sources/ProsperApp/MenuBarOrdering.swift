@@ -114,6 +114,12 @@ struct MenuBarOrderStore: Codable, Equatable, Sendable {
     /// mirrors where the user ⌘-dragged the real divider, and editable by dragging the
     /// divider row in Settings.
     var hiddenDividerIndex: Int? = nil
+    /// Position in `desiredOrder` where NEWLY-APPEARED icons are filed — the editor's
+    /// "new icons land here" placeholder row. macOS spawns new status items at the
+    /// far LEFT of the bar (physically inside the hidden band), so without this every
+    /// new icon defaults to hidden; with it the merge files the icon at this index and
+    /// the next apply drags it there. nil = no placeholder: file by physical band.
+    var newItemsIndex: Int? = nil
 
     /// Whether `key` is marked always-hidden.
     func isAlwaysHidden(_ key: String) -> Bool { alwaysHidden.contains(key) }
@@ -286,15 +292,29 @@ enum MenuBarOrderDiff {
     /// neighbor is a hidden entry, and the neighbor rule would file the (visible!)
     /// icon into the hidden prefix — the next reveal-apply then drags it off-screen
     /// and the sections ping-pong. Without the signal, the neighbor-side rule stands.
+    /// `newItemsIndex` is the user's placeholder ("new icons land HERE"): when set it
+    /// overrides both signals — every unknown icon is filed at that slot (a batch keeps
+    /// its live left→right arrival order stacked there), the divider grows only when
+    /// the slot is inside the hidden prefix, and the caller's next apply pass drags the
+    /// icon to it. Without it, band signals decide the slot.
     static func mergingNewItems(desired: [MenuBarIdentity], live: [MenuBarIdentity],
                                 hiddenDividerIndex: Int?,
-                                liveHiddenKeys: Set<String>? = nil) -> (order: [MenuBarIdentity], hiddenDividerIndex: Int?) {
+                                liveHiddenKeys: Set<String>? = nil,
+                                newItemsIndex: Int? = nil) -> (order: [MenuBarIdentity], hiddenDividerIndex: Int?) {
         var out = desired
         var divider = hiddenDividerIndex
+        // Placeholder cursor: each adopted icon inserts here then pushes it right.
+        var cursor = newItemsIndex.map { min(max($0, 0), out.count) }
         var known = Set(desired.map(\.key))
         for (i, id) in live.enumerated() {
             guard id.isManageable, id.isResolved, !known.contains(id.key) else { continue }
             known.insert(id.key)
+            if let c = cursor {
+                out.insert(id, at: c)
+                if let d = divider, c < d { divider = d + 1 }
+                cursor = c + 1
+                continue
+            }
             // Nearest saved neighbor to the LEFT in the live bar → insert after it.
             let leftNeighbor = live[..<i].reversed().first { known.contains($0.key) && $0.key != id.key }
                 .flatMap { n in out.firstIndex { $0.key == n.key } }

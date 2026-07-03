@@ -463,6 +463,44 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(div, 2)
     }
 
+    func testMergePlaceholderOverridesPhysicalBand() {
+        // Placeholder at the visible top: even an icon that physically sits in the
+        // hidden band (macOS spawns new icons at the far left) files at the
+        // placeholder, and the divider does not grow.
+        let desired = [ident("x", "h"), ident("x", "v")]
+        let live = [ident("x", "new"), ident("x", "h"), ident("x", "v")]
+        let (out, div) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                          hiddenDividerIndex: 1,
+                                                          liveHiddenKeys: ["x#h", "x#new"],
+                                                          newItemsIndex: 1)
+        XCTAssertEqual(out.map(\.key), ["x#h", "x#new", "x#v"])
+        XCTAssertEqual(div, 1)
+    }
+
+    func testMergePlaceholderInsideHiddenPrefixGrowsDivider() {
+        // Placeholder deliberately inside the hidden prefix: new icons file there
+        // and the divider grows to keep the same visible set.
+        let desired = [ident("x", "h"), ident("x", "v")]
+        let live = [ident("x", "new"), ident("x", "h"), ident("x", "v")]
+        let (out, div) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                          hiddenDividerIndex: 1,
+                                                          newItemsIndex: 0)
+        XCTAssertEqual(out.map(\.key), ["x#new", "x#h", "x#v"])
+        XCTAssertEqual(div, 2)
+    }
+
+    func testMergePlaceholderBatchKeepsArrivalOrder() {
+        // Two new icons in one tick stack at the placeholder in live left→right
+        // order (cursor semantics: insert, then push the cursor right).
+        let desired = [ident("x", "a"), ident("x", "b")]
+        let live = [ident("x", "n1"), ident("x", "n2"), ident("x", "a"), ident("x", "b")]
+        let (out, div) = MenuBarOrderDiff.mergingNewItems(desired: desired, live: live,
+                                                          hiddenDividerIndex: nil,
+                                                          newItemsIndex: 1)
+        XCTAssertEqual(out.map(\.key), ["x#a", "x#n1", "x#n2", "x#b"])
+        XCTAssertNil(div)
+    }
+
     func testMergeSkipsUnresolvedAndKnownItems() {
         let desired = [ident("x", "a")]
         // Unresolved (bundle-only) + already-known items must not be inserted.

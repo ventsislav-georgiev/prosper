@@ -2601,17 +2601,31 @@ private struct MenuBarPane: View {
     /// chevron); below it they stay visible.
     private enum OrderRow: Identifiable {
         case divider
+        case newItems
         case item(MenuBarIdentity)
-        var id: String { if case .item(let i) = self { return i.key }; return "__prosper_hidden_divider__" }
+        var id: String {
+            switch self {
+            case .item(let i): return i.key
+            case .divider: return "__prosper_hidden_divider__"
+            case .newItems: return "__prosper_new_items__"
+            }
+        }
     }
 
     /// `desiredOrder` with the divider sentinel spliced in at `hiddenDividerIndex`
-    /// (default 0 = nothing hidden). Only shown when moves work (probeOK).
+    /// (default 0 = nothing hidden) and the new-icons placeholder at `newItemsIndex`
+    /// (default: just right of the divider — the top of the visible band). Only shown
+    /// when moves work (probeOK).
     private var editorRows: [OrderRow] {
         var rows = orderStore.desiredOrder.map(OrderRow.item)
         guard probeOK == true else { return rows }
-        let idx = min(max(orderStore.hiddenDividerIndex ?? 0, 0), rows.count)
-        rows.insert(.divider, at: idx)
+        let itemCount = rows.count
+        let d = min(max(orderStore.hiddenDividerIndex ?? 0, 0), itemCount)
+        rows.insert(.divider, at: d)
+        // Both sentinels count the ITEMS above them; the placeholder's row index
+        // shifts by one when the divider row sits at or above its slot.
+        let p = min(max(orderStore.newItemsIndex ?? d, 0), itemCount)
+        rows.insert(.newItems, at: p + (p >= d ? 1 : 0))
         return rows
     }
 
@@ -2625,6 +2639,7 @@ private struct MenuBarPane: View {
                 ForEach(editorRows) { row in
                     switch row {
                     case .divider: dividerRow
+                    case .newItems: newItemsRow
                     case .item(let id): itemRow(id)
                     }
                 }
@@ -2678,15 +2693,34 @@ private struct MenuBarPane: View {
         .help("Drag this divider up/down. Icons above it are hidden (shown only on chevron click); icons below stay visible.")
     }
 
+    @ViewBuilder private var newItemsRow: some View {
+        HStack(spacing: sz(8)) {
+            Image(systemName: "plus.circle.dashed").foregroundStyle(Neon.blue)
+            Text("New icons land here")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.blue)
+            Spacer()
+        }
+        .padding(.vertical, sz(2))
+        .listRowSeparator(.hidden)
+        .help("When an app adds a menu bar icon, Prosper files it at this spot and moves it there (above the divider = hidden). macOS itself spawns new icons at the far left, inside the hidden area.")
+    }
+
     /// Decompose the mixed editor rows back into saved order + divider index, persist,
     /// and drive the live bar to match the new hidden / visible split.
     private func commitRows(_ rows: [OrderRow]) {
-        let dividerPos = rows.firstIndex { if case .divider = $0 { return true }; return false }
         let items: [MenuBarIdentity] = rows.compactMap { if case .item(let i) = $0 { return i }; return nil }
+        // Sentinel positions count the ITEMS above them (a raw row index would be
+        // off by one whenever the other sentinel row sits higher in the list).
+        func itemsAbove(_ isMatch: (OrderRow) -> Bool) -> Int? {
+            guard let at = rows.firstIndex(where: isMatch) else { return nil }
+            return rows[..<at].reduce(0) { n, r in if case .item = r { return n + 1 } else { return n } }
+        }
+        let dividerPos = itemsAbove { if case .divider = $0 { return true }; return false }
+        let placeholderPos = itemsAbove { if case .newItems = $0 { return true }; return false }
         mutateOrder {
             $0.desiredOrder = items
-            // dividerPos counts the items before the sentinel = size of hidden prefix.
             $0.hiddenDividerIndex = (dividerPos.map { $0 == 0 ? nil : $0 } ?? nil)
+            $0.newItemsIndex = placeholderPos
         }
         applyBandsNow()
     }
@@ -2837,7 +2871,10 @@ private struct MenuBarPane: View {
         saving = true
         Task {
             let snap = await MenuBarArranger.snapshotCurrentOrder()
-            mutateOrder { $0.desiredOrder = snap.order; $0.hiddenDividerIndex = snap.hiddenDividerIndex }
+            // Fresh capture invalidates a pinned placeholder slot — fall back to the
+            // default (just right of the divider) until the user re-drags it.
+            mutateOrder { $0.desiredOrder = snap.order; $0.hiddenDividerIndex = snap.hiddenDividerIndex
+                          $0.newItemsIndex = nil }
             screenRecOK = MenuBarItemIndexer.hasPermission()
             saving = false
         }

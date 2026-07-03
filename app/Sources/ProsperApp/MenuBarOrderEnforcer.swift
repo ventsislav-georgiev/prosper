@@ -38,6 +38,10 @@ final class MenuBarOrderEnforcer {
     /// enumeration. Reset to nil on any settings change (the desired order may now
     /// differ even though the live order is static).
     private var lastOrderFingerprint: [CGWindowID]?
+    /// A new icon merged at its placeholder but the apply pass hasn't run yet (mode
+    /// guard or cooldown blocked it). Sticky across ticks — the bar is static after
+    /// the merge, so the fingerprint gate alone would never re-trigger placement.
+    private var pendingNewIconPlacement = false
 
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
@@ -189,11 +193,24 @@ final class MenuBarOrderEnforcer {
         // saved order at their observed position, so the engine KNOWS them instead of
         // treating every later tick as unexplained drift (the back-and-forth the
         // membership confusion caused). No moves here; pure bookkeeping.
+        // Placeholder slot for new icons: the user's saved position, defaulting to
+        // just RIGHT of the divider (top of the visible band) — macOS spawns new
+        // status items at the far left, physically inside the hidden band, and
+        // "new icon silently vanishes behind the chevron" is never what anyone wants.
+        let placeholder = store.newItemsIndex ?? store.hiddenDividerIndex ?? 0
         let (merged, dividerIdx) = MenuBarOrderDiff.mergingNewItems(
             desired: store.desiredOrder, live: curIdentities,
             hiddenDividerIndex: store.hiddenDividerIndex,
-            liveHiddenKeys: liveHidden)
+            liveHiddenKeys: liveHidden,
+            newItemsIndex: placeholder)
         if merged.count != store.desiredOrder.count {
+            pendingNewIconPlacement = true
+            // Cursor semantics: every insertion lands at the placeholder and pushes
+            // it right, so a SAVED placeholder keeps sitting after the icons it
+            // just adopted (the default one re-derives from the divider each tick).
+            if let idx = store.newItemsIndex {
+                store.newItemsIndex = min(idx + (merged.count - store.desiredOrder.count), merged.count)
+            }
             store.desiredOrder = merged
             store.hiddenDividerIndex = dividerIdx
             persistStore()
@@ -203,7 +220,12 @@ final class MenuBarOrderEnforcer {
         // background tick in on-demand mode stops here: it only auto-saves.
         guard store.mode == .live || userInitiated else { return }
         let n = now
-        if !policy.canApply(now: n, onBattery: Self.onBattery()) { return }
+        if !policy.canApply(now: n, onBattery: Self.onBattery()) {
+            // Deferred while a placement is pending: the bar is static now, so force
+            // the next tick past the fingerprint gate to retry once the cooldown ends.
+            if pendingNewIconPlacement { lastOrderFingerprint = nil }
+            return
+        }
 
         let resolvedDesired = store.desiredOrder.filter { $0.isResolved }
         let desiredKeys = resolvedDesired.map { $0.key }
@@ -216,21 +238,31 @@ final class MenuBarOrderEnforcer {
         let needsReindex = resolvedDesired.contains {
             $0.imageHash != nil && liveBundles.contains($0.bundleID) && !curKeySet.contains($0.key)
         }
-        guard orderWrong || needsReindex else { return }
+        // A just-merged icon can already satisfy RELATIVE order (it spawned adjacent
+        // to its slot) while sitting on the wrong side of the divider — the reveal
+        // pass's placeDividers re-seats the boundary around it, so run it anyway.
+        guard orderWrong || needsReindex || pendingNewIconPlacement else { return }
 
         working = true
         let desired = store.desiredOrder
         let hiddenKeys = store.hiddenKeys
         let alwaysHidden = store.alwaysHidden
         let mode = store.mode
+        let placeNewIcon = pendingNewIconPlacement
+        pendingNewIconPlacement = false
         Task {
             // Live mode never force-reveals — only reorders on-screen items (Stats are
             // visible; that's the use case). On-demand reveals via onReveal/Apply, and
             // restores band membership in the same pass (live leaves the divider alone).
+            // ONE exception: a new icon just merged at its placeholder. It spawned at
+            // macOS's far-left default — physically OFF-SCREEN in the collapsed hidden
+            // band — and an off-screen icon can't be synthetic-dragged without a brief
+            // reveal. A just-appeared icon is the one moment a flash of the hidden band
+            // is justified, and it's a rare event (not the steady-state tick).
             let result = await MenuBarArranger.apply(desired: desired,
                                                      hiddenKeys: hiddenKeys,
                                                      alwaysHiddenKeys: alwaysHidden,
-                                                     reveal: mode != .live)
+                                                     reveal: mode != .live || placeNewIcon)
             let actionable = result.moved > 0 || result.failed > 0
             // Stamp the cooldown from the pass START (`n`), not `self.now` after the
             // await — apply() can run hundreds of ms (reveal + capture + drags) and
