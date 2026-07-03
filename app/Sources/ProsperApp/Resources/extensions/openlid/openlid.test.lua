@@ -305,10 +305,37 @@ do
     local G = h.load(INIT, host)
     G.openlid_toggle("")                                     -- our own override on
     h.eq(env.flags.lidDisabled, true, "lid override held before sleep-now")
-    G.settings_action("openlid", "sleep_now", "", "{}")
+    local ui = G.settings_action("openlid", "sleep_now", "", "{}")
     h.eq(env.flags.lidDisabled, false, "sleep-now releases our lid override")
     h.eq(state(host).active, false, "sleep-now clears stored active state")
     h.eq(env.flags.sleepNow, 1, "sleep-now asks the host to release remote holds + sleep")
+    -- Must return a FRESH settings tree: a nil return makes the pane keep the
+    -- stale pre-click tree ("Mac awake: on") whenever the sleep doesn't take.
+    h.eq(ui and ui.kind, "settings.ui", "sleep-now returns a re-rendered settings UI")
+end
+
+-- ── on_wake reconciles the lid override both ways ──────────────────────────────
+do
+    local host, env = h.makeHost { power = "AC Power" }
+    local G = h.load(INIT, host)
+
+    -- Active session: a daemon crash while asleep reset disablesleep; the full
+    -- wake must RE-ASSERT it, not just trust the stored flag.
+    G.openlid_toggle("")                                     -- manual on
+    h.eq(env.flags.lidDisabled, true, "override held")
+    env.flags.lidDisabled = false                            -- simulate daemon cold-start reclaim
+    G.on_wake("{}")
+    h.eq(env.flags.lidDisabled, true, "on_wake re-asserts the override while active")
+    h.eq(state(host).active, true, "state untouched")
+
+    -- Stale: not active but the flag survived (e.g. crash between save + release).
+    G.openlid_toggle("")                                     -- off (releases)
+    local s = state(host); s.lidSleepDisabled = true
+    host.prefs.set("state", host.json.encode(s))
+    env.flags.lidDisabled = true
+    G.on_wake("{}")
+    h.eq(env.flags.lidDisabled, false, "on_wake clears a stale override")
+    h.eq(state(host).lidSleepDisabled, false, "stale flag cleared in state")
 end
 
 print("ok openlid")

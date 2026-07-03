@@ -549,9 +549,16 @@ function on_network(payload)
 end
 
 function on_wake(payload)
-    -- Reset a stale lid override left set if we are no longer active.
+    -- Reconcile the lid override with reality after a full wake, both directions:
+    --   stale  (not active, flag set)  → clear it.
+    --   active (flag set)              → RE-ASSERT. A daemon crash while asleep
+    --     relaunches it (KeepAlive) and its cold-start reclaim resets disablesleep
+    --     to 0 — without this the UI says "on" while the next lid close sleeps the
+    --     Mac. Idempotent and cheap (one XPC call, no state change).
     local s = load_state()
-    if not s.active and s.lidSleepDisabled then
+    if s.active and s.lidSleepDisabled then
+        host.caffeinate.set_disable_lid_sleep(true)
+    elseif not s.active and s.lidSleepDisabled then
         host.caffeinate.set_disable_lid_sleep(false)
         s.lidSleepDisabled = false
         save_state(s)
@@ -806,7 +813,9 @@ function settings_action(section_id, action, value, form_json)
         deactivate("sleep now")
         if load_state().caffeine then caffeine_off("sleep now") end
         host.caffeinate.sleep_now()
-        return render(load_state())
+        -- Fall through to the settings_render below: `render()` returns nothing, and
+        -- a nil settings_action result makes the pane KEEP the stale pre-click tree
+        -- ("Mac awake: on") — visible whenever the sleep doesn't take instantly.
     end
     local key = action:match("^set:(.+)$")
     if key == "lid_now" then

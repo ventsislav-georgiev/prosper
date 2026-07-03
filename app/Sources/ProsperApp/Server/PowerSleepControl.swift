@@ -34,7 +34,12 @@ enum SleepControl {
         // awake + reachable. On the shared apply chain to keep order with any pending
         // lid op.
         LidSleepHelper.enqueueApply {
-            _ = await LidSleepHelper.sleepNow()
+            // The sleep never happened (daemon unreachable / registration refused):
+            // release the latch NOW. Leaving it armed — with the Mac still awake, so
+            // no didWakeNotification is ever coming — would silently refuse every
+            // keep-awake enabler (lid override, session hold) until some unrelated
+            // future sleep/wake cycle, while the openlid UI still reads "on".
+            if !(await LidSleepHelper.sleepNow()) { cancelWakeClear() }
         }
     }
 
@@ -45,6 +50,14 @@ enum SleepControl {
     /// ponytail: if a sleep command somehow neither sleeps nor wakes, the latch stays
     /// until the next real wake — fine, that path also means nothing re-triggered
     /// disablesleep, so the keep-awake feature isn't actually blocked in practice.
+    /// Undo `armWakeClear` + the suppression when the sleep command failed.
+    private static func cancelWakeClear() {
+        LidSleepHelper.endSleepSuppression()
+        lock.lock(); defer { lock.unlock() }
+        if let t = wakeToken { NSWorkspace.shared.notificationCenter.removeObserver(t) }
+        wakeToken = nil
+    }
+
     private static func armWakeClear() {
         lock.lock(); defer { lock.unlock() }
         if wakeToken != nil { return }   // already armed for a prior sleep

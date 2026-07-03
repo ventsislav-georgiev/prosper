@@ -243,6 +243,18 @@ final class RemoteWakeCoreTests: XCTestCase {
     func testDisabledConfigSanitizesToDisabled() {
         XCTAssertFalse(cfg(enabled: false).sanitized().enabled)
     }
+
+    func testSanitizeRejectionPreservesTrace() {
+        // The disable / refuse-to-arm paths are exactly what the verbose log
+        // debugs; sanitize must not silently drop the flag on its way to disabled.
+        var off = cfg(enabled: false); off.trace = true
+        XCTAssertTrue(off.sanitized().trace)
+        var badHost = cfg(url: "https://evil.example.com/wake/abc"); badHost.trace = true
+        XCTAssertFalse(badHost.sanitized().enabled)
+        XCTAssertTrue(badHost.sanitized().trace)
+        var badVersion = cfg(); badVersion.version = 99; badVersion.trace = true
+        XCTAssertTrue(badVersion.sanitized().trace)
+    }
 }
 
 /// Hot-path guard for `RemoteWakeCore.onWake` — runs on every dark wake, so the

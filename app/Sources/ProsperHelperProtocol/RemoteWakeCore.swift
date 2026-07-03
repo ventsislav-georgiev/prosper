@@ -60,10 +60,17 @@ public struct RemoteWakeConfig: Codable, Equatable, Sendable {
     /// bad URL, or non-allowlisted host so a corrupt file can never arm the daemon
     /// or point the root poll at an arbitrary host. Clamps intervals/floor in range.
     public func sanitized() -> RemoteWakeConfig {
-        guard version == RemoteWakeConfig.currentVersion else { return .disabled }
-        guard enabled else { return .disabled }
+        // Every reject path carries `trace` through: the disable / refuse-to-arm
+        // paths are exactly what the verbose log exists to debug, and returning the
+        // bare sentinel used to silently drop the flag (daemon went mute the moment
+        // remote-wake turned off or a config was rejected). trace is a plain Bool —
+        // harmless to keep even from an otherwise untrusted config.
+        var off = RemoteWakeConfig.disabled
+        off.trace = trace
+        guard version == RemoteWakeConfig.currentVersion else { return off }
+        guard enabled else { return off }
         guard let u = URL(string: pollURL), u.scheme == "https" || (u.scheme == "http" && (u.host == "127.0.0.1" || u.host == "localhost")),
-              let host = u.host, RemoteWakeConfig.allowedHosts.contains(host) else { return .disabled }
+              let host = u.host, RemoteWakeConfig.allowedHosts.contains(host) else { return off }
         func clampInterval(_ v: Double) -> Double {
             min(RemoteWakeConfig.maxInterval, max(RemoteWakeConfig.minInterval, v))
         }

@@ -75,7 +75,9 @@ final class RemoteWakeObserver: @unchecked Sendable {
     func apply(json: String) -> Bool {
         let cfg = RemoteWakeConfig.from(json: json)
         daemonTrace = cfg.trace
-        Self.writeConfig(cfg.enabled ? cfg.jsonString() : RemoteWakeConfig.disabled.jsonString())
+        // cfg is already sanitized: disabled → the sentinel (pollURL stripped) with
+        // `trace` preserved, so a restart while disabled keeps the verbose log on.
+        Self.writeConfig(cfg.jsonString())
         _ = core.applyConfig(cfg, onAC: Self.onAC())
         dtrace("apply: enabled=\(cfg.enabled) resident=\(core.isResident) trace=\(cfg.trace)")
         return core.isResident

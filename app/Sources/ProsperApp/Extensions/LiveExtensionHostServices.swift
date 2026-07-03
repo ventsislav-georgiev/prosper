@@ -579,7 +579,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         }
         let cfg = RemoteWakeConfig(
             enabled: enabled && signedIn,
-            pollURL: Self.wakePollURL(deviceTag: deviceID),
+            pollURL: Self.wakePollURL(deviceTag: deviceID, email: loaded?.email ?? ""),
             intervalAC: intervalAC,
             intervalBatt: intervalBatt,
             batteryFloor: batteryFloor,
@@ -709,8 +709,13 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             .map { String(format: "%02x", $0) }.joined().prefix(16))
     }
 
-    private static func wakePollURL(deviceTag: String) -> String {
-        let acctTag = wakeAcctTag(SupporterStore.load()?.email ?? "")
+    /// `email` is the caller's already-loaded (main-actor) credential — this must
+    /// NOT re-load the keychain here: it runs on the detached apply chain, where a
+    /// background keychain read can transiently return nil and would silently bake
+    /// an empty acctTag into the armed poll URL (un-wakeable device, wrong wakeId
+    /// to the phone) even though the caller's signed-in gate just passed.
+    private static func wakePollURL(deviceTag: String, email: String) -> String {
+        let acctTag = wakeAcctTag(email)
         var dev = normalizeTag(deviceTag)
         if dev.isEmpty { dev = normalizeTag(ProcessInfo.processInfo.hostName) }
         if dev.isEmpty {
