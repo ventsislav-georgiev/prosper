@@ -36,6 +36,36 @@ final class AppOverrideResolverTests: XCTestCase {
         XCTAssertTrue(AppOverrideResolver.isAutocompleteDisabled(forBundleId: "com.apple.mail"))
     }
 
+    // MARK: - A2 insertion knobs
+
+    /// An unlisted app resolves to the safe defaults (today's whole-string, plain
+    /// ⌘V path): everything off, chunk size 0.
+    func testInsertionKnobsDefaults() {
+        AppOverrideCache.shared.replace(with: [])
+        let k = AppOverrideResolver.insertionKnobs(forBundleId: unlistedId)
+        XCTAssertEqual(k, AppOverrideResolver.InsertionKnobs())
+    }
+
+    /// The Telegram (Qt) seed carries chunked injection + non-breaking space.
+    func testInsertionKnobsTelegramSeed() {
+        AppOverrideCache.shared.replace(with: [])
+        let k = AppOverrideResolver.insertionKnobs(forBundleId: "ru.keepcoder.Telegram")
+        XCTAssertTrue(k.nonBreakingSpace)
+        XCTAssertEqual(k.injectionChunkSize, 8)
+        XCTAssertFalse(k.pasteAndMatchStyle)
+    }
+
+    /// A user override beats the seed for insertion knobs too.
+    func testInsertionKnobsUserOverrideBeatsSeed() {
+        AppOverrideCache.shared.replace(with: [
+            AppOverride(bundleId: "ru.keepcoder.Telegram",
+                        nonBreakingSpace: false, injectionChunkSize: 0)
+        ])
+        let k = AppOverrideResolver.insertionKnobs(forBundleId: "ru.keepcoder.Telegram")
+        XCTAssertFalse(k.nonBreakingSpace)
+        XCTAssertEqual(k.injectionChunkSize, 0)
+    }
+
     /// With no user override, the curated seed applies: Mail/Slack/Discord etc. are
     /// seeded enabled.
     func testSeedAppliesWhenNoOverride() {

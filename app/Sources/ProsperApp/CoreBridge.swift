@@ -858,12 +858,19 @@ enum CoreBridge {
                     // path internally (WS2): the speculative iterator when
                     // enabled+draft-loaded, else this same single-model
                     // `generateInline` — so this call site is unchanged.
+                    // Guided decoding (B1, opt-in): constrain to the user's script so
+                    // cross-script garbage can't be generated. Latinica is exempt —
+                    // it is Latin-script Bulgarian and a Cyrillic constraint would be
+                    // wrong; it also keeps the sampled ladder for coverage.
+                    let requiredScript: ScriptClassifier.Target? =
+                        (Preferences.guidedScriptDecoding && !latinBulgarian)
+                        ? ScriptClassifier.target(for: before) : nil
                     let raw = try await MLXEngine.shared.generateInlineRouted(
                         prompt: attempt.reprompt ? nudgedPrompt : prompt,
                         system: system,
                         maxTokens: maxTokens, temperature: attempt.temperature,
                         topP: attempt.topP, stop: ["\n"], maxWords: maxWords,
-                        topK: attempt.topK
+                        topK: attempt.topK, requiredScript: requiredScript
                     )
                     benchLog(system: system, prompt: attempt.reprompt ? nudgedPrompt : prompt,
                              raw: raw, temp: attempt.temperature)
@@ -1160,12 +1167,66 @@ enum CoreBridge {
             if Self.echoesAfterHead(s, afterHead: String(after.prefix(400))) { return nil }
         }
 
+        // Clean-boundary stop (B3): the word cap ends on a word boundary but can
+        // still leave a dangling clause tail — a trailing opener/comma or a lone
+        // connector ("…going to the store, and", "…on the (") — that reads as
+        // unfinished. Trim it back to the last clean boundary so the ghost ends on a
+        // complete phrase. Conservative: never empties a completion, keeps ≥1 word.
+        s = Self.trimDanglingTail(s)
+
         // Trim trailing blank lines, keep at most a single trailing newline run.
         s = s.replacingOccurrences(of: "\r\n", with: "\n")
         while s.hasSuffix("\n\n") { s = String(s.dropLast()) }
 
         let trimmedEnds = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedEnds.isEmpty ? nil : s.hasPrefix(" ") || s.hasPrefix("\n") ? s : trimmedEnds
+    }
+
+    /// Common clause connectors (EN + BG/Cyrillic) that read as unfinished when a
+    /// completion ends on one. Lowercased for case-insensitive match.
+    private static let danglingConnectors: Set<String> = [
+        "and", "or", "but", "so", "the", "a", "an", "to", "of", "in", "on", "for",
+        "with", "at", "by", "as", "that", "if", "when", "while", "which",
+        "и", "а", "но", "да", "на", "в", "във", "с", "със", "за", "от", "че", "ще", "или",
+    ]
+
+    /// Trailing punctuation that leaves a clause visibly open: an unclosed opener or
+    /// a trailing dash. Commas/semicolons/colons are deliberately NOT here — they are
+    /// valid clause boundaries a gap-fill completion legitimately ends on when it
+    /// merges into the text after the caret.
+    private static let danglingTrailingPunct: Set<Character> = [
+        "(", "[", "{", "\"", "'", "“", "‘", "«", "—",
+    ]
+
+    /// Clean-boundary trim (B3): removes a trailing dangling opener/separator and a
+    /// single trailing connector word so a word-capped completion ends on a complete
+    /// phrase instead of mid-clause. Preserves the leading whitespace run (the
+    /// new-word separator the downstream contract depends on) and never empties the
+    /// completion — a bare connector is only dropped when ≥1 content word remains.
+    static func trimDanglingTail(_ s: String) -> String {
+        // Preserve the exact leading whitespace run.
+        let leading = String(s.prefix { $0 == " " || $0 == "\t" || $0 == "\n" })
+        var body = String(s.dropFirst(leading.count))
+        func rstripWhitespace() { while let l = body.last, l.isWhitespace { body.removeLast() } }
+        rstripWhitespace()
+        guard !body.isEmpty else { return s }
+
+        // Strip trailing openers/separators (possibly several: "… (", "…, —").
+        while let last = body.last, danglingTrailingPunct.contains(last) {
+            body.removeLast()
+            rstripWhitespace()
+            if body.isEmpty { return s }
+        }
+
+        // Drop a single trailing connector word when at least one other word remains.
+        let words = body.split(whereSeparator: { $0.isWhitespace })
+        if words.count >= 2, let last = words.last,
+           danglingConnectors.contains(last.lowercased()) {
+            body = String(body.dropLast(last.count))
+            rstripWhitespace()
+        }
+        guard !body.isEmpty else { return s }
+        return leading + body
     }
 
     /// Returns `s` with its longest leading run removed that equals a suffix of

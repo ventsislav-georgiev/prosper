@@ -40,6 +40,14 @@ enum AppOverrideResolver {
         "com.hnc.discord": AppOverride(
             bundleId: "com.hnc.discord", enabled: true, forceEnhancedUI: true
         ),
+        // Telegram is Qt: a single large synthesized injection is silently dropped,
+        // and it sends-on-space, so a plain trailing space can fire the message.
+        // Chunk the injection and use a non-breaking space (A2). textMirroring on
+        // because Qt exposes no usable caret geometry (glyph-mirror tier 3 anchors it).
+        "ru.keepcoder.Telegram": AppOverride(
+            bundleId: "ru.keepcoder.Telegram", enabled: true, textMirroring: true,
+            nonBreakingSpace: true, injectionChunkSize: 8
+        ),
     ]
 
     /// `Preferences.defaultDisabledBundleIds`, lowercased once, so the disable-by-default
@@ -191,6 +199,35 @@ enum AppOverrideResolver {
         if let ov = AppOverrideCache.shared.override(for: bundleId),
            let v = ov.textMirroring { return v }
         return seed(for: bundleId)?.textMirroring
+    }
+
+    // MARK: - Insertion knobs (A2)
+
+    /// The resolved per-app insertion workarounds, read once at accept time. Each
+    /// field falls back override → seed → safe default (false / 0 = today's path).
+    struct InsertionKnobs: Equatable {
+        var pasteAndMatchStyle = false
+        var nonBreakingSpace = false
+        var spaceKeyEvent = false
+        var backspaceAfterPaste = false
+        /// 0 = inject the whole string in one event (today's behavior).
+        var injectionChunkSize = 0
+    }
+
+    static func insertionKnobs(forBundleId bundleId: String?) -> InsertionKnobs {
+        let ov = AppOverrideCache.shared.override(for: bundleId)
+        let s = seed(for: bundleId)
+        func b(_ o: KeyPath<AppOverride, Bool?>) -> Bool {
+            ov?[keyPath: o] ?? s?[keyPath: o] ?? false
+        }
+        let chunk = ov?.injectionChunkSize ?? s?.injectionChunkSize ?? 0
+        return InsertionKnobs(
+            pasteAndMatchStyle: b(\.pasteAndMatchStyle),
+            nonBreakingSpace: b(\.nonBreakingSpace),
+            spaceKeyEvent: b(\.spaceKeyEvent),
+            backspaceAfterPaste: b(\.backspaceAfterPaste),
+            injectionChunkSize: max(0, chunk)
+        )
     }
 
     // MARK: - minSizeThreshold

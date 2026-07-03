@@ -509,4 +509,31 @@ final class CoreBridgeSanitizeTests: XCTestCase {
         let names = list.components(separatedBy: ", ")
         XCTAssertEqual(names.count, Set(names).count)
     }
+
+    // MARK: - B3 clean-boundary trim
+
+    func testTrimDanglingConnector() {
+        XCTAssertEqual(CoreBridge.trimDanglingTail("going to the store and"), "going to the store")
+        // A preceding comma is a valid boundary and is kept; only the connector goes.
+        XCTAssertEqual(CoreBridge.trimDanglingTail("go to the store, and"), "go to the store,")
+        XCTAssertEqual(CoreBridge.trimDanglingTail("отивам до магазина и"), "отивам до магазина")
+    }
+
+    func testTrimDanglingPunctuation() {
+        // Unclosed openers and a trailing dash are stripped.
+        XCTAssertEqual(CoreBridge.trimDanglingTail("meet me at the office ("), "meet me at the office")
+        XCTAssertEqual(CoreBridge.trimDanglingTail("he said \""), "he said")
+        XCTAssertEqual(CoreBridge.trimDanglingTail("see you soon —"), "see you soon")
+        // Commas/colons are valid boundaries (gap-fill) and are preserved.
+        XCTAssertEqual(CoreBridge.trimDanglingTail("the plan is,"), "the plan is,")
+    }
+
+    func testTrimPreservesLeadingSpaceAndCleanTails() {
+        // New-word separator space is preserved.
+        XCTAssertEqual(CoreBridge.trimDanglingTail(" the store and"), " the store")
+        // A clean, complete phrase is untouched.
+        XCTAssertEqual(CoreBridge.trimDanglingTail("going to the store"), "going to the store")
+        // Never empties: a lone connector/opener with no content word stays.
+        XCTAssertEqual(CoreBridge.trimDanglingTail("and"), "and")
+    }
 }

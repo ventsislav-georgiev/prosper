@@ -1073,7 +1073,8 @@ actor MLXEngine {
         stop: [String] = [],
         maxWords: Int = 0,
         topK: Int? = nil,
-        minP: Float? = nil
+        minP: Float? = nil,
+        requiredScript: ScriptClassifier.Target? = nil
     ) async throws -> String {
         guard let container else { throw MLXEngineError.notLoaded }
         if Task.isCancelled { return "" }
@@ -1169,8 +1170,23 @@ actor MLXEngine {
             // `break outer` (stop sequence / word cap / superseded keystroke), which
             // abandon the stream while the producer task is still stepping the model
             // on THIS cache. We cancel + await it before the trim/persist below.
-            let iterator = try TokenIterator(
-                input: lmInput, model: context.model, cache: cache, parameters: parameters)
+            //
+            // Guided decoding (B1, opt-in): when a script constraint is requested,
+            // build the iterator through the processor/sampler seam so out-of-script
+            // tokens are masked before sampling. This init does not carry kvBits, so
+            // the guided path forgoes KV-cache quantization (inline default is off).
+            let iterator: TokenIterator
+            if let requiredScript, requiredScript != .unconstrained {
+                let proc = RequiredScriptLogitProcessor(
+                    target: requiredScript,
+                    convertIdToToken: { context.tokenizer.convertIdToToken($0) })
+                iterator = try TokenIterator(
+                    input: lmInput, model: context.model, cache: cache,
+                    processor: proc, sampler: parameters.sampler(), maxTokens: maxTokens)
+            } else {
+                iterator = try TokenIterator(
+                    input: lmInput, model: context.model, cache: cache, parameters: parameters)
+            }
             let (stream, loopTask) = MLXLMCommon.generateTask(
                 promptTokenCount: lmInput.text.tokens.size,
                 modelConfiguration: context.configuration,
@@ -1265,14 +1281,19 @@ actor MLXEngine {
         stop: [String] = [],
         maxWords: Int = 0,
         topK: Int? = nil,
-        minP: Float? = nil
+        minP: Float? = nil,
+        requiredScript: ScriptClassifier.Target? = nil
     ) async throws -> String {
         // Tracked so a forced unload (autocomplete-disable) arriving mid-completion
         // defers instead of freeing GPU buffers under the inline compute. Cost is two
         // integer ops on the actor — negligible against multi-ms inference.
         activeGenerations += 1
         defer { endGeneration() }
-        if Self.shouldUseSpeculative(
+        // Guided decoding needs the logit-processor seam, which the speculative
+        // iterator doesn't expose — so a live script constraint routes to the
+        // single-model path (the constraint matters more than the draft's speed-up).
+        let guided = requiredScript != nil && requiredScript != .unconstrained
+        if !guided, Self.shouldUseSpeculative(
             enabled: Preferences.speculativeDecodingEnabled,
             draftLoaded: draftContainer != nil
         ) {
@@ -1285,7 +1306,7 @@ actor MLXEngine {
         return try await generateInline(
             prompt: prompt, system: system, maxTokens: maxTokens,
             temperature: temperature, topP: topP, stop: stop, maxWords: maxWords,
-            topK: topK, minP: minP
+            topK: topK, minP: minP, requiredScript: requiredScript
         )
     }
 

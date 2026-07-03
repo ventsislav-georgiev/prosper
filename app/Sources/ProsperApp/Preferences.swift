@@ -200,6 +200,7 @@ enum Preferences {
         static let modelDirMigrated = "modelDirMigrated"
         static let inlineKVBits = "inlineKVBits"
         static let speculativeDecodingEnabled = "speculativeDecodingEnabled"
+        static let guidedScriptDecoding = "guidedScriptDecoding"
         static let draftModelId = "draftModelId"
         static let numDraftTokens = "numDraftTokens"
         static let appOverridesMigrated = "appOverridesMigrated"
@@ -367,6 +368,17 @@ enum Preferences {
     static var speculativeDecodingEnabled: Bool {
         get { defaults.bool(forKey: Keys.speculativeDecodingEnabled) } // absent → false
         set { defaults.set(newValue, forKey: Keys.speculativeDecodingEnabled) }
+    }
+
+    /// Guided inline decoding (B1): constrain the inline decoder to in-script tokens
+    /// via `RequiredScriptLogitProcessor`, so cross-script garbage / wrong-language
+    /// bursts can't be generated instead of being rejected post-hoc. Default OFF —
+    /// opt-in and live-tuned against the corpus; the coarse script mask can't
+    /// separate sister languages (Bulgarian vs. Russian), so the dictionary gate
+    /// stays. Absent → false.
+    static var guidedScriptDecoding: Bool {
+        get { defaults.bool(forKey: Keys.guidedScriptDecoding) }
+        set { defaults.set(newValue, forKey: Keys.guidedScriptDecoding) }
     }
 
     /// Hugging Face MLX model id of the draft model. Defaults to `defaultDraftModelId`.

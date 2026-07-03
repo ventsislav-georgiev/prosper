@@ -40,6 +40,28 @@ struct AppOverride: Codable, FetchableRecord, PersistableRecord, Equatable, Send
     /// Raw `AppProfile.Surface` case ("chat", "email", …), or nil to infer.
     var surfaceOverride: String?
 
+    // MARK: Insertion workarounds (A2 — chat/web composers eat plain paste)
+    //
+    // Recovered from Cotypist's `AppOverrides` knobs. Each is optional so nil ==
+    // inherit today's behavior; the resolver falls back to a seed then to false/0.
+    /// Paste with `Cmd-Shift-V` (paste-and-match-style) instead of `Cmd-V`, for
+    /// rich/web editors that would otherwise inject styled text or reject the paste.
+    var pasteAndMatchStyle: Bool?
+    /// Substitute inserted space characters with U+00A0 (non-breaking space) so
+    /// send-on-space composers (mention pickers, some chat inputs) don't fire or
+    /// trim the trailing space when we inject a word.
+    var nonBreakingSpace: Bool?
+    /// Insert a lone space via a real Space key CGEvent instead of a paste/unicode
+    /// event, for fields (mention pickers) that only advance on a genuine keypress.
+    var spaceKeyEvent: Bool?
+    /// Send one backspace immediately after a paste, for editors that append a
+    /// stray character (newline/space) when text is pasted programmatically.
+    var backspaceAfterPaste: Bool?
+    /// Split a large injected string into chunks of this many characters. Qt
+    /// (Telegram) and some Electron composers silently drop a single large
+    /// injection; 0/nil = inject whole.
+    var injectionChunkSize: Int?
+
     init(
         bundleId: String,
         enabled: Bool? = nil,
@@ -49,7 +71,12 @@ struct AppOverride: Codable, FetchableRecord, PersistableRecord, Equatable, Send
         minSizeThreshold: Int? = nil,
         forceEnhancedUI: Bool? = nil,
         textMirroring: Bool? = nil,
-        surfaceOverride: String? = nil
+        surfaceOverride: String? = nil,
+        pasteAndMatchStyle: Bool? = nil,
+        nonBreakingSpace: Bool? = nil,
+        spaceKeyEvent: Bool? = nil,
+        backspaceAfterPaste: Bool? = nil,
+        injectionChunkSize: Int? = nil
     ) {
         self.bundleId = bundleId
         self.enabled = enabled
@@ -60,6 +87,11 @@ struct AppOverride: Codable, FetchableRecord, PersistableRecord, Equatable, Send
         self.forceEnhancedUI = forceEnhancedUI
         self.textMirroring = textMirroring
         self.surfaceOverride = surfaceOverride
+        self.pasteAndMatchStyle = pasteAndMatchStyle
+        self.nonBreakingSpace = nonBreakingSpace
+        self.spaceKeyEvent = spaceKeyEvent
+        self.backspaceAfterPaste = backspaceAfterPaste
+        self.injectionChunkSize = injectionChunkSize
     }
 
     /// True when no knob is set — a fully-inherited row carries no information and
@@ -68,6 +100,9 @@ struct AppOverride: Codable, FetchableRecord, PersistableRecord, Equatable, Send
         enabled == nil && customInstructions == nil && tabToAccept == nil
             && smartQuotes == nil && minSizeThreshold == nil && forceEnhancedUI == nil
             && textMirroring == nil && surfaceOverride == nil
+            && pasteAndMatchStyle == nil && nonBreakingSpace == nil
+            && spaceKeyEvent == nil && backspaceAfterPaste == nil
+            && injectionChunkSize == nil
     }
 }
 
@@ -144,6 +179,26 @@ actor AppOverrideStore {
                     t.column("forceEnhancedUI", .boolean)
                     t.column("textMirroring", .boolean)
                     t.column("surfaceOverride", .text)
+                    t.column("pasteAndMatchStyle", .boolean)
+                    t.column("nonBreakingSpace", .boolean)
+                    t.column("spaceKeyEvent", .boolean)
+                    t.column("backspaceAfterPaste", .boolean)
+                    t.column("injectionChunkSize", .integer)
+                }
+                // Additive migration for DBs created before the A2 insertion knobs:
+                // `create ifNotExists` never alters an existing table, so add each
+                // new column if the table predates it. `columns(in:)` is the cheap
+                // idempotent check — no separate migration-version bookkeeping.
+                let existing = Set(try db.columns(in: AppOverride.databaseTableName).map(\.name))
+                let added: [(String, String)] = [
+                    ("pasteAndMatchStyle", "BOOLEAN"),
+                    ("nonBreakingSpace", "BOOLEAN"),
+                    ("spaceKeyEvent", "BOOLEAN"),
+                    ("backspaceAfterPaste", "BOOLEAN"),
+                    ("injectionChunkSize", "INTEGER"),
+                ]
+                for (name, type) in added where !existing.contains(name) {
+                    try db.execute(sql: "ALTER TABLE \(AppOverride.databaseTableName) ADD COLUMN \(name) \(type)")
                 }
             }
             dbQueue = queue

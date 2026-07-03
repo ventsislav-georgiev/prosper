@@ -1050,9 +1050,23 @@ final class AutocompleteEngine {
         pendingRefire = false
         completionTask?.cancel()
         let token = requestToken
-        let caretRect = Self.effectiveCaretRect(context.caretScreenRect, field: fieldRect)
-        currentFieldRect = fieldRect
         let bundleId = frontApp?.bundleIdentifier
+        // Tier 3 (A1): when AX gives no usable caret but the app opts into text
+        // mirroring, measure the caret glyph off-screen so the ghost anchors inline
+        // instead of at the field's leading edge. Falls through to the synthetic
+        // field-anchored caret (tier 2→field) when the mirror can't measure.
+        var caretRect = Self.effectiveCaretRect(context.caretScreenRect, field: fieldRect)
+        var usedGlyphMirror = false
+        if !Self.hasUsableCaret(context.caretScreenRect),
+           AppOverrideResolver.textMirroring(forBundleId: bundleId) == true,
+           let field = fieldRect, let font = context.caretFont,
+           let mirrored = GlyphMirror.caretRect(
+               lineBefore: GlyphMirror.currentLine(of: context.textBefore),
+               font: font, fieldRect: field) {
+            caretRect = mirrored
+            usedGlyphMirror = true
+        }
+        currentFieldRect = fieldRect
         requestBundleId = bundleId
 
         // 4a feedback: did forcing enhanced UI yield a real caret for this app?
@@ -1066,7 +1080,9 @@ final class AutocompleteEngine {
         // 4b: when no usable caret exists (only a field rect) and text mirroring is
         // opted-in for this app, the suggestion is shown in the mirror bubble above
         // the field instead of relying on the accessory button alone.
-        let useMirror = Self.shouldUseMirror(
+        // The inline glyph mirror (tier 3) supersedes the bubble: when it produced a
+        // real inline caret, the ghost renders in place, so don't also float a bubble.
+        let useMirror = !usedGlyphMirror && Self.shouldUseMirror(
             caret: context.caretScreenRect, field: fieldRect, bundleId: bundleId
         )
 
@@ -1616,10 +1632,25 @@ final class AutocompleteEngine {
         // the stale-AX check keeps matching after an accept.
         typedShadow += string
         if typedShadow.count > 64 { typedShadow = String(typedShadow.suffix(64)) }
+
+        // A2 insertion workarounds (chat/web composers). Non-breaking-space
+        // substitution happens up front so both paths carry it; the remaining
+        // knobs branch inside the two insertion paths.
+        let knobs = AppOverrideResolver.insertionKnobs(forBundleId: bundleId)
+        var toInsert = string
+        if knobs.nonBreakingSpace {
+            toInsert = toInsert.replacingOccurrences(of: " ", with: "\u{00A0}")
+        }
+        // Lone-space accept in a mention-picker field: a real Space keypress is the
+        // only thing that advances it (a pasted/unicode space is swallowed).
+        if knobs.spaceKeyEvent, string == " " {
+            sendSpaceKey()
+            return
+        }
         if Preferences.usesCompatInsertion(forBundleId: bundleId) {
-            pasteString(string)
+            pasteString(toInsert, knobs: knobs)
         } else {
-            typeString(string)
+            typeString(toInsert, chunkSize: knobs.injectionChunkSize)
         }
         // ponytail: temporary e2e verdict — did our own injection actually mutate
         // the focused field? Re-read AX shortly after; gated on PROSPER_E2E.
@@ -2148,10 +2179,28 @@ final class AutocompleteEngine {
         return (head, tail)
     }
 
-    /// Synthesizes typing of a string via CGEvent unicode keyboard events.
-    private func typeString(_ string: String) {
-        let source = CGEventSource(stateID: .combinedSessionState)
+    /// Synthesizes typing of a string via CGEvent unicode keyboard events. When
+    /// `chunkSize > 0` (A2, Qt/Telegram) the string is posted in that many chars per
+    /// event — a single large injection is silently dropped by Qt composers.
+    private func typeString(_ string: String, chunkSize: Int = 0) {
         let utf16 = Array(string.utf16)
+        guard chunkSize > 0, utf16.count > chunkSize else {
+            postUnicode(utf16)
+            return
+        }
+        var i = 0
+        while i < utf16.count {
+            let end = min(i + chunkSize, utf16.count)
+            postUnicode(Array(utf16[i..<end]))
+            i = end
+        }
+    }
+
+    /// Posts one keyDown/keyUp pair carrying `utf16` as its unicode payload, stamped
+    /// with the self-marker so our own tap ignores it.
+    private func postUnicode(_ utf16: [UInt16]) {
+        guard !utf16.isEmpty else { return }
+        let source = CGEventSource(stateID: .combinedSessionState)
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
             return
@@ -2167,23 +2216,60 @@ final class AutocompleteEngine {
         keyUp.post(tap: .cgSessionEventTap)
     }
 
+    /// Emits a real Space key CGEvent (A2 `spaceKeyEvent`): mention-picker fields
+    /// only advance on a genuine keypress, not on a pasted/unicode space.
+    private func sendSpaceKey() {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let space: CGKeyCode = 49 // kVK_Space
+        let down = CGEvent(keyboardEventSource: source, virtualKey: space, keyDown: true)
+        let up = CGEvent(keyboardEventSource: source, virtualKey: space, keyDown: false)
+        down?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventMagic)
+        up?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventMagic)
+        down?.post(tap: .cgSessionEventTap)
+        up?.post(tap: .cgSessionEventTap)
+    }
+
+    /// Custom pasteboard type stamped on our own writes so a clipboard-watching host
+    /// (or our own restore) can tell our paste apart from user-copied text — the
+    /// self-marker Cotypist writes as `writeTextToPasteboardWithSelfMarker`.
+    private static let selfMarkerPasteboardType =
+        NSPasteboard.PasteboardType("com.prosper.autocomplete.self")
+
     /// Alternate insertion path for apps that mishandle synthesized unicode
     /// typing ("improve compatibility"): stash the text on the pasteboard and
-    /// synthesize ⌘V, restoring the previous clipboard afterward.
-    private func pasteString(_ string: String) {
+    /// synthesize ⌘V (or ⌘⇧V for paste-and-match-style), restoring the previous
+    /// clipboard afterward. Honors the A2 `pasteAndMatchStyle`/`backspaceAfterPaste`
+    /// knobs and stamps a self-marker onto the pasteboard write.
+    private func pasteString(_ string: String, knobs: AppOverrideResolver.InsertionKnobs = .init()) {
         let pb = NSPasteboard.general
         let previous = pb.string(forType: .string)
         pb.clearContents()
         pb.setString(string, forType: .string)
+        // Self-marker: our own bundle id under a private type. A host that watches
+        // the clipboard can skip echoing text it can see we injected.
+        pb.setString(Bundle.main.bundleIdentifier ?? "com.prosper.app",
+                     forType: Self.selfMarkerPasteboardType)
 
         let source = CGEventSource(stateID: .combinedSessionState)
         let vKey: CGKeyCode = 9 // kVK_ANSI_V
+        let flags: CGEventFlags = knobs.pasteAndMatchStyle
+            ? [.maskCommand, .maskShift] : .maskCommand
         let down = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true)
-        down?.flags = .maskCommand
+        down?.flags = flags
         let up = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false)
-        up?.flags = .maskCommand
+        up?.flags = flags
+        down?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventMagic)
+        up?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventMagic)
         down?.post(tap: .cgSessionEventTap)
         up?.post(tap: .cgSessionEventTap)
+
+        // Some editors append a stray char (newline/space) on programmatic paste —
+        // clip it right back off.
+        if knobs.backspaceAfterPaste {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                MainActor.assumeIsolated { self?.sendBackspaces(1) }
+            }
+        }
 
         // Restore the prior clipboard shortly after the paste lands.
         if let previous {
