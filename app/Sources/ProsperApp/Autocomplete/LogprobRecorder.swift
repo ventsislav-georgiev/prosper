@@ -18,20 +18,24 @@ import MLXNN
 final class LogprobRecorder: LogitProcessor, @unchecked Sendable {
     private var sumLogprob: Float = 0
     private var count = 0
-    private var lastLogprobs: MLXArray?
+    private var lastLogits: MLXArray?
 
     func prompt(_ prompt: MLXArray) {}
 
     func process(logits: MLXArray) -> MLXArray {
-        lastLogprobs = logSoftmax(logits, axis: -1)
+        // Keep the row (already alive as the return value); defer the log-prob math
+        // to `didSample` so we compute a scalar, never a vocab-wide `logSoftmax` array.
+        lastLogits = logits
         return logits
     }
 
     func didSample(token: MLXArray) {
-        guard let lp = lastLogprobs else { return }
+        guard let logits = lastLogits else { return }
         let id = token.item(Int.self)
-        // lp is [1, vocab]; gather the sampled token's logprob.
-        sumLogprob += lp[0, id].item(Float.self)
+        // logprob(id) = logits[id] - logSumExp(logits). logSumExp reduces to a scalar
+        // ([1]) instead of allocating a full [1, vocab] softmax row per token.
+        let lse = logSumExp(logits, axis: -1)  // [1]
+        sumLogprob += (logits[0, id] - lse[0]).item(Float.self)
         count += 1
     }
 

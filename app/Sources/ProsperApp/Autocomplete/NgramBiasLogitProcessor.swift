@@ -32,10 +32,25 @@ final class NgramBiasLogitProcessor: LogitProcessor, @unchecked Sendable {
     func process(logits: MLXArray) -> MLXArray {
         let biases = model.biases(context: context)
         guard !biases.isEmpty else { return logits }
+        // Sparse indexed add — only the biased token positions are touched (O(k)),
+        // never a vocab-wide (256k for Gemma) host allocation + copy per token. Same
+        // gather/scatter-write idiom mlx-swift-lm uses for repetition/presence
+        // penalties (Evaluate.swift). `logits` is the `[1, vocab]` last-position row.
         let vocab = logits.dim(-1)
-        var delta = [Float](repeating: 0, count: vocab)
-        for (tok, v) in biases where tok >= 0 && tok < vocab { delta[tok] = v }
-        return logits + MLXArray(delta)
+        var idx: [Int32] = []
+        var val: [Float] = []
+        idx.reserveCapacity(biases.count)
+        val.reserveCapacity(biases.count)
+        for (tok, v) in biases where tok >= 0 && tok < vocab {
+            idx.append(Int32(tok)); val.append(v)
+        }
+        guard !idx.isEmpty else { return logits }
+        let indices = MLXArray(idx)
+        // Match the logits dtype (Float16/BFloat16 on device) so the assignment back
+        // into the slice doesn't fight a Float32 RHS.
+        let deltas = MLXArray(val).asType(logits.dtype)
+        logits[0..., indices] = logits[0..., indices] + deltas
+        return logits
     }
 
     func didSample(token: MLXArray) {

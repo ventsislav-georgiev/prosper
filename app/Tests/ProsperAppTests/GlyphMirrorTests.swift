@@ -33,6 +33,28 @@ final class GlyphMirrorTests: XCTestCase {
         XCTAssertLessThanOrEqual(longR.minX, field.maxX)
     }
 
+    /// Guards the reused TextKit scratch stack: a short line measured AFTER a long
+    /// one must not retain the long line's glyphs (stale-state regression).
+    func testCaretRectShrinksAfterLongerLine() {
+        let font = NSFont.systemFont(ofSize: 14)
+        let field = CGRect(x: 100, y: 200, width: 400, height: 30)
+        guard let longR = GlyphMirror.caretRect(lineBefore: "hi there friend", font: font, fieldRect: field),
+              let shortR = GlyphMirror.caretRect(lineBefore: "hi", font: font, fieldRect: field)
+        else { return XCTFail("expected caret rects") }
+        XCTAssertLessThan(shortR.minX, longR.minX)
+    }
+
+    /// Reuse must be deterministic: identical input yields an identical rect.
+    func testCaretRectIsIdempotent() {
+        let font = NSFont.systemFont(ofSize: 14)
+        let field = CGRect(x: 100, y: 200, width: 400, height: 30)
+        guard let a = GlyphMirror.caretRect(lineBefore: "sample text", font: font, fieldRect: field),
+              let b = GlyphMirror.caretRect(lineBefore: "sample text", font: font, fieldRect: field)
+        else { return XCTFail("expected caret rects") }
+        XCTAssertEqual(a.minX, b.minX, accuracy: 0.01)
+        XCTAssertEqual(a.minY, b.minY, accuracy: 0.01)
+    }
+
     func testCaretRectEmptyLineAtLeadingEdge() {
         let font = NSFont.systemFont(ofSize: 14)
         let field = CGRect(x: 100, y: 200, width: 400, height: 30)

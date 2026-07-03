@@ -19,6 +19,18 @@ import AppKit
 @MainActor
 enum GlyphMirror {
 
+    /// Reusable off-screen TextKit stack for `caretRect` (see the reuse note there).
+    /// Built once; each call resets the string + container width. Main-actor isolated.
+    private static let scratch: (storage: NSTextStorage, layout: NSLayoutManager, container: NSTextContainer) = {
+        let storage = NSTextStorage()
+        let container = NSTextContainer(size: .zero)
+        container.lineFragmentPadding = 0
+        let layout = NSLayoutManager()
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        return (storage, layout, container)
+    }()
+
     /// A caret rect (AppKit screen coords, bottom-left origin) for the caret sitting
     /// at the END of `lineBefore`, laid out at `font` inside a container the width of
     /// `fieldRect`. Returns nil when there's nothing usable to measure.
@@ -39,13 +51,13 @@ enum GlyphMirror {
 
         // Lay out the line in a container as wide as the field so wrapping matches
         // what the user sees; the caret then lands on the correct visual line.
-        let storage = NSTextStorage(string: lineBefore, attributes: [.font: font])
-        let container = NSTextContainer(
-            size: CGSize(width: fieldRect.width, height: .greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
-        let layout = NSLayoutManager()
-        layout.addTextContainer(container)
-        storage.addLayoutManager(layout)
+        // Reuse one TextKit stack across keystrokes (this runs on the tier-3 caret
+        // path for every keystroke in Qt/Electron hosts) — rebuilding storage +
+        // layout manager + container per call is needless churn. @MainActor-isolated,
+        // so single-threaded reuse is safe.
+        let (storage, layout, container) = scratch
+        container.size = CGSize(width: fieldRect.width, height: .greatestFiniteMagnitude)
+        storage.setAttributedString(NSAttributedString(string: lineBefore, attributes: [.font: font]))
         layout.ensureLayout(for: container)
 
         let glyphCount = layout.numberOfGlyphs

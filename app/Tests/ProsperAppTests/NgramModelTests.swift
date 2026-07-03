@@ -50,6 +50,27 @@ final class NgramModelTests: XCTestCase {
         XCTAssertEqual(Set(b.keys), [7])
     }
 
+    /// Hot-path budget: `biases(context:)` runs once per decoded token while NB is on,
+    /// so it must stay cheap relative to a ~20–40ms/token forward pass. Train a
+    /// realistically-sized model and assert a large batch of lookups is well under a
+    /// single token's budget. Generous ceiling — it guards against an accidental
+    /// O(vocab) or superlinear regression, not micro-jitter.
+    func testBiasesLookupIsCheap() {
+        var m = NgramModel(maxOrder: 3, strength: 2.0)
+        // ~5k short accepted "sentences" over a 2k-token vocab.
+        for s in 0..<5000 {
+            let a = s % 2000, b = (s * 7) % 2000, c = (s * 13) % 2000
+            m.train([a, b, c, (s * 17) % 2000])
+        }
+        let ctx = [7, 13]
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for _ in 0..<10_000 { _ = m.biases(context: ctx) }
+        }
+        // 10k lookups << one token's decode time; < 50ms total is a safe ceiling.
+        XCTAssertLessThan(elapsed, .milliseconds(50), "biases() regressed: \(elapsed)")
+    }
+
     func testStrengthScalesLinearly() {
         var weak = NgramModel(maxOrder: 2, strength: 1.0)
         var strong = NgramModel(maxOrder: 2, strength: 3.0)
