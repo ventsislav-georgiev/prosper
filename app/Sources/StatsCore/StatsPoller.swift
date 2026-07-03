@@ -224,7 +224,8 @@ public final class StatsPoller {
             let temps = smcTemps.contains { $0.name.hasPrefix("CPU ") }
                 ? smcTemps
                 : smcTemps + (sensors?.read() ?? [])
-            if !temps.isEmpty { latest.temperatures = temps + tempAggregates(temps) }
+            // Aggregates first: Average/Hottest CPU/GPU lead the popup list.
+            if !temps.isEmpty { latest.temperatures = tempAggregates(temps) + temps }
         }
         if slow, let vi = powerSensors?.read(), !vi.isEmpty {
             latest.powerSensors = vi
