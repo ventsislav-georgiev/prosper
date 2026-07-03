@@ -168,6 +168,53 @@ final class RussianGateFragmentTests: XCTestCase {
     }
 }
 
+/// Mid-word Cyrillic pipeline (live report 2026-07-03, Telegram "прахосму"):
+/// glued garbage rejected, spaced new-word suppressed, dictionary finishes the
+/// word instantly.
+@MainActor
+final class MidWordCyrillicTests: XCTestCase {
+    private func requireBg() throws {
+        try XCTSkipUnless(
+            NSSpellChecker.shared.availableLanguages.contains("bg"),
+            "bg spellcheck dictionary unavailable — gates fail open here")
+    }
+
+    func testGluedNonWordRejected() throws {
+        try requireBg()
+        XCTAssertTrue(CoreBridge.gluedCyrillicNonWord(
+            "работува?", before: "дали може днес да пуснем прахосму"))
+    }
+
+    func testCorrectWordFinishPasses() throws {
+        try requireBg()
+        XCTAssertFalse(CoreBridge.gluedCyrillicNonWord(
+            "качка utre", before: "дали може днес да пуснем прахосму"))
+        // Spaced continuation after a FINISHED word: not glued, not this guard's business.
+        XCTAssertFalse(CoreBridge.gluedCyrillicNonWord(
+            " утре", before: "дали може днес да пуснем прахосмукачката"))
+    }
+
+    func testSpacedNewWordAgainstCyrillicFragmentSuppressed() throws {
+        try requireBg()
+        XCTAssertTrue(AutocompleteEngine.startsNewWordAgainstUnfinishedFragment(
+            before: "дали може днес да пуснем прахосму", spaced: " работува?"))
+        XCTAssertFalse(AutocompleteEngine.startsNewWordAgainstUnfinishedFragment(
+            before: "дали може днес да пуснем прахосмукачката", spaced: " утре"))
+    }
+
+    func testDictionaryFinishesTheWord() throws {
+        try requireBg()
+        XCTAssertEqual(
+            AutocompleteEngine.dictionaryWordFinish(before: "дали може днес да пуснем прахосму"),
+            "качка")
+        // Complete word: nothing to finish.
+        XCTAssertNil(AutocompleteEngine.dictionaryWordFinish(
+            before: "дали може днес да пуснем прахосмукачката"))
+        // Latin fragments stay model-owned.
+        XCTAssertNil(AutocompleteEngine.dictionaryWordFinish(before: "please downlo"))
+    }
+}
+
 /// Latinica-detector marker gating: bare `q` counts only in all-lowercase words,
 /// so English tech prose with acronyms never gets steered into the latinica path.
 final class LatinicaMarkerGatingTests: XCTestCase {

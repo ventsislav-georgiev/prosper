@@ -968,6 +968,14 @@ enum CoreBridge {
                     TraceLog.emit("complete: rejected Russian-only word in \"\(suggestion.prefix(24))\"")
                     return Self.reject("russianWord")
                 }
+                // Glued mid-word continuation must FORM a word. The model fumbles
+                // rare Cyrillic fragments by starting a fresh lowercase word flush
+                // against them ("прахосму" + "работува") — the mid-word capital
+                // guard only catches capitalized restarts (live report 2026-07-03).
+                if await MainActor.run(body: { Self.gluedCyrillicNonWord(suggestion, before: before) }) {
+                    TraceLog.emit("complete: rejected glued Cyrillic non-word \"\(suggestion.prefix(24))\"")
+                    return Self.reject("gluedNonWord")
+                }
                 return suggestion
             }
 
@@ -1842,6 +1850,31 @@ enum CoreBridge {
             if verdict { return true }
         }
         return false
+    }
+
+    /// True when the completion glues onto an unfinished Cyrillic word and the
+    /// joined token is not a Bulgarian word ("прахосму" + "работува" =
+    /// "прахосмуработува"). A correct mid-word finish ("качка" →
+    /// "прахосмукачка") passes. Fails open without the bg dictionary, matching
+    /// `containsRussianOnlyCyrillicWord`.
+    @MainActor
+    static func gluedCyrillicNonWord(_ s: String, before: String) -> Bool {
+        guard s.first?.isLetter == true else { return false }
+        let fragment = String(before.reversed().prefix(while: { $0.isLetter }).reversed())
+        guard !fragment.isEmpty,
+              fragment.unicodeScalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) })
+        else { return false }
+        let leading = String(s.prefix(while: { $0.isLetter }))
+        let joined = (fragment + leading).lowercased()
+        guard joined.count >= 5,
+              joined.unicodeScalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) })
+        else { return false }
+        let checker = NSSpellChecker.shared
+        guard checker.availableLanguages.contains("bg") else { return false }
+        return checker.checkSpelling(
+            of: joined, startingAt: 0, language: "bg", wrap: false,
+            inSpellDocumentWithTag: 0, wordCount: nil
+        ).location != NSNotFound
     }
 
     static func shouldPinBulgarianCyrillic(before: String, detected: String?) -> Bool {

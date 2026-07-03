@@ -1328,6 +1328,30 @@ final class AutocompleteEngine {
             renderSuggestion(text: spaced, caret: caretRect, field: fieldRect, useMirror: useMirror)
         }
 
+        // Word-finish rung (Cotypist parity, live report 2026-07-03): the model
+        // reliably fumbles long rare Cyrillic fragments ("прахосму" → restarts
+        // with a fresh word), but the spelling dictionary knows the finish
+        // ("качка"). Render the word remainder INSTANTLY; the LLM refresh
+        // underneath may extend it but not swap it. Cyrillic-only: the model
+        // finishes Latin fragments fine, and the old lexicon ghosts (removed)
+        // read as junk precisely because they GUESSED — this only finishes the
+        // word being typed. ponytail: first dictionary candidate wins; rank by
+        // personalization n-grams if the pick quality bites.
+        if currentSuggestion == nil,
+           let remainder = Self.dictionaryWordFinish(before: before) {
+            let spaced = Self.applyWordBoundary(before: before, suggestion: remainder)
+            currentSuggestion = spaced
+            replaceLength = 0
+            isFix = false
+            requestBefore = before // full-fledged ghost: model must not swap it
+            currentCaretRect = caretRect
+            caretAnchoredAt = Date()
+            lastRenderedBefore = before
+            accessoryButton.setState(.ready)
+            Self.e2elog("word-finish ghost=\"\(spaced.prefix(32))\"")
+            renderSuggestion(text: spaced, caret: caretRect, field: fieldRect, useMirror: useMirror)
+        }
+
         // LLM request in flight: pulse the indicator so the user can see Prosper
         // is thinking (vs. having decided to stay quiet).
         if currentSuggestion == nil { accessoryButton.setState(.thinking) }
@@ -2032,6 +2056,19 @@ final class AutocompleteEngine {
         var word = ""
         for ch in before.reversed() { if ch.isLetter { word.append(ch) } else { break } }
         let trailing = String(word.reversed())
+        // Cyrillic fragment: an unfinished (unknown-bg) word followed by a NEW
+        // spaced word orphans the fragment ("прахосму" + " работува" — live
+        // report 2026-07-03). The dictionary word-finish rung supplies the good
+        // ghost; suppress the model's new-word junk. Fails open without the bg
+        // dictionary, like the sister-language gates.
+        if trailing.count >= 4,
+           trailing.unicodeScalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) }),
+           NSSpellChecker.shared.availableLanguages.contains("bg") {
+            return NSSpellChecker.shared.checkSpelling(
+                of: trailing.lowercased(), startingAt: 0, language: "bg", wrap: false,
+                inSpellDocumentWithTag: 0, wordCount: nil
+            ).location != NSNotFound
+        }
         guard trailing.count >= 2, trailing.allSatisfy({ $0.isASCII && $0.isLowercase }),
               !Lexicon.shared.isKnownWord(trailing),
               !CoreBridge.looksLikeTransliteratedBulgarian(before)
@@ -2146,6 +2183,38 @@ final class AutocompleteEngine {
     /// typo ("teh"). Used to keep typo-suppression from silencing completions on the
     /// word the user is actively typing — the spell checker flags any incomplete word
     /// as "misspelled", which was suppressing every mid-word completion.
+    /// Remainder that finishes the unfinished Cyrillic word at the caret via the
+    /// Bulgarian spelling dictionary ("прахосму" → "качка"), or nil. Fires only
+    /// on fragments long enough to be unambiguous typing (≥5 letters) that are
+    /// not already a word themselves.
+    static func dictionaryWordFinish(before: String) -> String? {
+        let fragment = String(before.reversed().prefix(while: { $0.isLetter }).reversed())
+        guard fragment.count >= 5,
+              fragment.unicodeScalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) })
+        else { return nil }
+        let checker = NSSpellChecker.shared
+        guard checker.availableLanguages.contains("bg") else { return nil }
+        func isWord(_ w: String) -> Bool {
+            checker.checkSpelling(
+                of: w, startingAt: 0, language: "bg", wrap: false,
+                inSpellDocumentWithTag: 0, wordCount: nil
+            ).location == NSNotFound
+        }
+        // A complete word needs no finishing — ghosting "та" after every full
+        // word would be noise, not help.
+        guard !isWord(fragment.lowercased()) else { return nil }
+        let range = NSRange(location: 0, length: (fragment as NSString).length)
+        let completions = checker.completions(
+            forPartialWordRange: range, in: fragment, language: "bg",
+            inSpellDocumentWithTag: 0
+        ) ?? []
+        let lower = fragment.lowercased()
+        guard let word = completions.first(where: {
+            $0.count > fragment.count && $0.lowercased().hasPrefix(lower)
+        }) else { return nil }
+        return String(word.dropFirst(fragment.count))
+    }
+
     static func lastWordIsCompletablePrefix(_ before: String) -> Bool {
         var word = ""
         for ch in before.reversed() { if ch.isLetter { word.append(ch) } else { break } }

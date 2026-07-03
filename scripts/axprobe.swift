@@ -156,6 +156,24 @@ guard AXIsProcessTrusted() else {
     exit(1)
 }
 
+// `axprobe wait <bundle-substring>`: poll quietly until the focused app matches,
+// then take samples. Default: 5s lead, 8 samples.
+let args = CommandLine.arguments
+if args.count >= 3, args[1] == "wait" {
+    let want = args[2].lowercased()
+    print("waiting for focus in an app matching \"\(want)\" (15min max)…\n")
+    let deadline = Date().addingTimeInterval(900)
+    while Date() < deadline {
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.lowercased() ?? ""
+        if front.contains(want) {
+            for _ in 0..<6 { probe(); Thread.sleep(forTimeInterval: 2) }
+            exit(0)
+        }
+        Thread.sleep(forTimeInterval: 1)
+    }
+    print("timed out — target app never focused")
+    exit(1)
+}
 print("5s to focus the Slack composer… then 8 samples, 2s apart.\n")
 Thread.sleep(forTimeInterval: 5)
 for _ in 0..<8 {
