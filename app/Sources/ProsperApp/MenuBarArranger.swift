@@ -25,6 +25,10 @@ enum MenuBarArranger {
         var moved: Int
         var skippedUnresolved: Int
         var failed: Int
+        /// The user grabbed the mouse mid-pass and the batch stopped early. The bar
+        /// is half-applied; callers should retry once the user is idle instead of
+        /// treating the pass as settled (or as a pipeline failure).
+        var aborted = false
     }
 
     /// Identity for a live item. Falls back to "unknown" bundle so a nil never
@@ -172,11 +176,21 @@ enum MenuBarArranger {
                     if isOrderSatisfied(desired: desired) { break }   // fast positive exit
                     if ContinuousClock.now >= deadline { break }      // wall-clock guard
                     last = await applyMoves(desired: desired)
+                    if last.aborted { break }   // user grabbed the mouse — stop, don't misread as settled
                     try? await Task.sleep(for: .milliseconds(120))    // settle before measuring
                     let now = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
                     stable = (now == prev) ? stable + 1 : 0
                     prev = now
                     if stable >= 2 { break }   // no net change twice running → settled
+                }
+                // NEVER seat the dividers while the user is mousing: a real mouse
+                // motion mid-synthetic-drag corrupts the drop, and a mis-seated
+                // divider is worse than an unseated one (the chevron once landed
+                // LEFT of the hidden separator, hiding the click target itself).
+                // Report the pass as aborted so the caller retries when idle.
+                if last.aborted || MenuBarOrderEnforcer.userMouseActive() {
+                    last.aborted = true
+                    return last
                 }
                 await placeDividers(desired: desired, hiddenKeys: hiddenKeys,
                                     alwaysHiddenKeys: alwaysHiddenKeys)
@@ -242,36 +256,61 @@ enum MenuBarArranger {
         let chevron = mgr.chevronAnchorWindowID()
         let altSep = mgr.alwaysHiddenAnchorWindowID()
         await MenuBarItemMover.withCursorParked {
-            // Seat the control items as a CHAIN off DISTINCT, freshly-read anchors —
-            // never two `.leftOf` drags against the SAME anchor (beta.48 did, and the
-            // second drag could shove the first to the wrong side of the boundary,
-            // landing the separator RIGHT of the chevron+Prosper and hiding them).
-            // `move()` re-reads the anchor's live frame by windowID each call, so
-            // chaining chevron→firstVisible then hiddenSep→chevron is order-stable.
-            if let fv = firstVisible.flatMap({ win[$0.key] }) {
-                // 1. Chevron immediately left of the first visible item (click target
-                //    stays on the visible side).
-                if let chevron {
-                    try? await MenuBarItemMover.move(windowID: chevron, pid: pid, to: .leftOf(fv.windowID))
+            // Up to 3 seat-then-verify rounds. A single chain can mis-land (a swallowed
+            // move failure leaves the next drag anchored on a control item still in the
+            // wrong place), and the ONE invariant that must never end false is
+            // "chevron on the visible side of the hidden separator" — inverted, the
+            // separator's expansion sweeps the click target itself off-screen and the
+            // user loses access to the hidden band entirely.
+            for round in 0..<3 {
+                // Never drag control items against a live user gesture — real motion
+                // merges into the synthetic drag and corrupts the drop. The enforcer's
+                // per-tick inversion check retries once the user is idle.
+                if MenuBarOrderEnforcer.userMouseActive() { return }
+                // Seat the control items as a CHAIN off DISTINCT, freshly-read anchors —
+                // never two `.leftOf` drags against the SAME anchor (beta.48 did, and the
+                // second drag could shove the first to the wrong side of the boundary,
+                // landing the separator RIGHT of the chevron+Prosper and hiding them).
+                // `move()` re-reads the anchor's live frame by windowID each call, so
+                // chaining chevron→firstVisible then hiddenSep→chevron is order-stable.
+                if let fv = firstVisible.flatMap({ win[$0.key] }) {
+                    // 1. Chevron immediately left of the first visible item (click target
+                    //    stays on the visible side).
+                    if let chevron {
+                        try? await MenuBarItemMover.move(windowID: chevron, pid: pid, to: .leftOf(fv.windowID))
+                    }
+                    // 2. Hidden separator immediately left of the CHEVRON → guarantees
+                    //    [hidden] hiddenSep chevron firstVisible, never hiddenSep on the
+                    //    visible side. Falls back to firstVisible if the chevron id is gone.
+                    if let sep = hiddenSep {
+                        try? await MenuBarItemMover.move(windowID: sep, pid: pid,
+                                                         to: .leftOf(chevron ?? fv.windowID))
+                    }
                 }
-                // 2. Hidden separator immediately left of the CHEVRON → guarantees
-                //    [hidden] hiddenSep chevron firstVisible, never hiddenSep on the
-                //    visible side. Falls back to firstVisible if the chevron id is gone.
-                if let sep = hiddenSep {
-                    try? await MenuBarItemMover.move(windowID: sep, pid: pid,
-                                                     to: .leftOf(chevron ?? fv.windowID))
+                // 3. Always-hidden separator just left of the first hidden item (its right
+                //    boundary), or left of the hidden separator when nothing is merely-
+                //    hidden — always-hidden items sit further left and stay collapsed.
+                if !always.isEmpty, let altSep {
+                    let anchor = firstHidden.flatMap({ win[$0.key]?.windowID }) ?? hiddenSep
+                    if let anchor {
+                        try? await MenuBarItemMover.move(windowID: altSep, pid: pid, to: .leftOf(anchor))
+                    }
                 }
-            }
-            // 3. Always-hidden separator just left of the first hidden item (its right
-            //    boundary), or left of the hidden separator when nothing is merely-
-            //    hidden — always-hidden items sit further left and stay collapsed.
-            if !always.isEmpty, let altSep {
-                let anchor = firstHidden.flatMap({ win[$0.key]?.windowID }) ?? hiddenSep
-                if let anchor {
-                    try? await MenuBarItemMover.move(windowID: altSep, pid: pid, to: .leftOf(anchor))
-                }
+                if chevronOnVisibleSide(hiddenSep: hiddenSep, chevron: chevron) { break }
+                NSLog("prosper: menu-bar arrange — dividers mis-seated (chevron left of separator), retry \(round + 1)")
+                try? await Task.sleep(for: .milliseconds(120))
             }
         }
+    }
+
+    /// The critical divider invariant: the chevron sits on the visible (right) side
+    /// of the hidden separator. True when either id or frame is unavailable — no
+    /// judgement possible, and the enforcer's per-tick check owns the long game.
+    private static func chevronOnVisibleSide(hiddenSep: CGWindowID?, chevron: CGWindowID?) -> Bool {
+        guard let hiddenSep, let chevron,
+              let sf = MenuBarBridge.frame(for: hiddenSep),
+              let cf = MenuBarBridge.frame(for: chevron) else { return true }
+        return cf.minX >= sf.minX
     }
 
     /// The match + move batch. Assumes the caller already established the desired reveal
@@ -325,7 +364,7 @@ enum MenuBarArranger {
             desired: placed.map { String($0.windowID) }) {
             return ApplyResult(moved: 0, skippedUnresolved: skippedUnresolved, failed: 0)
         }
-        var moved = 0, failed = 0
+        var moved = 0, failed = 0, aborted = false
         let batchStart = ContinuousClock.now
         // Park the cursor once around the whole batch (not per move).
         await MenuBarItemMover.withCursorParked {
@@ -347,7 +386,7 @@ enum MenuBarArranger {
                     .map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }
                     .min() ?? .infinity
                 let e = batchStart.duration(to: .now).components
-                if sinceUser < Double(e.seconds) + Double(e.attoseconds) * 1e-18 { break }
+                if sinceUser < Double(e.seconds) + Double(e.attoseconds) * 1e-18 { aborted = true; break }
                 let item = placed[i], anchor = placed[i + 1]
                 // RELATIVE-order skip, NOT physical adjacency: skip when `item` already
                 // appears anywhere BEFORE `anchor` among the placed items in the live
@@ -378,7 +417,8 @@ enum MenuBarArranger {
                 }
             }
         }
-        return ApplyResult(moved: moved, skippedUnresolved: skippedUnresolved, failed: failed)
+        return ApplyResult(moved: moved, skippedUnresolved: skippedUnresolved, failed: failed,
+                           aborted: aborted)
     }
 
     /// Hash-only fallback when a desired item's exact key isn't live: among the same

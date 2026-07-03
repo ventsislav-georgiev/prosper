@@ -2094,7 +2094,7 @@ private struct AboutPane: View {
                 NeonDivider()
                 Text("Acknowledgments: mlx-swift, swift-transformers, GRDB.swift (encrypted store), Sparkle (auto-update), TOMLDecoder, Aptabase (anonymous analytics), and Apple's Vision / ScreenCaptureKit for screen context.")
                     .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
-                Text("Inspiration & know-how — System Stats from exelban/Stats, menu-bar management from jordanbaird/Ice, OpenLid from openlid/openlid, the command palette / clipboard history / snippets / QuickLinks from Raycast and Alfred, inline autocomplete from Cotypist, the Lua bridge from Hammerspoon, window snapping from Rectangle, and window layouts from Mosaic. Huge thanks to all — their implementations and UI/UX shaped ours.")
+                Text("Inspiration & know-how — System Stats from exelban/Stats, menu-bar management from jordanbaird/Ice, OpenLid from openlid/openlid, the command palette / clipboard history / snippets / QuickLinks from Raycast and Alfred, the Lua bridge from Hammerspoon, window snapping from Rectangle, and window layouts from Mosaic. Huge thanks to all — their implementations and UI/UX shaped ours.")
                     .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
             }
 
@@ -2739,17 +2739,29 @@ private struct MenuBarPane: View {
         guard !applying else { applyQueued = true; return }
         applying = true
         Task {
+            var result = MenuBarArranger.ApplyResult(moved: 0, skippedUnresolved: 0, failed: 0)
+            var abortRetries = 0
             repeat {
                 applyQueued = false
                 // Fresh read: mutateOrder just persisted; the @State copy may lag
                 // until the auto-save notification lands.
                 let s = Preferences.menuBarOrderStore
                 MenuBarManager.shared.ensureAlwaysHiddenBand(!s.alwaysHidden.isEmpty)
-                await MenuBarArranger.apply(desired: s.desiredOrder,
-                                            hiddenKeys: s.hiddenKeys,
-                                            alwaysHiddenKeys: s.alwaysHidden,
-                                            reveal: true)
-            } while applyQueued
+                result = await MenuBarArranger.apply(desired: s.desiredOrder,
+                                                     hiddenKeys: s.hiddenKeys,
+                                                     alwaysHiddenKeys: s.alwaysHidden,
+                                                     reveal: true)
+                // The user's own mouse motion aborts a pass half-done (dividers not
+                // seated → NOTHING hidden). Wait for idle, then re-run; bounded so a
+                // user who never stops mousing doesn't pin `applying` forever (the
+                // enforcer's tick picks up whatever is left).
+                if result.aborted {
+                    abortRetries += 1
+                    for _ in 0..<20 where MenuBarOrderEnforcer.userMouseActive() {
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                }
+            } while applyQueued || (result.aborted && abortRetries < 5)
             applying = false
         }
     }
@@ -2841,6 +2853,9 @@ private struct MenuBarPane: View {
         }
         let n = orderStore.desiredOrder.count
         if let r = lastApply {
+            if r.aborted {
+                return "Saved \(n) items. Last apply paused by mouse activity — it will finish automatically when the mouse is idle."
+            }
             return "Saved \(n) items. Last apply: moved \(r.moved), \(r.failed) failed, \(r.skippedUnresolved) not yet identifiable."
         }
         return "Saved \(n) items. “Apply saved order” to restore it."
@@ -2884,9 +2899,22 @@ private struct MenuBarPane: View {
         guard !applying, !saving else { return }
         applying = true
         Task {
-            lastApply = await MenuBarArranger.apply(desired: orderStore.desiredOrder,
-                                                    hiddenKeys: orderStore.hiddenKeys,
-                                                    alwaysHiddenKeys: orderStore.alwaysHidden)
+            var r = await MenuBarArranger.apply(desired: orderStore.desiredOrder,
+                                                hiddenKeys: orderStore.hiddenKeys,
+                                                alwaysHiddenKeys: orderStore.alwaysHidden)
+            // Aborted by the user's own mouse motion: wait for idle and finish the
+            // job instead of leaving the bar half-applied. Bounded retries.
+            var abortRetries = 0
+            while r.aborted, abortRetries < 5 {
+                abortRetries += 1
+                for _ in 0..<20 where MenuBarOrderEnforcer.userMouseActive() {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                r = await MenuBarArranger.apply(desired: orderStore.desiredOrder,
+                                                hiddenKeys: orderStore.hiddenKeys,
+                                                alwaysHiddenKeys: orderStore.alwaysHidden)
+            }
+            lastApply = r
             applying = false
         }
     }

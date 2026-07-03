@@ -352,6 +352,18 @@ final class MenuBarManager: NSObject {
     /// reports everything visible, which callers must treat as "no signal").
     var hiddenSeparatorLaidOut: Bool { dividerFrameX(hiddenSeparator) != nil }
 
+    /// True when the chevron sits LEFT of the hidden separator — a broken layout:
+    /// the separator's expansion then sweeps the chevron (the click target that
+    /// reveals the hidden band) off-screen with everything else, so the user can't
+    /// reach their hidden icons at all. Must never persist; the enforcer polls this
+    /// (two AppKit frame reads, no CGS) and forces a reveal repair pass when true.
+    var dividersInverted: Bool {
+        guard !isPlacing,
+              let sep = dividerFrameX(hiddenSeparator),
+              let chev = dividerFrameX(chevron) else { return false }
+        return chev < sep
+    }
+
     /// Whether the live preview can be trusted (CGS enumeration still sees our own
     /// dividers). Hide/show + spacing don't depend on this — only the Settings
     /// preview strip does, so it degrades to an "update macOS" note in isolation.

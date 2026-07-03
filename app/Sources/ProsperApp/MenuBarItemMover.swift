@@ -23,6 +23,7 @@ enum MenuBarMoveError: Error, Equatable {
     case invalidFrame
     case timedOut
     case didNotMove            // frame never changed after all retries
+    case landedWrongSide       // moved, but ended on the wrong side of the anchor
     case modifiersHeld         // user holding keys — refused rather than fight them
 }
 
@@ -220,8 +221,21 @@ enum MenuBarItemMover {
         for attempt in 1...5 {
             do {
                 try await postMove(windowID: windowID, pid: pid, to: destination)
-                if let newFrame = MenuBarBridge.frame(for: windowID), newFrame != initialFrame { return }
-                throw MenuBarMoveError.didNotMove
+                guard let newFrame = MenuBarBridge.frame(for: windowID), newFrame != initialFrame else {
+                    throw MenuBarMoveError.didNotMove
+                }
+                // A frame CHANGE is not a frame LANDING: real mouse motion mid-drag
+                // (the user grabbing the pointer while a synthetic ⌘-drag is in
+                // flight) merges into the drag session and drops the item at an
+                // arbitrary x — the old change-only check reported that corrupted
+                // drop as success, which is how the chevron once ended up LEFT of
+                // the hidden separator (hiding the click target itself). Confirm the
+                // item ended on the correct SIDE of its anchor; re-check once after
+                // a short settle so a mid-reflow read doesn't fail a good move.
+                if landedOnCorrectSide(windowID: windowID, destination: destination) { return }
+                try? await Task.sleep(for: .milliseconds(60))
+                if landedOnCorrectSide(windowID: windowID, destination: destination) { return }
+                throw MenuBarMoveError.landedWrongSide
             } catch {
                 lastError = error
                 if attempt < 5 { try? await wakeUp(windowID: windowID, pid: pid) }
@@ -344,6 +358,18 @@ enum MenuBarItemMover {
         switch destination {
         case .leftOf:  return f.maxX == t.minX
         case .rightOf: return f.minX == t.maxX
+        }
+    }
+
+    /// Directional landing confirmation: the moved item sits on the intended side of
+    /// its anchor. Anchor frame gone (app relaunching) → true; can't judge, and the
+    /// caller's own drift check will catch a genuinely wrong layout later.
+    private static func landedOnCorrectSide(windowID: CGWindowID, destination: Destination) -> Bool {
+        guard let f = MenuBarBridge.frame(for: windowID),
+              let t = MenuBarBridge.frame(for: destination.anchor) else { return true }
+        switch destination {
+        case .leftOf:  return f.minX < t.minX
+        case .rightOf: return f.minX > t.minX
         }
     }
 

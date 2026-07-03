@@ -133,6 +133,13 @@ final class MenuBarOrderEnforcer {
         // quiet tick after the gesture ends.
         if !userInitiated, Self.userMouseActive() { return }
 
+        // SELF-HEAL: an inverted divider pair (chevron LEFT of the hidden separator —
+        // a corrupted drop can produce it) hides the click target itself, and the bar
+        // is STATIC in that broken state, so the fingerprint gate below would never
+        // let a fix through. Two AppKit frame reads per tick buy a standing repair
+        // trigger that heals it regardless of cause (our bug or a stray user drag).
+        let dividerBroken = MenuBarManager.shared.dividersInverted
+
         // Cheap pre-gate: the foreign-item windowID order, read via CGS only (no
         // system-wide CGWindowListCopyWindowInfo). Identical to the last full check ⇒
         // no POSITIONAL or MEMBERSHIP drift (no reorder, relaunch, quit, or launch) ⇒
@@ -144,7 +151,7 @@ final class MenuBarOrderEnforcer {
         // Bar unchanged (incl. empty) → skip. A user-initiated reveal bypasses this:
         // the background tick stamps the fingerprint on every change WITHOUT applying
         // in on-demand mode, so "unchanged since last tick" does not mean "in order".
-        if !userInitiated, lastOrderFingerprint == order { return }
+        if !userInitiated, !dividerBroken, lastOrderFingerprint == order { return }
         let previous = lastOrderFingerprint
         lastOrderFingerprint = order
 
@@ -223,6 +230,8 @@ final class MenuBarOrderEnforcer {
         if !policy.canApply(now: n, onBattery: Self.onBattery()) {
             // Deferred while a placement is pending: the bar is static now, so force
             // the next tick past the fingerprint gate to retry once the cooldown ends.
+            // (dividerBroken needs nothing here — it's re-detected from live frames
+            // every tick and bypasses the fingerprint gate on its own.)
             if pendingNewIconPlacement { lastOrderFingerprint = nil }
             return
         }
@@ -241,7 +250,8 @@ final class MenuBarOrderEnforcer {
         // A just-merged icon can already satisfy RELATIVE order (it spawned adjacent
         // to its slot) while sitting on the wrong side of the divider — the reveal
         // pass's placeDividers re-seats the boundary around it, so run it anyway.
-        guard orderWrong || needsReindex || pendingNewIconPlacement else { return }
+        // Same for a broken divider pair: order-invisible, but must be repaired.
+        guard orderWrong || needsReindex || pendingNewIconPlacement || dividerBroken else { return }
 
         working = true
         let desired = store.desiredOrder
@@ -262,7 +272,18 @@ final class MenuBarOrderEnforcer {
             let result = await MenuBarArranger.apply(desired: desired,
                                                      hiddenKeys: hiddenKeys,
                                                      alwaysHiddenKeys: alwaysHidden,
-                                                     reveal: mode != .live || placeNewIcon)
+                                                     reveal: mode != .live || placeNewIcon || dividerBroken)
+            // The user grabbed the mouse mid-pass: the bar is half-applied, not
+            // settled and not sick. Restore the pending flag, throttle-stamp only
+            // (no breaker food — user activity isn't a pipeline failure), and clear
+            // the fingerprint so the first quiet tick retries the whole pass.
+            if result.aborted {
+                if placeNewIcon { self.pendingNewIconPlacement = true }
+                self.policy.stampThrottleOnly(now: n)
+                self.lastOrderFingerprint = nil
+                self.working = false
+                return
+            }
             let actionable = result.moved > 0 || result.failed > 0
             // Stamp the cooldown from the pass START (`n`), not `self.now` after the
             // await — apply() can run hundreds of ms (reveal + capture + drags) and
