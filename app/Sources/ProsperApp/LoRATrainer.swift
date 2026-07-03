@@ -200,6 +200,10 @@ actor LoRATrainer {
     func trainNowIfEligible() async -> TrainResult {
         let result = await train()
         NSLog("%@ trainNowIfEligible -> %@", Self.logPrefix, "\(result)")
+        // B5 (NB): refresh the inline n-gram personalization model on the same
+        // background cadence and corpus. Own gate (`Preferences.ngramPersonalization`),
+        // cheap (CPU tokenization, no forward pass), no-op when off.
+        await MLXEngine.shared.refreshInlineNgramModel()
         return result
     }
 

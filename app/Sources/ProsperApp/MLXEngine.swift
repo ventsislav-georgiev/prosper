@@ -210,11 +210,41 @@ actor MLXEngine {
     private let inlineBox = InlineCacheBox()
 
     /// B5 (NB): the trained n-gram personalization model applied to inline decode when
-    /// `Preferences.ngramPersonalization` is on. Nil until a training pass sets it
-    /// (`setInlineNgramModel`). Training from the user's accepted history is the
-    /// remaining live-tuning step; the bias mechanism itself is complete.
+    /// `Preferences.ngramPersonalization` is on. Nil until `refreshInlineNgramModel`
+    /// installs one; the bias mechanism itself lives in `generateInline`.
     private var inlineNgramModel: NgramModel?
     func setInlineNgramModel(_ model: NgramModel?) { inlineNgramModel = model }
+
+    /// Minimum accepted-completion pairs before NB is worth training — below this the
+    /// n-gram is too sparse to bias usefully. Tunable; unrecovered from Cotypist.
+    private static let ngramMinSamples = 20
+
+    /// B5 (NB): (re)train the inline n-gram personalization model from the user's
+    /// accepted-completion history and install it, so `generateInline` biases toward
+    /// the tokens the user actually types next. No-op (and clears any installed model)
+    /// when the gate is off, the model isn't loaded yet, or history is too sparse.
+    ///
+    /// Tokenization runs on the already-loaded inline container's tokenizer (cheap,
+    /// CPU-only string work — no forward pass), so this is safe to call from the LoRA
+    /// background scheduler tick. A4 (`.omc/research/cotypist-a4-spike.md`) found
+    /// Cotypist keys its corpus by (app, domain); we train one global model for now and
+    /// leave per-(app,domain) keying as a documented tuning refinement (needs the
+    /// frontmost bundle id threaded into `generateInline`).
+    func refreshInlineNgramModel() async {
+        guard Preferences.ngramPersonalization else { setInlineNgramModel(nil); return }
+        guard let container else { return } // not loaded; a later tick retrains
+        let pairs = await TypingHistoryStore.shared.trainingDataset()
+        guard pairs.count >= Self.ngramMinSamples else { setInlineNgramModel(nil); return }
+        let texts = pairs.map { TypingHistoryStore.trainingText(prompt: $0.prompt, completion: $0.completion) }
+        let model: NgramModel? = try? await container.perform { context in
+            var m = NgramModel()
+            for t in texts where !t.isEmpty {
+                m.train(context.tokenizer.encode(text: t))
+            }
+            return m.isEmpty ? nil : m
+        }
+        setInlineNgramModel(model)
+    }
 
     /// Persistent KV cache for the agent chat path (`streamChat`), reused across
     /// requests. Agent conversations grow append-only — each codex round trip
