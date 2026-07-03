@@ -90,6 +90,36 @@ enum VisionContext {
         return text.isEmpty ? nil : text
     }
 
+    /// Tier-4 caret anchor (A3): screenshot a band around `fieldRect`, OCR it, find
+    /// the line matching `targetLine`, and return the caret glyph box (after `column`
+    /// chars) in AppKit screen coords. Gated on `Preferences.ocrCaretAnchoring` and
+    /// Screen Recording permission; nil when disabled, unpermitted, or no match.
+    static func caretAnchor(around fieldRect: CGRect, targetLine: String, column: Int) async -> CGRect? {
+        guard Preferences.ocrCaretAnchoring, hasScreenRecordingPermission() else { return nil }
+        guard let cgRect = cgRegion(around: fieldRect, padX: 40, padY: 40),
+              let image = await capture(cgRect) else { return nil }
+        guard let norm = await VisionOCR.caretAnchor(
+            in: image, targetLine: targetLine, column: column) else { return nil }
+        return Self.normalizedToAppKit(norm, capturedCGRect: cgRect)
+    }
+
+    /// Converts a Vision-normalized rect (bottom-left origin, 0...1, relative to the
+    /// captured region `cg`, a top-left-origin global CoreGraphics rect) into an
+    /// AppKit screen rect (bottom-left origin). Pure and self-consistent; the exact
+    /// pixel mapping still wants live calibration on multi-display setups.
+    static func normalizedToAppKit(_ n: CGRect, capturedCGRect cg: CGRect) -> CGRect {
+        let globalTop = NSScreen.screens.map { $0.frame.maxY }.max() ?? cg.maxY
+        let px = cg.minX + n.minX * cg.width
+        let widthPts = n.width * cg.width
+        let heightPts = n.height * cg.height
+        // Vision y is bottom-up within the region; the box TOP maps to CG (y-down):
+        //   region top edge in CG = cg.minY; box top is (1 - n.maxY) down from it.
+        let cgYtop = cg.minY + (1 - n.maxY) * cg.height
+        // CG(top-left) global → AppKit(bottom-left).
+        let appKitY = globalTop - cgYtop - heightPts
+        return CGRect(x: px, y: appKitY, width: widthPts, height: heightPts)
+    }
+
     // MARK: - Internals
 
     /// Builds a capture rect that extends mostly *upward* from the caret (the chat

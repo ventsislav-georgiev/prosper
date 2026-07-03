@@ -73,6 +73,71 @@ enum VisionOCR {
         }
     }
 
+    /// Tier-4 caret anchoring (A3): the caret's normalized (Vision, bottom-left
+    /// origin, 0...1) rect for a caret sitting after `column` characters of the
+    /// on-screen line that best matches `targetLine`. Uses Vision's per-substring
+    /// `boundingBox(for:)` so the anchor is a real glyph box, not a line guess — the
+    /// `lastCharRect` technique for surfaces where AX exposes no caret geometry
+    /// (terminals/TUIs). Returns nil when OCR finds no acceptable matching line.
+    static func caretAnchor(in image: CGImage, targetLine: String, column: Int) async -> CGRect? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<CGRect?, Never>) in
+            let request = VNRecognizeTextRequest { request, _ in
+                let observations = request.results as? [VNRecognizedTextObservation] ?? []
+                let texts: [(obs: VNRecognizedTextObservation, cand: VNRecognizedText)] =
+                    observations.compactMap { o in o.topCandidates(1).first.map { (o, $0) } }
+                guard let idx = Self.bestMatchIndex(candidates: texts.map { $0.cand.string },
+                                                    target: targetLine) else {
+                    continuation.resume(returning: nil); return
+                }
+                let cand = texts[idx].cand
+                let s = cand.string
+                let col = max(0, min(column, s.count))
+                // Range = the `col`-char prefix; its trailing edge is the caret. For a
+                // zero-length prefix, anchor at the line box's leading edge.
+                guard col > 0 else {
+                    continuation.resume(returning: texts[idx].obs.boundingBox)
+                    return
+                }
+                let range = s.startIndex ..< s.index(s.startIndex, offsetBy: col)
+                guard let rectObs = try? cand.boundingBox(for: range) else {
+                    continuation.resume(returning: texts[idx].obs.boundingBox); return
+                }
+                let box = rectObs.boundingBox // axis-aligned normalized rect
+                // Caret = trailing edge of the measured prefix (zero-width).
+                continuation.resume(returning: CGRect(
+                    x: box.maxX, y: box.minY, width: 0, height: box.height))
+            }
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = false // exact glyph positions, no rewrite
+            let handler = VNImageRequestHandler(cgImage: image, options: [:])
+            DispatchQueue.global(qos: .userInitiated).async {
+                do { try handler.perform([request]) }
+                catch { continuation.resume(returning: nil) }
+            }
+        }
+    }
+
+    /// Picks the OCR line that best matches `target` (the user's current input line),
+    /// by longest common prefix length, requiring a minimal overlap so an unrelated
+    /// screen line is never chosen. Pure — the testable core of `caretAnchor`.
+    static func bestMatchIndex(candidates: [String], target: String) -> Int? {
+        let t = Array(target)
+        guard !t.isEmpty else { return nil }
+        func commonPrefix(_ a: [Character]) -> Int {
+            var n = 0
+            while n < a.count && n < t.count && a[n] == t[n] { n += 1 }
+            return n
+        }
+        var best: (idx: Int, score: Int)?
+        for (i, c) in candidates.enumerated() {
+            let score = commonPrefix(Array(c))
+            if score > (best?.score ?? 0) { best = (i, score) }
+        }
+        // Require at least 3 shared leading chars (or the whole short target).
+        guard let b = best, b.score >= min(3, t.count) else { return nil }
+        return b.idx
+    }
+
     /// Reconstructs the text *before* a caret from OCR lines, given the caret's
     /// position in the SAME normalized (bottom-left origin, 0...1) space as the
     /// lines' bounding boxes.

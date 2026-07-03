@@ -586,6 +586,7 @@ enum CoreBridge {
         fieldLabel: String? = nil,
         windowTitle: String? = nil,
         burst: Bool = false,
+        onCandidates: (@MainActor @Sendable (CandidateBuffer) -> Void)? = nil,
         completion: @escaping @MainActor @Sendable (String?) -> Void
     ) -> Task<Void, Never> {
         // Agent mode owns the GPU + RAM: the inline model is unloaded while a coding
@@ -845,79 +846,103 @@ enum CoreBridge {
             let attempts = burst ? Array(ladder.prefix(1)) : ladder
             var result: String?
             var rungsRun = 0
-            for attempt in attempts {
-                if Task.isCancelled { return }
-                rungsRun += 1
-                do {
-                    // Always the text path: a fast single-line completion. Visual
-                    // context arrives as cheap cached OCR text in the prompt, never
-                    // the multimodal VLM image path (too slow for per-keystroke
-                    // inline). `generateInline` reuses the KV cache across
-                    // keystrokes, re-prefilling only the tokens that changed since
-                    // the last completion. `generateInlineRouted` picks the decode
-                    // path internally (WS2): the speculative iterator when
-                    // enabled+draft-loaded, else this same single-model
-                    // `generateInline` — so this call site is unchanged.
-                    // Guided decoding (B1, opt-in): constrain to the user's script so
-                    // cross-script garbage can't be generated. Latinica is exempt —
-                    // it is Latin-script Bulgarian and a Cyrillic constraint would be
-                    // wrong; it also keeps the sampled ladder for coverage.
-                    let requiredScript: ScriptClassifier.Target? =
-                        (Preferences.guidedScriptDecoding && !latinBulgarian)
-                        ? ScriptClassifier.target(for: before) : nil
-                    let raw = try await MLXEngine.shared.generateInlineRouted(
-                        prompt: attempt.reprompt ? nudgedPrompt : prompt,
-                        system: system,
-                        maxTokens: maxTokens, temperature: attempt.temperature,
-                        topP: attempt.topP, stop: ["\n"], maxWords: maxWords,
-                        topK: attempt.topK, requiredScript: requiredScript
-                    )
-                    benchLog(system: system, prompt: attempt.reprompt ? nudgedPrompt : prompt,
-                             raw: raw, temp: attempt.temperature)
-                    if let suggestion = sanitizeCompletion(
+            // Guided decoding (B1, opt-in): constrain to the user's script so
+            // cross-script garbage can't be generated. Latinica is exempt — it is
+            // Latin-script Bulgarian and a Cyrillic constraint would be wrong; it
+            // also keeps the sampled ladder for coverage. Constant per request.
+            let requiredScript: ScriptClassifier.Target? =
+                (Preferences.guidedScriptDecoding && !latinBulgarian)
+                ? ScriptClassifier.target(for: before) : nil
+            // Acceptance gate, shared by the ladder and the n-best candidate pass:
+            // sanitize + the echo/screen/sister-language rejections. Returns the
+            // accepted suggestion or nil (⇒ reject this raw output).
+            let accept: (String) async -> String? = { raw in
+                guard let suggestion = sanitizeCompletion(
                         raw, before: before, after: after,
                         transliterateCyrillic: latinBulgarian,
                         bulgarianCyrillic: language == "Bulgarian"
                             && Self.isCyrillicScript(before)),
-                       !suggestion.isEmpty,
-                       // Small quantized models latch onto few-shot example lines and
-                       // return them VERBATIM at low temperature (same failure that
-                       // killed candidate word-lists). Reject any suggestion that is
-                       // just a copy of a writing sample; the next rung's higher
-                       // temperature escapes the latch.
-                       !echoesWritingSample(suggestion, samples: writingSamples),
-                       // The frequent-words hint line gets parroted the same way on
-                       // very short context ("side, spot, usual, oncall, …" offered
-                       // as a ghost for "к"). Same normalized-containment check
-                       // against the joined hint list.
-                       !echoesWritingSample(
-                           suggestion,
-                           samples: frequentWords.isEmpty
-                               ? [] : [frequentWords.joined(separator: ", ")]),
-                       // Same latch, other context block: with conversation OCR in
-                       // the prompt the model sometimes "continues" by quoting a
-                       // message visible on screen (live BG failure: suggested
-                       // "1. чекиран на твое име" — verbatim from the OCR'd chat).
-                       // A real continuation is new text, never a screen line.
-                       !echoesScreenContext(suggestion, screen: onScreenText) {
-                        // Sister-language word gate: a Bulgarian user (no Russian
-                        // layout) must never be offered a Russian word — the pin
-                        // holds the prompt but not every sampled token. Burn the
-                        // rung; the next one resamples.
-                        if rejectRussianWords,
-                           await MainActor.run(body: { Self.containsRussianOnlyCyrillicWord(suggestion) }) {
-                            TraceLog.emit("complete: rejected Russian-only word in \"\(suggestion.prefix(24))\"")
-                            continue
+                      !suggestion.isEmpty,
+                      // Small quantized models latch onto few-shot example lines and
+                      // return them VERBATIM; reject a copy of a writing sample.
+                      !echoesWritingSample(suggestion, samples: writingSamples),
+                      // The frequent-words hint line gets parroted the same way.
+                      !echoesWritingSample(
+                          suggestion,
+                          samples: frequentWords.isEmpty
+                              ? [] : [frequentWords.joined(separator: ", ")]),
+                      // Same latch, other context block: quoting an on-screen line.
+                      !echoesScreenContext(suggestion, screen: onScreenText)
+                else { return nil }
+                // Sister-language word gate: a Bulgarian user (no Russian layout)
+                // must never be offered a Russian word.
+                if rejectRussianWords,
+                   await MainActor.run(body: { Self.containsRussianOnlyCyrillicWord(suggestion) }) {
+                    TraceLog.emit("complete: rejected Russian-only word in \"\(suggestion.prefix(24))\"")
+                    return nil
+                }
+                return suggestion
+            }
+
+            // N-best pause pass (B2, opt-in): generate several continuations sharing
+            // the prompt prefill, keep the accepted ones ranked by avg-logprob, show
+            // the best and hand the rest to the engine's `CandidateBuffer` so a
+            // diverging keystroke can swap without a model round trip. Pause-only —
+            // bursts must land in a typing gap and can't afford K decodes.
+            let nBest = Preferences.nBestCandidates
+            if !burst, nBest > 1, !Task.isCancelled {
+                do {
+                    let cands = try await MLXEngine.shared.generateInlineCandidates(
+                        prompt: prompt, system: system, maxTokens: maxTokens,
+                        temperature: 1.0, topP: 0.95, stop: ["\n"], maxWords: maxWords,
+                        topK: 64, requiredScript: requiredScript, k: nBest)
+                    var accepted: [CandidateBuffer.Candidate] = []
+                    var seen = Set<String>()
+                    for c in cands {
+                        benchLog(system: system, prompt: prompt, raw: c.text, temp: 1.0)
+                        if let s = await accept(c.text), seen.insert(s).inserted {
+                            accepted.append(.init(text: s, avgLogprob: c.avgLogprob))
                         }
-                        result = suggestion
-                        break
+                    }
+                    if !accepted.isEmpty {
+                        let buffer = CandidateBuffer(anchorBefore: before, candidates: accepted)
+                        if let onCandidates { await MainActor.run { onCandidates(buffer) } }
+                        result = buffer.best
                     }
                 } catch {
                     if Task.isCancelled { return }
-                    // Transient engine error (e.g. a guarded MLX runtime error):
-                    // treat like an empty result and climb to the next rung.
-                    NSLog("prosper complete: attempt failed (temp %.1f): %@",
-                          attempt.temperature, String(describing: error))
+                    NSLog("prosper complete: n-best pass failed: %@", String(describing: error))
+                }
+            }
+
+            // Ladder: the single-candidate path (or the fallback when n-best found
+            // nothing acceptable). `generateInlineRouted` reuses the KV cache and
+            // picks the decode path internally (WS2 speculative when enabled).
+            if result == nil {
+                for attempt in attempts {
+                    if Task.isCancelled { return }
+                    rungsRun += 1
+                    do {
+                        let raw = try await MLXEngine.shared.generateInlineRouted(
+                            prompt: attempt.reprompt ? nudgedPrompt : prompt,
+                            system: system,
+                            maxTokens: maxTokens, temperature: attempt.temperature,
+                            topP: attempt.topP, stop: ["\n"], maxWords: maxWords,
+                            topK: attempt.topK, requiredScript: requiredScript
+                        )
+                        benchLog(system: system, prompt: attempt.reprompt ? nudgedPrompt : prompt,
+                                 raw: raw, temp: attempt.temperature)
+                        if let suggestion = await accept(raw) {
+                            result = suggestion
+                            break
+                        }
+                    } catch {
+                        if Task.isCancelled { return }
+                        // Transient engine error (e.g. a guarded MLX runtime error):
+                        // treat like an empty result and climb to the next rung.
+                        NSLog("prosper complete: attempt failed (temp %.1f): %@",
+                              attempt.temperature, String(describing: error))
+                    }
                 }
             }
             TraceLog.emit("complete: \(result == nil ? "EMPTY" : "ok(\(result!.count)ch)") after \(rungsRun) rung(s), lang=\(language ?? "auto")")

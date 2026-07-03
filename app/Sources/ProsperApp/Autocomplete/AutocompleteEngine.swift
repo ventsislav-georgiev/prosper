@@ -32,6 +32,10 @@ final class AutocompleteEngine {
     private var currentSuggestion: String?
     private var currentCaretRect: CGRect?
     private var currentFieldRect: CGRect?
+    // B2 n-best: the runners-up from the last pause-fire, keyed by anchor text, so a
+    // keystroke that diverges from the shown ghost can swap to an alternate with no
+    // model round trip. Nil unless `Preferences.nBestCandidates > 1`.
+    private var candidateBuffer: CandidateBuffer?
     // When > 0, accepting first deletes this many trailing chars (an emoji
     // `:shortcode` trigger, or a misspelled word being replaced by a fix).
     private var replaceLength: Int = 0
@@ -862,6 +866,11 @@ final class AutocompleteEngine {
     private func scheduleSuggestion(allowBurst: Bool = true) {
         lastTypedAt = Date()
         debounceTimer?.invalidate()
+        // B2 instant swap (opt-in): if the just-typed text diverges from the shown
+        // ghost into a buffered alternate, show that alternate NOW — no model round
+        // trip. Rendered provisional (requestBefore=nil) so the debounced model pass
+        // below still refreshes/reconciles. No-op unless n-best populated the buffer.
+        tryCandidateSwap()
         // Zero built-in waiting: the user must NEVER have to pause typing for a
         // ghost to appear. When no request is in flight, fire the fast burst rung
         // IMMEDIATELY on the keystroke — the first ghost costs pure model latency,
@@ -1066,6 +1075,27 @@ final class AutocompleteEngine {
             caretRect = mirrored
             usedGlyphMirror = true
         }
+        // Tier 4 (A3, opt-in): OCR caret anchoring when tiers 1-3 all failed
+        // (terminals/TUIs). Async — captures + OCRs off the keystroke path, then
+        // repositions the ghost at the OCR'd glyph box (like position-heal). Gated on
+        // `ocrCaretAnchoring`; no-op by default. Only fires when there is still no
+        // usable caret after the glyph mirror.
+        if !usedGlyphMirror, !Self.hasUsableCaret(context.caretScreenRect),
+           Preferences.ocrCaretAnchoring, let field = fieldRect {
+            let line = GlyphMirror.currentLine(of: context.textBefore)
+            let column = line.count
+            Task { [weak self] in
+                guard let anchor = await VisionContext.caretAnchor(
+                    around: field, targetLine: line, column: column) else { return }
+                await MainActor.run {
+                    guard let self, token == self.requestToken else { return }
+                    self.currentCaretRect = anchor
+                    if let ghost = self.currentSuggestion, !ghost.isEmpty {
+                        self.renderSuggestion(text: ghost, caret: anchor, field: field, useMirror: false)
+                    }
+                }
+            }
+        }
         currentFieldRect = fieldRect
         requestBundleId = bundleId
 
@@ -1261,7 +1291,8 @@ final class AutocompleteEngine {
             before: before, after: context.textAfter,
             bundleId: bundleId, caretScreenRect: caretRect,
             fieldLabel: context.fieldLabel, windowTitle: context.windowTitle,
-            burst: burst
+            burst: burst,
+            onCandidates: { [weak self] buffer in self?.candidateBuffer = buffer }
         ) { [weak self] suggestion in
             guard let self else { return }
             // Single-flight: ignore stale responses.
@@ -1483,6 +1514,36 @@ final class AutocompleteEngine {
         }
     }
 
+    /// B2 instant swap: when the buffered n-best set holds an alternate that still
+    /// validly continues the live text, render it immediately as a provisional ghost
+    /// (no model round trip). Provisional means `requestBefore == nil`, so the
+    /// debounced model pass may replace it and the ghost-stability contract treats it
+    /// as a replaceable guess. No-op when the buffer is empty (n-best off), when
+    /// nothing matches, or when the alternate is already what's shown.
+    private func tryCandidateSwap() {
+        guard let buffer = candidateBuffer,
+              let context = AXCaret.currentContext() else { return }
+        let before = context.textBefore
+        guard let swap = buffer.bestMatching(currentBefore: before), !swap.isEmpty,
+              swap != currentSuggestion else { return }
+        let field = context.fieldScreenRect
+        let caret = Self.effectiveCaretRect(context.caretScreenRect, field: field)
+        let useMirror = Self.shouldUseMirror(
+            caret: context.caretScreenRect, field: field,
+            bundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        currentSuggestion = swap
+        requestBefore = nil          // provisional — replaceable by the model pass
+        replaceLength = 0
+        isFix = false
+        lastRenderedBefore = before
+        currentCaretRect = caret
+        currentFieldRect = field
+        caretAnchoredAt = Date()
+        accessoryButton.setState(.ready)
+        Self.e2elog("candidate swap → \"\(swap.prefix(24))\"")
+        renderSuggestion(text: swap, caret: caret, field: field, useMirror: useMirror)
+    }
+
     /// Renders a plain suggestion through the appropriate overlay: the mirror bubble
     /// above the field when 4b mirroring is active (no usable caret + opted-in app),
     /// else the inline caret-anchored ghost. Centralizes the choice so every
@@ -1515,6 +1576,7 @@ final class AutocompleteEngine {
         completionTask = nil
         inFlightAnchor = nil     // cancelled tasks never call back; unblock the next fire
         pendingRefire = false
+        candidateBuffer = nil    // B2: hard-invalidate the n-best swap buffer
         clearGhost()
     }
 
@@ -1582,6 +1644,7 @@ final class AutocompleteEngine {
     /// Inserts the current suggestion by synthesizing keyboard input, then clears.
     /// For emoji shortcodes / typo fixes, first deletes the replaced trailing chars.
     private func acceptCurrentSuggestion() {
+        candidateBuffer = nil    // B2: the accepted text changes context; drop alternates
         guard let suggestion = reconciledGhostForAccept() else {
             Self.e2elog("accept: ghost diverged from live text — swallow + refresh")
             recordNoShow(.acceptDiverged)
@@ -2179,10 +2242,17 @@ final class AutocompleteEngine {
         return (head, tail)
     }
 
-    /// Synthesizes typing of a string via CGEvent unicode keyboard events. When
-    /// `chunkSize > 0` (A2, Qt/Telegram) the string is posted in that many chars per
-    /// event — a single large injection is silently dropped by Qt composers.
+    /// Synthesizes typing of a string via CGEvent unicode keyboard events. The
+    /// `chunkSize` knob mirrors Cotypist's recovered string-injection override
+    /// (A2/A4): `0` = post the whole string at once; `>1` = that many UTF-16 units
+    /// per event (Qt/Telegram composers silently drop one large injection); `-1` =
+    /// inject only the first word (+ its trailing whitespace) — for fields that choke
+    /// on multi-word insertion and re-fetch a fresh suggestion each accept.
     private func typeString(_ string: String, chunkSize: Int = 0) {
+        if chunkSize < 0 {
+            postUnicode(Array(Self.splitFirstWord(string).head.utf16))
+            return
+        }
         let utf16 = Array(string.utf16)
         guard chunkSize > 0, utf16.count > chunkSize else {
             postUnicode(utf16)

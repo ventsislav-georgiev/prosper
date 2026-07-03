@@ -209,6 +209,13 @@ actor MLXEngine {
     }
     private let inlineBox = InlineCacheBox()
 
+    /// B5 (NB): the trained n-gram personalization model applied to inline decode when
+    /// `Preferences.ngramPersonalization` is on. Nil until a training pass sets it
+    /// (`setInlineNgramModel`). Training from the user's accepted history is the
+    /// remaining live-tuning step; the bias mechanism itself is complete.
+    private var inlineNgramModel: NgramModel?
+    func setInlineNgramModel(_ model: NgramModel?) { inlineNgramModel = model }
+
     /// Persistent KV cache for the agent chat path (`streamChat`), reused across
     /// requests. Agent conversations grow append-only — each codex round trip
     /// re-sends the whole prior conversation plus a new tail — so consecutive
@@ -1074,7 +1081,8 @@ actor MLXEngine {
         maxWords: Int = 0,
         topK: Int? = nil,
         minP: Float? = nil,
-        requiredScript: ScriptClassifier.Target? = nil
+        requiredScript: ScriptClassifier.Target? = nil,
+        recorder: LogprobRecorder? = nil
     ) async throws -> String {
         guard let container else { throw MLXEngineError.notLoaded }
         if Task.isCancelled { return "" }
@@ -1084,6 +1092,9 @@ actor MLXEngine {
             repetitionPenalty: nil, kvBits: Self.configuredKVBits, topK: topK, minP: minP
         )
         let box = inlineBox
+        // B5 (NB): snapshot the actor-isolated n-gram model into a local so the
+        // `@Sendable` decode closure can read it (NgramModel is a value type).
+        let ngramModel: NgramModel? = Preferences.ngramPersonalization ? inlineNgramModel : nil
         // Cap the prompt for speed (shorter prefill → faster keystroke response) and
         // to stay within one prefill window chunk. The reuse path trims the persisted
         // cache back to exactly `promptTokens` after each keystroke so prefill stays
@@ -1175,14 +1186,28 @@ actor MLXEngine {
             // build the iterator through the processor/sampler seam so out-of-script
             // tokens are masked before sampling. This init does not carry kvBits, so
             // the guided path forgoes KV-cache quantization (inline default is off).
+            // Compose the optional logit processors — script mask (B1), n-gram bias
+            // (B5), logprob recorder (B2) — folding all present ones. With none, use
+            // the stock parameters init (keeps kvBits); with any, use the
+            // processor/sampler seam.
+            var stages: [LogitProcessor] = []
+            if requiredScript != nil, requiredScript != .unconstrained {
+                stages.append(RequiredScriptLogitProcessor(
+                    target: requiredScript!,
+                    convertIdToToken: { context.tokenizer.convertIdToToken($0) }))
+            }
+            if let ngramModel {
+                stages.append(NgramBiasLogitProcessor(model: ngramModel, promptTail: promptTokens))
+            }
+            if let recorder { stages.append(recorder) }
+            let composed: LogitProcessor? = stages.reduce(nil) { acc, next in
+                acc.map { CompositeLogitProcessor($0, next) } ?? next
+            }
             let iterator: TokenIterator
-            if let requiredScript, requiredScript != .unconstrained {
-                let proc = RequiredScriptLogitProcessor(
-                    target: requiredScript,
-                    convertIdToToken: { context.tokenizer.convertIdToToken($0) })
+            if let composed {
                 iterator = try TokenIterator(
                     input: lmInput, model: context.model, cache: cache,
-                    processor: proc, sampler: parameters.sampler(), maxTokens: maxTokens)
+                    processor: composed, sampler: parameters.sampler(), maxTokens: maxTokens)
             } else {
                 iterator = try TokenIterator(
                     input: lmInput, model: context.model, cache: cache, parameters: parameters)
@@ -1264,6 +1289,34 @@ actor MLXEngine {
             if case MLXEngineError.mlxRuntime = error { box.reset() }
             throw error
         }
+    }
+
+    /// B2: generate `k` inline candidates for the same prompt, each scored by average
+    /// log-probability, returned best-first. The shared prompt prefix is reused
+    /// across candidates (the persisted inline KV cache re-prefills only the
+    /// divergent suffix — nothing here, the prompt is identical), so K candidates
+    /// cost roughly one prefill + K decodes. Sampling (temperature > 0) supplies the
+    /// diversity; a greedy temperature yields K identical candidates. Completions are
+    /// raw (unsanitized) — the caller sanitizes and builds the `CandidateBuffer`.
+    func generateInlineCandidates(
+        prompt: String, system: String?, maxTokens: Int, temperature: Float,
+        topP: Float = 1.0, stop: [String] = [], maxWords: Int = 0,
+        topK: Int? = nil, minP: Float? = nil,
+        requiredScript: ScriptClassifier.Target? = nil, k: Int
+    ) async throws -> [(text: String, avgLogprob: Float)] {
+        activeGenerations += 1
+        defer { endGeneration() }
+        var out: [(text: String, avgLogprob: Float)] = []
+        for _ in 0..<max(1, k) {
+            if Task.isCancelled { break }
+            let rec = LogprobRecorder()
+            let text = try await generateInline(
+                prompt: prompt, system: system, maxTokens: maxTokens,
+                temperature: temperature, topP: topP, stop: stop, maxWords: maxWords,
+                topK: topK, minP: minP, requiredScript: requiredScript, recorder: rec)
+            out.append((text, rec.averageLogprob))
+        }
+        return out.sorted { $0.avgLogprob > $1.avgLogprob }
     }
 
     /// **Single inline entry point** (WS2 gate). Callers (CoreBridge) invoke this and

@@ -201,6 +201,9 @@ enum Preferences {
         static let inlineKVBits = "inlineKVBits"
         static let speculativeDecodingEnabled = "speculativeDecodingEnabled"
         static let guidedScriptDecoding = "guidedScriptDecoding"
+        static let nBestCandidates = "nBestCandidates"
+        static let ocrCaretAnchoring = "ocrCaretAnchoring"
+        static let ngramPersonalization = "ngramPersonalization"
         static let draftModelId = "draftModelId"
         static let numDraftTokens = "numDraftTokens"
         static let appOverridesMigrated = "appOverridesMigrated"
@@ -379,6 +382,34 @@ enum Preferences {
     static var guidedScriptDecoding: Bool {
         get { defaults.bool(forKey: Keys.guidedScriptDecoding) }
         set { defaults.set(newValue, forKey: Keys.guidedScriptDecoding) }
+    }
+
+    /// N-best inline candidates (B2): number of continuations the pause-fire generates
+    /// per request. The best (by average log-probability) is shown; the rest are kept
+    /// in a `CandidateBuffer` so a diverging keystroke can swap to an alternate with no
+    /// model round trip. `1` (default / absent) = today's single-candidate behavior.
+    /// Clamped to [1, 5]; each extra candidate is one more decode (prefill is shared).
+    static var nBestCandidates: Int {
+        get { let v = defaults.integer(forKey: Keys.nBestCandidates); return v == 0 ? 1 : min(max(v, 1), 5) }
+        set { defaults.set(min(max(newValue, 1), 5), forKey: Keys.nBestCandidates) }
+    }
+
+    /// OCR caret anchoring (A3, tier 4): when AX + text-marker + glyph-mirror all fail
+    /// to place the caret (terminals/TUIs), screenshot near the field and anchor the
+    /// ghost at the OCR'd caret glyph box. Default OFF — needs Screen Recording
+    /// permission and the normalized→screen transform is live-calibrated. Absent → false.
+    static var ocrCaretAnchoring: Bool {
+        get { defaults.bool(forKey: Keys.ocrCaretAnchoring) }
+        set { defaults.set(newValue, forKey: Keys.ocrCaretAnchoring) }
+    }
+
+    /// N-gram personalization (B5, NB): bias inline decode toward the user's own
+    /// next-token habits via a background-trained `NgramModel` (logit bias, never
+    /// prompt few-shot). Default OFF — opt-in and live-tuned; the training pipeline
+    /// and `maxOrder`/`strength` constants are unrecovered. Absent → false.
+    static var ngramPersonalization: Bool {
+        get { defaults.bool(forKey: Keys.ngramPersonalization) }
+        set { defaults.set(newValue, forKey: Keys.ngramPersonalization) }
     }
 
     /// Hugging Face MLX model id of the draft model. Defaults to `defaultDraftModelId`.
