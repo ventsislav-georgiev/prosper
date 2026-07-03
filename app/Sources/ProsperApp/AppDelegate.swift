@@ -78,6 +78,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the write fails with EPIPE instead — our pipe writes already handle the throw.
         signal(SIGPIPE, SIG_IGN)
 
+        // Headless quality bench (PROSPER_BENCH_CORPUS=...): runs the corpus
+        // through the inline-completion pipeline directly, writes JSON, and
+        // (with PROSPER_BENCH_QUIT=1) exits — see BenchRunner. No-op otherwise.
+        BenchRunner.runIfRequested()
+
         // Strip our own quarantine flag so post-update relaunches (and every
         // launch after the first) skip the Gatekeeper "unidentified developer"
         // dialog. No-op in dev (.build) and when already clean. See README.

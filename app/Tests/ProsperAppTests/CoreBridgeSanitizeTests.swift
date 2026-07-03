@@ -480,4 +480,33 @@ final class CoreBridgeSanitizeTests: XCTestCase {
             " Georgiev"
         )
     }
+
+    // MARK: - Russian-only word gate (Cyrillic sister-language leak)
+
+    @MainActor
+    func testRussianOnlyWordGate() throws {
+        let available = NSSpellChecker.shared.availableLanguages
+        try XCTSkipUnless(available.contains("bg") && available.contains("ru"),
+                          "bg/ru dictionaries not installed on this runner")
+        // Confidently-Russian words (bg flags, ru accepts) → rejected.
+        XCTAssertTrue(CoreBridge.containsRussianOnlyCyrillicWord("в пятница"))
+        XCTAssertTrue(CoreBridge.containsRussianOnlyCyrillicWord("сегодня вечером"))
+        XCTAssertTrue(CoreBridge.containsRussianOnlyCyrillicWord("човекът, который дойде"))
+        // Bulgarian words → pass.
+        XCTAssertFalse(CoreBridge.containsRussianOnlyCyrillicWord("днес и утре"))
+        XCTAssertFalse(CoreBridge.containsRussianOnlyCyrillicWord("среща в офиса"))
+        // bg-dictionary gap flagged by BOTH dicts (conjunction rule) → pass.
+        XCTAssertFalse(CoreBridge.containsRussianOnlyCyrillicWord("в петък"))
+        // Latin text never scanned.
+        XCTAssertFalse(CoreBridge.containsRussianOnlyCyrillicWord("see you on friday"))
+    }
+
+    func testInputSourceLanguagesFeedOsList() {
+        // Union list must at least resolve without crashing and dedupe names;
+        // exact contents are machine-dependent.
+        let list = CoreBridge.osLanguagesList()
+        XCTAssertFalse(list.isEmpty)
+        let names = list.components(separatedBy: ", ")
+        XCTAssertEqual(names.count, Set(names).count)
+    }
 }

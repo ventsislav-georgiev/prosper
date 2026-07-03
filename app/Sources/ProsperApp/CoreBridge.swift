@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import NaturalLanguage
 
@@ -624,10 +625,15 @@ enum CoreBridge {
         // same app; a different confident detection switches immediately (a real
         // language switch must not lag).
         let stickyLanguage = Self.stickyDetectedLanguage(bundleId: bundleId, detected: language)
+        // Word-level Russian gate is armed by the user's OS languages (preferred
+        // + keyboard input sources): Bulgarian present, Russian absent. Adding a
+        // Russian layout disarms it — Russian output becomes expected.
+        let osLangs = Self.osLanguagesList()
+        let rejectRussianWords = osLangs.contains("Bulgarian") && !osLangs.contains("Russian")
         let system = completionSystemPrompt(
             custom: AppOverrideResolver.effectivePromptAddendum(forBundleId: bundleId),
             length: length, language: latinBulgarian ? nil : stickyLanguage,
-            transliteratedBulgarian: latinBulgarian, userLanguages: Self.osLanguagesList()
+            transliteratedBulgarian: latinBulgarian, userLanguages: osLangs
         )
         // Volatile context blocks (clipboard, frequent words, on-screen OCR) are
         // FROZEN per app+site and shared by EVERY request — burst and pause
@@ -887,6 +893,15 @@ enum CoreBridge {
                        // "1. чекиран на твое име" — verbatim from the OCR'd chat).
                        // A real continuation is new text, never a screen line.
                        !echoesScreenContext(suggestion, screen: onScreenText) {
+                        // Sister-language word gate: a Bulgarian user (no Russian
+                        // layout) must never be offered a Russian word — the pin
+                        // holds the prompt but not every sampled token. Burn the
+                        // rung; the next one resamples.
+                        if rejectRussianWords,
+                           await MainActor.run(body: { Self.containsRussianOnlyCyrillicWord(suggestion) }) {
+                            TraceLog.emit("complete: rejected Russian-only word in \"\(suggestion.prefix(24))\"")
+                            continue
+                        }
                         result = suggestion
                         break
                     }
@@ -1420,6 +1435,36 @@ enum CoreBridge {
     /// both languages share, "как ти") and the unpinned model completes in Russian
     /// ("запустить тестовый сценарий") — observed live. The pin is soft ("trust
     /// the text itself over this guess"), so a genuinely-Russian paste still wins.
+    /// Word-level sister-language gate. The alphabet filter above ("ыэё") only
+    /// catches Russian-exclusive LETTERS; most Russian words are spelled entirely
+    /// with letters Bulgarian shares ("пятница", "сегодня", "который") and sailed
+    /// through a Bulgarian-pinned prompt (live bench: gap02 bg → "пятница.").
+    /// A Cyrillic word is rejected only when the Bulgarian dictionary flags it
+    /// AND the Russian dictionary accepts it — a confidently-Russian word. Words
+    /// both dictionaries flag (names, slang, bg-dict gaps like "петък") survive,
+    /// so the gate can't starve completions over dictionary coverage.
+    /// NSSpellChecker wants the main thread — call via MainActor (the ladder does).
+    /// ponytail: bg-vs-ru hardcoded — the one real confusable pair; generalize to
+    /// a per-language matrix if another Cyrillic layout ever ships.
+    @MainActor
+    static func containsRussianOnlyCyrillicWord(_ s: String) -> Bool {
+        let checker = NSSpellChecker.shared
+        guard checker.availableLanguages.contains("bg"),
+              checker.availableLanguages.contains("ru") else { return false }
+        func isWord(_ w: String, _ lang: String) -> Bool {
+            checker.checkSpelling(of: w, startingAt: 0, language: lang, wrap: false,
+                                  inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
+        }
+        for word in s.split(whereSeparator: { !$0.isLetter }) {
+            guard word.count >= 3 else { continue }
+            let scalars = word.unicodeScalars
+            guard scalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) }) else { continue }
+            let w = String(word)
+            if !isWord(w, "bg"), isWord(w, "ru") { return true }
+        }
+        return false
+    }
+
     static func shouldPinBulgarianCyrillic(before: String, detected: String?) -> Bool {
         guard isCyrillicScript(before) else { return false }
         let langs = osLanguagesList()
@@ -1629,13 +1674,45 @@ enum CoreBridge {
     /// transliteration) instead of guessing Croatian/Russian — no per-text detection.
     static func osLanguagesList() -> String {
         var seen = Set<String>(), names: [String] = []
-        for id in Locale.preferredLanguages.prefix(4) {
+        // Preferred UI languages UNION enabled keyboard input sources: the user
+        // treats their keyboard layouts as "my languages" (directive: adding a
+        // Russian layout tomorrow should make Russian completions expected),
+        // and either list alone can miss one (a bg keyboard with an en-only UI).
+        let ids = Array(Locale.preferredLanguages.prefix(4)) + enabledInputSourceLanguageCodes()
+        for id in ids {
             let code = Locale(identifier: id).language.languageCode?.identifier ?? id
             guard let name = Locale(identifier: "en").localizedString(forLanguageCode: code),
                   seen.insert(name).inserted else { continue }
             names.append(name)
         }
         return names.joined(separator: ", ")
+    }
+
+    // Cached: `complete` runs per keystroke burst; the TIS list changes rarely.
+    nonisolated(unsafe) private static var inputSourceLangsCache: (codes: [String], at: Date)?
+    private static let inputSourceLangsLock = NSLock()
+
+    /// Language codes of the ENABLED keyboard input sources (e.g. ["en", "bg"]).
+    /// Layout-only sources with no language (e.g. "Unicode Hex Input") drop out.
+    static func enabledInputSourceLanguageCodes() -> [String] {
+        inputSourceLangsLock.lock()
+        defer { inputSourceLangsLock.unlock() }
+        if let c = inputSourceLangsCache, Date().timeIntervalSince(c.at) < 30 { return c.codes }
+        var codes: [String] = []
+        if let list = TISCreateInputSourceList(nil, false)?.takeRetainedValue() as? [TISInputSource] {
+            for src in list {
+                guard let catPtr = TISGetInputSourceProperty(src, kTISPropertyInputSourceCategory),
+                      (Unmanaged<CFString>.fromOpaque(catPtr).takeUnretainedValue() as String)
+                        == (kTISCategoryKeyboardInputSource as String),
+                      let langsPtr = TISGetInputSourceProperty(src, kTISPropertyInputSourceLanguages),
+                      let langs = Unmanaged<CFArray>.fromOpaque(langsPtr).takeUnretainedValue() as? [String],
+                      let first = langs.first, !first.isEmpty
+                else { continue }
+                codes.append(first)
+            }
+        }
+        inputSourceLangsCache = (codes, Date())
+        return codes
     }
 
     static func completionSystemPrompt(
