@@ -80,6 +80,26 @@ final class SanitizerPolishTests: XCTestCase {
     }
 }
 
+/// Latinica-detector marker gating: bare `q` counts only in all-lowercase words,
+/// so English tech prose with acronyms never gets steered into the latinica path.
+final class LatinicaMarkerGatingTests: XCTestCase {
+    func testAcronymsAndProperNounsDoNotTriggerLatinica() {
+        XCTAssertFalse(CoreBridge.looksLikeTransliteratedBulgarian(
+            "we store the metadata in SQL and the FAQ covers the QA flow"))
+        XCTAssertFalse(CoreBridge.looksLikeTransliteratedBulgarian(
+            "the Iraq report mentions Qatar exports"))
+    }
+
+    func testLowercaseBareQStillTriggersLatinica() {
+        XCTAssertTrue(CoreBridge.looksLikeTransliteratedBulgarian("kak q karash dneska"))
+        XCTAssertTrue(CoreBridge.looksLikeTransliteratedBulgarian("vashiq proekt e gotov"))
+    }
+
+    func testShtMarkerStillTriggersLatinica() {
+        XCTAssertTrue(CoreBridge.looksLikeTransliteratedBulgarian("shte doida utre"))
+    }
+}
+
 /// RecentSentences session-vocabulary lookup (feeds the suspicious-token gate).
 @MainActor
 final class RecentSentencesVocabularyTests: XCTestCase {
@@ -95,5 +115,47 @@ final class RecentSentencesVocabularyTests: XCTestCase {
     func testHasRecentWordIsWordBounded() {
         RecentSentences.shared.ingest(before: "the detour took an hour extra. ")
         XCTAssertFalse(RecentSentences.shared.hasRecentWord("dto"))
+    }
+
+    // MARK: - Bundle scoping: private text never ghosts in another app
+
+    func testRecallIsBundleScoped() {
+        RecentSentences.shared.ingest(
+            before: "the merger closes on friday, keep it quiet. ",
+            bundleId: "com.private.chat")
+        XCTAssertNotNil(RecentSentences.shared.continuation(
+            for: "the merger", bundleId: "com.private.chat"))
+        XCTAssertNil(RecentSentences.shared.continuation(
+            for: "the merger", bundleId: "com.work.mail"))
+        XCTAssertNil(RecentSentences.shared.continuation(for: "the merger"))
+        // hasRecentWord stays cross-app: containment reveals no content.
+        XCTAssertTrue(RecentSentences.shared.hasRecentWord("merger"))
+    }
+
+    func testSameSentenceInTwoAppsRecallsInBoth() {
+        RecentSentences.shared.ingest(before: "see you at the standup tomorrow. ", bundleId: "a")
+        RecentSentences.shared.ingest(before: "see you at the standup tomorrow. ", bundleId: "b")
+        XCTAssertNotNil(RecentSentences.shared.continuation(for: "see you at", bundleId: "a"))
+        XCTAssertNotNil(RecentSentences.shared.continuation(for: "see you at", bundleId: "b"))
+    }
+}
+
+/// Per-guard reject telemetry: a rejected completion must name its killer guard
+/// (bench starvation cases were undiagnosable from a bare `return nil`).
+final class SanitizerRejectReasonTests: XCTestCase {
+    func testMarkdownRejectRecordsReason() {
+        XCTAssertNil(CoreBridge.sanitizeCompletion("some **bold** claim", before: "and then "))
+        XCTAssertEqual(CoreBridge.lastRejectReason, "markdown")
+    }
+
+    func testRussianMarkerRecordsReason() {
+        XCTAssertNil(CoreBridge.sanitizeCompletion(
+            "запустить тестовый прогон", before: "утре ще", bulgarianCyrillic: true))
+        XCTAssertEqual(CoreBridge.lastRejectReason, "russianMarker")
+    }
+
+    func testAcceptedCompletionClearsReason() {
+        XCTAssertNotNil(CoreBridge.sanitizeCompletion("brown fox", before: "the quick "))
+        XCTAssertNil(CoreBridge.lastRejectReason)
     }
 }

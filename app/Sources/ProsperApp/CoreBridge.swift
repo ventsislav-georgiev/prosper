@@ -558,11 +558,41 @@ enum CoreBridge {
         let frequentWords: [String]
         let onScreenText: String?
         let onScreenIsConversation: Bool
+        // The prompt's grounding line sits ahead of the text tail; a windowTitle
+        // that flaps mid-session (unsaved-dot, chat unread count) re-prefilled
+        // everything after it. Freeze both with the volatile blocks.
+        let fieldLabel: String?
+        let windowTitle: String?
+        // Latinica-only grounding samples (see the personalization comment in
+        // `complete`). They sit ahead of the text tail too, and the history
+        // store can commit new samples mid-session — re-fetching per request
+        // flapped the prompt head bytes exactly like windowTitle did.
+        let writingSamples: [String]
     }
     @MainActor static var frozenInlineContext: FrozenInlineContext?
     // ponytail: fixed 30s staleness window; make it a pref if chat contexts
     // prove to need faster conversation-OCR refresh.
     static let frozenContextTTL: TimeInterval = 30
+
+    // Sticky per-app site host (see the call site in `complete`): the
+    // BrowserURL/ChromiumPasteboard reads are flaky AX/pasteboard probes that
+    // transiently return nil. The frozen-context key is bundleId|siteHost, so a
+    // single missed read re-keyed the snapshot and forced a full re-prefill
+    // (250-400ms) with no real navigation. Same contract as the sticky language:
+    // nil never downgrades the last good host for the app; a different host
+    // switches immediately (real navigation must not lag).
+    private static let stickyHostLock = NSLock()
+    nonisolated(unsafe) private static var stickyHostByApp: [String: String] = [:]
+    static func stickySiteHost(bundleId: String?, read: String?) -> String? {
+        let key = bundleId ?? ""
+        stickyHostLock.lock()
+        defer { stickyHostLock.unlock() }
+        if let read {
+            stickyHostByApp[key] = read
+            return read
+        }
+        return stickyHostByApp[key]
+    }
 
     // Sticky per-app language detection (see the call site in `complete`).
     private static let stickyLangLock = NSLock()
@@ -664,8 +694,9 @@ enum CoreBridge {
             // grounds the spelling style, and cutting them dropped latinica
             // regress coverage 98% → 92% while EN/BG stayed green. Latinica is
             // also never the context that produced the vocab-leak junk.
-            let writingSamples: [String] = latinBulgarian
-                ? await TypingHistoryStore.shared.writingSamples(bundleId: bundleId) : []
+            // Fetched in the pause-capture branch below and FROZEN with the
+            // other volatile blocks — the store commits new samples
+            // mid-session, and a per-request fetch flapped the prompt head.
             // App context: name + writing surface (chat/email/code/…) so the model
             // matches the tone and length the situation calls for. For browsers and
             // Electron apps the active web host is the most specific context (e.g.
@@ -673,13 +704,14 @@ enum CoreBridge {
             // Resolved before OCR because the surface decides *how* we capture.
             let profile = AppProfile.profile(for: bundleId)
             let appName = AppProfile.displayName(for: bundleId)
-            let siteHost: String? = await MainActor.run {
+            let rawSiteHost: String? = await MainActor.run {
                 if profile.kind == .browser { return BrowserURL.currentHost() }
                 if profile.isElectron, ChromiumPasteboard.hasChromiumFlavors() {
                     return ChromiumPasteboard.sourceHost()
                 }
                 return nil
             }
+            let siteHost = Self.stickySiteHost(bundleId: bundleId, read: rawSiteHost)
             let appSurface = siteHost != nil
                 ? AppProfile.surface(forHost: siteHost)
                 : AppProfile.surface(for: bundleId, kind: profile.kind)
@@ -698,11 +730,17 @@ enum CoreBridge {
             let frequentWords: [String]
             let onScreenText: String?
             let onScreenIsConversation: Bool
+            let promptFieldLabel: String?
+            let promptWindowTitle: String?
+            let writingSamples: [String]
             if let cached, burst || cachedFresh {
                 clipboard = cached.clipboard
                 frequentWords = cached.frequentWords
                 onScreenText = cached.onScreenText
                 onScreenIsConversation = cached.onScreenIsConversation
+                promptFieldLabel = cached.fieldLabel
+                promptWindowTitle = cached.windowTitle
+                writingSamples = cached.writingSamples
             } else if burst {
                 // Cold snapshot on a mid-typing keystroke: never pay capture
                 // latency here. Light prompt once; the next pause freezes.
@@ -710,6 +748,9 @@ enum CoreBridge {
                 frequentWords = []
                 onScreenText = nil
                 onScreenIsConversation = false
+                promptFieldLabel = fieldLabel
+                promptWindowTitle = windowTitle
+                writingSamples = []
             } else {
                 // Pause request with no (or expired) snapshot: capture + freeze.
                 // OCR: on a conversational surface (chat/email/social) the dialog
@@ -730,20 +771,33 @@ enum CoreBridge {
                     }
                     : nil
                 onScreenIsConversation = conv
+                promptFieldLabel = fieldLabel
+                promptWindowTitle = windowTitle
+                writingSamples = latinBulgarian
+                    ? await TypingHistoryStore.shared.writingSamples(bundleId: bundleId) : []
                 let snapshot = FrozenInlineContext(
                     key: key, capturedAt: Date(), clipboard: clipboard,
                     frequentWords: frequentWords, onScreenText: onScreenText,
-                    onScreenIsConversation: onScreenIsConversation
+                    onScreenIsConversation: onScreenIsConversation,
+                    fieldLabel: fieldLabel, windowTitle: windowTitle,
+                    writingSamples: writingSamples
                 )
                 await MainActor.run { Self.frozenInlineContext = snapshot }
             }
+            // KNOWN COST (structural): `after` (the text after the caret) sits in
+            // the prompt AHEAD of the final instruction+`before` tail, so typing
+            // MID-LINE shifts those bytes every keystroke and re-prefills roughly
+            // the after-head + instruction (~100 tokens, ~40-60ms) per request.
+            // End-of-line typing (the primary trigger; `after` empty/stable) keeps
+            // the full prefix. Fixing this means a FIM-style prompt reorder — a
+            // model-behavior change, not a caching tweak. Documented, not fixed.
             let prompt = buildCompletionPrompt(
                 before: before, after: after,
                 clipboard: clipboard, frequentWords: frequentWords,
                 hasImage: false, onScreenText: onScreenText,
                 onScreenIsConversation: onScreenIsConversation && onScreenText != nil,
                 appName: appName, appSurface: appSurface, siteHost: siteHost,
-                fieldLabel: fieldLabel, windowTitle: windowTitle,
+                fieldLabel: promptFieldLabel, windowTitle: promptWindowTitle,
                 writingSamples: writingSamples,
                 reservedSystemChars: system.count
             )
@@ -789,18 +843,26 @@ enum CoreBridge {
             // right before the final instruction line — the context prefix stays
             // byte-identical, so the KV cache re-prefills only the short
             // instruction+tail instead of the whole prompt (the old `nudge + prompt`
-            // prepend invalidated everything).
-            let nudgedPrompt = buildCompletionPrompt(
-                before: before, after: after,
-                clipboard: clipboard, frequentWords: frequentWords,
-                hasImage: false, onScreenText: onScreenText,
-                onScreenIsConversation: onScreenIsConversation && onScreenText != nil,
-                appName: appName, appSurface: appSurface, siteHost: siteHost,
-                fieldLabel: fieldLabel, windowTitle: windowTitle,
-                writingSamples: writingSamples,
-                directive: nudge,
-                reservedSystemChars: system.count
-            )
+            // prepend invalidated everything). Built LAZILY on the first reprompt
+            // rung: bursts (1 rung) and fast rung-0/1 successes never use it, and
+            // an eager build ran the full budget/clip pipeline on every keystroke.
+            var nudgedPrompt: String?
+            func nudgedPromptLazy() -> String {
+                if let nudgedPrompt { return nudgedPrompt }
+                let built = buildCompletionPrompt(
+                    before: before, after: after,
+                    clipboard: clipboard, frequentWords: frequentWords,
+                    hasImage: false, onScreenText: onScreenText,
+                    onScreenIsConversation: onScreenIsConversation && onScreenText != nil,
+                    appName: appName, appSurface: appSurface, siteHost: siteHost,
+                    fieldLabel: promptFieldLabel, windowTitle: promptWindowTitle,
+                    writingSamples: writingSamples,
+                    directive: nudge,
+                    reservedSystemChars: system.count
+                )
+                nudgedPrompt = built
+                return built
+            }
             // Ladder rungs carry per-rung sampling. Gemma 4's own GGUF recommends
             // temp=1.0 / top_k=64 / top_p=0.95; that bounded-nucleus high-temp is what
             // keeps completions COHERENT (esp. low-resource scripts) instead of the
@@ -846,6 +908,16 @@ enum CoreBridge {
             let attempts = burst ? Array(ladder.prefix(1)) : ladder
             var result: String?
             var rungsRun = 0
+            // Per-rung reject reasons (see `lastRejectReason`) — surfaced in the
+            // summary trace so a starved case names its killer guard.
+            var rungRejects: [String] = []
+            // Wall-clock ladder budget: the pause ladder has no natural bound
+            // (nothing cancels while the user is paused — the exact case it
+            // runs), so a slow climb blew past the <1s worst-case bar (bench
+            // lat13: 1444ms). Rung 0 always runs; later rungs only start while
+            // inside the budget. Starts AFTER the cold-load guard above so a
+            // first-ever generation isn't starved by model load time.
+            let ladderDeadline = Date().addingTimeInterval(0.9)
             // Guided decoding (B1, opt-in): constrain to the user's script so
             // cross-script garbage can't be generated. Latinica is exempt — it is
             // Latin-script Bulgarian and a Cyrillic constraint would be wrong; it
@@ -857,29 +929,44 @@ enum CoreBridge {
             // sanitize + the echo/screen/sister-language rejections. Returns the
             // accepted suggestion or nil (⇒ reject this raw output).
             let accept: (String) async -> String? = { raw in
+                // Latinica path: the Russian word gate must see the RAW output —
+                // sanitizeCompletion transliterates Cyrillic to Latin first, which
+                // erases exactly the evidence the gate keys on ("хочу" → "hochu"
+                // passes every downstream check as plausible latinica).
+                if rejectRussianWords, latinBulgarian,
+                   await MainActor.run(body: { Self.containsRussianOnlyCyrillicWord(raw) }) {
+                    TraceLog.emit("complete: rejected Russian word in raw latinica output")
+                    return Self.reject("russianWordRaw")
+                }
                 guard let suggestion = sanitizeCompletion(
                         raw, before: before, after: after,
                         transliterateCyrillic: latinBulgarian,
                         bulgarianCyrillic: language == "Bulgarian"
                             && Self.isCyrillicScript(before)),
-                      !suggestion.isEmpty,
-                      // Small quantized models latch onto few-shot example lines and
-                      // return them VERBATIM; reject a copy of a writing sample.
-                      !echoesWritingSample(suggestion, samples: writingSamples),
-                      // The frequent-words hint line gets parroted the same way.
-                      !echoesWritingSample(
-                          suggestion,
-                          samples: frequentWords.isEmpty
-                              ? [] : [frequentWords.joined(separator: ", ")]),
-                      // Same latch, other context block: quoting an on-screen line.
-                      !echoesScreenContext(suggestion, screen: onScreenText)
-                else { return nil }
+                      !suggestion.isEmpty
+                else { return nil } // sanitizeCompletion recorded lastRejectReason
+                // Small quantized models latch onto few-shot example lines and
+                // return them VERBATIM; reject a copy of a writing sample.
+                if echoesWritingSample(suggestion, samples: writingSamples) {
+                    return Self.reject("sampleEcho")
+                }
+                // The frequent-words hint line gets parroted the same way.
+                if echoesWritingSample(
+                    suggestion,
+                    samples: frequentWords.isEmpty
+                        ? [] : [frequentWords.joined(separator: ", ")]) {
+                    return Self.reject("freqWordsEcho")
+                }
+                // Same latch, other context block: quoting an on-screen line.
+                if echoesScreenContext(suggestion, screen: onScreenText) {
+                    return Self.reject("screenEcho")
+                }
                 // Sister-language word gate: a Bulgarian user (no Russian layout)
                 // must never be offered a Russian word.
                 if rejectRussianWords,
                    await MainActor.run(body: { Self.containsRussianOnlyCyrillicWord(suggestion) }) {
                     TraceLog.emit("complete: rejected Russian-only word in \"\(suggestion.prefix(24))\"")
-                    return nil
+                    return Self.reject("russianWord")
                 }
                 return suggestion
             }
@@ -921,21 +1008,27 @@ enum CoreBridge {
             if result == nil {
                 for attempt in attempts {
                     if Task.isCancelled { return }
+                    if rungsRun > 0, Date() > ladderDeadline {
+                        rungRejects.append("deadline")
+                        break
+                    }
                     rungsRun += 1
+                    let rungPrompt = attempt.reprompt ? nudgedPromptLazy() : prompt
                     do {
                         let raw = try await MLXEngine.shared.generateInlineRouted(
-                            prompt: attempt.reprompt ? nudgedPrompt : prompt,
+                            prompt: rungPrompt,
                             system: system,
                             maxTokens: maxTokens, temperature: attempt.temperature,
                             topP: attempt.topP, stop: ["\n"], maxWords: maxWords,
                             topK: attempt.topK, requiredScript: requiredScript
                         )
-                        benchLog(system: system, prompt: attempt.reprompt ? nudgedPrompt : prompt,
+                        benchLog(system: system, prompt: rungPrompt,
                                  raw: raw, temp: attempt.temperature)
                         if let suggestion = await accept(raw) {
                             result = suggestion
                             break
                         }
+                        rungRejects.append(Self.lastRejectReason ?? "modelEmpty")
                     } catch {
                         if Task.isCancelled { return }
                         // Transient engine error (e.g. a guarded MLX runtime error):
@@ -945,7 +1038,14 @@ enum CoreBridge {
                     }
                 }
             }
-            TraceLog.emit("complete: \(result == nil ? "EMPTY" : "ok(\(result!.count)ch)") after \(rungsRun) rung(s), lang=\(language ?? "auto")")
+            let rejectsNote = rungRejects.isEmpty
+                ? "" : ", rejects=[\(rungRejects.joined(separator: ","))]"
+            TraceLog.emit("complete: \(result == nil ? "EMPTY" : "ok(\(result!.count)ch)") after \(rungsRun) rung(s), lang=\(language ?? "auto")\(rejectsNote)")
+            // A keystroke may have cancelled us while the last rung was decoding;
+            // the engine result is then stale against the new text. The engine
+            // callback path already guards with requestToken, but this emit is
+            // the one seam a stale suggestion could still slip through.
+            if Task.isCancelled { return }
             await MainActor.run { completion(result) }
         }
     }
@@ -1045,11 +1145,26 @@ enum CoreBridge {
     /// - rejects any echo of text already written (leading, interior, or of the
     ///   text after the caret) and cuts internal word/phrase loops
     /// - collapses runaway whitespace and trims trailing blank lines
+    /// Why the last `sanitizeCompletion` / ladder-accept call rejected its input.
+    /// Diagnostic only (TraceLog/bench): requests are single-flight, so the
+    /// last-writer-wins race on concurrent calls is acceptable. Without this the
+    /// ladder's ~15 rejection sites are indistinguishable `return nil`s and a
+    /// starved bench case (bginc07) cannot be attributed to a guard.
+    nonisolated(unsafe) static var lastRejectReason: String?
+
+    /// Records the reject reason and returns nil — `return Self.reject("x")`
+    /// keeps every guard a one-liner.
+    private static func reject(_ reason: String) -> String? {
+        lastRejectReason = reason
+        return nil
+    }
+
     static func sanitizeCompletion(
         _ raw: String, before: String, after: String = "",
         transliterateCyrillic: Bool = false,
         bulgarianCyrillic: Bool = false
     ) -> String? {
+        Self.lastRejectReason = nil
         var s = raw
 
         // Shlyokavitsa salvage: when the user is typing transliterated Bulgarian
@@ -1093,7 +1208,9 @@ enum CoreBridge {
         // `<<`, `>>` are ordinary code operators — rejecting them killed every
         // `a || b` / `std::cout << x` completion in code fields; they stay
         // edge-trimmed above but allowed in the body.
-        if ["**", "__", "~~"].contains(where: { s.contains($0) }) { return nil }
+        if ["**", "__", "~~"].contains(where: { s.contains($0) }) {
+            return Self.reject("markdown")
+        }
 
         // Prompt-scaffold guard: with near-empty context (a single word in a web
         // form) small instruct models sometimes parrot the INSTRUCTION instead of
@@ -1102,7 +1219,7 @@ enum CoreBridge {
         // catch it (they compare against the user's text, not the prompt), so
         // reject any output containing a distinctive prompt/nudge phrase and let
         // the retry ladder reprompt.
-        if Self.echoesPromptScaffold(s) { return nil }
+        if Self.echoesPromptScaffold(s) { return Self.reject("promptScaffold") }
 
         // Drop a leading overlap: the longest suffix of `before` that the model
         // re-emits at the head of `s` (it echoing what the user already typed). The
@@ -1128,7 +1245,7 @@ enum CoreBridge {
         // echo isn't a prefix/suffix overlap, it's a word lifted from earlier in the
         // buffer. Drop the whole suggestion when its first word duplicates a recently
         // typed word, so we show nothing rather than garbage.
-        if Self.echoesRecentWord(s, before: before) { return nil }
+        if Self.echoesRecentWord(s, before: before) { return Self.reject("echoRecentWord") }
 
         // Regurgitation guard #2: head/middle echo. Instruct models (gemma-it) told
         // to "continue this text" often RESTATE the document instead of continuing it
@@ -1138,17 +1255,17 @@ enum CoreBridge {
         // span lifted from the *start/middle*. Detect it: if the completion's leading
         // multi-word span appears verbatim earlier in `before`, it is a restatement —
         // show nothing rather than a duplicated, wrongly-capitalised fragment.
-        if Self.echoesEarlierSpan(s, before: before) { return nil }
+        if Self.echoesEarlierSpan(s, before: before) { return Self.reject("echoEarlierSpan") }
 
         // Language guard: a continuation in a visibly different script than the
         // user's text (Bulgarian typed, English suggested) is never wanted —
         // reject so the retry ladder reprompts instead of showing it.
-        if Self.mismatchedScript(s, before: before) { return nil }
+        if Self.mismatchedScript(s, before: before) { return Self.reject("mismatchedScript") }
 
         // Foreign-script garbage guard: reject a burst of letters from a script the
         // user isn't writing (e.g. Devanagari in Cyrillic text) — high-temperature
         // noise that `mismatchedScript` can't see because those blocks aren't counted.
-        if Self.containsForeignScript(s, before: before) { return nil }
+        if Self.containsForeignScript(s, before: before) { return Self.reject("foreignScript") }
 
         // Mid-word capital guard: continuing an unfinished lowercase word with an
         // uppercase letter glued on ("иска" + "Мнение…") is never a continuation
@@ -1166,7 +1283,9 @@ enum CoreBridge {
             var word = ""
             for ch in before.reversed() { if ch.isLetter { word.append(ch) } else { break } }
             let trailing = String(word.reversed())
-            if !Lexicon.shared.isKnownWord(trailing.lowercased()) { return nil }
+            if !Lexicon.shared.isKnownWord(trailing.lowercased()) {
+                return Self.reject("midWordCapital")
+            }
         }
 
         // Mixed-script word guard: a single word blending Cyrillic and Latin
@@ -1174,7 +1293,7 @@ enum CoreBridge {
         // loanword is a PURE-Latin token ("купих си iPhone"). `mismatchedScript`
         // can't catch it: such words are shorter than the ≥8-letter drift
         // threshold that protects proper nouns.
-        if Self.mixesScriptsWithinWord(s) { return nil }
+        if Self.mixesScriptsWithinWord(s) { return Self.reject("mixedScriptWord") }
 
         // Russian-marker guard: the letters ы/э/ё do not exist in Bulgarian. When
         // the user is writing Bulgarian Cyrillic (language pin above), a suggestion
@@ -1183,7 +1302,7 @@ enum CoreBridge {
         // script), so reject on the marker letters that make it unambiguous.
         if bulgarianCyrillic,
            s.unicodeScalars.contains(where: { "ыэёЫЭЁ".unicodeScalars.contains($0) }) {
-            return nil
+            return Self.reject("russianMarker")
         }
 
         // Regurgitation guard #3: interior echo. The leading-span guard above only
@@ -1192,7 +1311,7 @@ enum CoreBridge {
         // will" + "review thanks for the report"). Reject when ANY multi-word
         // window of the completion appears verbatim in `before` — the user never
         // wants to be offered words they already wrote.
-        if Self.echoesAnywhere(s, before: before) { return nil }
+        if Self.echoesAnywhere(s, before: before) { return Self.reject("echoAnywhere") }
 
         // Internal loop guard: small models sometimes stutter ("the the", "in the
         // in the …"). Cut the suggestion at the first immediate word/bigram repeat
@@ -1210,7 +1329,9 @@ enum CoreBridge {
             // suggestion that only paraphrases what already sits after the
             // caret. First 3 words matching the after-head word-for-word means
             // it adds nothing at the gap — reject so the ladder retries.
-            if Self.echoesAfterHead(s, afterHead: String(after.prefix(400))) { return nil }
+            if Self.echoesAfterHead(s, afterHead: String(after.prefix(400))) {
+                return Self.reject("echoAfterHead")
+            }
         }
 
         // Clean-boundary stop (B3): the word cap ends on a word boundary but can
@@ -1225,7 +1346,9 @@ enum CoreBridge {
         while s.hasSuffix("\n\n") { s = String(s.dropLast()) }
 
         let trimmedEnds = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedEnds.isEmpty ? nil : s.hasPrefix(" ") || s.hasPrefix("\n") ? s : trimmedEnds
+        return trimmedEnds.isEmpty
+            ? Self.reject("emptyAfterTrim")
+            : s.hasPrefix(" ") || s.hasPrefix("\n") ? s : trimmedEnds
     }
 
     /// Common clause connectors (EN + BG/Cyrillic) that read as unfinished when a
@@ -1517,10 +1640,17 @@ enum CoreBridge {
         guard sample.count >= 6 else { return false }
         // Marker signal (cheap, checked first).
         if sample.contains("sht") { return true }
-        let chars = Array(sample)
-        for (i, ch) in chars.enumerated() where ch == "q" {
-            let next = i + 1 < chars.count ? chars[i + 1] : " "
-            if next != "u" { return true }
+        // Bare `q` (я/ъ) counts only inside an ALL-LOWERCASE word: lowercasing
+        // the sample first made acronyms and proper nouns ("SQL", "FAQ", "QA",
+        // "Iraq", "Qatar") read as markers and steered English tech prose into
+        // the latinica path. Genuine shlyokavitsa is lowercase chat prose.
+        for word in text.suffix(300).split(whereSeparator: { !$0.isLetter }) {
+            guard word.allSatisfy({ $0.isLowercase }) else { continue }
+            let chars = Array(word)
+            for (i, ch) in chars.enumerated() where ch == "q" {
+                let next = i + 1 < chars.count ? chars[i + 1] : " "
+                if next != "u" { return true }
+            }
         }
         // Recognizer signal: top hypothesis is Slavic-Latin (no 0.8 floor).
         let recognizer = NLLanguageRecognizer()
@@ -1600,7 +1730,9 @@ enum CoreBridge {
             guard word.count >= 3 else { continue }
             let scalars = word.unicodeScalars
             guard scalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) }) else { continue }
-            let w = String(word)
+            // Lowercase before memo/check: "Завтра" and "завтра" are the same
+            // verdict, and sentence-start capitals were missing the cache.
+            let w = String(word).lowercased()
             if let cached = russianWordVerdicts[w] {
                 if cached { return true }
                 continue

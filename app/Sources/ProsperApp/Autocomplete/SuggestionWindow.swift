@@ -38,7 +38,12 @@ final class SuggestionWindow {
         panel.hasShadow = false
         panel.level = .statusBar
         panel.ignoresMouseEvents = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        // .fullScreenAuxiliary: without it the panel never composites over a
+        // fullscreen app's Space — the ghost would silently vanish in any
+        // fullscreen editor/browser.
+        panel.collectionBehavior = [
+            .canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary,
+        ]
         panel.hidesOnDeactivate = false
 
         label = NSTextField(labelWithString: "")
@@ -52,7 +57,6 @@ final class SuggestionWindow {
 
         strikeBar = NSView(frame: .zero)
         strikeBar.wantsLayer = true
-        strikeBar.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.75).cgColor
         strikeBar.layer?.cornerRadius = 0.75
         strikeBar.isHidden = true
 
@@ -109,7 +113,9 @@ final class SuggestionWindow {
         if let fieldRect, fieldRect.width > 1 {
             startX = min(max(startX, fieldRect.minX), fieldRect.maxX - 8)
         }
-        let width = clampedWidth(naturalWidth: size.width + 4, startX: startX, fieldRect: fieldRect)
+        let width = clampedWidth(
+            naturalWidth: size.width + 4, startX: startX, caretY: caretRect.midY,
+            fieldRect: fieldRect)
         guard width > 8 else { hide(); return } // no room to render legibly
         // Render the ghost inline on the user's actual text line. The line-center
         // resolution is toolkit-aware (AppKit's caret box sits half a line above
@@ -144,7 +150,9 @@ final class SuggestionWindow {
     /// exact screen positions, so consumption is visually just the user's real
     /// text filling the gap the cleared glyphs leave behind.
     func consumeGhost(by n: Int) {
-        guard panel.isVisible, !ghostFull.isEmpty else { return }
+        // No isVisible gate: the engine advances its suggestion state regardless,
+        // so a hide/fade race must not leave the label a keystroke behind.
+        guard !ghostFull.isEmpty else { return }
         ghostConsumed = min(ghostConsumed + n, ghostFull.count)
         applyGhostColors()
     }
@@ -163,7 +171,8 @@ final class SuggestionWindow {
         let natural = label.frame.size.width
         var frame = panel.frame
         let width = max(frame.width, clampedWidth(
-            naturalWidth: natural + 4, startX: frame.origin.x, fieldRect: ghostFieldRect
+            naturalWidth: natural + 4, startX: frame.origin.x, caretY: frame.midY,
+            fieldRect: ghostFieldRect
         ))
         frame.size.width = width
         panel.setFrame(frame, display: true)
@@ -177,7 +186,7 @@ final class SuggestionWindow {
     /// birth point — the engine then regrows by re-anchoring).
     @discardableResult
     func unconsumeGhost() -> Bool {
-        guard panel.isVisible, ghostConsumed > 0 else { return false }
+        guard ghostConsumed > 0 else { return false }
         ghostConsumed -= 1
         applyGhostColors()
         return true
@@ -264,9 +273,13 @@ final class SuggestionWindow {
     /// Clamps the ghost width so its right edge stays within the focused field
     /// (when known) and, as a hard backstop, the screen the caret sits on. The
     /// label's `.byTruncatingTail` mode renders an ellipsis when clipped.
-    private func clampedWidth(naturalWidth: CGFloat, startX: CGFloat, fieldRect: CGRect?) -> CGFloat {
+    private func clampedWidth(
+        naturalWidth: CGFloat, startX: CGFloat, caretY: CGFloat, fieldRect: CGRect?
+    ) -> CGFloat {
+        // Match on the real caret point — an x-only test picks the wrong display
+        // when two screens share an x-range (laptop stacked below a monitor).
         var maxRight = NSScreen.screens
-            .first(where: { $0.frame.contains(CGPoint(x: startX, y: $0.frame.midY)) })?
+            .first(where: { $0.frame.contains(CGPoint(x: startX, y: caretY)) })?
             .visibleFrame.maxX
             ?? NSScreen.main?.visibleFrame.maxX
             ?? (startX + naturalWidth)
@@ -318,7 +331,8 @@ final class SuggestionWindow {
         // Label sits where the caret is (same -2 cell-inset cancel as show()).
         let labelX = max(0, (caretRect.maxX - 2) - strikeStart)
         let width = clampedWidth(
-            naturalWidth: labelX + size.width + 4, startX: strikeStart, fieldRect: fieldRect
+            naturalWidth: labelX + size.width + 4, startX: strikeStart,
+            caretY: caretRect.midY, fieldRect: fieldRect
         )
         guard width > 8 else { hide(); return }
         let lineCenterY = AutocompleteEngine.ghostLineCenterY(caret: caretRect, field: fieldRect)
@@ -335,6 +349,10 @@ final class SuggestionWindow {
             let baselineY = labelY + (size.height - label.firstBaselineOffsetFromTop)
             let barY = (baselineY + font.xHeight * 0.55).rounded()
             strikeBar.frame = NSRect(x: 0, y: barY, width: strikeWidth, height: 1.5)
+            // Resolve the dynamic color at show time so a light↔dark appearance
+            // switch between fixes doesn't render a stale cgColor.
+            strikeBar.layer?.backgroundColor =
+                NSColor.systemRed.withAlphaComponent(0.75).cgColor
             strikeBar.isHidden = false
         } else {
             strikeBar.isHidden = true

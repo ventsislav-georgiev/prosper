@@ -1400,6 +1400,12 @@ actor MLXEngine {
             enabled: Preferences.speculativeDecodingEnabled,
             draftLoaded: draftContainer != nil
         ) {
+            // The speculative iterator owns its own KV caches; the non-speculative
+            // prefix in `inlineBox` goes stale the moment this path generates.
+            // Without the reset, flipping back (guided request, draft unload)
+            // trims against a prefix the model never saw — one wasted re-prefill,
+            // and in the bench an MLX abort.
+            inlineBox.reset()
             return try await generateInlineSpeculative(
                 prompt: prompt, system: system, maxTokens: maxTokens,
                 temperature: temperature, topP: topP, stop: stop, maxWords: maxWords,
@@ -1548,7 +1554,9 @@ actor MLXEngine {
         } catch {
             // ANY speculative failure (KVCacheError "requires trimmable caches",
             // tokenizer mismatch, etc.) degrades to the proven single-model path —
-            // never worse than today.
+            // never worse than today. NOTE: the withMLXErrorGuard block released
+            // the compute gate before this throw propagated, so the fallback
+            // re-acquires it inside generateInline — no double-hold, no deadlock.
             if Self.inlineTimingEnabled {
                 NSLog("prosper inline: speculative failed (%@), falling back", "\(error)")
             }

@@ -15,7 +15,11 @@ final class RecentSentences {
     static let shared = RecentSentences()
 
     /// Newest-last. `key` is the dedupe identity (lowercased trimmed text).
-    private var entries: [(key: String, text: String)] = []
+    /// `bundle` scopes recall to the app the sentence was written in: a line
+    /// typed in a private chat must never surface as a ghost in another app
+    /// (work email, screen-shared doc). `hasRecentWord` stays cross-app — a
+    /// word-boundary containment test reveals no content.
+    private var entries: [(key: String, text: String, bundle: String?)] = []
     private let cap = 200
 
     /// Characters that end a sentence. Newlines count: a line the user finished
@@ -29,36 +33,38 @@ final class RecentSentences {
     /// the unfinished tail changes, so re-splitting + re-deduping the same ~600
     /// chars every keystroke is pure waste — skip when the region is unchanged.
     private var lastHarvestedRegion = ""
+    private var lastHarvestedBundle: String?
 
     /// Harvest completed sentences from the text before the caret. Only the last
     /// ~600 chars are scanned (older text was ingested by earlier requests).
     /// The trailing unterminated fragment is NOT stored — it is still being typed.
-    func ingest(before: String) {
+    func ingest(before: String, bundleId: String? = nil) {
         let window = String(before.suffix(600))
         guard let lastTerm = window.lastIndex(where: Self.isTerminator) else { return }
         let region = String(window[...lastTerm])
-        guard region != lastHarvestedRegion else { return }
+        guard region != lastHarvestedRegion || bundleId != lastHarvestedBundle else { return }
         lastHarvestedRegion = region
+        lastHarvestedBundle = bundleId
         var sentence = ""
         for ch in region {
             sentence.append(ch)
             if Self.isTerminator(ch) {
-                add(sentence)
+                add(sentence, bundle: bundleId)
                 sentence = ""
             }
         }
     }
 
-    private func add(_ raw: String) {
+    private func add(_ raw: String, bundle: String?) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         // Too short to be a re-typeable thought (also skips "..." runs and
         // stray terminators). Word requirement keeps single-word lines out.
         guard text.count >= 12, text.contains(" ") else { return }
         let key = text.lowercased()
-        if let i = entries.firstIndex(where: { $0.key == key }) {
+        if let i = entries.firstIndex(where: { $0.key == key && $0.bundle == bundle }) {
             entries.remove(at: i) // re-written → bump to newest
         }
-        entries.append((key, text))
+        entries.append((key, text, bundle))
         if entries.count > cap { entries.removeFirst(entries.count - cap) }
     }
 
@@ -66,12 +72,13 @@ final class RecentSentences {
     /// is a prefix of a recently written sentence, return that sentence's
     /// remainder — newest match wins. Case-insensitive on the prefix; the
     /// remainder keeps the stored casing.
-    func continuation(for before: String) -> String? {
+    func continuation(for before: String, bundleId: String? = nil) -> String? {
         let fragment = Self.currentFragment(of: before)
         guard fragment.count >= 4 else { return nil }
         let lower = fragment.lowercased()
         for entry in entries.reversed() {
-            guard entry.key.hasPrefix(lower), entry.key != lower else { continue }
+            guard entry.bundle == bundleId,
+                  entry.key.hasPrefix(lower), entry.key != lower else { continue }
             let remainder = String(entry.text.dropFirst(fragment.count))
             guard remainder.count >= 2 else { continue }
             return remainder
@@ -105,5 +112,6 @@ final class RecentSentences {
     func reset() {
         entries.removeAll()
         lastHarvestedRegion = ""
+        lastHarvestedBundle = nil
     }
 }

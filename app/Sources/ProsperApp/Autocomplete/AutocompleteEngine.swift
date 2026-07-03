@@ -820,10 +820,10 @@ final class AutocompleteEngine {
 
     /// Attempts to consume `typed` from the front of the live suggestion.
     /// Returns true when the ghost absorbed the keystroke (suggestion remains
-    /// visible, advanced past the typed text). On a first-character mismatch,
-    /// tries an instant lexicon "snap": re-predict the current word from the
-    /// bundled dictionary so the ghost follows the user's actual word within a
-    /// letter or two, without waiting for the LLM.
+    /// visible, advanced past the typed text). On a mismatch it returns false —
+    /// the caller clears and reschedules. (An instant lexicon "snap" used to
+    /// re-predict the word here; it was removed with the rest of the lexicon
+    /// ghosts.)
     private func typeThrough(typed: String) -> Bool {
         guard let suggestion = currentSuggestion, !suggestion.isEmpty,
               !isFix, replaceLength == 0,
@@ -1219,7 +1219,8 @@ final class AutocompleteEngine {
                 // the recall buffer on the CORRECTED text (instant, the user's
                 // own recent phrasing), else a chained LLM request below.
                 let corrected = String(before.dropLast(original.count)) + fix
-                let recallCont = RecentSentences.shared.continuation(for: corrected)
+                let recallCont = RecentSentences.shared.continuation(
+                    for: corrected, bundleId: bundleId)
                 let continuation = recallCont.map {
                     Self.applyWordBoundary(before: corrected, suggestion: $0)
                 } ?? ""
@@ -1311,9 +1312,9 @@ final class AutocompleteEngine {
         // remainder is the user's OWN phrasing: render it INSTANTLY (no model
         // wait) and let the LLM refresh run underneath — the ghost-stability
         // guard keeps this ghost unless the model EXTENDS it.
-        RecentSentences.shared.ingest(before: before)
+        RecentSentences.shared.ingest(before: before, bundleId: bundleId)
         if currentSuggestion == nil,
-           let recall = RecentSentences.shared.continuation(for: before) {
+           let recall = RecentSentences.shared.continuation(for: before, bundleId: bundleId) {
             let spaced = Self.applyWordBoundary(before: before, suggestion: recall)
             currentSuggestion = spaced
             replaceLength = 0
@@ -1575,6 +1576,14 @@ final class AutocompleteEngine {
         guard let buffer = candidateBuffer,
               let context = AXCaret.currentContext() else { return }
         let before = context.textBefore
+        let bundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        // Yield to the higher-priority sources (fix-carryover, recall): both are
+        // nil-guarded on `currentSuggestion` in `requestSuggestion`, which runs
+        // AFTER this — a provisional candidate landing first would block the
+        // user's own phrasing for the keystroke and churn when the LLM swaps it.
+        guard pendingFixContinuation == nil,
+              RecentSentences.shared.continuation(for: before, bundleId: bundleId) == nil
+        else { return }
         guard let swap = buffer.bestMatching(currentBefore: before), !swap.isEmpty,
               swap != currentSuggestion else { return }
         let field = context.fieldScreenRect
