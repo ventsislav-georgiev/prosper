@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.122.4 *(unreleased)*
+## v2.123.0 *(unreleased)*
 
 ### Crash fix — generation task racing the KV cache
 - **Fixed a crash while typing** (`Range requires lowerBound <= upperBound` in
@@ -96,6 +96,85 @@ tag from the now-released section and put it on the new top draft.
   one day). All MLX compute — generation, weight loading, adapter load/unload,
   training — now runs through one process-wide gate, so exactly one evaluation
   touches the GPU at a time.
+
+### Inline autocomplete — typo correction, Cotypist-style
+- **Typos are now corrected inline while you type.** A misspelled word gets a
+  red strike bar with the corrected word in green after it, followed by the
+  gray continuation — Tab accepts just the corrected word, and the suggestion
+  keeps flowing from there instead of restarting.
+- A suggestion that is a close edit of the word you just typed (same first
+  letter, a letter or two off, not in the dictionary) is treated as a
+  correction of that word instead of being glued on as a spaced new word.
+- Abbreviation-like tokens the system spell checker tolerates (e.g. "tte")
+  now get a proper fix instead of a garbage spaced suggestion.
+
+### Inline autocomplete — steadier, smarter ghost
+- **The ghost is now visually static while you type through it.** Its glyphs
+  are laid out once; typing a matching key or accepting with Tab just turns
+  the consumed prefix transparent in place — no wiggle, no re-layout, no
+  breathing. Backspace un-consumes, and deleting then retyping no longer
+  swaps in a different suggestion.
+- **The ghost extends itself instead of running dry:** when you've nearly
+  typed through it, a continuation is appended in place and the panel grows —
+  no gap while a new suggestion is fetched.
+- **Sentences you've already written this session complete instantly** — a
+  retyped opening recalls the rest of the sentence with no model call. The
+  recall buffer is per-app and never leaves the machine.
+- **Suggestions are constrained to your keyboard languages.** The model can
+  only produce words in the languages you actually have input sources for
+  (e.g. English + Bulgarian), and Russian-lookalike words are rejected when
+  your languages say Bulgarian.
+- Suggestions now appear only at the end of a line — never injected into the
+  middle of a sentence you're still editing.
+- Every suggestion attempt now has a hard ~1 second budget; slow retry
+  ladders are cut off instead of arriving after you've moved on.
+- The ghost now positions correctly in more apps: a per-character glyph
+  mirror handles fields that report no caret geometry, and full-screen
+  auxiliary windows are supported.
+- Accepting a word with Tab no longer makes the remaining text jiggle.
+
+### System Stats — sensors & fan control
+- **Temperature sensors now have proper names** matching exelban/Stats:
+  Airflow left/right, NAND, Battery 1/2, Airport, per-core CPU efficiency/
+  performance labels — plus synthetic "Average CPU/GPU" and "Hottest CPU/GPU"
+  rows.
+- **Temperature kill-switch for manual fans:** if any sensor reaches 95 °C
+  while fans are manually pinned, the helper unconditionally returns them to
+  macOS control.
+- **Manual fan control now notices when macOS takes the fans back** (thermal
+  event, sleep). The helper re-asserts your target once; if the OS insists,
+  the UI honestly flips to Automatic with a note instead of showing a manual
+  state that isn't real.
+- **Fan RPM feedback is faster:** while manual control is on, the readout
+  updates every refresh tick, so the ramp is visible immediately.
+- **New opt-in "Fast manual fan re-engage"** checkbox (Sensors settings,
+  default off): keeps the fan controller unlocked after switching back to
+  Automatic so re-enabling Manual is near-instant instead of ~8 s. The held
+  unlock is supervised by the helper and fully released on quit, sleep or
+  disable.
+- Performance round: fixed a mach-port leak in the CPU sampler, cached GPU
+  and sensor lookups on the per-tick hot path, and added hot-path budget
+  tests.
+
+### Menu bar management — ordering that doesn't fight you
+- **Reordering passes are now non-disruptive:** they run only while the mouse
+  is quiet, skip the cursor entirely when nothing needs moving, and your own
+  drag-reorders (and newly appeared icons) are adopted into the saved order
+  instead of being fought and reverted.
+- Fixed icons becoming click-through after an ordering pass, a race with
+  chevron-collapse, ordering churn from unstable icon fingerprints, and
+  battery-wasting passes when nothing changed.
+
+### Open lid / power — helper hardening
+- Keep-awake status HUD now reports the real state, including a new watch
+  mode; fixed a stuck sleep latch, wake re-assert of the lid override, a
+  keychain race on the account tag, XPC double-close spam, and a stale
+  "Sleep now" settings pane.
+
+### Window layouts — polish
+- Layout palette position names fixed (e.g. "Center"), drag-start preference
+  snapshots so mid-drag settings changes can't corrupt a drop, and zone
+  geometry made deterministic (preview now always matches the drop).
 
 ## v2.122.3
 
