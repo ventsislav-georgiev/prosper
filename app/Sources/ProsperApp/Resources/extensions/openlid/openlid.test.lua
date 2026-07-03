@@ -350,4 +350,23 @@ do
     h.eq(state(host).lidSleepDisabled, false, "stale flag cleared in state")
 end
 
+-- ── Menubar icon is always exactly ONE glyph (fixed menu-bar width) ───────────
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    local function icon() G.on_tick(""); return env.menu.title end
+    h.eq(icon(), "\u{1F4A4}", "all off = single sleep glyph")
+    G.openlid_toggle("")                                     -- Mac awake
+    h.eq(icon(), "\u{1F513}", "Mac awake only = single unlock glyph")
+    G.openlid_caffeine("")                                   -- + display awake
+    h.eq(icon(), "\u{26A1}", "both = single bolt glyph, never a pair")
+    G.openlid_toggle("")                                     -- Mac off, display stays
+    h.eq(icon(), "\u{2615}", "display awake only = single cup glyph")
+    G.openlid_caffeine("")                                   -- all off again
+    h.eq(icon(), "\u{1F4A4}", "back to sleep glyph")
+    -- No countdown suffix even with a timed session (width must not vary).
+    G.on_menu_on(host.json.encode { secs = 1800 })
+    h.eq(icon(), "\u{1F513}", "timed session shows the bare glyph, no countdown text")
+end
+
 print("ok openlid")

@@ -146,14 +146,6 @@ local function fmt_remaining(endTime)
 end
 local function format_remaining(s) return s.endTime and fmt_remaining(s.endTime) or "∞" end
 
--- The earliest pending expiry across both features (for the menubar countdown).
-local function soonest(s)
-    local a = s.active and s.endTime or nil
-    local b = s.caffeine and s.caffeineEnd or nil
-    local e = (a and b) and math.min(a, b) or (a or b)
-    return e and fmt_remaining(e) or nil
-end
-
 -- Human-facing status text (toasts, menu, status HUD) — describes what the Mac
 -- is doing now, not the internal flags. Two independent features, each named by
 -- the thing it keeps awake so they read apart at a glance:
@@ -287,13 +279,17 @@ local function render(s)
     -- render runs on every event + countdown tick, so read only the one pref it
     -- needs (a full cfg() here was 7 prefs.get to learn one bool).
     if not pref_bool("show_menu_icon", DEFAULTS.show_menu_icon) then host.menubar.remove("main"); return end
+    -- Always exactly ONE glyph (no countdown suffix, no icon pairs) so the
+    -- status item never changes width and the menu bar doesn't reflow.
     local title
-    if not (s.active or s.caffeine) then
-        title = "\u{1F4A4}" -- 💤
+    if s.active and s.caffeine then
+        title = "\u{26A1}" -- ⚡ both: Mac + display awake
+    elseif s.active then
+        title = "\u{1F513}" -- 🔓 Mac awake (lid closed)
+    elseif s.caffeine then
+        title = "\u{2615}" -- ☕ display awake
     else
-        title = (s.caffeine and "\u{2615}" or "") .. (s.active and "\u{1F513}" or "") -- ☕ / 🔓
-        local r = soonest(s)
-        if r then title = title .. " " .. r end
+        title = "\u{1F4A4}" -- 💤 all off
     end
     host.menubar.set { id = "main", title = title, menu = build_menu(s) }
 end
