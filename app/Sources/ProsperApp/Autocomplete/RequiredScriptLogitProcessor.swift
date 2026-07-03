@@ -47,7 +47,11 @@ final class RequiredScriptLogitProcessor: LogitProcessor {
     func process(logits: MLXArray) -> MLXArray {
         guard target != .unconstrained else { return logits }
         let vocab = logits.dim(-1)
+        // Match the logits dtype (Float16/BFloat16 on device) once per generation —
+        // a Float32 mask would promote the whole [1, vocab] row to Float32 on every
+        // token's add (its sibling NgramBiasLogitProcessor casts for the same reason).
         let mask = bias ?? Self.mask(target: target, vocabSize: vocab, convertIdToToken: convertIdToToken)
+            .asType(logits.dtype)
         bias = mask
         // Additive bias broadcasts [vocab] against the [1, vocab] logits row.
         return logits + mask

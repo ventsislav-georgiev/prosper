@@ -48,7 +48,11 @@ struct NgramModel: Equatable {
 
     /// Sparse logit biases for the current `context` (recent token ids), using the
     /// LONGEST matching suffix that has counts (back-off). Empty when unseen. Each
-    /// bias = `strength * log(count / total)` — a smooth nudge, never a hard force.
+    /// bias = `strength * count / total` — a POSITIVE nudge in `(0, strength]`,
+    /// proportional to how often the user followed this context with that token.
+    /// (NOT `log(count/total)`: that is ≤ 0 for every observed token while the
+    /// untouched rest of the vocabulary sits at 0, which *penalizes* exactly the
+    /// tokens the user types — the inverse of personalization.)
     func biases(context: [Int]) -> [Int: Float] {
         guard !context.isEmpty else { return [:] }
         let hi = min(maxOrder - 1, context.count)
@@ -60,7 +64,7 @@ struct NgramModel: Equatable {
             let total = Float(dist.values.reduce(0, +))
             var out: [Int: Float] = [:]
             for (tok, c) in dist {
-                out[tok] = strength * log(Float(c) / total)
+                out[tok] = strength * Float(c) / total
             }
             return out
         }

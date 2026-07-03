@@ -16,13 +16,13 @@ final class NgramModelTests: XCTestCase {
         XCTAssertTrue(m.biases(context: [99]).isEmpty)
     }
 
-    func testSingleNextIsDeterministicZeroDelta() {
-        // One observed continuation: log(1/1) = 0 → nudge is zero but the token is present.
+    func testSingleNextGetsFullStrengthBoost() {
+        // One observed continuation: probability 1 → the full `strength` nudge.
         var m = NgramModel(maxOrder: 2, strength: 2.0)
         m.train([5, 6])
         let b = m.biases(context: [5])
         XCTAssertEqual(Set(b.keys), [6])
-        XCTAssertEqual(b[6]!, 0.0, accuracy: 1e-6)
+        XCTAssertEqual(b[6]!, 2.0, accuracy: 1e-6)
     }
 
     func testMoreFrequentNextGetsHigherBias() {
@@ -31,7 +31,21 @@ final class NgramModelTests: XCTestCase {
         m.train([1, 2, 1, 2, 1, 2, 1, 3])
         let b = m.biases(context: [1])
         XCTAssertNotNil(b[2]); XCTAssertNotNil(b[3])
-        XCTAssertGreaterThan(b[2]!, b[3]!)  // 2 is more likely → less-negative logprob
+        XCTAssertGreaterThan(b[2]!, b[3]!)  // 2 is more likely → bigger boost
+    }
+
+    /// Personalization must BOOST the user's observed tokens relative to the rest of
+    /// the vocabulary (which stays at 0): every bias positive, capped at `strength`.
+    /// Guards the sign inversion where `log(count/total) ≤ 0` pushed the user's own
+    /// tokens BELOW untouched vocab.
+    func testBiasesArePositiveAndBounded() {
+        var m = NgramModel(maxOrder: 2, strength: 2.0)
+        m.train([1, 2, 1, 2, 1, 3])
+        let b = m.biases(context: [1])
+        for (_, v) in b {
+            XCTAssertGreaterThan(v, 0)
+            XCTAssertLessThanOrEqual(v, 2.0)
+        }
     }
 
     func testLongestSuffixWins() {

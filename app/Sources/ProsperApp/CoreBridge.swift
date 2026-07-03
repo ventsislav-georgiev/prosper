@@ -977,7 +977,11 @@ enum CoreBridge {
         guard n.count >= 8 else { return false }
         if samples.contains(where: { norm($0).contains(n) }) { return true }
         // Instruction-header leak: the suggestion IS (a prefix of) an injected marker.
-        return instructionEchoMarkers.contains { $0.hasPrefix(n) || n.hasPrefix($0) }
+        // A truncated echo must cover most of the marker — a lone real word that
+        // happens to open one ("clipboard" vs "clipboardcontext") is not an echo.
+        return instructionEchoMarkers.contains { marker in
+            n.hasPrefix(marker) || (marker.hasPrefix(n) && n.count * 4 >= marker.count * 3)
+        }
     }
 
     /// True when the suggestion is a verbatim copy of text visible on screen (the
@@ -1532,6 +1536,13 @@ enum CoreBridge {
     /// NSSpellChecker wants the main thread — call via MainActor (the ladder does).
     /// ponytail: bg-vs-ru hardcoded — the one real confusable pair; generalize to
     /// a per-language matrix if another Cyrillic layout ever ships.
+    /// Per-word verdict memo for `containsRussianOnlyCyrillicWord`. The gate runs
+    /// per ladder rung (and per candidate with n-best on) on the completion path,
+    /// and each miss costs up to two synchronous main-thread spell checks — the
+    /// same words recur constantly while typing, so cache verdicts. Capped; a
+    /// full cache just resets (session-scoped scratch, not a durable store).
+    @MainActor private static var russianWordVerdicts: [String: Bool] = [:]
+
     @MainActor
     static func containsRussianOnlyCyrillicWord(_ s: String) -> Bool {
         let checker = NSSpellChecker.shared
@@ -1546,7 +1557,14 @@ enum CoreBridge {
             let scalars = word.unicodeScalars
             guard scalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) }) else { continue }
             let w = String(word)
-            if !isWord(w, "bg"), isWord(w, "ru") { return true }
+            if let cached = russianWordVerdicts[w] {
+                if cached { return true }
+                continue
+            }
+            let verdict = !isWord(w, "bg") && isWord(w, "ru")
+            if russianWordVerdicts.count >= 4096 { russianWordVerdicts.removeAll(keepingCapacity: true) }
+            russianWordVerdicts[w] = verdict
+            if verdict { return true }
         }
         return false
     }

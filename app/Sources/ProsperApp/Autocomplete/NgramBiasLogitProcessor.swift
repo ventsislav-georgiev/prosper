@@ -10,8 +10,8 @@ import MLXLMCommon
 /// It tracks the rolling generation context (`prompt` seeds it from the prompt tail,
 /// `didSample` appends), queries `model.biases(context:)`, and adds those sparse
 /// deltas to the matching logit positions. Gated + experimental: only on the opt-in
-/// path, and the per-token dense bias build is O(vocab) — acceptable for tuning, and
-/// skipped entirely when the context has no biases.
+/// path; the per-token cost is O(k) in the biased-token count (sparse indexed add),
+/// and skipped entirely when the context has no biases.
 ///
 /// `@unchecked Sendable`: created on the `MLXEngine` actor, used only inside one
 /// serialized `container.perform` decode loop.

@@ -183,8 +183,9 @@ final class AutocompleteEngine {
     }
     private(set) var noShowCounts: [NoShowReason: Int] = [:]
     private func recordNoShow(_ reason: NoShowReason) {
-        noShowCounts[reason, default: 0] += 1
-        Self.e2elog("no-show: \(reason.rawValue) [\(noShowCounts[reason]!)]")
+        let count = noShowCounts[reason, default: 0] + 1
+        noShowCounts[reason] = count
+        Self.e2elog("no-show: \(reason.rawValue) [\(count)]")
     }
 
     // Keycodes.
@@ -752,6 +753,12 @@ final class AutocompleteEngine {
         guard let ghost = currentSuggestion, !ghost.isEmpty,
               !isFix, replaceLength == 0,
               let anchor = requestBefore,
+              // Single-flight: a live request (recall-ghost refresh, typo-fix
+              // carry-over) already owns `requestToken`/`completionTask` — firing
+              // an extension under the SAME token would leak that task uncancelled
+              // and let two callbacks land for one token. Let it finish; the next
+              // type-through re-attempts the extension.
+              inFlightAnchor == nil,
               ghost.count < 160 else { return }
         let remainingWords = ghost.split(whereSeparator: { $0.isWhitespace }).count
         guard remainingWords < 4 else { return }

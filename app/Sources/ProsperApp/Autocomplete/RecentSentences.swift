@@ -19,23 +19,34 @@ final class RecentSentences {
     private let cap = 200
 
     /// Characters that end a sentence. Newlines count: a line the user finished
-    /// is as re-typeable as a sentence.
-    nonisolated private static let terminators = CharacterSet(charactersIn: ".!?\n")
+    /// is as re-typeable as a sentence. Direct comparison, not `CharacterSet` —
+    /// this runs per character per keystroke and the ObjC bridge is ~10× slower.
+    nonisolated private static func isTerminator(_ ch: Character) -> Bool {
+        ch == "." || ch == "!" || ch == "?" || ch == "\n"
+    }
+
+    /// The terminated region last harvested. Between terminator keystrokes only
+    /// the unfinished tail changes, so re-splitting + re-deduping the same ~600
+    /// chars every keystroke is pure waste — skip when the region is unchanged.
+    private var lastHarvestedRegion = ""
 
     /// Harvest completed sentences from the text before the caret. Only the last
     /// ~600 chars are scanned (older text was ingested by earlier requests).
     /// The trailing unterminated fragment is NOT stored — it is still being typed.
     func ingest(before: String) {
         let window = String(before.suffix(600))
+        guard let lastTerm = window.lastIndex(where: Self.isTerminator) else { return }
+        let region = String(window[...lastTerm])
+        guard region != lastHarvestedRegion else { return }
+        lastHarvestedRegion = region
         var sentence = ""
-        for ch in window {
+        for ch in region {
             sentence.append(ch)
-            if ch.unicodeScalars.allSatisfy({ Self.terminators.contains($0) }) {
+            if Self.isTerminator(ch) {
                 add(sentence)
                 sentence = ""
             }
         }
-        // `sentence` now holds the unfinished tail — deliberately dropped.
     }
 
     private func add(_ raw: String) {
@@ -73,7 +84,7 @@ final class RecentSentences {
     nonisolated static func currentFragment(of before: String) -> String {
         var fragment = ""
         for ch in before.reversed() {
-            if ch.unicodeScalars.allSatisfy({ terminators.contains($0) }) { break }
+            if isTerminator(ch) { break }
             fragment.append(ch)
         }
         return String(fragment.reversed()).trimmingCharacters(in: .whitespaces)

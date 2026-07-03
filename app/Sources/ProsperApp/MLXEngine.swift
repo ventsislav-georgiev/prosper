@@ -998,7 +998,15 @@ actor MLXEngine {
                 // included, since `decode` keeps them). `<tool_call>…</tool_call>`
                 // therefore reaches `ToolCallParser` intact.
                 var emitted = ""
+                // Maintained incrementally — `String.count` is O(n) and this loop is
+                // per-token, so recomputing it each token makes long turns quadratic.
+                var emittedCount = 0
                 var sentCount = 0
+                // Stop-sequence scan window: a match can only involve the new chunk
+                // plus (maxStopLen - 1) chars of overlap from the previous chunks, so
+                // scanning the whole growing `emitted` per token (O(n²) over a long
+                // agent turn) is wasted work.
+                let maxStopLen = stop.lazy.map { $0.count }.max() ?? 0
                 var generated: [Int] = []
                 var detokenizer = NaiveStreamingDetokenizer(tokenizer: context.tokenizer)
                 // Task-returning variant (see `generate()`): after a `break outer`
@@ -1020,10 +1028,13 @@ actor MLXEngine {
                     detokenizer.append(token: token)
                     guard let chunk = detokenizer.next() else { continue }
                     emitted += chunk
-                    if !stop.isEmpty {
+                    emittedCount += chunk.count
+                    if maxStopLen > 0 {
+                        let windowChars = min(emittedCount, chunk.count + maxStopLen - 1)
+                        let windowStart = emitted.index(emitted.endIndex, offsetBy: -windowChars)
                         var cutAt: String.Index? = nil
                         for s in stop where !s.isEmpty {
-                            if let r = emitted.range(of: s) {
+                            if let r = emitted.range(of: s, range: windowStart..<emitted.endIndex) {
                                 if cutAt == nil || r.lowerBound < cutAt! { cutAt = r.lowerBound }
                             }
                         }
@@ -1037,7 +1048,7 @@ actor MLXEngine {
                         }
                     }
                     continuation.yield(chunk)
-                    sentCount = emitted.count
+                    sentCount = emittedCount
                 }
 
                 // Join the producer BEFORE reading `cache.offset` or handing the
@@ -1227,7 +1238,16 @@ actor MLXEngine {
                     convertIdToToken: { context.tokenizer.convertIdToToken($0) }))
             }
             if let ngramModel {
-                stages.append(NgramBiasLogitProcessor(model: ngramModel, promptTail: promptTokens))
+                // Seed the rolling context from the RAW user text, not the templated
+                // prompt tokens: the template ends in chat markers (`<start_of_turn>
+                // model` etc.), which never occur in the raw-text training corpus, so
+                // a promptTail seed leaves the bias inert for precisely the first
+                // decoded tokens — the ghost's head, personalization's main shot.
+                // One tiny encode per request (not per token); 48 chars is plenty for
+                // a (maxOrder-1)-token window and keeps BPE boundary effects at the
+                // cut away from the tail.
+                let rawTail = context.tokenizer.encode(text: String(prompt.suffix(48)))
+                stages.append(NgramBiasLogitProcessor(model: ngramModel, promptTail: rawTail))
             }
             if let recorder { stages.append(recorder) }
             let composed: LogitProcessor? = stages.reduce(nil) { acc, next in
