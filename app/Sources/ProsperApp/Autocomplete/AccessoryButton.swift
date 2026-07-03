@@ -110,15 +110,15 @@ final class AccessoryButton {
         // Panel/hit-box size. The glyph stays 12pt — the extra points are click
         // padding (a 14pt target was too fiddly to hit).
         let size: CGFloat = 20
-        // Sit at the LEFT edge of the field, hugging the line start (fields pad
-        // their text, so the icon rides the padding without covering glyphs).
-        // Clamp to the screen's left edge so it can't be pushed off-screen when
-        // the field hugs the display edge.
+        // Sit just LEFT of the field, close but fully outside — riding the field's
+        // padding clipped the first glyphs in tight composers (Slack). Clamp to
+        // the screen's left edge so it can't be pushed off-screen when the field
+        // hugs the display edge.
         let screenLeft = NSScreen.screens
             .first(where: { $0.frame.intersects(fieldRect) })?
             .visibleFrame.minX
             ?? NSScreen.main?.visibleFrame.minX ?? 0
-        let x = max(screenLeft + 1, fieldRect.minX - size + 2)
+        let x = max(screenLeft + 1, fieldRect.minX - size - 2)
         // Vertical line center. When a caret rect is known, align to the actual
         // glyph line: AppKit text views report a caret box ~half a line-height
         // above the rendered text, so the true line center is `minY - height/2`
