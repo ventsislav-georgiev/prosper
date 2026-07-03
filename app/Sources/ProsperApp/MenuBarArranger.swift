@@ -216,9 +216,16 @@ enum MenuBarArranger {
                                       hiddenKeys: [String], alwaysHiddenKeys: [String]) async {
         guard !hiddenKeys.isEmpty || !alwaysHiddenKeys.isEmpty else { return }
         let hidden = Set(hiddenKeys), always = Set(alwaysHiddenKeys)
-        // Live key → window for the items we just ordered.
+        // Live key → window for the items we just ordered. Reuse the hashes the
+        // preceding applyMoves pass indexed (windowIDs are stable through moves) —
+        // a fresh ScreenCaptureKit pass here would be a straight duplicate. Only
+        // re-capture when the cache doesn't cover the live bar (fast-exit path
+        // where no applyMoves ran this session).
         let items = currentItems()
-        let hashes = await MenuBarItemIndexer.hashes(for: items)
+        var hashes = lastIndexedHashes
+        if items.contains(where: { hashes[$0.windowID] == nil }) {
+            hashes = await MenuBarItemIndexer.hashes(for: items)
+        }
         var win: [String: MenuBarItem] = [:]
         for it in items {
             let k = identity(for: it, hash: hashes[it.windowID]).key

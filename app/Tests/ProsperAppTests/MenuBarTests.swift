@@ -349,15 +349,17 @@ final class MenuBarTests: XCTestCase {
         let desired = [ident("x", "h1"), ident("x", "h2"),
                        ident("x", "a"), ident("x", "b"), ident("x", "c")]
         let out = MenuBarOrderDiff.adoptLiveOrder(desired: desired,
-                                                  liveKeys: ["x#b", "x#a", "x#c"])
-        XCTAssertEqual(out.map(\.key), ["x#h1", "x#h2", "x#b", "x#a", "x#c"],
+                                                  liveKeys: ["x#b", "x#a", "x#c"],
+                                                  hiddenDividerIndex: 2)
+        XCTAssertEqual(out.order.map(\.key), ["x#h1", "x#h2", "x#b", "x#a", "x#c"],
                        "live subset follows live order; hidden entries keep their slots")
+        XCTAssertEqual(out.hiddenDividerIndex, 2, "off-screen hidden entries keep the divider")
     }
 
     func testAdoptLiveOrderNoChangeIsIdentity() {
         let desired = [ident("x", "a"), ident("x", "b")]
         XCTAssertEqual(MenuBarOrderDiff.adoptLiveOrder(desired: desired,
-                                                       liveKeys: ["x#a", "x#b"]),
+                                                       liveKeys: ["x#a", "x#b"]).order,
                        desired)
     }
 
@@ -366,7 +368,39 @@ final class MenuBarTests: XCTestCase {
         let desired = [ident("x", "a"), ident("x", "b")]
         let out = MenuBarOrderDiff.adoptLiveOrder(desired: desired,
                                                   liveKeys: ["x#new", "x#b", "x#a"])
-        XCTAssertEqual(out.map(\.key), ["x#b", "x#a"])
+        XCTAssertEqual(out.order.map(\.key), ["x#b", "x#a"])
+    }
+
+    func testAdoptRevealedDragOutOfHiddenShrinksDivider() {
+        // Bar revealed (hidden items live). User drags h2 out to the visible end:
+        // the order follows AND the divider shrinks — keeping the old index would
+        // have re-hidden `a`, which merely inherited h2's prefix slot.
+        let desired = [ident("x", "h1"), ident("x", "h2"), ident("x", "a"), ident("x", "b")]
+        let out = MenuBarOrderDiff.adoptLiveOrder(
+            desired: desired, liveKeys: ["x#h1", "x#a", "x#b", "x#h2"],
+            liveHiddenKeys: ["x#h1"], hiddenDividerIndex: 2)
+        XCTAssertEqual(out.order.map(\.key), ["x#h1", "x#a", "x#b", "x#h2"])
+        XCTAssertEqual(out.hiddenDividerIndex, 1)
+    }
+
+    func testAdoptRevealedDragIntoHiddenGrowsDivider() {
+        let desired = [ident("x", "h1"), ident("x", "a"), ident("x", "b")]
+        let out = MenuBarOrderDiff.adoptLiveOrder(
+            desired: desired, liveKeys: ["x#b", "x#h1", "x#a"],
+            liveHiddenKeys: ["x#b", "x#h1"], hiddenDividerIndex: 1)
+        XCTAssertEqual(out.order.map(\.key), ["x#b", "x#h1", "x#a"])
+        XCTAssertEqual(out.hiddenDividerIndex, 2)
+    }
+
+    func testAdoptCollapsedVisibleSwapKeepsDivider() {
+        // Collapsed: hidden entries are off-screen (not live), user swaps two
+        // visible icons. Divider must not move.
+        let desired = [ident("x", "h1"), ident("x", "h2"), ident("x", "a"), ident("x", "b")]
+        let out = MenuBarOrderDiff.adoptLiveOrder(
+            desired: desired, liveKeys: ["x#b", "x#a"],
+            liveHiddenKeys: [], hiddenDividerIndex: 2)
+        XCTAssertEqual(out.order.map(\.key), ["x#h1", "x#h2", "x#b", "x#a"])
+        XCTAssertEqual(out.hiddenDividerIndex, 2)
     }
 
     func testMergeNewItemInsertsAfterItsLiveLeftNeighbor() {

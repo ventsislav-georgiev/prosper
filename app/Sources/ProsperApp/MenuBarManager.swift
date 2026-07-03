@@ -275,7 +275,13 @@ final class MenuBarManager: NSObject {
         rehideTimer?.invalidate()
         let secs = TimeInterval(Preferences.menuBarStore.clampedAutoRehide)
         rehideTimer = Timer.scheduledTimer(withTimeInterval: secs, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setRevealed(false) }
+            MainActor.assumeIsolated {
+                // Never collapse under an in-flight ordering pass — expanding the
+                // separator mid-batch shifts every frame the mover is about to use.
+                // Re-arm and try again once the bar is at rest.
+                if MenuBarArranger.isApplying { self?.scheduleRehide() }
+                else { self?.setRevealed(false) }
+            }
         }
     }
 
@@ -285,15 +291,16 @@ final class MenuBarManager: NSObject {
     /// idle cost.
     private func startRevealMonitors() {
         stopRevealMonitors()
-        outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { _ in
+        outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
             MainActor.assumeIsolated {
-                // A reorder pass posts a SYNTHETIC mouse-down off-bar (the cursor is
-                // parked off-screen for the ⌘-drag) — that is not a real outside click
-                // and must never collapse a section the user opened. While any apply is
-                // in flight (live tick or on-demand reveal), leave the reveal alone; the
-                // section hides only on a genuine outside click, a divider re-click, or
-                // the auto-rehide timer.
-                if MenuBarArranger.isApplying { return }
+                // A reorder pass posts SYNTHETIC mouse events off-bar (the cursor is
+                // parked off-screen for the ⌘-drag) — those are not real outside clicks
+                // and must never collapse a section the user opened. Ours all carry a
+                // nonzero eventSourceUserData (stamped by the mover); real user clicks
+                // default to 0. Filtering per-event (instead of ignoring EVERYTHING
+                // while an apply is in flight) keeps the user's genuine click-outside-
+                // to-hide working even mid-apply.
+                if (event.cgEvent?.getIntegerValueField(.eventSourceUserData) ?? 0) != 0 { return }
                 // A click below the menu-bar strip rehides; clicks ON the bar (to
                 // use a revealed icon) keep it open and re-arm the timer. A GLOBAL
                 // monitor has no associated window, so `event.locationInWindow` is
@@ -409,6 +416,9 @@ final class MenuBarManager: NSObject {
         // shut the instant the user opened it. If the section was already revealed on
         // entry, leave it revealed (its own auto-rehide timer, armed by the click,
         // still governs); only force the collapse when we revealed it ourselves.
+        // NOTE: the 180ms settle is needed even when `revealed` is already true — an
+        // on-reveal correction runs synchronously from the chevron click, while the
+        // separators are still mid-reflow; reading frames early mismoves items.
         isPlacing = true
         defer { isPlacing = false }
         beginPlacement()

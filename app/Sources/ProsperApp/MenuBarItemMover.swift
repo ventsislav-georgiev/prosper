@@ -175,15 +175,35 @@ enum MenuBarItemMover {
         .mouseEventWindowUnderMousePointerThatCanHandleThisEvent, windowIDField,
     ]
 
-    /// Park the cursor (hide + restore afterward) around a BATCH of moves. Doing it
-    /// once per apply pass — instead of once per `move()` — minimizes the window in
-    /// which a crash could leave the system cursor hidden, and avoids per-move
-    /// hide/show flicker. The arranger and self-probe wrap their move loops in this.
+    /// LAZY cursor parking around a BATCH of moves. Entering does NOT touch the
+    /// cursor — a batch where every move early-returns (already positioned / order
+    /// satisfied) must be invisible to the user. The first move that actually posts
+    /// a synthetic drag calls `ensureParked()` (hide + remember position); batch
+    /// exit restores only if something parked. One park per batch — instead of per
+    /// `move()` — minimizes the window in which a crash could leave the cursor
+    /// hidden and avoids per-move hide/show flicker.
+    private static var batchDepth = 0
+    private static var parkedAt: CGPoint?
+
     static func withCursorParked<T>(_ body: () async throws -> T) async rethrows -> T {
-        guard let location = MoveCursor.location else { return try await body() }
-        MoveCursor.hide()
-        defer { MoveCursor.warp(to: location); MoveCursor.show() }
+        batchDepth += 1
+        defer {
+            batchDepth -= 1
+            if batchDepth == 0, let p = parkedAt {
+                parkedAt = nil
+                MoveCursor.warp(to: p)
+                MoveCursor.show()
+            }
+        }
         return try await body()
+    }
+
+    /// Hide the cursor the moment a real drag is about to post (no-op when already
+    /// parked, or when called outside a batch — every caller wraps, this is a belt).
+    private static func ensureParked() {
+        guard batchDepth > 0, parkedAt == nil, let location = MoveCursor.location else { return }
+        parkedAt = location
+        MoveCursor.hide()
     }
 
     /// Move `windowID` (owned by `pid`) next to its destination anchor. The CALLER
@@ -195,6 +215,7 @@ enum MenuBarItemMover {
         guard let initialFrame = MenuBarBridge.frame(for: windowID) else { throw MenuBarMoveError.invalidFrame }
         if isAlreadyPositioned(windowID: windowID, destination: destination) { return }
 
+        ensureParked()   // real drag imminent — hide the cursor now (lazy, once per batch)
         var lastError: Error = MenuBarMoveError.didNotMove
         for attempt in 1...5 {
             do {

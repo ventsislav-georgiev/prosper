@@ -2531,13 +2531,18 @@ private struct MenuBarPane: View {
             if clean.count != orderStore.desiredOrder.count { mutateOrder { $0.desiredOrder = clean } }
             refresh()
         }
+        // The enforcer auto-saves in the background (adopts ⌘-drags, merges new
+        // icons) — reflect that live so the editor list never shows a stale order.
+        .onReceive(NotificationCenter.default.publisher(for: MenuBarOrderEnforcer.orderAutoSaved)) { _ in
+            orderStore = Preferences.menuBarOrderStore
+        }
     }
 
     // MARK: - Item ordering (opt-in, version-gated; engine wired in later phases)
 
     @ViewBuilder private var orderingSection: some View {
         NeonSection("Item ordering (experimental)",
-                    footer: "Keeps multi-icon apps (Stats, iStat Menus) in a fixed order across relaunch — the one thing macOS itself loses. Opt-in and version-gated: it only runs where Prosper can drive it reliably. Off does nothing.") {
+                    footer: "Keeps multi-icon apps (Stats, iStat Menus) in a fixed order across relaunch — the one thing macOS itself loses. When you ⌘-drag icons in the real bar (or a new icon appears), the saved order updates itself — no need to re-save here. Opt-in and version-gated: it only runs where Prosper can drive it reliably. Off does nothing.") {
             switch orderingSupport {
             case .unsupportedOS(let message):
                 Text(message)
@@ -2852,7 +2857,10 @@ private struct MenuBarPane: View {
     }
 
     private func mutateOrder(_ change: (inout MenuBarOrderStore) -> Void) {
-        var s = orderStore
+        // Mutate a FRESH read, not the pane's @State copy: the enforcer auto-saves
+        // (adopts user ⌘-drags / merges new icons) in the background while this pane
+        // is open, and writing back a stale snapshot would silently clobber those.
+        var s = Preferences.menuBarOrderStore
         change(&s)
         orderStore = s
         Preferences.menuBarOrderStore = s

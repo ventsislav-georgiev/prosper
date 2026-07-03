@@ -233,11 +233,23 @@ enum MenuBarOrderDiff {
 
     /// Auto-save (adopt) a user-made reorder: re-arrange the entries of `desired`
     /// whose keys appear in `liveKeys` into the live left→right order, keeping every
-    /// other entry (hidden/off-screen/quit apps) at its exact position. Pure — the
-    /// enforcer calls this when it detects a same-membership permutation of the bar
-    /// (only a user ⌘-drag produces that) so the saved order follows the user
-    /// instead of fighting them.
-    static func adoptLiveOrder(desired: [MenuBarIdentity], liveKeys: [String]) -> [MenuBarIdentity] {
+    /// other entry (off-screen/quit apps) at its exact position. Pure — the enforcer
+    /// calls this when it detects a same-membership permutation of the bar (only a
+    /// user ⌘-drag produces that) so the saved order follows the user instead of
+    /// fighting them.
+    ///
+    /// `liveHiddenKeys` = keys of live items physically in a non-visible band (only
+    /// non-empty while the bar is revealed; collapsed bands aren't enumerated). The
+    /// divider is recomputed from it: a revealed ⌘-drag ACROSS the divider changes
+    /// which items are hidden, and keeping the old index would re-hide whichever
+    /// innocent entry inherited the prefix slot on the next apply. Classification:
+    /// live entries by their physical band, non-live entries by their old side of
+    /// the divider (they're off-screen — can't have moved). Hidden-live items always
+    /// sort leftmost (bands are x-ordered), so the hidden set stays a prefix.
+    static func adoptLiveOrder(desired: [MenuBarIdentity], liveKeys: [String],
+                               liveHiddenKeys: Set<String> = [],
+                               hiddenDividerIndex: Int? = nil)
+        -> (order: [MenuBarIdentity], hiddenDividerIndex: Int?) {
         // keep-first on duplicates: two unindexed same-bundle items share a
         // degenerate key and must not trap the dictionary build.
         let rank = Dictionary(liveKeys.enumerated().map { ($1, $0) },
@@ -247,7 +259,18 @@ enum MenuBarOrderDiff {
         let sorted = slots.map { desired[$0] }.sorted { (rank[$0.key] ?? 0) < (rank[$1.key] ?? 0) }
         var out = desired
         for (slot, item) in zip(slots, sorted) { out[slot] = item }
-        return out
+
+        let oldDivider = hiddenDividerIndex ?? 0
+        let liveSet = Set(liveKeys)
+        var hiddenCount = 0
+        for (i, entry) in desired.enumerated() {
+            if liveSet.contains(entry.key) {
+                if liveHiddenKeys.contains(entry.key) { hiddenCount += 1 }
+            } else if i < oldDivider {
+                hiddenCount += 1
+            }
+        }
+        return (out, hiddenCount == 0 ? nil : hiddenCount)
     }
 
     /// Auto-save newly-appeared icons: insert each `live` identity (left→right) whose

@@ -93,6 +93,13 @@ final class MenuBarOrderEnforcer {
     /// Cheap: three counter reads + a button-state read, no event tap.
     nonisolated static func userMouseActive(within seconds: Double = 1.0) -> Bool {
         if CGEventSource.buttonState(.combinedSessionState, button: .left) { return true }
+        // Modifier held (⌘-shortcut, ⌘-drag about to start): the mover refuses to
+        // drag against held modifiers anyway (modifiersHeld error → breaker food), so
+        // defer the whole tick instead of burning a doomed apply pass.
+        if !CGEventSource.flagsState(.combinedSessionState)
+            .intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate]).isEmpty {
+            return true
+        }
         let types: [CGEventType] = [.mouseMoved, .leftMouseDragged, .scrollWheel]
         return types.contains {
             CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) < seconds
@@ -148,8 +155,19 @@ final class MenuBarOrderEnforcer {
         // `previous` can't be a mid-apply frame). Adopt the live order into the saved
         // one and do NOT enforce — the user just told us what they want.
         if let previous, previous != order, Set(previous) == Set(order) {
-            store.desiredOrder = MenuBarOrderDiff.adoptLiveOrder(desired: store.desiredOrder,
-                                                                 liveKeys: curKeys)
+            // Physical band per live item (only meaningful while revealed; collapsed
+            // bands aren't enumerated so this is empty then, and the divider keeps
+            // counting the off-screen entries by their old side). Lets a revealed
+            // ⌘-drag ACROSS the divider auto-save its new hidden/visible membership.
+            let liveHidden = Set(MenuBarManager.shared.sectionedItems()
+                .filter { $0.section != .visible }
+                .map { MenuBarArranger.identity(for: $0.item, hash: hashes[$0.item.windowID]).key })
+            let adopted = MenuBarOrderDiff.adoptLiveOrder(desired: store.desiredOrder,
+                                                          liveKeys: curKeys,
+                                                          liveHiddenKeys: liveHidden,
+                                                          hiddenDividerIndex: store.hiddenDividerIndex)
+            store.desiredOrder = adopted.order
+            store.hiddenDividerIndex = adopted.hiddenDividerIndex
             persistStore()
             return
         }
@@ -234,10 +252,15 @@ final class MenuBarOrderEnforcer {
         }
     }
 
+    /// Posted after an auto-save (adopt / merge) writes the order store, so an open
+    /// Settings pane can re-read instead of showing a stale list.
+    static let orderAutoSaved = Notification.Name("ProsperMenuBarOrderAutoSaved")
+
     /// Persist an auto-saved store mutation (adopt / merge). Writes Preferences so
-    /// it survives relaunch; the Settings pane re-reads on open.
+    /// it survives relaunch; notifies any open Settings pane.
     private func persistStore() {
         Preferences.menuBarOrderStore = store
+        NotificationCenter.default.post(name: Self.orderAutoSaved, object: nil)
     }
 
     /// True when running on battery (gentler cadence). Fail-open to AC on error.
