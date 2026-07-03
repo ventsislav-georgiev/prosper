@@ -114,6 +114,37 @@ final class AutocompleteWordBoundaryTests: XCTestCase {
         XCTAssertEqual(AutocompleteEngine.ghostLineCenterY(caret: caret, field: nil), 190)
     }
 
+    func testCrossLanguageGlueStillGetsSpace() {
+        // "bro" + "is" glues to "brois" — a word in SOME installed dictionary,
+        // which the auto-identifying checker tolerated (live report: Tab after
+        // the brw→bro fix wrote "the quick brois "). ASCII glue must be judged
+        // by the lexicon + primary language, so the space survives.
+        XCTAssertEqual(
+            AutocompleteEngine.applyWordBoundary(before: "the quick bro", suggestion: "is always"),
+            " is always"
+        )
+        // Genuine mid-word ASCII continuation still glues (English word).
+        XCTAssertEqual(
+            AutocompleteEngine.applyWordBoundary(before: "the quick brow", suggestion: "n fox"),
+            "n fox"
+        )
+    }
+
+    // MARK: - End-of-line gate (caretAtLineEnd)
+
+    func testCaretAtLineEndGate() {
+        // Empty tail / trailing spaces / newline right after → line end.
+        XCTAssertTrue(AutocompleteEngine.caretAtLineEnd(after: ""))
+        XCTAssertTrue(AutocompleteEngine.caretAtLineEnd(after: "   "))
+        XCTAssertTrue(AutocompleteEngine.caretAtLineEnd(after: "\nnext line text"))
+        XCTAssertTrue(AutocompleteEngine.caretAtLineEnd(after: "  \nmore"))
+        // Any text or punctuation before the newline → mid-sentence, suppress.
+        XCTAssertFalse(AutocompleteEngine.caretAtLineEnd(after: "word"))
+        XCTAssertFalse(AutocompleteEngine.caretAtLineEnd(after: " word"))
+        XCTAssertFalse(AutocompleteEngine.caretAtLineEnd(after: "."))
+        XCTAssertFalse(AutocompleteEngine.caretAtLineEnd(after: ", rest of sentence\nnext"))
+    }
+
     func testWordAfterClausePunctuationGetsSpace() {
         XCTAssertEqual(
             AutocompleteEngine.applyWordBoundary(before: "wait,", suggestion: "and then"),

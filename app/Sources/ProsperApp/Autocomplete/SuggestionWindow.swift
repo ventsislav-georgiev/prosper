@@ -86,6 +86,7 @@ final class SuggestionWindow {
         strikeBar.isHidden = true // fix-only decoration (see showFix)
         ghostFull = text
         ghostConsumed = 0
+        ghostFieldRect = fieldRect
         var display = text
         var leadingGap: CGFloat = 0
         if display.hasPrefix(" ") {
@@ -134,6 +135,9 @@ final class SuggestionWindow {
     private var ghostFull: String = ""
     private var ghostConsumed: Int = 0
     private var ghostStrippedLeading: Int = 0
+    // Field bounds captured at anchor time, so a later extension clamps its
+    // grown width against the same field edge the original layout used.
+    private var ghostFieldRect: CGRect?
 
     /// The user typed the next `n` predicted characters: make them transparent
     /// in place. NOTHING moves — the frame and the remaining glyphs keep their
@@ -143,6 +147,29 @@ final class SuggestionWindow {
         guard panel.isVisible, !ghostFull.isEmpty else { return }
         ghostConsumed = min(ghostConsumed + n, ghostFull.count)
         applyGhostColors()
+    }
+
+    /// Appends text to the anchored ghost WITHOUT touching the existing layout:
+    /// the frame origin, the consumed prefix, and every glyph already on screen
+    /// keep their exact positions — the panel only grows to the right. This is
+    /// how the ghost stays LONG while the user types toward its end (Cotypist
+    /// parity): the model's continuation of the ghost attaches to it instead of
+    /// a fresh suggestion replacing it.
+    func extendGhost(appending text: String) {
+        guard panel.isVisible, !ghostFull.isEmpty, !text.isEmpty else { return }
+        ghostFull += text
+        applyGhostColors()
+        label.sizeToFit()
+        let natural = label.frame.size.width
+        var frame = panel.frame
+        let width = max(frame.width, clampedWidth(
+            naturalWidth: natural + 4, startX: frame.origin.x, fieldRect: ghostFieldRect
+        ))
+        frame.size.width = width
+        panel.setFrame(frame, display: true)
+        label.frame = NSRect(
+            x: 0, y: label.frame.origin.y, width: width, height: label.frame.height
+        )
     }
 
     /// Reverse of `consumeGhost` for a single backspace. Returns false when

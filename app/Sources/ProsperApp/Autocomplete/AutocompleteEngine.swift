@@ -50,6 +50,19 @@ final class AutocompleteEngine {
     // Reset to false each time a fresh completion is shown.
     private var abAcceptedForCurrent = false
 
+    // One-shot carry-over of a typo fix's gray continuation across the Tab
+    // word-accept: the user was already reading it, so the re-suggest after the
+    // corrected word renders IT instantly instead of asking the model for a
+    // fresh (different) answer. `expectSuffix` is the text the accept injected;
+    // the next request only serves the carry-over if the live text still ends
+    // with it (anything else means the user typed on and it's stale).
+    private var pendingFixContinuation: (expectSuffix: String, text: String)?
+
+    // Prompt of the last ghost-extension request fired (live text + remaining
+    // ghost), so consuming several keystrokes near the ghost's end fires ONE
+    // extension per ghost state instead of one per keystroke.
+    private var ghostExtensionPrompt: String?
+
     // Single-flight token: increments on each new request; stale results ignored.
     private var requestToken: UInt64 = 0
 
@@ -660,16 +673,17 @@ final class AutocompleteEngine {
                     // ghost absorbed keeps the SAME ghost. Scheduling a refresh here
                     // swapped it for a different temp-1.0 sample every ~200ms while
                     // the user was following it — pure flicker (live trace + user
-                    // report). Refresh only when the ghost is nearly consumed, so
-                    // the next suggestion lands right as this one runs out; and
-                    // disarm any pending pause-snap so it can't swap a healthy ghost.
-                    // Lexicon ghosts (requestBefore == nil) are provisional — they
-                    // must keep the model refresh so the LLM can replace them.
-                    if self.ghostNearlyExhausted || self.requestBefore == nil {
+                    // report). Provisional ghosts (requestBefore == nil) keep the
+                    // model refresh so the LLM can replace them; a healthy LLM
+                    // ghost running LOW gets EXTENDED in place instead — the model
+                    // continues past the ghost's end and the words attach on the
+                    // right, so the suggestion never runs dry and never swaps.
+                    if self.requestBefore == nil {
                         self.scheduleSuggestion()
                     } else {
                         self.lastTypedAt = Date()
                         self.debounceTimer?.invalidate()
+                        self.extendGhostIfRunningLow()
                     }
                     return
                 }
@@ -709,6 +723,60 @@ final class AutocompleteEngine {
     private var ghostNearlyExhausted: Bool {
         guard let s = currentSuggestion, !s.isEmpty else { return true }
         return s.split(whereSeparator: { $0.isWhitespace }).count < 2
+    }
+
+    /// True when only whitespace sits between the caret and the end of its
+    /// line — the ONLY caret position where a ghost may render. Empty tail and
+    /// trailing spaces count; any letter/punctuation before the newline is
+    /// mid-sentence. `nonisolated` + pure for unit tests.
+    nonisolated static func caretAtLineEnd(after: String) -> Bool {
+        for ch in after {
+            if ch.isNewline { return true }
+            if !ch.isWhitespace { return false }
+        }
+        return true
+    }
+
+    /// Cotypist parity: as the user types toward the END of a healthy ghost,
+    /// ask the model to continue PAST it (prompt = live text + remaining ghost —
+    /// a warm KV prefix, so this is cheap) and append the words to the same
+    /// ghost. The suggestion stays long instead of running dry and being
+    /// swapped for a fresh (different) answer at the worst moment. One request
+    /// per ghost state; capped so an accepted-word walk can't grow the ghost
+    /// without bound.
+    private func extendGhostIfRunningLow() {
+        guard let ghost = currentSuggestion, !ghost.isEmpty,
+              !isFix, replaceLength == 0,
+              let anchor = requestBefore,
+              ghost.count < 160 else { return }
+        let remainingWords = ghost.split(whereSeparator: { $0.isWhitespace }).count
+        guard remainingWords < 4 else { return }
+        let prompt = anchor + ghost
+        guard prompt != ghostExtensionPrompt else { return }
+        ghostExtensionPrompt = prompt
+        let token = requestToken
+        completionTask = CoreBridge.complete(
+            before: prompt, after: "",
+            bundleId: requestBundleId, caretScreenRect: currentCaretRect,
+            burst: true
+        ) { [weak self] cont in
+            // The append stays valid even if more of the ghost was typed through
+            // meanwhile (the extension continues past the ghost's END) — it is
+            // only stale once the ghost was replaced or cleared.
+            guard let self, token == self.requestToken,
+                  let cont, !cont.isEmpty,
+                  let current = self.currentSuggestion, !current.isEmpty,
+                  !self.isFix, ghost.hasSuffix(current) else { return }
+            let spaced = Self.applyWordBoundary(before: prompt, suggestion: cont)
+            guard !spaced.isEmpty else { return }
+            self.currentSuggestion = current + spaced
+            Self.e2elog("extend ghost +=\"\(spaced.prefix(24))\"")
+            if self.mirrorWindow.isVisible, let field = self.currentFieldRect {
+                self.mirrorWindow.show(text: current + spaced, fieldRect: field)
+            } else {
+                self.suggestionWindow.extendGhost(appending: spaced)
+            }
+        }
     }
 
     /// Attempts to consume `typed` from the front of the live suggestion.
@@ -941,7 +1009,17 @@ final class AutocompleteEngine {
         }
         staleAXRetries = 0
 
-        // Mid-line completions: when disabled, only suggest at end-of-field.
+        // End-of-line only (user directive: NEVER mid-sentence). A ghost in the
+        // middle of existing text draws over it, and Right-arrow — an accept
+        // key — is how people move the caret through a sentence. Anything other
+        // than whitespace between the caret and the next newline suppresses;
+        // text on LATER lines is fine (end of the current line is a valid spot).
+        if !Self.caretAtLineEnd(after: context.textAfter) {
+            recordNoShow(.midlineDisabled)
+            return
+        }
+        // Mid-line completions preference keeps its stricter meaning: when
+        // disabled, only suggest at end-of-FIELD (nothing but whitespace after).
         if !Preferences.midlineCompletionsEnabled,
            !context.textAfter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             recordNoShow(.midlineDisabled)
@@ -1106,6 +1184,29 @@ final class AutocompleteEngine {
         }
 
         applyAppearance(for: caretRect)
+
+        // Carry-over from a typo-fix Tab (one-shot): the corrected word was just
+        // injected and the gray continuation the user was reading becomes the
+        // ghost immediately — no model round-trip, no surprise swap. The LLM
+        // refresh still runs underneath; the stability guard (requestBefore set)
+        // lets it only EXTEND this ghost, never replace it.
+        if currentSuggestion == nil, let pending = pendingFixContinuation {
+            pendingFixContinuation = nil
+            if before.hasSuffix(pending.expectSuffix)
+                || before.hasSuffix(pending.expectSuffix.trimmingCharacters(in: .whitespaces)) {
+                let spaced = Self.applyWordBoundary(before: before, suggestion: pending.text)
+                currentSuggestion = spaced
+                replaceLength = 0
+                isFix = false
+                requestBefore = before
+                currentCaretRect = caretRect
+                caretAnchoredAt = Date()
+                lastRenderedBefore = before
+                accessoryButton.setState(.ready)
+                Self.e2elog("fix-carryover ghost=\"\(spaced.prefix(32))\"")
+                renderSuggestion(text: spaced, caret: caretRect, field: fieldRect, useMirror: useMirror)
+            }
+        }
 
         // Recall (highest-priority source): people retype recently written
         // sentences — to a second person, or rewriting a line they deleted.
@@ -1417,6 +1518,7 @@ final class AutocompleteEngine {
         replaceLength = 0
         isFix = false
         lastRenderedBefore = nil
+        ghostExtensionPrompt = nil
         suggestionWindow.hide()
         mirrorWindow.hide()
         // Ghost gone → drop a stale success/error badge back to the neutral
@@ -1720,16 +1822,29 @@ final class AutocompleteEngine {
         let leading = String(suggestion.prefix { $0.isLetter })
         guard !trailing.isEmpty, !leading.isEmpty else { return suggestion }
         let glued = trailing + leading
-        // language: nil + automatic identification — the bare two-arg
-        // `checkSpelling` judges against the user's primary language only, so a
-        // Cyrillic glue ("пак"+"всяко") was never flagged on an English system
-        // and the separating space was silently dropped.
+        // Two-tier glue check. ASCII glue on a non-latinica context is judged
+        // by the lexicon + the user's PRIMARY language: the auto-identifying
+        // checker matches the token against every installed dictionary and
+        // tolerated "bro"+"is" = "brois" (a word somewhere), gluing a new word
+        // onto the previous one (live report: Tab after a typo fix wrote
+        // "the quick brois "). Non-ASCII / latinica glue keeps auto-ID — the
+        // primary-language path is what silently swallowed the space in
+        // Cyrillic glue ("пак"+"всяко") on an English system.
         let checker = NSSpellChecker.shared
-        checker.automaticallyIdentifiesLanguages = true
-        let gluedIsWord = checker.checkSpelling(
-            of: glued, startingAt: 0, language: nil, wrap: false,
-            inSpellDocumentWithTag: 0, wordCount: nil
-        ).location == NSNotFound
+        let gluedIsWord: Bool
+        if glued.allSatisfy({ $0.isASCII }), !CoreBridge.looksLikeTransliteratedBulgarian(before) {
+            checker.automaticallyIdentifiesLanguages = false
+            gluedIsWord = Lexicon.shared.isKnownWord(glued) || checker.checkSpelling(
+                of: glued, startingAt: 0, language: nil, wrap: false,
+                inSpellDocumentWithTag: 0, wordCount: nil
+            ).location == NSNotFound
+        } else {
+            checker.automaticallyIdentifiesLanguages = true
+            gluedIsWord = checker.checkSpelling(
+                of: glued, startingAt: 0, language: nil, wrap: false,
+                inSpellDocumentWithTag: 0, wordCount: nil
+            ).location == NSNotFound
+        }
         return gluedIsWord ? suggestion : " " + suggestion
     }
 
@@ -1943,7 +2058,10 @@ final class AutocompleteEngine {
                 sendBackspaces(replaceLen)
                 CompletionStats.recordAccept(head)
                 insert(head, bundleId: bundleId)
-                if !tail.isEmpty { scheduleSuggestion() }
+                if !tail.isEmpty {
+                    pendingFixContinuation = (expectSuffix: head, text: tail)
+                    scheduleSuggestion()
+                }
                 return
             }
             // Emoji replacements stay atomic — accept the whole thing.
@@ -2010,6 +2128,8 @@ final class AutocompleteEngine {
         } else {
             suggestionWindow.consumeGhost(by: head.count)
         }
+        // A word-walk drains the ghost fast — top it up in place too.
+        extendGhostIfRunningLow()
     }
 
     /// Splits a string into (first word + trailing run of whitespace, remainder).
