@@ -630,7 +630,14 @@ final class RunnerModel: ObservableObject {
         // immediately instead of leaving the stale previous result on screen —
         // except on a progress-driven re-invoke, where the partial result must
         // stay put while the handler fetches the next milestone.
-        if case .ext = activeMode, !keepOutcomeOnce { outcome = nil }
+        //
+        // Quick Chat is the exception: each keystroke re-runs the LLM, whose first
+        // milestone is an empty "Thinking…" card, so clearing here would flash
+        // answer→Thinking→answer on every character. Keep its last answer visible
+        // until the new one streams in. Scoped to chat only — every other mode keeps
+        // the original clear-then-spinner behavior.
+        let isChat: Bool = { if case .ext(let id, _, _, _) = activeMode { return id == "quickchat.run" }; return false }()
+        if case .ext = activeMode, !keepOutcomeOnce, !isChat { outcome = nil }
         keepOutcomeOnce = false
 
         Task { [weak self] in
