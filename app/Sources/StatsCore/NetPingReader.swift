@@ -30,9 +30,21 @@ public final class NetPingReader {
     // Lifecycle epoch — bumped on stop() so an old loop still draining its
     // recv()/sleep exits instead of racing a freshly-started one. Guarded by lock.
     private var epoch = 0
+    // Seconds between pings; follows the poller's base interval so a background
+    // menu-bar app isn't waking (and sending an ICMP packet) every second when the
+    // user asked for a slower refresh. Guarded by lock; the loop re-reads it each
+    // cycle so a change takes effect after at most one stale sleep.
+    private var sleepInterval: TimeInterval
 
-    public init(host: String = "1.1.1.1", historyLength: Int = 120) {
+    public init(host: String = "1.1.1.1", historyLength: Int = 120,
+                interval: TimeInterval = 1.0) {
         self.host = host; self.reachCap = historyLength
+        self.sleepInterval = max(1.0, interval)
+    }
+
+    /// Retune the ping cadence (popup open → fast, closed → poller base interval).
+    public func setInterval(_ v: TimeInterval) {
+        lock.withLock { sleepInterval = max(1.0, v) }
     }
 
     public func start() {
@@ -73,7 +85,7 @@ public final class NetPingReader {
                 }
                 _latency = NetLatency(latencyMs: rtt ?? .nan, jitterMs: Self.jitter(rtts), reachable: ok)
             }
-            Thread.sleep(forTimeInterval: 1.0)   // ~1 s between pings (plus the timeout above)
+            Thread.sleep(forTimeInterval: lock.withLock { sleepInterval })   // (plus the timeout above)
         }
     }
 

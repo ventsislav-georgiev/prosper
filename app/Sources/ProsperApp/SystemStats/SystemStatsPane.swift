@@ -11,6 +11,7 @@ struct SystemStatsPane: View {
     @State private var enabled = Preferences.systemStatsEnabled
     @State private var style = SystemStatsStore.load()
     @State private var interval = Preferences.statsRefreshInterval
+    @State private var sensorsInterval = Preferences.statsSensorsInterval
     /// Coalesces the persist+notify burst a ColorPicker drag emits (one set per
     /// frame) into a single commit, so we don't JSON-encode + reconfigure the live
     /// controller dozens of times a second mid-drag.
@@ -29,12 +30,20 @@ struct SystemStatsPane: View {
                 }
                 if enabled {
                     NeonDivider()
-                    NeonRow("Update interval", subtitle: "Lower = more responsive, more CPU. Slow metrics (temps, power, battery) sample less often.") {
+                    NeonRow("Update interval", subtitle: "Lower = more responsive, more CPU. Battery samples far less often.") {
                         Picker("", selection: intervalBinding) {
                             Text("1s").tag(1.0); Text("2s").tag(2.0)
                             Text("3s").tag(3.0); Text("5s").tag(5.0)
                         }
                         .labelsHidden().pickerStyle(.segmented).frame(width: sz(180))
+                    }
+                    NeonDivider()
+                    NeonRow("Sensors interval", subtitle: "Temps & power are the priciest reads. Never faster than the update interval; popups always refresh live.") {
+                        Picker("", selection: sensorsIntervalBinding) {
+                            Text("1s").tag(1.0); Text("2s").tag(2.0)
+                            Text("3s").tag(3.0); Text("5s").tag(5.0); Text("10s").tag(10.0)
+                        }
+                        .labelsHidden().pickerStyle(.segmented).frame(width: sz(220))
                     }
                     NeonDivider()
                     NeonRow("Number alignment") {
@@ -135,6 +144,11 @@ struct SystemStatsPane: View {
     private var intervalBinding: Binding<Double> {
         Binding(get: { interval },
                 set: { interval = $0; Preferences.statsRefreshInterval = $0; notify() })
+    }
+
+    private var sensorsIntervalBinding: Binding<Double> {
+        Binding(get: { sensorsInterval },
+                set: { sensorsInterval = $0; Preferences.statsSensorsInterval = $0; notify() })
     }
 
     /// A binding into one module's config. Mutates the @State immediately (so the

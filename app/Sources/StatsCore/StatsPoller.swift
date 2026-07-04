@@ -1,7 +1,8 @@
 // Tiered polling scheduler — the single clock for every module.
 //
 // One serial queue, one base-interval timer. Each module polls on its own tick
-// divider (fast: CPU/RAM/Net/GPU every tick; slow: temps/power every 2; battery
+// divider (fast: CPU/RAM/Net/GPU every tick; slow: temps/power every
+// `slowDivider` ticks — derived from the user's sensors interval; battery
 // every 10) so cheap fast metrics stay responsive while expensive/slow-moving
 // ones don't burn cycles. Only ENABLED modules instantiate readers and run.
 // ProcSampler (the ~4 ms all-pid scan) runs only while a popup is open.
@@ -99,6 +100,9 @@ public final class StatsPoller {
         procFlag.set(on)
         queue.async { [self] in
             guard let timer else { return }   // not running → nothing to reschedule
+            // Live latency while the user is looking; back to the quiet rate on close.
+            ping?.setInterval(on ? Swift.min(config.activeInterval, config.baseInterval)
+                                 : config.baseInterval)
             // Kick a sample at the instant of open so the ~1 s reader work (top/nettop)
             // starts now, not at the next background tick — which may be seconds away
             // if the user picked a slow update interval. Readers deliver via onUpdate.
@@ -170,7 +174,11 @@ public final class StatsPoller {
         if enabled.contains(.memory) { memory = MemoryReader() }
         if enabled.contains(.network) {
             network = NetworkReader()
-            ping = NetPingReader(historyLength: config.historyLength); ping?.start()
+            // Ping at the user's chosen refresh rate, not a hardwired 1 s — latency/
+            // connectivity are popup-only readouts; setPopupActive speeds this up.
+            ping = NetPingReader(historyLength: config.historyLength,
+                                 interval: config.baseInterval)
+            ping?.start()
             netLink = NetLinkReader()
         }
         if enabled.contains(.gpu) { gpu = GPUReader() }
@@ -183,7 +191,9 @@ public final class StatsPoller {
     }
 
     private func poll() {
-        let slow = tick % UInt64(max(1, config.slowDivider)) == 0
+        // While a popup is open, every tick is a "slow" tick so temps/power refresh
+        // at the active cadence the moment the user is actually looking at them.
+        let slow = procFlag.get() || tick % UInt64(max(1, config.slowDivider)) == 0
         let batt = tick % UInt64(max(1, config.batteryDivider)) == 0
         tick &+= 1
 
@@ -209,7 +219,10 @@ public final class StatsPoller {
         if gpu != nil, let s = try? gpu!.read() {
             latest.gpu = s; push("gpu", s.utilization)
         }
-        if slow, let p = power?.read() {
+        // IOReport is charted only when the Power module is on; with Power off its
+        // sole consumer is the popup's ANE row (GPU module) — skip the read entirely
+        // while no popup is open so an idle tick does no IOReport work.
+        if slow, enabled.contains(.power) || procFlag.get(), let p = power?.read() {
             latest.power = p
             if enabled.contains(.power) { push("power", p.totalWatts) }
         }

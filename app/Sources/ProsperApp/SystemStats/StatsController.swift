@@ -83,16 +83,23 @@ final class StatsController {
     // MARK: - Poller
 
     private var pollerInterval: TimeInterval = 0
+    private var pollerSensorsInterval: TimeInterval = 0
 
     private func startPoller(for modules: Set<StatsModule>) {
         let interval = Preferences.statsRefreshInterval
-        // Re-create only when the enabled set OR the sampling period changed (avoids
+        let sensorsInterval = Preferences.statsSensorsInterval
+        // Re-create only when the enabled set OR a sampling period changed (avoids
         // churn on a pure colour/label tweak).
-        if let p = poller, p.enabledSet == modules, pollerInterval == interval { return }
+        if let p = poller, p.enabledSet == modules, pollerInterval == interval,
+           pollerSensorsInterval == sensorsInterval { return }
         poller?.stop()
         var cfg = StatsPoller.Config()
         cfg.baseInterval = interval
+        // Divider grid: temps/power fire every Nth tick, nearest to the requested
+        // period, never faster than the base interval.
+        cfg.slowDivider = max(1, Int((sensorsInterval / interval).rounded()))
         pollerInterval = interval
+        pollerSensorsInterval = sensorsInterval
         let p = StatsPoller(modules: modules, config: cfg)
         p.onSnapshot = { [weak self] snap in
             // The poller delivers on the main queue (its default deliverQueue), so
