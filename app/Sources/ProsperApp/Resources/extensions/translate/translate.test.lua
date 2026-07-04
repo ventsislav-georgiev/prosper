@@ -44,6 +44,9 @@ h.eq(env.translateArgs.source, "Spanish", "explicit source forwarded")
 -- ── Declines ─────────────────────────────────────────────────────────────────
 h.eq((run("l ", RESULT)), nil, "empty input declines")
 h.eq((run("l hi", nil)), nil, "nil model result declines")
-h.eq((run("l hi", { primary = "  " })), nil, "blank primary declines")
+-- A blank primary is NOT a decline: init.lua renders a real "No translation"
+-- row (a nil return would surface the runner's generic "(done)" placeholder).
+local blank = (run("l hi", { primary = "  " }))
+h.eq(blank.items[1].title, "No translation", "blank primary shows a no-translation row")
 
 print("ok translate")

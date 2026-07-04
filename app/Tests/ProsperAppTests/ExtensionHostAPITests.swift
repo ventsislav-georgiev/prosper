@@ -36,6 +36,13 @@ private final class FakeServices: ExtensionHostServices, @unchecked Sendable {
         // wrapper decodes into { status, primary, detected, candidates }.
         translateJSON ?? "{\"primary\":\"[\(target)]\(text)\",\"detected\":\"\",\"candidates\":[]}"
     }
+    /// When set, llmChat returns this verbatim (staged-snapshot tests).
+    var chatJSON: String?
+    func llmChat(_ prompt: String) async -> String {
+        // Mirrors the live service: a JSON object the host.llm.chat Lua wrapper
+        // decodes into { status, text }.
+        chatJSON ?? "{\"status\":\"done\",\"text\":\"[chat]\(prompt)\"}"
+    }
     func shellRun(_ command: String) async -> String { "ran:\(command)" }
     func httpRequest(method: String, url: String, headers: [String: String],
                      body: String?, timeout: TimeInterval) async -> HTTPResponse? {

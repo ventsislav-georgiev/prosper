@@ -494,6 +494,17 @@ final class RunnerModel: ObservableObject {
                 self.rerun()
             }
         }
+        // QuickChat streams the same way: each token milestone re-invokes the
+        // locked handler, which returns the growing answer snapshot.
+        NotificationCenter.default.addObserver(
+            forName: CoreBridge.chatProgress, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, case .ext = self.mode else { return }
+                self.keepOutcomeOnce = true
+                self.rerun()
+            }
+        }
     }
 
     func reset() {

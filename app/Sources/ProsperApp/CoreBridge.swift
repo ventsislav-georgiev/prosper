@@ -362,6 +362,101 @@ enum CoreBridge {
         NotificationCenter.default.post(name: translateProgress, object: nil)
     }
 
+    // MARK: - QuickChat (staged, streaming)
+
+    /// One chat request's observable state. `status` walks
+    /// loading → generating → done (or failed); `text` is the answer streamed so
+    /// far. Mirrors the translate staging model, on the SAME resident GGUF.
+    struct ChatSnapshot: Sendable {
+        var status: String
+        var text: String
+    }
+
+    /// Posted (main thread) as the active chat job streams tokens / finishes.
+    /// The runner re-invokes the handler and picks up the current snapshot.
+    static let chatProgress = Notification.Name("ProsperChatProgress")
+
+    @MainActor
+    private static var chatJob: (key: String, snapshot: ChatSnapshot, lastPost: CFAbsoluteTime, task: Task<Void, Never>)?
+
+    private static let chatSystemPrompt =
+        "You are a helpful, concise assistant. Answer the user's question or task directly and accurately in plain text."
+
+    /// Snapshot-returning chat. First call for a prompt starts generation and
+    /// returns immediately (status "loading"); repeat calls (driven by
+    /// `chatProgress`) return the latest streamed text. A different prompt
+    /// cancels the previous job. ponytail: single job slot — the runner is
+    /// single-flight, concurrent chats can't happen.
+    @MainActor
+    static func chatStaged(_ input: String) -> ChatSnapshot {
+        let key = input
+        if let job = chatJob, job.key == key { return job.snapshot }
+        chatJob?.task.cancel()
+        let snapshot = ChatSnapshot(status: "loading", text: "")
+        let task = Task { await runChatJob(key: key, input: input) }
+        chatJob = (key, snapshot, 0, task)
+        return snapshot
+    }
+
+    @MainActor
+    private static func advanceChat(
+        _ key: String, throttle: Bool = false, _ mutate: (inout ChatSnapshot) -> Void
+    ) {
+        guard var job = chatJob, job.key == key else { return }
+        mutate(&job.snapshot)
+        // Coalesce streamed partials to ~12Hz — a post per token stalls the
+        // runner window (same lesson as the agent stream-delta coalescing). The
+        // text is always stored; only the notification is throttled, and the
+        // final "done" advance is unthrottled so no tail is lost.
+        let now = CFAbsoluteTimeGetCurrent()
+        if throttle, now - job.lastPost < 0.08 { chatJob = job; return }
+        job.lastPost = now
+        chatJob = job
+        NotificationCenter.default.post(name: chatProgress, object: nil)
+    }
+
+    private static func runChatJob(key: String, input: String) async {
+        do {
+            if LlamaInlineEngine.isEnabled, LlamaInlineEngine.modelIsDownloaded {
+                try await LlamaInlineEngine.shared.ensureLoaded(params: LlamaInlineEngine.tunedParams())
+            } else {
+                try await MLXEngine.shared.load { _, _ in }
+            }
+            if Task.isCancelled { return }
+            await advanceChat(key) { $0.status = "generating" }
+
+            let text: String
+            if LlamaInlineEngine.isEnabled, LlamaInlineEngine.modelIsDownloaded {
+                text = try await LlamaInlineEngine.shared.generate(
+                    system: chatSystemPrompt, user: input, maxTokens: 512,
+                    partialEvery: 4,
+                    onPartial: { partial in
+                        // Unstructured Tasks aren't ordering-guaranteed; only ever
+                        // grow the text so a reordered partial can't shrink it.
+                        Task { @MainActor in
+                            advanceChat(key, throttle: true) {
+                                if partial.count > $0.text.count { $0.text = partial }
+                            }
+                        }
+                    })
+            } else {
+                // MLX fallback has no incremental sink here — one-shot, then done.
+                text = try await MLXEngine.shared.generate(
+                    prompt: input, system: chatSystemPrompt, maxTokens: 512, temperature: 0)
+            }
+            if Task.isCancelled { return }
+            // Re-arm the shared idle-unload timer, exactly as translate/complete do,
+            // so an on-demand chat load doesn't leak the resident model.
+            await MainActor.run { ModelIdleUnloader.shared.noteUsage() }
+            await advanceChat(key) { $0.status = "done"; $0.text = text }
+        } catch is CancellationError {
+            // Superseded by a newer prompt — leave the new job's state alone.
+        } catch {
+            await MainActor.run { ModelIdleUnloader.shared.noteUsage() }
+            await advanceChat(key) { $0.status = "failed" }
+        }
+    }
+
     private static func runTranslateJob(
         key: String, input: String, target: String, source: String?
     ) async {

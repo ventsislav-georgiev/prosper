@@ -16,6 +16,7 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     // Local LLM (queued onto MLX; back-pressured).
     func llmComplete(_ prompt: String) async -> String
     func llmTranslate(_ text: String, target: String, source: String?) async -> String
+    func llmChat(_ prompt: String) async -> String
     // Shell (user-permissioned).
     func shellRun(_ command: String) async -> String
     // Outbound HTTP (trusted-extension capability; http/https only, size-capped).
@@ -421,6 +422,14 @@ struct ExtensionHost {
             let source = rt.stringArgument(3)
             let out = ExtensionHost.awaitSync(timeout: timeout) {
                 await services.llmTranslate(text, target: target, source: source)
+            }
+            rt.push(out ?? "")
+            return 1
+        }
+        lua.register("__h_llm_chat") { rt in
+            let prompt = rt.stringArgument(1) ?? ""
+            let out = ExtensionHost.awaitSync(timeout: timeout) {
+                await services.llmChat(prompt)
             }
             rt.push(out ?? "")
             return 1
@@ -905,6 +914,7 @@ struct ExtensionHost {
         llm = {
             complete  = __h_llm_complete,
             translate = __h_llm_translate,
+            chat      = __h_llm_chat,
         },
         shell  = { run = __h_shell_run },
         prefs  = { get = __h_pref_get, set = __h_pref_set },
@@ -1104,6 +1114,23 @@ struct ExtensionHost {
                 and (t.primary == nil or t.primary == "") then return nil end
             if t.detected == "" then t.detected = nil end
             t.candidates = t.candidates or {}
+            return t
+        end
+    end
+
+    -- Upgrade host.llm.chat to a structured table: { status, text }. A staged
+    -- snapshot (status present) passes through even with empty text — the
+    -- extension renders the stage as a progress row. Status-less empty result
+    -- (legacy bridge / failure) becomes nil.
+    do
+        local raw_chat = host.llm.chat
+        host.llm.chat = function(prompt)
+            local raw = raw_chat(prompt)
+            if raw == nil or raw == "" then return nil end
+            local t = json_decode(raw)
+            if type(t) ~= "table" then return nil end
+            if (t.status == nil or t.status == "")
+                and (t.text == nil or t.text == "") then return nil end
             return t
         end
     end

@@ -89,6 +89,20 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         return json
     }
 
+    /// QuickChat, returning a JSON object string the Lua `host.llm.chat` wrapper
+    /// decodes into `{ status, text }`. Staged like translate: the first call
+    /// starts generation and returns the current milestone immediately (status
+    /// "loading" / "generating"); the runner re-invokes the handler on each
+    /// `CoreBridge.chatProgress` notification until status is "done".
+    /// Empty string on failure (the Lua wrapper maps that to nil).
+    func llmChat(_ prompt: String) async -> String {
+        let snap = await MainActor.run { CoreBridge.chatStaged(prompt) }
+        let obj: [String: Any] = ["status": snap.status, "text": snap.text]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let json = String(data: data, encoding: .utf8) else { return "" }
+        return json
+    }
+
     // MARK: Shell
 
     func shellRun(_ command: String) async -> String {

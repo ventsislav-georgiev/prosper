@@ -1,0 +1,38 @@
+[extension]
+id          = "com.prosper.quickchat"
+name        = "quickchat"
+title       = "Quick Chat"
+description = "Ask the local AI model anything — a direct answer, streamed inline."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "bubble.left.and.bubble.right"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# Runner-mode command. `c ` (and the `ask ` alias) lock the launcher into chat
+# mode. `requires = ["model"]` keeps it out of the palette until the local AI
+# model is loaded, and ties this extension into the host's model-unload policy.
+# QuickChat rides the SAME on-device model as inline autocomplete + translate —
+# no separate download, no residency swap (that's the coding agent's heavier
+# path). It loads on first use and unloads on the shared idle window.
+[[contributes.commands]]
+id          = "quickchat.run"
+title       = "Quick Chat"
+description = "Ask the local AI model and get a direct answer"
+mode        = "no-view"
+icon        = "bubble.left.and.bubble.right"
+keywords    = ["chat", "ask", "question", "assistant", "ai", "gpt"]
+prefix      = "c "
+prefixes    = ["ask "]
+requires    = ["model"]

@@ -240,6 +240,7 @@ function M.makeHost(opts)
         files = opts.files or {},
         fsDirs = opts.fsDirs or {},
         translateResult = opts.translateResult,
+        chatResult = opts.chatResult,
         agentResult = opts.agentResult,
         httpResponse = opts.httpResponse,
         setDefaultOK = (opts.setDefaultOK ~= false),
@@ -370,6 +371,10 @@ function M.makeHost(opts)
             translate = function(text, target, source)
                 env.translateArgs = { text = text, target = target, source = source }
                 return env.translateResult
+            end,
+            chat = function(prompt)
+                env.chatArgs = { prompt = prompt }
+                return env.chatResult
             end,
         },
         agent = {

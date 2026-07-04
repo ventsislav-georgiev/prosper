@@ -34,6 +34,7 @@ private final class FallbackAwareFakeServices: ExtensionHostServices, @unchecked
     func clipboardHistory(limit: Int) -> [String] { [] }
     func llmComplete(_ prompt: String) async -> String { "" }
     func llmTranslate(_ text: String, target: String, source: String?) async -> String { "{}" }
+    func llmChat(_ prompt: String) async -> String { "{}" }
     func shellRun(_ command: String) async -> String { "" }
     func httpRequest(method: String, url: String, headers: [String: String],
                      body: String?, timeout: TimeInterval) async -> HTTPResponse? { nil }

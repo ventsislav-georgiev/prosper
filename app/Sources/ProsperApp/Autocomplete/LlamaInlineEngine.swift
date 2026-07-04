@@ -693,11 +693,17 @@ actor LlamaInlineEngine {
             + "<|turn>user\n" + user + "<turn|>\n<|turn>model\n"
     }
 
+    /// `partialEvery` > 0 with `onPartial` set emits the growing decoded text
+    /// every N tokens (whole-array detok — correct across multibyte boundaries;
+    /// N coalesces the O(n²) cost). Used by the QuickChat staged job to stream
+    /// tokens into the runner. Default off — existing callers are unaffected.
     func generate(
         system: String,
         user: String,
         maxTokens: Int,
-        bannedCharacters: String = ""
+        bannedCharacters: String = "",
+        partialEvery: Int = 0,
+        onPartial: (@Sendable (String) -> Void)? = nil
     ) throws -> String {
         try ensureLoaded(params: Self.tunedParams())
         guard let ctx, var batch else { throw EngineError.loadFailed("no context") }
@@ -735,6 +741,9 @@ actor LlamaInlineEngine {
             batch.n_tokens = 1
             guard llama_decode(ctx, batch) == 0 else { throw EngineError.decodeFailed }
             logitsRow = 0
+            if let onPartial, partialEvery > 0, out.count % partialEvery == 0 {
+                onPartial(String(decoding: detok(out), as: UTF8.self))
+            }
         }
 
         // Trim seq 0 back to the prompt so the NEXT request's prefix-reuse
