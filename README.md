@@ -31,6 +31,7 @@
 - [**System monitors**](#system-stats) — CPU, memory, GPU, network, temps, fans, battery & power, with rich live popovers in the menu bar.
 - [**Window management**](#window-management) — drag-to-edge snapping plus custom drag-into-zone layouts.
 - [**Menu-bar management**](#menu-bar-management) — hide, space, and reorder your menu-bar icons.
+- [**Calendar**](#calendar) — an Itsycal-style menu-bar calendar with month grid, event dots, and agenda.
 - [**Browser router**](#browser-router) — make Prosper your default browser and route each link by domain.
 - [**Input switching**](#input-switcher) — auto-set your keyboard input source by the focused app.
 - [**Lid-stay-awake**](#openlid) — keep your Mac running with the lid closed, no charger or display required.
@@ -142,6 +143,14 @@ Snap and tile windows without a separate window manager. Drag a window to a scre
 _Opt-in — turn it on in **Settings → Extensions**._ Hide menu-bar icons behind a divider you reveal on demand, add spacing between icons, and pick the chevron style — with **no Accessibility or Screen Recording permission** for the basics. A live preview strip in Settings shows your real icons in order; mark any icon "always hidden", or drag the divider to choose what's tucked away. The clickable chevron is a separate, always-on-screen item, so showing/hiding never sweeps it (or Prosper's own icon) off screen. Optional item **ordering** keeps multi-icon apps (Stats, iStat Menus) in place across relaunches. A native take on Ice / Bartender.
 
 <p align="center"><img width="688" alt="Menu Bar Management — hidden section revealed" src="https://github.com/user-attachments/assets/c928fc57-0174-41a3-bbcf-355061d9c0f4" /></p>
+
+---
+
+## Calendar
+
+_Opt-in — turn it on in **Settings → Extensions**._ A menu-bar calendar in the spirit of Itsycal: click the date in your menu bar for a month grid with **event dots** (optionally colored per calendar), weekend highlighting, ISO week numbers, and an **agenda list** of upcoming events — click any day to see its events, double-click to jump to Calendar.app. The menu-bar icon comes in four styles (filled or outlined day badge, plain glyph, or a fully custom datetime pattern like `EEE, d MMM HH:mm`) with configurable text weight and font style, or hide it entirely and open the popup with a global shortcut. Pick which calendars show, set the first day of the week, resize the grid by dragging, and pin the popup to keep it open. Reads your macOS calendars via EventKit — asks for Calendar access on first enable, and everything stays on your Mac.
+
+<p align="center"><img width="312" height="400" alt="Calendar — menu-bar month grid with event dots and agenda" src="https://github.com/user-attachments/assets/d9417d18-23ad-4a06-8984-6be36f68ee84" /></p>
 
 ---
 
