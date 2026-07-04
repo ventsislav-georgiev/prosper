@@ -39,6 +39,24 @@ final class ModelDownloadManager: ObservableObject {
         status = "Starting download…"
         task = Task {
             do {
+                if let gguf = AgentModelRegistry.gguf(for: modelId) {
+                    // Single-file GGUF (llama.cpp agent rows).
+                    try await GGUFDownload.fetch(
+                        url: gguf.downloadURL,
+                        dest: LlamaAgentEngine.fileURL(fileName: gguf.fileName),
+                        expectedBytes: gguf.bytes
+                    ) { p, s in
+                        Task { @MainActor in
+                            guard ModelDownloadManager.shared.activeModelId == modelId else { return }
+                            ModelDownloadManager.shared.progress = p
+                            ModelDownloadManager.shared.status = s
+                        }
+                    }
+                    guard self.activeModelId == modelId else { return }
+                    self.revision += 1
+                    self.reset()
+                    return
+                }
                 try await MLXEngine.downloadModelFiles(modelId: modelId) { p, s in
                     Task { @MainActor in
                         guard ModelDownloadManager.shared.activeModelId == modelId else { return }
@@ -72,8 +90,13 @@ final class ModelDownloadManager: ObservableObject {
     func delete(_ modelId: String) {
         guard !modelId.isEmpty else { return }
         if activeModelId == modelId { cancel() }
-        let dir = ModelPaths.hubURL.appendingPathComponent(
-            "models--" + modelId.replacingOccurrences(of: "/", with: "--"))
+        let dir: URL
+        if let gguf = AgentModelRegistry.gguf(for: modelId) {
+            dir = LlamaAgentEngine.fileURL(fileName: gguf.fileName)
+        } else {
+            dir = ModelPaths.hubURL.appendingPathComponent(
+                "models--" + modelId.replacingOccurrences(of: "/", with: "--"))
+        }
         Task { [weak self] in
             await Task.detached { try? FileManager.default.removeItem(at: dir) }.value
             self?.revision += 1   // back on @MainActor → triggers the pane's disk rebuild

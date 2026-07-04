@@ -143,6 +143,7 @@ enum Preferences {
         static let fanTargets = "fanTargets"
         static let fanHoldUnlock = "fanHoldUnlock"
         static let statsRefreshInterval = "statsRefreshInterval"
+        static let statsSensorsInterval = "statsSensorsInterval"
         static let sensorsHeadlineSensor = "sensorsHeadlineSensor"
         static let sensorsNamedOrder = "sensorsNamedOrder"
         static let dragSnapEnabled = "dragSnapEnabled"
@@ -201,6 +202,7 @@ enum Preferences {
         static let perAppCustomInstructions = "perAppCustomInstructions"
         static let modelDirMigrated = "modelDirMigrated"
         static let inlineKVBits = "inlineKVBits"
+        static let agentKVBits = "agentKVBits"
         static let speculativeDecodingEnabled = "speculativeDecodingEnabled"
         static let guidedScriptDecoding = "guidedScriptDecoding"
         static let nBestCandidates = "nBestCandidates"
@@ -666,13 +668,21 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.coreModel) }
     }
 
-    /// Hugging Face MLX model id used by the coding agent (a SEPARATE checkpoint
-    /// from the inline `coreModel` — bigger, tool-calling-capable, loaded only while
-    /// an agent run is active; see ModelResidencyCoordinator). Defaults to
+    /// Model id used by the coding agent (a SEPARATE checkpoint from the inline
+    /// `coreModel` — bigger, tool-calling-capable, loaded only while an agent run
+    /// is active; see ModelResidencyCoordinator). Defaults to
     /// `AgentModelRegistry.recommendedId`. The set of selectable ids lives in
     /// `AgentModelRegistry.models` so adding a model is a one-row change there.
     static var agentModel: String {
-        get { defaults.string(forKey: Keys.agentModel) ?? AgentModelRegistry.recommendedId }
+        get {
+            // Self-heal (same pattern as coreModel): the MLX built-in ladder was
+            // retired for llama.cpp, so a stored id no longer in the catalog (and
+            // not a user-imported custom model) falls back to the GGUF recommended
+            // — picker, tool-call format, and engine routing then all agree.
+            let id = defaults.string(forKey: Keys.agentModel) ?? AgentModelRegistry.recommendedId
+            return AgentModelRegistry.all().contains { $0.id == id }
+                ? id : AgentModelRegistry.recommendedId
+        }
         set { defaults.set(newValue, forKey: Keys.agentModel) }
     }
 
@@ -782,6 +792,19 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.inlineKVBits) }
     }
 
+    /// KV-cache quantization bits for the agent chat path. Agent contexts run
+    /// 30–100k tokens where fp16 KV is multi-GB and decode is bandwidth-bound;
+    /// 8-bit halves it with negligible quality loss, so unlike the inline path
+    /// the default is ON (8). Set 0 to disable, 4 for maximum savings.
+    static var agentKVBits: Int {
+        get {
+            guard defaults.object(forKey: Keys.agentKVBits) != nil else { return 8 }
+            let v = defaults.integer(forKey: Keys.agentKVBits)
+            return (v == 4 || v == 8) ? v : 0
+        }
+        set { defaults.set(newValue, forKey: Keys.agentKVBits) }
+    }
+
     static var autocompleteEnabled: Bool {
         get {
             if defaults.object(forKey: Keys.autocompleteEnabled) == nil { return false }
@@ -813,14 +836,26 @@ enum Preferences {
 
     /// Base sampling period (seconds) for every System Stats module. Higher = less
     /// CPU. Default 3s (lean to the low side). The poller tiers off this: fast metrics
-    /// (CPU/RAM/Net/GPU) sample at this rate, slow ones (temps/power) at half, battery
-    /// far slower — so one knob scales the whole cost profile. Clamped 1…10s.
+    /// (CPU/RAM/Net/GPU) sample at this rate, temps/power at `statsSensorsInterval`,
+    /// battery far slower — so one knob scales the whole cost profile. Clamped 1…10s.
     static var statsRefreshInterval: Double {
         get {
             let v = defaults.object(forKey: Keys.statsRefreshInterval) as? Double ?? 3.0
             return Swift.min(10, Swift.max(1, v))
         }
         set { defaults.set(Swift.min(10, Swift.max(1, newValue)), forKey: Keys.statsRefreshInterval) }
+    }
+
+    /// Sampling period (seconds) for the slow metrics (temps + power). SMC/IOReport
+    /// reads are the priciest tick work, so they default to a lazy 5s; users who want
+    /// livelier temps can lower it. Effective cadence rounds to a multiple of
+    /// `statsRefreshInterval` and can never be faster than it. Clamped 1…10s.
+    static var statsSensorsInterval: Double {
+        get {
+            let v = defaults.object(forKey: Keys.statsSensorsInterval) as? Double ?? 5.0
+            return Swift.min(10, Swift.max(1, v))
+        }
+        set { defaults.set(Swift.min(10, Swift.max(1, newValue)), forKey: Keys.statsSensorsInterval) }
     }
 
     /// Whether the user has opted into MANUAL fan control. Default OFF — fan writes

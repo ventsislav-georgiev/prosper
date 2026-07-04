@@ -29,6 +29,18 @@ enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
     case minimax
 }
 
+/// A single-file GGUF build served by the llama.cpp agent engine
+/// (`LlamaAgentEngine`) instead of MLX. Rows carrying one get grammar-locked
+/// tool calls, q8_0 KV + flash attention, and prompt-prefix KV reuse.
+struct AgentGGUF: Sendable, Equatable {
+    /// On-disk name under `Prosper/models/gguf/`.
+    let fileName: String
+    /// Direct single-file download (verified 200, ungated).
+    let downloadURL: URL
+    /// Exact size in bytes (drives download progress + disk-state display).
+    let bytes: Int64
+}
+
 /// One selectable coding-agent model. The agent ladder is intentionally separate
 /// from the inline `Preferences.selectableModelIds` (different sizes, different
 /// quality bar, different RAM tiers, loaded only during an agent run).
@@ -47,199 +59,104 @@ struct AgentModel: Sendable, Identifiable, Equatable {
     let toolFormat: ToolCallFormat
     /// One-line note shown under the label (tier hint, caveats).
     let note: String
+    /// Non-nil → this row runs on the llama.cpp engine (`LlamaAgentEngine`)
+    /// from this GGUF file; nil → MLX (Hugging Face snapshot) as before.
+    var gguf: AgentGGUF? = nil
 }
 
-/// The agent-model catalog. **Adding a model is a one-row change here.** Prefer
-/// DWQ (distillation-trained quant — the MLX QAT-equivalent, loads through the same
-/// affine-quant path as the existing Gemma-QAT models with no engine change) and
-/// natively-trained low-bit formats (MXFP4) for best quality-per-GB. Ordered by
-/// ascending RAM so the picker reads smallest→largest.
+/// The agent-model catalog. **Adding a model is a one-row change here.**
+/// GGUF/llama.cpp ONLY — the coding agent went all-in on `LlamaAgentEngine`
+/// (grammar-locked tool calls, q8_0 KV + flash attention, prompt-prefix KV
+/// reuse). The former MLX built-in ladder was removed (git history has it);
+/// MLX survives only for user-imported HF custom models (`CustomModelStore`),
+/// which still route to `MLXEngine`. Ordered by ascending RAM.
 enum AgentModelRegistry {
     // CODING-TUNED ONLY. This ladder serves the coding agent — every entry is a
     // code/SWE-tuned model (or a flagship with strong agentic coding). General-
     // purpose models do NOT belong here (the inline-autocomplete role is a separate,
-    // gemma4-VLM-only path — see MLXEngine/SettingsWindow — and can't host them
-    // either without engine work). Adding a model is a one-row change.
+    // gemma-only llama.cpp path — see LlamaInlineEngine). Qwen-only for now
+    // (`LlamaAgentEngine` hand-renders the ChatML template).
     static let models: [AgentModel] = [
-        // ── 16 GB tier ──────────────────────────────────────────────────────
         AgentModel(
-            id: "mlx-community/Qwen3.5-4B-MLX-4bit",
-            label: "Qwen3.5 4B",
-            approxRAMGB: 3, minRAMGB: 16, toolFormat: .qwenXML,
-            note: "~3 GB · latest small Qwen · fastest, light but reliable tool-calling"
+            id: "unsloth/Qwen3.5-4B-GGUF",
+            label: "Qwen3.5 4B (llama.cpp)",
+            approxRAMGB: 3.5, minRAMGB: 16, toolFormat: .qwenXML,
+            note: "GGUF Q4_K_M ~2.6 GB · llama.cpp · grammar-locked tool calls, fastest",
+            gguf: AgentGGUF(
+                fileName: "Qwen3.5-4B-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf")!,
+                bytes: 2_740_937_888)
+        ),
+        // Nemotron 3 Nano: template verified exact ChatML (`<|im_start|>role\n…`,
+        // `<tool_response>` user blocks) with `<tool_call><function=…>` calls — the
+        // qwenXML parser's xml_function branch. Renders through the same
+        // `renderChatML`, no engine change.
+        AgentModel(
+            id: "unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF",
+            label: "Nemotron 3 Nano 4B (llama.cpp)",
+            approxRAMGB: 3.5, minRAMGB: 16, toolFormat: .qwenXML,
+            note: "GGUF Q4_K_M ~2.7 GB · NVIDIA agentic-tuned · fast",
+            gguf: AgentGGUF(
+                fileName: "NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/resolve/main/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf")!,
+                bytes: 2_900_295_712)
         ),
         AgentModel(
-            id: "mlx-community/NVIDIA-Nemotron-3-Nano-4B-4bit",
-            label: "Nemotron 3 Nano 4B",
-            approxRAMGB: 3, minRAMGB: 16, toolFormat: .nemotron,
-            note: "~3 GB · NVIDIA agentic-tuned · fast, reliable tool-calling"
+            id: "unsloth/Qwen3-8B-GGUF",
+            label: "Qwen3 8B (llama.cpp)",
+            approxRAMGB: 6, minRAMGB: 16, toolFormat: .qwenXML,
+            note: "GGUF Q4_K_M ~4.7 GB · llama.cpp · grammar-locked tool calls",
+            gguf: AgentGGUF(
+                fileName: "Qwen3-8B-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf")!,
+                bytes: 5_027_784_512)
         ),
         AgentModel(
-            id: "mlx-community/Qwen3-8B-4bit-DWQ",
-            label: "Qwen3 8B",
-            approxRAMGB: 5, minRAMGB: 16, toolFormat: .qwenXML,
-            note: "DWQ ~5 GB · light, fast, capable tool-calling"
+            id: "unsloth/Nemotron-3-Nano-30B-A3B-GGUF",
+            label: "Nemotron 3 Nano 30B-A3B (llama.cpp)",
+            approxRAMGB: 26, minRAMGB: 32, toolFormat: .qwenXML,
+            note: "GGUF Q4_K_M ~23 GB · NVIDIA agentic MoE (3B active)",
+            gguf: AgentGGUF(
+                fileName: "Nemotron-3-Nano-30B-A3B-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Nemotron-3-Nano-30B-A3B-GGUF/resolve/main/Nemotron-3-Nano-30B-A3B-Q4_K_M.gguf")!,
+                bytes: 24_574_373_664)
         ),
         AgentModel(
-            id: "mlx-community/phi-4-4bit",
-            label: "Phi-4 14B",
-            approxRAMGB: 9, minRAMGB: 16, toolFormat: .hermesJSON,
-            // ponytail: no native tool syntax — relies on the harness tool-instruction
-            // prompt steering it into hermes `<tool_call>` form. Verified-experimental;
-            // demote to chat-only or drop if it won't emit tool calls reliably.
-            note: "~9 GB · MS Phi-4 · strong reasoning · tool-calling experimental"
+            id: "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+            label: "Qwen3-Next 80B-A3B (llama.cpp)",
+            approxRAMGB: 50, minRAMGB: 64, toolFormat: .qwenXML,
+            note: "GGUF Q4_K_M ~45 GB · needs 64 GB · hybrid-attention flagship MoE (3B active)",
+            gguf: AgentGGUF(
+                fileName: "Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF/resolve/main/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf")!,
+                bytes: 48_506_100_512)
         ),
         AgentModel(
-            id: "mlx-community/gpt-oss-20b-MXFP4-Q4",
-            label: "gpt-oss 20B",
-            approxRAMGB: 13, minRAMGB: 16, toolFormat: .harmony,
-            note: "native MXFP4 ~12 GB · OpenAI open MoE (3.6B active), native harmony tool-calling"
-        ),
-        // ── 24 GB tier ──────────────────────────────────────────────────────
-        AgentModel(
-            id: "mlx-community/Devstral-Small-2507-4bit-DWQ",
-            label: "Devstral Small 24B",
-            approxRAMGB: 14, minRAMGB: 24, toolFormat: .mistral,
-            note: "DWQ ~14 GB · SWE-agent-trained, reliable in loops"
-        ),
-        AgentModel(
-            // 6-bit, not 4-bit: the 4-bit conversion has a reported tokenizer/
-            // gibberish bug (HF discussions). 6-bit is the safe loadable build.
-            id: "mlx-community/Devstral-Small-2-24B-Instruct-2512-6bit",
-            label: "Devstral Small 2 24B",
-            approxRAMGB: 18, minRAMGB: 24, toolFormat: .mistral,
-            note: "6-bit ~18 GB · Dec-2512 SWE-agent model, newer than 2507"
-        ),
-        AgentModel(
-            id: "mlx-community/GLM-4.7-Flash-4bit",
-            label: "GLM-4.7-Flash 30B-A3B",
-            approxRAMGB: 17, minRAMGB: 24, toolFormat: .glm,
-            note: "~17 GB · GLM Flash MoE (3B active), strong agentic coding, light"
-        ),
-        // ── 32 GB tier (primary / recommended) ───────────────────────────────
-        AgentModel(
-            id: "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2",
-            label: "Qwen3-Coder 30B-A3B",
+            id: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+            label: "Qwen3-Coder 30B-A3B (llama.cpp)",
             approxRAMGB: 20, minRAMGB: 32, toolFormat: .qwenXML,
-            note: "DWQ v2 ~20 GB · coder-tuned MoE (3B active), best small-Mac tool-calling"
+            note: "GGUF Q4_K_M ~17 GB · recommended · coder MoE (3B active), grammar-locked tool calls",
+            gguf: AgentGGUF(
+                fileName: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf")!,
+                bytes: 18_556_689_568)
         ),
         AgentModel(
-            id: "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-6bit",
-            label: "Qwen3-Coder 30B-A3B (6-bit)",
-            approxRAMGB: 25, minRAMGB: 32, toolFormat: .qwenXML,
-            note: "6-bit ~25 GB · same coder MoE (3B active), less quant damage than 4-bit"
-        ),
-        AgentModel(
-            id: "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ",
-            label: "Qwen3.6 35B-A3B",
-            approxRAMGB: 22, minRAMGB: 32, toolFormat: .qwenXML,
-            note: "DWQ ~22 GB · recommended · latest Qwen flagship MoE (3B active), strong agentic coding"
-        ),
-        AgentModel(
-            id: "mlx-community/NVIDIA-Nemotron-3-Nano-30B-A3B-4bit",
-            label: "Nemotron 3 Nano 30B-A3B",
-            approxRAMGB: 18, minRAMGB: 32, toolFormat: .nemotron,
-            note: "~18 GB · NVIDIA agentic-tuned MoE (3B active)"
-        ),
-        // Ornith-1.0 (DeepReinforce): self-scaffolding RL coding models, MIT.
-        // Qwen3.5-based → qwenXML tool syntax; replies open with a <think> block
-        // (same as the other Qwen3 reasoning entries, handled by the qwen parser).
-        // The 9B is the only on-device-friendly *dense* Ornith but ships MLX as
-        // BF16 only for now — swap to a 4bit/DWQ id (one-row change) when one lands.
-        AgentModel(
-            id: "leonsarmiento/Ornith-1.0-35B-5bit-mlx",
-            label: "Ornith-1.0 35B-A3B",
-            approxRAMGB: 24, minRAMGB: 32, toolFormat: .qwenXML,
-            note: "5-bit ~24 GB · Qwen3.5 MoE (3B active), SOTA-for-size agentic coding"
-        ),
-        AgentModel(
-            id: "airagrp/ornith-1.0-9B-mlx-BF16",
-            label: "Ornith-1.0 9B",
-            approxRAMGB: 22, minRAMGB: 32, toolFormat: .qwenXML,
-            note: "⚠️ BF16 ~22 GB (no 4bit MLX yet) · Qwen3.5 dense · strong small coder"
-        ),
-        // ── 64 GB tier (option; unverified on small machines) ─────────────────
-        AgentModel(
-            id: "mlx-community/Qwen3-Coder-Next-4bit",
-            label: "Qwen3-Coder-Next 80B-A3B",
-            approxRAMGB: 45, minRAMGB: 64, toolFormat: .qwenXML,
-            note: "~45 GB · needs 64 GB · near-frontier agentic coding"
-        ),
-        AgentModel(
-            id: "mlx-community/gpt-oss-120b-MXFP4-Q4",
-            label: "gpt-oss 120B",
-            approxRAMGB: 65, minRAMGB: 64, toolFormat: .harmony,
-            note: "native MXFP4 ~63 GB · OpenAI open MoE (5.1B active), frontier agentic · needs ≥64 GB"
-        ),
-        AgentModel(
-            id: "mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit",
-            label: "Qwen3-Next 80B-A3B",
-            approxRAMGB: 45, minRAMGB: 64, toolFormat: .qwenXML,
-            note: "~45 GB · hybrid-attention flagship MoE (3B active), strong agentic coding"
-        ),
-        AgentModel(
-            id: "mlx-community/GLM-4.5-Air-4bit",
-            label: "GLM-4.5-Air 106B-A12B",
-            approxRAMGB: 60, minRAMGB: 64, toolFormat: .glm,
-            note: "~60 GB · needs ≥64 GB · practical large GLM coder (12B active)"
-        ),
-        AgentModel(
-            id: "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit",
-            label: "Llama 4 Scout 17B-16E",
-            // Llama 4 has no dedicated tool-call parser case; hermes `<tool_call>`
-            // is the closest — tool-calling is experimental (prompt-steered, no
-            // native syntax).
-            approxRAMGB: 60, minRAMGB: 64, toolFormat: .hermesJSON,
-            note: "⚠️ 109B MoE (17B active, 16E) · ~60 GB · needs ≥64 GB · vision stripped (text-only)"
-        ),
-        // ── Frontier / experimental tier ─────────────────────────────────────
-        // ⚠️ Server-class agentic MoE (230B–1T). All are strong at agentic/coding
-        // workflows and their architectures DO load in mlx-swift-lm (minimax, mimo,
-        // glm4_moe, deepseek_v3=Kimi, nemotron_h — arch-verified), with a matching
-        // per-family tool-call parser. The real limit is RAM: each FAR exceeds any
-        // Mac even at 4-bit. The RAM gate only soft-warns, so selecting one can
-        // trigger a 100–550 GB download that then OOMs. Here for completeness.
-        AgentModel(
-            id: "lmstudio-community/MiniMax-M2.5-MLX-4bit",
-            label: "MiniMax M2.5 (experimental)",
-            approxRAMGB: 130, minRAMGB: 128, toolFormat: .minimax,
-            note: "⚠️ 230B agentic MoE (10B active) · ~115 GB · needs ≥128 GB"
-        ),
-        AgentModel(
-            id: "inferencerlabs/MiMo-V2.5-Pro-MLX-4.3bit-INF",
-            label: "MiMo V2.5 Pro (experimental)",
-            approxRAMGB: 180, minRAMGB: 192, toolFormat: .qwenXML,
-            note: "⚠️ Xiaomi agentic MoE · ~170 GB · needs ≥192 GB"
-        ),
-        AgentModel(
-            id: "mlx-community/Nemotron-3-Ultra-550B-A55B-4bit",
-            label: "Nemotron 3 Ultra 550B (experimental)",
-            approxRAMGB: 320, minRAMGB: 512, toolFormat: .nemotron,
-            note: "⚠️ 550B agentic MoE · ~300 GB · needs ≥512 GB"
-        ),
-        AgentModel(
-            id: "mlx-community/GLM-4.6-4bit",
-            label: "GLM-4.6 355B-A32B (experimental)",
-            approxRAMGB: 200, minRAMGB: 256, toolFormat: .glm,
-            note: "⚠️ 355B top GLM coder MoE (32B active) · ~190 GB · needs ≥256 GB"
-        ),
-        AgentModel(
-            id: "mlx-community/GLM-5-4bit",
-            label: "GLM-5 (experimental)",
-            approxRAMGB: 400, minRAMGB: 512, toolFormat: .glm,
-            note: "⚠️ 744B agentic MoE · ~380 GB · only a 512 GB Mac Studio fits"
-        ),
-        AgentModel(
-            id: "pipenetwork/Kimi-K2.7-Code-MLX-4bit-hiprec",
-            label: "Kimi K2.7 Code (experimental)",
-            approxRAMGB: 580, minRAMGB: 512, toolFormat: .kimi,
-            note: "⚠️ 1T coder MoE · ~550 GB · exceeds every Mac even at 4-bit"
+            id: "unsloth/Qwen3-Coder-Next-GGUF",
+            label: "Qwen3-Coder-Next 80B-A3B (llama.cpp)",
+            approxRAMGB: 50, minRAMGB: 64, toolFormat: .qwenXML,
+            note: "GGUF Q4_K_M ~45 GB · needs 64 GB · near-frontier agentic coding",
+            gguf: AgentGGUF(
+                fileName: "Qwen3-Coder-Next-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF/resolve/main/Qwen3-Coder-Next-Q4_K_M.gguf")!,
+                bytes: 48_528_320_544)
         ),
     ]
 
-    /// Default agent model: the latest Qwen flagship MoE (Qwen3.6 35B-A3B) — newest
-    /// generation, strong agentic coding, fits a 32 GB dev Mac.
-    static let recommendedId = "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"
+    /// Default agent model: Qwen3-Coder 30B-A3B on the llama.cpp engine —
+    /// coder-tuned MoE that fits a 32 GB dev Mac, with grammar-locked tool
+    /// calls and prompt-prefix KV reuse (the fastest correct agent path).
+    static let recommendedId = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
 
     /// Built-in catalog plus any user-added (HF-imported) custom models. The single
     /// source the picker, the AI Models pane, and `model(for:)`/`toolFormat(for:)` read,
@@ -267,5 +184,12 @@ enum AgentModelRegistry {
     /// Tool-call format for an id (recommended model's format if unknown).
     static func toolFormat(for id: String) -> ToolCallFormat {
         model(for: id).toolFormat
+    }
+
+    /// GGUF spec for an id — EXACT match only. This routes *engine selection*
+    /// (`ModelResidencyCoordinator`), where `model(for:)`'s recommended-fallback
+    /// would silently swap an unknown MLX id onto the llama engine.
+    static func gguf(for id: String) -> AgentGGUF? {
+        models.first { $0.id == id }?.gguf
     }
 }

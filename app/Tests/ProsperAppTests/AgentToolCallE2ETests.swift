@@ -111,11 +111,12 @@ final class AgentToolCallE2ETests: XCTestCase {
         ]
 
         var out = ""
-        // 512, not 128: thinking models (Qwen3 non-coder) spend >128 tokens in their
-        // <think> preamble before the tool call; production budgets are far larger.
+        // 1024, not 128: thinking models (Qwen3 non-coder) spend hundreds of tokens
+        // in their <think> preamble before the tool call (greedy Qwen3-8B overruns
+        // 512 on this prompt); production budgets are far larger still.
         let stream = engine.generateChat(
             messages: messages, tools: [shellTool],
-            maxTokens: 512, temperature: 0.0
+            maxTokens: 1024, temperature: 0.0
         )
         for try await chunk in stream { out += chunk }
         NSLog("agent-e2e: output(len=%d) = %@", out.count, out)

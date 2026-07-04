@@ -49,6 +49,10 @@ enum ModelFiles {
     /// Scans `hub/models--<sanitized id>/snapshots/*` for any `*.safetensors`.
     static func isModelDownloaded(_ modelId: String) -> Bool {
         guard !modelId.isEmpty else { return false }
+        if let gguf = AgentModelRegistry.gguf(for: modelId) {
+            return FileManager.default.fileExists(
+                atPath: LlamaAgentEngine.fileURL(fileName: gguf.fileName).path)
+        }
         let fm = FileManager.default
         let snapshots = ModelPaths.hubURL
             .appendingPathComponent(cacheDirName(for: modelId))
@@ -80,6 +84,14 @@ enum ModelFiles {
     /// pane computes this for every catalog row.
     static func diskState(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> DiskState {
         guard !modelId.isEmpty else { return DiskState(downloaded: false, sizeBytes: nil) }
+        if let gguf = AgentModelRegistry.gguf(for: modelId) {
+            // Single-file GGUF (llama.cpp agent rows) — no HF cache walk.
+            let path = LlamaAgentEngine.fileURL(fileName: gguf.fileName).path
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let size = attrs[.size] as? Int64
+            else { return DiskState(downloaded: false, sizeBytes: nil) }
+            return DiskState(downloaded: true, sizeBytes: size)
+        }
         let fm = FileManager.default
         let root = hubURL.appendingPathComponent(cacheDirName(for: modelId))
         let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]

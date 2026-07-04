@@ -743,13 +743,18 @@ actor MLXEngine {
         repetitionPenalty: Float?,
         kvBits: Int? = nil,
         topK: Int? = nil,
-        minP: Float? = nil
+        minP: Float? = nil,
+        prefillStepSize: Int? = nil
     ) -> GenerateParameters {
         var parameters = GenerateParameters(
             maxTokens: maxTokens,
             temperature: temperature,
             topP: topP
         )
+        // Prefill chunk size (default 512). The agent path passes 2048: its
+        // prompts run tens of thousands of tokens, where 512-token chunks are
+        // pure kernel-launch overhead on first-turn/post-compaction prefill.
+        if let prefillStepSize { parameters.prefillStepSize = prefillStepSize }
         // Gemma 4's recommended sampling is temp≈1.0 with top_k=64 shaping (the value
         // baked into the model's own GGUF: general.sampling.top_k=64/top_p=0.95/temp=1.0).
         // top_k caps the candidate set so a higher temperature stays in-language without
@@ -947,7 +952,9 @@ actor MLXEngine {
         guard let container else { throw MLXEngineError.notLoaded }
         let parameters = Self.makeParameters(
             maxTokens: maxTokens, temperature: temperature, topP: topP,
-            repetitionPenalty: repetitionPenalty
+            repetitionPenalty: repetitionPenalty,
+            kvBits: Preferences.agentKVBits,
+            prefillStepSize: 2048
         )
         if Task.isCancelled { return }
         let box = chatBox

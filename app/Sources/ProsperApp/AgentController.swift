@@ -464,6 +464,21 @@ final class AgentController {
     }
 
     private func apply(_ event: HarnessEvent) {
+        // Coalesce token deltas; everything else applies immediately (after flushing
+        // buffered text so transcript ordering stays exact). llama.cpp streams
+        // 50–100 chunks/s and every `items` mutation re-runs SwiftUI layout of the
+        // whole growing transcript — unthrottled, the layout pass outruns the main
+        // thread and the window beachballs (sampled: 100% in placeSubviews).
+        switch event {
+        case .textDelta(_, let itemID, let text):
+            bufferTextDelta(itemID, text: text, reasoning: false)
+            return
+        case .reasoningDelta(_, let itemID, let text):
+            bufferTextDelta(itemID, text: text, reasoning: true)
+            return
+        default:
+            flushTextDeltas()
+        }
         switch event {
         case .sessionStarted(let s):
             // Only adopt when nothing is tracked: a late/echoed event must not
@@ -472,10 +487,8 @@ final class AgentController {
         case .turnStarted(let t):
             currentTurn = t
             phase = .running
-        case .textDelta(_, let itemID, let text):
-            upsertText(itemID, text: text, reasoning: false)
-        case .reasoningDelta(_, let itemID, let text):
-            upsertText(itemID, text: text, reasoning: true)
+        case .textDelta, .reasoningDelta:
+            break // handled above (buffered)
         case .toolCallStarted(let call):
             autoNudges = 0   // model is doing real work — reset the nudge budget
             upsertToolCall(call, output: nil)
@@ -657,6 +670,28 @@ final class AgentController {
     private func append(_ item: AgentItem) {
         if let id = item.itemID { itemIndex[id] = items.count }
         items.append(item)
+    }
+
+    /// Pending streamed text per itemID, published to `items` at most ~12×/s.
+    /// (`items` mutations drive full transcript layout; see `apply`.)
+    private var pendingDeltas: [String: (text: String, reasoning: Bool)] = [:]
+    private var deltaFlushTask: Task<Void, Never>?
+
+    private func bufferTextDelta(_ itemID: String, text: String, reasoning: Bool) {
+        if let p = pendingDeltas[itemID], p.reasoning != reasoning { flushTextDeltas() }
+        pendingDeltas[itemID, default: ("", reasoning)].text += text
+        guard deltaFlushTask == nil else { return }
+        deltaFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            self?.deltaFlushTask = nil
+            self?.flushTextDeltas()
+        }
+    }
+
+    private func flushTextDeltas() {
+        guard !pendingDeltas.isEmpty else { return }
+        for (id, p) in pendingDeltas { upsertText(id, text: p.text, reasoning: p.reasoning) }
+        pendingDeltas.removeAll()
     }
 
     private func upsertText(_ itemID: String, text: String, reasoning: Bool) {

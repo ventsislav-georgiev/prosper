@@ -18,6 +18,31 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.124.0
+
+### Coding agent — llama.cpp engine
+- **The coding agent now runs on the same llama.cpp engine as inline
+  autocomplete.** Tool calls are grammar-locked during decoding — a malformed
+  call is structurally impossible, so the old parse-repair round-trips (each a
+  full prompt re-read) are gone. Repeated turns reuse the prompt cache, and the
+  KV cache runs quantized with flash attention, cutting per-turn latency and
+  memory.
+- **New GGUF model catalog for the agent.** Seven coding-tuned models from
+  2.7 GB to 45 GB: Qwen3.5 4B, Nemotron 3 Nano 4B, Qwen3 8B, Qwen3-Coder
+  30B-A3B (recommended), Nemotron 3 Nano 30B-A3B, Qwen3-Next 80B and
+  Qwen3-Coder-Next 80B. The former MLX list is retired; an existing selection
+  migrates to the recommended model automatically. Custom models imported from
+  a Hugging Face URL keep working unchanged.
+- **Fixed the chat window freezing during fast replies.** Small models stream
+  faster than the transcript could lay itself out, blocking the whole window;
+  streamed text now renders in coalesced batches and the window stays
+  responsive.
+
+### System stats
+- **Separate "Sensors interval" for temperatures and power.** The priciest
+  sensor reads can now sample slower than the main update interval, and the
+  network ping follows the update interval instead of firing every second.
+
 ## v2.123.0
 
 ### Inline autocomplete — a new completion engine

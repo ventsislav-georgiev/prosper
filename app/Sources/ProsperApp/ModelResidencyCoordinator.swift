@@ -22,8 +22,9 @@ actor ModelResidencyCoordinator {
     enum Mode: Sendable, Equatable { case inline, agent }
     private(set) var mode: Mode = .inline
 
-    /// The agent engine, resident only in `.agent` mode.
-    private var agent: MLXEngine?
+    /// The agent engine, resident only in `.agent` mode. Either the llama.cpp
+    /// engine (GGUF catalog rows) or a dedicated `MLXEngine` (HF snapshot rows).
+    private var agent: (any AgentChatEngine)?
 
     /// Cheap, lock-guarded snapshot of "is the agent model resident", readable from
     /// the inline hot path without an actor hop. `OSAllocatedUnfairLock` is the
@@ -39,7 +40,7 @@ actor ModelResidencyCoordinator {
     /// (e.g. `warmUp` on window open racing the first `submit`) both pass the
     /// `mode == .agent` check while the first is suspended in `load` and each
     /// loads its own multi-GB engine.
-    private var acquireTask: Task<MLXEngine, Error>?
+    private var acquireTask: Task<any AgentChatEngine, Error>?
     /// Progress callbacks of every waiter on the in-flight load (a later caller
     /// must still see download progress — the chat UI's loading bar).
     private var progressSinks: [@Sendable (Double, String) -> Void] = []
@@ -56,11 +57,11 @@ actor ModelResidencyCoordinator {
     /// lazily) and the error is rethrown — the caller surfaces it in the chat UI.
     func acquireAgent(
         progress: @escaping @Sendable (Double, String) -> Void
-    ) async throws -> MLXEngine {
+    ) async throws -> any AgentChatEngine {
         if mode == .agent, let agent { return agent }
         progressSinks.append(progress)
         let myEpoch = epoch
-        let task: Task<MLXEngine, Error>
+        let task: Task<any AgentChatEngine, Error>
         if let acquireTask {
             task = acquireTask
         } else {
@@ -70,6 +71,14 @@ actor ModelResidencyCoordinator {
             // dies with the load.
             task = Task {
                 await MLXEngine.shared.unload()
+                if let gguf = AgentModelRegistry.gguf(for: modelId) {
+                    // llama.cpp path. The inline llama engine (if resident) stays —
+                    // it's ~3 GB and serves autocomplete the moment agent mode ends.
+                    try await LlamaAgentEngine.shared.ensureModel(gguf) { p, s in
+                        Task { await ModelResidencyCoordinator.shared.fanProgress(p, s) }
+                    }
+                    return LlamaAgentEngine.shared
+                }
                 let engine = MLXEngine(modelId: modelId)
                 try await engine.load { p, s in
                     Task { await ModelResidencyCoordinator.shared.fanProgress(p, s) }
@@ -119,5 +128,5 @@ actor ModelResidencyCoordinator {
     }
 
     /// The live agent engine, if resident (nil in inline mode).
-    func currentAgentEngine() -> MLXEngine? { agent }
+    func currentAgentEngine() -> (any AgentChatEngine)? { agent }
 }

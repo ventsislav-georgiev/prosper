@@ -400,7 +400,7 @@ private final class HTTPConnection: @unchecked Sendable {
     }
 
     private func bufferedResponses(
-        engine: MLXEngine, request: ResponsesRequest, format: ToolCallFormat,
+        engine: any AgentChatEngine, request: ResponsesRequest, format: ToolCallFormat,
         responseID: String, model: String
     ) async throws {
         let chat = request.chatRequest
@@ -421,7 +421,7 @@ private final class HTTPConnection: @unchecked Sendable {
     /// turn is buffered whole (tool args must validate before emission); a pure-text
     /// turn streams text deltas live.
     private func streamResponses(
-        engine: MLXEngine, request: ResponsesRequest, format: ToolCallFormat,
+        engine: any AgentChatEngine, request: ResponsesRequest, format: ToolCallFormat,
         responseID: String, model: String
     ) async throws {
         let chat = request.chatRequest
@@ -536,7 +536,7 @@ private final class HTTPConnection: @unchecked Sendable {
     // MARK: Non-streaming
 
     private func bufferedCompletion(
-        engine: MLXEngine, request: OpenAIChatRequest, format: ToolCallFormat,
+        engine: any AgentChatEngine, request: OpenAIChatRequest, format: ToolCallFormat,
         responseID: String, model: String
     ) async throws {
         let result = try await generateValidated(engine: engine, request: request, format: format)
@@ -553,7 +553,7 @@ private final class HTTPConnection: @unchecked Sendable {
     // MARK: Streaming (SSE)
 
     private func streamCompletion(
-        engine: MLXEngine, request: OpenAIChatRequest, format: ToolCallFormat,
+        engine: any AgentChatEngine, request: OpenAIChatRequest, format: ToolCallFormat,
         responseID: String, model: String
     ) async throws {
         sendSSEHeader()
@@ -612,7 +612,7 @@ private final class HTTPConnection: @unchecked Sendable {
     /// raw stream of the FIRST attempt only (live UI deltas; repair retries stay
     /// buffered so a corrected answer is never streamed twice).
     private func generateValidated(
-        engine: MLXEngine, request: OpenAIChatRequest, format: ToolCallFormat,
+        engine: any AgentChatEngine, request: OpenAIChatRequest, format: ToolCallFormat,
         maxRepairs: Int = 2, onChunk: ((String) -> Void)? = nil
     ) async throws -> GenerationResult {
         var turns = request.chatTurns(format: format)
@@ -650,7 +650,7 @@ private final class HTTPConnection: @unchecked Sendable {
 
     /// Drain a full generation into one string, optionally observing each chunk.
     private func collect(
-        engine: MLXEngine, turns: [MLXEngine.ChatTurn], tools: [ToolSpec],
+        engine: any AgentChatEngine, turns: [MLXEngine.ChatTurn], tools: [ToolSpec],
         request: OpenAIChatRequest, onChunk: ((String) -> Void)? = nil
     ) async throws -> String {
         var out = ""
