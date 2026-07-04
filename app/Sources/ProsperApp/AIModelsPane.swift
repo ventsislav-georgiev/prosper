@@ -48,12 +48,9 @@ final class LoadedModelMonitor: ObservableObject {
 /// "add your own" via a Hugging Face URL. Model *selection* still lives in the
 /// Completions and Agent panes (this is the management hub).
 struct AIModelsPane: View {
-    /// One sheet at a time — SwiftUI only honours a single `.sheet` per view, so both
-    /// the add-custom and rename flows route through this.
     private enum ActiveSheet: Identifiable {
         case addCustom
-        case rename(RenameTarget)
-        var id: String { switch self { case .addCustom: "add"; case .rename(let t): "rename-\(t.id)" } }
+        var id: String { "add" }
     }
 
     @ObservedObject var model: SettingsModel
@@ -121,8 +118,6 @@ struct AIModelsPane: View {
             switch which {
             case .addCustom:
                 AddCustomModelSheet(onDone: { sheet = nil; refresh += 1 })
-            case .rename(let t):
-                RenameModelSheet(target: t, onDone: { sheet = nil; refresh += 1 })
             }
         }
     }
@@ -162,21 +157,36 @@ struct AIModelsPane: View {
             } else {
                 HStack(spacing: sz(6)) {
                     if downloaded {
-                        if !isCurrent {
-                            Button("Use") {
-                                LlamaInlineEngine.selectModel(m.id); refresh += 1
-                            }.buttonStyle(.neon)
-                        }
-                        Button("Reveal") {
-                            NSWorkspace.shared.activateFileViewerSelecting(
-                                [LlamaInlineEngine.fileURL(for: m)])
-                        }.buttonStyle(.neon)
                         Button("Delete") {
                             Task { await LlamaInlineEngine.deleteModel(m); refresh += 1 }
                         }.buttonStyle(.neonDestructive)
+                        Menu {
+                            if !isCurrent {
+                                Button("Use for inline") {
+                                    LlamaInlineEngine.selectModel(m.id); refresh += 1
+                                }
+                            }
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting(
+                                    [LlamaInlineEngine.fileURL(for: m)])
+                            }
+                        } label: { Image(systemName: "ellipsis.circle") }
+                            .menuStyle(.borderlessButton).fixedSize()
                     } else {
                         Button("Download") { downloadGGUF(m) }.buttonStyle(.neon)
                             .disabled(anyDownloadActive)
+                        if !isCurrent {
+                            Menu {
+                                // Select + fetch in one go — selecting a missing GGUF
+                                // without downloading would silently kill autocomplete
+                                // (ensureLoaded throws modelMissing).
+                                Button("Use for inline") {
+                                    LlamaInlineEngine.selectModel(m.id); refresh += 1
+                                    downloadGGUF(m)
+                                }.disabled(anyDownloadActive)
+                            } label: { Image(systemName: "ellipsis.circle") }
+                                .menuStyle(.borderlessButton).fixedSize()
+                        }
                     }
                 }
             }
@@ -184,6 +194,7 @@ struct AIModelsPane: View {
     }
 
     private func downloadGGUF(_ m: LlamaInlineEngine.CatalogModel) {
+        guard !anyDownloadActive else { return }
         ggufProgress[m.id] = (0, "Starting download…")
         Task {
             do {
@@ -370,16 +381,13 @@ struct AIModelsPane: View {
                         .disabled(anyDownloadActive)
                 }
                 Menu {
-                    if downloaded {
-                        Button("Reveal in Finder") { ModelFiles.reveal(row.id) }
-                    }
                     if !isCurrent {
                         Button(role == .inline ? "Use for inline" : "Use for agent") {
                             if role == .inline { model.coreModel = row.id } else { model.agentModel = row.id }
                         }
                     }
-                    Button("Rename…") {
-                        sheet = .rename(RenameTarget(id: row.id, currentLabel: row.fallbackLabel))
+                    if downloaded {
+                        Button("Reveal in Finder") { ModelFiles.reveal(row.id) }
                     }
                     if row.isCustom {
                         Button("Remove from list", role: .destructive) {
@@ -400,44 +408,6 @@ struct AIModelsPane: View {
             .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
             .background(color.opacity(0.18)).clipShape(Capsule())
             .foregroundStyle(color)
-    }
-}
-
-// MARK: - Rename sheet
-
-struct RenameTarget: Identifiable {
-    let id: String
-    let currentLabel: String
-}
-
-/// Edits the display label override for a model (the "rename with my own clarifications
-/// in brackets" feature). Clearing it reverts to the built-in name.
-private struct RenameModelSheet: View {
-    let target: RenameTarget
-    let onDone: () -> Void
-    @State private var label: String
-
-    init(target: RenameTarget, onDone: @escaping () -> Void) {
-        self.target = target
-        self.onDone = onDone
-        _label = State(initialValue: CustomModelStore.label(for: target.id, fallback: target.currentLabel))
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: sz(14)) {
-            Text("Rename Model").font(Neon.font(.headline)).foregroundStyle(Neon.textPrimary)
-            Text(target.id).font(Neon.font(.caption, design: .monospaced)).foregroundStyle(Neon.textSecondary)
-            TextField("Display name", text: $label).frame(width: sz(360))
-            HStack {
-                Button("Reset to default") { CustomModelStore.clearLabel(target.id); onDone() }
-                    .buttonStyle(.neon)
-                Spacer()
-                Button("Cancel") { onDone() }.buttonStyle(.neon)
-                Button("Save") { CustomModelStore.setLabel(target.id, label); onDone() }
-                    .buttonStyle(.neon)
-            }
-        }
-        .padding(sz(20)).frame(width: sz(420)).background(SettingsBackground())
     }
 }
 
