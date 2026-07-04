@@ -40,6 +40,9 @@ tag from the now-released section and put it on the new top draft.
 - Event list shows **1 day by default**.
 - Today no longer keeps a selected-looking fill when another day is selected —
   it's marked by its bright outline only; the fill belongs to the selection.
+- **Event details**: click an event in the list for the full picture — date and
+  time, location, attendees with accept/decline status, a join button for video
+  calls, and the event notes with clickable links.
 - Added **Itsycal** to the acknowledgements (README + About) as the calendar's
   inspiration.
 

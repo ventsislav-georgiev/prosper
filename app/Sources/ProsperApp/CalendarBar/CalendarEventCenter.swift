@@ -11,6 +11,13 @@
 import AppKit
 import EventKit
 
+/// One attendee of an event, for the detail view.
+struct CalendarAttendee: Equatable, Sendable {
+    enum Status: Equatable, Sendable { case accepted, declined, pending, unknown }
+    let name: String
+    let status: Status
+}
+
 /// One occurrence-day of an event, pre-flattened for the popup. A multi-day
 /// event contributes one info per visible day, tagged with span position.
 struct CalendarEventInfo: Identifiable, Equatable, Sendable {
@@ -26,6 +33,8 @@ struct CalendarEventInfo: Identifiable, Equatable, Sendable {
     let color: RGBAColor        // the calendar's colour
     let calendarID: String
     let videoURL: URL?          // detected conference link, if any
+    let notes: String           // event notes, "" when none (detail view)
+    let attendees: [CalendarAttendee]
 }
 
 /// A calendar row for the settings checklist.
@@ -151,6 +160,18 @@ final class CalendarEventCenter {
                         .map { $0.participantStatus == .pending } ?? false)
             let color = RGBAColor(cgColor: event.calendar?.cgColor)
             let video = detectVideoURL(event)
+            let notes = event.notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let attendees: [CalendarAttendee] = (event.attendees ?? []).map { p in
+                let name = p.name ?? p.url.absoluteString
+                    .replacingOccurrences(of: "mailto:", with: "")
+                let status: CalendarAttendee.Status = switch p.participantStatus {
+                case .accepted: .accepted
+                case .declined: .declined
+                case .pending, .tentative: .pending
+                default: .unknown
+                }
+                return CalendarAttendee(name: name, status: status)
+            }
             let firstDay = calendar.startOfDay(for: start)
             // A timed event "covers" every day it overlaps; an all-day event's
             // endDate is the exclusive midnight, so back it off by a second to
@@ -170,7 +191,9 @@ final class CalendarEventCenter {
                     isTentative: isTentative,
                     color: color,
                     calendarID: event.calendar?.calendarIdentifier ?? "",
-                    videoURL: video)
+                    videoURL: video,
+                    notes: notes,
+                    attendees: attendees)
                 byDay[day, default: []].append(info)
                 guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
                 day = next

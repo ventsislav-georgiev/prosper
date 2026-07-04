@@ -17,6 +17,7 @@ struct CalendarPopupView: View {
 
     @State private var hoveredDay: Date?
     @State private var dragStartRows: Int?
+    @State private var detailEvent: CalendarEventInfo?
 
     /// User text-scale on top of the global UI scale.
     private var f: CGFloat { store.style.textScale.factor }
@@ -297,6 +298,8 @@ struct CalendarPopupView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if !store.accessGranted {
                     accessHint
+                } else if let event = detailEvent {
+                    eventDetail(event)
                 } else {
                     ForEach(agendaDays, id: \.self) { day in
                         let events = store.eventsByDay[day] ?? []
@@ -317,7 +320,9 @@ struct CalendarPopupView: View {
             .padding(.vertical, sz(6))
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxHeight: sz(240) * f)
+        .frame(maxHeight: (detailEvent == nil ? sz(240) : sz(380)) * f)
+        // Back to the list when the user picks another day.
+        .onChange(of: store.selectedDay) { _ in detailEvent = nil }
     }
 
     private var accessHint: some View {
@@ -415,6 +420,93 @@ struct CalendarPopupView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, sz(14)).padding(.vertical, sz(3))
+        .contentShape(Rectangle())
+        .onTapGesture { detailEvent = event }
+    }
+
+    // MARK: - Event detail (Itsycal parity: click an agenda row for the
+    // full picture — date, attendees with status, notes with tappable links)
+
+    @ViewBuilder
+    private func eventDetail(_ event: CalendarEventInfo) -> some View {
+        VStack(alignment: .leading, spacing: sz(8)) {
+            HStack(alignment: .top, spacing: sz(8)) {
+                Text(event.title)
+                    .font(Neon.font(14 * f, weight: .semibold))
+                    .foregroundStyle(Neon.textPrimary)
+                    .textSelection(.enabled)
+                Spacer(minLength: sz(8))
+                Button { detailEvent = nil } label: {
+                    Image(systemName: "delete.backward")
+                        .font(.system(size: sz(13) * f))
+                        .foregroundStyle(Neon.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Back to events")
+            }
+            Text(detailDateLine(event))
+                .font(Neon.font(12 * f).monospacedDigit())
+                .foregroundStyle(Neon.textSecondary)
+            if !event.location.isEmpty {
+                Text(event.location)
+                    .font(Neon.font(11 * f))
+                    .foregroundStyle(Neon.textSecondary)
+                    .textSelection(.enabled)
+            }
+            if let url = event.videoURL {
+                Button { NSWorkspace.shared.open(url) } label: {
+                    Label("Join video call", systemImage: "video")
+                        .font(Neon.font(11 * f))
+                }
+            }
+            if !event.attendees.isEmpty {
+                VStack(alignment: .leading, spacing: sz(3)) {
+                    ForEach(Array(event.attendees.enumerated()), id: \.offset) { _, a in
+                        HStack(spacing: sz(6)) {
+                            attendeeIcon(a.status)
+                                .font(.system(size: sz(11) * f))
+                            Text(a.name)
+                                .font(Neon.font(11 * f))
+                                .foregroundStyle(Neon.textSecondary)
+                                .textSelection(.enabled)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+            if !event.notes.isEmpty {
+                Divider().overlay(Neon.stroke)
+                Text(CalendarDetailText.linkified(event.notes))
+                    .font(Neon.font(12 * f))
+                    .foregroundStyle(Neon.textPrimary.opacity(0.92))
+                    .tint(Neon.blueBright)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, sz(14)).padding(.vertical, sz(6))
+    }
+
+    @ViewBuilder
+    private func attendeeIcon(_ status: CalendarAttendee.Status) -> some View {
+        switch status {
+        case .accepted:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .declined:
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+        case .pending:
+            Image(systemName: "questionmark.circle").foregroundStyle(Neon.textSecondary)
+        case .unknown:
+            Image(systemName: "circle").foregroundStyle(Neon.textSecondary.opacity(0.6))
+        }
+    }
+
+    private func detailDateLine(_ event: CalendarEventInfo) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = store.calendar
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        let day = formatter.string(from: event.startDate)
+        return event.isAllDay ? "\(day) — all day" : "\(day), \(timeRange(event))"
     }
 
     private func timeRange(_ event: CalendarEventInfo) -> String {
@@ -424,5 +516,27 @@ struct CalendarPopupView: View {
         formatter.dateStyle = .none
         if !event.isStartDay { return "ends \(formatter.string(from: event.endDate))" }
         return "\(formatter.string(from: event.startDate))–\(formatter.string(from: event.endDate))"
+    }
+}
+
+/// Turns plain event notes into an AttributedString whose URLs carry a .link
+/// attribute — SwiftUI Text renders those as tappable links. Plain enum (not a
+/// View static) so it's nonisolated and unit-testable.
+enum CalendarDetailText {
+    static func linkified(_ text: String) -> AttributedString {
+        var attr = AttributedString(text)
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue) else { return attr }
+        let ns = text as NSString
+        for match in detector.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            guard let url = match.url,
+                  let range = Range(match.range, in: text),
+                  let lower = AttributedString.Index(range.lowerBound, within: attr),
+                  let upper = AttributedString.Index(range.upperBound, within: attr)
+            else { continue }
+            attr[lower..<upper].link = url
+            attr[lower..<upper].underlineStyle = .single
+        }
+        return attr
     }
 }

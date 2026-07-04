@@ -207,4 +207,16 @@ final class CalendarBarTests: XCTestCase {
         // 0 = system; must resolve to a valid weekday whatever the host locale.
         XCTAssertTrue((1...7).contains(style.resolvedFirstWeekday))
     }
+
+    func testLinkifiedNotes() {
+        let attr = CalendarDetailText.linkified(
+            "Join https://zoom.us/j/123?pwd=x now or via https://meet.google.com/abc")
+        let links = attr.runs.compactMap(\.link)
+        XCTAssertEqual(links.map(\.absoluteString),
+                       ["https://zoom.us/j/123?pwd=x", "https://meet.google.com/abc"])
+        // Text content unchanged by linkification.
+        XCTAssertEqual(String(attr.characters),
+                       "Join https://zoom.us/j/123?pwd=x now or via https://meet.google.com/abc")
+        XCTAssertTrue(CalendarDetailText.linkified("no links here").runs.compactMap(\.link).isEmpty)
+    }
 }
