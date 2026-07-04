@@ -152,7 +152,7 @@ struct CalendarPopupView: View {
                 Color.clear
                 ForEach(0..<runs.count, id: \.self) { i in
                     RoundedRectangle(cornerRadius: sz(8), style: .continuous)
-                        .fill(Neon.card.opacity(0.7))
+                        .fill(Neon.cardHi.opacity(0.85))
                         .frame(width: CGFloat(runs[i].count) * cellW)
                         .offset(x: CGFloat(runs[i].lowerBound) * cellW)
                 }
@@ -198,18 +198,24 @@ struct CalendarPopupView: View {
         .frame(width: cellW, height: cellH)
         .background(
             RoundedRectangle(cornerRadius: sz(6), style: .continuous)
-                .fill(isSelected && !isToday ? Neon.cardHi : Color.clear)
+                .fill(isToday ? Neon.blueBright.opacity(0.16)
+                      : (isSelected ? Neon.blue.opacity(0.32) : Color.clear))
         )
         .overlay(
             RoundedRectangle(cornerRadius: sz(6), style: .continuous)
                 .stroke(isToday ? Neon.blueBright
-                        : (isHovered ? Neon.textSecondary.opacity(0.4) : Color.clear),
-                        lineWidth: isToday ? 2 : 1)
+                        : (isSelected ? Neon.blue
+                           : (isHovered ? Neon.textSecondary.opacity(0.4) : Color.clear)),
+                        lineWidth: isToday ? 2 : (isSelected ? 1.5 : 1))
         )
         .contentShape(Rectangle())
         .onHover { hoveredDay = $0 ? day.date : (hoveredDay == day.date ? nil : hoveredDay) }
-        .onTapGesture(count: 2) { openCalendarApp() }
-        .onTapGesture { store.selectedDay = day.date }
+        // Double-tap via .gesture + single via .simultaneousGesture: the plain
+        // .onTapGesture pair makes the single tap wait out double-tap
+        // disambiguation (~1s perceived selection lag). Selecting on the first
+        // tap of a double-tap is harmless — it opens Calendar anyway.
+        .gesture(TapGesture(count: 2).onEnded { openCalendarApp() })
+        .simultaneousGesture(TapGesture().onEnded { store.selectedDay = day.date })
     }
 
     /// Bottom drag pill: resize the grid 6–10 rows (Itsycal parity).

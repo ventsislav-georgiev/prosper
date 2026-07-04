@@ -23,6 +23,41 @@ enum CalendarIconMode: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Menu-bar icon text weight. Regular by default — the bold look is opt-in.
+enum CalendarIconTextWeight: String, Codable, CaseIterable, Sendable {
+    case regular, medium, semibold, bold
+    var label: String {
+        switch self {
+        case .regular: "Regular"; case .medium: "Medium"
+        case .semibold: "Semibold"; case .bold: "Bold"
+        }
+    }
+    var weight: Font.Weight {
+        switch self {
+        case .regular: .regular; case .medium: .medium
+        case .semibold: .semibold; case .bold: .bold
+        }
+    }
+}
+
+/// Menu-bar icon font design (system font families only — arbitrary font
+/// pickers are overkill for a 16pt menu-bar badge).
+enum CalendarIconFontDesign: String, Codable, CaseIterable, Sendable {
+    case standard, rounded, monospaced, serif
+    var label: String {
+        switch self {
+        case .standard: "Default"; case .rounded: "Rounded"
+        case .monospaced: "Monospaced"; case .serif: "Serif"
+        }
+    }
+    var design: Font.Design {
+        switch self {
+        case .standard: .default; case .rounded: .rounded
+        case .monospaced: .monospaced; case .serif: .serif
+        }
+    }
+}
+
 /// Popup text scale steps (segmented presets, not a slider — a slider's .id()
 /// rebuild tears the drag gesture elsewhere in the app, same convention here).
 enum CalendarTextScale: String, Codable, CaseIterable, Sendable {
@@ -38,6 +73,11 @@ struct CalendarBarStyle: Codable, Equatable, Sendable {
     var showDayOfWeekInIcon: Bool
     var datetimePattern: String     // used by .pattern; empty falls back to .solid
     var hideIcon: Bool
+    // Optional (added after first beta): missing keys in an existing saved blob
+    // must keep decoding — a non-optional field would fail decode and silently
+    // reset every setting to .default. nil means the default.
+    var iconTextWeight: CalendarIconTextWeight?   // nil = .regular
+    var iconFontDesign: CalendarIconFontDesign?   // nil = .standard
 
     // Popup calendar
     var textScale: CalendarTextScale
@@ -55,6 +95,10 @@ struct CalendarBarStyle: Codable, Equatable, Sendable {
     // once the user touches the checklist it becomes an explicit identifier list.
     var selectedCalendarIDs: [String]?
 
+    /// Resolved menu-bar icon font attributes (nil fields mean the default).
+    var resolvedIconWeight: Font.Weight { (iconTextWeight ?? .regular).weight }
+    var resolvedIconDesign: Font.Design { (iconFontDesign ?? .standard).design }
+
     /// Resolved first weekday (1=Sun…7=Sat), honouring "follow system".
     var resolvedFirstWeekday: Int {
         firstWeekday >= 1 && firstWeekday <= 7 ? firstWeekday : Calendar.current.firstWeekday
@@ -70,11 +114,13 @@ struct CalendarBarStyle: Codable, Equatable, Sendable {
     func isCalendarSelected(_ id: String) -> Bool { selectedCalendarIDs?.contains(id) ?? true }
 
     static let `default` = CalendarBarStyle(
-        iconMode: .solid,
-        showMonthInIcon: false,
-        showDayOfWeekInIcon: false,
+        iconMode: .outline,
+        showMonthInIcon: true,
+        showDayOfWeekInIcon: true,
         datetimePattern: "",
         hideIcon: false,
+        iconTextWeight: nil,
+        iconFontDesign: nil,
         textScale: .medium,
         firstWeekday: 0,
         // Sat (bit 6) + Sun (bit 0) — the Itsycal weekend default.

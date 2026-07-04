@@ -342,6 +342,11 @@ if [[ "$NOTARIZE" == 1 ]]; then
   # automation.apple-events: osascript host API / Hammerspoon-compat URL routing
   #   drives other apps via NSAppleScript ("tell application Safari ..."); without
   #   it that is denied (errAEEventNotPermitted). Unrestricted, safe on the deep set.
+  # personal-information.calendars: EventKit for the Calendar extension. Under the
+  #   hardened runtime requestFullAccessToEvents silently fails without it — no TCC
+  #   prompt, and Prosper never appears in System Settings > Privacy > Calendars.
+  #   Must ALSO be in scripts/Prosper.entitlements (profile reseal replaces the
+  #   main executable's entitlements when embedded.provisionprofile is present).
   # NOTE: keep this plist comment-free. AMFI's entitlement parser
   # (AMFIUnserializeXML) is stricter than plutil and rejects an XML comment that
   # contains a double hyphen (e.g. a literal "--deep"), failing the whole sign with
@@ -355,6 +360,8 @@ if [[ "$NOTARIZE" == 1 ]]; then
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.personal-information.calendars</key>
 	<true/>
 </dict>
 </plist>

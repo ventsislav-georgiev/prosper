@@ -29,6 +29,11 @@
 	     controlling another app is denied (errAEEventNotPermitted). -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+	<!-- EventKit access for the Calendar extension. Under the hardened runtime
+	     requestFullAccessToEvents silently fails without this: no TCC prompt,
+	     and the app never appears in System Settings > Privacy > Calendars. -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
 	<!-- iCloud-Keychain settings-sync key (SyncKeyStore). The default keychain
 	     access group is <TeamID>.<bundleID>; declaring it explicitly is what
 	     clears errSecMissingEntitlement for the kSecAttrSynchronizable item. -->

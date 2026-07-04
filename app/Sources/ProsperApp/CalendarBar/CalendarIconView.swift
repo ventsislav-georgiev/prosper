@@ -28,7 +28,8 @@ struct CalendarIconWidget: View {
                         badge(filled: true)
                     } else {
                         Text(Self.patternText(style.datetimePattern, now: store.now))
-                            .font(.system(size: 12, weight: .medium).monospacedDigit())
+                            .font(.system(size: 12, weight: style.resolvedIconWeight,
+                                          design: style.resolvedIconDesign).monospacedDigit())
                             .lineLimit(1)
                     }
                 }
@@ -43,27 +44,30 @@ struct CalendarIconWidget: View {
     /// out of the fill (Itsycal's XOR draw); outline mode strokes the rect.
     @ViewBuilder
     private func badge(filled: Bool) -> some View {
-        let text = Self.badgeText(style: store.style, today: store.today,
+        let style = store.style
+        let text = Self.badgeText(style: style, today: store.today,
                                   calendar: store.calendar)
+        // Text drives layout in BOTH modes: a shape with .fill() has no
+        // intrinsic width, so shape-first + .fixedSize() collapses to a sliver
+        // (the beta.2 "narrow dark pill" bug). Knockout via destinationOut over
+        // a background shape instead.
+        let label = Text(text)
+            .font(.system(size: 11, weight: style.resolvedIconWeight,
+                          design: style.resolvedIconDesign).monospacedDigit())
+            .lineLimit(1)
+            .padding(.horizontal, 4)
+            .frame(height: 16)
         if filled {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(.primary)
-                .frame(height: 16)
-                .overlay(
-                    Text(text)
-                        .font(.system(size: 11, weight: .bold).monospacedDigit())
-                        .lineLimit(1)
-                        .padding(.horizontal, 4)
-                        .blendMode(.destinationOut)
+            label
+                .blendMode(.destinationOut)
+                .background(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(.primary)
                 )
                 .compositingGroup()
                 .fixedSize()
         } else {
-            Text(text)
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .lineLimit(1)
-                .padding(.horizontal, 4)
-                .frame(height: 16)
+            label
                 .overlay(
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .stroke(.primary, lineWidth: 1)

@@ -20,6 +20,21 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.126.0 *(unreleased)*
 
+### Calendar beta feedback fixes
+- **Calendar access now works**: the hardened-runtime `calendars` entitlement
+  was missing, so macOS never showed the access prompt and Prosper never
+  appeared in System Settings → Privacy & Security → Calendars.
+- Fixed the **Filled icon style** rendering as a narrow pill with a squished
+  day number.
+- New defaults: **Outline** icon style with month and day-of-week shown.
+- Menu bar icon text is no longer bold — new **Text weight** (Regular /
+  Medium / Semibold / Bold) and **Font style** (Default / Rounded /
+  Monospaced / Serif) options in settings.
+- **More popup contrast**: clearer weekend shading, the selected day now gets
+  a visible accent fill and outline (today keeps its bright outline).
+- **Day selection is instant** — no more ~1s delay while waiting to rule out
+  a double-click (double-click still opens the Calendar app).
+
 ### New: Calendar
 - New opt-in **Calendar** extension: an Itsycal-style menu bar calendar that
   reads your macOS calendars (asks for Calendar access on first enable).

@@ -54,6 +54,23 @@ struct CalendarPane: View {
                         .disabled(style.hideIcon)
                 }
             }
+            if style.iconMode != .glyph {
+                NeonDivider()
+                NeonRow("Text weight") {
+                    Picker("", selection: optionalBinding(\.iconTextWeight, default: .regular)) {
+                        ForEach(CalendarIconTextWeight.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden().pickerStyle(.segmented).frame(width: sz(280))
+                    .disabled(style.hideIcon)
+                }
+                NeonRow("Font style") {
+                    Picker("", selection: optionalBinding(\.iconFontDesign, default: .standard)) {
+                        ForEach(CalendarIconFontDesign.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden().pickerStyle(.segmented).frame(width: sz(280))
+                    .disabled(style.hideIcon)
+                }
+            }
             NeonDivider()
             NeonRow("Hide icon",
                     subtitle: "Keeps the calendar reachable via its shortcut") {
@@ -195,6 +212,14 @@ struct CalendarPane: View {
     }
 
     // MARK: - Write-through
+
+    /// Binding over an optional style field where nil means `default` — the
+    /// picker always shows a concrete value; writes store it explicitly.
+    private func optionalBinding<T>(_ keyPath: WritableKeyPath<CalendarBarStyle, T?>,
+                                    default def: T) -> Binding<T> {
+        Binding(get: { style[keyPath: keyPath] ?? def },
+                set: { style[keyPath: keyPath] = $0; commit() })
+    }
 
     private func binding<T>(_ keyPath: WritableKeyPath<CalendarBarStyle, T>) -> Binding<T> {
         Binding(get: { style[keyPath: keyPath] },
