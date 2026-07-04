@@ -1,0 +1,39 @@
+[extension]
+id          = "com.prosper.migration"
+name        = "migration"
+title       = "Migration Assistant"
+description = "Import your quicklinks and snippets from Raycast or Alfred. Guides you through each app's export flow, reads the exported files (including password-protected Raycast .rayconfig backups), and merges everything into Prosper without overwriting what you already have."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "arrow.down.doc"
+system      = true
+# Opt-in: a one-time migration tool — stays off until the user wants it.
+default_disabled = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Palette entry that deep-links into the settings pane below, so "import" /
+# "raycast" / "alfred" typed in the launcher surfaces the migration flow.
+[[contributes.commands]]
+id       = "migration.open"
+title    = "Import from Raycast or Alfred"
+mode     = "no-view"
+launches_window = true
+icon     = "arrow.down.doc"
+keywords = ["import", "migrate", "migration", "raycast", "alfred", "quicklinks", "snippets"]
+
+# Dynamic (Tier-B) settings: the guided import flow (Raycast JSON / .rayconfig,
+# Alfred auto-detect / .alfredsnippets) plus the last-import summary.
+[[contributes.settings_sections]]
+id       = "migration"
+title    = "Migration Assistant"
+icon     = "arrow.down.doc"
+accent   = "migration"
+subtitle = "Import quicklinks & snippets from Raycast or Alfred"
+dynamic  = true

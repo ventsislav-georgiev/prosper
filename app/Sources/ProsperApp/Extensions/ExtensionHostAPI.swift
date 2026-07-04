@@ -122,6 +122,13 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func snippetIgnored() -> String
     func snippetSetIgnored(json: String)
     func snippetImportFile() -> String
+    // Quicklinks (native QuicklinkStore: UserDefaults runtime store +
+    // ~/.config/prosper/quicklinks.json mirror). Same JSON-marshalled pattern as
+    // snippets; `save` upserts by name and keeps the file mirror in sync, so
+    // importers (the migration extension) go through the store instead of poking
+    // another extension's prefs.
+    func quicklinksAll() -> String
+    func quicklinkSave(json: String)
     // File finder: ranked Spotlight (`NSMetadataQuery`) matches for a structured
     // query. `optsJSON` is the `host.files.search{…}` options object `{ name, kind,
     // ext, in, content, limit }`; returns a JSON array string `[{ name, path,
@@ -208,6 +215,11 @@ extension ExtensionHostServices {
     func snippetSave(json: String) {}
     func snippetRemove(name: String) {}
     func snippetExpand(keyword: String, argsJSON: String?) -> String { "" }
+
+    /// Default: no quicklink store (test / minimal hosts). The live host
+    /// (`LiveExtensionHostServices`) overrides these with the real `QuicklinkStore`.
+    func quicklinksAll() -> String { "[]" }
+    func quicklinkSave(json: String) {}
 
     /// Default: no Spotlight backend (test / minimal hosts). The live host
     /// overrides this with a real `FileSearchEngine` (`NSMetadataQuery`) query.
@@ -609,6 +621,17 @@ struct ExtensionHost {
         lua.register("__h_snippets_import_file") { rt in
             rt.push(services.snippetImportFile())
             return 1
+        }
+
+        // --- quicklinks (native QuicklinkStore; sync). JSON strings, decoded
+        // Lua-side; kept alive past the bootstrap nil-out like snippets. ---
+        lua.register("__h_quicklinks_all") { rt in
+            rt.push(services.quicklinksAll())
+            return 1
+        }
+        lua.register("__h_quicklink_save") { rt in
+            services.quicklinkSave(json: rt.stringArgument(1) ?? "")
+            return 0
         }
 
         // --- files (Spotlight file finder; async → sync, time-boxed) ---
@@ -1466,6 +1489,22 @@ struct ExtensionHost {
     __h_snippets_ignored = nil
     __h_snippets_set_ignored = nil
     __h_snippets_import_file = nil
+
+    -- Quicklinks (host.quicklinks). Native QuicklinkStore (UserDefaults store +
+    -- ~/.config/prosper/quicklinks.json mirror): read + upsert keyed by name.
+    --   host.quicklinks.all()                   -> { { name=, target=, description= }, ... }
+    --   host.quicklinks.save{ name=, target=, description= }   (upsert by name)
+    local raw_ql_all  = __h_quicklinks_all
+    local raw_ql_save = __h_quicklink_save
+    host.quicklinks = {
+        all = function()
+            local raw = raw_ql_all()
+            return raw and json_decode(raw) or {}
+        end,
+        save = function(q) raw_ql_save(json_encode(q or {})) end,
+    }
+    __h_quicklinks_all = nil
+    __h_quicklink_save = nil
 
     -- File finder (Spotlight). search{…} takes an options table — name plus
     -- optional kind/ext/in/content/limit filters — and returns a Lua array of

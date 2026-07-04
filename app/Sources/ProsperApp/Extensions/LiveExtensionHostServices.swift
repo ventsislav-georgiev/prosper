@@ -403,6 +403,22 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         }
     }
 
+    // MARK: Quicklinks (native QuicklinkStore)
+
+    func quicklinksAll() -> String {
+        Self.jsonString(QuicklinkStore.all().map {
+            ["name": $0.name, "target": $0.target, "description": $0.description]
+        }) ?? "[]"
+    }
+
+    func quicklinkSave(json: String) {
+        guard let data = json.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        QuicklinkStore.save(name: (obj["name"] as? String) ?? "",
+                            target: (obj["target"] as? String) ?? "",
+                            description: (obj["description"] as? String) ?? "")
+    }
+
     private static func jsonString(_ obj: Any) -> String? {
         guard let data = try? JSONSerialization.data(withJSONObject: obj),
               let s = String(data: data, encoding: .utf8) else { return nil }

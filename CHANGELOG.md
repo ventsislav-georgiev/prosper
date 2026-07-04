@@ -18,6 +18,33 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.125.0
+
+### New: Migration Assistant
+- New opt-in **Migration Assistant** extension imports your quicklinks and
+  snippets from **Raycast** or **Alfred**, with guided steps for each app's
+  export flow (also reachable from the launcher: "Import from Raycast or
+  Alfred"). Imports merge — existing quicklinks (same name) and snippets (same
+  name or keyword) are never overwritten, so re-running is always safe.
+- **Raycast:** import the plain JSON files written by Raycast's "Export
+  Quicklinks" / "Export Snippets" commands (file type auto-detected), or a
+  full password-protected `.rayconfig` backup — the export password is asked
+  for in a native dialog and never stored. `{argument}` placeholders are
+  converted to Prosper's `{query}`.
+- **Alfred:** one click imports custom web searches (as quicklinks) and
+  snippet collections straight from Alfred's preferences on disk — no export
+  step needed. Exported `.alfredsnippets` files are also accepted, and
+  collection keyword prefixes/suffixes are preserved.
+- Extensions can now read and add quicklinks through the new
+  `host.quicklinks` API (`all()` / `save{}`), same shape as `host.snippets`.
+
+### AI Models
+- Tidier model rows: secondary actions ("Use for inline", "Reveal in Finder")
+  now live in a "…" menu next to the primary button.
+- Picking a not-yet-downloaded inline model now starts its download in the
+  same step, so autocomplete can no longer be pointed at a missing file.
+- The model rename flow was removed.
+
 ## v2.124.1
 
 ### Fixed

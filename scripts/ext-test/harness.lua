@@ -251,6 +251,7 @@ function M.makeHost(opts)
         snippets = opts.snippets or {},
         snippetCollections = opts.snippetCollections or {},
         snippetIgnored = opts.snippetIgnored or {},
+        quicklinks = opts.quicklinks or {},
         snippetConfig = opts.snippetConfig or { enabled = true, autoExpand = true,
             wordBoundary = true, restoreClipboard = false },
         windowClosed = 0,
@@ -445,6 +446,18 @@ function M.makeHost(opts)
             ignored = function() return env.snippetIgnored end,
             set_ignored = function(list) env.snippetIgnored = list end,
             import_file = function() env.snippetImported = true end,
+        },
+
+        -- Quicklink store (host.quicklinks), backed by env.quicklinks. save
+        -- upserts by name, mirroring the native QuicklinkStore.
+        quicklinks = {
+            all = function() return env.quicklinks end,
+            save = function(q)
+                for i, e in ipairs(env.quicklinks) do
+                    if e.name == q.name then env.quicklinks[i] = q; return end
+                end
+                env.quicklinks[#env.quicklinks + 1] = q
+            end,
         },
     }
     env.host = host
