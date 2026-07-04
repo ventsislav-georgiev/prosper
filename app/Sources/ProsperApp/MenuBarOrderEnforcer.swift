@@ -48,7 +48,8 @@ final class MenuBarOrderEnforcer {
     /// Reconfigure from settings. Call on enable/disable, mode change, probe result,
     /// and when the saved order changes. Starts/stops the poll timer to match.
     /// The timer runs in BOTH modes now: on-demand still never auto-applies, but the
-    /// cheap tick is how manual ⌘-drags and new icons get auto-saved.
+    /// cheap tick is how NEW icons get filed at the placeholder. (User ⌘-drags are
+    /// NOT auto-saved — the saved order changes only via explicit Settings actions.)
     func update(store: MenuBarOrderStore, probeOK: Bool) {
         self.store = store
         self.probeOK = probeOK
@@ -152,7 +153,6 @@ final class MenuBarOrderEnforcer {
         // the background tick stamps the fingerprint on every change WITHOUT applying
         // in on-demand mode, so "unchanged since last tick" does not mean "in order".
         if !userInitiated, !dividerBroken, lastOrderFingerprint == order { return }
-        let previous = lastOrderFingerprint
         lastOrderFingerprint = order
 
         // Capture-free drift signal: build live keys from titles + the last index's
@@ -164,51 +164,28 @@ final class MenuBarOrderEnforcer {
         let curKeySet = Set(curKeys)
         let liveBundles = Set(cur.map { $0.bundleID ?? "unknown" })
 
-        // Physical band per live item — an x-vs-separator comparison that works
-        // COLLAPSED too: off-screen items keep enumerating (displayID(for:) falls
-        // back to the main display for off-screen frames) with minX left of the
-        // expanded separator, so hidden/visible membership reads correctly whether
-        // the bar is revealed or not. nil until the separator lays out (then
-        // "everything visible" would be a lie, not a signal). Shared by both
-        // auto-save paths below.
-        // Ceiling: with a second display arranged to the LEFT, off-screen frames
-        // resolve to that display instead and drop from `cur`; those items are
-        // then classified by their old side of the divider until the next reveal.
-        let liveHidden: Set<String>? = MenuBarManager.shared.hiddenSeparatorLaidOut
-            ? Set(MenuBarManager.shared.sectionedItems(cur)
-                .filter { $0.section != .visible }
-                .map { MenuBarArranger.identity(for: $0.item, hash: hashes[$0.item.windowID]).key })
-            : nil
+        // NO auto-adopt of user reorders. The tick used to classify "same windowIDs,
+        // new permutation" as a deliberate user ⌘-drag and silently adopt it into the
+        // saved order — but a Settings-driven apply doesn't reset this enforcer's
+        // fingerprint, so an imperfectly-landed apply pass matched the same signature
+        // and its half-applied layout became the new saved order. The enforcer then
+        // faithfully chased a slightly-wrong target on every pass ("always misses the
+        // right order by a little"). The saved order now changes ONLY via explicit
+        // Settings actions (Save current order, the drag editor) — and the new-icon
+        // merge below, which never reorders existing entries.
 
-        // AUTO-SAVE, part 1 — user reorder: the same windowIDs in a different order
-        // can only come from a user ⌘-drag (apps don't permute themselves, a relaunch
-        // mints a new windowID, and our own apply resets the fingerprint to nil so
-        // `previous` can't be a mid-apply frame). Adopt the live order into the saved
-        // one and do NOT enforce — the user just told us what they want.
-        if let previous, previous != order, Set(previous) == Set(order) {
-            let adopted = MenuBarOrderDiff.adoptLiveOrder(desired: store.desiredOrder,
-                                                          liveKeys: curKeys,
-                                                          liveHiddenKeys: liveHidden ?? [],
-                                                          hiddenDividerIndex: store.hiddenDividerIndex)
-            store.desiredOrder = adopted.order
-            store.hiddenDividerIndex = adopted.hiddenDividerIndex
-            persistStore()
-            return
-        }
-
-        // AUTO-SAVE, part 2 — new icons: merge freshly-appeared identities into the
-        // saved order at their observed position, so the engine KNOWS them instead of
-        // treating every later tick as unexplained drift (the back-and-forth the
-        // membership confusion caused). No moves here; pure bookkeeping.
-        // Placeholder slot for new icons: the user's saved position, defaulting to
-        // just RIGHT of the divider (top of the visible band) — macOS spawns new
-        // status items at the far left, physically inside the hidden band, and
-        // "new icon silently vanishes behind the chevron" is never what anyone wants.
+        // AUTO-FILE new icons: merge freshly-appeared identities into the saved order
+        // at the placeholder slot, so the engine KNOWS them instead of treating every
+        // later tick as unexplained drift. No moves here; pure bookkeeping. The
+        // placeholder handles any number of arrivals (each insertion pushes the cursor
+        // right, so a batch lands in arrival order). Default slot: just RIGHT of the
+        // divider (top of the visible band) — macOS spawns new status items at the far
+        // left, physically inside the hidden band, and "new icon silently vanishes
+        // behind the chevron" is never what anyone wants.
         let placeholder = store.newItemsIndex ?? store.hiddenDividerIndex ?? 0
         let (merged, dividerIdx) = MenuBarOrderDiff.mergingNewItems(
             desired: store.desiredOrder, live: curIdentities,
             hiddenDividerIndex: store.hiddenDividerIndex,
-            liveHiddenKeys: liveHidden,
             newItemsIndex: placeholder)
         if merged.count != store.desiredOrder.count {
             pendingNewIconPlacement = true
@@ -224,7 +201,7 @@ final class MenuBarOrderEnforcer {
         }
 
         // ENFORCE — live mode, or the user-initiated on-demand reveal. The plain
-        // background tick in on-demand mode stops here: it only auto-saves.
+        // background tick in on-demand mode stops here: it only files new icons.
         guard store.mode == .live || userInitiated else { return }
         let n = now
         if !policy.canApply(now: n, onBattery: Self.onBattery()) {
