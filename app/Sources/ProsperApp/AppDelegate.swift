@@ -870,6 +870,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for record in extensions.records {
             LiveExtensionHostServices.shared.resetResources(extensionID: record.id)
         }
+        // llama.cpp's Metal backend aborts in a C++ static destructor when exit()
+        // runs while a model is still resident (ggml_metal_device_free →
+        // ggml_metal_rsets_free → ggml_abort), so every normal quit filed a SIGABRT
+        // crash report. Registering here makes this the LAST atexit handler, which
+        // runs FIRST: everything above (and every willTerminate observer, incl.
+        // Sparkle's install-on-quit) has already run, so cut exit() short before
+        // the static-destructor pass. The kernel reclaims Metal/heap state anyway.
+        atexit { _exit(0) }
     }
 
     // MARK: - Actions
