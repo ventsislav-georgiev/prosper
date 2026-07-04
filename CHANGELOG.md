@@ -18,6 +18,19 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.127.0 *(unreleased)*
+
+### Quick Chat — ask the local AI anything
+- **New Quick Chat runner mode**: type `c ` (or `ask `) in the launcher,
+  then a question or task, and get a direct answer streamed straight from
+  the on-device AI model — a lightweight, ChatGPT-style experience.
+- Runs on the **same model as inline autocomplete and translate**, so
+  there's no separate download and no extra memory: it loads on first use
+  and shares the idle-unload window. Much lighter and faster than the
+  coding agent, which loads a separate large model.
+- Answers stream in live as they're generated. Single-shot for now
+  (each question stands alone).
+
 ## v2.126.0
 
 ### Themes for every taste
