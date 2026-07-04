@@ -25,11 +25,16 @@ final class LoadedModelMonitor: ObservableObject {
                     ? LlamaInlineEngine.isLoadedSnapshot
                     : MLXEngine.isInlineModelLoaded
                 let agent = ModelResidencyCoordinator.isAgentActive
-                // llama.cpp memory is invisible to the MLX allocator — sum both.
-                // Skip the Metal allocator read when nothing is resident — it's 0 then.
+                // Loaded-model footprint. llama.cpp and MLX use separate allocators, so
+                // only count the one that actually backs a resident model — the MLX read
+                // only when an MLX model is loaded (inline runs on llama.cpp when
+                // isEnabled). The old code added MLX memory on the llama path too, which
+                // double-counted it (~2x overstatement).
+                let mlxResident = (!LlamaInlineEngine.isEnabled && inline)
+                    ? MLXEngine.residentMemoryBytes : 0
                 let bytes = LlamaInlineEngine.residentBytesSnapshot
                     + LlamaAgentEngine.residentBytesSnapshot
-                    + ((inline || agent) ? MLXEngine.residentMemoryBytes : 0)
+                    + mlxResident
                 // Assign only on change: a @Published write always fires objectWillChange,
                 // so unconditional writes would re-render (and re-scan disk) every tick.
                 if inline != self.inlineLoaded { self.inlineLoaded = inline }
@@ -212,7 +217,7 @@ struct AIModelsPane: View {
 
     private var statusSection: some View {
         NeonSection("Status",
-                    footer: "Only one model is resident at a time — starting the agent frees the inline model, and it reloads afterwards. Memory shown is what MLX is actively using.") {
+                    footer: "Only one model is resident at a time — starting the agent frees the inline model, and it reloads afterwards. Memory shown is the loaded model's footprint (its weights in RAM).") {
             statusRow(title: "Inline & Translate",
                       id: LlamaInlineEngine.isEnabled
                           ? "\(LlamaInlineEngine.selectedModel.label) — GGUF, llama.cpp"
