@@ -11,12 +11,21 @@ struct ExtensionsPane: View {
 
     @State private var checkingUpdates = false
 
-    // Per-section collapse state, persisted across opens (user > system).
+    // Per-section collapse state, persisted across opens (user > system > themes).
+    // Themes start expanded: they are the section users browse, not manage.
     @AppStorage("ext.collapse.user") private var userCollapsed = true
     @AppStorage("ext.collapse.system") private var systemCollapsed = true
+    @AppStorage("ext.collapse.themes") private var themesCollapsed = false
 
     private var userRecords: [ExtensionRecord] { registry.records.filter { !$0.isSystem } }
-    private var systemRecords: [ExtensionRecord] { registry.records.filter(\.isSystem) }
+    private var systemRecords: [ExtensionRecord] {
+        registry.records.filter { $0.isSystem && ($0.manifest.contributes?.allThemes ?? []).isEmpty }
+    }
+    /// System extensions whose only job is contributing a color theme get their
+    /// own always-visible section — they'd otherwise drown the real system list.
+    private var themeRecords: [ExtensionRecord] {
+        registry.records.filter { $0.isSystem && !($0.manifest.contributes?.allThemes ?? []).isEmpty }
+    }
 
     /// Render a divider-separated list of extension rows, or an empty-state caption.
     @ViewBuilder
@@ -76,6 +85,10 @@ struct ExtensionsPane: View {
 
             NeonSection("System Extensions", collapsed: $systemCollapsed) {
                 installedList(systemRecords, emptyText: "No system extensions found.")
+            }
+
+            NeonSection("System Theme Extensions", collapsed: $themesCollapsed) {
+                installedList(themeRecords, emptyText: "No theme extensions found.")
             }
         }
     }

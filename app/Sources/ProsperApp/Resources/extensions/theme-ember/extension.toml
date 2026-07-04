@@ -1,0 +1,27 @@
+[extension]
+id          = "com.prosper.theme.ember"
+name        = "theme-ember"
+title       = "Ember Theme"
+description = "Glowing orange embers on smoked charcoal."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "paintpalette.fill"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+[[contributes.themes]]
+id         = "com.prosper.theme.ember"
+title      = "Ember"
+path       = "theme.json"
+appearance = "dark"

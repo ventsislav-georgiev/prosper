@@ -168,6 +168,40 @@ final class ThemeTests: XCTestCase {
         try? FileManager.default.removeItem(at: dir)
     }
 
+    // MARK: bundled theme extensions
+
+    /// Every bundled theme-* extension is pure data — one typo in a hex string or
+    /// token name silently falls back to the default palette, so lint them here:
+    /// theme.json decodes, every token is a recognized name, manifest appearance
+    /// matches the JSON, and the full 12-token palette is provided.
+    func testBundledThemeExtensionsAreValid() throws {
+        let extensionsDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()           // …/app/Tests/ProsperAppTests
+            .deletingLastPathComponent()           // …/app/Tests
+            .deletingLastPathComponent()           // …/app
+            .appendingPathComponent("Sources/ProsperApp/Resources/extensions", isDirectory: true)
+        let themeDirs = try FileManager.default.contentsOfDirectory(
+            at: extensionsDir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("theme-") }
+        XCTAssertGreaterThanOrEqual(themeDirs.count, 15, "bundled theme set went missing")
+
+        for dir in themeDirs {
+            let loaded = try ExtensionLoader.load(directory: dir, isSystem: true, hostVersion: "2.0.0")
+            let themes = loaded.manifest.contributes?.allThemes ?? []
+            XCTAssertEqual(themes.count, 1, "\(dir.lastPathComponent): expected one contributed theme")
+            guard let t = themes.first else { continue }
+
+            let data = try Data(contentsOf: dir.appendingPathComponent(t.path))
+            let spec = try ThemeSpec.decode(data)
+            XCTAssertEqual(spec.appearance.rawValue, t.appearance ?? "dark",
+                           "\(dir.lastPathComponent): manifest/json appearance mismatch")
+            // decode drops unparseable hex and resolve ignores unknown tokens —
+            // both silent, so assert the exact full token set survived.
+            XCTAssertEqual(Set(spec.colors.keys), Set(ThemePalette.tokenNames),
+                           "\(dir.lastPathComponent): token set incomplete or misspelled")
+        }
+    }
+
     // MARK: ThemeStore
 
     @MainActor

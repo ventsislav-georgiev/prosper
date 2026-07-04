@@ -20,6 +20,15 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.126.0
 
+### Themes for every taste
+- **13 new built-in color themes** alongside Default and Amber — a full
+  rainbow of dark themes (Crimson, Ember, Gold, Emerald, Teal, Indigo,
+  Violet, Rose) plus five light ones (Daylight, Mint, Solar, Lavender,
+  Blossom). Pick in Settings → Personalization.
+- Theme extensions now live in their own **System Theme Extensions**
+  section in Settings → Extensions (expanded by default) instead of
+  crowding the system-extensions list.
+
 ### Calendar beta feedback fixes
 - **Calendar access now works**: the hardened-runtime `calendars` entitlement
   was missing, so macOS never showed the access prompt and Prosper never

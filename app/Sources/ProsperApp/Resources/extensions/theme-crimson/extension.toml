@@ -1,0 +1,27 @@
+[extension]
+id          = "com.prosper.theme.crimson"
+name        = "theme-crimson"
+title       = "Crimson Theme"
+description = "A deep crimson-on-charcoal theme — red done right in the dark."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "paintpalette.fill"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+[[contributes.themes]]
+id         = "com.prosper.theme.crimson"
+title      = "Crimson"
+path       = "theme.json"
+appearance = "dark"

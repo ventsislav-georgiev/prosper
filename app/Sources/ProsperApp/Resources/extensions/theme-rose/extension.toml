@@ -1,0 +1,27 @@
+[extension]
+id          = "com.prosper.theme.rose"
+name        = "theme-rose"
+title       = "Rose Theme"
+description = "Rose pink on dark cocoa."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "paintpalette.fill"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+[[contributes.themes]]
+id         = "com.prosper.theme.rose"
+title      = "Rose"
+path       = "theme.json"
+appearance = "dark"
