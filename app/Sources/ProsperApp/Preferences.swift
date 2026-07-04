@@ -453,11 +453,12 @@ enum Preferences {
         set { defaults.set(min(max(newValue, uiScaleRange.lowerBound), uiScaleRange.upperBound), forKey: Keys.uiScale) }
     }
 
-    /// Global window opacity (Appearance → Transparency). Default 1.0 = fully opaque.
+    /// Global window opacity (Appearance → Transparency). Default 0.9 = a slight
+    /// see-through so windows sit on the desktop instead of reading as opaque slabs.
     static let uiOpacityRange: ClosedRange<Double> = 0.35...1.0
     static var uiOpacity: Double {
         get {
-            guard defaults.object(forKey: Keys.uiOpacity) != nil else { return 1.0 }
+            guard defaults.object(forKey: Keys.uiOpacity) != nil else { return 0.9 }
             return min(max(defaults.double(forKey: Keys.uiOpacity), uiOpacityRange.lowerBound), uiOpacityRange.upperBound)
         }
         set { defaults.set(min(max(newValue, uiOpacityRange.lowerBound), uiOpacityRange.upperBound), forKey: Keys.uiOpacity) }
