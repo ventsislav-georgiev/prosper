@@ -266,6 +266,9 @@ actor LlamaInlineEngine {
     /// pane) — written on the actor at load/unload, read from the main
     /// thread; a stale badge for one poll tick is harmless.
     nonisolated(unsafe) private(set) static var isLoadedSnapshot = false
+    /// Weight bytes of the resident GGUF (0 when unloaded) — the MLX allocator
+    /// can't see llama.cpp memory, so the AI Models pane reads this instead.
+    nonisolated(unsafe) private(set) static var residentBytesSnapshot: Int64 = 0
 
     private var model: OpaquePointer?
     private var ctx: OpaquePointer?
@@ -321,11 +324,13 @@ actor LlamaInlineEngine {
         cachedPromptTokens = []
         pieceBytes = [:]; piecesFlat = []
         Self.isLoadedSnapshot = true
+        Self.residentBytesSnapshot = Int64(llama_model_size(m))
         TraceLog.emit("llama: model loaded (\(path))")
     }
 
     func unload() {
         Self.isLoadedSnapshot = false
+        Self.residentBytesSnapshot = 0
         if let batch { llama_batch_free(batch) }
         batch = nil
         if let ctx { llama_free(ctx) }

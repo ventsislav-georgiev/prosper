@@ -25,8 +25,11 @@ final class LoadedModelMonitor: ObservableObject {
                     ? LlamaInlineEngine.isLoadedSnapshot
                     : MLXEngine.isInlineModelLoaded
                 let agent = ModelResidencyCoordinator.isAgentActive
+                // llama.cpp memory is invisible to the MLX allocator — sum both.
                 // Skip the Metal allocator read when nothing is resident — it's 0 then.
-                let bytes = (inline || agent) ? MLXEngine.residentMemoryBytes : 0
+                let bytes = LlamaInlineEngine.residentBytesSnapshot
+                    + LlamaAgentEngine.residentBytesSnapshot
+                    + ((inline || agent) ? MLXEngine.residentMemoryBytes : 0)
                 // Assign only on change: a @Published write always fires objectWillChange,
                 // so unconditional writes would re-render (and re-scan disk) every tick.
                 if inline != self.inlineLoaded { self.inlineLoaded = inline }
@@ -129,6 +132,12 @@ struct AIModelsPane: View {
     /// Per-model download progress, keyed by catalog id.
     @State private var ggufProgress: [String: (Double, String)] = [:]
 
+    /// One download at a time across BOTH engines (GGUF + HF snapshot) — disk
+    /// and network sanity. Every Download button disables while this is true.
+    private var anyDownloadActive: Bool {
+        !ggufProgress.isEmpty || downloads.activeModelId != nil
+    }
+
     @ViewBuilder
     private func ggufRow(_ m: LlamaInlineEngine.CatalogModel) -> some View {
         let downloaded = LlamaInlineEngine.isDownloaded(m)
@@ -158,13 +167,16 @@ struct AIModelsPane: View {
                                 LlamaInlineEngine.selectModel(m.id); refresh += 1
                             }.buttonStyle(.neon)
                         }
+                        Button("Reveal") {
+                            NSWorkspace.shared.activateFileViewerSelecting(
+                                [LlamaInlineEngine.fileURL(for: m)])
+                        }.buttonStyle(.neon)
                         Button("Delete") {
                             Task { await LlamaInlineEngine.deleteModel(m); refresh += 1 }
                         }.buttonStyle(.neonDestructive)
                     } else {
-                        // One download at a time keeps disk/network sane.
                         Button("Download") { downloadGGUF(m) }.buttonStyle(.neon)
-                            .disabled(!ggufProgress.isEmpty)
+                            .disabled(anyDownloadActive)
                     }
                 }
             }
@@ -352,12 +364,15 @@ struct AIModelsPane: View {
                     Button("Delete") { downloads.delete(row.id) }
                         .buttonStyle(.neonDestructive)
                 } else {
-                    // One download at a time — disable the rest while one is in flight,
-                    // else start() would silently cancel it.
+                    // Disable while ANY download is in flight, else start() would
+                    // silently cancel it.
                     Button("Download") { downloads.start(row.id) }.buttonStyle(.neon)
-                        .disabled(downloads.activeModelId != nil)
+                        .disabled(anyDownloadActive)
                 }
                 Menu {
+                    if downloaded {
+                        Button("Reveal in Finder") { ModelFiles.reveal(row.id) }
+                    }
                     if !isCurrent {
                         Button(role == .inline ? "Use for inline" : "Use for agent") {
                             if role == .inline { model.coreModel = row.id } else { model.agentModel = row.id }

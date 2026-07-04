@@ -164,6 +164,10 @@ actor LlamaAgentEngine: AgentChatEngine {
 
     // MARK: state
 
+    /// Weight bytes of the resident GGUF (0 when unloaded) — the MLX allocator
+    /// can't see llama.cpp memory, so the AI Models pane reads this instead.
+    nonisolated(unsafe) private(set) static var residentBytesSnapshot: Int64 = 0
+
     private var model: OpaquePointer?
     private var ctx: OpaquePointer?
     private var vocab: OpaquePointer?
@@ -230,6 +234,7 @@ actor LlamaAgentEngine: AgentChatEngine {
         vocab = llama_model_get_vocab(m)
         batch = llama_batch_init(2048, 0, 1)
         cachedPromptTokens = []
+        Self.residentBytesSnapshot = Int64(llama_model_size(m))
         NSLog("prosper agent: llama engine loaded (%@, n_ctx=%d, kv=%@)",
               (path as NSString).lastPathComponent, Self.contextTokens,
               Self.quantizedKV ? "q8_0+fa" : "f16")
@@ -240,6 +245,7 @@ actor LlamaAgentEngine: AgentChatEngine {
     }
 
     private func unloadLocked() {
+        Self.residentBytesSnapshot = 0
         if let batch { llama_batch_free(batch) }
         batch = nil
         if let ctx { llama_free(ctx) }

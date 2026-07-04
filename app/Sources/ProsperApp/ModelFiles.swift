@@ -129,6 +129,19 @@ enum ModelFiles {
             .first(where: isModelDownloaded)
     }
 
+    /// Reveals one model's files in Finder: the GGUF file for llama.cpp agent
+    /// rows, the hub cache dir for HF snapshot rows. Falls back to the generic
+    /// cache reveal when the model has nothing on disk.
+    static func reveal(_ modelId: String) {
+        let url: URL = if let gguf = AgentModelRegistry.gguf(for: modelId) {
+            LlamaAgentEngine.fileURL(fileName: gguf.fileName)
+        } else {
+            ModelPaths.hubURL.appendingPathComponent(cacheDirName(for: modelId))
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else { return reveal() }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
     /// Opens the most specific existing dir in Finder: the hub cache root if
     /// present, else the HF home base, else ~/.config/prosper (creating nothing).
     static func reveal() {

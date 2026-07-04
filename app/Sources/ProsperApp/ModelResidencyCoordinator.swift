@@ -70,10 +70,12 @@ actor ModelResidencyCoordinator {
             // Strong capture: `self` is a process-lifetime singleton and the closure
             // dies with the load.
             task = Task {
+                // One resident at a time: free BOTH inline engines (MLX and
+                // llama.cpp — ~3 GB) before the multi-GB agent model loads. The
+                // inline model reloads lazily on the first keystroke after release.
                 await MLXEngine.shared.unload()
+                await LlamaInlineEngine.shared.unload()
                 if let gguf = AgentModelRegistry.gguf(for: modelId) {
-                    // llama.cpp path. The inline llama engine (if resident) stays —
-                    // it's ~3 GB and serves autocomplete the moment agent mode ends.
                     try await LlamaAgentEngine.shared.ensureModel(gguf) { p, s in
                         Task { await ModelResidencyCoordinator.shared.fanProgress(p, s) }
                     }

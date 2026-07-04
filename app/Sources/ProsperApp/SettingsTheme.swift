@@ -368,6 +368,9 @@ struct NeonStatTile: View {
 /// Outlined neon button — the default action style inside Settings.
 struct NeonButtonStyle: ButtonStyle {
     var destructive = false
+    /// Without this, `.disabled(true)` buttons render identically to enabled
+    /// ones — clicks silently no-op with zero visual cue.
+    @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         let accent = destructive ? Neon.magenta : Neon.blue
         configuration.label
@@ -382,6 +385,8 @@ struct NeonButtonStyle: ButtonStyle {
                     .strokeBorder(accent.opacity(0.55), lineWidth: 1))
             .shadow(color: accent.opacity(configuration.isPressed ? 0.4 : 0.18), radius: sz(6))
             .contentShape(Rectangle())
+            .opacity(isEnabled ? 1 : 0.35)
+            .saturation(isEnabled ? 1 : 0.3)
     }
 }
 

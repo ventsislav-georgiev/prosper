@@ -18,6 +18,27 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.124.1
+
+### Fixed
+- **Quitting the app no longer crashes.** Since the llama.cpp engines keep a
+  model resident, every normal quit tripped an abort inside llama.cpp's Metal
+  teardown during process exit and filed a crash report. Process shutdown now
+  skips that teardown entirely after Prosper's own cleanup completes.
+- Disabled buttons in Settings now look disabled (dimmed/desaturated) instead
+  of silently ignoring clicks.
+
+### AI Models
+- The loaded-model RAM badge now counts llama.cpp models too (it previously
+  only saw MLX memory, under-reporting while a GGUF model was resident).
+- New "Reveal" / "Reveal in Finder" actions show a downloaded model's files
+  on disk.
+- Only one model download can run at a time across both engines (GGUF and
+  Hugging Face) — the other Download buttons disable while one is in flight.
+- Starting an agent run now also releases the inline llama.cpp model before
+  the agent model loads (one resident model at a time); inline reloads lazily
+  on the next keystroke after the run.
+
 ## v2.124.0
 
 ### Coding agent — llama.cpp engine
