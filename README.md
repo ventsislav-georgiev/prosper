@@ -365,6 +365,7 @@ Prosper takes inspiration — ideas, UI/UX, and implementation know-how — from
 
 - **[exelban/Stats](https://github.com/exelban/stats)** — the System Stats modules (CPU / RAM / GPU / network / sensors / fans) and their popups. Much of our know-how for the private IOReport / IOHID sensor paths and the SMC fan-control sequence came from studying it.
 - **[jordanbaird/Ice](https://github.com/jordanbaird/Ice)** — the menu-bar management (hiding, reordering, layout).
+- **[Itsycal](https://github.com/sfsam/Itsycal)** — the menu-bar calendar: icon styles, month grid, and agenda.
 - **[openlid/openlid](https://github.com/openlid/openlid)** — the OpenLid lid-stay-awake feature.
 - **[Raycast](https://www.raycast.com)** & **[Alfred](https://www.alfredapp.com)** — the command palette / launcher, clipboard history, snippets, and QuickLinks.
 - **[Cotypist](https://cotypist.app)** — on-device inline autocomplete.

@@ -8,6 +8,7 @@
 // fully down — a disabled install never touches EventKit at all.
 
 import AppKit
+import Combine
 import SwiftUI
 
 extension Notification.Name {
@@ -99,6 +100,7 @@ final class CalendarBarController {
     private var minuteTimer: DispatchSourceTimer?
     /// Process-lifetime observer; the controller is a singleton, never removed.
     private var configObserver: NSObjectProtocol?
+    private var selectionObserver: AnyCancellable?
     private var lastIconWidthKey = ""
 
     private init() {
@@ -107,6 +109,12 @@ final class CalendarBarController {
             MainActor.assumeIsolated { self?.reload() }
         }
         eventCenter.onStoreChanged = { [weak self] in self?.refetch() }
+        // Agenda is anchored to the selected day — refetch when it moves so the
+        // span past the visible grid has events. receive(on:) defers past the
+        // @Published willSet so refetch reads the NEW value.
+        selectionObserver = store.$selectedDay.removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refetch() }
     }
 
     /// Bring the feature to match extension state + style. Idempotent — called
@@ -203,6 +211,10 @@ final class CalendarBarController {
         popover.behavior = store.pinned ? .applicationDefined : .transient
         popover.contentViewController = host
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // Accessory-app popover: without key status the first click inside only
+        // activates the window and SwiftUI never sees it ("first click on
+        // another day does nothing"). Make it key on open.
+        host.view.window?.makeKey()
     }
 
     /// Persist a grid-row resize (drag handle) without routing through the pane.
@@ -295,8 +307,8 @@ final class CalendarBarController {
             calendar: calendar)
         let gridEnd = calendar.date(byAdding: .day, value: style.gridRows * 7, to: gridStart)!
         let agendaEnd = calendar.date(byAdding: .day, value: max(style.agendaDays, 1),
-                                      to: store.today)!
-        let range = DateInterval(start: min(gridStart, store.today),
+                                      to: store.selectedDay)!
+        let range = DateInterval(start: min(gridStart, store.selectedDay),
                                  end: max(gridEnd, agendaEnd))
         eventCenter.fetchEvents(range: range,
                                 selectedCalendarIDs: style.selectedCalendarIDs,

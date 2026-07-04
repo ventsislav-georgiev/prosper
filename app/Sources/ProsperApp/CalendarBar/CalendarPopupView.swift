@@ -210,12 +210,15 @@ struct CalendarPopupView: View {
         )
         .contentShape(Rectangle())
         .onHover { hoveredDay = $0 ? day.date : (hoveredDay == day.date ? nil : hoveredDay) }
-        // Double-tap via .gesture + single via .simultaneousGesture: the plain
-        // .onTapGesture pair makes the single tap wait out double-tap
-        // disambiguation (~1s perceived selection lag). Selecting on the first
-        // tap of a double-tap is harmless — it opens Calendar anyway.
-        .gesture(TapGesture(count: 2).onEnded { openCalendarApp() })
-        .simultaneousGesture(TapGesture().onEnded { store.selectedDay = day.date })
+        // One single-tap gesture, double-click detected via AppKit's clickCount:
+        // any two-tap SwiftUI gesture (plain pair or simultaneous) delays or
+        // swallows the single tap while disambiguating. This fires on every
+        // mouse-up — instant selection; the second click of a double-click
+        // arrives with clickCount == 2 and additionally opens Calendar.app.
+        .onTapGesture {
+            store.selectedDay = day.date
+            if NSApp.currentEvent?.clickCount ?? 1 >= 2 { openCalendarApp() }
+        }
     }
 
     /// Bottom drag pill: resize the grid 6–10 rows (Itsycal parity).
@@ -283,8 +286,10 @@ struct CalendarPopupView: View {
     // MARK: - Agenda
 
     private var agendaDays: [Date] {
+        // Anchored to the selected day (not today) so clicking a day in the
+        // grid moves the event list to it.
         (0..<max(store.style.agendaDays, 1)).compactMap {
-            store.calendar.date(byAdding: .day, value: $0, to: store.today)
+            store.calendar.date(byAdding: .day, value: $0, to: store.selectedDay)
         }
     }
 

@@ -32,8 +32,14 @@ tag from the now-released section and put it on the new top draft.
   Monospaced / Serif) options in settings.
 - **More popup contrast**: clearer weekend shading, the selected day now gets
   a visible accent fill and outline (today keeps its bright outline).
-- **Day selection is instant** — no more ~1s delay while waiting to rule out
-  a double-click (double-click still opens the Calendar app).
+- **Day selection actually works now**: the event list follows the day you
+  click (it was pinned to today), selection reacts on mouse-up with no
+  double-click disambiguation delay, and the first click right after opening
+  the popup registers (the popup window wasn't key). Double-click still opens
+  the Calendar app.
+- Event list shows **1 day by default**.
+- Added **Itsycal** to the acknowledgements (README + About) as the calendar's
+  inspiration.
 
 ### New: Calendar
 - New opt-in **Calendar** extension: an Itsycal-style menu bar calendar that

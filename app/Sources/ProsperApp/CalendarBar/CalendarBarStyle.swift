@@ -130,7 +130,7 @@ struct CalendarBarStyle: Codable, Equatable, Sendable {
         showEventLocation: true,
         showDaysWithNoEvents: true,
         showWeekNumbers: true,
-        agendaDays: 7,
+        agendaDays: 1,
         gridRows: 6,
         selectedCalendarIDs: nil)
 }
