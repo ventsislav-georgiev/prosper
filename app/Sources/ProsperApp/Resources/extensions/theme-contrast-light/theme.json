@@ -1,0 +1,17 @@
+{
+  "appearance": "light",
+  "colors": {
+    "blue":          "#0033CC",
+    "blueBright":    "#0055FF",
+    "indigo":        "#5500CC",
+    "magenta":       "#C4007A",
+    "terminal":      "#006633",
+    "bgTop":         "#FFFFFF",
+    "bgBottom":      "#FFFFFF",
+    "sidebar":       "#FFFFFF",
+    "card":          "#F2F2F2",
+    "cardHi":        "#E5E5E5",
+    "textPrimary":   "#000000",
+    "textSecondary": "#3C3C3C"
+  }
+}

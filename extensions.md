@@ -391,7 +391,7 @@ Bundled features ship as **system extensions**: editable and disablable, **reset
 | [`inputswitch`](app/Sources/ProsperApp/Resources/extensions/inputswitch/) | Per-app keyboard input source | **opt-in**; `app.activated` event; `host.keyboard` |
 | [`menubar`](app/Sources/ProsperApp/Resources/extensions/menubar/) | Ice/Bartender-style menu-bar control | **opt-in**; native footer pane |
 | [`fallback-search`](app/Sources/ProsperApp/Resources/extensions/fallback-search/) | Web-search default results | settings UI only; native row building via system-only `host.fallback.*` |
-| [`theme-default`](app/Sources/ProsperApp/Resources/extensions/theme-default/) · [`theme-amber`](app/Sources/ProsperApp/Resources/extensions/theme-amber/) · `theme-*` (crimson, ember, gold, emerald, teal, indigo, violet, rose + light: daylight, mint, solar, lavender, blossom) | Color themes | declarative `theme.json`, no Lua |
+| [`theme-default`](app/Sources/ProsperApp/Resources/extensions/theme-default/) · [`theme-amber`](app/Sources/ProsperApp/Resources/extensions/theme-amber/) · `theme-*` (crimson, ember, gold, emerald, teal, indigo, violet, rose, graphite, contrast-dark + light: daylight, mint, solar, lavender, blossom, silver, contrast-light) | Color themes | declarative `theme.json`, no Lua |
 
 The conversion engines keep a **native fallback**, so a disabled or edited extension never loses the feature.
 
