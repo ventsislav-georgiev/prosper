@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.126.0 *(unreleased)*
+## v2.126.0
 
 ### Calendar beta feedback fixes
 - **Calendar access now works**: the hardened-runtime `calendars` entitlement
@@ -38,6 +38,8 @@ tag from the now-released section and put it on the new top draft.
   the popup registers (the popup window wasn't key). Double-click still opens
   the Calendar app.
 - Event list shows **1 day by default**.
+- Today no longer keeps a selected-looking fill when another day is selected —
+  it's marked by its bright outline only; the fill belongs to the selection.
 - Added **Itsycal** to the acknowledgements (README + About) as the calendar's
   inspiration.
 

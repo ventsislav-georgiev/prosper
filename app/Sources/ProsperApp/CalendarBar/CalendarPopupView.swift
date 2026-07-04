@@ -198,8 +198,7 @@ struct CalendarPopupView: View {
         .frame(width: cellW, height: cellH)
         .background(
             RoundedRectangle(cornerRadius: sz(6), style: .continuous)
-                .fill(isToday ? Neon.blueBright.opacity(0.16)
-                      : (isSelected ? Neon.blue.opacity(0.32) : Color.clear))
+                .fill(isSelected ? Neon.blue.opacity(0.32) : Color.clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: sz(6), style: .continuous)
