@@ -125,9 +125,14 @@ struct ListItem: Decodable, Equatable, Identifiable {
     /// indeterminate spinner next to the title (Translate's "Finding
     /// alternatives…" while enrichment streams in).
     let loading: Bool?
+    /// True renders `title` as block markdown (headings, bullet/numbered lists,
+    /// code fences, inline bold/italic/code) instead of plain text — used by
+    /// QuickChat for the local model's rich-text answers.
+    let markdown: Bool?
 
     var allActions: [ExtensionAction] { actions ?? [] }
     var isLoading: Bool { loading ?? false }
+    var isMarkdown: Bool { markdown ?? false }
 }
 
 struct DetailNode: Decodable, Equatable {

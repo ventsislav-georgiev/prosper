@@ -688,6 +688,7 @@ struct ResultRow: Identifiable {
     var actions: [RowAction] = []      // file/extension actions; when non-empty, Enter runs actions[0]
     var filePath: String? = nil        // backing file path for the row's actions (Quick Look, default payload)
     var spinning: Bool = false         // in-progress placeholder: show a small spinner next to the title
+    var isMarkdown: Bool = false       // render `primary` as block markdown (QuickChat answers)
 }
 
 // MARK: - Row builder
@@ -913,7 +914,7 @@ private func buildRows(from outcome: RunnerOutcome) -> [ResultRow] {
                           appURL: appURL, iconImage: iconImage,
                           openTarget: item.url, label: item.accessory,
                           actions: actions, filePath: item.launch,
-                          spinning: item.isLoading)
+                          spinning: item.isLoading, isMarkdown: item.isMarkdown)
             }
         }
         switch node {
@@ -1737,6 +1738,127 @@ private struct CalcCard {
 /// reading/copy), an optional register/sense chip (`label`), and a wrapped note
 /// (`secondary`). Highlights when keyboard-selected and pastes on tap — the focus
 /// is *reading*, so text wraps instead of clipping to a single line.
+// MARK: - Minimal block markdown
+
+/// One parsed markdown block. Deliberately small — enough to render the local
+/// model's chat answers readably; inline **bold**/*italic*/`code` are left to
+/// AttributedString per line.
+enum MarkdownBlock: Equatable {
+    case heading(level: Int, text: String)
+    case bullet(String)
+    case numbered(number: String, text: String)
+    case code(String)
+    case paragraph(String)
+}
+
+/// Splits raw markdown into blocks. Pure + free function so it's unit-testable
+/// without a SwiftUI host.
+// ponytail: line-at-a-time, no nested lists / tables / blockquotes — add those
+// only if the model's output actually needs them.
+func parseMarkdownBlocks(_ raw: String) -> [MarkdownBlock] {
+    var blocks: [MarkdownBlock] = []
+    var code: [String]? = nil
+    for line in raw.components(separatedBy: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("```") {
+            if let c = code { blocks.append(.code(c.joined(separator: "\n"))); code = nil }
+            else { code = [] }
+            continue
+        }
+        if code != nil { code?.append(line); continue }
+        if t.isEmpty { continue }
+        // Heading: 1–6 leading '#' then a space.
+        if t.first == "#", let sp = t.firstIndex(of: " ") {
+            let hashes = t[..<sp]
+            if hashes.count <= 6, hashes.allSatisfy({ $0 == "#" }) {
+                blocks.append(.heading(level: hashes.count,
+                    text: String(t[t.index(after: sp)...]).trimmingCharacters(in: .whitespaces)))
+                continue
+            }
+        }
+        if let m = t.range(of: "^[-*+]\\s+", options: .regularExpression) {
+            blocks.append(.bullet(String(t[m.upperBound...])))
+            continue
+        }
+        if let m = t.range(of: "^\\d+[.)]\\s+", options: .regularExpression) {
+            let number = t.prefix { $0.isNumber }
+            blocks.append(.numbered(number: String(number), text: String(t[m.upperBound...])))
+            continue
+        }
+        blocks.append(.paragraph(t))
+    }
+    if let c = code { blocks.append(.code(c.joined(separator: "\n"))) }  // unterminated fence
+    return blocks
+}
+
+/// Renders parsed markdown blocks as native Neon UI (headings, bulleted /
+/// numbered lists, code cards, paragraphs).
+private struct MarkdownBlocksView: View {
+    let blocks: [MarkdownBlock]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(6)) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .heading(let level, let text):
+                    Text(inline(text))
+                        .font(Neon.font(headingSize(level), weight: .bold))
+                        .foregroundColor(Neon.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .bullet(let text):
+                    listRow("•", inline(text))
+                case .numbered(let number, let text):
+                    listRow("\(number).", inline(text))
+                case .code(let code):
+                    Text(code)
+                        .font(Neon.font(13, design: .monospaced))
+                        .foregroundColor(Neon.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(sz(8))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: sz(6)).fill(Neon.blue.opacity(0.08)))
+                case .paragraph(let text):
+                    Text(inline(text))
+                        .font(Neon.font(15))
+                        .foregroundColor(Neon.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func listRow(_ marker: String, _ text: AttributedString) -> some View {
+        HStack(alignment: .top, spacing: sz(6)) {
+            Text(marker)
+                .font(Neon.font(15))
+                .foregroundColor(Neon.textSecondary)
+            Text(text)
+                .font(Neon.font(15))
+                .foregroundColor(Neon.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func headingSize(_ level: Int) -> CGFloat {
+        switch level {
+        case 1: 20
+        case 2: 18
+        case 3: 16
+        default: 15
+        }
+    }
+
+    private func inline(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(s)
+    }
+}
+
 private struct ExtCardRow: View {
     let row: ResultRow
     let isSelected: Bool
@@ -1752,11 +1874,16 @@ private struct ExtCardRow: View {
                 if row.spinning {
                     ProgressView().controlSize(.small)
                 }
-                Text(row.primary)
-                    .font(Neon.font(17, weight: .medium))
-                    .foregroundColor(row.spinning ? Neon.textSecondary : Neon.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if row.isMarkdown, !row.spinning {
+                    MarkdownBlocksView(blocks: parseMarkdownBlocks(row.primary))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(row.primary)
+                        .font(Neon.font(17, weight: .medium))
+                        .foregroundColor(row.spinning ? Neon.textSecondary : Neon.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             if (row.label?.isEmpty == false) || !row.secondary.isEmpty {

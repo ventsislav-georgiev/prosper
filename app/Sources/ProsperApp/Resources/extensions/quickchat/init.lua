@@ -60,6 +60,7 @@ function quickchat_run(query)
         id = "0",
         title = answer,
         icon = "bubble.left.and.bubble.right",
+        markdown = true,   -- the model answers in markdown; render it richly
     } }
     if not finished then
         items[#items + 1] = {

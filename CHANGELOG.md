@@ -30,6 +30,9 @@ tag from the now-released section and put it on the new top draft.
   coding agent, which loads a separate large model.
 - Answers stream in live as they're generated. Single-shot for now
   (each question stands alone).
+- **Rich-text answers**: the model's markdown (headings, bullet and
+  numbered lists, code blocks, bold/italic) now renders natively instead
+  of showing raw `**` / `*` markers.
 
 ## v2.126.0
 
