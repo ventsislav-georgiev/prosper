@@ -34,17 +34,6 @@ tag from the now-released section and put it on the new top draft.
   numbered lists, code blocks, bold/italic) now renders natively instead
   of showing raw `**` / `*` markers.
 
-### Smoother, flicker-free results
-- The launcher results no longer **flicker** while you type. The previous
-  result stays on screen while the next one computes instead of flashing
-  empty, so a streaming answer no longer thrashes between "Thinking…" and
-  the answer. Applies to every runner mode, not just Quick Chat.
-- The panel now **animates** its height and crossfades between different
-  result shapes, so results growing or switching size glide instead of
-  snapping. Streaming answers still update instantly without stutter.
-- A brief loading state is only shown once a request is genuinely slow, so
-  fast results never flash a spinner.
-
 ## v2.126.0
 
 ### Themes for every taste
