@@ -33,6 +33,15 @@ tag from the now-released section and put it on the new top draft.
 - **Rich-text answers**: the model's markdown (headings, bullet and
   numbered lists, code blocks, bold/italic) now renders natively instead
   of showing raw `**` / `*` markers.
+- Quick Chat no longer flickers between "Thinking…" and the answer while
+  you type — it keeps the last answer on screen until the new one arrives.
+
+### Appearance & fixes
+- Windows are now **slightly translucent by default** (90% opacity) so they
+  sit on your desktop instead of reading as opaque slabs. Change it under
+  Settings → Personalization → Transparency.
+- Fixed the **memory figure** in Settings → AI Models, which double-counted
+  and showed roughly twice a model's real footprint.
 
 ## v2.126.0
 
