@@ -18,6 +18,12 @@ final class RunnerPanel {
     /// Guards saving the origin while we move the panel programmatically (resize
     /// keeps the top edge fixed, which fires didMove).
     private var isProgrammaticMove = false
+    /// In-flight animated resizes. `isProgrammaticMove` is only released when this
+    /// hits 0, so an earlier resize's completion can't unguard saveOrigin while a
+    /// later resize is still gliding (belt-and-braces; top-anchor math already keeps
+    /// the persisted origin correct, but this stops future anchoring changes from
+    /// silently persisting a mid-glide frame).
+    private var resizeAnimations = 0
     private var moveObserver: NSObjectProtocol?
     private var resignObserver: NSObjectProtocol?
     /// Latest content height reported by SwiftUI, pending an applied resize.
@@ -148,13 +154,39 @@ final class RunnerPanel {
     private func resize(toHeight height: CGFloat) {
         let h = max(1, height.rounded())
         var f = panel.frame
-        guard abs(f.height - h) > 0.5 else { return }
+        let delta = abs(f.height - h)
+        guard delta > 0.5 else { return }
         let top = f.maxY
         f.size.height = h
         f.origin.y = top - h
+        // Snap (no animation) for tiny deltas and while a stream grows ~12Hz —
+        // animating each tick stutters (NSHostingView relayouts every frame). Glide
+        // only the meaningful settle: a large jump with no active stream. Top-anchor
+        // math keeps (minX, maxY) invariant across the animation, so the didMove
+        // observer that fires mid-glide persists the correct origin; holding
+        // isProgrammaticMove until completion just suppresses redundant writes.
+        let animate = delta >= 8 && !model.isStreaming
         isProgrammaticMove = true
-        panel.setFrame(f, display: true, animate: false)
-        isProgrammaticMove = false
+        if animate {
+            resizeAnimations += 1
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.18
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                self.panel.animator().setFrame(f, display: true)
+            }, completionHandler: { [weak self] in
+                guard let self else { return }
+                // Clamp: dismiss() may have zeroed the counter while this animation was
+                // still pending, so a bare decrement could go negative and never return
+                // to 0 (leaking isProgrammaticMove true forever on the next resize).
+                self.resizeAnimations = max(0, self.resizeAnimations - 1)
+                if self.resizeAnimations == 0 { self.isProgrammaticMove = false }
+            })
+        } else {
+            panel.setFrame(f, display: true, animate: false)
+            // Don't unguard if an animated resize is still gliding — its completion
+            // owns the release.
+            if resizeAnimations == 0 { isProgrammaticMove = false }
+        }
     }
 
     /// Persists the panel's top-left corner (x, maxY) in screen coordinates.
@@ -229,6 +261,12 @@ final class RunnerPanel {
 
     func dismiss() {
         panel.orderOut(nil)
+        // Defensively clear the resize guard: if a resize animation was mid-glide,
+        // orderOut may drop its completion handler, which would otherwise leave
+        // resizeAnimations > 0 and isProgrammaticMove stuck true — suppressing
+        // saveOrigin for every later user drag.
+        resizeAnimations = 0
+        isProgrammaticMove = false
         DockPolicy.windowDidHide(panel)
     }
 
@@ -453,6 +491,14 @@ final class RunnerModel: ObservableObject {
     @Published var mode: RunnerMode = .universal
     /// Index into the flattened row list; always 0 when outcome is non-nil.
     @Published var selectedIndex: Int = 0
+    /// A subtle in-flight indicator for a *refetch* (a prior outcome is still on
+    /// screen). Delay-gated (~200ms) so sub-perceptual loads never flash it — the
+    /// big centered spinner is reserved for a true first load (outcome == nil).
+    @Published var showLoading: Bool = false
+    /// True while a staged handler (translate / QuickChat) is streaming milestones.
+    /// The panel snaps its height instead of animating each ~12Hz growth tick, and
+    /// only animates the final settle. Self-clears ~250ms after the last tick.
+    @Published var isStreaming: Bool = false
 
     /// Measured row y-spans + scroll-viewport height for the ⌘-digit quick-select
     /// ladder (issue: badges must stay fixed in the viewport and map to whichever
@@ -473,12 +519,14 @@ final class RunnerModel: ObservableObject {
     /// at most one in-flight request plus one pending: while a run is active, newer
     /// input only updates `pendingText`; the in-flight completion then runs the
     /// latest. Caps total work at 2 regardless of how much editing happened.
-    private var isRunning = false
+    private(set) var isRunning = false
     private var pendingText: String?
-    /// Set for a progress-driven re-invoke (staged translate milestones): the
-    /// prior partial result stays on screen instead of flashing back to the
-    /// spinner while the handler re-reads the pipeline snapshot.
-    private var keepOutcomeOnce = false
+    /// Delay-gate for `showLoading`: armed on each run start, fires after ~200ms
+    /// only if still running; cancelled the moment a result lands.
+    private var loadingGate: Task<Void, Never>?
+    /// Self-resetting one-shot: each streaming milestone re-arms it; when no tick
+    /// arrives for ~250ms the stream is considered settled and `isStreaming` clears.
+    private var streamSettle: Task<Void, Never>?
     init() {
         // Staged translate: each pipeline milestone re-invokes the locked
         // handler, which returns the newest snapshot (primary first, then the
@@ -490,7 +538,7 @@ final class RunnerModel: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, case .ext = self.mode else { return }
-                self.keepOutcomeOnce = true
+                self.markStreaming()
                 self.rerun()
             }
         }
@@ -501,10 +549,40 @@ final class RunnerModel: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, case .ext = self.mode else { return }
-                self.keepOutcomeOnce = true
+                self.markStreaming()
                 self.rerun()
             }
         }
+    }
+
+    /// Marks a streaming milestone: the panel snaps height (no per-tick animation)
+    /// and re-arms the settle timer so `isStreaming` clears ~250ms after the last.
+    private func markStreaming() {
+        isStreaming = true
+        streamSettle?.cancel()
+        streamSettle = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            self.isStreaming = false
+        }
+    }
+
+    /// Arms the delay-gated refetch indicator. Only surfaces after ~200ms, and
+    /// only while still running — a fast result cancels it before it ever shows.
+    private func armLoadingGate() {
+        loadingGate?.cancel()
+        showLoading = false
+        loadingGate = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self, self.isRunning else { return }
+            self.showLoading = true
+        }
+    }
+
+    private func endLoadingGate() {
+        loadingGate?.cancel()
+        loadingGate = nil
+        showLoading = false
     }
 
     func reset() {
@@ -516,6 +594,9 @@ final class RunnerModel: ObservableObject {
         debounceWorkItem?.cancel()
         requestToken &+= 1
         pendingText = nil
+        endLoadingGate()
+        streamSettle?.cancel()
+        isStreaming = false
     }
 
     /// Leaves the current locked mode back to the universal launcher (bound to
@@ -528,6 +609,9 @@ final class RunnerModel: ObservableObject {
         debounceWorkItem?.cancel()
         requestToken &+= 1
         pendingText = nil
+        endLoadingGate()
+        streamSettle?.cancel()
+        isStreaming = false
     }
 
     /// Enters a specific quickdir's browse mode (from the `qd` picker), locking the
@@ -568,6 +652,11 @@ final class RunnerModel: ObservableObject {
         if mode == .universal, let (m, stripped) = ModeTrigger.resolve(input) {
             mode = m
             input = stripped
+            // Clear the universal-launcher result so entering a view / list_on_empty
+            // ext mode (which runs on empty, skipping the empty-guard clear below)
+            // doesn't leave the prior app grid on screen under keep-last.
+            outcome = nil
+            selectedIndex = 0
             return
         }
 
@@ -599,6 +688,7 @@ final class RunnerModel: ObservableObject {
             pendingText = nil
             outcome = nil
             isLoading = false
+            endLoadingGate()
             return
         }
 
@@ -616,6 +706,13 @@ final class RunnerModel: ObservableObject {
         // back-and-forth editing.
         if isRunning {
             pendingText = text
+            // Surface an indicator while the parked query waits for the in-flight
+            // handler to drain. Matters after reset() (reopen mid-flight): outcome is
+            // nil so this shows the first-load spinner instead of a blank panel;
+            // during normal typing isLoading is already true and the gate re-arms
+            // (so the slim bar only appears once the user pauses).
+            isLoading = true
+            armLoadingGate()
             return
         }
 
@@ -625,13 +722,11 @@ final class RunnerModel: ObservableObject {
         isLoading = true
 
         let activeMode = mode
-        // In a locked extension mode the handler is async and often slow (an LLM
-        // call, http, shell). Clear the prior result so the loading spinner shows
-        // immediately instead of leaving the stale previous result on screen —
-        // except on a progress-driven re-invoke, where the partial result must
-        // stay put while the handler fetches the next milestone.
-        if case .ext = activeMode, !keepOutcomeOnce { outcome = nil }
-        keepOutcomeOnce = false
+        // Keep-last: the prior outcome stays on screen while the (often slow: LLM /
+        // http / shell) handler computes, so the results area never flashes empty on
+        // a refetch. A big centered spinner shows only on a true first load
+        // (outcome == nil); a refetch surfaces the delay-gated subtle indicator.
+        armLoadingGate()
 
         Task { [weak self] in
             let result = await CommandRouter.run(text, mode: activeMode)
@@ -643,8 +738,17 @@ final class RunnerModel: ObservableObject {
                 self.pendingText = nil
                 if next != text { self.runQuery(next); return }
             }
-            guard token == self.requestToken else { return } // ignore stale
+            // Ignore a stale result (token bumped by reset/exitMode/empty-guard while
+            // this was in flight). Clear the loading flags too — the park branch may
+            // have set isLoading, and nothing else drains it on this path (else a
+            // reopen-then-retype-same-query leaves the centered spinner stuck).
+            guard token == self.requestToken else {
+                self.isLoading = false
+                self.endLoadingGate()
+                return
+            }
             self.isLoading = false
+            self.endLoadingGate()
             self.outcome = result
             self.selectedIndex = 0
         }
@@ -997,6 +1101,26 @@ private struct RunnerView: View {
                             store: FallbackSearchStore.shared)
     }
 
+    /// Stable discriminator for the visible result *branch* — drives the crossfade
+    /// between structurally different results (loading ↔ card ↔ list). Deliberately
+    /// coarse: it does NOT change on streaming text growth (same branch, content
+    /// diffs in place), so the answer card grows without a per-token fade.
+    private var outcomeBranch: String {
+        if model.isLoading && model.outcome == nil { return "loading" }
+        guard let o = model.outcome else { return "empty" }
+        if case .extView(let node) = o {
+            switch node {
+            case .list:      return "ext.list"
+            case .detail:    return "ext.detail"
+            case .grid:      return "ext.grid"
+            case .form:      return "ext.form"
+            case .loading:   return "ext.loading"
+            case .converter: return "ext.converter"
+            }
+        }
+        return calcCard(for: o) != nil ? "calc" : "rows"
+    }
+
     /// Move the result selection up/down (wrapping). Driven by `.onKeyPress` on the
     /// input field — NOT the NSEvent monitor: the field is `axis: .vertical`
     /// (multi-line), and a multi-line SwiftUI TextField acts on ↑/↓ itself (moving
@@ -1104,35 +1228,55 @@ private struct RunnerView: View {
 
             // ── Result list or loading (empty input → single line, nothing here)
             if model.isLoading && model.outcome == nil {
+                // True first load: nothing to keep, so show the centered spinner.
                 Divider()
                 ProgressView()
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, sz(20))
-            } else if case .extView(let node) = model.outcome {
-                Divider()
-                extViewInline(node: node, rows: rows)
-                if !rows.isEmpty {
-                    Divider()
-                    actionBar(outcome: model.outcome!)
-                }
+                    .transition(.opacity)
             } else if let outcome = model.outcome {
                 Divider()
-                if let card = calcCard(for: outcome) {
-                    // Calc / unit / currency: big two-column Raycast calculator card.
-                    CalcCardView(card: card)
-                        .padding(.horizontal, sz(8))
-                        .padding(.vertical, sz(6))
-                } else {
-                    // All other outcomes: Raycast-style row list.
-                    resultRowList(rows: rows)
+                // Keep-last refetch: the prior result stays on screen; a slim,
+                // delay-gated bar is the only hint a newer run is in flight (it
+                // never shows for sub-perceptual loads).
+                if model.showLoading {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .frame(height: 2)
+                        .transition(.opacity)
                 }
+                if case .extView(let node) = outcome {
+                    extViewInline(node: node, rows: rows)
+                    if !rows.isEmpty {
+                        Divider()
+                        actionBar(outcome: outcome)
+                    }
+                } else {
+                    if let card = calcCard(for: outcome) {
+                        // Calc / unit / currency: big two-column Raycast card.
+                        CalcCardView(card: card)
+                            .padding(.horizontal, sz(8))
+                            .padding(.vertical, sz(6))
+                    } else {
+                        // All other outcomes: Raycast-style row list.
+                        resultRowList(rows: rows)
+                    }
 
-                Divider()
+                    Divider()
 
-                // ── Action bar ────────────────────────────────────────────
-                actionBar(outcome: outcome)
+                    // ── Action bar ────────────────────────────────────────
+                    actionBar(outcome: outcome)
+                }
             }
         }
+        // Crossfade between structurally different results (loading ↔ card ↔ list),
+        // matched to the panel-resize curve (0.18 easeOut) so window + content move
+        // as one. Scoped to `outcomeBranch` so it never fires on streaming text
+        // growth (same branch, content just diffs in place).
+        .animation(.easeOut(duration: 0.18), value: outcomeBranch)
+        // Fade the slim refetch bar in/out (its `.transition(.opacity)` needs a
+        // transaction driven by its own toggle, not the outcomeBranch one).
+        .animation(.easeOut(duration: 0.18), value: model.showLoading)
         .frame(width: 600)
         .neonPanelSurface()
         .background(
@@ -1455,6 +1599,18 @@ private struct RunnerView: View {
     // MARK: - Helpers
 
     private func commitSelected() {
+        // Keep-last keeps the prior result visible during an in-flight ext refetch
+        // (translate/quickchat run for seconds). For a no-view single-answer command
+        // that whole answer is stale mid-refetch, so swallow Enter — the user
+        // re-presses once the real result lands. View/list modes (quicklinks,
+        // quickdirs, bookmarks, list_on_empty) keep valid activatable rows during a
+        // refetch, so don't drop their keystroke.
+        if model.isRunning, case .ext(let id, _, _, _) = model.mode {
+            let isListMode = id == "quicklinks.run" || id == "quickdirs.run"
+                || CommandRouter.registry?.command(id: id)?.command.mode == .view
+                || CommandRouter.registry?.command(id: id)?.command.listsOnEmpty == true
+            if !isListMode { return }
+        }
         if let row = selectedRow {
             activateRow(row)
             return
