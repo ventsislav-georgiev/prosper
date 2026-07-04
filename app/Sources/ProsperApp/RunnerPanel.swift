@@ -1075,39 +1075,22 @@ private struct RunnerView: View {
     var body: some View {
         VStack(spacing: 0) {
             // ── Search field ──────────────────────────────────────────────
-            HStack(alignment: .center, spacing: sz(10)) {
-                Group {
-                    if model.mode == .universal {
-                        Image(systemName: model.isLoading ? "arrow.triangle.2.circlepath" : "magnifyingglass")
-                            .font(Neon.font(18, weight: .regular))
-                            .foregroundColor(Neon.blue)
-                            .symbolEffect(.pulse, isActive: model.isLoading)
-                    } else {
-                        ModeChip(mode: model.mode, isLoading: model.isLoading)
-                    }
-                }
-                // Center the icon/chip against the field's first line. The field text
-                // is larger (20pt) than the chip text (13pt), so baseline-alignment
-                // left the pill visually high; vertical centering matches the eye.
-
-                // Grows and wraps for long input (e.g. a paragraph to translate)
-                // instead of overflowing a single line; caps at 5 lines, then the
-                // field scrolls internally.
-                TextField(model.mode.placeholder, text: $model.input, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(Neon.font(20, weight: .regular))
-                    .lineLimit(1 ... 5)
-                    .focused($inputFocused)
-                    .onSubmit { commitSelected() }
-                    .onChange(of: model.input) { _, _ in model.inputChanged() }
-                    // ↑/↓ switch results only — never move the caret. Handled here
-                    // (not the NSEvent monitor) because a multi-line TextField acts
-                    // on the arrows itself; `.handled` suppresses that default.
-                    .onKeyPress(.upArrow) { selectPrev(); return .handled }
-                    .onKeyPress(.downArrow) { selectNext(); return .handled }
-            }
-            .padding(.horizontal, sz(16))
-            .padding(.vertical, sz(16))
+            // Isolated as an Equatable subview keyed only on (mode, input): while a
+            // Quick Chat answer streams, `outcome` and `isLoading` update ~12Hz, which
+            // would otherwise re-evaluate this whole body and re-lay-out the vertical
+            // TextField every tick — nudging the insertion point ~1 glyph left/right
+            // (the visible caret jiggle). `.equatable()` skips it unless mode/text
+            // actually change, so the caret holds still during streaming.
+            InputHeader(
+                mode: model.mode,
+                isLoading: model.isLoading,
+                text: $model.input,
+                focus: $inputFocused,
+                onChange: { model.inputChanged() },
+                onSubmit: { commitSelected() },
+                onUp: { selectPrev() },
+                onDown: { selectNext() }
+            )
 
             // ── Result list or loading (empty input → single line, nothing here)
             if model.isLoading && model.outcome == nil {
@@ -1540,6 +1523,91 @@ private struct RunnerView: View {
     private func quickLookSelected() {
         guard let row = selectedRow, let path = row.filePath ?? row.appURL?.path else { return }
         onFileAction(FileActions.ID.quickLook, path)
+    }
+}
+
+// MARK: - Search field
+
+/// The search field + mode chip row. The icon/chip renders LIVE (reflects
+/// `isLoading` every render) while only the `TextField` is `.equatable()`-gated
+/// inside `GatedField` — so the loading spinner stays correct, but the vertical
+/// TextField is not re-measured on the ~12Hz `outcome`/`isLoading` churn of a
+/// streaming Quick Chat answer (that re-measure nudged the caret ~1 glyph). The
+/// icon's fixed width keeps the field's frame stable across those re-renders, so
+/// the caret holds even though this row itself re-renders each tick.
+private struct InputHeader: View {
+    let mode: RunnerMode
+    let isLoading: Bool
+    @Binding var text: String
+    var focus: FocusState<Bool>.Binding
+    let onChange: () -> Void
+    let onSubmit: () -> Void
+    let onUp: () -> Void
+    let onDown: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: sz(10)) {
+            Group {
+                if mode == .universal {
+                    Image(systemName: isLoading ? "arrow.triangle.2.circlepath" : "magnifyingglass")
+                        .font(Neon.font(18, weight: .regular))
+                        .foregroundColor(Neon.blue)
+                        .symbolEffect(.pulse, isActive: isLoading)
+                } else {
+                    ModeChip(mode: mode, isLoading: isLoading)
+                }
+            }
+            GatedField(
+                placeholder: mode.placeholder,
+                textValue: text,
+                text: $text,
+                focus: focus,
+                onChange: onChange, onSubmit: onSubmit, onUp: onUp, onDown: onDown
+            )
+            .equatable()
+        }
+        .padding(.horizontal, sz(16))
+        .padding(.vertical, sz(16))
+    }
+}
+
+/// Just the search `TextField`, gated by `.equatable()` on a `text` VALUE SNAPSHOT
+/// (`textValue`) — NOT the `$text` binding, whose `wrappedValue` is a live proxy that
+/// reads the *current* `model.input` on both sides of `==` and so always compares
+/// equal (which would wrongly suppress re-render on typing → frozen search / stale
+/// field). With the snapshot, `==` is false whenever the input changed, so the field
+/// reconciles (and `.onChange` fires); during a stream the input is unchanged, so
+/// `==` is true and the vertical field is not re-measured → the caret holds still.
+/// `placeholder` is included in `==` so a mode switch (which changes it) re-renders.
+/// Closures are excluded (identity is irrelevant to layout).
+private struct GatedField: View, Equatable {
+    let placeholder: String
+    let textValue: String            // snapshot of model.input, for == only
+    @Binding var text: String        // live binding, drives the TextField
+    var focus: FocusState<Bool>.Binding
+    let onChange: () -> Void
+    let onSubmit: () -> Void
+    let onUp: () -> Void
+    let onDown: () -> Void
+
+    nonisolated static func == (l: GatedField, r: GatedField) -> Bool {
+        l.placeholder == r.placeholder && l.textValue == r.textValue
+    }
+
+    var body: some View {
+        // Grows and wraps for long input (e.g. a paragraph to translate) instead of
+        // overflowing a single line; caps at 5 lines, then scrolls internally.
+        TextField(placeholder, text: $text, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(Neon.font(20, weight: .regular))
+            .lineLimit(1 ... 5)
+            .focused(focus)
+            .onSubmit(onSubmit)
+            .onChange(of: text) { _, _ in onChange() }
+            // ↑/↓ switch results only — never move the caret (a multi-line TextField
+            // acts on the arrows itself; `.handled` suppresses that).
+            .onKeyPress(.upArrow) { onUp(); return .handled }
+            .onKeyPress(.downArrow) { onDown(); return .handled }
     }
 }
 

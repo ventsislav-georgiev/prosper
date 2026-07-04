@@ -18,6 +18,13 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.128.0 *(unreleased)*
+
+### Fixes
+- Fixed the search field's **cursor jiggling** left and right while a Quick
+  Chat answer streamed in — the input row no longer re-lays-out on every
+  streamed token.
+
 ## v2.127.0
 
 ### Quick Chat — ask the local AI anything
