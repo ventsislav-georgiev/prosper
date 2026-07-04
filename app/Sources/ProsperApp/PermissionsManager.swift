@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import EventKit
 import ServiceManagement
 import UserNotifications
 
@@ -53,6 +54,8 @@ enum PermissionsManager {
         // Login-Items approval is actionable. (NOT isEnabled, which means "actively
         // registered + enabled" and gates re-pin/heal.)
         case "lid-helper": return LidSleepHelper.permissionResolved
+        case "calendar":
+            return EKEventStore.authorizationStatus(for: .event) == .fullAccess
         default: return false
         }
     }
@@ -87,6 +90,7 @@ enum PermissionsManager {
                 _ = await LidSleepHelper.ensureRegistered(presentModal: false)
                 SMAppService.openSystemSettingsLoginItems()
             }
+        case "calendar": openSettings("com.apple.preference.security?Privacy_Calendars")
         default: break
         }
     }
@@ -98,6 +102,7 @@ enum PermissionsManager {
         case "accessibility": return "Accessibility"
         case "screen-recording": return "Screen Recording"
         case "lid-helper": return "Background Helper"
+        case "calendar": return "Calendars"
         default: return permission
         }
     }
@@ -111,6 +116,7 @@ enum PermissionsManager {
         case "accessibility": return "Lets Prosper read the focused window and post the keystrokes that drive shortcuts."
         case "screen-recording": return "Lets Prosper capture on-screen text for OCR-based features."
         case "lid-helper": return "A privileged login item applies the lid-closed sleep override (needs a one-time approval)."
+        case "calendar": return "Lets Prosper read your calendars and events for the menu bar calendar."
         default: return "Required for this extension to function."
         }
     }

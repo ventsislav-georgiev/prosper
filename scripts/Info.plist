@@ -65,6 +65,10 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Prosper sends Apple Events to control other apps for extensions you enable — e.g. routing a clicked link to a chosen browser, or running an osascript automation from your Hammerspoon config.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Prosper shows your events in the menu bar calendar (Calendar extension).</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Prosper shows your events in the menu bar calendar (Calendar extension).</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>

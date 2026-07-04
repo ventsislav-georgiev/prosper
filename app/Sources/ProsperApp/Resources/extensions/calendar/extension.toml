@@ -1,0 +1,55 @@
+# Calendar — Itsycal-style menu bar calendar: a day badge (or custom datetime
+# pattern) in the menu bar, and a popup month grid with event dots plus an
+# agenda list, read from the macOS calendar via EventKit. Implemented natively
+# (CalendarBarController); this extension is the enable/disable gate and the
+# declarative Settings header. Reading events needs the Calendar TCC grant,
+# requested on first enable.
+[extension]
+id          = "com.prosper.calendar"
+name        = "calendar"
+title       = "Calendar"
+description = "Menu bar calendar: month grid, event dots and an agenda list from your macOS calendars."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "calendar"
+system      = true
+# Opt-in: enabling this extension adds an icon to the menu bar and prompts for
+# Calendar access, so it ships OFF. The user turns it on in Settings › Extensions.
+default_disabled = true
+permissions = ["calendar"]
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Declarative (Tier-A) settings header: Permissions group + the rebindable
+# toggle shortcut. The rich controls (icon style, grid options, calendar
+# checklist) render natively as the footer pane (CalendarPane), same merge
+# pattern as Window Management / Menu Bar Management.
+[[contributes.settings_sections]]
+id        = "calendar"
+title     = "Calendar"
+icon      = "calendar"
+accent    = "Calendar"
+subtitle  = "Menu bar calendar with month grid and event list"
+
+[[contributes.settings_sections.controls]]
+kind  = "group"
+title = "Permissions"
+
+[[contributes.settings_sections.controls]]
+kind = "permission"
+name = "calendar"
+
+[[contributes.settings_sections.controls]]
+kind   = "group"
+title  = "Toggle shortcut (click to rebind)"
+footer = "Opens or closes the calendar popup, same as clicking the menu-bar icon."
+
+[[contributes.settings_sections.controls]]
+kind = "shortcut"
+name = "calendarTogglePopup"

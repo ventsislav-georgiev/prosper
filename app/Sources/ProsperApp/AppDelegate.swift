@@ -143,6 +143,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // System Stats menu-bar monitors. No-ops entirely when disabled (the
         // default) — no poller, no status items until the user opts in.
         StatsController.shared.reload()
+        // Menu-bar calendar: gated on its (opt-in) extension; no EventKit access
+        // and no status item until the user enables it.
+        CalendarBarController.shared.openSettingsHandler = { [weak self] in
+            self?.openSettings()
+        }
+        CalendarBarController.shared.extLive = calendarExtLive
+        CalendarBarController.shared.reload()
         // Headless self-check of the settings code paths (ordering + bookmarks FDA
         // gate). Set PROSPER_VERIFY=1 to dump and exit — used to verify on a locked
         // display where windows won't render. No effect on normal launches.
@@ -318,6 +325,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Enabling resumes live ordering without a relaunch; disabling stops the
             // enforcer's 2s timer so it can't keep driving a torn-down bar.
             self.reconcileMenuBarOrdering()
+            // The menu-bar calendar comes and goes with its extension: enabling
+            // builds the status item (and prompts for Calendar access), disabling
+            // tears everything down.
+            CalendarBarController.shared.extLive = self.calendarExtLive
+            CalendarBarController.shared.reload()
         }
 
         // Reconcile quicklinks with their human-editable file
@@ -700,6 +712,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(.agent, openAgent)
         add(.toggleAutocomplete, toggleAutocomplete)
         add(.menuBarToggleHidden) { MenuBarManager.shared.toggleHidden() }
+        add(.calendarTogglePopup) { CalendarBarController.shared.togglePopup() }
 
         // Built-in window management: snap the frontmost window to a screen edge,
         // maximize, or centre it. Applied via Accessibility to whatever app is
@@ -926,6 +939,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Whether the Menu Bar Management extension is enabled + trusted.
     private var menubarExtLive: Bool {
         extensions.record(id: "com.prosper.menubar")?.isLive ?? false
+    }
+
+    /// Whether the Calendar extension is enabled + trusted. The menu-bar calendar
+    /// (status item + EventKit access) only runs while it is live.
+    private var calendarExtLive: Bool {
+        extensions.record(id: "com.prosper.calendar")?.isLive ?? false
     }
 
     /// Arm or disarm the menu-bar ordering enforcer to match current state. Called at

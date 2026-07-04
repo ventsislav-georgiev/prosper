@@ -209,6 +209,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     case windowMaximize
     case windowCenter
     case menuBarToggleHidden
+    case calendarTogglePopup
 
     var title: String {
         switch self {
@@ -227,6 +228,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .windowMaximize: return "Window: Maximize"
         case .windowCenter: return "Window: Center"
         case .menuBarToggleHidden: return "Menu Bar: Reveal/Hide Section"
+        case .calendarTogglePopup: return "Calendar: Toggle Calendar"
         }
     }
 
@@ -248,6 +250,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .translate: return 13
         case .toggleAutocomplete: return 14
         case .menuBarToggleHidden: return 15
+        case .calendarTogglePopup: return 16
         }
     }
 
@@ -260,6 +263,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         switch self {
         case .translate: return "com.prosper.translate"
         case .menuBarToggleHidden: return "com.prosper.menubar"
+        case .calendarTogglePopup: return "com.prosper.calendar"
         default: return nil
         }
     }
@@ -319,6 +323,10 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .menuBarToggleHidden:
             // Opt-in: no default combo so it never collides out of the box. The
             // chevron in the menu bar is the always-available trigger.
+            return unsetKeyCombo
+        case .calendarTogglePopup:
+            // Opt-in: no default combo — the menu-bar icon is the always-available
+            // trigger; rebind from the extension's Settings page.
             return unsetKeyCombo
         }
     }

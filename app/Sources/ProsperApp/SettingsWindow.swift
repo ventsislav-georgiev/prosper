@@ -608,6 +608,9 @@ private struct SettingsRootView: View {
         // reorder + relaunch) ride in as the FOOTER below the manifest's reveal
         // shortcut, so there's ONE Menu Bar Management section.
         case "com.prosper.menubar": footer = AnyView(MenuBarPane(model: model))
+        // Calendar: icon/grid appearance + per-calendar checklist ride in as the
+        // FOOTER below the manifest's Permissions row and toggle shortcut.
+        case "com.prosper.calendar": footer = AnyView(CalendarPane())
         default: break
         }
         return ExtensionSettingsPane(registry: registry, record: record, section: section,
