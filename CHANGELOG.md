@@ -18,6 +18,26 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.126.0 *(unreleased)*
+
+### New: Calendar
+- New opt-in **Calendar** extension: an Itsycal-style menu bar calendar that
+  reads your macOS calendars (asks for Calendar access on first enable).
+- **Menu bar icon** in four styles — solid day badge, outlined badge, plain
+  calendar glyph, or a fully custom datetime pattern (e.g. `EEE, d MMM HH:mm`)
+  — with optional month / day-of-week in the badge, or hidden entirely and
+  driven by a rebindable global shortcut.
+- **Popup month calendar** with event dots (optionally colored per calendar),
+  ISO week numbers, highlighted weekend/custom days, first-day-of-week
+  override, adjustable text size, and a resizable 6–10 week grid — drag the
+  handle under the grid. Double-click a day to open it in Calendar.app; pin
+  the popup to keep it open.
+- **Agenda list** below the grid shows the next 1–31 days (or today only):
+  all-day capsules, tentative rings, calendar colors, locations, and one-click
+  join buttons for Zoom / Meet / Teams / Webex / FaceTime links.
+- Choose exactly **which calendars appear** from a per-source checklist in the
+  extension's settings.
+
 ## v2.125.0
 
 ### New: Migration Assistant
