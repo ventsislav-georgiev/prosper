@@ -1553,6 +1553,9 @@ private struct InputHeader: View {
                         .font(Neon.font(18, weight: .regular))
                         .foregroundColor(Neon.blue)
                         .symbolEffect(.pulse, isActive: isLoading)
+                        // Fixed width so the loading/idle symbol swap (different glyph
+                        // widths) can't shift the field's origin and jiggle the caret.
+                        .frame(width: sz(24), alignment: .center)
                 } else {
                     ModeChip(mode: mode, isLoading: isLoading)
                 }
@@ -1634,6 +1637,10 @@ private struct ModeChip: View {
             Image(systemName: isLoading ? "arrow.triangle.2.circlepath" : mode.icon)
                 .font(Neon.font(13, weight: .semibold))
                 .symbolEffect(.pulse, isActive: isLoading)
+                // Fixed width so the loading/idle symbol swap doesn't change the chip's
+                // width — which would shift the search field's origin and jiggle the
+                // caret while a Quick Chat answer streams (isLoading toggles ~12Hz).
+                .frame(width: sz(16), alignment: .center)
             Text(mode.title)
                 .font(Neon.font(13, weight: .semibold))
                 .lineLimit(1)
