@@ -1601,6 +1601,12 @@ private struct GatedField: View, Equatable {
             .textFieldStyle(.plain)
             .font(Neon.font(20, weight: .regular))
             .lineLimit(1 ... 5)
+            // Pin to the full remaining width (leading). Without an explicit width the
+            // field hugs its content, so each result update re-measures its width and
+            // re-snaps the caret ~1 glyph (the visible left/right jiggle while a Quick
+            // Chat answer streams). A fixed-proposal width makes the text layout — and
+            // thus the caret rect — deterministic across those re-layout passes.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .focused(focus)
             .onSubmit(onSubmit)
             .onChange(of: text) { _, _ in onChange() }
@@ -1608,6 +1614,9 @@ private struct GatedField: View, Equatable {
             // acts on the arrows itself; `.handled` suppresses that).
             .onKeyPress(.upArrow) { onUp(); return .handled }
             .onKeyPress(.downArrow) { onDown(); return .handled }
+            // Belt-and-braces: never let an implicit animation interpolate the field's
+            // layout/caret on a surrounding result change.
+            .transaction { $0.disablesAnimations = true }
     }
 }
 
