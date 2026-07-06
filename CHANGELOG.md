@@ -18,6 +18,15 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.128.2
+
+### Fixes
+- **Remote Terminal**: when a session's program finished (e.g. typing `exit`),
+  the exit notification could be lost in the connection teardown, so the mobile
+  app saw a dropped link and reattached — resurrecting the dead session. The
+  exit frame is now flushed before the connection closes, so clients end the
+  session cleanly.
+
 ## v2.128.1
 
 ### Fixes

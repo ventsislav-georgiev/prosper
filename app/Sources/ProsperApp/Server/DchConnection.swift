@@ -187,8 +187,14 @@ final class DchConnection: @unchecked Sendable {
                     sem.wait()
                 },
                 onExit: { [weak self] code in
-                    self?.send(DchFrame.encode(DchFrame.exit, json: ["code": code]))
-                    self?.close()
+                    guard let self else { return }
+                    // Close only after the exit frame is handed to the stack, and mark
+                    // it the final message so the FIN follows the data. cancel() right
+                    // after send() could drop the unflushed frame — the client then
+                    // saw a link drop, reattached, and resurrected the dead session.
+                    self.conn.send(content: DchFrame.encode(DchFrame.exit, json: ["code": code]),
+                                   contentContext: .finalMessage,
+                                   completion: .contentProcessed { _ in self.close() })
                 })
             pty = child
             child.run()
