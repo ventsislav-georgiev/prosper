@@ -18,6 +18,20 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.128.1
+
+### Fixes
+- **Menu bar**: using a revealed hidden icon's popup no longer collapses the
+  hidden section instantly — only the auto-rehide timer (or the chevron)
+  hides it now; clicking elsewhere never does.
+- **Menu bar**: new icons the saved order doesn't know yet (e.g. Now Playing)
+  no longer trigger an endless reorder loop — ordering pauses, files them in
+  automatically, then resumes. The ordering settings explain this.
+
+### Improvements
+- **Menu bar**: new "Auto-rehide" toggle — turn it off and hidden icons stay
+  revealed until you click the chevron again.
+
 ## v2.128.0
 
 ### Fixes

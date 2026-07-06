@@ -45,7 +45,6 @@ final class MenuBarManager: NSObject {
     /// Transient: is the hidden section currently revealed (separators collapsed)?
     private var revealed = false
     private var rehideTimer: Timer?
-    private var outsideMonitor: Any?
 
     /// Set by AppDelegate from the registry (boot + onEnabledChanged). Defaults
     /// true so a reconcile before the registry wires up doesn't suppress setup.
@@ -113,7 +112,6 @@ final class MenuBarManager: NSObject {
 
     private func teardown() {
         rehideTimer?.invalidate(); rehideTimer = nil
-        stopRevealMonitors()
         for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
             NSStatusBar.system.removeStatusItem(item)
         }
@@ -237,7 +235,7 @@ final class MenuBarManager: NSObject {
         if isActiveSpaceFullscreen { return }
         revealedAlwaysHidden.toggle()
         if revealedAlwaysHidden {
-            setRevealed(true)        // revealing always-hidden implies hidden shown (applies lengths + monitors + timer)
+            setRevealed(true)        // revealing always-hidden implies hidden shown (applies lengths + timer)
         } else {
             applyDividerLengths()    // collapse just the always-hidden band; keep hidden as-is
             scheduleRehide()
@@ -249,12 +247,10 @@ final class MenuBarManager: NSObject {
         applyDividerLengths()
         if revealed {
             scheduleRehide()
-            startRevealMonitors()
             MenuBarOrderEnforcer.shared.onReveal()   // on-demand ordering: correct order while visible
         } else {
             revealedAlwaysHidden = false
             rehideTimer?.invalidate(); rehideTimer = nil
-            stopRevealMonitors()
         }
     }
 
@@ -269,10 +265,21 @@ final class MenuBarManager: NSObject {
     /// no teardown). Called from Settings.
     func refreshChevronStyle() { updateChevron() }
 
-    // MARK: - Auto-rehide + reveal monitors
+    /// Re-derive the rehide timer after the auto-rehide setting changes WHILE the
+    /// section is revealed — turning it off must cancel the pending collapse
+    /// (scheduleRehide self-gates on the store flag).
+    func refreshRevealBehavior() {
+        guard revealed else { return }
+        scheduleRehide()
+    }
+
+    // MARK: - Auto-rehide
 
     private func scheduleRehide() {
         rehideTimer?.invalidate()
+        // Auto-rehide off: the section stays revealed until the user collapses it
+        // (chevron click / shortcut). No timer to arm.
+        guard Preferences.menuBarStore.autoRehideEnabled else { rehideTimer = nil; return }
         let secs = TimeInterval(Preferences.menuBarStore.clampedAutoRehide)
         rehideTimer = Timer.scheduledTimer(withTimeInterval: secs, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -284,45 +291,6 @@ final class MenuBarManager: NSObject {
             }
         }
     }
-
-    /// Arm passive monitors only while revealed: rehide when the user clicks
-    /// outside the menu bar, and (if enabled) keep the section open while the
-    /// cursor stays in the menu-bar strip. Removed the instant we rehide → zero
-    /// idle cost.
-    private func startRevealMonitors() {
-        stopRevealMonitors()
-        outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
-            MainActor.assumeIsolated {
-                // A reorder pass posts SYNTHETIC mouse events off-bar (the cursor is
-                // parked off-screen for the ⌘-drag) — those are not real outside clicks
-                // and must never collapse a section the user opened. Ours all carry a
-                // nonzero eventSourceUserData (stamped by the mover); real user clicks
-                // default to 0. Filtering per-event (instead of ignoring EVERYTHING
-                // while an apply is in flight) keeps the user's genuine click-outside-
-                // to-hide working even mid-apply.
-                if (event.cgEvent?.getIntegerValueField(.eventSourceUserData) ?? 0) != 0 { return }
-                // A click below the menu-bar strip rehides; clicks ON the bar (to
-                // use a revealed icon) keep it open and re-arm the timer. A GLOBAL
-                // monitor has no associated window, so `event.locationInWindow` is
-                // unreliable — read the real cursor via NSEvent.mouseLocation and
-                // compare against the screen the cursor is actually on.
-                let loc = NSEvent.mouseLocation
-                let screen = NSScreen.screens.first { $0.frame.contains(loc) } ?? NSScreen.main
-                let top = screen?.frame.maxY ?? .infinity
-                if loc.y < top - Self.menuBarHeight {
-                    MenuBarManager.shared.setRevealed(false)
-                } else {
-                    MenuBarManager.shared.scheduleRehide()
-                }
-            }
-        }
-    }
-
-    private func stopRevealMonitors() {
-        if let m = outsideMonitor { NSEvent.removeMonitor(m); outsideMonitor = nil }
-    }
-
-    private static let menuBarHeight: CGFloat = 24
 
     // MARK: - Enumeration / sections (cold path: reveal + Settings only)
 

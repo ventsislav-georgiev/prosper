@@ -29,6 +29,14 @@ enum MenuBarArranger {
         /// is half-applied; callers should retry once the user is idle instead of
         /// treating the pass as settled (or as a pipeline failure).
         var aborted = false
+        /// Live, resolvable icons the saved order doesn't know about. The pass
+        /// refuses to drag anything while these exist — reordering around an unknown
+        /// icon is how the endless-shuffle started (the fuzzy matcher could hand the
+        /// newcomer a saved sibling's slot and every pass chased a moving target).
+        /// The hashes captured this pass are cached, so the enforcer's next tick
+        /// files the newcomers into the saved order and reordering resumes with an
+        /// exact set match.
+        var unknownItems = 0
     }
 
     /// Identity for a live item. Falls back to "unknown" bundle so a nil never
@@ -177,6 +185,7 @@ enum MenuBarArranger {
                     if ContinuousClock.now >= deadline { break }      // wall-clock guard
                     last = await applyMoves(desired: desired)
                     if last.aborted { break }   // user grabbed the mouse — stop, don't misread as settled
+                    if last.unknownItems > 0 { break }   // unknown icons — wait for the merge, don't shuffle
                     try? await Task.sleep(for: .milliseconds(120))    // settle before measuring
                     let now = MenuBarBridge.menuBarWindowOrder(onDisplay: CGMainDisplayID())
                     stable = (now == prev) ? stable + 1 : 0
@@ -348,6 +357,26 @@ enum MenuBarArranger {
                                             excluding: claimed) {
                 placed.append(item); claimed.insert(item.windowID)
             }
+        }
+        // SAFEGUARD: never reorder while the bar holds manageable, resolvable icons
+        // the saved order doesn't know (new app, changed glyph, fresh hash). Dragging
+        // around an unknown icon never converges — and the fuzzy matcher can hand the
+        // newcomer to a stale saved entry's slot, so every pass chases a wrong target
+        // until the 20s deadline. Refuse the whole pass instead: the hashes captured
+        // above are now in `lastIndexedHashes`, so the enforcer's next tick files the
+        // newcomers into the saved order (mergingNewItems) and the following pass runs
+        // with an exact set match. `claimed` windows are excluded — a fuzzy match IS
+        // recognition (normal AA hash jitter across relaunch), not a newcomer.
+        let desiredKeys = Set(desired.map(\.key))
+        let unknown = live.filter { item in
+            let id = identity(for: item, hash: hashes[item.windowID])
+            return id.isManageable && id.isResolved
+                && !desiredKeys.contains(id.key) && !claimed.contains(item.windowID)
+        }
+        if !unknown.isEmpty {
+            NSLog("prosper: menu-bar arrange — \(unknown.count) icon(s) not in the saved order, deferring reorder until they're filed")
+            return ApplyResult(moved: 0, skippedUnresolved: skippedUnresolved, failed: 0,
+                               unknownItems: unknown.count)
         }
         guard placed.count > 1 else {
             return ApplyResult(moved: 0, skippedUnresolved: skippedUnresolved, failed: 0)

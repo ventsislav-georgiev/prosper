@@ -123,6 +123,7 @@ final class MenuBarTests: XCTestCase {
         var s = MenuBarStore.default
         s.spacing = 8
         s.alwaysHiddenEnabled = true
+        s.autoRehideEnabled = false
         s.autoRehideSeconds = 12
         s.chevronStyle = .circle
         let data = try JSONEncoder().encode(s)
@@ -137,6 +138,7 @@ final class MenuBarTests: XCTestCase {
         let s = try JSONDecoder().decode(MenuBarStore.self, from: json)
         XCTAssertEqual(s.spacing, 3)   // model default (denser than macOS stock 16)
         XCTAssertFalse(s.alwaysHiddenEnabled)
+        XCTAssertTrue(s.autoRehideEnabled)
         XCTAssertEqual(s.autoRehideSeconds, 5)
         XCTAssertEqual(s.chevronStyle, .ellipsis)
     }

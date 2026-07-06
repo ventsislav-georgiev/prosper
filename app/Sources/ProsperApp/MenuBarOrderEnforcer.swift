@@ -261,6 +261,17 @@ final class MenuBarOrderEnforcer {
                 self.working = false
                 return
             }
+            // Unknown icons in the bar: the pass refused to drag (see ApplyResult.
+            // unknownItems) but DID refresh the hash cache, so the next tick's merge
+            // can file the newcomers into the saved order. Not a pipeline failure —
+            // throttle-stamp only, clear the fingerprint so that tick actually runs.
+            if result.unknownItems > 0 {
+                if placeNewIcon { self.pendingNewIconPlacement = true }
+                self.policy.stampThrottleOnly(now: n)
+                self.lastOrderFingerprint = nil
+                self.working = false
+                return
+            }
             let actionable = result.moved > 0 || result.failed > 0
             // Stamp the cooldown from the pass START (`n`), not `self.now` after the
             // await — apply() can run hundreds of ms (reveal + capture + drags) and

@@ -2532,11 +2532,20 @@ private struct MenuBarPane: View {
 
             NeonSection("Hiding",
                         footer: "A chevron sits in your menu bar. Drag any icon to its LEFT to hide it; click the chevron (or the reveal shortcut) to show the hidden icons. They auto-rehide after a few seconds.") {
-                NeonRow("Auto-rehide", subtitle: "\(store.clampedAutoRehide) s") {
-                    Slider(value: Binding(get: { Double(store.clampedAutoRehide) },
-                                          set: { v in mutate { $0.autoRehideSeconds = Int(v.rounded()) } }),
-                           in: 1...30, step: 1)
-                        .frame(width: sz(200))
+                Toggle("Auto-rehide", isOn: Binding(
+                    get: { store.autoRehideEnabled },
+                    set: { v in mutate { $0.autoRehideEnabled = v }
+                           MenuBarManager.shared.refreshRevealBehavior() }))
+                if store.autoRehideEnabled {
+                    NeonRow("After", subtitle: "\(store.clampedAutoRehide) s") {
+                        Slider(value: Binding(get: { Double(store.clampedAutoRehide) },
+                                              set: { v in mutate { $0.autoRehideSeconds = Int(v.rounded()) } }),
+                               in: 1...30, step: 1)
+                            .frame(width: sz(200))
+                    }
+                } else {
+                    Text("Hidden icons stay revealed until you click the chevron again.")
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 }
                 NeonDivider()
                 NeonRow("Chevron", subtitle: "Divider glyph") {
@@ -2593,7 +2602,7 @@ private struct MenuBarPane: View {
 
     @ViewBuilder private var orderingSection: some View {
         NeonSection("Item ordering (experimental)",
-                    footer: "Keeps multi-icon apps (Stats, iStat Menus) in a fixed order across relaunch — the one thing macOS itself loses. When you ⌘-drag icons in the real bar (or a new icon appears), the saved order updates itself — no need to re-save here. Opt-in and version-gated: it only runs where Prosper can drive it reliably. Off does nothing.") {
+                    footer: "Keeps multi-icon apps (Stats, iStat Menus) in a fixed order across relaunch — the one thing macOS itself loses. When you ⌘-drag icons in the real bar (or a new icon appears), the saved order updates itself — no need to re-save here. New icons the saved order doesn't know yet briefly pause reordering while they're filed in automatically; it resumes on the next pass. Opt-in and version-gated: it only runs where Prosper can drive it reliably. Off does nothing.") {
             switch orderingSupport {
             case .unsupportedOS(let message):
                 Text(message)
@@ -2904,6 +2913,9 @@ private struct MenuBarPane: View {
         if let r = lastApply {
             if r.aborted {
                 return "Saved \(n) items. Last apply paused by mouse activity — it will finish automatically when the mouse is idle."
+            }
+            if r.unknownItems > 0 {
+                return "Saved \(n) items. \(r.unknownItems) icon(s) aren't in the saved order yet — they're filed in automatically, then ordering resumes."
             }
             return "Saved \(n) items. Last apply: moved \(r.moved), \(r.failed) failed, \(r.skippedUnresolved) not yet identifiable."
         }

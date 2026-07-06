@@ -70,6 +70,11 @@ struct MenuBarStore: Codable, Equatable, Sendable {
     /// single hidden section, one chevron.
     var alwaysHiddenEnabled: Bool = false
 
+    /// Master gate for auto-rehide. Off → the hidden section stays revealed until
+    /// the user collapses it themselves (chevron click / reveal shortcut): no timer.
+    /// The timer is the ONLY automatic collapse — starts on reveal, cleared on hide.
+    var autoRehideEnabled: Bool = true
+
     /// Seconds the hidden section stays revealed with no interaction before it
     /// auto-rehides. Clamped 1...30 on read.
     var autoRehideSeconds: Int = 5
@@ -94,6 +99,7 @@ struct MenuBarStore: Codable, Equatable, Sendable {
         schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? d.schemaVersion
         spacing = try c.decodeIfPresent(Int.self, forKey: .spacing) ?? d.spacing
         alwaysHiddenEnabled = try c.decodeIfPresent(Bool.self, forKey: .alwaysHiddenEnabled) ?? d.alwaysHiddenEnabled
+        autoRehideEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoRehideEnabled) ?? d.autoRehideEnabled
         autoRehideSeconds = try c.decodeIfPresent(Int.self, forKey: .autoRehideSeconds) ?? d.autoRehideSeconds
         chevronStyle = try c.decodeIfPresent(ChevronStyle.self, forKey: .chevronStyle) ?? d.chevronStyle
     }
