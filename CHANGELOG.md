@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.128.2
+## v2.128.3
 
 ### Fixes
 - **Remote Terminal**: when a session's program finished (e.g. typing `exit`),

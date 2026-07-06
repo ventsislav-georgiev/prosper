@@ -195,6 +195,9 @@ final class DchConnection: @unchecked Sendable {
                     self.conn.send(content: DchFrame.encode(DchFrame.exit, json: ["code": code]),
                                    contentContext: .finalMessage,
                                    completion: .contentProcessed { _ in self.close() })
+                    // Failsafe: if the completion never fires (client stalled or gone
+                    // mid-teardown), don't leak the connection. close() is idempotent.
+                    self.queue.asyncAfter(deadline: .now() + 5) { self.close() }
                 })
             pty = child
             child.run()
