@@ -2990,6 +2990,9 @@ private struct MenuBarPane: View {
         mutateOrder { s in
             if let i = s.alwaysHidden.firstIndex(of: key) { s.alwaysHidden.remove(at: i) }
             else { s.alwaysHidden.append(key) }
+            // Membership alone does nothing — the arranger drives the bar to
+            // desiredOrder as-is, so the item must physically lead the list.
+            s.normalizeAlwaysHidden()
         }
         applyBandsNow()
     }

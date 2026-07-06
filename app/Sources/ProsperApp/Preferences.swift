@@ -595,10 +595,14 @@ enum Preferences {
     static var menuBarOrderStore: MenuBarOrderStore {
         get {
             guard let data = defaults.data(forKey: Keys.menuBarOrderStoreJSON),
-                  let store = try? JSONDecoder().decode(MenuBarOrderStore.self, from: data),
+                  var store = try? JSONDecoder().decode(MenuBarOrderStore.self, from: data),
                   store.schemaVersion == MenuBarOrderStore.currentSchema else {
                 return .default
             }
+            // Heal blobs written before the eye toggle re-slotted items: every
+            // consumer (arranger, enforcer, Settings) reads through here, so
+            // always-hidden items are guaranteed to lead `desiredOrder`.
+            store.normalizeAlwaysHidden()
             return store
         }
         set {

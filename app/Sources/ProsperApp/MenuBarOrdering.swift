@@ -124,6 +124,31 @@ struct MenuBarOrderStore: Codable, Equatable, Sendable {
     /// Whether `key` is marked always-hidden.
     func isAlwaysHidden(_ key: String) -> Bool { alwaysHidden.contains(key) }
 
+    /// Always-hidden items must sit at the FRONT of `desiredOrder` — the physical
+    /// steady state is [always-hidden] altSep [hidden] hiddenSep chevron [visible],
+    /// and the arranger drives the bar to `desiredOrder` as-is BEFORE seating the
+    /// dividers. A key marked always-hidden while its item sits mid-list therefore
+    /// never moved (the eye toggle looked dead), or — when it was the first visible
+    /// item — the divider chain re-seated around it and orphaned it into the plain
+    /// hidden band. Stable partition: always-hidden items keep their relative order,
+    /// everything else keeps its order after them; the divider / new-items markers
+    /// are bumped when an item crosses into the region they count.
+    mutating func normalizeAlwaysHidden() {
+        let always = Set(alwaysHidden)
+        guard !always.isEmpty else { return }
+        var insertAt = 0
+        for i in desiredOrder.indices where always.contains(desiredOrder[i].key) {
+            if i != insertAt {
+                desiredOrder.insert(desiredOrder.remove(at: i), at: insertAt)
+                // The move is right-to-left; a marker counts the items before it,
+                // so it grows by one when the item crosses from beyond it to inside.
+                if let d = hiddenDividerIndex, i >= d, insertAt < d { hiddenDividerIndex = d + 1 }
+                if let n = newItemsIndex, i >= n, insertAt < n { newItemsIndex = n + 1 }
+            }
+            insertAt += 1
+        }
+    }
+
     /// Identity keys in the hidden section: the `desiredOrder` prefix before the
     /// divider, minus any that are always-hidden (those go one band further left).
     var hiddenKeys: [String] {
@@ -147,6 +172,7 @@ struct MenuBarOrderStore: Codable, Equatable, Sendable {
         desiredOrder = try c.decodeIfPresent([MenuBarIdentity].self, forKey: .desiredOrder) ?? d.desiredOrder
         alwaysHidden = try c.decodeIfPresent([String].self, forKey: .alwaysHidden) ?? d.alwaysHidden
         hiddenDividerIndex = try c.decodeIfPresent(Int.self, forKey: .hiddenDividerIndex) ?? d.hiddenDividerIndex
+        newItemsIndex = try c.decodeIfPresent(Int.self, forKey: .newItemsIndex) ?? d.newItemsIndex
     }
 }
 

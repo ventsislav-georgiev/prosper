@@ -279,12 +279,52 @@ final class MenuBarTests: XCTestCase {
                           MenuBarIdentity(bundleID: "a", title: "RAM")]
         s.alwaysHidden = ["a#RAM"]
         s.hiddenDividerIndex = 1
+        s.newItemsIndex = 2
         let data = try JSONEncoder().encode(s)
         let back = try JSONDecoder().decode(MenuBarOrderStore.self, from: data)
         XCTAssertEqual(back, s)
         XCTAssertTrue(back.isAlwaysHidden("a#RAM"))
         XCTAssertFalse(back.isAlwaysHidden("a#CPU"))
         XCTAssertEqual(back.hiddenDividerIndex, 1)
+        XCTAssertEqual(back.newItemsIndex, 2)   // was silently dropped by the tolerant decode
+    }
+
+    func testNormalizeAlwaysHiddenMovesItemsToFront() {
+        var s = MenuBarOrderStore.default
+        s.desiredOrder = [MenuBarIdentity(bundleID: "x", title: "A"),   // hidden
+                          MenuBarIdentity(bundleID: "x", title: "B"),   // visible
+                          MenuBarIdentity(bundleID: "x", title: "C"),   // visible, marked always
+                          MenuBarIdentity(bundleID: "x", title: "D")]   // visible
+        s.hiddenDividerIndex = 1
+        s.newItemsIndex = 2
+        s.alwaysHidden = ["x#C"]
+        s.normalizeAlwaysHidden()
+        // C leads the list; everything else keeps its relative order.
+        XCTAssertEqual(s.desiredOrder.map(\.key), ["x#C", "x#A", "x#B", "x#D"])
+        // Both markers counted items before C's new slot → each grows by one, so
+        // A stays hidden and new icons still land between B and D.
+        XCTAssertEqual(s.hiddenDividerIndex, 2)
+        XCTAssertEqual(s.newItemsIndex, 3)
+        // hiddenKeys still excludes always-hidden members of the prefix.
+        XCTAssertEqual(s.hiddenKeys, ["x#A"])
+        // Idempotent: a second pass changes nothing.
+        var again = s
+        again.normalizeAlwaysHidden()
+        XCTAssertEqual(again, s)
+    }
+
+    func testNormalizeAlwaysHiddenKeepsRelativeOrderOfMarked() {
+        var s = MenuBarOrderStore.default
+        s.desiredOrder = [MenuBarIdentity(bundleID: "x", title: "A"),
+                          MenuBarIdentity(bundleID: "x", title: "B"),
+                          MenuBarIdentity(bundleID: "x", title: "C")]
+        s.alwaysHidden = ["x#C", "x#B"]   // marked in reverse click order
+        s.normalizeAlwaysHidden()
+        // Stable partition: B before C (their order in desiredOrder, not click order).
+        XCTAssertEqual(s.desiredOrder.map(\.key), ["x#B", "x#C", "x#A"])
+        // No markers set → none invented.
+        XCTAssertNil(s.hiddenDividerIndex)
+        XCTAssertNil(s.newItemsIndex)
     }
 
     func testHiddenKeysAreDividerPrefixMinusAlwaysHidden() {
@@ -306,6 +346,7 @@ final class MenuBarTests: XCTestCase {
         XCTAssertFalse(s.enabled)
         XCTAssertEqual(s.mode, .onDemand)
         XCTAssertTrue(s.desiredOrder.isEmpty)
+        XCTAssertNil(s.newItemsIndex)
     }
 
     // MARK: - Ordering engine: reorder diff (must converge current → desired)
