@@ -18,6 +18,15 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.129.0
+
+### Fixes
+- **Menu bar**: the always-hidden eye toggle now actually works — marking an
+  icon moves it into the always-hidden band (and unmarking brings it back),
+  instead of doing nothing or sliding it into the wrong section.
+- **Menu bar**: the "new icons land here" position is no longer forgotten
+  after an app restart.
+
 ## v2.128.3
 
 ### Fixes
@@ -26,15 +35,6 @@ tag from the now-released section and put it on the new top draft.
   app saw a dropped link and reattached — resurrecting the dead session. The
   exit frame is now flushed before the connection closes, so clients end the
   session cleanly.
-
-## v2.129.0 *(unreleased)*
-
-### Fixes
-- **Menu bar**: the always-hidden eye toggle now actually works — marking an
-  icon moves it into the always-hidden band (and unmarking brings it back),
-  instead of doing nothing or sliding it into the wrong section.
-- **Menu bar**: the "new icons land here" position is no longer forgotten
-  after an app restart.
 
 ## v2.128.1
 
