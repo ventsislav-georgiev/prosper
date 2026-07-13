@@ -446,7 +446,14 @@ final class RunnerPanel {
 final class RunnerModel: ObservableObject {
     @Published var input: String = ""
     @Published var outcome: RunnerOutcome?
+    /// Raw in-flight flag (logic only — stale-result guards, hide-work checks).
     @Published var isLoading: Bool = false
+    /// Latched spinner flag the UI reads. Decoupled from `isLoading` so fast
+    /// local operations (calc, app search, quicklinks) never flash the loading
+    /// icon: the spinner appears only if loading persists past `spinnerGrace`,
+    /// and once shown stays at least `spinnerMinVisible` so a completion that
+    /// lands just past the grace window doesn't read as a one-frame glitch.
+    @Published var showSpinner: Bool = false
     @Published var focusRequested: Bool = false
     /// The active runner mode. `.universal` is the launcher; the others lock the
     /// runner to one capability and show a mode chip.
@@ -464,6 +471,12 @@ final class RunnerModel: ObservableObject {
     private var debounceWorkItem: DispatchWorkItem?
     private var requestToken: UInt64 = 0
     private let debounceInterval: TimeInterval = 0.25
+    /// Spinner latch state (see `showSpinner`).
+    private var spinnerShowWork: DispatchWorkItem?
+    private var spinnerHideWork: DispatchWorkItem?
+    private var spinnerShownAt: Date?
+    private let spinnerGrace: TimeInterval = 0.3
+    private let spinnerMinVisible: TimeInterval = 0.35
     /// Trailing single-flight state. A locked extension run is often an expensive,
     /// non-cancellable async call (LLM generation, http, shell). Debounce alone
     /// collapses fast typing, but slow back-and-forth editing (type → pause →
@@ -510,7 +523,7 @@ final class RunnerModel: ObservableObject {
     func reset() {
         input = ""
         outcome = nil
-        isLoading = false
+        clearLoadingNow()
         mode = .universal
         selectedIndex = 0
         debounceWorkItem?.cancel()
@@ -523,11 +536,56 @@ final class RunnerModel: ObservableObject {
     func exitMode() {
         mode = .universal
         outcome = nil
-        isLoading = false
+        clearLoadingNow()
         selectedIndex = 0
         debounceWorkItem?.cancel()
         requestToken &+= 1
         pendingText = nil
+    }
+
+    /// Latched spinner transitions. `loading == true` arms a delayed show (only
+    /// fires if still loading after `spinnerGrace`); `loading == false` hides —
+    /// immediately if the spinner has been visible for `spinnerMinVisible`,
+    /// otherwise after the remainder of that window.
+    private func setLoading(_ loading: Bool) {
+        isLoading = loading
+        spinnerShowWork?.cancel(); spinnerShowWork = nil
+        spinnerHideWork?.cancel(); spinnerHideWork = nil
+        if loading {
+            // Already visible (trailing single-flight re-run, streaming
+            // milestone): keep it, don't restart the grace clock.
+            guard !showSpinner else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.isLoading else { return }
+                self.showSpinner = true
+                self.spinnerShownAt = Date()
+            }
+            spinnerShowWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + spinnerGrace, execute: work)
+        } else {
+            guard showSpinner else { return }
+            let shown = spinnerShownAt.map { Date().timeIntervalSince($0) } ?? spinnerMinVisible
+            if shown >= spinnerMinVisible {
+                showSpinner = false
+            } else {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, !self.isLoading else { return }
+                    self.showSpinner = false
+                }
+                spinnerHideWork = work
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + (spinnerMinVisible - shown), execute: work)
+            }
+        }
+    }
+
+    /// Immediate spinner teardown for reset/mode-exit/emptied input — the panel
+    /// state is being discarded, so no grace/min-visible smoothing applies.
+    private func clearLoadingNow() {
+        spinnerShowWork?.cancel(); spinnerShowWork = nil
+        spinnerHideWork?.cancel(); spinnerHideWork = nil
+        isLoading = false
+        showSpinner = false
     }
 
     /// Enters a specific quickdir's browse mode (from the `qd` picker), locking the
@@ -598,7 +656,7 @@ final class RunnerModel: ObservableObject {
             requestToken &+= 1
             pendingText = nil
             outcome = nil
-            isLoading = false
+            clearLoadingNow()
             return
         }
 
@@ -622,7 +680,7 @@ final class RunnerModel: ObservableObject {
         requestToken &+= 1
         let token = requestToken
         isRunning = true
-        isLoading = true
+        setLoading(true)
 
         let activeMode = mode
         // In a locked extension mode the handler is async and often slow (an LLM
@@ -651,7 +709,7 @@ final class RunnerModel: ObservableObject {
                 if next != text { self.runQuery(next); return }
             }
             guard token == self.requestToken else { return } // ignore stale
-            self.isLoading = false
+            self.setLoading(false)
             self.outcome = result
             self.selectedIndex = 0
         }
@@ -1083,7 +1141,7 @@ private struct RunnerView: View {
             // actually change, so the caret holds still during streaming.
             InputHeader(
                 mode: model.mode,
-                isLoading: model.isLoading,
+                isLoading: model.showSpinner,
                 text: $model.input,
                 focus: $inputFocused,
                 onChange: { model.inputChanged() },
@@ -1093,7 +1151,7 @@ private struct RunnerView: View {
             )
 
             // ── Result list or loading (empty input → single line, nothing here)
-            if model.isLoading && model.outcome == nil {
+            if model.showSpinner && model.outcome == nil {
                 Divider()
                 ProgressView()
                     .frame(maxWidth: .infinity, alignment: .center)

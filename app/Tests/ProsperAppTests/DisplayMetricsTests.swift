@@ -74,15 +74,15 @@ final class DisplayMetricsTests: XCTestCase {
         XCTAssertEqual(Preferences.uiOpacity, Preferences.uiOpacityRange.lowerBound)
     }
 
-    /// An unset key must read as 1.0 (full size / fully opaque) — the launch default
-    /// that keeps a fresh install pixel-identical to the old build. tearDown restores
+    /// An unset scale must read as 1.0 (full size); an unset opacity defaults to
+    /// 0.9 (the v2.127.0 slightly-transparent launch default). tearDown restores
     /// the saved values.
     func testUnsetPreferencesDefaultToOne() {
         let d = UserDefaults.standard
         d.removeObject(forKey: "prosper.uiScale")
         d.removeObject(forKey: "prosper.uiOpacity")
         XCTAssertEqual(Preferences.uiScale, 1.0)
-        XCTAssertEqual(Preferences.uiOpacity, 1.0)
+        XCTAssertEqual(Preferences.uiOpacity, 0.9)
     }
 
     // MARK: preset snapping

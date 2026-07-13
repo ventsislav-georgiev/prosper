@@ -18,6 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.130.0 *(unreleased)*
+
+### Fixes
+- **Command runner**: the search icon no longer flickers into a loading spinner
+  on every keystroke. Fast local results (calculator, app search, quicklinks)
+  never show the spinner; it appears only when a request genuinely takes a
+  moment (e.g. an AI answer or translation), and once shown it stays visible
+  briefly instead of vanishing a frame later. The mode chip also stops pulsing
+  while a Quick Chat answer streams.
+
 ## v2.129.0
 
 ### Fixes
