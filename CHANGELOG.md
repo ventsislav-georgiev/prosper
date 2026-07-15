@@ -18,7 +18,19 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.130.0 *(unreleased)*
+## v2.131.0 *(unreleased)*
+
+### Fixes
+- **Remote Terminal**: attaching from the phone while a TUI sits on a modal
+  prompt (e.g. a Claude Code question) no longer shows a black screen. The
+  server now forces a repaint with a brief window-size jiggle — Node/Ink apps
+  ignore a same-size redraw signal, so a real size change is the only reliable
+  repaint. Also ships dch 1.0.2, which repaints attaches via SIGWINCH instead
+  of typing a stray ^L into the session (Claude Code binds ^L to clear-input,
+  which flashed "press ctrl+l again to clear" on every reconnect and could
+  wipe the conversation).
+
+## v2.130.0
 
 ### Fixes
 - **Command runner**: the search icon no longer flickers into a loading spinner
