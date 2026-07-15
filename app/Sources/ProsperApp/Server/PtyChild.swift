@@ -13,6 +13,9 @@ final class PtyChild: @unchecked Sendable {
     private let onExit: (Int32) -> Void
     private var done = false
     private let lock = NSLock()
+    private var lastCols = 80
+    private var lastRows = 24
+    private var jiggling = false
 
     enum PtyError: Error { case forkFailed }
 
@@ -30,6 +33,8 @@ final class PtyChild: @unchecked Sendable {
             envp.forEach { if let p = $0 { free(p) } }
         }
 
+        lastCols = cols
+        lastRows = rows
         var ws = winsize(ws_row: UInt16(rows), ws_col: UInt16(cols), ws_xpixel: 0, ws_ypixel: 0)
         var amaster: Int32 = 0
         let child = forkpty(&amaster, nil, nil, &ws)
@@ -76,7 +81,11 @@ final class PtyChild: @unchecked Sendable {
 
         var status: Int32 = 0
         if pid > 0 { waitpid(pid, &status, 0) }
+        // Close under the lock so redraw()'s delayed restore can't ioctl a
+        // recycled fd after the child is gone.
+        lock.lock()
         if masterFD >= 0 { close(masterFD); masterFD = -1 }
+        lock.unlock()
         let code: Int32 = (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
         onExit(code)
     }
@@ -96,21 +105,47 @@ final class PtyChild: @unchecked Sendable {
     }
 
     /// Push a new window size; dch's client gets SIGWINCH and forwards MSG_WINCH.
+    /// The size record and the ioctl stay under one lock so redraw()'s restore
+    /// can never interleave and leave the pty at a stale size.
     func resize(cols: Int, rows: Int) {
+        lock.lock()
+        defer { lock.unlock() }
         guard masterFD >= 0 else { return }
+        lastCols = cols
+        lastRows = rows
         var ws = winsize(ws_row: UInt16(rows), ws_col: UInt16(cols), ws_xpixel: 0, ws_ypixel: 0)
         _ = ioctl(masterFD, TIOCSWINSZ, &ws)
     }
 
-    /// Force a remote repaint without reattaching: SIGUSR2 makes the dch client
-    /// send MSG_REDRAW(REDRAW_WINCH), so the master raises SIGWINCH at the inner
-    /// program and it repaints — recovers DchTerm after a soft-keyboard relayout.
+    /// Force a remote repaint: jiggle the window size (rows-1, then restore after a
+    /// beat). A plain SIGWINCH is NOT enough — Node/Ink apps (Claude Code) only
+    /// re-render when the queried size actually CHANGED, so a same-size WINCH is
+    /// dropped and an attach mid-prompt stays a black screen until a keypress.
+    /// Two real size changes guarantee two resize events and a full repaint.
+    /// The 120 ms gap keeps the kernel/dch from coalescing them into a no-op.
     func redraw() {
         lock.lock()
-        let alreadyDone = done
-        let p = pid
+        // Claim the jiggle only once we know we'll schedule the restore that
+        // releases it — a bail here must not wedge every future redraw().
+        guard !done, !jiggling, masterFD >= 0, lastRows > 2 else { lock.unlock(); return }
+        jiggling = true
+        var small = winsize(ws_row: UInt16(lastRows - 1), ws_col: UInt16(lastCols),
+                            ws_xpixel: 0, ws_ypixel: 0)
+        _ = ioctl(masterFD, TIOCSWINSZ, &small)
         lock.unlock()
-        if !alreadyDone && p > 0 { kill(p, SIGUSR2) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.jiggling = false
+            guard self.masterFD >= 0 else { return }
+            // Restore to the CURRENT size (a real resize may have landed
+            // meanwhile). Read + ioctl stay under the lock so a concurrent
+            // resize() can't be clobbered by this stale restore.
+            var ws = winsize(ws_row: UInt16(self.lastRows), ws_col: UInt16(self.lastCols),
+                             ws_xpixel: 0, ws_ypixel: 0)
+            _ = ioctl(self.masterFD, TIOCSWINSZ, &ws)
+        }
     }
 
     /// Detach: SIGHUP the dch client so it exits; its master daemon keeps running.
