@@ -1,7 +1,7 @@
 // Owns the menu-bar Calendar end to end: the NSStatusItem with its SwiftUI
 // icon (day badge / outline / glyph / custom pattern), the transient popover
-// with the Itsycal-style month grid + agenda, timers (midnight rollover, and a
-// minute tick only while a time-bearing custom pattern is shown), and the
+// with the Itsycal-style month grid + agenda, day-change/wake observers plus a
+// minute tick (only while a time-bearing custom pattern is shown), and the
 // EventKit fetch orchestration. Gated by the com.prosper.calendar system
 // extension (ships default-disabled): `extLive` is set by AppDelegate at launch
 // and on every extension toggle; `reload()` brings the feature up or tears it
@@ -96,10 +96,11 @@ final class CalendarBarController {
         }
     }
     private var outsideClickMonitor: Any?
-    private var midnightTimer: DispatchSourceTimer?
     private var minuteTimer: DispatchSourceTimer?
-    /// Process-lifetime observer; the controller is a singleton, never removed.
+    /// Process-lifetime observers; the controller is a singleton, never removed.
     private var configObserver: NSObjectProtocol?
+    private var dayChangeObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
     private var selectionObserver: AnyCancellable?
     private var lastIconWidthKey = ""
 
@@ -107,6 +108,20 @@ final class CalendarBarController {
         configObserver = NotificationCenter.default.addObserver(
             forName: .calendarBarConfigChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reload() }
+        }
+        // Midnight rollover. A mach-time DispatchSourceTimer pauses during
+        // sleep, so a Mac asleep over midnight kept showing yesterday until the
+        // timer finally fired hours late. NSCalendarDayChanged covers midnight,
+        // a wake that crossed midnight, and timezone/clock changes.
+        dayChangeObserver = NotificationCenter.default.addObserver(
+            forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rollToToday() }
+        }
+        // Wake also re-syncs `now` so a time-bearing pattern doesn't show the
+        // pre-sleep minute until its next tick.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rollToToday() }
         }
         eventCenter.onStoreChanged = { [weak self] in self?.refetch() }
         // Agenda is anchored to the selected day — refetch when it moves so the
@@ -133,7 +148,7 @@ final class CalendarBarController {
         }
 
         syncItem()
-        startMidnightTimer()
+        rollToToday()
         syncMinuteTimer()
         refetch()
     }
@@ -246,24 +261,17 @@ final class CalendarBarController {
 
     // MARK: - Timers
 
-    /// Re-render the icon and re-anchor "today" at every midnight.
-    private func startMidnightTimer() {
-        midnightTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        let calendar = store.calendar
-        let nextMidnight = calendar.date(
-            byAdding: .day, value: 1, to: calendar.startOfDay(for: Date()))!
-        timer.schedule(deadline: .now() + nextMidnight.timeIntervalSinceNow,
-                       repeating: 86_400, leeway: .seconds(5))
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            self.store.today = self.store.calendar.startOfDay(for: Date())
-            self.resizeItem()
-            self.refetch()
-            self.startMidnightTimer()   // re-anchor (DST shifts the next midnight)
+    /// Re-anchor "today"/`now` and re-render — midnight, wake, timezone/clock
+    /// change, and `reload()`.
+    private func rollToToday() {
+        guard extLive, item != nil else { return }
+        store.now = Date()
+        let day = store.calendar.startOfDay(for: Date())
+        if store.today != day {
+            store.today = day
+            refetch()
         }
-        timer.resume()
-        midnightTimer = timer
+        resizeItem()
     }
 
     /// A per-minute tick only while a custom pattern renders time fields —
@@ -331,7 +339,6 @@ final class CalendarBarController {
     }
 
     private func teardown() {
-        midnightTimer?.cancel(); midnightTimer = nil
         minuteTimer?.cancel(); minuteTimer = nil
         if let item { NSStatusBar.system.removeStatusItem(item) }
         item = nil; host = nil

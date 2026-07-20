@@ -47,3 +47,4 @@ server/.signing-key.jwk
 
 # Local benchmark harness (not tracked)
 bench/
+.serena/

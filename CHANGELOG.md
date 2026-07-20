@@ -18,7 +18,17 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.131.0 *(unreleased)*
+## v2.132.0 *(unreleased)*
+
+### Fixes
+- **Calendar**: the menu-bar date no longer goes stale after the Mac sleeps
+  past midnight (it kept showing the previous day until clicked). The midnight
+  rollover timer paused during sleep; the icon now re-anchors on the system's
+  day-changed and wake notifications, which also covers timezone and clock
+  changes, and time-bearing icon patterns refresh immediately on wake instead
+  of showing the pre-sleep minute.
+
+## v2.131.0
 
 ### Fixes
 - **Remote Terminal**: attaching from the phone while a TUI sits on a modal
