@@ -137,6 +137,10 @@ final class DchSessionServer: @unchecked Sendable {
         listener.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
         listener.start(queue: queue)
         _ = sem.wait(timeout: .now() + 5)
+        // Detach any dch client left behind by a previous Prosper (crash / force quit).
+        // Those clients still hold a pty and keep reporting ITS window size to the
+        // master, which narrows the session for whoever attaches next.
+        queue.async { DchCommand.sweepOrphanedClients() }
     }
 
     func stop() {
@@ -168,14 +172,31 @@ final class DchSessionServer: @unchecked Sendable {
             conn.cancel()
             return
         }
-        let handler = DchConnection(conn: conn, queue: queue, log: log) { [weak self] id in
-            self?.connections.removeValue(forKey: id)
-            // No immediate release: the tick re-evaluates and the grace covers a
-            // detached session still working or a quick reconnect.
-        }
+        let handler = DchConnection(
+            conn: conn, queue: queue, log: log,
+            onClose: { [weak self] id in
+                self?.connections.removeValue(forKey: id)
+                // No immediate release: the tick re-evaluates and the grace covers a
+                // detached session still working or a quick reconnect.
+            },
+            onAttach: { [weak self] id, name in self?.retireOlderClients(of: name, keep: id) })
         connections[ObjectIdentifier(handler)] = handler
         handler.start()
         startKeepAwake()
+    }
+
+    /// One phone, one client per session. A reconnect (backgrounded app, tunnel switch,
+    /// no signal) opens a new connection while the old one still looks `.ready`; without
+    /// this the old client lingers until TCP keepalive notices, ~70s during which the
+    /// master takes ITS window size and the phone sees a narrow, garbled screen. So the
+    /// newest attach retires the older clients for that session immediately.
+    /// Runs on `queue`, called from the connection that just attached.
+    private func retireOlderClients(of name: String, keep: ObjectIdentifier) {
+        for (id, c) in connections where id != keep && c.attachedSession == name {
+            log.info("dch server: retiring stale client for \(name, privacy: .public)")
+            c.close()
+            connections.removeValue(forKey: id)
+        }
     }
 
     // MARK: - Keep-awake (drives the daemon's remote-session hold)

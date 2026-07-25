@@ -149,12 +149,28 @@ final class PtyChild: @unchecked Sendable {
     }
 
     /// Detach: SIGHUP the dch client so it exits; its master daemon keeps running.
+    ///
+    /// SIGHUP alone is not enough. A client whose output stopped being drained blocks in
+    /// `write()` on its pty, and in that state it never acts on SIGHUP or SIGTERM —
+    /// verified on a Mac where 39 leaked clients survived both and only died to SIGKILL.
+    /// Each survivor keeps reporting its window size to the master, and dch keeps one
+    /// size per session, so a leak doesn't just waste a process: it narrows the session
+    /// for the phone actually looking at it. Hence the escalation. The client is a leaf —
+    /// the master daemon and everything running inside the session are untouched.
     func terminate() {
         lock.lock()
         let alreadyDone = done
         let p = pid
         lock.unlock()
-        if !alreadyDone && p > 0 { kill(p, SIGHUP) }
+        guard !alreadyDone, p > 0 else { return }
+        kill(p, SIGHUP)
         // pump()'s read will hit EOF and reap; closing the fd here would race it.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let stillRunning = !self.done
+            self.lock.unlock()
+            if stillRunning, kill(p, 0) == 0 { kill(p, SIGKILL) }
+        }
     }
 }

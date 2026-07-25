@@ -21,11 +21,20 @@ tag from the now-released section and put it on the new top draft.
 ## v2.135.0 *(unreleased)*
 
 ### Fixes
-- **Remote Terminal**: a phone that leaves the network without hanging up (sleep,
-  tunnel switch, no signal) no longer leaks its session client. TCP keepalive now
-  notices the dead link in about a minute and tears the client down; before this,
-  every dropped connection left a `dch` client attached forever — dozens piled up
-  over a day.
+- **Remote Terminal**: session clients no longer leak, which also fixes the phone
+  showing a narrow, garbled screen that the redraw button couldn't repair. A dch
+  session keeps ONE window size and the last client to report it wins, so every
+  leftover client kept narrowing the session under the phone actually looking at it —
+  dozens piled up over a day. Four things kept them alive, all fixed: a phone that
+  left the network without hanging up (sleep, tunnel switch, no signal) was never
+  noticed, so TCP keepalive now spots the dead link in about a minute; the byte pump
+  waited forever for an acknowledgement that never came, wedging the session's pty;
+  a client stuck on that undrained pty ignores SIGHUP, so detaching now escalates to
+  SIGKILL (the session and everything inside it are untouched); and clients orphaned
+  by a crashed or force-quit Prosper are swept on startup.
+- **Remote Terminal**: reconnecting retires the previous client for that session at
+  once instead of waiting for the network to time out, so a reconnect can't leave two
+  clients fighting over the session's window size.
 
 ### Improvements
 - **Remote Terminal**: screen snapshots now carry the caret position, so the phone

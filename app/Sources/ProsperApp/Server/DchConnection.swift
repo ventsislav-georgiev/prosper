@@ -57,18 +57,26 @@ final class DchConnection: @unchecked Sendable {
     private let queue: DispatchQueue
     private let log: Logger
     private let onClose: (ObjectIdentifier) -> Void
+    /// Called once this connection owns a dch client for `name`, so the server can
+    /// retire any earlier connection still holding a client for the SAME session.
+    private let onAttach: (ObjectIdentifier, String) -> Void
     private var closed = false
     private var buffer = Data()
     private var pty: PtyChild?
     /// dch session name of the attached session — needed to ask dch for its mirror.
     private var sessionName: String?
 
+    /// The session this connection attached to, once it has one.
+    var attachedSession: String? { sessionName }
+
     init(conn: NWConnection, queue: DispatchQueue, log: Logger,
-         onClose: @escaping (ObjectIdentifier) -> Void) {
+         onClose: @escaping (ObjectIdentifier) -> Void,
+         onAttach: @escaping (ObjectIdentifier, String) -> Void = { _, _ in }) {
         self.conn = conn
         self.queue = queue
         self.log = log
         self.onClose = onClose
+        self.onAttach = onAttach
     }
 
     func start() {
@@ -242,7 +250,17 @@ final class DchConnection: @unchecked Sendable {
                     let sem = DispatchSemaphore(value: 0)
                     self.conn.send(content: DchFrame.encode(DchFrame.data, bytes),
                                    completion: .contentProcessed { _ in sem.signal() })
-                    sem.wait()
+                    // Bounded, not forever: a phone that vanished mid-stream never
+                    // acknowledges, and an unbounded wait parks this pump thread for
+                    // good. The pty then stops being drained, the dch client blocks in
+                    // write() — where it ignores SIGHUP — and detaching it becomes
+                    // impossible. That is how clients leaked and narrowed the session.
+                    // Well past any real stall on a tailnet; TCP keepalive kills the
+                    // link at ~70s anyway, so this only fires when it is truly gone.
+                    if sem.wait(timeout: .now() + 20) == .timedOut {
+                        self.log.error("dch client stalled 20s — dropping the connection")
+                        self.queue.async { self.close() }
+                    }
                 },
                 onExit: { [weak self] code in
                     guard let self else { return }
@@ -259,6 +277,11 @@ final class DchConnection: @unchecked Sendable {
                 })
             pty = child
             child.run()
+            // Our client is up and has already reported our window size, so retiring
+            // the previous one can't leave the master on someone else's size. Order
+            // matters: retire AFTER the spawn, never before — a failed spawn would
+            // otherwise have killed a working client for nothing.
+            if let name, !name.isEmpty { onAttach(ObjectIdentifier(self), name) }
         } catch {
             send(DchFrame.encode(DchFrame.error, json: ["message": "\(error)"]))
             close()
@@ -288,6 +311,49 @@ enum DchCommand {
     /// inner app (Claude Code); the app detaches by closing the TCP connection.
     /// `-f` force-attaches so an app client can mirror a session already attached in
     /// a standalone terminal. dch's `-n name [cmd]` is attach-or-create.
+    /// SIGHUP dch clients that outlived the Prosper that spawned them.
+    ///
+    /// A client killed by `-9`, a crash, or a force quit is reparented to launchd and
+    /// keeps its pty — and its window size. dch keeps ONE size per session and the last
+    /// client to report wins, so a leftover client at 49 columns silently narrows the
+    /// session for the phone that is actually looking at it. SIGHUP is dch's own detach
+    /// signal (`attach.c` installs `signal(SIGHUP, die)`): the client leaves, the master
+    /// daemon and everything running inside it are untouched.
+    static func sweepOrphanedClients() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.arguments = ["-axo", "pid=,ppid=,tty=,command="]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        do { try p.run() } catch { return }
+        let out = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let pids = orphanedClientPIDs(ps: String(decoding: out, as: UTF8.self))
+        // DchCommand.kill(_:) shadows the global, hence Darwin.kill.
+        for pid in pids { Darwin.kill(pid, SIGHUP) }
+        guard !pids.isEmpty else { return }
+        // A client stuck writing to an undrained pty ignores SIGHUP (and SIGTERM) —
+        // observed on 39 leaked clients that only died to SIGKILL. They are leaves: the
+        // master daemon and the program inside the session don't notice.
+        Thread.sleep(forTimeInterval: 0.3)
+        for pid in pids where Darwin.kill(pid, 0) == 0 { Darwin.kill(pid, SIGKILL) }
+    }
+
+    /// Parse `ps -axo pid=,ppid=,tty=,command=` for our orphans. Three conditions, all
+    /// needed: `ppid == 1` (its Prosper is gone — a live one still owns its children),
+    /// a real tty (the `--master-of` daemons are ppid 1 too, but have none, and killing
+    /// one would kill the session), and `-E` in the argv, which only Prosper passes.
+    static func orphanedClientPIDs(ps: String) -> [pid_t] {
+        ps.split(separator: "\n").compactMap { line in
+            let f = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard f.count >= 4, let pid = pid_t(f[0]), f[1] == "1", f[2] != "??" else { return nil }
+            let command = f[3...].joined(separator: " ")
+            guard command.contains("dch"), !command.contains("--master-of"),
+                  f[3...].contains("-E") else { return nil }
+            return pid
+        }
+    }
+
     static func spawnArgs(name: String?, command: [String], attach: Bool) -> [String] {
         var args = ["-E"]
         if attach { args.append("-f") }
