@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.133.0 *(unreleased)*
+## v2.134.0 *(unreleased)*
+
+### Improvements
+- **Remote Terminal**: pasting an image from the phone now works without Universal
+  Clipboard. The phone sends the copied image to this Mac's clipboard and then the
+  paste keystroke, so Claude Code (which reads the clipboard of the machine it runs
+  on) finds the picture every time — previously the keystroke went over alone and
+  pasted nothing unless macOS happened to have synced the image across.
+
+## v2.133.0
 
 ### Improvements
 - **Remote Terminal**: the phone can now ask for the *authoritative* screen instead

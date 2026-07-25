@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 import Network
@@ -23,6 +24,7 @@ enum DchFrame {
     static let redraw: UInt8  = 0x07  // (empty) force remote repaint (on an attached conn)
     static let machineInfo: UInt8 = 0x08 // (empty) → machineInfoResp; identity handshake
     static let snapshot: UInt8 = 0x09 // (empty) → snapshotResp; authoritative screen (on an attached conn)
+    static let putClipboard: UInt8 = 0x0a // raw image bytes → this Mac's clipboard, then ok
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -153,6 +155,9 @@ final class DchConnection: @unchecked Sendable {
             pty?.redraw()
         case DchFrame.snapshot:
             sendSnapshot()
+        case DchFrame.putClipboard:
+            setClipboardImage(payload)
+            send(DchFrame.encode(DchFrame.ok, []))
         case DchFrame.machineInfo:
             // Identity-only handshake (read-only, no side effects). Lets the paired
             // app bind this connection to a stable machine + its wake id, so it can
@@ -169,6 +174,26 @@ final class DchConnection: @unchecked Sendable {
         default:
             break
         }
+    }
+
+    /// Put an image the phone copied onto THIS Mac's clipboard. Claude Code's image
+    /// paste reads the clipboard of the machine it runs on, so a phone that only
+    /// sends ctrl-V pastes whatever the Mac happens to hold — Universal Clipboard
+    /// syncs phone images to the Mac unreliably, which is why the phone ships the
+    /// bytes itself and then sends ctrl-V.
+    ///
+    /// Deliberately synchronous on the connection queue: the ctrl-V arrives as the
+    /// very next frame, so the clipboard has to be set before this returns.
+    private func setClipboardImage(_ data: Data) {
+        guard !data.isEmpty, let image = NSImage(data: data) else { return }
+        let png = data.starts(with: [0x89, 0x50, 0x4e, 0x47])
+            ? data
+            : image.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0) }?
+                .representation(using: .png, properties: [:])
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        if let png { pb.setData(png, forType: .png) }
+        if let tiff = image.tiffRepresentation { pb.setData(tiff, forType: .tiff) }
     }
 
     /// Answer a snapshot request with dch's own rendered screen (`--read --ansi`).
