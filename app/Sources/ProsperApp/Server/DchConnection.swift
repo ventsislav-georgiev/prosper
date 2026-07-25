@@ -22,14 +22,16 @@ enum DchFrame {
     static let rename: UInt8  = 0x06  // {name, alias}  (alias "" clears)
     static let redraw: UInt8  = 0x07  // (empty) force remote repaint (on an attached conn)
     static let machineInfo: UInt8 = 0x08 // (empty) → machineInfoResp; identity handshake
+    static let snapshot: UInt8 = 0x09 // (empty) → snapshotResp; authoritative screen (on an attached conn)
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
-    static let listResp: UInt8 = 0x11 // [{name, alias?}]
+    static let listResp: UInt8 = 0x11 // [{name, alias?, state?}]
     static let exit: UInt8     = 0x12 // {code}
     static let error: UInt8    = 0x13 // {message}
     static let ok: UInt8       = 0x14 // (empty) ack for kill
     static let machineInfoResp: UInt8 = 0x18 // {device_id, hostname, wakeId?}
+    static let snapshotResp: UInt8 = 0x19 // raw ANSI screen from dch's VT mirror (empty = unavailable)
 
     /// Encode one frame. DATA payloads can be large; control payloads are tiny.
     static func encode(_ type: UInt8, _ payload: [UInt8]) -> Data {
@@ -56,6 +58,8 @@ final class DchConnection: @unchecked Sendable {
     private var closed = false
     private var buffer = Data()
     private var pty: PtyChild?
+    /// dch session name of the attached session — needed to ask dch for its mirror.
+    private var sessionName: String?
 
     init(conn: NWConnection, queue: DispatchQueue, log: Logger,
          onClose: @escaping (ObjectIdentifier) -> Void) {
@@ -117,7 +121,10 @@ final class DchConnection: @unchecked Sendable {
         switch type {
         case DchFrame.list:
             let rows = DchCommand.listSessions().map { row -> [String: Any] in
-                row.alias.isEmpty ? ["name": row.name] : ["name": row.name, "alias": row.alias]
+                var o: [String: Any] = ["name": row.name]
+                if !row.alias.isEmpty { o["alias"] = row.alias }
+                if !row.state.isEmpty { o["state"] = row.state }   // working|idle|blocked|done
+                return o
             }
             send(DchFrame.encode(DchFrame.listResp, json: rows))
         case DchFrame.kill:
@@ -144,6 +151,8 @@ final class DchConnection: @unchecked Sendable {
             }
         case DchFrame.redraw:
             pty?.redraw()
+        case DchFrame.snapshot:
+            sendSnapshot()
         case DchFrame.machineInfo:
             // Identity-only handshake (read-only, no side effects). Lets the paired
             // app bind this connection to a stable machine + its wake id, so it can
@@ -162,10 +171,34 @@ final class DchConnection: @unchecked Sendable {
         }
     }
 
+    /// Answer a snapshot request with dch's own rendered screen (`--read --ansi`).
+    /// The master keeps a full VT mirror of the session, so this is the authoritative
+    /// picture of what the remote program has drawn — the client can repaint from it
+    /// instead of waiting for the TUI to notice it should redraw. An empty payload
+    /// means "no mirror" (a session whose master predates dch 1.2, or a lite build):
+    /// the client then just keeps whatever it has.
+    private func sendSnapshot() {
+        guard let name = sessionName, !name.isEmpty else {
+            send(DchFrame.encode(DchFrame.snapshotResp, []))
+            return
+        }
+        // `--read` forks dch and round-trips the master socket; keep it off this
+        // connection's queue so the pty byte pump never waits on it.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let screen = DchCommand.readScreen(name)
+            guard let self else { return }
+            self.queue.async {
+                guard !self.closed else { return }
+                self.send(DchFrame.encode(DchFrame.snapshotResp, [UInt8](screen)))
+            }
+        }
+    }
+
     private func startSession(type: UInt8, payload: Data) {
         guard pty == nil else { return }  // one session per connection
         let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
         let name = o["name"] as? String
+        sessionName = name
         let command = (o["command"] as? [String]) ?? []
         let cols = (o["cols"] as? Int) ?? 80
         let rows = (o["rows"] as? Int) ?? 24
@@ -251,18 +284,44 @@ enum DchCommand {
         return env
     }
 
-    /// Parse `dch -lj` (one `name\talias\tactivityEpoch` per line; alias may be
-    /// empty, epoch 0 when the session has produced no output yet).
-    static func listSessions() -> [(name: String, alias: String, activityEpoch: Int)] {
-        runCapturing(args: ["-lj"])
+    /// Sessions with dch's own agent state (`working`/`idle`/`blocked`/`done`),
+    /// which it resolves from the session's rendered screen — that's why we ask dch
+    /// instead of guessing from output timestamps. `--ls-json` arrived in dch 1.4;
+    /// against an older binary it prints nothing and we fall back to `-lj`'s
+    /// `name\talias\tactivityEpoch` lines (state empty).
+    static func listSessions() -> [(name: String, alias: String, activityEpoch: Int, state: String)] {
+        let rows = parseListJSON(runCapturingData(args: ["--ls-json"]))
+        if !rows.isEmpty { return rows }
+        return parseListTSV(runCapturing(args: ["-lj"]))
+    }
+
+    /// `[{"name","alias","activity_epoch","state"}]` — dch 1.4+ `--ls-json`.
+    static func parseListJSON(_ data: Data) -> [(name: String, alias: String, activityEpoch: Int, state: String)] {
+        guard let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
+        return rows.compactMap { o in
+            guard let name = o["name"] as? String, !name.isEmpty else { return nil }
+            return (name, o["alias"] as? String ?? "",
+                    o["activity_epoch"] as? Int ?? 0, o["state"] as? String ?? "")
+        }
+    }
+
+    /// `name\talias\tactivityEpoch` lines — every dch's `-lj`, state unknown.
+    static func parseListTSV(_ text: String) -> [(name: String, alias: String, activityEpoch: Int, state: String)] {
+        text
             .split(separator: "\n")
             .compactMap { line in
                 let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
                 guard let name = parts.first, !name.isEmpty else { return nil }
                 let alias = parts.count > 1 ? String(parts[1]) : ""
                 let epoch = parts.count > 2 ? Int(parts[2]) ?? 0 : 0
-                return (String(name), alias, epoch)
+                return (String(name), alias, epoch, "")
             }
+    }
+
+    /// dch's rendered screen for `name`, colors included. Empty when the master has
+    /// no VT mirror (dch < 1.2 / lite build — it exits 3 and prints nothing).
+    static func readScreen(_ name: String) -> Data {
+        runCapturingData(args: ["--read", name, "--ansi"])
     }
 
     /// The dch socket directory the spawned client/master use, resolved exactly as
@@ -331,9 +390,14 @@ enum DchCommand {
         _ = runCapturing(args: ["-m", name, alias])
     }
 
-    /// Run dch for a short control command and capture stdout. Not used for attach
-    /// (that needs a pty) — only for `-ls` / `-k`.
     private static func runCapturing(args: [String]) -> String {
+        String(data: runCapturingData(args: args), encoding: .utf8) ?? ""
+    }
+
+    /// Run dch for a short control command and capture stdout. Not used for attach
+    /// (that needs a pty) — only for `--ls-json` / `-k` / `--read`, whose output is
+    /// raw bytes (escape sequences), hence Data rather than String.
+    private static func runCapturingData(args: [String]) -> Data {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: dchPath)
         p.arguments = args
@@ -346,9 +410,9 @@ enum DchCommand {
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return "" }
+        do { try p.run() } catch { return Data() }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        return String(data: data, encoding: .utf8) ?? ""
+        return data
     }
 }

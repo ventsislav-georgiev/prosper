@@ -18,7 +18,23 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.132.0 *(unreleased)*
+## v2.133.0 *(unreleased)*
+
+### Improvements
+- **Remote Terminal**: the phone can now ask for the *authoritative* screen instead
+  of hoping the remote program repaints. dch keeps a full terminal emulation mirror
+  of every session, so the server answers a new snapshot request with that rendered
+  screen — which fixes the missing characters and the half-blank screen after
+  rotating the phone, cases where the TUI believes it already drew those cells and
+  never sends them again. The size-jiggle repaint nudge still runs first; the
+  snapshot is the backstop.
+- **Remote Terminal**: the session list now reports what each agent is doing —
+  `working`, `idle`, `blocked` (a prompt is waiting for a human) or `done`. dch
+  resolves the state from the session's rendered screen, so it works for Claude
+  Code, Codex, Gemini and friends with no setup.
+- Ships dch 1.4.0 (agent API: `--read`, `--wait`, `--status`, `--ls-json`).
+
+## v2.132.0
 
 ### Fixes
 - **Calendar**: the menu-bar date no longer goes stale after the Mac sleeps
