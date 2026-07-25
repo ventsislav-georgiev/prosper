@@ -18,7 +18,22 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.134.0 *(unreleased)*
+## v2.135.0 *(unreleased)*
+
+### Fixes
+- **Remote Terminal**: a phone that leaves the network without hanging up (sleep,
+  tunnel switch, no signal) no longer leaks its session client. TCP keepalive now
+  notices the dead link in about a minute and tears the client down; before this,
+  every dropped connection left a `dch` client attached forever — dozens piled up
+  over a day.
+
+### Improvements
+- **Remote Terminal**: screen snapshots now carry the caret position, so the phone
+  paints the input row exactly where the session has it instead of guessing (needs
+  dch ≥ 1.5; older dch and sessions started before the upgrade keep the old
+  behavior).
+
+## v2.134.0
 
 ### Improvements
 - **Remote Terminal**: pasting an image from the phone now works without Universal

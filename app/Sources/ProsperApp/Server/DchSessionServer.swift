@@ -106,6 +106,16 @@ final class DchSessionServer: @unchecked Sendable {
         }
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
+        // A phone that leaves the network (sleep, tunnel switch, no signal) never sends
+        // FIN. Without keepalive the connection sits in `.ready` forever, so `close()`
+        // never runs and its dch client — plus that client's pty — leaks. 44 of them
+        // had piled up over one day, all still attached to their sessions.
+        if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+            tcp.enableKeepalive = true
+            tcp.keepaliveIdle = 30
+            tcp.keepaliveInterval = 10
+            tcp.keepaliveCount = 4   // dead link noticed in ~70s
+        }
         params.requiredLocalEndpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(tsIP), port: NWEndpoint.Port(rawValue: Self.port)!)
 

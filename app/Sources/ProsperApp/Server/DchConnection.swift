@@ -343,10 +343,32 @@ enum DchCommand {
             }
     }
 
-    /// dch's rendered screen for `name`, colors included. Empty when the master has
-    /// no VT mirror (dch < 1.2 / lite build — it exits 3 and prints nothing).
+    /// dch's rendered screen for `name`, colors included, with the caret appended as a
+    /// CUP when dch can tell us where it is. Empty when the master has no VT mirror
+    /// (dch < 1.2 / lite build — it exits 3 and prints nothing).
+    ///
+    /// The mirror is cell contents only, so a client painting it has to guess the
+    /// caret — which drew the phone's input row a line off its box. `--read --cursor`
+    /// (dch ≥ 1.5) reports `cursor <row> <col> <visible> <wrap>` on stderr; turning
+    /// that into `ESC[row;colH` needs no protocol change, because it's just more
+    /// screen bytes. Older dch rejects the flag and older masters report nothing —
+    /// both fall back to the screen alone.
     static func readScreen(_ name: String) -> Data {
-        runCapturingData(args: ["--read", name, "--ansi"])
+        let (screen, err) = runCapturingBoth(args: ["--read", name, "--ansi", "--cursor"])
+        guard !screen.isEmpty else { return runCapturingData(args: ["--read", name, "--ansi"]) }
+        guard let cup = cursorCUP(err) else { return screen }
+        return screen + Data(cup.utf8)
+    }
+
+    /// `cursor 7 12 1 0` (1-based, on stderr) → `ESC[7;12H`.
+    static func cursorCUP(_ stderrText: String) -> String? {
+        for line in stderrText.split(separator: "\n") where line.hasPrefix("cursor ") {
+            let f = line.split(separator: " ")
+            guard f.count >= 3, let row = Int(f[1]), let col = Int(f[2]),
+                  row > 0, col > 0 else { continue }
+            return "\u{1b}[\(row);\(col)H"
+        }
+        return nil
     }
 
     /// The dch socket directory the spawned client/master use, resolved exactly as
@@ -423,6 +445,12 @@ enum DchCommand {
     /// (that needs a pty) — only for `--ls-json` / `-k` / `--read`, whose output is
     /// raw bytes (escape sequences), hence Data rather than String.
     private static func runCapturingData(args: [String]) -> Data {
+        runCapturingBoth(args: args).out
+    }
+
+    /// Same as `runCapturingData`, plus stderr as text — `--read --cursor` reports the
+    /// caret there so it can't corrupt the screen on stdout.
+    private static func runCapturingBoth(args: [String]) -> (out: Data, err: String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: dchPath)
         p.arguments = args
@@ -433,11 +461,15 @@ enum DchCommand {
         }
         p.environment = env
         let pipe = Pipe()
+        let errPipe = Pipe()
         p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return Data() }
+        p.standardError = errPipe
+        do { try p.run() } catch { return (Data(), "") }
+        // Screen first (it can be tens of KB), then stderr (one line at most, so it
+        // fits the pipe buffer while we drain stdout — no deadlock).
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let err = errPipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        return data
+        return (data, String(data: err, encoding: .utf8) ?? "")
     }
 }
