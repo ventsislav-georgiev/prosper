@@ -41,6 +41,14 @@ final class PtyChild: @unchecked Sendable {
         if child < 0 { throw PtyError.forkFailed }
         if child == 0 {
             // Child: replace image. execve only touches the prebuilt C arrays.
+            // Clear the signal mask first — it survives fork AND exec, and the Swift
+            // runtime thread we fork from has SIGWINCH blocked. dch's client installs a
+            // SIGWINCH handler that then never runs, so every resize we push below was
+            // dropped: rotating the phone left the session at the old width. sigprocmask
+            // is async-signal-safe, so it is legal here.
+            var none = sigset_t()
+            sigemptyset(&none)
+            sigprocmask(SIG_SETMASK, &none, nil)
             execve(exe, argv, envp)
             _exit(127)  // exec failed
         }
