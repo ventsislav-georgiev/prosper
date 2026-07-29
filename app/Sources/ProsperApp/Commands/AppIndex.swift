@@ -130,7 +130,14 @@ final class AppIndex {
 
     /// Enumerates `.app` bundles across the standard search directories,
     /// de-duplicating by display name (a user copy in /Applications wins over a
-    /// system copy of the same name).
+    /// system copy of the same name), sorted by name.
+    ///
+    /// The sort is for the Settings app-pickers, which show this list verbatim and
+    /// were otherwise in filesystem scan order (visibly shuffled). Dedup precedence
+    /// is unaffected — that's enforced by the first-seen guard in `add`, not by the
+    /// output order. Search is unaffected too: `rank` / `SearchScore.before` sort by
+    /// score with their own tie-breaks, so this only makes equal-score ties
+    /// deterministic instead of dependent on directory enumeration.
     nonisolated static func scan(dirs: [String] = searchDirs,
                                  nested: [String] = nestedRoots,
                                  extraPaths: [String] = extraAppPaths) -> [AppEntry] {
@@ -174,7 +181,10 @@ final class AppIndex {
         for path in extraPaths where fm.fileExists(atPath: path) {
             add(path: path)
         }
+        // localizedStandardCompare = the Finder's ordering: case-insensitive and
+        // digit-aware, so "iMovie" files under I and "Item 2" precedes "Item 10".
         return order.compactMap { byName[$0] }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     /// Ranks `apps` against `query`. Scoring (high → low): whole-query alias hit,

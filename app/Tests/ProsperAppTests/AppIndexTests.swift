@@ -93,4 +93,39 @@ final class AppIndexTests: XCTestCase {
         try XCTSkipIf(AppIndex.shared.apps.isEmpty, "no apps scanned in this environment")
         XCTAssertEqual(apps.first?.name, "System Settings")
     }
+
+    /// The Settings app-pickers render the index verbatim, so `scan` must return it
+    /// name-sorted rather than in filesystem enumeration order.
+    @MainActor
+    func testLiveIndexIsAlphabetical() throws {
+        let apps = AppIndex.shared.ensureBuilt()
+        try XCTSkipIf(apps.count < 2, "no apps scanned in this environment")
+        let names = apps.map(\.name)
+        let expected = names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        XCTAssertEqual(names, expected, "app index must be alphabetical for the pickers")
+    }
+
+    /// `scan`'s sort must not disturb dedup precedence: a name present in an earlier
+    /// search dir wins, whatever the alphabetical position of the winner's path.
+    func testScanDedupPrefersFirstDirAndStaysSorted() {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("appindex-sort-\(UUID().uuidString)")
+        let winner = tmp.appendingPathComponent("first")
+        let loser = tmp.appendingPathComponent("second")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        for dir in [winner, loser] {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        // Same display name in both dirs, plus two others to prove the ordering.
+        for (dir, extra) in [(winner, "Zebra"), (loser, "Alpha")] {
+            for name in ["Dup", extra] {
+                try? FileManager.default.createDirectory(
+                    at: dir.appendingPathComponent("\(name).app"), withIntermediateDirectories: true)
+            }
+        }
+        let found = AppIndex.scan(dirs: [winner.path, loser.path], nested: [], extraPaths: [])
+        XCTAssertEqual(found.map(\.name), ["Alpha", "Dup", "Zebra"])
+        XCTAssertEqual(found.first { $0.name == "Dup" }?.url.deletingLastPathComponent().path,
+                       winner.path, "first search dir must still win the dedup")
+    }
 }

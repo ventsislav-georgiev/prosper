@@ -313,6 +313,9 @@ final class SettingsModel: ObservableObject {
     /// User-defined custom shortcuts (open the runner pre-seeded with a prefix).
     @Published var customShortcuts: [CustomShortcut]
 
+    /// User-defined app shortcuts (hotkey launches/focuses one app directly).
+    @Published var appShortcuts: [AppShortcut]
+
     /// Side-effect hooks owned by AppDelegate (start/stop engines, login item).
     var onAutocompleteChanged: ((Bool) -> Void)?
     var onLaunchAtLoginChanged: ((Bool) -> Void)?
@@ -379,6 +382,7 @@ final class SettingsModel: ObservableObject {
         for action in ShortcutAction.allCases { combos[action] = ShortcutStore.combo(for: action) }
         shortcutCombos = combos
         customShortcuts = ShortcutStore.customShortcuts()
+        appShortcuts = ShortcutStore.appShortcuts()
 
         // Let AppDelegate silently revert the picker after a cancelled/failed switch.
         SettingsHooks.shared.revertModelSelection = { [weak self] id in
@@ -400,6 +404,19 @@ final class SettingsModel: ObservableObject {
             guard let self, let hooks = note.object as? [HookRule], self.hooks != hooks
             else { return }
             self.hooks = hooks
+        }
+        // The runner can bind an app shortcut (⌘⇧K) while this window is open — this
+        // window and model outlive a single showing, so re-read the store.
+        NotificationCenter.default.addObserver(
+            forName: .appShortcutsChangedExternally, object: nil, queue: .main) { [weak self] _ in
+            // `queue: .main` guarantees main-thread delivery, so the hop is a
+            // no-op assertion — it just lets us touch MainActor state without the
+            // Sendable-closure warning the observers above still carry.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let stored = ShortcutStore.appShortcuts()
+                if self.appShortcuts != stored { self.appShortcuts = stored }
+            }
         }
     }
 
@@ -433,6 +450,38 @@ final class SettingsModel: ObservableObject {
     func removeCustomShortcut(id: UUID) {
         customShortcuts.removeAll { $0.id == id }
         persistCustomShortcuts()
+    }
+
+    // MARK: - App shortcuts (hotkey → launch/focus one app)
+
+    private func persistAppShortcuts() {
+        ShortcutStore.setAppShortcuts(appShortcuts)
+        onShortcutsChanged?()  // → AppDelegate.registerHotKeys()
+    }
+
+    /// Adds an empty app-shortcut row: no app and no combo yet, so it registers
+    /// nothing until the user picks both.
+    func addAppShortcut() {
+        appShortcuts.append(AppShortcut(target: "", combo: unsetKeyCombo, name: ""))
+        persistAppShortcuts()
+    }
+
+    func updateAppShortcutTarget(id: UUID, target: String, name: String) {
+        guard let i = appShortcuts.firstIndex(where: { $0.id == id }) else { return }
+        appShortcuts[i].target = target
+        appShortcuts[i].name = name
+        persistAppShortcuts()
+    }
+
+    func updateAppShortcutCombo(id: UUID, combo: KeyCombo) {
+        guard let i = appShortcuts.firstIndex(where: { $0.id == id }) else { return }
+        appShortcuts[i].combo = combo
+        persistAppShortcuts()
+    }
+
+    func removeAppShortcut(id: UUID) {
+        appShortcuts.removeAll { $0.id == id }
+        persistAppShortcuts()
     }
 
     // MARK: - Native key mappings (launch app / remap / media — replaces the old
@@ -711,6 +760,9 @@ final class SettingsHooks {
     var onClipboardMaxItemsChanged: (() -> Void)?
     var onShortcutsChanged: (() -> Void)?
     var onCheckForUpdates: (() -> Void)?
+    /// Opens the Settings window. Lets surfaces outside AppDelegate (the runner's
+    /// Actions menu / `:settings`) reach it without exposing the window itself.
+    var onOpenSettings: (() -> Void)?
     var onMenuBarIconChanged: ((Bool) -> Void)?
     var onDockIconChanged: ((Bool) -> Void)?
     var onDragSnapChanged: ((Bool) -> Void)?
@@ -1604,6 +1656,24 @@ private struct ShortcutsPane: View {
                 }
             }
 
+            NeonSection("App Shortcuts",
+                        footer: "Bind a hotkey that launches an app \u{2014} or brings it to the front when it's already running (\u{2318}\u{21E7}D \u{2192} DBeaver). Works without Accessibility permission. You can also bind one straight from the launcher with \u{2318}K on an app result.") {
+                let duplicates = AppShortcut.duplicateComboIDs(model.appShortcuts)
+                ForEach(Array(model.appShortcuts.enumerated()), id: \.element.id) { idx, sc in
+                    if idx > 0 { NeonDivider() }
+                    AppShortcutRow(model: model, shortcut: sc,
+                                   isDuplicate: duplicates.contains(sc.id))
+                }
+                if !model.appShortcuts.isEmpty { NeonDivider() }
+                HStack {
+                    Button {
+                        model.addAppShortcut()
+                    } label: { Label("Add App Shortcut", systemImage: "plus") }
+                        .buttonStyle(.neon)
+                    Spacer()
+                }
+            }
+
             NeonSection("Key Remapping",
                         footer: "Bind any key or media key to launch an app, remap to another key, send a media key, or disable it \u{2014} for every app or just one. No defaults; add what you want.") {
                 ForEach(Array(model.keyMappings.enumerated()), id: \.element.id) { idx, rule in
@@ -1772,6 +1842,68 @@ private struct CustomShortcutRow: View {
             .buttonStyle(.borderless)
             .help("Remove this shortcut")
         }
+    }
+}
+
+/// One app-shortcut row: app picker + recorder + delete. The hotkey launches (or
+/// focuses) that app directly — no runner. Sibling of `CustomShortcutRow`, which
+/// binds a runner prefix instead of an app.
+private struct AppShortcutRow: View {
+    @ObservedObject var model: SettingsModel
+    let shortcut: AppShortcut
+    /// Another row already claims this combo, so macOS would give the hotkey to
+    /// whichever registered first and this one would silently never fire.
+    let isDuplicate: Bool
+
+    var body: some View {
+        HStack(spacing: sz(8)) {
+            Menu(appLabel) {
+                ForEach(AppIndex.shared.ensureBuilt()) { app in
+                    Button(app.name) {
+                        model.updateAppShortcutTarget(
+                            id: shortcut.id,
+                            target: app.bundleId ?? app.url.path,
+                            name: app.name)
+                    }
+                }
+            }
+            .fixedSize()
+
+            Spacer()
+
+            if isDuplicate {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help("Another app shortcut already uses this key \u{2014} only one of them will fire.")
+            }
+
+            ShortcutRecorder(combo: shortcut.combo) { combo in
+                model.updateAppShortcutCombo(id: shortcut.id, combo: combo)
+            }
+            .frame(width: sz(110), height: sz(24))
+            .fixedSize()
+
+            Button {
+                model.removeAppShortcut(id: shortcut.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove this shortcut")
+        }
+    }
+
+    /// The stored name, falling back to a live index lookup (so a shortcut that
+    /// synced from another Mac still shows a real name), then to a prompt.
+    private var appLabel: String {
+        if !shortcut.name.isEmpty { return shortcut.name }
+        guard !shortcut.target.isEmpty else { return "Choose App\u{2026}" }
+        if let app = AppIndex.shared.ensureBuilt().first(where: {
+            $0.bundleId == shortcut.target || $0.url.path == shortcut.target
+        }) {
+            return app.name
+        }
+        return shortcut.target
     }
 }
 

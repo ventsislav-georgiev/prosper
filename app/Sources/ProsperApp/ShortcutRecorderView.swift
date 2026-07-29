@@ -68,6 +68,15 @@ final class RecorderView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        beginRecording()
+    }
+
+    /// Arms the field to capture the next combo. Exposed (rather than only firing on
+    /// click) so a host that exists purely to record — the runner's "Assign
+    /// Shortcut…" dialog — can arm it up front: that dialog tells the user to press
+    /// keys, so requiring a click first would make it look broken. The Settings rows
+    /// stay click-to-record, since there the field also displays the current binding.
+    func beginRecording() {
         window?.makeFirstResponder(self)
         recording = true
         guard monitor == nil else { return }

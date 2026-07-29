@@ -421,6 +421,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Side-effect hook: re-register hotkeys when the user rebinds them.
         SettingsHooks.shared.onShortcutsChanged = { [weak self] in self?.registerHotKeys() }
         SettingsHooks.shared.onCheckForUpdates = { AppUpdater.shared.checkForUpdates() }
+        // Lets the runner open Settings (Actions menu / `:settings`) — the only
+        // always-present surface, since ⌥\ is rebindable and the menu-bar icon
+        // can be hidden.
+        SettingsHooks.shared.onOpenSettings = { [weak self] in self?.openSettings() }
         SettingsHooks.shared.onMenuBarIconChanged = { [weak self] visible in
             self?.menuBar?.setIconVisible(visible)
         }
@@ -744,6 +748,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     DispatchQueue.main.async { self?.openRunner(prefill: prefix) }
                 },
                  "\(cs.label) (\(cs.combo.display))")
+            )
+        }
+
+        // User-defined app shortcuts: each launches or focuses ONE app directly —
+        // no runner, nothing to type (⌘⇧D → DBeaver). Ids start at 200 to stay clear
+        // of the fixed (1-16) and custom-shortcut (100+) ids above and the
+        // extension-keybinding ids (300+) below; `registrations` enforces that range
+        // and skips unset combos / unpicked apps.
+        for (id, sc) in AppShortcut.registrations(ShortcutStore.appShortcuts()) {
+            let target = sc.target
+            bound.append(
+                (GlobalHotKey(keyCode: sc.combo.keyCode, modifiers: sc.combo.carbonModifiers,
+                              id: id) {
+                    // launchOrFocus (not NSRunningApplication.activate) because we
+                    // fire while Prosper is a background app — see its doc comment.
+                    DispatchQueue.main.async { AppControl.launchOrFocus(target) }
+                },
+                 "Launch \(sc.name) (\(sc.combo.display))")
             )
         }
 

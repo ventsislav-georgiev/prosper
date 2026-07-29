@@ -24,6 +24,9 @@ struct SearchHit: Sendable, Equatable {
     var commandID: String? = nil       // the command to invoke / lock into
     var commandIcon: String? = nil     // SF Symbol for the row
     var commandLaunchesWindow: Bool = false // opens its own window on Enter (vs enter mode)
+    /// Native Prosper action (not an extension command): Enter runs this meta
+    /// command. Lets "settings" surface a real "Prosper Settings" row.
+    var metaCommand: MetaCommand? = nil
 }
 
 /// Pure, source-agnostic relevance scorer. Same ladder for apps, quicklinks and

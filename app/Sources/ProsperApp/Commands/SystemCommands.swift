@@ -111,6 +111,11 @@ enum MetaCommand: String, Sendable {
     /// Opens the "Create Quicklink" dialog (Raycast parity). Reached via `ql new`
     /// / `ql create` in the runner; the UI handles it by presenting a form.
     case newQuicklink
+    /// Opens Prosper's own Settings window. The runner is the one surface that is
+    /// always reachable (⌘Space), so it must offer a way in: the ⌥\ hotkey can be
+    /// rebound or cleared, and the menu-bar icon can be switched off — or tucked
+    /// into Prosper's own hidden menu-bar section — leaving no other route.
+    case openSettings
 
     static func parse(_ input: String) -> MetaCommand? {
         let s = input.trimmingCharacters(in: .whitespaces).lowercased()
@@ -118,6 +123,9 @@ enum MetaCommand: String, Sendable {
         case ":q", ":quit": return .quit
         case ":c", ":clear": return .clearClipboard
         case "ql new", "ql create", "ql add": return .newQuicklink
+        // Colon-prefixed so they can't shadow an app search for "settings" /
+        // "preferences" (System Settings.app must still win that).
+        case ":s", ":settings", ":prefs", ":preferences": return .openSettings
         default: return nil
         }
     }
@@ -127,6 +135,7 @@ enum MetaCommand: String, Sendable {
         case .quit: return "Quit Prosper"
         case .clearClipboard: return "Clear clipboard history"
         case .newQuicklink: return "Create Quicklink"
+        case .openSettings: return "Open Prosper Settings"
         }
     }
 }
