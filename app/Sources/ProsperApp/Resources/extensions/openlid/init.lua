@@ -19,7 +19,7 @@ local DEFAULTS = {
     rule_at_launch        = false, -- turn on at every launch (manual; survives unplug)
     auto_on_ac            = true,  -- LEGACY (migrated to rule_on_ac): auto-on when plugged in
     activate_at_launch    = false, -- LEGACY (migrated to rule_at_launch): arm on every launch
-    lock_on_lid_close     = true,  -- on lid close while active: lock + blank the display
+    lock_on_lid_close     = true,  -- on every lid close: lock + blank the display
     show_menu_icon        = true,  -- show the menu bar status item
     battery_threshold_pct = 20,    -- auto-off below this % on battery (0 disables)
     network_timeout_min   = 2,     -- in-transit: auto-off after this many min with no network (0 disables)
@@ -572,10 +572,12 @@ end
 
 function on_lid(payload)
     local p = host.json.decode(payload) or {}
-    local s = load_state()
-    if p.closed and s.active and pref_bool("lock_on_lid_close", DEFAULTS.lock_on_lid_close) then
+    -- No keep-awake gate: the setting says "on lid close", so it holds whether or
+    -- not we're holding the Mac up. It used to require an active session, which is
+    -- exactly the "sometimes doesn't lock" the toggle promised not to do.
+    -- lock_screen locks THEN blanks the display (host-side, ordered).
+    if p.closed and pref_bool("lock_on_lid_close", DEFAULTS.lock_on_lid_close) then
         host.caffeinate.lock_screen()
-        host.shell.run("/usr/bin/pmset displaysleepnow")
     end
 end
 

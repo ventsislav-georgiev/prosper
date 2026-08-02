@@ -369,4 +369,28 @@ do
     h.eq(icon(), "\u{1F513}", "timed session shows the bare glyph, no countdown text")
 end
 
+-- ── Lock on lid close: checked = always, awake session or not ────────────────
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+
+    -- Idle Mac, no keep-awake session: still locks (the old gate skipped this).
+    G.on_lid(host.json.encode { closed = true })
+    h.eq(env.flags.locked, true, "lid close locks without an active session")
+
+    env.flags.locked = false
+    G.on_lid(host.json.encode { closed = false })
+    h.eq(env.flags.locked, false, "opening the lid never locks")
+
+    G.openlid_toggle("")                                     -- keep-awake on
+    G.on_lid(host.json.encode { closed = true })
+    h.eq(env.flags.locked, true, "lid close locks while keeping the Mac awake")
+
+    -- Unchecked = never.
+    env.flags.locked = false
+    G.settings_action("openlid", "set:lock_on_lid_close", "false", "{}")
+    G.on_lid(host.json.encode { closed = true })
+    h.eq(env.flags.locked, false, "no lock when the setting is off")
+end
+
 print("ok openlid")

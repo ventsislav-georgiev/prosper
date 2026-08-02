@@ -466,6 +466,8 @@ final class SystemEventWatchers {
     private var screenObserver: NSObjectProtocol?
     private var activateObserver: NSObjectProtocol?
     private var lastLidClosed: Bool?
+    private var pmNotifyPort: IONotificationPortRef?
+    private var pmInterest: io_object_t = 0
     private var started = false
 
     /// Start watchers (idempotent). Call after the registry is wired; safe to call
@@ -566,6 +568,38 @@ final class SystemEventWatchers {
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkLid() }
+        }
+        startClamshellWatch()
+    }
+
+    /// Real clamshell edges straight from IOPMrootDomain. The screen-parameters
+    /// notification above only fires when the DISPLAY LIST changes — closing the lid
+    /// with no external display attached (and the keep-awake override holding the Mac
+    /// up) never changed it, so `lid.changed` was simply never emitted and the
+    /// lock-on-lid-close action silently didn't run. Any general-interest message is
+    /// re-checked (they're rare); `checkLid` dedups, so extra wakeups cost nothing.
+    private func startClamshellWatch() {
+        let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard root != 0 else { return }
+        defer { IOObjectRelease(root) }
+        guard let port = IONotificationPortCreate(kIOMainPortDefault) else { return }
+        pmNotifyPort = port
+        IONotificationPortSetDispatchQueue(port, .main)
+        let ctx = Unmanaged.passUnretained(self).toOpaque()
+        IOServiceAddInterestNotification(port, root, kIOGeneralInterest, { ctx, _, _, _ in
+            guard let ctx else { return }
+            let me = Unmanaged<SystemEventWatchers>.fromOpaque(ctx).takeUnretainedValue()
+            MainActor.assumeIsolated { me.checkLidNowAndSettled() }
+        }, ctx, &pmInterest)
+    }
+
+    /// Check immediately, then once more after the power stack settles: the message
+    /// can beat the `AppleClamshellState` registry update, and a missed edge has no
+    /// second chance (nothing else fires). The re-check is a no-op on the common path.
+    private func checkLidNowAndSettled() {
+        checkLid()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             MainActor.assumeIsolated { self?.checkLid() }
         }
     }

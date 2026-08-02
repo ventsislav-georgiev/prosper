@@ -768,11 +768,28 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
 
     func caffeinateLockScreen() {
         // User-space lock (no entitlement): the CGSession menu-extra suspends the
-        // session. Fire-and-forget off-main.
+        // session, then the panel is blanked. Blanking must come AFTER the lock —
+        // the login window turns the display back on, so the reverse order (what
+        // openlid used to do from Lua, racing two independent commands) left a lit
+        // screen behind a closed lid. Executed directly, NOT through ShellRunner:
+        // that one spawns `zsh -lc` and sources login profiles, hundreds of ms we
+        // may not have before the system suspends us on a lid close.
         Task.detached {
-            _ = await ShellRunner.run(
-                "'/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession' -suspend")
+            Self.runTool("/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession",
+                         ["-suspend"])
+            Self.runTool("/usr/bin/pmset", ["displaysleepnow"])
         }
+    }
+
+    /// Run a binary to completion, no shell, output discarded.
+    private static func runTool(_ path: String, _ args: [String]) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path)
+        p.arguments = args
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return }
+        p.waitUntilExit()
     }
 
     func caffeinateStartScreensaver() {
