@@ -1852,27 +1852,131 @@ private struct CustomShortcutRow: View {
     }
 }
 
-/// The single-pick app menu shared by every row that stores an app as a bundle-id
-/// or path: app shortcuts and `launchApp` key mappings. One place decides what the
-/// list contains and what a stored target is CALLED, because two rows disagreeing
-/// about the name of the same app is the kind of thing nobody reports and everybody
-/// notices. (The key-mapping scope picker is deliberately not folded in — it is
-/// multi-select with checkmarks, a different control that only shares the source list.)
+/// The app picker shared by every row that stores an app as a bundle-id or path:
+/// app shortcuts, `launchApp` key mappings, and the key-mapping scope list. One
+/// place decides what the list contains and what a stored target is CALLED, because
+/// two rows disagreeing about the name of the same app is the kind of thing nobody
+/// reports and everybody notices.
+///
+/// A plain `Menu` was a several-hundred-item scroll with no way in but the mouse.
+/// This is the same shape as the agent history popover: filter field on top, a
+/// short scrolling list under it, Return to take the top match.
 private struct AppPickerMenu: View {
-    let target: String
-    /// Shown instead of resolving `target`. App shortcuts persist the name they were
-    /// created with, so a row synced from another Mac still reads "DBeaver" rather
-    /// than a bundle id when that app isn't installed here. Empty = resolve.
-    var storedName: String = ""
+    /// Bundle ids / paths currently chosen. Single-pick rows pass at most one.
+    var selected: Set<String> = []
+    /// Multi-select keeps the popover open, marks every chosen row, and offers the
+    /// "Any app" reset (an empty scope means every app, so it needs its own row).
+    var multiSelect = false
+    let label: String
+    var help: String = ""
     let onPick: (_ target: String, _ name: String) -> Void
+    var onClear: (() -> Void)?
+
+    @State private var showing = false
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+
+    /// Contains-match first, then a fuzzy subsequence (the same test the launcher
+    /// uses), so "dbv" still finds DBeaver. Order stays the index's own A→Z.
+    private var filtered: [AppEntry] {
+        let apps = AppIndex.shared.ensureBuilt()
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return apps }
+        return apps.filter {
+            let n = $0.name.lowercased()
+            return n.contains(q) || AppIndex.isSubsequence(q, of: n)
+        }
+    }
 
     var body: some View {
-        Menu(storedName.isEmpty ? Self.displayName(for: target) : storedName) {
-            ForEach(AppIndex.shared.ensureBuilt()) { app in
-                Button(app.name) { onPick(app.bundleId ?? app.url.path, app.name) }
+        Button { showing.toggle() } label: {
+            HStack(spacing: sz(4)) {
+                Text(label).lineLimit(1)
+                Image(systemName: "chevron.down").imageScale(.small)
             }
         }
+        .buttonStyle(.neon)
         .fixedSize()
+        .help(help)
+        .popover(isPresented: $showing, arrowEdge: .bottom) { popoverBody }
+        // Every open starts from the full list; a stale filter from last time reads
+        // as "half my apps are missing".
+        .onChange(of: showing) { _, open in if open { query = "" } }
+    }
+
+    private var popoverBody: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: sz(8)) {
+                Image(systemName: "magnifyingglass")
+                    .font(Neon.font(12)).foregroundColor(Neon.blue)
+                TextField("Filter apps\u{2026}", text: $query)
+                    .textFieldStyle(.plain)
+                    .foregroundColor(Neon.textPrimary)
+                    .focused($searchFocused)
+                    // Return takes the top match: the whole point is picking an app
+                    // without reaching for the mouse.
+                    .onSubmit { if let first = filtered.first { pick(first) } }
+            }
+            .padding(.horizontal, sz(12)).padding(.vertical, sz(9))
+
+            Rectangle().fill(Neon.stroke).frame(height: 1)
+
+            ScrollView {
+                LazyVStack(spacing: sz(2)) {
+                    if multiSelect, query.isEmpty, let onClear {
+                        row(title: "Any app", checked: selected.isEmpty) {
+                            onClear()
+                            showing = false
+                        }
+                        Rectangle().fill(Neon.stroke).frame(height: 1).padding(.vertical, sz(2))
+                    }
+                    if filtered.isEmpty {
+                        Text("No matches")
+                            .font(Neon.font(.caption)).foregroundColor(Neon.textSecondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, sz(24))
+                    } else {
+                        ForEach(filtered) { app in
+                            let id = app.bundleId ?? app.url.path
+                            row(title: app.name, checked: selected.contains(id)) { pick(app) }
+                        }
+                    }
+                }
+                .padding(sz(6))
+            }
+            // ~10 rows, then scroll — the list is hundreds long and a popover that
+            // covers the window is what we're getting away from.
+            .frame(maxHeight: sz(260))
+        }
+        .frame(width: sz(280))
+        .background(LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
+                                   startPoint: .top, endPoint: .bottom))
+        .preferredColorScheme(.dark)
+        .tint(Neon.blue)
+        .task { searchFocused = true }
+    }
+
+    private func row(title: String, checked: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: sz(6)) {
+                Image(systemName: "checkmark")
+                    .font(Neon.font(10))
+                    .foregroundColor(Neon.blue)
+                    .opacity(checked ? 1 : 0)
+                Text(title).font(Neon.font(12)).foregroundColor(Neon.textPrimary)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, sz(8)).padding(.vertical, sz(4))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func pick(_ app: AppEntry) {
+        onPick(app.bundleId ?? app.url.path, app.name)
+        // Multi-select is a list being assembled, so it stays open (and keeps the
+        // filter, which is how you tick three JetBrains IDEs in a row).
+        if !multiSelect { showing = false }
     }
 
     /// The app's display name for a stored bundle-id/path target, else a prompt.
@@ -1897,9 +2001,23 @@ private struct AppShortcutRow: View {
     /// whichever registered first and this one would silently never fire.
     let isDuplicate: Bool
 
+    /// Installed app's current name, else whatever we stored when it was picked,
+    /// else the raw target — never an empty button.
+    private var label: String {
+        if shortcut.target.isEmpty { return "Choose App\u{2026}" }
+        let resolved = AppPickerMenu.displayName(for: shortcut.target)
+        if resolved != shortcut.target { return resolved }
+        return shortcut.name.isEmpty ? resolved : shortcut.name
+    }
+
     var body: some View {
         HStack(spacing: sz(8)) {
-            AppPickerMenu(target: shortcut.target, storedName: shortcut.name) { target, name in
+            AppPickerMenu(
+                selected: shortcut.target.isEmpty ? [] : [shortcut.target],
+                // The stored name keeps the row readable when the app isn't installed
+                // on this machine (synced shortcut, external drive unmounted).
+                label: label
+            ) { target, name in
                 model.updateAppShortcutTarget(id: shortcut.id, target: target, name: name)
             }
 
@@ -1991,23 +2109,19 @@ private struct KeyMappingRow: View {
     /// Per-app scope: empty `apps` = every app; otherwise the rule only fires when one
     /// of the listed bundle ids is frontmost. Multi-select with checkmarks.
     @ViewBuilder private var scopeEditor: some View {
-        Menu(scopeLabel) {
-            Button("Any app") { update { $0.apps = [] } }
-            Divider()
-            ForEach(AppIndex.shared.ensureBuilt()) { app in
-                let id = app.bundleId ?? app.url.path
-                Button {
-                    update {
-                        if let i = $0.apps.firstIndex(of: id) { $0.apps.remove(at: i) }
-                        else { $0.apps.append(id) }
-                    }
-                } label: {
-                    if rule.apps.contains(id) { Label(app.name, systemImage: "checkmark") }
-                    else { Text(app.name) }
+        AppPickerMenu(
+            selected: Set(rule.apps),
+            multiSelect: true,
+            label: scopeLabel,
+            help: "Limit this mapping to specific apps",
+            onPick: { id, _ in
+                update {
+                    if let i = $0.apps.firstIndex(of: id) { $0.apps.remove(at: i) }
+                    else { $0.apps.append(id) }
                 }
-            }
-        }
-        .menuIndicator(.hidden).fixedSize().help("Limit this mapping to specific apps")
+            },
+            onClear: { update { $0.apps = [] } }
+        )
     }
 
     private var scopeLabel: String {
@@ -2021,7 +2135,10 @@ private struct KeyMappingRow: View {
     @ViewBuilder private var targetEditor: some View {
         switch rule.action {
         case .launchApp:
-            AppPickerMenu(target: rule.target) { target, _ in update { $0.target = target } }
+            AppPickerMenu(
+                selected: rule.target.isEmpty ? [] : [rule.target],
+                label: rule.target.isEmpty ? "Choose App\u{2026}" : AppPickerMenu.displayName(for: rule.target)
+            ) { target, _ in update { $0.target = target } }
         case .remap:
             ShortcutRecorder(combo: KeyCombo.parse(rule.target) ?? unsetKeyCombo) { combo in
                 if let s = combo.specString { update { $0.target = s } }

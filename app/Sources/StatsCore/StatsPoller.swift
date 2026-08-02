@@ -12,6 +12,7 @@
 // fully (no idle wakeups when every menu-bar item is hidden).
 
 import Foundation
+import IOKit.ps
 import os
 
 public enum StatsModule: String, CaseIterable, Sendable {
@@ -85,6 +86,8 @@ public final class StatsPoller {
     private let deliverQueue: DispatchQueue
     private let config: Config
     private var timer: DispatchSourceTimer?
+    /// Retained IOPS run-loop source (main run loop); nil when not observing.
+    private var powerNotifySource: CFRunLoopSource?
     private var tick: UInt64 = 0
 
     private let enabled: Set<StatsModule>
@@ -96,6 +99,10 @@ public final class StatsPoller {
     /// reschedules the timer to the faster `activeInterval` (back to baseInterval on
     /// close). One call from the popover delegate drives both.
     private let procFlag = ManagedAtomicFlag()
+    /// Set by the IOPS power-source notification (plug/unplug, charge step) so the
+    /// next tick reads the battery even if it isn't a `batteryDivider` tick — the
+    /// menu-bar bolt would otherwise keep the stale state for up to 10 intervals.
+    private let battFlag = ManagedAtomicFlag()
     public func setPopupActive(_ on: Bool) {
         procFlag.set(on)
         queue.async { [self] in
@@ -160,6 +167,7 @@ public final class StatsPoller {
     }
 
     public func stop() {
+        stopPowerSourceNotifications()   // callback holds an unowned self — kill it first
         queue.async { [self] in
             timer?.cancel(); timer = nil
             procs = nil   // drop the pid cpu-time map
@@ -187,14 +195,45 @@ public final class StatsPoller {
         // when the Power module itself is enabled (see poll()).
         if enabled.contains(.power) || enabled.contains(.gpu) { power = IOReportKit() }
         if enabled.contains(.sensors) { sensors = IOHIDSensors(); powerSensors = PowerSensorReader() }
-        if enabled.contains(.battery) { battery = BatteryReader() }
+        if enabled.contains(.battery) {
+            battery = BatteryReader()
+            startPowerSourceNotifications()
+        }
     }
+
+    /// Plug/unplug is an event, not a poll: without this the charging bolt keeps the
+    /// stale state until the next `batteryDivider` tick (10 × the refresh interval).
+    /// IOPS calls back on the main run loop; we only flag + kick a sample on `queue`.
+    private func startPowerSourceNotifications() {
+        guard powerNotifySource == nil else { return }
+        let ctx = Unmanaged.passUnretained(self).toOpaque()
+        guard let src = IOPSNotificationCreateRunLoopSource({ ctx in
+            guard let ctx else { return }
+            let poller = Unmanaged<StatsPoller>.fromOpaque(ctx).takeUnretainedValue()
+            poller.battFlag.set(true)
+            poller.queue.async { [weak poller] in
+                guard let poller, poller.timer != nil else { return }
+                poller.poll()
+            }
+        }, ctx)?.takeRetainedValue() else { return }
+        powerNotifySource = src
+        CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
+    }
+
+    private func stopPowerSourceNotifications() {
+        guard let src = powerNotifySource else { return }
+        powerNotifySource = nil
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .defaultMode)
+    }
+
+    deinit { stopPowerSourceNotifications() }
 
     private func poll() {
         // While a popup is open, every tick is a "slow" tick so temps/power refresh
         // at the active cadence the moment the user is actually looking at them.
         let slow = procFlag.get() || tick % UInt64(max(1, config.slowDivider)) == 0
-        let batt = tick % UInt64(max(1, config.batteryDivider)) == 0
+        let batt = battFlag.get() || tick % UInt64(max(1, config.batteryDivider)) == 0
+        if batt { battFlag.set(false) }
         tick &+= 1
 
         if cpu != nil, let s = try? cpu!.read() {

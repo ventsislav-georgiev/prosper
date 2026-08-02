@@ -36,8 +36,15 @@ tag from the now-released section and put it on the new top draft.
 - **Launcher**: the Actions menu's shortcuts now all work without opening the menu
   first (⌘⇧C copy, ⌘E edit quicklink, ⌘⇧K assign shortcut, ⌘⌫ delete quicklink), and
   per-file actions no longer render a misleading ⌘K.
-- **Settings**: the app pickers list apps alphabetically instead of in filesystem
-  scan order.
+- **Settings**: the app pickers are searchable — a filter field at the top and a
+  scrolling list instead of a menu the length of `/Applications`. Enter picks the top
+  match. They also list apps alphabetically instead of in filesystem scan order.
+- **Launcher**: ⌘⌥C copies the selected row too. ⌘⇧C stays the advertised shortcut,
+  but it's a popular *global* hotkey (password managers, clipboard tools), and an app
+  that registers it system-wide takes the key before any app can see it.
+- **System Stats**: the battery icon flips between charging and on-battery the moment
+  you plug or unplug, instead of waiting for the next battery sample (up to ten
+  refresh intervals).
 
 ### Fixes
 - **Shortcuts**: a settings-sync pull no longer risks being overwritten by an open

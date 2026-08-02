@@ -2431,6 +2431,12 @@ private struct ActionMenuButton: View {
             ZStack {
                 Button("") { onCopy() }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
+                // ⌥ fallback: ⌘⇧C is a popular global hotkey (password managers,
+                // clipboard tools) and a Carbon RegisterEventHotKey owner eats the
+                // key before it ever reaches this panel — no app-side handling can
+                // win it back. ⌘⌥C is the escape hatch on such machines.
+                Button("") { onCopy() }
+                    .keyboardShortcut("c", modifiers: [.command, .option])
                 Button("") { if let hit = quicklink { onEdit(hit) } }
                     .keyboardShortcut("e", modifiers: .command)
                 Button("") { if let url = appURL { onAssignShortcut(url) } }
