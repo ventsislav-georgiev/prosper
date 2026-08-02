@@ -73,20 +73,24 @@ final class AppShortcutTests: XCTestCase {
     /// hotkeys start at 300 in `AppDelegate.registerHotKeys`, so no app-shortcut id
     /// may ever reach it, however many the user adds.
     func testIdsNeverReachExtensionRange() {
+        // Distinct chords per row: identical ones now collapse to a single
+        // registration, which would make the cap trivially unreachable here.
         let list = (0..<(AppShortcut.maxRegistered + 25)).map {
-            shortcut("com.example.app\($0)", combo(kVK_ANSI_D, cmdKey | shiftKey))
+            shortcut("com.example.app\($0)", combo($0, cmdKey | shiftKey))
         }
         let regs = AppShortcut.registrations(list)
         XCTAssertEqual(regs.count, AppShortcut.maxRegistered)
         for reg in regs {
             XCTAssertGreaterThanOrEqual(reg.id, AppShortcut.hotKeyIdBase)
-            XCTAssertLessThan(reg.id, 300, "app-shortcut id leaked into the extension range")
+            XCTAssertLessThan(reg.id, GlobalHotKey.extensionIdBase,
+                              "app-shortcut id leaked into the extension range")
         }
     }
 
     /// The base must also stay clear of the fixed (1-16) and custom (100+) ranges.
     func testBaseIsClearOfLowerRanges() {
-        XCTAssertGreaterThan(AppShortcut.hotKeyIdBase, 100 + 99)
+        XCTAssertGreaterThanOrEqual(AppShortcut.hotKeyIdBase,
+                                    GlobalHotKey.customIdBase + UInt32(GlobalHotKey.customMaxRegistered))
         for action in ShortcutAction.allCases {
             XCTAssertNotEqual(action.hotKeyId, AppShortcut.hotKeyIdBase)
         }
@@ -112,6 +116,33 @@ final class AppShortcutTests: XCTestCase {
         XCTAssertTrue(AppShortcut.duplicateComboIDs([a, b]).isEmpty)
     }
 
+    /// Only the FIRST claim of a chord ever fires, so a later row sharing it must
+    /// not be handed a hotkey id: registering it would burn an id on something dead
+    /// and make Settings' duplicate warning a lie about what is bound.
+    func testDuplicateCombosOnlyRegisterOnce() {
+        let dup = combo(kVK_ANSI_D, cmdKey | shiftKey)
+        let regs = AppShortcut.registrations([
+            shortcut("com.a", dup),
+            shortcut("com.b", dup),
+            shortcut("com.c", combo(kVK_ANSI_W, cmdKey | shiftKey)),
+        ])
+        XCTAssertEqual(regs.map(\.shortcut.target), ["com.a", "com.c"])
+        XCTAssertEqual(regs.map(\.id), [AppShortcut.hotKeyIdBase, AppShortcut.hotKeyIdBase + 1])
+    }
+
+    /// The same chord recorded on two Macs can carry different display strings
+    /// (layout, or a synced row). Arbitration is keycode + modifiers only.
+    func testDuplicateDetectionIgnoresDisplayString() {
+        let a = shortcut("com.a", KeyCombo(keyCode: UInt32(kVK_ANSI_D),
+                                           carbonModifiers: UInt32(cmdKey | shiftKey),
+                                           display: "\u{2318}\u{21E7}D"))
+        let b = shortcut("com.b", KeyCombo(keyCode: UInt32(kVK_ANSI_D),
+                                           carbonModifiers: UInt32(cmdKey | shiftKey),
+                                           display: "other"))
+        XCTAssertEqual(AppShortcut.duplicateComboIDs([a, b]), Set([a.id, b.id]))
+        XCTAssertEqual(AppShortcut.registrations([a, b]).count, 1)
+    }
+
     /// Unset rows share keyCode 0 / modifier 0 but aren't bound to anything, so
     /// several of them must not light up the duplicate warning.
     func testMultipleUnsetRowsAreNotDuplicates() {
@@ -125,7 +156,7 @@ final class AppShortcutTests: XCTestCase {
     /// `ShortcutStore` writes to `UserDefaults.standard`, so save and restore the key
     /// around the assertions rather than polluting the dev machine's prefs.
     func testStoreRoundTrip() {
-        let key = "shortcut.apps"
+        let key = ShortcutStore.appsKey
         let saved = UserDefaults.standard.data(forKey: key)
         defer {
             if let saved { UserDefaults.standard.set(saved, forKey: key) }
@@ -147,48 +178,54 @@ final class AppShortcutTests: XCTestCase {
     /// per-key allowlist entry. A future edit to `SyncedKeys` must not silently
     /// strand them (they'd stop reaching other Macs with no compile error).
     func testAppShortcutsAreCoveredBySettingsSync() {
-        let key = "shortcut.apps"
+        let key = ShortcutStore.appsKey
         XCTAssertTrue(SyncedKeys.prefixes.contains { key.hasPrefix($0) },
-                      "shortcut.apps must be matched by a SyncedKeys prefix")
+                      "\(key) must be matched by a SyncedKeys prefix")
         XCTAssertFalse(SyncedKeys.excluded.contains(key))
     }
 
     // MARK: - "Prosper Settings" as a searchable row
 
-    /// The synonym haystack behind the native "Prosper Settings" entry. Typing any
-    /// of these has to surface it, since the runner is the only always-reachable
-    /// surface for opening Settings.
-    private let settingsHaystack = "prosper settings preferences prefs config options"
-
-    private func score(_ query: String, _ haystack: String, tieLen: Int) -> Int? {
-        let q = query.lowercased()
-        return SearchScore.score(q: q, tokens: q.split(separator: " ").map(String.init),
-                                 matchText: haystack, tieLen: tieLen)
-    }
-
-    func testSettingsSynonymsAllMatch() {
+    /// Goes through the real router rather than re-scoring a copy of the haystack:
+    /// a literal-based score test stays green even if the entry is deleted from
+    /// `nativeEntries`, which is the only failure that matters here. The runner is
+    /// the one always-reachable way into Settings (⌥\\ is rebindable, the menu-bar
+    /// icon can be hidden), so every synonym has to actually surface the row.
+    func testSettingsSynonymsSurfaceTheRow() async {
         for q in ["settings", "preferences", "prefs", "prosper", "config", "options",
                   "prosper settings"] {
-            XCTAssertNotNil(score(q, settingsHaystack, tieLen: 17),
-                            "\u{201C}\(q)\u{201D} should surface Prosper Settings")
+            guard case .search(let hits) = await CommandRouter.run(q) else {
+                XCTFail("\u{201C}\(q)\u{201D} produced no search outcome")
+                continue
+            }
+            XCTAssertTrue(hits.contains { $0.metaCommand == .openSettings },
+                          "\u{201C}\(q)\u{201D} should surface Prosper Settings")
         }
     }
 
-    /// System Settings.app is an `AppIndex` alias for "settings" (score 1000), so it
-    /// must still win that query — the new row appears below it, never displaces it.
-    func testSystemSettingsAppStillOutranksProsperSettings() {
-        let appAlias = SearchScore.score(q: "settings", tokens: ["settings"],
-                                         matchText: "system settings",
-                                         tieLen: 15, isAlias: true)
-        let prosper = score("settings", settingsHaystack, tieLen: 17)
-        XCTAssertNotNil(appAlias)
+    /// The row is additive: it must not push System Settings.app off the top of
+    /// "settings" (an AppIndex alias, score 1000).
+    @MainActor
+    func testSystemSettingsAppStillOutranksProsperSettings() async throws {
+        let apps = AppIndex.shared.ensureBuilt()
+        try XCTSkipUnless(apps.contains { $0.name.localizedCaseInsensitiveContains("System Settings") },
+                          "no System Settings.app in this environment")
+        guard case .search(let hits) = await CommandRouter.run("settings") else {
+            return XCTFail("no search outcome for \u{201C}settings\u{201D}")
+        }
+        let prosper = hits.firstIndex { $0.metaCommand == .openSettings }
+        let system = hits.firstIndex { $0.kind == .app }
         XCTAssertNotNil(prosper)
-        XCTAssertGreaterThan(appAlias!, prosper!)
+        XCTAssertNotNil(system)
+        if let prosper, let system {
+            XCTAssertLessThan(system, prosper, "an app row must still win \u{201C}settings\u{201D}")
+        }
     }
 
-    /// An unrelated query must not drag the entry in — it would show up under
-    /// everything if the haystack were matched too loosely.
-    func testUnrelatedQueryDoesNotMatchSettings() {
-        XCTAssertNil(score("dbeaver", settingsHaystack, tieLen: 17))
+    /// An unrelated query must not drag the entry in — a haystack matched too
+    /// loosely would show it under everything.
+    func testUnrelatedQueryDoesNotSurfaceSettings() async {
+        guard case .search(let hits) = await CommandRouter.run("dbeaver") else { return }
+        XCTAssertFalse(hits.contains { $0.metaCommand == .openSettings })
     }
 }

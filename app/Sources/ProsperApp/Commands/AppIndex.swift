@@ -143,7 +143,6 @@ final class AppIndex {
                                  extraPaths: [String] = extraAppPaths) -> [AppEntry] {
         let fm = FileManager.default
         var byName: [String: AppEntry] = [:]
-        var order: [String] = []
 
         func add(path: String) {
             guard path.hasSuffix(".app") else { return }
@@ -153,7 +152,6 @@ final class AppIndex {
             guard byName[key] == nil else { return }
             let bundleId = Bundle(url: url)?.bundleIdentifier
             byName[key] = AppEntry(name: name, url: url, bundleId: bundleId)
-            order.append(key)
         }
 
         for dir in dirs {
@@ -183,8 +181,7 @@ final class AppIndex {
         }
         // localizedStandardCompare = the Finder's ordering: case-insensitive and
         // digit-aware, so "iMovie" files under I and "Item 2" precedes "Item 10".
-        return order.compactMap { byName[$0] }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        return byName.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     /// Ranks `apps` against `query`. Scoring (high → low): whole-query alias hit,

@@ -82,10 +82,14 @@ final class RecorderView: NSView {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self, self.recording else { return event }
-            // Escape cancels recording without changing the binding.
+            // Escape cancels recording without changing the binding, then goes on to
+            // the host: in the runner's "Assign Shortcut…" alert the whole point of
+            // Escape is to dismiss it, and swallowing the key left the dialog up with
+            // a disarmed field — looking hung. Settings has no Escape handler, so
+            // passing it through there is a no-op.
             if event.type == .keyDown && event.keyCode == UInt16(kVK_Escape) {
                 self.stopRecording()
-                return nil
+                return event
             }
             // Only act on keyDown with an actual (non-modifier) key.
             if event.type == .keyDown {
@@ -116,6 +120,15 @@ final class RecorderView: NSView {
     override func resignFirstResponder() -> Bool {
         stopRecording()
         return super.resignFirstResponder()
+    }
+
+    /// A view torn out of its window while still armed keeps a process-wide event
+    /// monitor alive forever (closing the runner's alert never routes through
+    /// `resignFirstResponder`), and every leftover monitor swallows keystrokes for
+    /// a recorder that no longer exists.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { stopRecording() }
     }
 
     override func keyDown(with event: NSEvent) {

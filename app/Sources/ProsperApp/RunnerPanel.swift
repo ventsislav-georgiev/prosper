@@ -388,6 +388,11 @@ final class RunnerPanel {
             // Save without recording anything is a no-op: it keeps the existing
             // binding (shown in the field) rather than clearing it.
             guard let combo = recorded else { return }
+            // The chord the user just pressed has to win. Only the first entry that
+            // claims a chord ever fires, so leaving it on another app would make this
+            // dialog silently do nothing — the one outcome worse than taking the
+            // shortcut away from an app the user is, right now, rebinding it off.
+            list.removeAll { $0.target != target && $0.combo.chord == combo.chord }
             // Rebinding an app already in the list replaces its combo rather than
             // stacking a second entry for the same target.
             if let i = list.firstIndex(where: { $0.target == target }) {
@@ -2382,12 +2387,16 @@ private struct ActionMenuButton: View {
                     if let icon = action.icon { Label(action.title, systemImage: icon) }
                     else { Text(action.title) }
                 }
+                // These are dynamic per-file actions with no accelerator of their
+                // own. Without this, each inherits the Menu's ⌘K and renders it —
+                // reading as "⌘K runs Reveal in Finder" when ⌘K only opens the menu.
+                .keyboardShortcut(nil)
             }
             if !fileActions.isEmpty { Divider() }
-            // Every item gets an EXPLICIT shortcut. `.keyboardShortcut` on the Menu
-            // below propagates into its content, so an item without one renders a
-            // misleading "⌘K" — making it look like ⌘K would run that item rather
-            // than just open the menu.
+            // Shortcuts on these items are LABELS: a menu item's key equivalent only
+            // fires while the menu is open. Every one of them therefore also needs a
+            // hidden button below, which is what actually makes it work from the
+            // runner — verified, not assumed.
             Button("Copy") { onCopy() }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
             if let url = appURL {
@@ -2413,14 +2422,21 @@ private struct ActionMenuButton: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .keyboardShortcut("k", modifiers: .command)
-        // ⌘E edits the selected quicklink directly (Raycast parity); ⌘⇧K binds a
-        // global hotkey to the selected app without opening the menu first.
+        // The real accelerators, one per advertised menu item, so each works without
+        // opening the menu first: ⌘⇧C copies, ⌘E edits the selected quicklink
+        // (Raycast parity), ⌘⇧K binds a global hotkey to the selected app, ⌘⌫ deletes.
+        // Each guards on the same state its menu item is gated by, so a shortcut for
+        // an item that isn't showing does nothing.
         .background(
             ZStack {
+                Button("") { onCopy() }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
                 Button("") { if let hit = quicklink { onEdit(hit) } }
                     .keyboardShortcut("e", modifiers: .command)
                 Button("") { if let url = appURL { onAssignShortcut(url) } }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
+                Button("") { if let hit = quicklink { onDelete(hit) } }
+                    .keyboardShortcut(.delete, modifiers: .command)
             }
             .opacity(0)
             .allowsHitTesting(false)

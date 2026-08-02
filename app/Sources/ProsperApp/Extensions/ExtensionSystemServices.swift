@@ -201,18 +201,24 @@ enum AppControl {
     /// `launchOrFocus("Ghostty")` did NOTHING unless Prosper itself was frontmost.
     /// LaunchServices performs the activation on our behalf and is not subject to
     /// that restriction, so it focuses a running instance from the background too.
+    /// The app bundle `nameOrBundleID` points at, if this Mac has one: the running
+    /// instance's bundle, else LaunchServices' answer for a bundle id, else a path.
+    /// `nil` means only the by-name last resort in `launchOrFocus` could still find
+    /// it — which is also the signal callers use to decide an app shortcut synced
+    /// from another Mac has nothing to launch here.
+    static func resolvedBundleURL(_ nameOrBundleID: String) -> URL? {
+        let ws = NSWorkspace.shared
+        if let running = match(nameOrBundleID)?.bundleURL { return running }
+        if nameOrBundleID.contains("."),
+           let byID = ws.urlForApplication(withBundleIdentifier: nameOrBundleID) { return byID }
+        let p = (nameOrBundleID as NSString).expandingTildeInPath
+        if FileManager.default.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
+        return nil
+    }
+
     static func launchOrFocus(_ nameOrBundleID: String) {
         let ws = NSWorkspace.shared
-        // Resolve to a file URL: running instance's bundle, else by bundle id, else path.
-        var url: URL? = match(nameOrBundleID)?.bundleURL
-        if url == nil, nameOrBundleID.contains(".") {
-            url = ws.urlForApplication(withBundleIdentifier: nameOrBundleID)
-        }
-        if url == nil {
-            let p = (nameOrBundleID as NSString).expandingTildeInPath
-            if FileManager.default.fileExists(atPath: p) { url = URL(fileURLWithPath: p) }
-        }
-        guard let url else {
+        guard let url = resolvedBundleURL(nameOrBundleID) else {
             _ = ws.launchApplication(nameOrBundleID) // last resort: resolve by name
             return
         }

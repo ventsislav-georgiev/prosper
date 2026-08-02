@@ -18,7 +18,36 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.135.0 *(unreleased)*
+## v2.137.0 *(unreleased)*
+
+### Improvements
+- **App shortcuts**: bind a global hotkey that launches or focuses one app directly —
+  ⌘⇧D starts DBeaver, no launcher in between. Select an app in the launcher and press
+  ⌘⇧K (or **Actions → Assign Shortcut…**), or manage the whole list in
+  **Settings → Shortcuts → App Shortcuts**. The only way to do this before was a Key
+  Mapping, which needs Accessibility permission and rides the typing event tap; these
+  are Carbon hotkeys, so they need no permission, cost nothing while idle, and sync
+  across your Macs like the rest of the `shortcut.` settings. A shortcut whose app
+  isn't installed on this Mac is left unbound rather than holding the chord hostage,
+  and two rows fighting over one chord are flagged instead of one silently never firing.
+- **Launcher**: type `settings`, `preferences`, `prefs` or `:s` to open Prosper's own
+  Settings — the launcher is the one surface that's always reachable, since ⌥\ is
+  rebindable and the menu-bar icon can be hidden.
+- **Launcher**: the Actions menu's shortcuts now all work without opening the menu
+  first (⌘⇧C copy, ⌘E edit quicklink, ⌘⇧K assign shortcut, ⌘⌫ delete quicklink), and
+  per-file actions no longer render a misleading ⌘K.
+- **Settings**: the app pickers list apps alphabetically instead of in filesystem
+  scan order.
+
+### Fixes
+- **Shortcuts**: a settings-sync pull no longer risks being overwritten by an open
+  Settings window, and a custom shortcut can no longer be silently rebound to launch
+  an app (overlapping internal hotkey ids).
+- **Shortcuts**: Escape now closes the "Assign Shortcut" dialog instead of only
+  disarming the recorder, and the recorder stops listening for keys once its window
+  goes away.
+
+## v2.135.0
 
 ### Fixes
 - **Remote Terminal**: session clients no longer leak, which also fixes the phone

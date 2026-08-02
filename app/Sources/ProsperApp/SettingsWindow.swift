@@ -1657,7 +1657,7 @@ private struct ShortcutsPane: View {
             }
 
             NeonSection("App Shortcuts",
-                        footer: "Bind a hotkey that launches an app \u{2014} or brings it to the front when it's already running (\u{2318}\u{21E7}D \u{2192} DBeaver). Works without Accessibility permission. You can also bind one straight from the launcher with \u{2318}K on an app result.") {
+                        footer: "Bind a hotkey that launches an app \u{2014} or brings it to the front when it's already running (\u{2318}\u{21E7}D \u{2192} DBeaver). Works without Accessibility permission. You can also bind one straight from the launcher with \u{2318}\u{21E7}K on an app result.") {
                 let duplicates = AppShortcut.duplicateComboIDs(model.appShortcuts)
                 ForEach(Array(model.appShortcuts.enumerated()), id: \.element.id) { idx, sc in
                     if idx > 0 { NeonDivider() }
@@ -1670,6 +1670,13 @@ private struct ShortcutsPane: View {
                         model.addAppShortcut()
                     } label: { Label("Add App Shortcut", systemImage: "plus") }
                         .buttonStyle(.neon)
+                        // Past the cap `AppShortcut.registrations` stops handing out
+                        // hotkey ids, so a further row would look bound and never
+                        // fire. Refuse to add it rather than explain that later.
+                        .disabled(model.appShortcuts.count >= AppShortcut.maxRegistered)
+                        .help(model.appShortcuts.count >= AppShortcut.maxRegistered
+                              ? "Limit of \(AppShortcut.maxRegistered) app shortcuts reached."
+                              : "")
                     Spacer()
                 }
             }
@@ -1845,6 +1852,41 @@ private struct CustomShortcutRow: View {
     }
 }
 
+/// The single-pick app menu shared by every row that stores an app as a bundle-id
+/// or path: app shortcuts and `launchApp` key mappings. One place decides what the
+/// list contains and what a stored target is CALLED, because two rows disagreeing
+/// about the name of the same app is the kind of thing nobody reports and everybody
+/// notices. (The key-mapping scope picker is deliberately not folded in — it is
+/// multi-select with checkmarks, a different control that only shares the source list.)
+private struct AppPickerMenu: View {
+    let target: String
+    /// Shown instead of resolving `target`. App shortcuts persist the name they were
+    /// created with, so a row synced from another Mac still reads "DBeaver" rather
+    /// than a bundle id when that app isn't installed here. Empty = resolve.
+    var storedName: String = ""
+    let onPick: (_ target: String, _ name: String) -> Void
+
+    var body: some View {
+        Menu(storedName.isEmpty ? Self.displayName(for: target) : storedName) {
+            ForEach(AppIndex.shared.ensureBuilt()) { app in
+                Button(app.name) { onPick(app.bundleId ?? app.url.path, app.name) }
+            }
+        }
+        .fixedSize()
+    }
+
+    /// The app's display name for a stored bundle-id/path target, else a prompt.
+    static func displayName(for target: String) -> String {
+        guard !target.isEmpty else { return "Choose App\u{2026}" }
+        if let app = AppIndex.shared.ensureBuilt().first(where: {
+            $0.bundleId == target || $0.url.path == target
+        }) {
+            return app.name
+        }
+        return target
+    }
+}
+
 /// One app-shortcut row: app picker + recorder + delete. The hotkey launches (or
 /// focuses) that app directly — no runner. Sibling of `CustomShortcutRow`, which
 /// binds a runner prefix instead of an app.
@@ -1857,17 +1899,9 @@ private struct AppShortcutRow: View {
 
     var body: some View {
         HStack(spacing: sz(8)) {
-            Menu(appLabel) {
-                ForEach(AppIndex.shared.ensureBuilt()) { app in
-                    Button(app.name) {
-                        model.updateAppShortcutTarget(
-                            id: shortcut.id,
-                            target: app.bundleId ?? app.url.path,
-                            name: app.name)
-                    }
-                }
+            AppPickerMenu(target: shortcut.target, storedName: shortcut.name) { target, name in
+                model.updateAppShortcutTarget(id: shortcut.id, target: target, name: name)
             }
-            .fixedSize()
 
             Spacer()
 
@@ -1891,19 +1925,6 @@ private struct AppShortcutRow: View {
             .buttonStyle(.borderless)
             .help("Remove this shortcut")
         }
-    }
-
-    /// The stored name, falling back to a live index lookup (so a shortcut that
-    /// synced from another Mac still shows a real name), then to a prompt.
-    private var appLabel: String {
-        if !shortcut.name.isEmpty { return shortcut.name }
-        guard !shortcut.target.isEmpty else { return "Choose App\u{2026}" }
-        if let app = AppIndex.shared.ensureBuilt().first(where: {
-            $0.bundleId == shortcut.target || $0.url.path == shortcut.target
-        }) {
-            return app.name
-        }
-        return shortcut.target
     }
 }
 
@@ -1992,7 +2013,7 @@ private struct KeyMappingRow: View {
     private var scopeLabel: String {
         switch rule.apps.count {
         case 0: return "Any app"
-        case 1: return appDisplay(rule.apps[0])
+        case 1: return AppPickerMenu.displayName(for: rule.apps[0])
         default: return "\(rule.apps.count) apps"
         }
     }
@@ -2000,12 +2021,7 @@ private struct KeyMappingRow: View {
     @ViewBuilder private var targetEditor: some View {
         switch rule.action {
         case .launchApp:
-            Menu(appDisplay(rule.target)) {
-                ForEach(AppIndex.shared.ensureBuilt()) { app in
-                    Button(app.name) { update { $0.target = app.bundleId ?? app.url.path } }
-                }
-            }
-            .fixedSize()
+            AppPickerMenu(target: rule.target) { target, _ in update { $0.target = target } }
         case .remap:
             ShortcutRecorder(combo: KeyCombo.parse(rule.target) ?? unsetKeyCombo) { combo in
                 if let s = combo.specString { update { $0.target = s } }
@@ -2022,15 +2038,6 @@ private struct KeyMappingRow: View {
         case .swallow:
             Text("\u{2014}").foregroundStyle(Neon.textSecondary)
         }
-    }
-
-    /// Show the app's display name for a stored bundle-id/path target, else a prompt.
-    private func appDisplay(_ target: String) -> String {
-        guard !target.isEmpty else { return "Choose App\u{2026}" }
-        if let app = AppIndex.shared.ensureBuilt().first(where: { $0.bundleId == target || $0.url.path == target }) {
-            return app.name
-        }
-        return target
     }
 }
 

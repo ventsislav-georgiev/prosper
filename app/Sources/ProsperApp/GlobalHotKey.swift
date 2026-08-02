@@ -15,6 +15,22 @@ final class GlobalHotKey {
     // Unique signature shared by all Prosper hotkeys.
     private static let signature: OSType = 0x50525350 // 'PRSP'
 
+    /// Hot-key ids are ONE process-wide namespace — `handlers` below is keyed by id
+    /// alone — shared by every registrar in `AppDelegate.registerHotKeys`. Each range
+    /// is stated once, here, so a registrar can't drift into its neighbour by copying
+    /// a bare literal:
+    ///
+    ///   1…16     fixed `ShortcutAction`s (`ShortcutAction.hotKeyId`)
+    ///   100…199  user custom shortcuts (`customIdBase` + `customMaxRegistered`)
+    ///   200…299  app shortcuts (`AppShortcut.hotKeyIdBase` + `maxRegistered`)
+    ///   300+     extension keybindings (`extensionIdBase`)
+    ///
+    /// An overlap is invisible at runtime: the later registrar just overwrites the
+    /// earlier closure, so a user's shortcut quietly starts doing something else.
+    static let customIdBase: UInt32 = 100
+    static let customMaxRegistered = 100
+    static let extensionIdBase: UInt32 = 300
+
     // Process-wide dispatch state. Touched only on the main thread (registration
     // happens on the main actor; the Carbon callback is pumped by the main run
     // loop), so unsynchronized access is safe.
@@ -46,6 +62,15 @@ final class GlobalHotKey {
         self.keyCode = keyCode
         self.modifiers = modifiers
         Self.installSharedHandlerIfNeeded()
+        // A live id claimed twice silently rebinds the first owner's chord to the
+        // second owner's action (and the first `unregister` then kills both), which
+        // is unfindable from the outside — so say it out loud. `registerHotKeys`
+        // tears every instance down before rebuilding, so this only ever fires on a
+        // genuine range overlap, never on re-registration.
+        if Self.handlers[id] != nil {
+            NSLog("prosper: global hotkey id %u claimed twice — the earlier binding is now dead", id)
+            assertionFailure("duplicate global hotkey id \(id) — see GlobalHotKey's id ranges")
+        }
         Self.handlers[id] = handler
         register(keyCode: keyCode, modifiers: modifiers)
     }

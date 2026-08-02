@@ -68,9 +68,17 @@ extension AppShortcut {
     ///   - an unset / half-recorded combo (no modifier): registering a bare key would
     ///     swallow ordinary typing,
     ///   - an empty target (a row added in Settings before an app was picked),
+    ///   - a combo already claimed by an earlier entry: only the first registration
+    ///     of a chord ever fires, so handing the runner-up a hotkey would claim an id
+    ///     for something dead and contradict what `duplicateComboIDs` tells the user,
     ///   - anything past `maxRegistered`, to keep ids inside 200…299.
     static func registrations(_ list: [AppShortcut]) -> [(id: UInt32, shortcut: AppShortcut)] {
-        list.filter { $0.combo.carbonModifiers != 0 && !$0.target.isEmpty }
+        var claimed: Set<KeyCombo> = []
+        return list
+            .filter { sc in
+                guard sc.combo.carbonModifiers != 0, !sc.target.isEmpty else { return false }
+                return claimed.insert(sc.combo.chord).inserted
+            }
             .prefix(maxRegistered)
             .enumerated()
             .map { (hotKeyIdBase + UInt32($0.offset), $0.element) }
@@ -82,11 +90,19 @@ extension AppShortcut {
     static func duplicateComboIDs(_ list: [AppShortcut]) -> Set<UUID> {
         var seen: [KeyCombo: [UUID]] = [:]
         for sc in list where sc.combo.carbonModifiers != 0 {
-            seen[KeyCombo(keyCode: sc.combo.keyCode,
-                          carbonModifiers: sc.combo.carbonModifiers,
-                          display: ""), default: []].append(sc.id)
+            seen[sc.combo.chord, default: []].append(sc.id)
         }
         return Set(seen.values.filter { $0.count > 1 }.flatMap { $0 })
+    }
+}
+
+extension KeyCombo {
+    /// The combo stripped to what macOS actually arbitrates on. `display` is a label
+    /// ("⌘⇧D") that two identical chords can disagree about — recorded on a different
+    /// keyboard layout, or synced from a Mac with another one — so equality/hashing
+    /// for "is this chord taken?" has to ignore it.
+    var chord: KeyCombo {
+        KeyCombo(keyCode: keyCode, carbonModifiers: carbonModifiers, display: "")
     }
 }
 
@@ -447,12 +463,20 @@ enum ShortcutStore {
     /// The `shortcut.` prefix is load-bearing: `SyncCoordinator.SyncedKeys.prefixes`
     /// syncs it wholesale, so app shortcuts carry across devices with no allowlist
     /// entry to maintain (and `AppDelegate.reapplyAfterSync` re-registers them).
-    private static let appsKey = "shortcut.apps"
+    /// Internal (not private) so `AppShortcutTests` asserts against THIS constant:
+    /// the sync coverage it proves hangs off the literal, and a rename would
+    /// otherwise silently strand every user's shortcuts with the test still green.
+    static let appsKey = "shortcut.apps"
 
     /// All user-defined app shortcuts (empty by default).
     static func appShortcuts() -> [AppShortcut] {
-        guard let data = defaults.data(forKey: appsKey),
-              let list = try? JSONDecoder().decode([AppShortcut].self, from: data) else {
+        guard let data = defaults.data(forKey: appsKey) else { return [] }
+        guard let list = try? JSONDecoder().decode([AppShortcut].self, from: data) else {
+            // Absent and corrupt both have to return empty, but they are not the same
+            // event: a corrupt blob means the next Settings write silently replaces
+            // real shortcuts with nothing. Nothing here can recover them, so at least
+            // leave a trace instead of a mystery.
+            NSLog("prosper: shortcut.apps failed to decode (%d bytes) — treating as empty", data.count)
             return []
         }
         return list
