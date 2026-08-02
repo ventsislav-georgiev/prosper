@@ -4,7 +4,7 @@ import Foundation
 
 /// A rebindable key combination: a virtual key code plus a Carbon modifier mask
 /// (kVK_* / cmdKey|optionKey|controlKey|shiftKey), with a cached display string.
-struct KeyCombo: Codable, Equatable, Sendable {
+struct KeyCombo: Codable, Equatable, Hashable, Sendable {
     var keyCode: UInt32
     var carbonModifiers: UInt32
     var display: String
@@ -26,6 +26,91 @@ struct CustomShortcut: Codable, Equatable, Sendable, Identifiable {
         self.prefix = prefix
         self.label = label
     }
+}
+
+/// A global hotkey that launches or focuses one specific app (⌘⇧D → DBeaver).
+/// Unlike `CustomShortcut`, which opens the runner seeded with a prefix, this fires
+/// the app directly — no visible runner, nothing to type. Rides Carbon
+/// `RegisterEventHotKey` like every other Prosper hotkey, so unlike the
+/// `ShortcutRulesStore` `launchApp` rules (which ride the shared CGEvent tap) it
+/// needs no Accessibility permission.
+struct AppShortcut: Codable, Equatable, Sendable, Identifiable {
+    var id: UUID
+    /// Bundle id ("com.apple.Safari") or absolute `.app` path — the same identifier
+    /// convention the key-mapping rows store (`app.bundleId ?? app.url.path`).
+    var target: String
+    var combo: KeyCombo
+    /// Display name captured at bind time, so Settings and the hotkey-conflict
+    /// notification can name the app without waiting on an `AppIndex` rebuild.
+    var name: String
+
+    init(id: UUID = UUID(), target: String, combo: KeyCombo, name: String) {
+        self.id = id
+        self.target = target
+        self.combo = combo
+        self.name = name
+    }
+}
+
+extension AppShortcut {
+    /// Base Carbon hot-key id for app shortcuts. Ids run 200…299, wedged between the
+    /// custom-shortcut range (100+) and the extension-keybinding range (300+) in
+    /// `AppDelegate.registerHotKeys`.
+    static let hotKeyIdBase: UInt32 = 200
+
+    /// Hard cap on registered app shortcuts, so an id can never reach 300 and
+    /// silently hijack an extension's keybinding.
+    static let maxRegistered = 100
+
+    /// The subset of `list` that should actually claim a hotkey, each paired with its
+    /// Carbon id. Pure so the skip rules are unit-testable without Carbon or UI —
+    /// same rationale as `AppDelegate.needKeyTap`. Skips:
+    ///   - an unset / half-recorded combo (no modifier): registering a bare key would
+    ///     swallow ordinary typing,
+    ///   - an empty target (a row added in Settings before an app was picked),
+    ///   - a combo already claimed by an earlier entry: only the first registration
+    ///     of a chord ever fires, so handing the runner-up a hotkey would claim an id
+    ///     for something dead and contradict what `duplicateComboIDs` tells the user,
+    ///   - anything past `maxRegistered`, to keep ids inside 200…299.
+    static func registrations(_ list: [AppShortcut]) -> [(id: UInt32, shortcut: AppShortcut)] {
+        var claimed: Set<KeyCombo> = []
+        return list
+            .filter { sc in
+                guard sc.combo.carbonModifiers != 0, !sc.target.isEmpty else { return false }
+                return claimed.insert(sc.combo.chord).inserted
+            }
+            .prefix(maxRegistered)
+            .enumerated()
+            .map { (hotKeyIdBase + UInt32($0.offset), $0.element) }
+    }
+
+    /// Ids of shortcuts whose combo is shared with another entry in `list`. macOS
+    /// gives a combo to whoever registers first, so a duplicate silently never
+    /// fires; Settings marks these rather than letting them look bound.
+    static func duplicateComboIDs(_ list: [AppShortcut]) -> Set<UUID> {
+        var seen: [KeyCombo: [UUID]] = [:]
+        for sc in list where sc.combo.carbonModifiers != 0 {
+            seen[sc.combo.chord, default: []].append(sc.id)
+        }
+        return Set(seen.values.filter { $0.count > 1 }.flatMap { $0 })
+    }
+}
+
+extension KeyCombo {
+    /// The combo stripped to what macOS actually arbitrates on. `display` is a label
+    /// ("⌘⇧D") that two identical chords can disagree about — recorded on a different
+    /// keyboard layout, or synced from a Mac with another one — so equality/hashing
+    /// for "is this chord taken?" has to ignore it.
+    var chord: KeyCombo {
+        KeyCombo(keyCode: keyCode, carbonModifiers: carbonModifiers, display: "")
+    }
+}
+
+extension Notification.Name {
+    /// Posted when app shortcuts are edited OUTSIDE the Settings window (today: the
+    /// runner's Assign Shortcut…). The Settings window and its model are cached for
+    /// the app's lifetime, so without this its list would keep showing a stale copy.
+    static let appShortcutsChangedExternally = Notification.Name("appShortcutsChangedExternally")
 }
 
 /// A pickable target the user can bind a custom shortcut to. The `prefix` is the
@@ -371,5 +456,34 @@ enum ShortcutStore {
     static func setCustomShortcuts(_ list: [CustomShortcut]) {
         guard let data = try? JSONEncoder().encode(list) else { return }
         defaults.set(data, forKey: customKey)
+    }
+
+    // MARK: - App shortcuts (hotkey → launch/focus one app)
+
+    /// The `shortcut.` prefix is load-bearing: `SyncCoordinator.SyncedKeys.prefixes`
+    /// syncs it wholesale, so app shortcuts carry across devices with no allowlist
+    /// entry to maintain (and `AppDelegate.reapplyAfterSync` re-registers them).
+    /// Internal (not private) so `AppShortcutTests` asserts against THIS constant:
+    /// the sync coverage it proves hangs off the literal, and a rename would
+    /// otherwise silently strand every user's shortcuts with the test still green.
+    static let appsKey = "shortcut.apps"
+
+    /// All user-defined app shortcuts (empty by default).
+    static func appShortcuts() -> [AppShortcut] {
+        guard let data = defaults.data(forKey: appsKey) else { return [] }
+        guard let list = try? JSONDecoder().decode([AppShortcut].self, from: data) else {
+            // Absent and corrupt both have to return empty, but they are not the same
+            // event: a corrupt blob means the next Settings write silently replaces
+            // real shortcuts with nothing. Nothing here can recover them, so at least
+            // leave a trace instead of a mystery.
+            NSLog("prosper: shortcut.apps failed to decode (%d bytes) — treating as empty", data.count)
+            return []
+        }
+        return list
+    }
+
+    static func setAppShortcuts(_ list: [AppShortcut]) {
+        guard let data = try? JSONEncoder().encode(list) else { return }
+        defaults.set(data, forKey: appsKey)
     }
 }

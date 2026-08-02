@@ -92,11 +92,13 @@ brew install --cask ventsislav-georgiev/tap/prosper
 | **QuickDir** | `qd projects api` | browse a saved dir's subfolders, run its action on one |
 | **Window** | `win left` / `win max` | snap the focused window (also `⌃⌥←→↑↓` / `⌃⌥⏎` / `⌃⌥C` global hotkeys) |
 | **Emoji** | `:fire` | 🔥 |
-| **Meta** | `:q` / `:c` | quit / clear clipboard history |
+| **Meta** | `:q` / `:c` / `:s` | quit / clear clipboard history / open Settings |
 | **Translate** | *free text* (or `⌥L`) | best translation + alternatives, on-device |
 
 
 <p align="center"><img width="960" height="724" alt="Command palette part 2 — emoji, shell, live base64, fuzzy app launch" src="https://github.com/user-attachments/assets/987e6aae-5e03-4479-9030-9d63b2f41ea0" /></p>
+
+> **Launch an app with one chord.** Select any app in the launcher and press `⌘⇧K` (or **Actions → Assign Shortcut…**) to bind a global hotkey that launches or focuses it — `⌘⇧D` for DBeaver, no runner in between. Manage them all in **Settings → Shortcuts → App Shortcuts**. These are Carbon hotkeys, so they need no Accessibility permission and they sync with your other Macs.
 
 > **Shortcut already taken?** Another launcher may own the hotkey (Raycast claims `⌥Space` by default). Prosper detects the conflict on launch and notifies; rebind in **Settings → Shortcuts**.
 

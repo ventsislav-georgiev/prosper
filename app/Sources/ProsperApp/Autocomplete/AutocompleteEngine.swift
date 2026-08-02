@@ -490,16 +490,14 @@ final class AutocompleteEngine {
     }
 
     /// Launch or activate an app by bundle id (`com.apple.Safari`) or `.app` path.
+    ///
+    /// Delegates to `AppControl.launchOrFocus` rather than calling NSWorkspace here:
+    /// that one sets `activates = true` and resolves a running instance's bundle URL
+    /// first. Both matter for a key rule, which fires while Prosper is a background
+    /// app — without them an ALREADY-RUNNING target was opened but never brought
+    /// frontmost, so the mapping looked dead.
     static func launchApp(_ app: String) {
-        let ws = NSWorkspace.shared
-        let cfg = NSWorkspace.OpenConfiguration()
-        if app.hasSuffix(".app") || app.hasPrefix("/") {
-            ws.openApplication(at: URL(fileURLWithPath: app), configuration: cfg)
-        } else if let url = ws.urlForApplication(withBundleIdentifier: app) {
-            ws.openApplication(at: url, configuration: cfg)
-        } else {
-            NSLog("prosper: shortcut launchApp — app not found: %@", app)
-        }
+        AppControl.launchOrFocus(app)
     }
 
     // MARK: - Tap callback

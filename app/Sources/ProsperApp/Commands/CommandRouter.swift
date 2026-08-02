@@ -574,10 +574,31 @@ enum CommandRouter {
             }
         }
 
+        // Prosper's own actions, scored on the same ladder so they're discoverable by
+        // typing rather than only via the runner's Actions menu. Ranked as .command
+        // so a real app never loses a tie to one — "settings" still puts System
+        // Settings first (it's an AppIndex alias, score 1000) with Prosper Settings
+        // just below it.
+        for e in nativeEntries {
+            if let s = SearchScore.score(q: q, tokens: tokens, matchText: e.haystack,
+                                         tieLen: e.title.count) {
+                hits.append(SearchHit(kind: .command, title: e.title, subtitle: "Prosper",
+                                      score: s, commandIcon: e.icon, metaCommand: e.meta))
+            }
+        }
+
         guard !hits.isEmpty else { return nil }
         hits.sort(by: SearchScore.before)
         return .search(Array(hits.prefix(12)))
     }
+
+    /// Native (non-extension) launcher entries. `haystack` carries the synonyms a
+    /// user might type — it is the scored text, so keep it lowercased.
+    private static let nativeEntries:
+        [(title: String, haystack: String, icon: String, meta: MetaCommand)] = [
+        ("Prosper Settings", "prosper settings preferences prefs config options",
+         "gearshape", .openSettings),
+    ]
 
     /// Bookmark extension id, shared by the snapshot + fetch.
     private static let bookmarksID = "com.prosper.bookmarks"

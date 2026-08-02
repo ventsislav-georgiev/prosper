@@ -42,6 +42,20 @@ final class SystemCommandsTests: XCTestCase {
         XCTAssertEqual(MetaCommand.parse(":clear"), .clearClipboard)
     }
 
+    func testMetaOpenSettings() {
+        XCTAssertEqual(MetaCommand.parse(":s"), .openSettings)
+        XCTAssertEqual(MetaCommand.parse(":settings"), .openSettings)
+        XCTAssertEqual(MetaCommand.parse(":prefs"), .openSettings)
+        XCTAssertEqual(MetaCommand.parse(":preferences"), .openSettings)
+    }
+
+    /// The settings aliases must stay colon-prefixed: a bare "settings" has to fall
+    /// through to app search so System Settings.app still wins that query.
+    func testBareSettingsIsNotAMetaCommand() {
+        XCTAssertNil(MetaCommand.parse("settings"))
+        XCTAssertNil(MetaCommand.parse("preferences"))
+    }
+
     func testMetaUnknownReturnsNil() {
         XCTAssertNil(MetaCommand.parse(":x"))
         XCTAssertNil(MetaCommand.parse("hello"))

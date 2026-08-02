@@ -93,4 +93,33 @@ final class AppIndexTests: XCTestCase {
         try XCTSkipIf(AppIndex.shared.apps.isEmpty, "no apps scanned in this environment")
         XCTAssertEqual(apps.first?.name, "System Settings")
     }
+
+    // (No "live index is alphabetical" test: re-sorting the index with the same
+    // comparator and asserting it didn't move passes whatever `scan` returns.
+    // `testScanDedupPrefersFirstDirAndStaysSorted` below checks the order against
+    // literal expected names instead, which is the assertion that can actually fail.)
+
+    /// `scan`'s sort must not disturb dedup precedence: a name present in an earlier
+    /// search dir wins, whatever the alphabetical position of the winner's path.
+    func testScanDedupPrefersFirstDirAndStaysSorted() {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("appindex-sort-\(UUID().uuidString)")
+        let winner = tmp.appendingPathComponent("first")
+        let loser = tmp.appendingPathComponent("second")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        for dir in [winner, loser] {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        // Same display name in both dirs, plus two others to prove the ordering.
+        for (dir, extra) in [(winner, "Zebra"), (loser, "Alpha")] {
+            for name in ["Dup", extra] {
+                try? FileManager.default.createDirectory(
+                    at: dir.appendingPathComponent("\(name).app"), withIntermediateDirectories: true)
+            }
+        }
+        let found = AppIndex.scan(dirs: [winner.path, loser.path], nested: [], extraPaths: [])
+        XCTAssertEqual(found.map(\.name), ["Alpha", "Dup", "Zebra"])
+        XCTAssertEqual(found.first { $0.name == "Dup" }?.url.deletingLastPathComponent().path,
+                       winner.path, "first search dir must still win the dedup")
+    }
 }

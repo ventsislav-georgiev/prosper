@@ -79,7 +79,8 @@ final class RunnerPanel {
             onDeleteQuicklink: { [weak self] hit in self?.deleteQuicklink(hit) },
             onRunQuickdir: { [weak self] hit, query in self?.runQuickdir(hit, query: query) },
             onLaunchExtension: { [weak self] id, query in self?.launchExtension(commandID: id, query: query) },
-            onFileAction: { [weak self] id, path in self?.performFileAction(id: id, path: path) }
+            onFileAction: { [weak self] id, path in self?.performFileAction(id: id, path: path) },
+            onAssignShortcut: { [weak self] url in self?.presentAssignShortcut(for: url) }
         )
         let hosting = NSHostingView(rootView: Themed { root })
         hosting.frame = panel.contentView?.bounds ?? .zero
@@ -256,6 +257,8 @@ final class RunnerPanel {
             ClipboardStore.shared.clearAll()
         case .newQuicklink:
             presentCreateQuicklink()
+        case .openSettings:
+            SettingsHooks.shared.onOpenSettings?()
         }
     }
 
@@ -318,6 +321,95 @@ final class RunnerPanel {
             description: descField.stringValue
         )
         return true
+    }
+
+    /// Binds a global hotkey to `appURL` right from the launcher (⌘⇧K / Actions →
+    /// Assign Shortcut…), so you don't have to go find the app again in Settings.
+    /// The recorded combo is stored as an `AppShortcut` and registered immediately.
+    ///
+    /// Follows `presentCreateQuicklink`'s modal recipe — a plain `NSAlert` with an
+    /// accessory view, laid out then re-centred on the runner's screen, because
+    /// NSAlert otherwise anchors itself to the floating panel.
+    private func presentAssignShortcut(for appURL: URL) {
+        let name = FileManager.default.displayName(atPath: appURL.path)
+            .replacingOccurrences(of: ".app", with: "")
+        // Bundle id is the stable target; path is the fallback for an app without one.
+        let target = Bundle(url: appURL)?.bundleIdentifier ?? appURL.path
+
+        // An existing binding turns this into a change/remove dialog, so the place
+        // you bound a shortcut is also where you can unbind it.
+        let existing = ShortcutStore.appShortcuts().first { $0.target == target }
+
+        let alert = NSAlert()
+        alert.messageText = existing == nil ? "Assign Shortcut" : "Change Shortcut"
+        alert.informativeText = existing == nil
+            ? "Press the keys that should launch \u{201C}\(name)\u{201D}. Needs at least one modifier."
+            : "Click the shortcut to record a new one for \u{201C}\(name)\u{201D}, or remove it."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        if existing != nil { alert.addButton(withTitle: "Remove Shortcut") }
+
+        // Reuse the Settings recorder verbatim: it already enforces >=1 non-shift
+        // modifier, renders the glyphs, and cancels on Esc. Seeded with the current
+        // binding so the dialog SHOWS what's already assigned (and so cancelling a
+        // re-record falls back to it rather than to "Unset").
+        let recorder = RecorderView(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+        recorder.combo = existing?.combo ?? unsetKeyCombo
+        var recorded: KeyCombo?
+        recorder.onChange = { combo in recorded = combo }
+        recorder.refreshTitle()
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        container.addSubview(recorder)
+        alert.accessoryView = container
+        alert.window.initialFirstResponder = recorder
+
+        alert.layout()
+        if let screen = panel.screen ?? NSScreen.main {
+            let vf = screen.visibleFrame
+            let f = alert.window.frame
+            alert.window.setFrameOrigin(NSPoint(x: vf.midX - f.width / 2, y: vf.midY - f.height / 2))
+        }
+
+        // With nothing bound yet, arm the recorder up front: the dialog exists only to
+        // capture a combo, so it must not need a click first (it is also the
+        // initialFirstResponder, so becoming key doesn't resign it mid-capture).
+        // With a binding already set, stay idle instead — arming would replace the
+        // visible "⌘⇧D" with "Press keys…" and hide the very thing we're showing.
+        if existing == nil { recorder.beginRecording() }
+
+        let choice = alert.runModal()
+        var list = ShortcutStore.appShortcuts()
+
+        switch choice {
+        case .alertThirdButtonReturn where existing != nil:
+            list.removeAll { $0.target == target }
+        case .alertFirstButtonReturn:
+            // Save without recording anything is a no-op: it keeps the existing
+            // binding (shown in the field) rather than clearing it.
+            guard let combo = recorded else { return }
+            // The chord the user just pressed has to win. Only the first entry that
+            // claims a chord ever fires, so leaving it on another app would make this
+            // dialog silently do nothing — the one outcome worse than taking the
+            // shortcut away from an app the user is, right now, rebinding it off.
+            list.removeAll { $0.target != target && $0.combo.chord == combo.chord }
+            // Rebinding an app already in the list replaces its combo rather than
+            // stacking a second entry for the same target.
+            if let i = list.firstIndex(where: { $0.target == target }) {
+                list[i].combo = combo
+                list[i].name = name
+            } else {
+                list.append(AppShortcut(target: target, combo: combo, name: name))
+            }
+        default:
+            return  // Cancel
+        }
+        ShortcutStore.setAppShortcuts(list)
+        // Re-register so the new hotkey is live without reopening Settings, and tell
+        // the (app-lifetime) Settings model to reload so its list isn't stale.
+        SettingsHooks.shared.onShortcutsChanged?()
+        NotificationCenter.default.post(name: .appShortcutsChangedExternally, object: nil)
+        dismiss()
     }
 
     /// Opens a quicklink's target (URL / file path / deeplink), substituting any
@@ -754,6 +846,9 @@ struct ResultRow: Identifiable {
     var filePath: String? = nil        // backing file path for the row's actions (Quick Look, default payload)
     var spinning: Bool = false         // in-progress placeholder: show a small spinner next to the title
     var isMarkdown: Bool = false       // render `primary` as block markdown (QuickChat answers)
+    /// Native Prosper action row (e.g. "Prosper Settings"): Enter runs this meta
+    /// command. Distinct from `isMeta`, which reads the command off the outcome.
+    var metaCommand: MetaCommand? = nil
 }
 
 // MARK: - Row builder
@@ -859,6 +954,14 @@ private func buildRows(from outcome: RunnerOutcome) -> [ResultRow] {
                                  category: "Bookmark", copyValue: hit.openTarget ?? hit.title, isMeta: false,
                                  openTarget: hit.openTarget)
             case .command:
+                // A native Prosper action (Prosper Settings) carries a meta command
+                // instead of an extension id — Enter runs it directly.
+                if let meta = hit.metaCommand {
+                    return ResultRow(id: i, icon: hit.commandIcon ?? "gearshape",
+                                     primary: hit.title, secondary: hit.subtitle,
+                                     category: "Prosper", copyValue: "", isMeta: false,
+                                     metaCommand: meta)
+                }
                 // Window-launching commands open their window on Enter (dismiss +
                 // invoke). Everything else enters the command's locked mode: a
                 // parameterless action (`runs_on_select`) runs immediately and shows
@@ -1048,6 +1151,8 @@ private struct RunnerView: View {
     /// Runs a built-in file action (`file.*` id) against a path — open / reveal /
     /// quick look / copy / trash. Routed to `FileActions` in the controller.
     let onFileAction: (String, String) -> Void
+    /// Binds a global hotkey to the selected app row (⌘⇧K / the Actions menu).
+    let onAssignShortcut: (URL) -> Void
 
     @FocusState private var inputFocused: Bool
 
@@ -1484,6 +1589,7 @@ private struct RunnerView: View {
                     if let row = selectedRow { performRowAction(action, on: row) }
                 },
                 quicklink: selectedRow?.quicklink,
+                appURL: selectedRow?.appURL,
                 onCopy: {
                     if let row = selectedRow {
                         let pb = NSPasteboard.general
@@ -1492,7 +1598,8 @@ private struct RunnerView: View {
                     }
                 },
                 onEdit: { hit in onEditQuicklink(hit) },
-                onDelete: { hit in onDeleteQuicklink(hit) }
+                onDelete: { hit in onDeleteQuicklink(hit) },
+                onAssignShortcut: { url in onAssignShortcut(url) }
             )
         }
         .padding(.horizontal, sz(14))
@@ -1518,6 +1625,11 @@ private struct RunnerView: View {
     }
 
     private func activateRow(_ row: ResultRow) {
+        // Native Prosper action row (e.g. "Prosper Settings") — runs its meta command.
+        if let meta = row.metaCommand {
+            onMeta(meta)
+            return
+        }
         if let primary = row.actions.first {
             performRowAction(primary, on: row)
             return
@@ -2261,9 +2373,12 @@ private struct ActionMenuButton: View {
     var fileActions: [RowAction] = []
     var runFileAction: (RowAction) -> Void = { _ in }
     let quicklink: QuicklinkHit?
+    /// Set when the selected row is an app result — enables "Assign Shortcut…".
+    let appURL: URL?
     let onCopy: () -> Void
     let onEdit: (QuicklinkHit) -> Void
     let onDelete: (QuicklinkHit) -> Void
+    let onAssignShortcut: (URL) -> Void
 
     var body: some View {
         Menu {
@@ -2272,13 +2387,29 @@ private struct ActionMenuButton: View {
                     if let icon = action.icon { Label(action.title, systemImage: icon) }
                     else { Text(action.title) }
                 }
+                // These are dynamic per-file actions with no accelerator of their
+                // own. Without this, each inherits the Menu's ⌘K and renders it —
+                // reading as "⌘K runs Reveal in Finder" when ⌘K only opens the menu.
+                .keyboardShortcut(nil)
             }
             if !fileActions.isEmpty { Divider() }
+            // Shortcuts on these items are LABELS: a menu item's key equivalent only
+            // fires while the menu is open. Every one of them therefore also needs a
+            // hidden button below, which is what actually makes it work from the
+            // runner — verified, not assumed.
             Button("Copy") { onCopy() }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            if let url = appURL {
+                Divider()
+                Button("Assign Shortcut\u{2026}") { onAssignShortcut(url) }
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
+            }
             if let hit = quicklink {
                 Divider()
                 Button("Edit Quicklink\u{2026}") { onEdit(hit) }
+                    .keyboardShortcut("e", modifiers: .command)
                 Button("Delete Quicklink", role: .destructive) { onDelete(hit) }
+                    .keyboardShortcut(.delete, modifiers: .command)
             }
         } label: {
             HStack(spacing: sz(6)) {
@@ -2291,12 +2422,24 @@ private struct ActionMenuButton: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .keyboardShortcut("k", modifiers: .command)
-        // ⌘E edits the selected quicklink directly (Raycast parity).
+        // The real accelerators, one per advertised menu item, so each works without
+        // opening the menu first: ⌘⇧C copies, ⌘E edits the selected quicklink
+        // (Raycast parity), ⌘⇧K binds a global hotkey to the selected app, ⌘⌫ deletes.
+        // Each guards on the same state its menu item is gated by, so a shortcut for
+        // an item that isn't showing does nothing.
         .background(
-            Button("") { if let hit = quicklink { onEdit(hit) } }
-                .keyboardShortcut("e", modifiers: .command)
-                .opacity(0)
-                .allowsHitTesting(false)
+            ZStack {
+                Button("") { onCopy() }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                Button("") { if let hit = quicklink { onEdit(hit) } }
+                    .keyboardShortcut("e", modifiers: .command)
+                Button("") { if let url = appURL { onAssignShortcut(url) } }
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
+                Button("") { if let hit = quicklink { onDelete(hit) } }
+                    .keyboardShortcut(.delete, modifiers: .command)
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
         )
     }
 }

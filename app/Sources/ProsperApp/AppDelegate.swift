@@ -421,6 +421,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Side-effect hook: re-register hotkeys when the user rebinds them.
         SettingsHooks.shared.onShortcutsChanged = { [weak self] in self?.registerHotKeys() }
         SettingsHooks.shared.onCheckForUpdates = { AppUpdater.shared.checkForUpdates() }
+        // Lets the runner open Settings (Actions menu / `:settings`) — the only
+        // always-present surface, since ⌥\ is rebindable and the menu-bar icon
+        // can be hidden.
+        SettingsHooks.shared.onOpenSettings = { [weak self] in self?.openSettings() }
         SettingsHooks.shared.onMenuBarIconChanged = { [weak self] visible in
             self?.menuBar?.setIconVisible(visible)
         }
@@ -492,6 +496,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func reapplyAfterSync() {
         // Global hotkeys (shortcut.* keys may have changed).
         registerHotKeys()
+        // An open Settings window holds its own copy of the app shortcuts, and its
+        // next edit writes that whole array back — which would silently undo whatever
+        // the sync just pulled in. Same notification the runner's "Assign Shortcut…"
+        // posts, for the same reason.
+        NotificationCenter.default.post(name: .appShortcutsChangedExternally, object: nil)
 
         // File-backed stores reconcile from the freshly written files.
         QuicklinkStore.bootstrap()
@@ -733,17 +742,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // User-defined custom shortcuts: each opens the runner pre-seeded with
         // its activation prefix (no need to type "o ", ">", etc.). Ids start at
         // 100 to stay clear of the fixed action ids above.
-        for (i, cs) in ShortcutStore.customShortcuts().enumerated() {
+        //
+        // Enumerate the FILTERED list and cap it: the index is the id, so numbering
+        // the raw list let a skipped (not-yet-recorded) row still burn an id, and
+        // nothing stopped 100 + i from walking into the app-shortcut range at 200 —
+        // where the later registrar silently rebinds the user's custom shortcut.
+        let customShortcuts = ShortcutStore.customShortcuts()
             // Skip not-yet-recorded combos (no modifier) so we never register a
             // bare key that would swallow ordinary typing.
-            guard cs.combo.carbonModifiers != 0 else { continue }
+            .filter { $0.combo.carbonModifiers != 0 }
+            .prefix(GlobalHotKey.customMaxRegistered)
+        for (i, cs) in customShortcuts.enumerated() {
             let prefix = cs.prefix
             bound.append(
                 (GlobalHotKey(keyCode: cs.combo.keyCode, modifiers: cs.combo.carbonModifiers,
-                              id: UInt32(100 + i)) { [weak self] in
+                              id: GlobalHotKey.customIdBase + UInt32(i)) { [weak self] in
                     DispatchQueue.main.async { self?.openRunner(prefill: prefix) }
                 },
                  "\(cs.label) (\(cs.combo.display))")
+            )
+        }
+
+        // User-defined app shortcuts: each launches or focuses ONE app directly —
+        // no runner, nothing to type (⌘⇧D → DBeaver). Ids start at 200 to stay clear
+        // of the fixed (1-16) and custom-shortcut (100+) ids above and the
+        // extension-keybinding ids (300+) below; `registrations` enforces that range
+        // and skips unset combos / unpicked apps.
+        for (id, sc) in AppShortcut.registrations(ShortcutStore.appShortcuts()) {
+            let target = sc.target
+            // Shortcuts sync across Macs, so a target may name an app this one does
+            // not have. Claiming its chord anyway would take the combo away from
+            // whatever else wants it and then do nothing on press — worse than not
+            // binding it. (Settings still shows the row; only the binding is held back.)
+            guard AppControl.resolvedBundleURL(target) != nil else {
+                NSLog("prosper: app shortcut '%@' (%@) not registered — no app for '%@' on this Mac",
+                      sc.name, sc.combo.display, target)
+                continue
+            }
+            bound.append(
+                (GlobalHotKey(keyCode: sc.combo.keyCode, modifiers: sc.combo.carbonModifiers,
+                              id: id) {
+                    // launchOrFocus (not NSRunningApplication.activate) because we
+                    // fire while Prosper is a background app — see its doc comment.
+                    DispatchQueue.main.async { AppControl.launchOrFocus(target) }
+                },
+                 "Launch \(sc.name) (\(sc.combo.display))")
             )
         }
 
@@ -758,7 +801,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let command = kb.command
                 bound.append(
                     (GlobalHotKey(keyCode: combo.keyCode, modifiers: combo.carbonModifiers,
-                                  id: UInt32(300 + hotkeyIndex)) { [weak self] in
+                                  id: GlobalHotKey.extensionIdBase + UInt32(hotkeyIndex)) { [weak self] in
                         Task { @MainActor in _ = await self?.extensions.invokeAsync(commandID: command, query: "") }
                     },
                      "\(record.manifest.extension.title) · \(combo.display)")
