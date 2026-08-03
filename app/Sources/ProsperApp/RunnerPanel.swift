@@ -2647,25 +2647,11 @@ private struct KeyHandling: NSViewRepresentable {
             guard let h = handlers else { return e }
             guard let w = window, e.window === w else { return e }
             let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            // Standard Edit-menu shortcuts (⌘A/⌘C/⌘V/⌘X). A borderless,
-            // non-activating panel has no menu, so AppKit never dispatches these
-            // key equivalents to the field editor on its own — we route each to
-            // the first responder explicitly. Returning nil consumes the event
-            // once handled; an unmapped ⌘ combo falls through to edit normally.
-            if mods == .command {
-                let action: Selector?
-                switch e.keyCode {
-                case 0: action = #selector(NSText.selectAll(_:))  // A
-                case 8: action = #selector(NSText.copy(_:))       // C
-                case 9: action = #selector(NSText.paste(_:))      // V
-                case 7: action = #selector(NSText.cut(_:))        // X
-                default: action = nil
-                }
-                if let action {
-                    NSApp.sendAction(action, to: nil, from: nil)
-                    return nil
-                }
-            }
+            // ⌘A/⌘C/⌘V/⌘X are deliberately NOT handled here. The app installs a real
+            // Edit menu (AppDelegate.installEditMenu), which dispatches them to the
+            // field editor even in this borderless panel. Routing them here as well
+            // ran the action TWICE — ⌘V pasted "3+3" as "3+33+3" (the explicit
+            // sendAction fired, and the event still reached the menu).
             // ⌃C → clear the input (expected "wipe the field" gesture here).
             if mods == .control, e.keyCode == 8 {  // C
                 h.clear(); return nil

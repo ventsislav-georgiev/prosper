@@ -18,7 +18,15 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.137.0 *(unreleased)*
+## v2.139.0 *(unreleased)*
+
+### Fixes
+- **Command runner**: ⌘V pasted the clipboard twice — pasting `3+3` typed `3+33+3`.
+  The runner routed the Edit shortcuts (⌘A/⌘C/⌘V/⌘X) to the focused field itself,
+  a leftover from before Prosper had a real Edit menu; both paths ran, so every
+  paste landed twice. The runner no longer routes them — the Edit menu does.
+
+## v2.137.0
 
 ### Improvements
 - **App shortcuts**: bind a global hotkey that launches or focuses one app directly —
