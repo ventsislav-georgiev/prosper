@@ -116,10 +116,15 @@ final class DchSessionServer: @unchecked Sendable {
             tcp.keepaliveInterval = 10
             tcp.keepaliveCount = 4   // dead link noticed in ~70s
         }
+        // Port MUST stay `.any` here. Listener params are inherited by every accepted
+        // connection, so a port in requiredLocalEndpoint makes each accepted socket try to
+        // bind the port the listener already holds: connectx fails EADDRINUSE and the
+        // connection dies before the handshake. allowLocalEndpointReuse is SO_REUSEADDR,
+        // which does not cover an actively LISTENing port. The listening port goes in `on:`.
         params.requiredLocalEndpoint = NWEndpoint.hostPort(
-            host: NWEndpoint.Host(tsIP), port: NWEndpoint.Port(rawValue: Self.port)!)
+            host: NWEndpoint.Host(tsIP), port: .any)
 
-        let listener = try NWListener(using: params)
+        let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: Self.port)!)
         self.listener = listener
         let sem = DispatchSemaphore(value: 0)
         listener.stateUpdateHandler = { [weak self] state in
