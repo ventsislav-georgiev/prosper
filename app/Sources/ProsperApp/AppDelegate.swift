@@ -726,6 +726,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(.toggleAutocomplete, toggleAutocomplete)
         add(.menuBarToggleHidden) { MenuBarManager.shared.toggleHidden() }
         add(.calendarTogglePopup) { CalendarBarController.shared.togglePopup() }
+        add(.mixerCycleOutput) { AppVolumeMixer.shared.cycleSoundOutput() }
 
         // Built-in window management: snap the frontmost window to a screen edge,
         // maximize, or centre it. Applied via Accessibility to whatever app is

@@ -598,6 +598,8 @@ enum CommandRouter {
         [(title: String, haystack: String, icon: String, meta: MetaCommand)] = [
         ("Prosper Settings", "prosper settings preferences prefs config options",
          "gearshape", .openSettings),
+        ("Volume Mixer", "volume mixer sound audio output speaker mute",
+         "slider.horizontal.3", .openVolumeMixer),
     ]
 
     /// Bookmark extension id, shared by the snapshot + fetch.

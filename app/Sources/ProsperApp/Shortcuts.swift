@@ -295,6 +295,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     case windowCenter
     case menuBarToggleHidden
     case calendarTogglePopup
+    case mixerCycleOutput
 
     var title: String {
         switch self {
@@ -314,6 +315,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .windowCenter: return "Window: Center"
         case .menuBarToggleHidden: return "Menu Bar: Reveal/Hide Section"
         case .calendarTogglePopup: return "Calendar: Toggle Calendar"
+        case .mixerCycleOutput: return "Volume Mixer: Next Sound Output"
         }
     }
 
@@ -336,6 +338,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .toggleAutocomplete: return 14
         case .menuBarToggleHidden: return 15
         case .calendarTogglePopup: return 16
+        case .mixerCycleOutput: return 17
         }
     }
 
@@ -357,6 +360,10 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     /// disabled. Used to gate both global registration and the Settings listing.
     @MainActor
     func isAvailable(registry: ExtensionRegistry?) -> Bool {
+        // The output cycle drives the mixer service, which only keeps its device
+        // list live while the mixer is on — so the binding is hidden and left
+        // unregistered rather than firing into a stopped service.
+        if self == .mixerCycleOutput { return MixerCore.isSupported && Preferences.mixerEnabled }
         guard let ext = owningExtensionID else { return true }
         return registry?.record(id: ext)?.enabled ?? false
     }
@@ -412,6 +419,10 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .calendarTogglePopup:
             // Opt-in: no default combo — the menu-bar icon is the always-available
             // trigger; rebind from the extension's Settings page.
+            return unsetKeyCombo
+        case .mixerCycleOutput:
+            // Opt-in: cycling outputs behind a key the user did not choose is a
+            // surprise, and the mixer panel already switches output by hand.
             return unsetKeyCombo
         }
     }

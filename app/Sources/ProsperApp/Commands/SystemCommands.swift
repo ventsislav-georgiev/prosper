@@ -116,6 +116,9 @@ enum MetaCommand: String, Sendable {
     /// rebound or cleared, and the menu-bar icon can be switched off — or tucked
     /// into Prosper's own hidden menu-bar section — leaving no other route.
     case openSettings
+    /// Opens the volume mixer popover from its menu-bar item. No-op when the
+    /// mixer is off — there is then no status item to anchor the popover to.
+    case openVolumeMixer
 
     static func parse(_ input: String) -> MetaCommand? {
         let s = input.trimmingCharacters(in: .whitespaces).lowercased()
@@ -126,6 +129,7 @@ enum MetaCommand: String, Sendable {
         // Colon-prefixed so they can't shadow an app search for "settings" /
         // "preferences" (System Settings.app must still win that).
         case ":s", ":settings", ":prefs", ":preferences": return .openSettings
+        case ":v", ":volume", ":mixer": return .openVolumeMixer
         default: return nil
         }
     }
@@ -136,6 +140,7 @@ enum MetaCommand: String, Sendable {
         case .clearClipboard: return "Clear clipboard history"
         case .newQuicklink: return "Create Quicklink"
         case .openSettings: return "Open Prosper Settings"
+        case .openVolumeMixer: return "Open Volume Mixer"
         }
     }
 }
