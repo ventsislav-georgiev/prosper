@@ -378,6 +378,7 @@ Prosper takes inspiration — ideas, UI/UX, and implementation know-how — from
 - **[jordanbaird/Ice](https://github.com/jordanbaird/Ice)** — the menu-bar management (hiding, reordering, layout).
 - **[Itsycal](https://github.com/sfsam/Itsycal)** — the menu-bar calendar: icon styles, month grid, and agenda.
 - **[openlid/openlid](https://github.com/openlid/openlid)** — the OpenLid lid-stay-awake feature.
+- **[vorssaint/vorssaint-utils](https://github.com/vorssaint/vorssaint-utils)** — the per-app volume mixer: the process-tap + aggregate-device engine, the boost limiter, the microphone input picker and mute-everything sweep, and the panel's UI/UX.
 - **[Raycast](https://www.raycast.com)** & **[Alfred](https://www.alfredapp.com)** — the command palette / launcher, clipboard history, snippets, and QuickLinks.
 - **[Cotypist](https://cotypist.app)** — on-device inline autocomplete.
 - **[Hammerspoon](https://github.com/Hammerspoon/hammerspoon)** — the Lua automation / scripting bridge.
