@@ -138,6 +138,8 @@ enum Preferences {
         static let autocompleteEnabled = "autocompleteEnabled"
         static let agentEnabled = "agentEnabled"
         static let systemStatsEnabled = "systemStatsEnabled"
+        static let mixerEnabled = "mixerEnabled"
+        static let mixerPreferredInputDevice = "mixerPreferredInputDevice"
         static let fanManualEnabled = "fanManualEnabled"
         static let fanManualConsent = "fanManualConsent"
         static let fanTargets = "fanTargets"
@@ -837,6 +839,28 @@ enum Preferences {
             return defaults.bool(forKey: Keys.systemStatsEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.systemStatsEnabled) }
+    }
+
+    /// Master switch for the per-app volume mixer. Absent reads as off.
+    static var mixerEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.mixerEnabled) == nil { return false }
+            return defaults.bool(forKey: Keys.mixerEnabled)
+        }
+        set { defaults.set(newValue, forKey: Keys.mixerEnabled) }
+    }
+
+    /// UID of the microphone the mixer re-selects whenever it is present. Absent
+    /// means whatever the system picked wins, and nothing is re-asserted.
+    static var mixerPreferredInputDeviceUID: String? {
+        get { defaults.string(forKey: Keys.mixerPreferredInputDevice) }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: Keys.mixerPreferredInputDevice)
+            } else {
+                defaults.removeObject(forKey: Keys.mixerPreferredInputDevice)
+            }
+        }
     }
 
     /// Base sampling period (seconds) for every System Stats module. Higher = less
