@@ -150,6 +150,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         CalendarBarController.shared.extLive = calendarExtLive
         CalendarBarController.shared.reload()
+
+        // Per-app volume mixer: opt-in, so no status item and no audio taps
+        // until the preference is on (the controller re-checks it on reload).
+        MixerPanelController.shared.reload()
         // Headless self-check of the settings code paths (ordering + bookmarks FDA
         // gate). Set PROSPER_VERIFY=1 to dump and exit — used to verify on a locked
         // display where windows won't render. No effect on normal launches.
