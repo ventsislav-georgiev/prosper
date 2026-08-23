@@ -18,7 +18,27 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.139.0 *(unreleased)*
+## v2.141.0 *(unreleased)*
+
+### Improvements
+- **Volume Mixer**: a per-app volume mixer in the menu bar — one slider per app that
+  is playing, up to 200%, plus mute and a one-click boost. macOS has no per-app volume
+  and no API for one, so Prosper taps each app's audio, applies the gain, and plays it
+  back through an aggregate device it owns: no plugin, no kernel extension, works for
+  any app. The panel also carries the system volume, the output device picker and the
+  microphone picker, so it doubles as the sound menu. Because a tap reads audio, macOS
+  asks for the audio-recording permission the first time — Prosper records nothing, the
+  audio goes straight back out. Off by default; turn it on in
+  **Settings → Volume Mixer**, or type `:mixer` (or `:v`) in the launcher. Needs
+  macOS 14.4.
+- **Volume Mixer**: pick the microphone you want kept selected and Prosper re-asserts it
+  whenever it reappears — dock, headset, USB interface — instead of letting macOS hand
+  the default input to whatever was plugged in last. The panel's mic button also mutes
+  every input at once, and an unmute never opens a microphone you had muted yourself.
+- **Volume Mixer**: bind a global shortcut to cycle the sound output across the devices
+  you tick in the pane, so speakers → headphones is one chord. Unbound by default.
+
+## v2.139.0
 
 ### Fixes
 - **Command runner**: ⌘V pasted the clipboard twice — pasting `3+3` typed `3+33+3`.
