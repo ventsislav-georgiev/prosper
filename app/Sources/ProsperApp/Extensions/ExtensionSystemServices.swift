@@ -165,6 +165,23 @@ enum SystemInfo {
         return s
     }
 
+    /// Default route up (SCNetworkReachability on 0.0.0.0)? Fail-open: SC errors
+    /// report reachable, so a broken check never fires "no network" behavior.
+    /// Thread-safe, synchronous, no DNS (address-based). Note this is the ROUTE,
+    /// not the interface list: Tailscale's utun keeps its 100.x address when the
+    /// physical network drops, so interface presence cannot detect a network loss.
+    static func networkReachable() -> Bool {
+        var addr = sockaddr()
+        addr.sa_len = UInt8(MemoryLayout<sockaddr>.size)
+        addr.sa_family = sa_family_t(AF_INET)
+        guard let reach = withUnsafePointer(to: &addr, { ptr in
+            SCNetworkReachabilityCreateWithAddress(nil, ptr)
+        }) else { return true }
+        var flags = SCNetworkReachabilityFlags()
+        guard SCNetworkReachabilityGetFlags(reach, &flags) else { return true }
+        return flags.contains(.reachable) && !flags.contains(.connectionRequired)
+    }
+
     /// Clamshell (lid) closed? Reads IOKit `AppleClamshellState`. nil when the key
     /// is unavailable (desktops). Cheap enough to poll, but the watcher below makes
     /// polling unnecessary.

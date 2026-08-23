@@ -448,6 +448,20 @@ enum DchCommand {
         return "/tmp/dch-\(getuid())"
     }
 
+    /// True while the transport a remote session needs is up: the default route is
+    /// alive AND a Tailscale address is assigned. Nothing here is "remote" without
+    /// both: on a network drop the local pty of a detached session keeps stamping
+    /// activity and stale NWConnections linger for ~70s of TCP keepalive, so the
+    /// keep-awake hold used to be renewed forever for a session no client could
+    /// possibly reach — the Mac never slept. The address check alone is NOT enough:
+    /// Tailscale's utun keeps its 100.x address when the physical network drops, so
+    /// only the route check catches the actual "Mac lost network" case (the address
+    /// check catches Tailscale being stopped). No transport → zero remote sessions,
+    /// everywhere this is read.
+    static var transportUp: Bool {
+        SystemInfo.networkReachable() && DchSessionServer.tailscaleIPv4() != nil
+    }
+
     /// True if any detached session produced pty output within `seconds`. Lets the
     /// keep-awake hold survive a client disconnect while a session is still working:
     /// the master stamps `<name>.sock.act`'s mtime on each output, so we just scan
@@ -455,6 +469,7 @@ enum DchCommand {
     /// loop. A long-running command that prints nothing reads as idle — an accepted
     /// limitation (per the design).
     static func anySessionActive(within seconds: Int) -> Bool {
+        guard transportUp else { return false }
         let dir = socketDir
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: dir) else { return false }
@@ -488,9 +503,10 @@ enum DchCommand {
         let dir = socketDir
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(seconds))
+        let up = transportUp
         return listSessions().map { s in
             let m = (try? fm.attributesOfItem(atPath: "\(dir)/\(s.name).sock.act"))?[.modificationDate] as? Date
-            return (s.name, s.alias, m.map { $0 >= cutoff } ?? false)
+            return (s.name, s.alias, up && (m.map { $0 >= cutoff } ?? false))
         }
     }
 

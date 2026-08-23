@@ -224,7 +224,13 @@ final class DchSessionServer: @unchecked Sendable {
     /// One evaluation, delegating the branching to the pure `KeepAwakePolicy`. The
     /// `||` short-circuits so the sidecar scan runs only while no client is attached.
     private func tick() {
-        let active = connections.isEmpty
+        // No transport → no remote session, whatever the sockets and the (still open,
+        // keepalive-pending) NWConnections claim. See `DchCommand.transportUp`: on a
+        // network drop this used to renew the hold forever for a session nothing
+        // could reach, so the Mac never slept.
+        let up = DchCommand.transportUp
+        let clients = up && !connections.isEmpty
+        let active = up && connections.isEmpty
             && DchCommand.anySessionActive(within: KeepAwakePolicy.activeWindowSeconds)
         guard keepAwakeActive else {
             // Watch mode: the hold was released after the idle grace, but detached
@@ -232,7 +238,12 @@ final class DchSessionServer: @unchecked Sendable {
             // output) re-acquires the hold; the timer stops only once nothing is
             // left to watch. Without this, a build that goes quiet >grace and then
             // resumes printing would sleep the Mac mid-work.
-            switch KeepAwakePolicy.watch(clientConnected: !connections.isEmpty,
+            // `sessionsExist` stays transport-UNgated on purpose: with no transport,
+            // `active` is false so nothing re-holds, but the watch timer must keep
+            // ticking so a session that resumes printing after the network returns
+            // re-acquires the hold. Gating it would .stop the timer on a drop and
+            // never watch again until a client reconnects.
+            switch KeepAwakePolicy.watch(clientConnected: clients,
                                          sessionActive: active,
                                          sessionsExist: DchCommand.anySessionExists()) {
             case .rehold:
@@ -246,8 +257,8 @@ final class DchSessionServer: @unchecked Sendable {
             return
         }
         let step = KeepAwakePolicy.step(
-            clientConnected: !connections.isEmpty, sessionActive: active, idleTicks: idleTicks)
-        TraceLog.emit("keepAwake tick: clients=\(connections.count) activeSession=\(active) "
+            clientConnected: clients, sessionActive: active, idleTicks: idleTicks)
+        TraceLog.emit("keepAwake tick: clients=\(connections.count) transport=\(up) activeSession=\(active) "
             + "idleTicks=\(idleTicks)→\(step.idleTicks) hold=\(step.hold) release=\(step.release)")
         idleTicks = step.idleTicks
         if step.release {

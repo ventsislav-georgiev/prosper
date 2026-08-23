@@ -92,6 +92,90 @@ do
     assert(not h.lastAlert(env):find("manual"), "manual off shows no internal reason")
 end
 
+-- ── Every guard false + lid shut on battery => FORCE sleep (not just release) ─
+do
+    local host, env = h.makeHost { lidClosed = true, power = "Battery Power" }
+    host.prefs.set("network_timeout_min", "2")
+    local G = h.load(INIT, host)
+    G.openlid_toggle("")                                  -- manual on, lid closed
+    h.eq(state(host).active, true, "on")
+
+    -- Network drops -> auto-off timer -> fires. Releasing the assertions alone does
+    -- NOT sleep a Mac whose lid is already shut (no new lid-close event, and another
+    -- disablesleep writer may still hold), so deactivate must sleep it outright.
+    env.reachable = false
+    G.on_network(host.json.encode { reachable = false })
+    assert(env.timers["netoff"], "netoff scheduled on network loss")
+    G.on_netoff("")
+    h.eq(state(host).active, false, "off after no-network timeout")
+    h.eq(env.flags.lidDisabled, false, "lid override released")
+    h.eq(env.flags.sleepNow, 1, "forced sleep with the lid already closed")
+end
+
+-- ── netoff arms from reality, not only from events ────────────────────────────
+do
+    -- Activate while the network is ALREADY gone: no network.changed will ever
+    -- arrive, the countdown must start anyway.
+    local host, env = h.makeHost { power = "Battery Power" }
+    host.prefs.set("network_timeout_min", "2")
+    local G = h.load(INIT, host)
+    env.reachable = false
+    G.openlid_toggle("")
+    assert(env.timers["netoff"], "activate while offline arms netoff")
+
+    -- Wake while active + offline (network.changed missed during sleep): same.
+    local host2, env2 = h.makeHost { power = "Battery Power" }
+    host2.prefs.set("network_timeout_min", "2")
+    local G2 = h.load(INIT, host2)
+    G2.openlid_toggle("")
+    assert(not env2.timers["netoff"], "online: no netoff pending")
+    env2.reachable = false
+    G2.on_wake("{}")
+    assert(env2.timers["netoff"], "wake while offline arms netoff")
+end
+
+-- ── Stale netoff fire with the network back => no deactivate, no sleep ────────
+do
+    local host, env = h.makeHost { lidClosed = true, power = "Battery Power" }
+    host.prefs.set("network_timeout_min", "2")
+    local G = h.load(INIT, host)
+    G.openlid_toggle("")
+    env.reachable = false
+    G.on_network(host.json.encode { reachable = false })
+    env.reachable = true                      -- network returned, cancel event lost
+    G.on_netoff("")
+    h.eq(state(host).active, true, "stale netoff fire is ignored when reachable")
+    h.eq(env.flags.sleepNow, nil, "and it must not force sleep")
+end
+
+-- ── Lid open, on AC (clamshell), or caffeine => release only, never sleep ─────
+do
+    local host, env = h.makeHost { lidClosed = false, power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.openlid_toggle("")
+    G.openlid_toggle("")
+    h.eq(state(host).active, false, "off")
+    h.eq(env.flags.sleepNow, nil, "lid open: no forced sleep")
+
+    -- Lid closed on AC is clamshell mode: macOS keeps a docked Mac awake by
+    -- design, so a manual off must not put it down under the user.
+    local hostAC, envAC = h.makeHost { lidClosed = true, power = "AC Power" }
+    local GAC = h.load(INIT, hostAC)
+    GAC.openlid_toggle("")
+    GAC.openlid_toggle("")
+    h.eq(state(hostAC).active, false, "off")
+    h.eq(envAC.flags.sleepNow, nil, "clamshell (AC): no forced sleep")
+
+    -- Display caffeine deliberately on: the user wants the Mac up — release only.
+    local host2, env2 = h.makeHost { lidClosed = true, power = "Battery Power" }
+    local G2 = h.load(INIT, host2)
+    G2.openlid_caffeine("")
+    G2.openlid_toggle("")
+    G2.openlid_toggle("")
+    h.eq(state(host2).active, false, "off")
+    h.eq(env2.flags.sleepNow, nil, "caffeine on: no forced sleep")
+end
+
 -- ── Display caffeine: independent of the lid override ─────────────────────────
 do
     local host, env = h.makeHost {}

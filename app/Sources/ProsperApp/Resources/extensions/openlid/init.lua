@@ -295,6 +295,22 @@ local function render(s)
 end
 
 -- ============ Core ============
+
+-- Arm/cancel the no-network auto-off from CURRENT reachability, not just from
+-- network.changed events. Event-only arming has a hole: activate (or wake, or
+-- launch) with the network ALREADY gone and no further event ever arrives, so
+-- the countdown never starts and the Mac stays awake in a bag indefinitely —
+-- the exact "sometimes it does not sleep". Re-scheduling an armed timer resets
+-- the countdown; call sites are one-shot moments (activate/launch/wake/network
+-- event), so that only ever grants a fresh grace period, never starves it.
+local function sync_netoff(s, c)
+    if s.active and c.networkAutoOffSeconds and not host.network.reachable() then
+        host.timer.schedule { id = "netoff", after = c.networkAutoOffSeconds, handler = "on_netoff" }
+    else
+        host.timer.cancel("netoff")
+    end
+end
+
 local function activate(durationSec, auto)
     local c = cfg()
     local s = load_state()
@@ -317,6 +333,7 @@ local function activate(durationSec, auto)
         s.endTime = nil
     end
     sync_tick(s) -- refresh the countdown while either feature is on
+    sync_netoff(s, c) -- network may already be gone; start the countdown now
     save_state(s)
     render(s)
     host.alert.show(awake_line(s))
@@ -341,6 +358,19 @@ local function deactivate(reason)
     -- Show why only when it wasn't a plain manual toggle (battery, timer, unplug…).
     local why = (reason and reason ~= "manual") and ("  \u{2014} " .. reason) or ""
     host.alert.show(SLEEP_LINE .. why)
+    -- Dropping the assertions is NOT enough with the lid ALREADY closed: macOS only
+    -- re-evaluates lid sleep on the next close event, and any other disablesleep
+    -- writer (a remote-session hold) keeps the Mac up regardless of what we just
+    -- released. So when every keep-awake condition has gone false and the lid is
+    -- shut, sleep it — sleep_now clears every writer first, then sleeps. Battery
+    -- only: every guard that lands here (no network in transit, battery floor,
+    -- unplug) is a battery scenario, while lid-closed-on-AC is clamshell mode —
+    -- macOS keeps a docked Mac awake by design, and force-sleeping it would put
+    -- the machine down under a user mid-work. Also skipped when the lid state is
+    -- unknown (nil) or display caffeine is deliberately on.
+    if host.screen.lid_closed() and not s.caffeine and running_on_battery() then
+        host.caffeinate.sleep_now()
+    end
 end
 
 -- ============ Display caffeine (independent of the lid override) ============
@@ -435,7 +465,12 @@ end
 -- ============ Timer handlers ============
 function on_expiry(payload) deactivate("timer expired") end
 function on_tick(payload) render(load_state()) end
-function on_netoff(payload) deactivate("no network (in transit)") end
+-- Re-verify at fire time: a cancel event missed across a sleep/wake must not
+-- become a forced sleep under a user whose network is actually fine.
+function on_netoff(payload)
+    if host.network.reachable() then return end
+    deactivate("no network (in transit)")
+end
 function on_caffeine_expiry(payload) caffeine_off("timer expired") end
 
 -- ============ Menu handlers ============
@@ -502,6 +537,9 @@ function on_launch(payload)
     -- the app knowing the daemon is resident, so without this the hold no-ops and a
     -- remotely-woken Mac sleeps mid-session despite a live dch client.
     if c.remoteWake then apply_remote_wake() end
+    -- Restored-active path (activate() not called): the network may have vanished
+    -- while we were not running — reconcile the no-network countdown from reality.
+    sync_netoff(load_state(), c)
 end
 
 function on_battery(payload)
@@ -542,15 +580,9 @@ function on_battery(payload)
 end
 
 function on_network(payload)
-    local p = host.json.decode(payload) or {}
-    local c = cfg()
-    local s = load_state()
-    if not s.active or not c.networkAutoOffSeconds then return end
-    if p.reachable then
-        host.timer.cancel("netoff") -- network back: cancel pending shutdown
-    else
-        host.timer.schedule { id = "netoff", after = c.networkAutoOffSeconds, handler = "on_netoff" }
-    end
+    -- Live reachability, not the event payload: sync_netoff re-reads it, so a
+    -- stale/reordered event cannot arm or cancel against reality.
+    sync_netoff(load_state(), cfg())
 end
 
 function on_wake(payload)
@@ -568,6 +600,9 @@ function on_wake(payload)
         s.lidSleepDisabled = false
         save_state(s)
     end
+    -- Woke somewhere without network (in a bag): any network.changed fired while
+    -- asleep was missed, so reconcile the no-network countdown from reality too.
+    sync_netoff(s, cfg())
 end
 
 function on_lid(payload)

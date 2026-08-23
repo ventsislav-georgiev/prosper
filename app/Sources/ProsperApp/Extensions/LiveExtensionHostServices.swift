@@ -803,17 +803,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     func batteryPowerSource() -> String { SystemInfo.powerSource() }
     func batteryPercentage() -> Int { SystemInfo.batteryPercentage() ?? -1 }
 
-    func networkIsReachable() -> Bool {
-        var addr = sockaddr()
-        addr.sa_len = UInt8(MemoryLayout<sockaddr>.size)
-        addr.sa_family = sa_family_t(AF_INET)
-        guard let reach = withUnsafePointer(to: &addr, { ptr in
-            SCNetworkReachabilityCreateWithAddress(nil, ptr)
-        }) else { return true }
-        var flags = SCNetworkReachabilityFlags()
-        guard SCNetworkReachabilityGetFlags(reach, &flags) else { return true }
-        return flags.contains(.reachable) && !flags.contains(.connectionRequired)
-    }
+    func networkIsReachable() -> Bool { SystemInfo.networkReachable() }
 
     /// Candidate wake handles for this Mac, best first: Tailscale IPs (100.64/10),
     /// then private LAN IPv4, then the hostname. Tailscale + LAN IPs come free as

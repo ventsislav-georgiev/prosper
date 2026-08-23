@@ -232,6 +232,7 @@ function M.makeHost(opts)
         prefs = {}, alerts = {}, timers = {}, notifications = {},
         flags = { idleSystem = false, idleDisplay = false, lidDisabled = false, locked = false },
         power = opts.power or "AC Power",
+        lidClosed = opts.lidClosed,           -- nil = unknown, true/false = lid state
         pct = opts.pct or 90,
         shellOut = opts.shellOut or "",
         now = opts.now or 1000,
@@ -305,7 +306,11 @@ function M.makeHost(opts)
             power_source = function() env.calls.battery = env.calls.battery + 1; return env.power end,
             percentage = function() env.calls.battery = env.calls.battery + 1; return env.pct end,
         },
-        screen = { count = function() env.calls.screen = env.calls.screen + 1; return opts.screens or 1 end },
+        screen = {
+            count = function() env.calls.screen = env.calls.screen + 1; return opts.screens or 1 end,
+            -- nil = unknown (real host returns -1 → nil), matching the live bridge.
+            lid_closed = function() env.calls.screen = env.calls.screen + 1; return env.lidClosed end,
+        },
         dch = { sessions = function() return opts.dchSessions or {} end },
         time = function() return env.now end,
         date = function() return opts.date or { hour = 12, min = 0, sec = 0 } end,
