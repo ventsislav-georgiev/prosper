@@ -37,6 +37,11 @@ tag from the now-released section and put it on the new top draft.
   every input at once, and an unmute never opens a microphone you had muted yourself.
 - **Volume Mixer**: bind a global shortcut to cycle the sound output across the devices
   you tick in the pane, so speakers → headphones is one chord. Unbound by default.
+- **Shortcuts**: **Quit Guard** — require a double-tap of ⌘Q to quit. The first ⌘Q is
+  swallowed; press it again within half a second and the quit goes through, so a stray
+  ⌘Q no longer takes the window you were working in. Off by default, in
+  **Settings → Shortcuts → Quit Guard**; it rides the same key engine as Key Remapping,
+  so it needs Accessibility permission.
 
 ## v2.139.0
 
