@@ -34,6 +34,11 @@
 	     and the app never appears in System Settings > Privacy > Calendars. -->
 	<key>com.apple.security.personal-information.calendars</key>
 	<true/>
+	<!-- Audio input for the Volume Mixer's process taps (System Audio Recording).
+	     Under the hardened runtime AudioHardwareCreateProcessTap is refused
+	     without this, so every per-app volume/route silently does nothing. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 	<!-- iCloud-Keychain settings-sync key (SyncKeyStore). The default keychain
 	     access group is <TeamID>.<bundleID>; declaring it explicitly is what
 	     clears errSecMissingEntitlement for the kSecAttrSynchronizable item. -->

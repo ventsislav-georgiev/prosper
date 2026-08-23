@@ -722,6 +722,7 @@ private struct SettingsRootView: View {
         case "shortcuts": ShortcutsPane(model: model)
         case "ai-models": AIModelsPane(model: model)
         case "system-stats": SystemStatsPane()
+        case "audio-mixer": VolumeMixerPane()
         case "agent": AgentPane(model: model)
         case "agent-mcp": MCPServersPane(model: model)
         case "agent-plugins": PluginsHooksPane(model: model)
@@ -3484,6 +3485,9 @@ func settingsSidebarGroups(registry: ExtensionRegistry?) -> [(String, [SettingsT
     // System Stats is its own top-level group (native menu-bar monitors); the
     // pane's master switch gates the whole feature, so it shows regardless.
     result.append(("System Stats", [SettingsTab(id: "system-stats", title: "System Stats", icon: "speedometer", accent: "Stats")]))
+    // Volume Mixer is its own top-level group for the same reason: the pane's
+    // master switch gates the menu-bar item, so it must show even while off.
+    result.append(("Volume Mixer", [SettingsTab(id: "audio-mixer", title: "Volume Mixer", icon: "slider.horizontal.3", accent: "Mixer")]))
     // Extension Settings sits right after General so user extensions read first,
     // ahead of the built-in feature groups.
     if !extensionSections.isEmpty { result.append(("Extension Settings", extensionSections)) }

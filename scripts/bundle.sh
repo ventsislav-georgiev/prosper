@@ -347,6 +347,9 @@ if [[ "$NOTARIZE" == 1 ]]; then
   #   prompt, and Prosper never appears in System Settings > Privacy > Calendars.
   #   Must ALSO be in scripts/Prosper.entitlements (profile reseal replaces the
   #   main executable's entitlements when embedded.provisionprofile is present).
+  # device.audio-input: process taps for the Volume Mixer (System Audio Recording).
+  #   Hardened runtime refuses AudioHardwareCreateProcessTap without it, so every
+  #   per-app volume/route silently no-ops. Same reseal caveat as calendars.
   # NOTE: keep this plist comment-free. AMFI's entitlement parser
   # (AMFIUnserializeXML) is stricter than plutil and rejects an XML comment that
   # contains a double hyphen (e.g. a literal "--deep"), failing the whole sign with
@@ -362,6 +365,8 @@ if [[ "$NOTARIZE" == 1 ]]; then
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
 	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
 	<true/>
 </dict>
 </plist>

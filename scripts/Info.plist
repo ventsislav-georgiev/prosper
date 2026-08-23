@@ -69,6 +69,14 @@
 	<string>Prosper shows your events in the menu bar calendar (Calendar extension).</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Prosper shows your events in the menu bar calendar (Calendar extension).</string>
+	<!-- The Volume Mixer re-renders each app's audio at the chosen volume, which
+	     macOS implements as a process tap (CATapDescription, 14.4+) behind the
+	     System Audio Recording grant. Without this key the TCC prompt never
+	     appears and AudioHardwareCreateProcessTap fails, so every per-app slider
+	     is inert. Prosper never records: the tapped samples are scaled and
+	     written straight back out. -->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Prosper taps each app's audio so the Volume Mixer can play it back at the volume and output device you choose. Nothing is recorded or stored.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
