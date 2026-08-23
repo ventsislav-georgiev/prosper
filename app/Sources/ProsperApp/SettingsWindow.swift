@@ -169,6 +169,14 @@ final class SettingsModel: ObservableObject {
     /// Master switch for the coding agent. Toggling it shows/hides the whole
     /// "Coding Agent" settings category and the menu-bar entry.
     @Published var agentEnabled: Bool { didSet { Preferences.agentEnabled = agentEnabled } }
+    /// Double-press ⌘Q to quit. Re-applies the shortcut rules so the built-in
+    /// double-tap rule is installed/removed in the shared key engine right away.
+    @Published var doubleTapQuitEnabled: Bool {
+        didSet {
+            Preferences.doubleTapQuitEnabled = doubleTapQuitEnabled
+            ShortcutRulesStore.shared.apply()
+        }
+    }
     @Published var completionsEnabledByDefault: Bool { didSet { Preferences.completionsEnabledByDefault = completionsEnabledByDefault } }
     @Published var completionLength: CompletionLength { didSet { Preferences.completionLength = completionLength } }
     @Published var customInstructions: String { didSet { Preferences.customInstructions = customInstructions } }
@@ -329,6 +337,7 @@ final class SettingsModel: ObservableObject {
     init() {
         autocompleteEnabled = Preferences.autocompleteEnabled
         agentEnabled = Preferences.agentEnabled
+        doubleTapQuitEnabled = Preferences.doubleTapQuitEnabled
         completionsEnabledByDefault = Preferences.completionsEnabledByDefault
         completionLength = Preferences.completionLength
         customInstructions = Preferences.customInstructions
@@ -1680,6 +1689,11 @@ private struct ShortcutsPane: View {
                               : "")
                     Spacer()
                 }
+            }
+
+            NeonSection("Quit Guard",
+                        footer: "The first \u{2318}Q is swallowed; press it again within half a second to really quit. Prevents losing a window to a stray \u{2318}Q. Requires Accessibility permission.") {
+                Toggle("Require a double-tap of \u{2318}Q to quit", isOn: $model.doubleTapQuitEnabled)
             }
 
             NeonSection("Key Remapping",

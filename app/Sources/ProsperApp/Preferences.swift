@@ -140,6 +140,7 @@ enum Preferences {
         static let systemStatsEnabled = "systemStatsEnabled"
         static let mixerEnabled = "mixerEnabled"
         static let mixerPreferredInputDevice = "mixerPreferredInputDevice"
+        static let doubleTapQuitEnabled = "doubleTapQuitEnabled"
         static let fanManualEnabled = "fanManualEnabled"
         static let fanManualConsent = "fanManualConsent"
         static let fanTargets = "fanTargets"
@@ -839,6 +840,17 @@ enum Preferences {
             return defaults.bool(forKey: Keys.systemStatsEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.systemStatsEnabled) }
+    }
+
+    /// Require a double-press of ⌘Q to quit the frontmost app. On, a built-in
+    /// `double_tap` rule for cmd+q is fed to the shared key-rule engine by
+    /// `ShortcutRulesStore.apply()`. Absent reads as off (plain ⌘Q passthrough).
+    static var doubleTapQuitEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.doubleTapQuitEnabled) == nil { return false }
+            return defaults.bool(forKey: Keys.doubleTapQuitEnabled)
+        }
+        set { defaults.set(newValue, forKey: Keys.doubleTapQuitEnabled) }
     }
 
     /// Master switch for the per-app volume mixer. Absent reads as off.

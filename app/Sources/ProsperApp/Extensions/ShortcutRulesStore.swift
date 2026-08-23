@@ -71,6 +71,17 @@ final class ShortcutRulesStore {
     /// Compile the enabled rules into the engine's JSON shape and register them.
     /// Idempotent — safe to call at launch and after every edit.
     func apply() {
+        ExtensionKeyRules.shared.setRules(
+            extensionID: Self.ownerID,
+            json: Self.compileJSON(rules, doubleTapQuit: Preferences.doubleTapQuitEnabled))
+    }
+
+    /// Pure rules → engine-JSON compiler (testable without touching the engine).
+    /// The built-in double-tap ⌘Q rule is appended LAST so a user's own cmd+q
+    /// mapping keeps precedence; across owners the engine matches the first rule
+    /// in sorted-extension-id order, so an extension that also registers cmd+q
+    /// simply wins and this one stays inert — never both.
+    static func compileJSON(_ rules: [Rule], doubleTapQuit: Bool) -> String {
         var objs: [[String: Any]] = []
         for r in rules where r.enabled && !r.trigger.isEmpty {
             var obj: [String: Any] = ["from": r.trigger]
@@ -91,8 +102,8 @@ final class ShortcutRulesStore {
             if !r.notApps.isEmpty { obj["not_apps"] = r.notApps }
             objs.append(obj)
         }
-        let json = (try? JSONSerialization.data(withJSONObject: objs))
+        if doubleTapQuit { objs.append(["from": "cmd+q", "double_tap": "cmd+q"]) }
+        return (try? JSONSerialization.data(withJSONObject: objs))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
-        ExtensionKeyRules.shared.setRules(extensionID: Self.ownerID, json: json)
     }
 }
