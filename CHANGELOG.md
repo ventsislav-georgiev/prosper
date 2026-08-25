@@ -21,6 +21,77 @@ tag from the now-released section and put it on the new top draft.
 ## v2.141.0 *(unreleased)*
 
 ### Improvements
+- **Screen tools**: two new commands, on the launcher (`:ocr` / `:text` / `:scan` and
+  `:color` / `:pick`) and rebindable in **Settings → Shortcuts** (no default key).
+  **Copy Text from Screen** drags a region and copies what it holds — QR and other
+  barcodes first, then on-device OCR. **Pick Color from Screen** samples any pixel
+  and copies its sRGB hex. A result that is a single link offers to open it. Both
+  copy to the clipboard, so results land in clipboard history like any other copy —
+  keep that in mind when OCR'ing something sensitive.
+- **Extensions**: three new events — `system.sleep` (machine about to sleep),
+  `screen.locked` (`{locked}`, lock and unlock), and `clipboard.changed`
+  (`{kind, text}`, text capped at 8 KB). Clipboard events honour the same
+  concealed-clip privacy guard as history, don't turn history on, and don't re-fire
+  on a `host.clipboard.write()` from a handler. `host.clipboard.write("")` now
+  clears the pasteboard instead of leaving an empty-string item on it.
+- **Launcher**: type `ss ` for **System Settings** — all 43 panes (Wi-Fi, Displays,
+  Sound, Privacy & Security, Login Items…) listed on an empty query and filtered as
+  you type, `⏎` opens the pane. No permissions needed.
+- **Launcher**: type `kill ` for **Kill Process** — the top CPU consumers, filtered by
+  name or pid. The kill is committed by a trailing `!` (`kill 1234!`, or `!!` to force)
+  and then a confirmation dialog, so nothing dies while you are still typing the pid.
+  Prosper itself and the system's own critical processes are refused.
+- **Launcher**: **Scripts** — save a shell command under a name and run it with
+  `sc <name>`; `sc ` alone lists everything saved. Each runs to completion and then
+  shows its output. Manage the list in **Settings → Scripts**.
+- **Launcher**: **App Updates** — pending Homebrew formulae and casks plus macOS
+  system updates in one list, with a command to run `brew upgrade` for all of them.
+  Prosper re-checks in the background every 6 hours (configurable) and notifies only
+  when something *new* appears; the palette command shows that cached result instantly,
+  since the macOS check itself can take a minute. "Check for Updates Now" runs the slow
+  path on demand. In **Settings → App Updates**.
+- **Launcher**: **Paste as Plain Text** — ⌘⌥⇧V pastes the clipboard with all formatting
+  stripped, straight into the app you are typing in without the launcher appearing.
+  Needs Accessibility. Note that the rich clipboard content is replaced rather than
+  restored, so the styled original is gone after the paste.
+- **New extension — Clipboard Auto-Clear**: a copied password, OTP or token should not
+  still be on the pasteboard an hour later. Clears the clipboard a set time after the
+  copy (5 minutes by default), when the Mac sleeps, and/or when the screen locks —
+  each trigger switchable — plus a "Clear Clipboard Now" command. Off by default, in
+  **Settings → Clipboard Auto-Clear**; turning it on starts the pasteboard poll, and
+  concealed clips from password managers are never seen by it.
+- **Browser router**: a second toggle, **clean copied links** — copy a link with
+  `utm_source`, `fbclid` and friends on it and Prosper writes the clean URL back to the
+  clipboard in place. Only a bare link on its own is touched (a link inside copied prose
+  is left alone), and only when the cleaned URL actually differs. Off by default and
+  independent of the existing cleanup of *opened* links.
+- **Launcher**: type `menu ` (or just `m `) and search the frontmost app's menu bar —
+  every command in every submenu, fuzzy-matched with its full path shown, and Enter
+  presses it. Safari's Export as PDF… is `m pdf` instead of a trip through the File
+  menu. Needs Accessibility permission; the index is read fresh per app and cached
+  for the session.
+- **Shortcuts**: **Hyper Key** — hold Caps Lock and it becomes a modifier chord
+  (⌃⌥⇧⌘ by default, configurable), tap it alone for a chosen action: nothing, Escape,
+  toggle capitals, or switch to the next input source. Prosper refuses to enable it
+  if Caps Lock is already remapped elsewhere (hidutil, Karabiner) rather than fight
+  over the key, and the remap is removed the moment the feature — or the app — goes
+  away. Off by default, in **Settings → Shortcuts → Hyper Key**; needs Accessibility.
+- **System Stats**: a **Disk** module — boot-volume capacity in the menu bar (ramp
+  coloured, like CPU and RAM), and a popup with live read/write throughput, a mirrored
+  activity chart, session read/written totals, and a per-volume breakdown (used of
+  total, free, format, device) that picks up externals as you plug them in. Free space
+  is the number Finder shows, not `df`'s — purgeable space counts. On NVMe internals
+  the popup also reads SMART: drive health, temperature, lifetime bytes read/written,
+  power-on hours, power cycles, unsafe shutdowns and media errors. The popup
+  also lists the processes doing the most disk I/O right now, with live read and
+  write rates. Off by default; turn it on in **Settings → System Stats → Storage**.
+- **Quick Toggles**: eight palette commands for the switches macOS buries — dark mode,
+  hidden files, desktop icons, empty Trash (confirmed first), eject all external disks,
+  lock screen, screen saver, display off. Fire-and-forget: type, Enter, done. Needs
+  Automation access for dark mode and Trash; the command opens the right Privacy pane
+  if macOS has it switched off. The extension's settings page carries live switches
+  for dark mode, hidden files and desktop icons too, so a toggle is reachable without
+  the launcher.
 - **Volume Mixer**: a per-app volume mixer in the menu bar — one slider per app that
   is playing, up to 200%, plus mute and a one-click boost. macOS has no per-app volume
   and no API for one, so Prosper taps each app's audio, applies the gain, and plays it
@@ -37,11 +108,31 @@ tag from the now-released section and put it on the new top draft.
   every input at once, and an unmute never opens a microphone you had muted yourself.
 - **Volume Mixer**: bind a global shortcut to cycle the sound output across the devices
   you tick in the pane, so speakers → headphones is one chord. Unbound by default.
+- **Volume Mixer**: the menu-bar glyph follows the output — AirPods, AirPods Pro and
+  AirPods Max each get their own icon while they are the default output, the way the
+  native sound icon does, and the speaker returns for everything else.
 - **Shortcuts**: **Quit Guard** — require a double-tap of ⌘Q to quit. The first ⌘Q is
   swallowed; press it again within half a second and the quit goes through, so a stray
   ⌘Q no longer takes the window you were working in. Off by default, in
   **Settings → Shortcuts → Quit Guard**; it rides the same key engine as Key Remapping,
   so it needs Accessibility permission.
+- **Finder**: three Windows habits for the file manager, each its own switch in
+  **Settings → Shortcuts → Finder**, all off by default. **F2** renames the selected
+  file. **⌘X then ⌘V** moves files: ⌘X marks the selection, ⌘V drops it into the front
+  window. Anything staying on the same disk is moved by Finder itself, so you get
+  Finder's own progress window and a real **Edit → Undo Move**; a move to another disk,
+  or one that hits a name collision, is done by Prosper instead — the file really moves
+  (and a collision is renamed rather than refused), but there is no undo entry for it.
+  **⌘V with an image on the clipboard** saves it as
+  `Pasted_Image_yyyyMMdd_HHmmss.png` in the front window's folder; copied *files* still
+  paste exactly as Finder would. All three fire only with Finder frontmost and no
+  filename being edited, and need Accessibility; the move also needs Automation
+  permission for Finder, which macOS asks for the first time you use it.
+- **Settings**: the sidebar has a search field — `⌘F` focuses it, `Esc` clears it.
+  Type part of any pane or section name and the rail turns into a result list; picking one
+  switches to that pane, scrolls to the matched section and highlights it for a moment.
+  Covers extension settings sections as well, and the index is built from the panes
+  themselves, so a new section is searchable without anyone maintaining a keyword list.
 
 ## v2.139.0
 

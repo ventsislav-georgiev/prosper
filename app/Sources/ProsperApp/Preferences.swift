@@ -141,6 +141,12 @@ enum Preferences {
         static let mixerEnabled = "mixerEnabled"
         static let mixerPreferredInputDevice = "mixerPreferredInputDevice"
         static let doubleTapQuitEnabled = "doubleTapQuitEnabled"
+        static let finderF2RenameEnabled = "finderF2RenameEnabled"
+        static let finderCutPasteEnabled = "finderCutPasteEnabled"
+        static let finderPasteImageEnabled = "finderPasteImageEnabled"
+        static let hyperKeyEnabled = "hyperKeyEnabled"
+        static let hyperKeyModifiers = "hyperKeyModifiers"
+        static let hyperKeySoloAction = "hyperKeySoloAction"
         static let fanManualEnabled = "fanManualEnabled"
         static let fanManualConsent = "fanManualConsent"
         static let fanTargets = "fanTargets"
@@ -155,6 +161,11 @@ enum Preferences {
         static let dragSnapEdgeMargin = "dragSnapEdgeMargin"
         static let dragSnapCornerSize = "dragSnapCornerSize"
         static let dragSnapIgnoredBundleIds = "dragSnapIgnoredBundleIds"
+        /// One list per mouse scope — see `MouseScope`.
+        static func mouseExceptions(_ scope: String) -> String { "mouseExceptions_\(scope)" }
+        static let mouseScrollInvertVertical = "mouseScrollInvertVertical"
+        static let mouseScrollInvertHorizontal = "mouseScrollInvertHorizontal"
+        static let mouseSideButtonNavigation = "mouseSideButtonNavigation"
         static let runnerPlacement = "runnerPlacement"
         static let snapMode = "snapMode"
         static let layoutGap = "layoutGap"
@@ -523,6 +534,36 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.dragSnapIgnoredBundleIds) }
     }
 
+    /// Bundle ids the mouse module leaves alone, one list per scope. Empty by
+    /// default — every list empty is what makes the event hot path free.
+    static func mouseExceptions(_ scope: MouseScope) -> [String] {
+        defaults.object(forKey: Keys.mouseExceptions(scope.rawValue)) as? [String] ?? []
+    }
+    static func setMouseExceptions(_ ids: [String], for scope: MouseScope) {
+        defaults.set(ids, forKey: Keys.mouseExceptions(scope.rawValue))
+    }
+
+    /// Scroll inversion, per axis — only wheels are touched, never a trackpad.
+    /// Vertical defaults ON so enabling the (opt-in, ships-off) Mouse extension
+    /// actually does something; horizontal is the rare one, so it defaults off.
+    static var mouseScrollInvertVertical: Bool {
+        get { defaults.object(forKey: Keys.mouseScrollInvertVertical) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.mouseScrollInvertVertical) }
+    }
+    static var mouseScrollInvertHorizontal: Bool {
+        get { defaults.bool(forKey: Keys.mouseScrollInvertHorizontal) }
+        set { defaults.set(newValue, forKey: Keys.mouseScrollInvertHorizontal) }
+    }
+
+    /// Side buttons (thumb buttons 4/5 on the mouse, 3/4 to CoreGraphics) drive
+    /// Back/Forward. Defaults ON for the same reason vertical inversion does —
+    /// the Mouse extension itself is opt-in and ships disabled, so this toggle
+    /// only ever reaches someone who already switched the module on.
+    static var mouseSideButtonNavigation: Bool {
+        get { defaults.object(forKey: Keys.mouseSideButtonNavigation) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.mouseSideButtonNavigation) }
+    }
+
     /// Drag-to-snap behavior: classic edges/corners (default) or drop-into-zone of
     /// the active custom layout. Absence ⇒ `.edges` (unchanged shipping behavior).
     static var snapMode: SnapMode {
@@ -851,6 +892,73 @@ enum Preferences {
             return defaults.bool(forKey: Keys.doubleTapQuitEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.doubleTapQuitEnabled) }
+    }
+
+    /// Press F2 in Finder to rename the selection (the Windows habit). On, a built-in
+    /// `f2 → return` remap scoped to `com.apple.finder` is fed to the shared key-rule
+    /// engine by `ShortcutRulesStore.apply()`. Absent reads as off.
+    static var finderF2RenameEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.finderF2RenameEnabled) == nil { return false }
+            return defaults.bool(forKey: Keys.finderF2RenameEnabled)
+        }
+        set { defaults.set(newValue, forKey: Keys.finderF2RenameEnabled) }
+    }
+
+    /// ⌘X marks the Finder selection and ⌘V moves it into the front window (the
+    /// Windows habit — Finder itself only offers ⌘C then ⌥⌘V). Unlike the F2
+    /// remap this one rides the shared keystroke tap and scripts Finder, so it
+    /// needs Accessibility AND Automation permission. Absent reads as off.
+    static var finderCutPasteEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.finderCutPasteEnabled) == nil { return false }
+            return defaults.bool(forKey: Keys.finderCutPasteEnabled)
+        }
+        set { defaults.set(newValue, forKey: Keys.finderCutPasteEnabled) }
+    }
+
+    /// ⌘V in Finder writes an image on the clipboard out as a PNG file. Rides the
+    /// same tap and the same Automation grant as the move above, and is only
+    /// consulted when no cut is pending and the pasteboard holds no file URL.
+    /// Absent reads as off.
+    static var finderPasteImageEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.finderPasteImageEnabled) == nil { return false }
+            return defaults.bool(forKey: Keys.finderPasteImageEnabled)
+        }
+        set { defaults.set(newValue, forKey: Keys.finderPasteImageEnabled) }
+    }
+
+    /// Remap Caps Lock to a hyper key (hold = modifiers, tap = lone action). Off by
+    /// default — it installs a global `hidutil` mapping, so it must be opted into.
+    static var hyperKeyEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.hyperKeyEnabled) == nil { return false }
+            return defaults.bool(forKey: Keys.hyperKeyEnabled)
+        }
+        set { defaults.set(newValue, forKey: Keys.hyperKeyEnabled) }
+    }
+
+    /// `HyperMods` bitmask unioned onto whatever key is pressed while Caps Lock is
+    /// held. Defaults to ⌃⌥⌘⇧. An empty (or absent) mask reads as the default —
+    /// a hyper key with no modifiers would swallow Caps Lock and do nothing.
+    static var hyperKeyModifiers: Int {
+        get {
+            let raw = defaults.integer(forKey: Keys.hyperKeyModifiers)
+            return raw == 0 ? HyperMods.all : raw
+        }
+        set { defaults.set(newValue == 0 ? HyperMods.all : newValue, forKey: Keys.hyperKeyModifiers) }
+    }
+
+    /// What a lone tap of the hyper key does. Defaults to Escape — the Caps→Esc
+    /// remap is the reason most people reach for this feature.
+    static var hyperKeySoloAction: HyperSoloAction {
+        get {
+            guard let raw = defaults.string(forKey: Keys.hyperKeySoloAction),
+                  let value = HyperSoloAction(rawValue: raw) else { return .escape }
+            return value
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.hyperKeySoloAction) }
     }
 
     /// Master switch for the per-app volume mixer. Absent reads as off.

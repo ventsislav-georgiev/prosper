@@ -16,7 +16,7 @@ import IOKit.ps
 import os
 
 public enum StatsModule: String, CaseIterable, Sendable {
-    case cpu, memory, network, gpu, power, sensors, battery
+    case cpu, memory, disk, network, gpu, power, sensors, battery
 
     /// Metric history series this module feeds (empty = not charted). Drives both
     /// which rings the poller allocates and what it snapshots each tick.
@@ -26,6 +26,8 @@ public enum StatsModule: String, CaseIterable, Sendable {
         case .power: ["power"]
         // Network feeds two channels for the popover's dual up/down area chart.
         case .network: ["net.up", "net.down"]
+        // Disk charts capacity (menu-bar sparkline) plus a mirrored read/write pair.
+        case .disk: ["disk.used", "disk.read", "disk.write"]
         case .sensors, .battery: []
         }
     }
@@ -35,6 +37,7 @@ public struct StatsSnapshot: Sendable {
     public var cpu: CPUSample?
     public var memory: MemorySample?
     public var network: NetworkSample?
+    public var disk: DiskSample?
     public var gpu: GPUSample?
     public var power: PowerSample?
     public var temperatures: [TempSensor]?
@@ -43,6 +46,9 @@ public struct StatsSnapshot: Sendable {
     public var topByCPU: [ProcInfo]?
     public var topByPower: [ProcInfo]?
     public var topByMemory: [ProcInfo]?
+    /// Busiest processes by disk I/O this interval; empty (not nil) means "sampled,
+    /// nothing is touching the disk right now".
+    public var topByDisk: [ProcInfo]?
     public var topByNetwork: [NetProcInfo]?
     public var netLatency: NetLatency?
     public var netLink: NetLinkInfo?
@@ -126,6 +132,7 @@ public final class StatsPoller {
     private var cpu: CPUReader?
     private var memory: MemoryReader?
     private var network: NetworkReader?
+    private var disk: DiskReader?
     private var gpu: GPUReader?
     private var power: IOReportKit?
     private var sensors: IOHIDSensors?
@@ -189,6 +196,7 @@ public final class StatsPoller {
             ping?.start()
             netLink = NetLinkReader()
         }
+        if enabled.contains(.disk) { disk = DiskReader() }
         if enabled.contains(.gpu) { gpu = GPUReader() }
         // GPU's popup shows ANE utilization, derived from ANE power — so the
         // IOReport reader is created for GPU too, but its history is only pushed
@@ -255,6 +263,11 @@ public final class StatsPoller {
             if procFlag.get() { netLink?.refresh(interface: s.interfaceName) }
             latest.netLink = netLink?.latest()
         }
+        if disk != nil, let s = try? disk!.read() {
+            latest.disk = s
+            push("disk.used", s.usedFraction)
+            push("disk.read", s.readBytesPerSec); push("disk.write", s.writeBytesPerSec)
+        }
         if gpu != nil, let s = try? gpu!.read() {
             latest.gpu = s; push("gpu", s.utilization)
         }
@@ -290,10 +303,14 @@ public final class StatsPoller {
         // kernel_task, the security agent) are included — libproc can't read them
         // unprivileged. Memory stays on the libproc ProcSampler: it's exact for the
         // user apps that actually dominate RAM, and the root daemons it misses are
-        // tiny on the memory axis.
+        // tiny on the memory axis. Disk I/O rides the same libproc sample (the
+        // rusage_info_v4 record it already reads carries the ri_diskio_* counters),
+        // so it costs one extra delta per pid and no extra syscall.
         if procFlag.get() {
             if procs == nil { procs = ProcSampler() }
-            latest.topByMemory = procs!.sample(limit: 5).byMemory
+            let sampled = procs!.sample(limit: 5)
+            latest.topByMemory = sampled.byMemory
+            latest.topByDisk = sampled.byDisk
             if topProc == nil {
                 topProc = TopProcessReader()
                 topProc!.onUpdate = { [weak self] in self?.deliverProcUpdate() }

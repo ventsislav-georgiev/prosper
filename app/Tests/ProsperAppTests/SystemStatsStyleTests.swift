@@ -36,6 +36,21 @@ final class SystemStatsStyleTests: XCTestCase {
         XCTAssertEqual(order, Set(StatsModule.allCases.map(\.rawValue)), "every module placed in order")
     }
 
+    /// Disk is capacity in the menu bar: a used-% sparkline is a flat line, so it
+    /// ships text-only, off by default, and sits right after RAM.
+    func testDiskWidgetDefaults() {
+        let cfg = ModuleWidgetConfig.defaultFor(.disk)
+        XCTAssertFalse(cfg.enabled)
+        XCTAssertEqual(cfg.mode, .textOnly)
+        let order = StatsWidgetStyle.default.order
+        XCTAssertEqual(order.firstIndex(of: StatsModule.disk.rawValue),
+                       order.firstIndex(of: StatsModule.memory.rawValue).map { $0 + 1 })
+        XCTAssertEqual(StatsModule.disk.historyKey, "disk.used")
+        XCTAssertEqual(StatsModule.disk.sfSymbol, "internaldrive")
+        XCTAssertEqual(StatsModule.disk.primaryWidthSample(), "100%")
+        XCTAssertEqual(StatsModule.disk.historyKeys, ["disk.used", "disk.read", "disk.write"])
+    }
+
     // MARK: - enabledModules (order + filter)
 
     func testEnabledModulesRespectsOrderAndFilter() {

@@ -23,7 +23,13 @@ enum VisionOCR {
     /// Recognizes text in `image`, returning one entry per text line with its
     /// normalized bounding box. Empty on failure. Async; the request itself runs
     /// off the calling actor.
-    static func recognizeLines(in image: CGImage) async -> [OCRLine] {
+    ///
+    /// `level` is defaulted so no existing call site changes. `.fast` is the
+    /// retry the screen tools use when `.accurate` finds nothing — it genuinely
+    /// reads some rendered UI text `.accurate` misses; language correction is
+    /// off there because there is no prose for it to correct.
+    static func recognizeLines(in image: CGImage,
+                               level: VNRequestTextRecognitionLevel = .accurate) async -> [OCRLine] {
         await withCheckedContinuation { (continuation: CheckedContinuation<[OCRLine], Never>) in
             let request = VNRecognizeTextRequest { request, _ in
                 let observations = request.results as? [VNRecognizedTextObservation] ?? []
@@ -33,8 +39,8 @@ enum VisionOCR {
                 }
                 continuation.resume(returning: lines)
             }
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
+            request.recognitionLevel = level
+            request.usesLanguageCorrection = (level == .accurate)
 
             let handler = VNImageRequestHandler(cgImage: image, options: [:])
             DispatchQueue.global(qos: .userInitiated).async {

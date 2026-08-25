@@ -11,7 +11,10 @@ struct SearchHit: Sendable, Equatable {
         // Extension commands rank last on a tie so a real app/link/bookmark target
         // isn't shadowed by a same-scored command, but an exact name match (score
         // 900) still floats a command to the top of its own results.
-        case app = 0, quicklink = 1, bookmark = 2, command = 3
+        // Menu commands rank last on a tie: they're contextual to whatever app
+        // happens to be frontmost, so they must never shadow a thing the user
+        // actually named.
+        case app = 0, quicklink = 1, bookmark = 2, command = 3, menu = 4
     }
     let kind: Kind
     let title: String
@@ -27,6 +30,10 @@ struct SearchHit: Sendable, Equatable {
     /// Native Prosper action (not an extension command): Enter runs this meta
     /// command. Lets "settings" surface a real "Prosper Settings" row.
     var metaCommand: MetaCommand? = nil
+    /// Short right-hand chip (menu rows: the keyboard shortcut, e.g. `⇧⌘E`).
+    var accessory: String? = nil
+    /// Payload for the row's single action — menu rows carry `"<gen>:<idx>"`.
+    var actionValue: String? = nil
 }
 
 /// Pure, source-agnostic relevance scorer. Same ladder for apps, quicklinks and

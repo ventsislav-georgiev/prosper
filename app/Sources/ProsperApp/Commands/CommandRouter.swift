@@ -505,9 +505,13 @@ enum CommandRouter {
             let (apps, lower) = AppIndex.shared.entriesWithLower()
             let reg = registry
             let bmOn = reg?.prefValue(extensionID: Self.bookmarksID, key: "show_in_launcher") == "true"
+            // Plain synchronous reads of the already-warmed menu index — no new
+            // hop, no await. Empty until the first walk lands.
+            let menus = MenuCommandIndex.shared
             return Snapshot(apps: apps, lower: lower, links: QuicklinkStore.all(),
                             registry: reg, bookmarksEnabled: bmOn,
-                            commands: reg?.commandSearchEntries() ?? [])
+                            commands: reg?.commandSearchEntries() ?? [],
+                            menus: menus.cached(), menuApp: menus.appName)
         }
         let alias = AppIndex.aliasTarget(for: q) // nonisolated static — no hop
 
@@ -587,9 +591,45 @@ enum CommandRouter {
             }
         }
 
+        // Frontmost app's menu bar. Capped and floored before merging — see
+        // `menuHits`.
+        hits.append(contentsOf: menuHits(rows: snap.menus, q: q, tokens: tokens,
+                                         appName: snap.menuApp))
+
         guard !hits.isEmpty else { return nil }
         hits.sort(by: SearchScore.before)
         return .search(Array(hits.prefix(12)))
+    }
+
+    /// How many menu rows may enter the merged ladder. 400 menu items scored on
+    /// the same ladder as apps would push everything else out of the top 12, so
+    /// only the best few compete. One constant, tune against real use.
+    static let menuHitLimit = 5
+
+    /// The frontmost app's menu commands, scored on the shared ladder. Pure over a
+    /// plain `[MenuCommand]` so ranking and capping are testable without an AX tree.
+    ///
+    /// Scored over `"<app> <path…> <title>"` so both "safari export" and "export"
+    /// find `Safari › File › Export as PDF…`, tie-broken on the item title so a
+    /// deep breadcrumb isn't penalized. The `q.count >= 2` floor matches bookmarks:
+    /// at one character nearly every menu bar matches something.
+    static func menuHits(rows: [MenuCommand], q: String, tokens: [String],
+                         appName: String) -> [SearchHit] {
+        guard q.count >= 2, !rows.isEmpty else { return [] }
+        let prefix = appName.isEmpty ? "" : appName.lowercased() + " "
+        var hits: [SearchHit] = []
+        for row in rows {
+            let breadcrumb = row.breadcrumb
+            guard let s = SearchScore.score(q: q, tokens: tokens,
+                                            matchText: prefix + breadcrumb.lowercased(),
+                                            tieLen: row.title.count) else { continue }
+            hits.append(SearchHit(kind: .menu, title: row.title,
+                                  subtitle: appName.isEmpty ? breadcrumb
+                                                            : "\(appName) › \(breadcrumb)",
+                                  score: s, accessory: row.shortcut, actionValue: row.id))
+        }
+        hits.sort(by: SearchScore.before)
+        return Array(hits.prefix(menuHitLimit))
     }
 
     /// Native (non-extension) launcher entries. `haystack` carries the synonyms a
@@ -600,6 +640,10 @@ enum CommandRouter {
          "gearshape", .openSettings),
         ("Volume Mixer", "volume mixer sound audio output speaker mute",
          "slider.horizontal.3", .openVolumeMixer),
+        ("Copy Text from Screen", "copy text from screen ocr scan grab qr barcode recognize",
+         "text.viewfinder", .copyScreenText),
+        ("Pick Color from Screen", "pick color from screen picker eyedropper hex sample swatch",
+         "eyedropper", .pickColor),
     ]
 
     /// Bookmark extension id, shared by the snapshot + fetch.
@@ -615,6 +659,8 @@ enum CommandRouter {
         let registry: ExtensionRegistry?
         let bookmarksEnabled: Bool
         let commands: [ExtensionRegistry.CommandSearchEntry]
+        let menus: [MenuCommand]
+        let menuApp: String
     }
 
     /// Ranked bookmark rows (off-main Lua lane + decode), or [] when bookmarks are

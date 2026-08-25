@@ -223,13 +223,16 @@ local function uiNode(kind)
 end
 
 -- Build a stub host. opts: { power, pct, shellOut, screens, date, now, frame,
--- apps, files, fsDirs, translateResult, agentResult, httpResponse,
+-- apps, files, fsDirs, fsExists, translateResult, agentResult, httpResponse,
 -- setDefaultOK, perms, snippets, shellRouter }.
 -- Returns (host, env); inspect env.* and mutate env.* between steps.
 function M.makeHost(opts)
     opts = opts or {}
     local env = {
         prefs = {}, alerts = {}, timers = {}, notifications = {},
+        clipboard = opts.clipboard or "",     -- host.clipboard.read/write backing store
+        strokes = {},                         -- every host.keys.stroke spec, in order
+        actions = {},                         -- ordered side-effect log ("clip.write", "keys.stroke:cmd+v")
         flags = { idleSystem = false, idleDisplay = false, lidDisabled = false, locked = false },
         power = opts.power or "AC Power",
         lidClosed = opts.lidClosed,           -- nil = unknown, true/false = lid state
@@ -240,6 +243,7 @@ function M.makeHost(opts)
         apps = opts.apps or {},
         files = opts.files or {},
         fsDirs = opts.fsDirs or {},
+        fsExists = opts.fsExists or {},   -- { [absolute path] = true } for host.fs.exists
         translateResult = opts.translateResult,
         chatResult = opts.chatResult,
         agentResult = opts.agentResult,
@@ -259,13 +263,21 @@ function M.makeHost(opts)
         windowClosed = 0,
         -- shellRouter(cmd) -> string lets a test return different output per command.
         shellRouter = opts.shellRouter,
+        -- Every AppleScript source passed to host.osascript.run, in order.
+        -- osaRouter(src) -> { ok=, output=, error= } lets a test fail a specific
+        -- script (e.g. an Automation grant denied); default is a silent success.
+        osaCalls = {},
+        osaRouter = opts.osaRouter,
+        menus = opts.menus or {},             -- host.menus.list() rows (AX menu-bar walk)
+        menusPressed = {},                    -- ordered log of host.menus.press(id) ids
+        menusPressOK = (opts.menusPressOK ~= false),
         -- Host-bridge call counters. Each real call is a Lua→Swift hop (and often a
         -- UserDefaults / pmset / NSScreen syscall), so counting them is a stable,
         -- timing-free proxy for an extension's per-event cost. h.resetCalls(env)
         -- before an op, then assert env.calls.* budgets after.
         calls = { prefsGet = 0, prefsSet = 0, shell = 0, timerSchedule = 0,
                   timerCancel = 0, menubarSet = 0, screen = 0, battery = 0, http = 0,
-                  kbdLayouts = 0 },
+                  kbdLayouts = 0, osascript = 0, menusList = 0 },
     }
     local function shell_run(cmd)
         env.calls.shell = env.calls.shell + 1
@@ -317,7 +329,20 @@ function M.makeHost(opts)
         menubar = { set = function(t) env.calls.menubarSet = env.calls.menubarSet + 1; env.menu = t end,
                     remove = function() env.menu = nil end },
         settings = { open = function(id) env.settingsOpened = id end },
-        dialog = { prompt = function(o) env.dialogPrompt = o; return env.dialogReply end },
+        dialog = {
+            prompt = function(o) env.dialogPrompt = o; return env.dialogReply end,
+            -- Confirms unless the test sets env.confirmReply = false.
+            confirm = function(o) env.dialogConfirm = o; return env.confirmReply ~= false end,
+        },
+        -- AppleScript bridge. Mirrors the real wrapper's decoded shape.
+        osascript = {
+            run = function(src)
+                env.calls.osascript = env.calls.osascript + 1
+                env.osaCalls[#env.osaCalls + 1] = src
+                return (env.osaRouter and env.osaRouter(src))
+                    or { ok = true, output = "", error = "" }
+            end,
+        },
         network = {
             addresses = function() return opts.addresses or {} end,
             reachable = function() return env.reachable ~= false end,
@@ -371,7 +396,12 @@ function M.makeHost(opts)
             search = function(o) env.fileQuery = o; return env.files end,
             act = function(id, path) env.fileAct = { id = id, path = path } end,
         },
-        fs = { list_dirs = function(path) return env.fsDirs[path] or {} end },
+        fs = {
+            list_dirs = function(path) return env.fsDirs[path] or {} end,
+            -- host.fs.exists(path) -> boolean. Backed by env.fsExists (opts.fsExists),
+            -- a { [path] = true } set; anything absent from it does not exist.
+            exists = function(path) return env.fsExists[path] == true end,
+        },
         llm = {
             translate = function(text, target, source)
                 env.translateArgs = { text = text, target = target, source = source }
@@ -426,6 +456,35 @@ function M.makeHost(opts)
             end,
         },
         perms = { has = function(name) return env.perms[name] == true end },
+        -- Frontmost app's menu-bar commands (the AX walk, cached natively).
+        -- `opts.menus` seeds the walked rows ({ id, path, title, shortcut });
+        -- presses land in env.menusPressed and answer with env.menusPressOK
+        -- (default true; set false to model a stale generation).
+        menus = {
+            list = function()
+                env.calls.menusList = env.calls.menusList + 1
+                return env.menus
+            end,
+            press = function(id)
+                env.menusPressed[#env.menusPressed + 1] = id
+                return env.menusPressOK
+            end,
+        },
+        -- Stub pasteboard + synthetic keystrokes. Never touches the real machine;
+        -- `env.actions` records the interleaving so tests can assert call ORDER.
+        clipboard = {
+            read = function() return env.clipboard end,
+            write = function(s)
+                env.clipboard = s or ""
+                env.actions[#env.actions + 1] = "clip.write"
+            end,
+        },
+        keys = {
+            stroke = function(spec)
+                env.strokes[#env.strokes + 1] = spec
+                env.actions[#env.actions + 1] = "keys.stroke:" .. tostring(spec)
+            end,
+        },
 
         -- Snippet store, backed by env tables so management verbs can be tested.
         snippets = {

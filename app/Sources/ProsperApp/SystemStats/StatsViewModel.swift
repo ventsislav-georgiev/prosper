@@ -64,6 +64,7 @@ extension StatsModule {
     var shortLabel: String {
         switch self {
         case .cpu: "CPU"; case .memory: "RAM"; case .network: "NET"
+        case .disk: "Disk"
         case .gpu: "GPU"; case .power: "Power"; case .sensors: "Sensor"; case .battery: "BAT"
         }
     }
@@ -71,6 +72,7 @@ extension StatsModule {
     var sfSymbol: String {
         switch self {
         case .cpu: "cpu"; case .memory: "memorychip"; case .network: "network"
+        case .disk: "internaldrive"
         case .gpu: "display"; case .power: "bolt.fill"; case .sensors: "thermometer.medium"; case .battery: "battery.100"
         }
     }
@@ -78,6 +80,7 @@ extension StatsModule {
     var historyKey: String? {
         switch self {
         case .cpu: "cpu"; case .memory: "memory"; case .gpu: "gpu"; case .power: "power"
+        case .disk: "disk.used"
         case .network, .sensors, .battery: nil
         }
     }
@@ -88,6 +91,7 @@ extension StatsModule {
         switch self {
         case .cpu: return s.cpu?.total
         case .memory: return s.memory?.usedFraction
+        case .disk: return s.disk?.usedFraction
         case .gpu: return s.gpu?.utilization
         // Normalize temp to 0…1 over a 30–100 °C comfort→hot band.
         case .sensors: return s.headlineTemperature(pinned: Preferences.sensorsHeadlineSensor).map { min(1, max(0, ($0 - 30) / 70)) }
@@ -103,7 +107,7 @@ extension StatsModule {
     /// so the worst case is just "max digits + unit".
     func primaryWidthSample() -> String {
         switch self {
-        case .cpu, .memory, .gpu, .battery: return "100%"
+        case .cpu, .memory, .disk, .gpu, .battery: return "100%"
         case .sensors: return "100°"
         case .power: return "99.9W"
         case .network: return ""
@@ -115,6 +119,7 @@ extension StatsModule {
         switch self {
         case .cpu: return s.cpu.map { StatsFormat.percent($0.total) } ?? "—"
         case .memory: return s.memory.map { StatsFormat.percent($0.usedFraction) } ?? "—"
+        case .disk: return s.disk.map { StatsFormat.percent($0.usedFraction) } ?? "—"
         case .gpu: return s.gpu.map { StatsFormat.percent($0.utilization) } ?? "—"
         case .sensors: return s.headlineTemperature(pinned: Preferences.sensorsHeadlineSensor).map { StatsFormat.temp($0) } ?? "—"
         case .battery: return s.battery.map { StatsFormat.percent($0.charge) } ?? "—"

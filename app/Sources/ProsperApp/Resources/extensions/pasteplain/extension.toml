@@ -1,0 +1,39 @@
+# Paste as Plain Text — re-write the pasteboard as a bare string, then synthesize
+# ⌘V so the plain version lands in whatever app the user is typing in.
+#
+# Known ceiling: the rich pasteboard content is REPLACED, not restored — there is no
+# host.clipboard.snapshot()/restore(), so the styled original is gone after a paste,
+# and clipboard history (when enabled) gains one extra plain entry.
+[extension]
+id          = "com.prosper.pasteplain"
+name        = "pasteplain"
+title       = "Paste as Plain Text"
+description = "Paste the clipboard with all formatting stripped. Note: the rich clipboard content is replaced, not restored, and clipboard history gains a plain-text entry."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "doc.on.clipboard"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[[contributes.commands]]
+id             = "pasteplain.paste"
+title          = "Paste as Plain Text"
+description    = "Strip formatting from the clipboard and paste it"
+mode           = "no-view"
+icon           = "doc.on.clipboard"
+keywords       = ["paste", "plain", "plain text", "unformatted", "strip formatting", "clipboard"]
+runs_on_select = true
+
+# Carbon global hotkey → invokeAsync(commandID:query:"") WITHOUT opening the runner
+# (AppDelegate.swift:798-816), so the frontmost app keeps focus and the synthesized
+# ⌘V lands in it. That is the whole trick — no Swift changes needed.
+[[contributes.keybindings]]
+command = "pasteplain.paste"
+key     = "cmd+alt+shift+v"

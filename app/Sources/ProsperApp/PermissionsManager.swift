@@ -56,6 +56,11 @@ enum PermissionsManager {
         case "lid-helper": return LidSleepHelper.permissionResolved
         case "calendar":
             return EKEventStore.authorizationStatus(for: .event) == .fullAccess
+        // Automation is per-target, and Finder is the only app Prosper scripts, so
+        // the Finder grant IS this permission. `askUser: false` matters: this is
+        // read while drawing a settings row, and a consent dialog raised by merely
+        // LOOKING at the row would be the app nagging.
+        case "automation": return Scripting.consentToAutomate(bundleID: "com.apple.finder", askUser: false)
         default: return false
         }
     }
@@ -91,6 +96,7 @@ enum PermissionsManager {
                 SMAppService.openSystemSettingsLoginItems()
             }
         case "calendar": openSettings("com.apple.preference.security?Privacy_Calendars")
+        case "automation": openAutomationSettings()
         default: break
         }
     }
@@ -103,6 +109,7 @@ enum PermissionsManager {
         case "screen-recording": return "Screen Recording"
         case "lid-helper": return "Background Helper"
         case "calendar": return "Calendars"
+        case "automation": return "Automation"
         default: return permission
         }
     }
@@ -117,6 +124,7 @@ enum PermissionsManager {
         case "screen-recording": return "Lets Prosper capture on-screen text for OCR-based features."
         case "lid-helper": return "A privileged login item applies the lid-closed sleep override (needs a one-time approval)."
         case "calendar": return "Lets Prosper read your calendars and events for the menu bar calendar."
+        case "automation": return "Lets Prosper ask Finder what is selected and move it — needed for \u{2318}X / \u{2318}V in Finder."
         default: return "Required for this extension to function."
         }
     }
@@ -168,6 +176,11 @@ enum PermissionsManager {
     /// Opens the Accessibility privacy pane in System Settings.
     static func openAccessibilitySettings() {
         openSettings("com.apple.preference.security?Privacy_Accessibility")
+    }
+
+    /// Opens the Automation privacy pane (Finder scripting for the Finder shortcuts).
+    static func openAutomationSettings() {
+        openSettings("com.apple.preference.security?Privacy_Automation")
     }
 
     /// Opens the Screen Recording privacy pane (needed for vision context).

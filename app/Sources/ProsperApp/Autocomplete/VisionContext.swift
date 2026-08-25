@@ -165,7 +165,11 @@ enum VisionContext {
     /// Recording permission is already granted. SCK uses the same permission but
     /// does not trip that periodic prompt. No audio is ever captured: this is a
     /// still-image API and Prosper opens no audio or video stream.
-    private static func capture(_ globalRect: CGRect) async -> CGImage? {
+    ///
+    /// `excludingOwnWindows` filters out every window belonging to this process,
+    /// so a region the user drew under Prosper's own overlay does not photograph
+    /// the overlay. Off by default: the caret-context callers capture other apps.
+    static func capture(_ globalRect: CGRect, excludingOwnWindows: Bool = false) async -> CGImage? {
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: false) else { return nil }
 
@@ -188,7 +192,10 @@ enum VisionContext {
         config.height = Int((clipped.height * scale).rounded())
         config.showsCursor = false
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let own = excludingOwnWindows
+            ? content.windows.filter { $0.owningApplication?.processID == getpid() }
+            : []
+        let filter = SCContentFilter(display: display, excludingWindows: own)
         return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 

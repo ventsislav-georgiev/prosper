@@ -256,6 +256,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.extensions.hasSubscribers(event) ?? false
         }
         systemEventWatchers.start()
+        // Same pair for `clipboard.changed`: the gate is checked before the payload
+        // (and its 8 KB text copy) is built, so a copy costs nothing when nothing
+        // subscribes. Whether the poll runs at all is `reconcileClipboardMonitor`.
+        ClipboardMonitor.shared.shouldEmitChange = { [weak self] in
+            self?.extensions.hasSubscribers("clipboard.changed") ?? false
+        }
+        ClipboardMonitor.shared.emitChange = { [weak self] payload in
+            self?.extensions.broadcastEvent("clipboard.changed", payloadJSON: payload)
+        }
         // A host-rendered menubar item's menu click re-invokes the extension's
         // named Lua handler on its serialized lane (stateless, like timers/events).
         ExtensionMenuBar.shared.invoke = { [weak self] extID, handler, payload in
@@ -334,6 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // tears everything down.
             CalendarBarController.shared.extLive = self.calendarExtLive
             CalendarBarController.shared.reload()
+            self.reconcileMouse()
         }
 
         // Reconcile quicklinks with their human-editable file
@@ -424,6 +434,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Side-effect hook: re-register hotkeys when the user rebinds them.
         SettingsHooks.shared.onShortcutsChanged = { [weak self] in self?.registerHotKeys() }
+        SettingsHooks.shared.onHyperKeyChanged = { [weak self] on in
+            // Prompt for Accessibility on enable: without the tap the hidutil remap
+            // is never installed (and would be a dead Caps Lock if it were).
+            if on { _ = PermissionsManager.ensureAccessibilityTrust(prompt: true) }
+            self?.reconcileKeyTap()
+        }
+        SettingsHooks.shared.onFinderCutPasteChanged = { [weak self] on in
+            // Same shape as the hyper key: the feature rides the shared tap, so
+            // turning it on with every other consumer off must bring the tap up —
+            // otherwise the preference reads ON and nothing happens. Turning it off
+            // lets the tap come back down if nothing else wants it.
+            if on { _ = PermissionsManager.ensureAccessibilityTrust(prompt: true) }
+            self?.reconcileKeyTap()
+            // Dropping the marks matters: they point at files the user may now move
+            // by hand, and a stale mark plus a matching pasteboard would move them
+            // again the next time the feature is switched on.
+            if !Preferences.finderCutPasteEnabled { FinderCutPaste.shared.cancelPendingCut() }
+        }
         SettingsHooks.shared.onCheckForUpdates = { AppUpdater.shared.checkForUpdates() }
         // Lets the runner open Settings (Actions menu / `:settings`) — the only
         // always-present surface, since ⌥\ is rebindable and the menu-bar icon
@@ -453,10 +481,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Start Sparkle (background update checks per Info.plist + preference).
         _ = AppUpdater.shared
 
-        // Start clipboard capture if enabled (off by default).
-        if Preferences.clipboardHistoryEnabled {
-            ClipboardMonitor.shared.start()
-        }
+        // Start clipboard capture if history is on (off by default) or an extension
+        // subscribes to `clipboard.changed`.
+        reconcileClipboardMonitor()
 
         // Only preload the language model when inline autocomplete is on —
         // that's the one path where a cold load on the first keystroke is
@@ -481,6 +508,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MenuBarManager.shared.reconcile()
 
         reconcileMenuBarOrdering()
+
+        reconcileMouse()
 
         // E2E handshake (gated by PROSPER_E2E=1): tell the launching test process
         // whether the keystroke tap is live so it can proceed — or skip with a
@@ -727,6 +756,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(.menuBarToggleHidden) { MenuBarManager.shared.toggleHidden() }
         add(.calendarTogglePopup) { CalendarBarController.shared.togglePopup() }
         add(.mixerCycleOutput) { AppVolumeMixer.shared.cycleSoundOutput() }
+        add(.copyScreenText) { ScreenTools.copyScreenText() }
+        add(.pickColor) { ScreenTools.pickColor() }
 
         // Built-in window management: snap the frontmost window to a screen edge,
         // maximize, or centre it. Applied via Accessibility to whatever app is
@@ -896,8 +927,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// dead" bug was a dropped term here (`eventTaps`), which silently kept the tap
     /// down for pure-eventtap configs; the `snippets` term has the same failure mode
     /// (snippets dead whenever inline autocomplete is off).
-    static func needKeyTap(autocomplete: Bool, extRules: Bool, eventTaps: Bool, snippets: Bool) -> Bool {
-        autocomplete || extRules || eventTaps || snippets
+    /// (`hyper` is the same shape: the Caps-Lock hyper key rides this tap for its
+    /// hold/tap edges, and its hidutil remap is only ever installed while the tap is
+    /// confirmed up — a remapped Caps Lock with no tap is a dead key.)
+    /// (`finderShortcuts` is the same shape again: Finder ⌘X/⌘V rides this tap, and
+    /// with the tap down the preference is on but the feature is silently dead —
+    /// which is exactly why turning it on has to call `reconcileKeyTap()`.)
+    static func needKeyTap(autocomplete: Bool, extRules: Bool, eventTaps: Bool, snippets: Bool,
+                           hyper: Bool, finderShortcuts: Bool) -> Bool {
+        autocomplete || extRules || eventTaps || snippets || hyper || finderShortcuts
     }
 
     func reconcileKeyTap() {
@@ -910,19 +948,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Snippet auto-expansion rides the same tap. Without this term the tap stays
         // down when autocomplete is off and snippets are the only consumer.
         let snippets = Preferences.snippetsEnabled && Preferences.snippetsAutoExpand
-        let needTap = Self.needKeyTap(autocomplete: acEnabled, extRules: extRules, eventTaps: eventTaps, snippets: snippets)
+        let hyper = Preferences.hyperKeyEnabled
+        // Finder ⌘X/⌘V and ⌘V-saves-image ride the same tap; either one wants it up.
+        let finderShortcuts = Preferences.finderCutPasteEnabled || Preferences.finderPasteImageEnabled
+        let needTap = Self.needKeyTap(autocomplete: acEnabled, extRules: extRules, eventTaps: eventTaps,
+                                      snippets: snippets, hyper: hyper, finderShortcuts: finderShortcuts)
         let trusted = PermissionsManager.isAccessibilityTrusted()
-        NSLog("prosper: reconcileKeyTap autocomplete=%d extRules=%d eventTaps=%d snippets=%d needTap=%d axTrusted=%d",
-              acEnabled, extRules, eventTaps, snippets, needTap, trusted)
+        NSLog("prosper: reconcileKeyTap autocomplete=%d extRules=%d eventTaps=%d snippets=%d finder=%d needTap=%d axTrusted=%d",
+              acEnabled, extRules, eventTaps, snippets, finderShortcuts, needTap, trusted)
         if needTap {
             if trusted { _ = autocomplete.start() }
             else { NSLog("prosper: key tap needed but Accessibility not trusted — tap not started") }
         } else {
             autocomplete.stop()
         }
+        // AFTER start/stop, and against the engine's REAL state: the hidutil remap
+        // goes in only once the tap that reads it is actually running, and comes out
+        // the moment it isn't. Also the crash-recovery path — a leftover ownership
+        // marker with the feature off clears the mapping at launch.
+        HyperKey.shared.reconcile(tapRunning: autocomplete.isRunning)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Before the atexit shortcut below — a hyper remap must never outlive the app.
+        HyperKey.shared.clearMapping()
         autocomplete.stop()
         hotKeys.forEach { $0.unregister() }
         BunHarness.shared.shutdown()
@@ -971,7 +1020,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setClipboardHistory(enabled: Bool) {
         Preferences.clipboardHistoryEnabled = enabled
-        if enabled {
+        reconcileClipboardMonitor()
+    }
+
+    /// The pasteboard poll has two customers: clipboard history, and the
+    /// `clipboard.changed` extension event. It runs while either wants it, and
+    /// `captureHistory` decides whether a captured clip is also persisted — event-only
+    /// mode makes zero `ClipboardStore` writes.
+    ///
+    /// ponytail: the subscriber set is read at launch and on the history toggle.
+    /// Enabling a `clipboard.changed` extension mid-session takes effect on the next
+    /// launch; wire a registry change hook here if that ever bites.
+    private func reconcileClipboardMonitor() {
+        let history = Preferences.clipboardHistoryEnabled
+        ClipboardMonitor.shared.captureHistory = history
+        if history || extensions.hasSubscribers("clipboard.changed") {
             ClipboardMonitor.shared.start()
         } else {
             ClipboardMonitor.shared.stop()
@@ -995,6 +1058,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         extensions.record(id: "com.prosper.calendar")?.isLive ?? false
     }
 
+    /// Whether the Mouse extension is enabled + trusted. Every mouse service (scroll
+    /// inversion, side-button navigation) creates its CGEvent tap lazily and only
+    /// while this is true; flipping it off tears the taps back down.
+    private var mouseExtLive: Bool {
+        extensions.record(id: "com.prosper.mouse")?.isLive ?? false
+    }
+
     /// Arm or disarm the menu-bar ordering enforcer to match current state. Called at
     /// launch AND whenever the menubar extension is toggled at runtime (now the primary
     /// path, since the extension ships opt-in/off). When live + opted-in on a supported
@@ -1014,6 +1084,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ok = (await MenuBarItemMover.selfProbe()) == .ok
             MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: ok)
         }
+    }
+
+    /// Every mouse service owns its own CGEvent tap, created only while the
+    /// `com.prosper.mouse` extension is live and that service is switched on.
+    /// One line per controller.
+    private func reconcileMouse() {
+        ScrollInvertController.shared.mouseExtLive = mouseExtLive
+        ScrollInvertController.shared.reconcile()
+        MouseNavigationController.shared.mouseExtLive = mouseExtLive
+        MouseNavigationController.shared.reconcile()
     }
 
     private func setDragSnap(enabled: Bool) {

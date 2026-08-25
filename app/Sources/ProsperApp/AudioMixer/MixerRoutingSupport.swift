@@ -180,6 +180,25 @@ enum MixerRoutingSupport {
         return isPlaying || !isUnity(volume) || selectedOutputDeviceUID != nil
     }
 
+    /// Whether a refresh that just started listening to process objects has to
+    /// read them again.
+    ///
+    /// A pass reads `IsRunningOutput` off the HAL queue and only then, back on
+    /// the main thread, subscribes to the objects it had not seen before. An
+    /// app creates its audio process object and starts rendering milliseconds
+    /// apart, so a flip landing in that window fires before the listener
+    /// exists and is lost — with no timer anywhere, the row then stays wrong
+    /// until some unrelated audio event happens. Re-reading once the
+    /// subscription is live closes the window.
+    ///
+    /// Only objects actually subscribed count: a registration the HAL refuses
+    /// leaves the set unchanged, so a failing object can never arm an endless
+    /// chain of re-reads.
+    static func needsRunningRecheck(previouslyWatched: Set<AudioObjectID>,
+                                    nowWatched: Set<AudioObjectID>) -> Bool {
+        !nowWatched.isSubset(of: previouslyWatched)
+    }
+
     /// Turns the text entered beside a mixer slider into its gain. The field
     /// accepts the same optional percent sign it displays, while the caller
     /// supplies the limit (100 for the system output, 200 for an app row).

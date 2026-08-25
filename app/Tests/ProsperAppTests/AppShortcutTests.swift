@@ -87,7 +87,7 @@ final class AppShortcutTests: XCTestCase {
         }
     }
 
-    /// The base must also stay clear of the fixed (1-16) and custom (100+) ranges.
+    /// The base must also stay clear of the fixed (1-19) and custom (100+) ranges.
     func testBaseIsClearOfLowerRanges() {
         XCTAssertGreaterThanOrEqual(AppShortcut.hotKeyIdBase,
                                     GlobalHotKey.customIdBase + UInt32(GlobalHotKey.customMaxRegistered))

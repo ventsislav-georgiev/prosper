@@ -1,0 +1,79 @@
+# App Updates — one place to see everything that wants upgrading: Homebrew
+# formulae/casks (`brew outdated --json=v2`) and macOS system updates
+# (`softwareupdate -l`).
+#
+# Cost split, and the reason this extension has a cache at all:
+#   brew outdated        — sub-second, safe to run when the command is selected.
+#   softwareupdate -l    — 10–60 s (it talks to Apple's update servers). NEVER on
+#                          the palette path; only the 6-hourly timer and the
+#                          explicit "Check now" row run it. The palette shows the
+#                          last cached macOS result.
+[extension]
+id          = "com.prosper.appupdates"
+name        = "appupdates"
+title       = "App Updates"
+description = "Pending Homebrew and macOS updates in one list. Checks in the background every few hours and notifies when new updates appear."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "arrow.down.circle"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# system.launch arms the durable poll timer (host.timer.schedule persists across
+# restarts, so re-arming is idempotent). Nothing resident.
+[extension.activation]
+on_event = ["system.launch"]
+eager    = true
+
+# No `prefix` on purpose: a prefix would lock the runner into this command and
+# re-invoke the handler on every keystroke (RunnerPanel.swift:741-765). This one
+# only reads the cache so that would be survivable, but the two commands below
+# shell out — keeping all three as plain discovery-list entries means each runs
+# exactly once, on Enter.
+[[contributes.commands]]
+id          = "appupdates.check"
+title       = "App Updates"
+description = "Show pending Homebrew and macOS updates (last cached result — instant)"
+mode        = "no-view"
+icon        = "arrow.down.circle"
+keywords    = ["updates", "update", "upgrade", "brew", "homebrew", "outdated", "software update", "macos"]
+runs_on_select = true
+
+[[contributes.commands]]
+id          = "appupdates.refresh"
+title       = "Check for Updates Now"
+description = "Re-check Homebrew and macOS for updates. The macOS check can take up to a minute."
+mode        = "no-view"
+icon        = "arrow.clockwise"
+keywords    = ["updates", "check", "refresh", "brew", "homebrew", "software update", "macos"]
+runs_on_select = true
+
+[[contributes.commands]]
+id          = "appupdates.upgrade"
+title       = "Upgrade Homebrew Packages"
+description = "Run `brew upgrade` for every outdated formula and cask. Runs to completion — no streaming output."
+mode        = "no-view"
+icon        = "arrow.up.circle"
+keywords    = ["upgrade", "brew", "homebrew", "updates", "outdated"]
+runs_on_select = true
+
+[[contributes.events]]
+event   = "system.launch"
+handler = "on_launch"
+
+# Dynamic (Tier-B) settings: poll interval + notification toggle + a manual
+# "Check now" button that runs the slow path off the palette.
+[[contributes.settings_sections]]
+id       = "appupdates"
+title    = "App Updates"
+icon     = "arrow.down.circle"
+accent   = "appupdates"
+subtitle = "Homebrew and macOS update checks"
+dynamic  = true

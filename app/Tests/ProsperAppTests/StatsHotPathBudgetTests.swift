@@ -83,6 +83,34 @@ final class StatsHotPathBudgetTests: XCTestCase {
         XCTAssertEqual(rows[0].pid, 512)
     }
 
+    // MARK: - DiskReader (one read per tick; re-enumerates only every 10th)
+
+    /// REQUIREMENT: the per-tick disk read is counter arithmetic, NOT a registry
+    /// walk — volume enumeration and driver resolution are gated to every 10th
+    /// read. 1 000 reads ≈ 17 min of ticks and must cost ~nothing.
+    func testDiskReaderReadBudget() throws {
+        final class StubSource: DiskSource {
+            let volumes = [DiskVolume(name: "T", mountPath: "/", bsdName: "disk0s1",
+                                      fileSystem: "apfs", total: 1_000_000, free: 400_000,
+                                      isInternal: true, isRemovable: false)]
+            var read: UInt64 = 0
+            var refreshes = 0
+            func refresh() { refreshes += 1 }
+            func counters() -> (read: UInt64, write: UInt64) { read += 1_000; return (read, read) }
+        }
+        let src = StubSource()
+        var t = 0.0
+        var reader = DiskReader(now: { t }, source: src)
+        let clock = ContinuousClock()
+        var sink = 0.0
+        let elapsed = try clock.measure {
+            for _ in 0..<1_000 { t += 1; sink += try reader.read().readBytesPerSec }
+        }
+        XCTAssertGreaterThan(sink, 0)
+        XCTAssertEqual(src.refreshes, 100, "enumeration stays on the 10-tick tier")
+        XCTAssertLessThan(elapsed, .milliseconds(500), "DiskReader hot path regressed: \(elapsed)")
+    }
+
     // MARK: - SMC decode/encode (fan reads each poll; writes on slider commit)
 
     /// REQUIREMENT: scalar decode is a branch + a load — the sensors tick decodes

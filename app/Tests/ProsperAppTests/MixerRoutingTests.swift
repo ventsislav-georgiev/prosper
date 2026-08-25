@@ -1,3 +1,4 @@
+import CoreAudio
 import XCTest
 @testable import ProsperApp
 
@@ -275,6 +276,25 @@ final class MixerRoutingTests: XCTestCase {
         XCTAssertTrue(shown(playing: false, volume: 1, route: "speakers", hide: true))
     }
 
+    // MARK: - Play-state subscription
+
+    func testRecheckIsArmedOnlyByNewlyWatchedProcessObjects() {
+        func recheck(_ before: Set<AudioObjectID>, _ after: Set<AudioObjectID>) -> Bool {
+            MixerRoutingSupport.needsRunningRecheck(previouslyWatched: before, nowWatched: after)
+        }
+        // A first look at an object: its IsRunningOutput was read before the
+        // listener existed, so the snapshot has to be read again.
+        XCTAssertTrue(recheck([], [7]))
+        XCTAssertTrue(recheck([7], [7, 9]))
+        // Nothing new to hear about: the chain stops instead of looping.
+        XCTAssertFalse(recheck([7, 9], [7, 9]))
+        XCTAssertFalse(recheck([7, 9], [9]))
+        XCTAssertFalse(recheck([], []))
+        // A registration the HAL refused leaves the object unwatched, which
+        // must not re-arm the recheck forever.
+        XCTAssertFalse(recheck([7], [7]))
+    }
+
     // MARK: - Helper-to-app attribution
 
     func testOwningRegularAppWalksTheParentChain() {
@@ -328,5 +348,50 @@ final class MixerRoutingTests: XCTestCase {
     func testCycleStartsAtTheFirstSelectionWhenTheCurrentOutputIsOutsideIt() {
         XCTAssertEqual(next(nil, ["a", "b"], ["a", "b"]), "a")
         XCTAssertEqual(next("z", ["a", "b"], ["a", "b"]), "a")
+    }
+
+    // MARK: - Menu-bar glyph
+
+    func testGlyphUsesVariableValueAndSlashesOnMute() {
+        XCTAssertEqual(MixerPanelController.glyph(volume: 0.25, muted: false).name, "speaker.wave.3.fill")
+        XCTAssertEqual(MixerPanelController.glyph(volume: 0.25, muted: false).value, 0.25)
+        XCTAssertEqual(MixerPanelController.glyph(volume: 1, muted: false).value, 1)
+        XCTAssertEqual(MixerPanelController.glyph(volume: 0.5, muted: true).name, "speaker.slash.fill")
+        XCTAssertEqual(MixerPanelController.glyph(volume: 0, muted: false).name, "speaker.slash.fill")
+        // No readable volume: neutral mid level, never the mute glyph.
+        XCTAssertEqual(MixerPanelController.glyph(volume: nil, muted: false).name, "speaker.wave.3.fill")
+        XCTAssertEqual(MixerPanelController.glyph(volume: nil, muted: false).value, 0.66)
+    }
+
+    // MARK: - AirPods glyph mapping
+
+    func testAirPodsNameMapsToItsSymbol() {
+        let symbol = { MixerPanelController.airPodsSymbol(outputDeviceName: $0) }
+        XCTAssertEqual(symbol("AirPods Pro"), "airpodspro")
+        XCTAssertEqual(symbol("Ventsi's AirPods Pro (2nd generation)"), "airpodspro")
+        XCTAssertEqual(symbol("AirPods Max"), "airpodsmax")
+        XCTAssertEqual(symbol("AirPods (3rd generation)"), "airpods.gen3")
+        XCTAssertEqual(symbol("AirPods 4"), "airpods.gen4")
+        XCTAssertEqual(symbol("AirPods"), "airpods")
+        XCTAssertEqual(symbol("airpods"), "airpods")
+        // Anything else keeps the speaker: no guessing from a renamed pair.
+        XCTAssertNil(symbol("MacBook Pro Speakers"))
+        XCTAssertNil(symbol("Sony WH-1000XM4"))
+        XCTAssertNil(symbol(nil))
+    }
+
+    func testAirPodsReplaceTheSpeakerGlyphButNeverTheMuteGlyph() {
+        XCTAssertEqual(MixerPanelController.glyph(volume: 0.25, muted: false,
+                                                  outputDeviceName: "AirPods Pro").name, "airpodspro")
+        // No variable rendering on the AirPods symbols: level lives in the slider.
+        XCTAssertEqual(MixerPanelController.glyph(volume: 0.25, muted: false,
+                                                  outputDeviceName: "AirPods Pro").value, 1)
+        XCTAssertEqual(MixerPanelController.glyph(volume: 0.25, muted: true,
+                                                  outputDeviceName: "AirPods Pro").name, "speaker.slash.fill")
+        XCTAssertEqual(MixerPanelController.glyph(volume: 0, muted: false,
+                                                  outputDeviceName: "AirPods Max").name, "speaker.slash.fill")
+        XCTAssertEqual(MixerPanelController.glyph(volume: 0.4, muted: false,
+                                                  outputDeviceName: "Studio Display Speakers").name,
+                       "speaker.wave.3.fill")
     }
 }

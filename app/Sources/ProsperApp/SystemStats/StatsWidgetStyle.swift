@@ -77,7 +77,8 @@ struct StatsWidgetStyle: Codable, Equatable, Sendable {
         modules: Dictionary(uniqueKeysWithValues: StatsModule.allCases.map { ($0.rawValue, ModuleWidgetConfig.defaultFor($0)) }),
         // CPU + RAM on by default — the two everyone wants; the rest opt-in to
         // keep a fresh enable from flooding the menu bar.
-        order: [StatsModule.cpu.rawValue, StatsModule.memory.rawValue, StatsModule.gpu.rawValue,
+        order: [StatsModule.cpu.rawValue, StatsModule.memory.rawValue,
+                StatsModule.disk.rawValue, StatsModule.gpu.rawValue,
                 StatsModule.network.rawValue, StatsModule.sensors.rawValue, StatsModule.power.rawValue,
                 StatsModule.battery.rawValue])
 }

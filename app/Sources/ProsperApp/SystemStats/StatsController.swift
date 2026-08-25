@@ -120,7 +120,8 @@ final class StatsController {
     /// Human label for the menu-bar manager's order/preview lists.
     private static func moduleName(_ m: StatsModule) -> String {
         switch m {
-        case .cpu: "CPU"; case .memory: "RAM"; case .network: "Network"; case .gpu: "GPU"
+        case .cpu: "CPU"; case .memory: "RAM"; case .disk: "Disk"
+        case .network: "Network"; case .gpu: "GPU"
         case .power: "Power"; case .sensors: "Sensors"; case .battery: "Battery"
         }
     }

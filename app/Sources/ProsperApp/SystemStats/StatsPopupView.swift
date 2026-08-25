@@ -88,6 +88,7 @@ struct StatsPopupView: View {
             detail
             if module == .cpu || module == .memory || module == .battery { topProcesses }
             if module == .network { networkProcesses }
+            if module == .disk { diskProcesses }
         }
         .padding(sz(16))
         .frame(width: sz(320))
@@ -134,7 +135,8 @@ struct StatsPopupView: View {
 
     private var title: String {
         switch module {
-        case .cpu: "CPU"; case .memory: "Memory"; case .network: "Network"
+        case .cpu: "CPU"; case .memory: "Memory"; case .disk: "Disk"
+        case .network: "Network"
         case .gpu: "GPU"; case .power: "Power"
         case .sensors: "Sensors"; case .battery: "Battery"
         }
@@ -147,6 +149,7 @@ struct StatsPopupView: View {
         switch module {
         case .cpu: cpuGauges
         case .memory: memoryGauges
+        case .disk: diskGauges
         case .gpu: gpuGauges
         case .battery: batteryPrimary
         case .network: networkPrimary
@@ -282,6 +285,21 @@ struct StatsPopupView: View {
         }
     }
 
+    /// Disk: boot-volume capacity donut on the left, live Read/Write rates right —
+    /// the same `channelBig` readouts the network popup uses.
+    private var diskGauges: some View {
+        let d = store.snapshot.disk
+        let cfg = store.style.config(.disk)
+        return HStack(spacing: sz(24)) {
+            StatsRing(value: d?.usedFraction ?? 0, color: ringColor, lineWidth: sz(8),
+                      label: d.map { StatsFormat.percent($0.usedFraction) } ?? "—")
+                .frame(width: sz(74), height: sz(74))
+            channelBig(d?.readBytesPerSec ?? 0, "Read", cfg.down.color)
+            channelBig(d?.writeBytesPerSec ?? 0, "Write", cfg.up.color)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var bigReadout: some View {
         Text(module.primaryText(store.snapshot, showUnit: true))
             .font(Neon.font(28, weight: .bold, design: .rounded).monospacedDigit())
@@ -297,6 +315,9 @@ struct StatsPopupView: View {
         case .network:
             section("Usage history")
             networkChart
+        case .disk:
+            section("Activity history")
+            diskChart
         case .cpu:
             if let key = module.historyKey {
                 section("Usage history")
@@ -367,6 +388,27 @@ struct StatsPopupView: View {
         .frame(height: sz(90))
     }
 
+    /// Same mirrored renderer as the network chart: writes fill upward, reads
+    /// downward, both against one shared peak.
+    private var diskChart: some View {
+        let write = store.history("disk.write"), read = store.history("disk.read")
+        let cfg = store.style.config(.disk)
+        let writePeak = write.max() ?? 0, readPeak = read.max() ?? 0
+        return ZStack(alignment: .leading) {
+            MirrorNetChart(up: write, upColor: cfg.up.color,
+                           down: read, downColor: cfg.down.color,
+                           peak: max(writePeak, readPeak))
+                .frame(height: sz(90))
+            VStack(alignment: .leading) {
+                chartPeakLabel("W " + StatsFormat.rateMenu(writePeak))
+                Spacer()
+                chartPeakLabel("R " + StatsFormat.rateMenu(readPeak))
+            }
+            .padding(sz(4))
+        }
+        .frame(height: sz(90))
+    }
+
     // Peak-rate chip readable over the chart fill.
     private func chartPeakLabel(_ s: String) -> some View {
         Text(s)
@@ -383,6 +425,7 @@ struct StatsPopupView: View {
         switch module {
         case .cpu:    if let c = store.snapshot.cpu { cpuDetail(c) }
         case .memory: if let m = store.snapshot.memory { memDetail(m) }
+        case .disk:   if let d = store.snapshot.disk { diskDetail(d) }
         case .network: if let n = store.snapshot.network { netDetail(n) }
         case .gpu:    if let g = store.snapshot.gpu { gpuDetail(g) }
         case .power:  if let p = store.snapshot.power { powerDetail(p) }
@@ -495,6 +538,53 @@ struct StatsPopupView: View {
                 if let pub = link?.publicIP {
                     kv("Public IP", flag(link?.countryCode).map { "\($0) \(pub)" } ?? pub)
                 }
+            }
+        }
+    }
+
+    private func diskDetail(_ d: DiskSample) -> some View {
+        let cfg = store.style.config(.disk)
+        return VStack(alignment: .leading, spacing: sz(6)) {
+            section("Details")
+            legend(cfg.down.color, "Read this session", StatsFormat.bytes(Double(d.totalRead)))
+            legend(cfg.up.color, "Written this session", StatsFormat.bytes(Double(d.totalWritten)))
+
+            // NVMe SMART — boot disk only, absent on non-NVMe machines.
+            if let s = d.smart {
+                section("Health")
+                StackedBar(segments: [(Double(s.healthPercent),
+                                       cfg.rampColor(1 - Double(s.healthPercent) / 100))],
+                           total: 100)
+                kv("Drive health", "\(s.healthPercent)%")
+                if let c = s.celsius { kv("Temperature", StatsFormat.tempDetail(c)) }
+                kv("Lifetime read", StatsFormat.bytes(Double(s.totalRead)))
+                kv("Lifetime written", StatsFormat.bytes(Double(s.totalWritten)))
+                kv("Power on", "\(s.powerOnHours) h")
+                kv("Power cycles", "\(s.powerCycles)")
+                kv("Unsafe shutdowns", "\(s.unsafeShutdowns)")
+                kv("Media errors", "\(s.mediaErrors)")
+            }
+
+            section("Volumes")
+            ForEach(d.volumes, id: \.mountPath) { v in
+                VStack(alignment: .leading, spacing: sz(4)) {
+                    HStack {
+                        Text(v.name).font(Neon.font(.caption, weight: .semibold)).lineLimit(1)
+                        Spacer(minLength: sz(8))
+                        if v.isRemovable {
+                            StatusBadge(text: "Removable", color: Neon.blue, symbol: "eject.fill")
+                        } else if !v.isInternal {
+                            StatusBadge(text: "External", color: Neon.blue, symbol: "externaldrive.fill")
+                        }
+                    }
+                    StackedBar(segments: [(Double(v.used), cfg.rampColor(v.usedFraction))],
+                               total: Double(v.total))
+                    kv("\(StatsFormat.bytes(Double(v.used))) of \(StatsFormat.bytes(Double(v.total)))",
+                       "\(StatsFormat.bytes(Double(v.free))) free")
+                    kv("Format", v.fileSystem)
+                    kv("Device", v.bsdName)
+                }
+                .padding(.bottom, sz(2))
             }
         }
     }
@@ -934,16 +1024,50 @@ struct StatsPopupView: View {
     }
 
     private func netProcRow(_ p: NetProcInfo) -> some View {
+        ioProcRow(pid: p.pid, name: p.name, in: p.downBytesPerSec, out: p.upBytesPerSec)
+    }
+
+    /// Two-rate process row (in/out columns) shared by the network and disk tables.
+    private func ioProcRow(pid: Int32, name: String, in inRate: Double, out outRate: Double) -> some View {
         HStack(spacing: sz(7)) {
-            ProcessIcon(pid: p.pid)
-            Text(p.name).font(Neon.font(.caption)).foregroundStyle(Neon.textPrimary).lineLimit(1)
+            ProcessIcon(pid: pid)
+            Text(name).font(Neon.font(.caption)).foregroundStyle(Neon.textPrimary).lineLimit(1)
             Spacer(minLength: sz(8))
-            Text(StatsFormat.rateMenu(p.downBytesPerSec))
+            Text(StatsFormat.rateMenu(inRate))
                 .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
                 .frame(width: sz(71), alignment: .trailing)
-            Text(StatsFormat.rateMenu(p.upBytesPerSec))
+            Text(StatsFormat.rateMenu(outRate))
                 .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
                 .frame(width: sz(71), alignment: .trailing)
+        }
+    }
+
+    /// Per-process disk I/O (libproc `ri_diskio_*`): name + read/write rate columns.
+    /// Unprivileged libproc can't read root-owned daemons, so this table is the user's
+    /// own processes — the ones a "why is my disk thrashing" question is usually about.
+    private var diskProcesses: some View {
+        let procs = store.snapshot.topByDisk
+        let cfg = store.style.config(.disk)
+        return VStack(alignment: .leading, spacing: sz(5)) {
+            section("Top processes")
+            HStack(spacing: sz(8)) {
+                Text("Process").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                Spacer(minLength: sz(8))
+                Circle().fill(cfg.down.color).frame(width: sz(7), height: sz(7))
+                Text("Read").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                    .frame(width: sz(64), alignment: .trailing)
+                Circle().fill(cfg.up.color).frame(width: sz(7), height: sz(7))
+                Text("Write").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                    .frame(width: sz(64), alignment: .trailing)
+            }
+            if let procs, !procs.isEmpty {
+                ForEach(procs, id: \.pid) { ioProcRow(pid: $0.pid, name: $0.name,
+                                                      in: $0.diskRead, out: $0.diskWrite) }
+            } else {
+                // nil = the first sample hasn't landed; empty = sampled, disk is idle.
+                Text(procs == nil ? "Sampling…" : "No disk activity")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            }
         }
     }
 

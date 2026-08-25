@@ -202,6 +202,10 @@ struct NeonSection<Content: View>: View {
     let collapsed: Binding<Bool>?
     @ViewBuilder var content: () -> Content
 
+    @Environment(\.settingsPaneID) private var paneID
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var focus = SettingsFocusRouter.shared
+
     init(_ title: String? = nil, accent: String? = nil, footer: String? = nil,
          collapsed: Binding<Bool>? = nil,
          @ViewBuilder content: @escaping () -> Content) {
@@ -215,7 +219,36 @@ struct NeonSection<Content: View>: View {
     private var collapsible: Bool { collapsed != nil }
     private var isCollapsed: Bool { collapsed?.wrappedValue ?? false }
 
+    /// Scroll target for "jump to this section". Titleless sections and anything
+    /// rendered outside the Settings window get none — and no `.id`, since a shared
+    /// explicit identity across siblings is worse than no identity at all.
+    private var anchor: SettingsAnchor? {
+        guard let title, !paneID.isEmpty else { return nil }
+        return SettingsAnchor(pane: paneID, section: title)
+    }
+
     var body: some View {
+        if let anchor {
+            card.id(anchor).overlay(focusGlow(anchor))
+        } else {
+            card
+        }
+    }
+
+    /// Fades in while this section is the focused one, then out again. Reduce
+    /// Motion drops the fade; the highlight itself still shows (it is what tells
+    /// the user where they landed).
+    private func focusGlow(_ anchor: SettingsAnchor) -> some View {
+        RoundedRectangle(cornerRadius: sz(14), style: .continuous)
+            .strokeBorder(Neon.blueBright, lineWidth: sz(1.5))
+            .background(RoundedRectangle(cornerRadius: sz(14), style: .continuous)
+                .fill(Neon.blue.opacity(0.10)))
+            .opacity(focus.focused == anchor ? 1 : 0)
+            .allowsHitTesting(false)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: focus.focused)
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: sz(8)) {
             if let title {
                 titleRow(title)
@@ -273,20 +306,49 @@ struct NeonSection<Content: View>: View {
 /// the consistent column width so panes only declare their sections.
 struct NeonScroll<Content: View>: View {
     @ViewBuilder var content: () -> Content
+
+    @Environment(\.settingsPaneID) private var paneID
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var focus = SettingsFocusRouter.shared
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: sz(22)) {
-                content()
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: sz(22)) {
+                    content()
+                }
+                .padding(.horizontal, sz(26))
+                .padding(.vertical, sz(24))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, sz(26))
-            .padding(.vertical, sz(24))
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Two consumption points, both needed. `.onChange` covers a request
+            // made while this pane is already on screen; `.onAppear` covers the
+            // request that arrives BEFORE the pane exists — every first request
+            // after the window opens does, and the pending slot holds it until
+            // the matching pane mounts. Without the appear path the first click
+            // silently does nothing.
+            .onAppear { consume(proxy) }
+            .onChange(of: focus.pending) { _, _ in consume(proxy) }
         }
         // The backdrop is painted once by `content` in SettingsRootView (behind the
         // whole pane). Painting it here too double-rendered the gradient + two radial
         // glows on every pane switch — drop it; the ScrollView is transparent over it.
         .tint(Neon.blue)
         .foregroundStyle(Neon.textPrimary)
+    }
+
+    private func consume(_ proxy: ScrollViewProxy) {
+        guard let anchor = focus.take(pane: paneID) else { return }
+        // One hop: on the first appear the sections have not been laid out yet and
+        // scrollTo to an id SwiftUI has not seen is a no-op.
+        DispatchQueue.main.async {
+            if reduceMotion {
+                proxy.scrollTo(anchor, anchor: .top)
+            } else {
+                withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(anchor, anchor: .top) }
+            }
+            focus.highlight(anchor)
+        }
     }
 }
 
@@ -460,22 +522,38 @@ struct SettingsTab: Identifiable, Hashable {
 struct SettingsSidebar: View {
     let groups: [(String, [SettingsTab])]
     @Binding var selection: String
+    /// Live search text. Non-empty swaps the grouped rail for `results`.
+    @Binding var query: String
+    /// Rows matching `query`, already filtered by the owner (`SettingsRootView`).
+    let results: [SettingsIndexEntry]
+    /// Select the pane, scroll it to the section, clear the query.
+    let onPick: (SettingsIndexEntry) -> Void
     // Re-render the sidebar backdrop on opacity/frost without a teardown (see SettingsBackground).
     @ObservedObject private var theme = ThemeStore.shared
+    @FocusState private var searchFocused: Bool
+
+    private var searching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: sz(18)) {
                 header
-                ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
-                    VStack(alignment: .leading, spacing: sz(4)) {
-                        Text(group.0)
-                            .font(Neon.font(10, weight: .bold))
-                            .textCase(.uppercase).tracking(sz(1.4))
-                            .foregroundStyle(Neon.textSecondary.opacity(0.7))
-                            .padding(.leading, sz(12)).padding(.bottom, sz(2))
-                        ForEach(group.1) { tab in
-                            row(tab)
+                searchField
+                if searching {
+                    resultList
+                } else {
+                    ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                        VStack(alignment: .leading, spacing: sz(4)) {
+                            Text(group.0)
+                                .font(Neon.font(10, weight: .bold))
+                                .textCase(.uppercase).tracking(sz(1.4))
+                                .foregroundStyle(Neon.textSecondary.opacity(0.7))
+                                .padding(.leading, sz(12)).padding(.bottom, sz(2))
+                            ForEach(group.1) { tab in
+                                row(tab)
+                            }
                         }
                     }
                 }
@@ -518,6 +596,83 @@ struct SettingsSidebar: View {
         }
         .padding(.leading, sz(10))
         .padding(.bottom, sz(4))
+    }
+
+    private var searchField: some View {
+        HStack(spacing: sz(7)) {
+            Image(systemName: "magnifyingglass")
+                .font(Neon.font(11)).foregroundStyle(Neon.blue)
+            TextField("Search\u{2026}", text: $query)
+                .textFieldStyle(.plain)
+                .font(Neon.font(13))
+                .foregroundStyle(Neon.textPrimary)
+                .focused($searchFocused)
+                // Return takes the top match — same "no mouse needed" contract as
+                // the app-filter popover.
+                .onSubmit { if let first = results.first { onPick(first) } }
+            if searching {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
+        .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Neon.card)
+            .overlay(RoundedRectangle(cornerRadius: sz(9), style: .continuous)
+                .strokeBorder(Neon.blue.opacity(searchFocused ? 0.55 : 0.2), lineWidth: 1)))
+        // Esc clears first, and only gives up focus once the field is already empty
+        // — so one Esc never loses both the query and the caret.
+        .onExitCommand { if searching { query = "" } else { searchFocused = false } }
+        // ⌘F focuses the field. A zero-size button is the only way to hang a
+        // keyboardShortcut off a non-Button; `.hidden()` would make it unreachable.
+        .background(
+            Button("") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true))
+        .padding(.horizontal, sz(2))
+    }
+
+    /// Flat result rail: section title over its pane title. These rows are actions,
+    /// not selection, so there is no selected-state styling.
+    @ViewBuilder
+    private var resultList: some View {
+        if results.isEmpty {
+            Text("No matches")
+                .font(Neon.font(.caption))
+                .foregroundStyle(Neon.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, sz(12))
+        } else {
+            VStack(alignment: .leading, spacing: sz(2)) {
+                ForEach(results, id: \.self) { entry in
+                    resultRow(entry)
+                }
+            }
+        }
+    }
+
+    private func resultRow(_ entry: SettingsIndexEntry) -> some View {
+        Button { onPick(entry) } label: {
+            VStack(alignment: .leading, spacing: sz(1)) {
+                Text(entry.section.isEmpty ? entry.paneTitle : entry.section)
+                    .font(Neon.font(13))
+                    .foregroundStyle(Neon.textPrimary)
+                    .lineLimit(1)
+                if !entry.section.isEmpty {
+                    Text(entry.paneTitle)
+                        .font(Neon.font(10))
+                        .foregroundStyle(Neon.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, sz(6))
+            .padding(.horizontal, sz(10))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func row(_ tab: SettingsTab) -> some View {

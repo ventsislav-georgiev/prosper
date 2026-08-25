@@ -56,6 +56,15 @@ final class SystemCommandsTests: XCTestCase {
         XCTAssertNil(MetaCommand.parse("preferences"))
     }
 
+    func testMetaScreenTools() {
+        for alias in [":ocr", ":text", ":scan"] {
+            XCTAssertEqual(MetaCommand.parse(alias), .copyScreenText, alias)
+        }
+        for alias in [":color", ":pick"] {
+            XCTAssertEqual(MetaCommand.parse(alias), .pickColor, alias)
+        }
+    }
+
     func testMetaUnknownReturnsNil() {
         XCTAssertNil(MetaCommand.parse(":x"))
         XCTAssertNil(MetaCommand.parse("hello"))

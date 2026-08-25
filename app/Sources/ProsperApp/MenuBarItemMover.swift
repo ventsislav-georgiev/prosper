@@ -40,124 +40,9 @@ private enum MoveCursor {
     }
 }
 
-// MARK: - Minimal event tap (port of Ice's EventTap essentials)
-
-/// A listen-or-default CGEvent tap with enable/disable + timeout. Used only by the
-/// scromble handshake; lifetime is one move. Self-owns its mach port + runloop
-/// source and tears them down on `deinit`.
-@MainActor
-final class MenuBarEventTap {
-    enum Location {
-        case session, annotatedSession, hid, pid(pid_t)
-    }
-
-    // CF handles: accessed from the (nonisolated) deinit for teardown, so marked
-    // unsafe. Only ever touched on the main thread in practice.
-    private nonisolated(unsafe) let runLoop = CFRunLoopGetCurrent()
-    private let mode: CFRunLoopMode = .commonModes
-    private let callback: @MainActor (_ proxy: Proxy, _ type: CGEventType, _ event: CGEvent) -> CGEvent?
-    private nonisolated(unsafe) var machPort: CFMachPort?
-    private nonisolated(unsafe) var source: CFRunLoopSource?
-    private var isAdded = false   // guards against double CFRunLoopAddSource
-    let label: String
-
-    var isEnabled: Bool {
-        guard let machPort else { return false }
-        return CGEvent.tapIsEnabled(tap: machPort)
-    }
-
-    @MainActor
-    struct Proxy {
-        fileprivate let tap: MenuBarEventTap
-        var isEnabled: Bool { tap.isEnabled }
-        func enable() { tap.enable() }
-        func disable() { tap.disable() }
-    }
-
-    init(label: String,
-         options: CGEventTapOptions,
-         location: Location,
-         types: [CGEventType],
-         callback: @MainActor @escaping (_ proxy: Proxy, _ type: CGEventType, _ event: CGEvent) -> CGEvent?) {
-        self.label = label
-        self.callback = callback
-        let mask = types.reduce(into: CGEventMask(0)) { $0 |= 1 << $1.rawValue }
-        guard let machPort = Self.createMachPort(location: location, options: options,
-                                                 mask: mask,
-                                                 userInfo: Unmanaged.passUnretained(self).toOpaque()),
-              let source = CFMachPortCreateRunLoopSource(nil, machPort, 0) else {
-            NSLog("prosper: menu-bar move — failed to create event tap \(label)")
-            return
-        }
-        self.machPort = machPort
-        self.source = source
-    }
-
-    deinit {
-        guard let machPort else { return }
-        CFRunLoopRemoveSource(runLoop, source, mode)
-        CGEvent.tapEnable(tap: machPort, enable: false)
-        CFMachPortInvalidate(machPort)
-    }
-
-    private static func createMachPort(location: Location, options: CGEventTapOptions,
-                                       mask: CGEventMask, userInfo: UnsafeMutableRawPointer?) -> CFMachPort? {
-        if case .pid(let pid) = location {
-            return CGEvent.tapCreateForPid(pid: pid, place: .tailAppendEventTap, options: options,
-                                           eventsOfInterest: mask, callback: menuBarTapHandler, userInfo: userInfo)
-        }
-        let tap: CGEventTapLocation = switch location {
-            case .hid: .cghidEventTap
-            case .annotatedSession: .cgAnnotatedSessionEventTap
-            default: .cgSessionEventTap
-        }
-        return CGEvent.tapCreate(tap: tap, place: .tailAppendEventTap, options: options,
-                                 eventsOfInterest: mask, callback: menuBarTapHandler, userInfo: userInfo)
-    }
-
-    /// Called from the C tap handler. The tap is installed on the main run loop, so
-    /// the handler fires on the main thread — assume the isolation rather than hop
-    /// (a hop would break the synchronous return the C API requires).
-    nonisolated static func dispatch(_ tap: MenuBarEventTap, _ type: CGEventType,
-                                     _ event: CGEvent) -> Unmanaged<CGEvent>? {
-        // CGEvent isn't Sendable, but the C handler fires synchronously on the main
-        // run loop where the tap was installed — the hand-off is real-thread-safe.
-        nonisolated(unsafe) let event = event
-        MainActor.assumeIsolated {
-            // Our callbacks observe/disable and post manually; none re-inject via the
-            // return value, so we never pass an event back across the boundary.
-            _ = tap.callback(Proxy(tap: tap), type, event)
-        }
-        return nil
-    }
-
-    func enable() {
-        guard let source, let machPort else { return }
-        if !isAdded { CFRunLoopAddSource(runLoop, source, mode); isAdded = true }
-        CGEvent.tapEnable(tap: machPort, enable: true)
-    }
-
-    func enable(timeout: Duration, onTimeout: @escaping () -> Void) {
-        enable()
-        Task { [weak self] in
-            try? await Task.sleep(for: timeout)
-            if self?.isEnabled == true { onTimeout() }
-        }
-    }
-
-    func disable() {
-        guard let source, let machPort else { return }
-        if isAdded { CFRunLoopRemoveSource(runLoop, source, mode); isAdded = false }
-        CGEvent.tapEnable(tap: machPort, enable: false)
-    }
-}
-
-private func menuBarTapHandler(proxy: CGEventTapProxy, type: CGEventType,
-                               event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
-    guard let refcon else { return Unmanaged.passUnretained(event) }
-    let tap = Unmanaged<MenuBarEventTap>.fromOpaque(refcon).takeUnretainedValue()
-    return MenuBarEventTap.dispatch(tap, type, event)
-}
+// The generic CGEvent tap this file used to own now lives in EventTap.swift —
+// the mouse module shares it. The scromble callbacks below `return nil` to keep
+// swallowing, now that `EventTap.dispatch` honours the callback's return.
 
 // MARK: - The mover
 
@@ -441,8 +326,8 @@ enum MenuBarItemMover {
     /// to `first` so the target actually consumes it. Optionally wait for the
     /// observed item's frame to change. This double-bounce is what makes delivery
     /// reliable across recent macOS — a plain post often no-ops.
-    private static func scromble(_ event: CGEvent, from first: MenuBarEventTap.Location,
-                                 to second: MenuBarEventTap.Location,
+    private static func scromble(_ event: CGEvent, from first: EventTap.Location,
+                                 to second: EventTap.Location,
                                  confirmFrameChangeOf windowID: CGWindowID?) async throws {
         let initialFrame = windowID.flatMap { MenuBarBridge.frame(for: $0) }
         try await deliver(event, from: first, to: second)
@@ -451,15 +336,15 @@ enum MenuBarItemMover {
         }
     }
 
-    private static func deliver(_ event: CGEvent, from first: MenuBarEventTap.Location,
-                                to second: MenuBarEventTap.Location) async throws {
+    private static func deliver(_ event: CGEvent, from first: EventTap.Location,
+                                to second: EventTap.Location) async throws {
         guard let nullEvent = CGEvent(source: nil) else { throw MenuBarMoveError.eventCreationFailed }
         let nullUserData = Int64(truncatingIfNeeded: Int(bitPattern: ObjectIdentifier(nullEvent)))
         nullEvent.setIntegerValueField(.eventSourceUserData, value: nullUserData)
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            var tap1: MenuBarEventTap?
-            var tap2: MenuBarEventTap?
+            var tap1: EventTap?
+            var tap2: EventTap?
             // Single-shot guard: the success callback and the timeout closure both run
             // on the main actor, but their ordering near the 50 ms boundary isn't
             // guaranteed — without this, a near-simultaneous fire would resume the
@@ -472,16 +357,16 @@ enum MenuBarItemMover {
                 cont.resume(with: result)
             }
 
-            tap1 = MenuBarEventTap(label: "scromble-1", options: .defaultTap, location: first,
-                                   types: [nullEvent.type]) { proxy, type, rEvent in
+            tap1 = EventTap(label: "scromble-1", options: .defaultTap, location: first,
+                            types: [nullEvent.type]) { proxy, type, rEvent in
                 if type == .tapDisabledByUserInput || type == .tapDisabledByTimeout { proxy.enable(); return nil }
                 guard rEvent.getIntegerValueField(.eventSourceUserData) == nullUserData else { return nil }
                 proxy.disable()
                 post(event, to: second)
                 return nil
             }
-            tap2 = MenuBarEventTap(label: "scromble-2", options: .listenOnly, location: second,
-                                   types: [event.type]) { proxy, type, rEvent in
+            tap2 = EventTap(label: "scromble-2", options: .listenOnly, location: second,
+                            types: [event.type]) { proxy, type, rEvent in
                 if type == .tapDisabledByUserInput || type == .tapDisabledByTimeout { proxy.enable(); return nil }
                 guard eventsMatch(rEvent, event), proxy.isEnabled else { return nil }
                 proxy.disable()
@@ -499,7 +384,7 @@ enum MenuBarItemMover {
         }
     }
 
-    private static func post(_ event: CGEvent, to location: MenuBarEventTap.Location) {
+    private static func post(_ event: CGEvent, to location: EventTap.Location) {
         switch location {
         case .session: event.post(tap: .cgSessionEventTap)
         case .annotatedSession: event.post(tap: .cgAnnotatedSessionEventTap)

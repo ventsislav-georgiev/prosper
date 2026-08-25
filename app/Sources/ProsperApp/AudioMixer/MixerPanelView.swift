@@ -24,7 +24,6 @@ struct MixerPanelView: View {
     @ObservedObject private var mixer = AppVolumeMixer.shared
     @ObservedObject private var inputs = AudioInputDeviceManager.shared
     @AppStorage(MixerDefaultsKey.hideInactiveApps) private var hideInactiveApps = false
-    @State private var showListChooser = false
     @State private var editingVolumeID: String?
     /// Where the system slider was before the mute button zeroed it. The HAL
     /// mute property has no setter on the service, so "mute" is volume 0 that
@@ -37,7 +36,6 @@ struct MixerPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(10)) {
-            header
             globalSection
             NeonDivider()
             appsSection
@@ -49,19 +47,6 @@ struct MixerPanelView: View {
         .background(Neon.bgTop)
         .foregroundStyle(Neon.textPrimary)
         .tint(Neon.blue)
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: sz(8)) {
-            Image(systemName: "slider.horizontal.3")
-                .font(Neon.font(13, weight: .semibold))
-                .foregroundStyle(Neon.blue)
-            neonAccentedText("Volume Mixer", accent: "Mixer")
-                .font(Neon.font(15, weight: .bold, design: .rounded))
-            Spacer()
-        }
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -381,19 +366,6 @@ struct MixerPanelView: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: sz(8)) {
             HStack(spacing: sz(8)) {
-                Text("Hide inactive apps")
-                    .font(Neon.font(10.5))
-                    .foregroundStyle(Neon.textSecondary)
-                Spacer(minLength: sz(6))
-                Toggle("Hide inactive apps", isOn: $hideInactiveApps)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-            }
-
-            listChooser
-
-            HStack(spacing: sz(8)) {
                 Button("Reset all apps") { mixer.resetAll() }
                     .buttonStyle(.neon)
                     .disabled(mixer.apps.isEmpty)
@@ -409,90 +381,6 @@ struct MixerPanelView: View {
                 .help("Volume mixer settings")
             }
         }
-    }
-
-    private var listChooser: some View {
-        VStack(alignment: .leading, spacing: sz(4)) {
-            Button {
-                showListChooser.toggle()
-            } label: {
-                HStack(spacing: sz(8)) {
-                    Text("Visible apps")
-                        .font(Neon.font(10.5))
-                        .foregroundStyle(Neon.textSecondary)
-                    Spacer(minLength: sz(6))
-                    Text(mixer.hiddenApps.isEmpty
-                         ? "All shown"
-                         : "Hidden: \(mixer.hiddenApps.count)")
-                        .font(Neon.font(10))
-                        .foregroundStyle(Neon.textSecondary)
-                    Image(systemName: "chevron.right")
-                        .font(Neon.font(8, weight: .semibold))
-                        .foregroundStyle(Neon.textSecondary)
-                        .rotationEffect(.degrees(showListChooser ? 90 : 0))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if showListChooser {
-                ForEach(listChoices) { choice in
-                    Toggle(isOn: listedBinding(for: choice)) {
-                        Text(choice.name)
-                            .font(Neon.font(10.5))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .toggleStyle(.checkbox)
-                    .controlSize(.small)
-                    .disabled(!choice.canToggle)
-                }
-            }
-        }
-        .animation(.easeOut(duration: 0.15), value: showListChooser)
-    }
-
-    private struct MixerListChoice: Identifiable {
-        let id: String
-        let name: String
-        let isListed: Bool
-        let canToggle: Bool
-    }
-
-    private var listChoices: [MixerListChoice] {
-        var seen = Set<String>()
-        var choices = mixer.hiddenApps.map { hidden -> MixerListChoice in
-            seen.insert(hidden.id)
-            return MixerListChoice(id: hidden.id, name: hidden.name,
-                                   isListed: false, canToggle: true)
-        }
-        for app in mixer.apps {
-            let id = app.persistenceID ?? app.id
-            guard seen.insert(id).inserted else { continue }
-            choices.append(MixerListChoice(id: id, name: app.name,
-                                           isListed: true,
-                                           canToggle: app.persistenceID != nil))
-        }
-        choices.sort {
-            MixerRoutingSupport.displayOrderedBefore(name: $0.name, id: $0.id,
-                                                     otherName: $1.name, otherID: $1.id)
-        }
-        return choices
-    }
-
-    private func listedBinding(for choice: MixerListChoice) -> Binding<Bool> {
-        Binding(
-            get: { choice.isListed },
-            set: { listed in
-                if listed {
-                    mixer.showInList(id: choice.id)
-                } else if let app = mixer.apps.first(where: {
-                    ($0.persistenceID ?? $0.id) == choice.id
-                }) {
-                    mixer.hideFromList(app)
-                }
-            }
-        )
     }
 
     // MARK: - Small shared bits

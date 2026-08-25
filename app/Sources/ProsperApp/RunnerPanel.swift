@@ -226,6 +226,12 @@ final class RunnerPanel {
         DispatchQueue.main.async { [weak self] in self?.model.focusRequested = true }
         // Warm the app index so the first keystroke in the launcher is instant.
         AppIndex.shared.ensureBuilt()
+        // Same for the frontmost app's menu bar. Fire-and-forget: a no-op inside
+        // the index's TTL, an off-main AX walk otherwise.
+        // ponytail: a first keystroke landing before the walk finishes shows no
+        // menu rows; the next one has them. Upgrade path is a change token on the
+        // index that `inputChanged()` observes, if that ever reads as a bug.
+        MenuCommandIndex.shared.warm(pid: previousApp?.processIdentifier)
     }
 
     func dismiss() {
@@ -243,6 +249,36 @@ final class RunnerPanel {
     /// records frecency for engagements. Quick Look overlays the runner and keeps
     /// it open; every other action completes and dismisses (Raycast behavior).
     private func performFileAction(id: String, path: String) {
+        // Reserved native action, handled before both the extension dispatch and
+        // the file dispatcher (its id is neither `file.*` nor extension-owned).
+        // The runner activated Prosper on present(), so the target app has to be
+        // brought back first or the press lands on the wrong app; the settle is a
+        // heuristic delay, not a handshake. `press` does the AX call off-main.
+        if id == MenuCommandIndex.pressActionID {
+            dismiss()
+            let target = previousApp
+            DispatchQueue.main.async {
+                target?.activate(options: [])
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + MenuCommandIndex.activationSettle
+                ) { MenuCommandIndex.shared.press(id: path) }
+            }
+            return
+        }
+        // Custom (non `file.*`) action id: dispatch it back to the extension that
+        // built the row — `FileActions.perform` would silently drop it. The handler
+        // is the command handler suffixed `_action`, receiving (actionID, value, "{}").
+        if let commandID = FileActions.extensionTarget(actionID: id, mode: model.mode) {
+            dismiss()
+            Task { @MainActor in
+                // ponytail: the returned component tree is discarded — the runner is
+                // already dismissed. Re-render in place if a row action ever needs to
+                // refresh the list (e.g. per-package upgrade rows) instead of closing.
+                _ = await CommandRouter.registry?.dispatchActionAsync(
+                    commandID: commandID, actionID: id, value: path, formValues: [:])
+            }
+            return
+        }
         if FileActions.dismissesRunner(id) { dismiss() }
         FileActionDispatcher.live.run(id: id, path: path)
     }
@@ -265,6 +301,10 @@ final class RunnerPanel {
             if !MixerPanelController.shared.showPanel() {
                 LiveExtensionHostServices.shared.settingsOpener?("audio-mixer")
             }
+        case .copyScreenText:
+            ScreenTools.copyScreenText()
+        case .pickColor:
+            ScreenTools.pickColor()
         }
     }
 
@@ -818,8 +858,9 @@ final class RunnerModel: ObservableObject {
 
 /// One activatable action a result row offers (Alfred/Raycast file actions, or
 /// any extension-declared action). `id` is a reserved `file.*` id the runner runs
-/// natively, or a custom id dispatched back to the extension; `value` overrides
-/// the row's `filePath` payload when set.
+/// natively, or a custom id dispatched back to the owning extension's
+/// `<handler>_action(actionID, value, formJSON)` global (which dismisses the
+/// runner); `value` overrides the row's `filePath` payload when set.
 struct RowAction: Identifiable {
     let id: String
     let title: String
@@ -980,6 +1021,16 @@ private func buildRows(from outcome: RunnerOutcome) -> [ResultRow] {
                                  category: "Command", copyValue: "", isMeta: false,
                                  launchCommandID: hit.commandLaunchesWindow ? hit.commandID : nil,
                                  enterMode: hit.commandLaunchesWindow ? nil : mode)
+            case .menu:
+                // The shortcut rides the `label` chip; Enter runs the row's only
+                // action, which `performFileAction` intercepts natively.
+                return ResultRow(id: i, icon: "filemenu.and.selection", primary: hit.title,
+                                 secondary: hit.subtitle, category: "Menu Command",
+                                 copyValue: hit.title, isMeta: false, label: hit.accessory,
+                                 actions: [RowAction(id: MenuCommandIndex.pressActionID,
+                                                     title: "Press",
+                                                     icon: "cursorarrow.click",
+                                                     value: hit.actionValue)])
             }
         }
 

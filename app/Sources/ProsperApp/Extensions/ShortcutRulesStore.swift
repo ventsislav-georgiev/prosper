@@ -73,7 +73,9 @@ final class ShortcutRulesStore {
     func apply() {
         ExtensionKeyRules.shared.setRules(
             extensionID: Self.ownerID,
-            json: Self.compileJSON(rules, doubleTapQuit: Preferences.doubleTapQuitEnabled))
+            json: Self.compileJSON(rules,
+                                   doubleTapQuit: Preferences.doubleTapQuitEnabled,
+                                   finderF2Rename: Preferences.finderF2RenameEnabled))
     }
 
     /// Pure rules → engine-JSON compiler (testable without touching the engine).
@@ -81,7 +83,7 @@ final class ShortcutRulesStore {
     /// mapping keeps precedence; across owners the engine matches the first rule
     /// in sorted-extension-id order, so an extension that also registers cmd+q
     /// simply wins and this one stays inert — never both.
-    static func compileJSON(_ rules: [Rule], doubleTapQuit: Bool) -> String {
+    static func compileJSON(_ rules: [Rule], doubleTapQuit: Bool, finderF2Rename: Bool = false) -> String {
         var objs: [[String: Any]] = []
         for r in rules where r.enabled && !r.trigger.isEmpty {
             var obj: [String: Any] = ["from": r.trigger]
@@ -103,6 +105,12 @@ final class ShortcutRulesStore {
             objs.append(obj)
         }
         if doubleTapQuit { objs.append(["from": "cmd+q", "double_tap": "cmd+q"]) }
+        // F2 → Return, Finder only: Finder renames the selection on Return, so this is
+        // the whole feature — no tap, no AX, no new key path. Appended last for the same
+        // reason as the quit rule: a user's own f2 mapping keeps precedence.
+        if finderF2Rename {
+            objs.append(["from": "f2", "to": "return", "apps": ["com.apple.finder"]])
+        }
         return (try? JSONSerialization.data(withJSONObject: objs))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
     }

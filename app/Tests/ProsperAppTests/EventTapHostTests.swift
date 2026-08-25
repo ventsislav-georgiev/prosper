@@ -259,13 +259,17 @@ final class EventTapHostTests: XCTestCase {
     /// left the tap down. Each consumer alone must keep it up; all-off keeps it down.
     @MainActor
     func testNeedKeyTapIsOrOfAllConsumers() {
-        XCTAssertFalse(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false, snippets: false),
+        XCTAssertFalse(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false, snippets: false, hyper: false, finderShortcuts: false),
                        "tap must be DOWN when no consumer needs it")
-        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: true,  extRules: false, eventTaps: false, snippets: false))
-        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: true,  eventTaps: false, snippets: false))
-        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: true,  snippets: false),
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: true,  extRules: false, eventTaps: false, snippets: false, hyper: false, finderShortcuts: false))
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: true,  eventTaps: false, snippets: false, hyper: false, finderShortcuts: false))
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: true,  snippets: false, hyper: false, finderShortcuts: false),
                       "the eventTaps term is the one that regressed — must keep the tap up alone")
-        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false, snippets: true),
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false, snippets: true, hyper: false, finderShortcuts: false),
                       "snippet auto-expand rides the tap too — must keep it up with autocomplete off")
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false, snippets: false, hyper: true, finderShortcuts: false),
+                      "the Caps-Lock hyper key rides the tap too — its remap is only installed while it runs")
+        XCTAssertTrue(AppDelegate.needKeyTap(autocomplete: false, extRules: false, eventTaps: false, snippets: false, hyper: false, finderShortcuts: true),
+                      "Finder ⌘X/⌘V rides the tap too — the preference reads ON and does nothing without it")
     }
 }

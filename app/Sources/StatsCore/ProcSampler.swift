@@ -1,4 +1,4 @@
-// Top processes by CPU and memory via libproc — popup tables only, NOT a
+// Top processes by CPU, memory and disk I/O via libproc — popup tables only, NOT a
 // menu-bar hot path. Enumerates pids, reads per-process rusage (phys footprint
 // + cpu time), and rates CPU as the time delta between samples (first sample
 // has no CPU rate). Sampling every pid is ~1-2ms, so the poller runs this on a
@@ -13,11 +13,19 @@ public struct ProcInfo: Sendable, Equatable {
     public let cpu: Double          // 0...1 of one core-second per wall-second
     public let memory: UInt64       // phys_footprint bytes
     public var power: Double = 0     // top's relative energy-impact score (Activity Monitor "Energy")
+    // Per-process disk I/O, delta'd out of rusage_info_v4's cumulative `ri_diskio_*`
+    // counters exactly the way `cpu` is delta'd out of cumulative CPU time. Rates
+    // rather than raw counters, so the popup column formats through the same
+    // `StatsFormat.rateMenu` the network table uses.
+    public var diskRead: Double = 0     // bytes/sec
+    public var diskWrite: Double = 0    // bytes/sec
+    public var diskTotal: Double { diskRead + diskWrite }
 }
 
 public struct ProcSampler {
-    // pid → (cumulative cpu nanoseconds, wall time of that reading)
-    private var prevCPU: [Int32: (ns: UInt64, t: Double)] = [:]
+    // pid → (cumulative cpu nanoseconds, cumulative disk bytes read/written,
+    //        wall time of that reading)
+    private var prevCPU: [Int32: (ns: UInt64, read: UInt64, written: UInt64, t: Double)] = [:]
     private let now: () -> Double
 
     // proc_pid_rusage reports ri_user_time/ri_system_time in MACH time units, not
@@ -37,12 +45,29 @@ public struct ProcSampler {
         return (Double(deltaTicks) * machToNS / 1_000_000_000) / dt
     }
 
+    /// Cumulative byte counter → bytes/sec. `now < prev` means the counter went
+    /// backwards, which only happens when a pid was recycled onto a new process
+    /// between samples — report 0 rather than a wrapped-around exabyte spike.
+    static func byteRate(from prev: UInt64, to now: UInt64, seconds dt: Double) -> Double {
+        guard dt > 0, now >= prev else { return 0 }
+        return Double(now - prev) / dt
+    }
+
+    /// Busiest `limit` processes by combined read+write rate. Processes doing no I/O
+    /// this interval are dropped — a table of idle daemons at 0 B/s is noise.
+    static func topByDisk(_ infos: [ProcInfo], limit: Int) -> [ProcInfo] {
+        Array(infos.filter { $0.diskTotal > 0 }
+                   .sorted { $0.diskTotal > $1.diskTotal }
+                   .prefix(limit))
+    }
+
     public init(now: @escaping () -> Double = NetworkReader.monotonicSeconds) {
         self.now = now
     }
 
-    /// Top `limit` by memory and by CPU. One enumeration feeds both.
-    public mutating func sample(limit: Int = 5) -> (byCPU: [ProcInfo], byMemory: [ProcInfo]) {
+    /// Top `limit` by memory, by CPU and by disk I/O. One enumeration feeds all three.
+    public mutating func sample(limit: Int = 5)
+        -> (byCPU: [ProcInfo], byMemory: [ProcInfo], byDisk: [ProcInfo]) {
         let t = now()
         let pids = Self.allPIDs()
         var infos = [ProcInfo]()
@@ -53,20 +78,24 @@ public struct ProcSampler {
             guard let ru = Self.rusage(pid) else { continue }
             live.insert(pid)
             let cpuNS = ru.ri_user_time &+ ru.ri_system_time
-            var cpu = 0.0
+            var cpu = 0.0, dRead = 0.0, dWrite = 0.0
             if let prev = prevCPU[pid], t > prev.t {
-                cpu = Self.cpuRate(deltaTicks: cpuNS &- prev.ns, seconds: t - prev.t)
+                let dt = t - prev.t
+                cpu = Self.cpuRate(deltaTicks: cpuNS &- prev.ns, seconds: dt)
+                dRead = Self.byteRate(from: prev.read, to: ru.ri_diskio_bytesread, seconds: dt)
+                dWrite = Self.byteRate(from: prev.written, to: ru.ri_diskio_byteswritten, seconds: dt)
             }
-            prevCPU[pid] = (cpuNS, t)
+            prevCPU[pid] = (cpuNS, ru.ri_diskio_bytesread, ru.ri_diskio_byteswritten, t)
             infos.append(ProcInfo(pid: pid, name: Self.name(pid),
-                                  cpu: max(0, cpu), memory: ru.ri_phys_footprint))
+                                  cpu: max(0, cpu), memory: ru.ri_phys_footprint,
+                                  diskRead: dRead, diskWrite: dWrite))
         }
         // Drop dead pids so the map doesn't grow unbounded.
         prevCPU = prevCPU.filter { live.contains($0.key) }
 
         let byMem = Array(infos.sorted { $0.memory > $1.memory }.prefix(limit))
         let byCPU = Array(infos.sorted { $0.cpu > $1.cpu }.prefix(limit))
-        return (byCPU, byMem)
+        return (byCPU, byMem, Self.topByDisk(infos, limit: limit))
     }
 
     // MARK: libproc

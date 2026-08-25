@@ -21,7 +21,7 @@ struct SystemStatsPane: View {
     var body: some View {
         NeonScroll {
             PaneTitle(title: "System Stats", accent: "Stats",
-                      subtitle: "Native CPU, memory, GPU, network, sensor and battery monitors in your menu bar")
+                      subtitle: "Native CPU, memory, disk, GPU, network, sensor and battery monitors in your menu bar")
 
             NeonSection("Menu Bar") {
                 NeonRow("Show System Stats", subtitle: "Adds one menu-bar item per enabled module") {
@@ -127,7 +127,8 @@ struct SystemStatsPane: View {
 
     private func sectionTitle(_ m: StatsModule) -> String {
         switch m {
-        case .cpu: "Processor"; case .memory: "Memory"; case .network: "Network"
+        case .cpu: "Processor"; case .memory: "Memory"; case .disk: "Storage"
+        case .network: "Network"
         case .gpu: "Graphics"; case .power: "Power"; case .sensors: "Temperature"; case .battery: "Battery"
         }
     }

@@ -17,6 +17,22 @@ final class FileActionsTests: XCTestCase {
         XCTAssertFalse(FileActions.isBuiltIn(""))
     }
 
+    /// Regression (#057): a custom row action id used to be handed to
+    /// `FileActions.perform`, which drops anything outside the reserved set — the
+    /// action silently did nothing. It must resolve to the locked mode's command id.
+    func testCustomActionIdRoutesToOwningExtension() {
+        let mode = RunnerMode.ext(id: "brew.run", title: "Brew", icon: "shippingbox")
+        XCTAssertEqual(FileActions.extensionTarget(actionID: "upgrade", mode: mode), "brew.run")
+        // Reserved ids stay native even inside an extension mode.
+        XCTAssertNil(FileActions.extensionTarget(actionID: FileActions.ID.open, mode: mode))
+        XCTAssertNil(FileActions.extensionTarget(actionID: FileActions.ID.quickLook, mode: mode))
+        // No owning extension (universal launcher) or a blank id → nothing to dispatch.
+        XCTAssertNil(FileActions.extensionTarget(actionID: "upgrade", mode: .universal))
+        XCTAssertNil(FileActions.extensionTarget(
+            actionID: "upgrade",
+            mode: .ext(id: "", title: "", icon: "")))
+    }
+
     func testQuickLookKeepsRunnerOpenOthersDismiss() {
         XCTAssertFalse(FileActions.dismissesRunner(FileActions.ID.quickLook))
         XCTAssertTrue(FileActions.dismissesRunner(FileActions.ID.open))

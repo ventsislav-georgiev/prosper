@@ -1,0 +1,49 @@
+# Mouse — per-app mouse tweaks (scroll inversion, side-button navigation).
+# Implemented natively over CGEvent taps (EventTap.swift); this extension is the
+# enable/disable gate and the Settings page, same shell pattern as Window
+# Management and Menu Bar Management. No Lua logic.
+#
+# SHELL ONLY for now: the services hang off this manifest in later entries. The
+# accessibility row is here from day one because every mouse service needs the
+# grant before `CGEvent.tapCreate` returns anything but nil.
+[extension]
+id          = "com.prosper.mouse"
+name        = "mouse"
+title       = "Mouse"
+description = "Per-app mouse tweaks: scroll direction and side-button navigation."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "computermouse"
+system      = true
+# Opt-in: enabling this rewrites mouse input system-wide, so it ships OFF.
+default_disabled = true
+# Every mouse service is a CGEvent tap — without the Accessibility grant
+# `tapCreate` returns nil silently. Surfaced here so the user can grant inline.
+permissions = ["accessibility"]
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Declarative (Tier-A) settings page. Empty but for the permission row until the
+# service entries add their toggles; the exceptions editor arrives as a native
+# footer pane (same merge pattern as Menu Bar Management).
+[[contributes.settings_sections]]
+id        = "mouse"
+title     = "Mouse"
+icon      = "computermouse"
+accent    = "Mouse"
+subtitle  = "Scroll direction and side-button navigation, with per-app exceptions"
+
+[[contributes.settings_sections.controls]]
+kind   = "group"
+title  = "Permissions"
+footer = "Mouse tweaks read and rewrite mouse events — the same Accessibility grant as autocomplete."
+
+[[contributes.settings_sections.controls]]
+kind = "permission"
+name = "accessibility"

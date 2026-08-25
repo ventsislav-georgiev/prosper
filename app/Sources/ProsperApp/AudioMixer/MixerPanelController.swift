@@ -65,7 +65,7 @@ final class MixerPanelController {
 
     private func syncItem() {
         guard item == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let item = NSStatusBar.system.statusItem(withLength: Self.itemWidth)
         item.autosaveName = "ProsperVolumeMixer"
         // .content: stays in the menubar-management ordering/preview set.
         ProsperStatusItems.register(item, role: .content, name: "Volume")
@@ -83,28 +83,72 @@ final class MixerPanelController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.updateGlyph() }
             .store(in: &glyphObservers)
+
+        // The default output can change without the level changing (AirPods
+        // connect at whatever volume was already set), so the device drives
+        // the glyph too.
+        mixer.$outputDevices
+            .map { $0.first(where: \.isDefault)?.name }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateGlyph() }
+            .store(in: &glyphObservers)
     }
+
+    /// speaker.wave.3 renders 24pt wide at every variable value, the slash
+    /// glyph 16pt. Pinning the item to the widest keeps mute and every volume
+    /// step the same width, so neighbouring menu-bar items never shift. Every
+    /// AirPods glyph is narrower than speaker.wave.3, so they fit unchanged.
+    private static let itemWidth: CGFloat = 24
 
     private func updateGlyph() {
         guard let button = item?.button else { return }
-        let image = NSImage(systemSymbolName: Self.symbolName(volume: mixer.systemOutputVolume,
-                                                             muted: mixer.systemOutputMuted),
+        let glyph = Self.glyph(volume: mixer.systemOutputVolume,
+                               muted: mixer.systemOutputMuted,
+                               outputDeviceName: mixer.outputDevices.first(where: \.isDefault)?.name)
+        // A symbol the running system does not carry resolves to nil
+        // (airpods.gen4 lands in macOS 15), so the speaker glyph takes over.
+        let image = NSImage(systemSymbolName: glyph.name,
+                            variableValue: glyph.value,
                             accessibilityDescription: "Volume")
+            ?? NSImage(systemSymbolName: "speaker.wave.3.fill",
+                       variableValue: mixer.systemOutputVolume ?? 0.66,
+                       accessibilityDescription: "Volume")
         image?.isTemplate = true
         button.image = image
     }
 
-    /// Same wave-count ladder as the native menu-bar icon. An output with no
-    /// readable volume (an aggregate device, a HDMI sink) keeps the neutral
-    /// two-wave glyph rather than pretending to be at zero.
-    private static func symbolName(volume: Double?, muted: Bool?) -> String {
-        guard let volume else { return "speaker.wave.2.fill" }
-        if muted == true || volume <= 0.001 { return "speaker.slash.fill" }
-        switch volume {
-        case ..<0.34: return "speaker.wave.1.fill"
-        case ..<0.67: return "speaker.wave.2.fill"
-        default: return "speaker.wave.3.fill"
-        }
+    /// Variable rendering draws every wave arc and dims the ones above the
+    /// level — what the native menu-bar icon does. An output with no readable
+    /// volume (an aggregate device, a HDMI sink) sits at a neutral mid level
+    /// rather than pretending to be at zero.
+    ///
+    /// AirPods replace the speaker outright, the way the native icon does: the
+    /// level lives in the slider, not in the glyph (no AirPods symbol supports
+    /// variable rendering anyway). Mute still wins over both, because the
+    /// slashed speaker is the only unambiguous "you hear nothing".
+    nonisolated static func glyph(volume: Double?,
+                                  muted: Bool?,
+                                  outputDeviceName: String? = nil) -> (name: String, value: Double) {
+        if muted == true || (volume ?? 1) <= 0.001 { return ("speaker.slash.fill", 1) }
+        if let symbol = airPodsSymbol(outputDeviceName: outputDeviceName) { return (symbol, 1) }
+        return ("speaker.wave.3.fill", volume ?? 0.66)
+    }
+
+    /// Name matching, the same way `outputLooksLikeHeadphones` does it: no
+    /// public CoreAudio property says "these are AirPods", so a pair renamed
+    /// past recognition simply keeps the speaker glyph.
+    nonisolated static func airPodsSymbol(outputDeviceName: String?) -> String? {
+        guard let name = outputDeviceName?
+            .folding(options: .diacriticInsensitive, locale: nil)
+            .lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: "", options: .regularExpression),
+            name.contains("airpods") else { return nil }
+        if name.contains("airpodsmax") { return "airpodsmax" }
+        if name.contains("airpodspro") { return "airpodspro" }
+        if name.contains("airpods3") { return "airpods.gen3" }
+        if name.contains("airpods4") { return "airpods.gen4" }
+        return "airpods"
     }
 
     @objc private func itemClicked(_ sender: NSStatusBarButton) {

@@ -32,6 +32,17 @@ enum FileActions {
     /// True if `id` is a built-in file action this type handles natively.
     static func isBuiltIn(_ id: String) -> Bool { ID.all.contains(id) }
 
+    /// The extension command a row action must be dispatched back to, or nil when
+    /// the runner handles it natively. A custom (non-`file.*`) action id belongs to
+    /// the extension whose list built the row; rows carrying custom actions come
+    /// only from `.extView`, which only a locked `.ext` mode produces — so the mode
+    /// carries the owning command id and nothing extra has to be plumbed onto the row.
+    static func extensionTarget(actionID: String, mode: RunnerMode) -> String? {
+        guard !isBuiltIn(actionID), case .ext(let commandID, _, _, _) = mode,
+              !commandID.isEmpty else { return nil }
+        return commandID
+    }
+
     /// Engagements that count toward frecency ranking (actively using a file),
     /// as opposed to incidental ones (copy/trash).
     static let engagementIDs: Set<String> = [ID.open, ID.reveal, ID.openWith, ID.enclosingFolder, ID.quickLook]

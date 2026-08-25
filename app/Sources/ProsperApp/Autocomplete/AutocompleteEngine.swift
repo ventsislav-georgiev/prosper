@@ -242,6 +242,22 @@ final class AutocompleteEngine {
     // the just-re-rendered word-accept remainder (Tab would make it vanish).
     private static let syntheticEventMagic: Int64 = 0x50_52_4F_53 // 'PROS'
 
+    /// Event mask of the keystroke tap. This tap is head-inserted, synchronous, and
+    /// typing-critical: widening it (scroll, mouse-moved, …) risks the OS disabling it
+    /// by timeout, which silently kills autocomplete, snippets and extension key rules.
+    /// Mouse services own separate taps for that reason. Pinned by `MouseTests`.
+    ///
+    /// systemDefined (14) carries media/aux keys (PLAY, SOUND_UP, …). We watch it
+    /// so user shortcut rules can remap/swallow INCOMING media keys; with no media
+    /// rule registered the callback returns the event untouched (volume HUD intact).
+    /// keyUp is here for the Caps-Lock hyper key ONLY: hold-vs-tap needs the release
+    /// edge. Everything else ignores it — `handle()` returns at its `keyDown` guard
+    /// before doing any work, so no existing consumer sees a keyUp.
+    static let tapMask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        | (1 << CGEventType.flagsChanged.rawValue)
+        | (1 << CGEventType.leftMouseDown.rawValue)
+        | (1 << 14 /* NX_SYSDEFINED / CGEventType.systemDefined */)
+
     private(set) var isRunning = false
 
     // MARK: - Lifecycle
@@ -257,12 +273,7 @@ final class AutocompleteEngine {
             return false
         }
 
-        // systemDefined (14) carries media/aux keys (PLAY, SOUND_UP, …). We watch it
-        // so user shortcut rules can remap/swallow INCOMING media keys; with no media
-        // rule registered the callback returns the event untouched (volume HUD intact).
-        let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
-            | (1 << CGEventType.leftMouseDown.rawValue)
-            | (1 << 14 /* NX_SYSDEFINED / CGEventType.systemDefined */)
+        let mask = Self.tapMask
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
@@ -310,6 +321,19 @@ final class AutocompleteEngine {
                 // OS key-autorepeat flag (held key). Double-tap rules must ignore
                 // these so a repeat doesn't masquerade as the second press.
                 let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+                // §Hyper pre-pass, BEFORE the four modifier booleans are read: holding
+                // the Caps-Lock hyper key unions its modifiers into the real CGEvent, so
+                // everything downstream (rule engine, hammerspoon shim, snippets, the
+                // app) sees one ordinary, already-hyper-flagged chord. A no-op read of
+                // one Bool when the feature is off.
+                let hyper = MainActor.assumeIsolated {
+                    HyperKey.shared.handleEvent(
+                        type: type, keyCode: keyCode, flags: event.flags, isRepeat: isRepeat)
+                }
+                if hyper == .swallow { return nil }
+                if hyper == .addModifiers {
+                    event.flags = event.flags.union(MainActor.assumeIsolated { HyperKey.shared.flags })
+                }
                 let optionHeld = event.flags.contains(.maskAlternate)
                 let controlHeld = event.flags.contains(.maskControl)
                 let commandHeld = event.flags.contains(.maskCommand)
@@ -561,6 +585,18 @@ final class AutocompleteEngine {
                 ExtensionKeyRules.shared.invoke?(extID, handler, arg)
                 return true
             }
+        }
+
+        // Finder ⌘X / ⌘V move. After the declarative key rules so a user's own
+        // mapping for either chord still wins, and before the resident eventtap for
+        // the same reason. Gated on one Bool read, so it costs nothing when off;
+        // everything else it needs (frontmost bundle id, focused AX role, pasteboard
+        // generation) is answered synchronously inside `handle`, and the Apple
+        // Events that actually move files are dispatched off-main after it returns.
+        if FinderCutPaste.shared.isEnabled,
+           FinderCutPaste.shared.handle(keyCode: keyCode, cmd: commandHeld, alt: optionHeld,
+                                        ctrl: controlHeld, shift: shiftHeld, bundleID: bundleId) {
+            return true
         }
 
         // Opt-in resident-VM eventtap (e.g. hammerspoon-compat raw keyDown taps).

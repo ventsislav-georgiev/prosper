@@ -296,6 +296,8 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     case menuBarToggleHidden
     case calendarTogglePopup
     case mixerCycleOutput
+    case copyScreenText
+    case pickColor
 
     var title: String {
         switch self {
@@ -316,6 +318,8 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .menuBarToggleHidden: return "Menu Bar: Reveal/Hide Section"
         case .calendarTogglePopup: return "Calendar: Toggle Calendar"
         case .mixerCycleOutput: return "Volume Mixer: Next Sound Output"
+        case .copyScreenText: return "Screen: Copy Text from Region"
+        case .pickColor: return "Screen: Pick Color"
         }
     }
 
@@ -339,6 +343,8 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .menuBarToggleHidden: return 15
         case .calendarTogglePopup: return 16
         case .mixerCycleOutput: return 17
+        case .copyScreenText: return 18
+        case .pickColor: return 19
         }
     }
 
@@ -423,6 +429,9 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .mixerCycleOutput:
             // Opt-in: cycling outputs behind a key the user did not choose is a
             // surprise, and the mixer panel already switches output by hand.
+            return unsetKeyCombo
+        case .copyScreenText, .pickColor:
+            // Opt-in: the runner (`:ocr` / `:color`) is the always-available trigger.
             return unsetKeyCombo
         }
     }

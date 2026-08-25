@@ -120,7 +120,7 @@ runs_on_select  = false                   # discovery-list pick runs immediately
 | `launches_window` | Surface as a row that opens its own window on Enter instead of running per keystroke. |
 | `runs_on_select` | Picking the command from the discovery list runs the handler immediately rather than entering its input mode. Reserve for **parameterless, non-destructive** actions (toggles/status, e.g. [`openlid`](app/Sources/ProsperApp/Resources/extensions/openlid/)'s "Toggle Mac Awake"). It never auto-fires on a keystroke — only on an explicit Enter on the selected row. |
 
-Other contribution arrays under `[contributes]`: `keybindings` (`{ command, key, when }`), `palette_entries`, `views`, `placeholders` (snippet tokens, §6), `events` (§5), `themes` (§7), `settings_sections` (§8).
+Other contribution arrays under `[contributes]`: `keybindings` (`{ command, key, when }`), `views`, `placeholders` (snippet tokens, §6), `events` (§5), `themes` (§7), `settings_sections` (§8).
 
 Any installed extension whose `match` accepts the query is dispatched on its own **off-main async lane** — that is how [`quicklinks`](app/Sources/ProsperApp/Resources/extensions/quicklinks/) and your own extensions surface as palette commands. [`currency`](app/Sources/ProsperApp/Resources/extensions/currency/) is the canonical async example: it fetches daily FX over `host.http` (with retry), caches via `host.prefs`/`host.time`, and never blocks the main thread.
 
@@ -132,7 +132,7 @@ The host surface is strict, time-boxed, and assembled per-extension. **Reads are
 
 ### Core (every extension)
 
-- `host.clipboard.{read,write,history}`
+- `host.clipboard.{read,write,history}` — `write("")` clears the pasteboard (no empty-string item left behind)
 - `host.prefs.{get,set}` — durable per-extension key/value store
 - `host.time()` → wall-clock epoch seconds · `host.sleep(seconds)` → for backoff (capped)
 - `host.date()` → `{ epoch, year, month, day, hour, min, sec, wday }` (the sandbox has no `os.date`)
@@ -163,6 +163,8 @@ Built-in **retry + exponential backoff** on transient failures (no response / 5x
 - `host.ui.{list,detail,form,grid,converter,loading,render}` build native SwiftUI trees — **no HTML, the host owns every pixel.** Renderer: [`ExtensionViewRenderer.swift`](app/Sources/ProsperApp/Extensions/ExtensionViewRenderer.swift).
 - `host.ui.chooseApp()` → `{ bundleID=, name= }` | nil — native app picker (used by [`inputswitch`](app/Sources/ProsperApp/Resources/extensions/inputswitch/)).
 - `host.ui.settings.*` — the Settings-pane builders (§8).
+
+A list item's `actions` are the per-row verbs the runner surfaces (Enter runs the first, ⌘K lists them all). An action `id` is either a **reserved** `file.*` id the host runs natively (`file.open`, `file.reveal`, `file.quicklook`, `file.copyPath`, `file.copyFile`, `file.openWith`, `file.enclosingFolder`, `file.trash` — see [`FileActions.swift`](app/Sources/ProsperApp/Commands/FileActions.swift)) or **any other id**, which dispatches back into your extension: the host calls the global `<command>_action(actionID, value, formJSON)` — `<command>` being your command id with non-alphanumerics replaced by `_` — and dismisses the runner. `value` defaults to the row's payload and can be overridden per action, so one handler can fan out over rows (e.g. a per-package `upgrade` action carrying the package name).
 
 `host.ui.loading{ title=, subtitle=, progress= }` renders an Apple-style loading state — an **infinite** spinner when `progress` is absent, a **progressive** bar (0…1 with a percentage) when set. The host also shows this spinner automatically while an async view action is in flight, so every async operation gets a polished loading state for free.
 
@@ -200,6 +202,9 @@ handler = "install_rules"
 | ----- | ------- | ---- |
 | `system.launch` | — | once, at startup |
 | `system.wake` | — | wake from sleep |
+| `system.sleep` | — | machine about to sleep |
+| `screen.locked` | `{ locked }` | screen locked / unlocked |
+| `clipboard.changed` | `{ kind, text }` | something was copied — `kind` is `text`/`image`/`file`, `text` present only for `text` and capped at 8 KB (call `host.clipboard.read()` for the whole clip) |
 | `battery.changed` | — | power source / level change |
 | `network.changed` | — | reachability change |
 | `app.activated` | `{ bundleID, name, pid }` | frontmost app change |
@@ -207,7 +212,13 @@ handler = "install_rules"
 | `url.open` | `{ url }` | a link opened while Prosper is the default browser |
 | `timer.fired` | `{ id }` | a scheduled `host.timer` fired |
 
-A native watcher stays dormant until at least one **enabled** extension subscribes. [`openlid`](app/Sources/ProsperApp/Resources/extensions/openlid/) subscribes to `system.launch`/`battery.changed`/`network.changed`/`system.wake`/`lid.changed`; [`inputswitch`](app/Sources/ProsperApp/Resources/extensions/inputswitch/) to `app.activated`; [`url-dispatcher`](app/Sources/ProsperApp/Resources/extensions/url-dispatcher/) to `url.open`.
+A native watcher stays dormant until at least one **enabled** extension subscribes. [`openlid`](app/Sources/ProsperApp/Resources/extensions/openlid/) subscribes to `system.launch`/`battery.changed`/`network.changed`/`system.wake`/`lid.changed`; [`inputswitch`](app/Sources/ProsperApp/Resources/extensions/inputswitch/) to `app.activated`; [`url-dispatcher`](app/Sources/ProsperApp/Resources/extensions/url-dispatcher/) to `url.open` and (behind its `clean_copied` toggle) `clipboard.changed`; [`clipclear`](app/Sources/ProsperApp/Resources/extensions/clipclear/) to `system.launch`/`clipboard.changed`/`system.sleep`/`screen.locked`; [`appupdates`](app/Sources/ProsperApp/Resources/extensions/appupdates/) to `system.launch` (to arm its durable poll timer).
+
+`clipboard.changed` is the one with a running cost: it needs the pasteboard poll, which
+otherwise only runs when clipboard history is on. Subscribing starts it (history stays
+off, and nothing is written to the history store). Concealed/transient clips —
+passwords, OTPs — never reach a handler. A `host.clipboard.write()` from a handler does
+**not** re-fire the event, so writing back the cleaned-up value cannot loop.
 
 **Durable named-handler timers** survive relaunch and re-invoke a global by name (no live closure):
 
@@ -385,9 +396,15 @@ Bundled features ship as **system extensions**: editable and disablable, **reset
 | [`quicklinks`](app/Sources/ProsperApp/Resources/extensions/quicklinks/) | Saved links | `records` list; palette command |
 | [`quickdirs`](app/Sources/ProsperApp/Resources/extensions/quickdirs/) | Saved directories | `host.fs.list_dirs` |
 | [`bookmarks`](app/Sources/ProsperApp/Resources/extensions/bookmarks/) | Browser bookmarks | Chrome/Brave/Edge/Vivaldi/Opera/Arc/Safari/Firefox/Zen; `full-disk-access` for Safari; `list_on_empty` |
+| [`sysprefs`](app/Sources/ProsperApp/Resources/extensions/sysprefs/) | System Settings panes | `ss ` prefix, `list_on_empty`; 43 panes as `x-apple.systempreferences:` row URLs — pure Lua, no shell, no permissions |
+| [`killproc`](app/Sources/ProsperApp/Resources/extensions/killproc/) | List processes by CPU, terminate one | `kill ` prefix; system-only `host.shell` (`ps`/`kill`) + `host.dialog.confirm`. Committed by a trailing `!` (`!!` = SIGKILL), never by Enter, because a prefixed command re-runs on every keystroke; pids validated `^%d+$`, names never interpolated, pid ≤ 1 / Prosper itself / a blocklist refused |
+| [`scripts`](app/Sources/ProsperApp/Resources/extensions/scripts/) | Saved shell commands | `sc ` prefix, `list_on_empty`; system-only `host.shell` on the async lane + a `records` settings section over `host.prefs` |
+| [`appupdates`](app/Sources/ProsperApp/Resources/extensions/appupdates/) | Pending Homebrew + macOS updates | system-only `host.shell`; no `prefix` on purpose — three `runs_on_select` rows. The palette shows the **cache**; the 10–60 s `softwareupdate -l` runs only on the 6-hourly durable timer or the explicit "Check now" |
+| [`pasteplain`](app/Sources/ProsperApp/Resources/extensions/pasteplain/) | Paste with formatting stripped | `contributes.keybindings` (⌘⌥⇧V) invoked without opening the runner, so the synthesized ⌘V lands in the frontmost app. Ceiling: the rich clip is *replaced*, not restored |
+| [`clipclear`](app/Sources/ProsperApp/Resources/extensions/clipclear/) | Clipboard auto-clear | **opt-in** (`default_disabled`); `clipboard.changed` stamps the copy and a durable 60 s sweep clears it once the delay (5 min default) is up, so the timer cost is fixed rather than one rearm per ⌘C; `system.sleep`/`screen.locked` wipe it outright; `clipclear.now` clears on demand. Not `system` — `host.clipboard`/`host.timer`/`host.prefs` are ungated |
 | [`window`](app/Sources/ProsperApp/Resources/extensions/window/) | Window management | `host.window.frame/set`; 10 settings sections |
 | [`openlid`](app/Sources/ProsperApp/Resources/extensions/openlid/) | Keep-awake / lid power | `host.caffeinate.*`; 5 events; `runs_on_select` toggles |
-| [`url-dispatcher`](app/Sources/ProsperApp/Resources/extensions/url-dispatcher/) | Browser routing | **opt-in** (`default_disabled`); `url.open` event + key rules |
+| [`url-dispatcher`](app/Sources/ProsperApp/Resources/extensions/url-dispatcher/) | Browser routing | **opt-in** (`default_disabled`); `url.open` event + key rules. Separate `clean_copied` toggle (off by default) subscribes to `clipboard.changed` and strips tracking params from a copied bare link in place — prose containing a link is left alone, and it only writes when the cleaned URL actually differs |
 | [`inputswitch`](app/Sources/ProsperApp/Resources/extensions/inputswitch/) | Per-app keyboard input source | **opt-in**; `app.activated` event; `host.keyboard` |
 | [`menubar`](app/Sources/ProsperApp/Resources/extensions/menubar/) | Ice/Bartender-style menu-bar control | **opt-in**; native footer pane |
 | [`fallback-search`](app/Sources/ProsperApp/Resources/extensions/fallback-search/) | Web-search default results | settings UI only; native row building via system-only `host.fallback.*` |

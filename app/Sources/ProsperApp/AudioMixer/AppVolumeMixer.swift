@@ -822,7 +822,7 @@ final class AppVolumeMixer: ObservableObject {
         // The mixer no longer wants this pass (it stopped, or changed the
         // output itself, while the pass was reading).
         guard refresh.finish(generation) else { return }
-        let refreshAgain = refresh.takeRepeatRequest()
+        var refreshAgain = refresh.takeRepeatRequest()
         guard listenerInstalled else { return }
         defer { if refreshAgain { refreshApps() } }
 
@@ -866,11 +866,20 @@ final class AppVolumeMixer: ObservableObject {
             return
         }
 
+        let watchedBefore = runningListeners
         pruneRunningListeners(keeping: Set(snapshot.processObjects))
         for object in snapshot.processObjects {
             // Audio starting/stopping in a process flips IsRunningOutput
             // without changing the object list — subscribe per object.
             subscribeToRunningChanges(of: object)
+        }
+        // This snapshot read IsRunningOutput off the HAL queue before those
+        // subscriptions existed, so a flip in between fired unheard. Read once
+        // more now that they are live. The next pass subscribes nothing new,
+        // which is what stops the chain.
+        if MixerRoutingSupport.needsRunningRecheck(previouslyWatched: watchedBefore,
+                                                   nowWatched: runningListeners) {
+            refreshAgain = true
         }
 
         guard audioEnvironmentChanged || next != apps else { return }

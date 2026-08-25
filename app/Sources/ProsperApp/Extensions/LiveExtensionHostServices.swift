@@ -38,8 +38,14 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     func clipboardWrite(_ text: String) {
         mainSync {
             let pb = NSPasteboard.general
+            // A host-originated write must not re-fire `clipboard.changed` — that is
+            // the write-back loop a handler which edits the clipboard would spin
+            // forever (clean-URL, paste-as-plain-text, …).
+            ClipboardMonitor.shared.suppressNextChange()
             pb.clearContents()
-            pb.setString(text, forType: .string)
+            // write("") is a CLEAR: `clearContents()` alone leaves the pasteboard
+            // empty, while `setString("")` would leave an empty-string item on it.
+            if !text.isEmpty { pb.setString(text, forType: .string) }
         }
     }
 
@@ -505,7 +511,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// is off (see `AppDelegate.reconcileKeyTap`).
     var snippetConfigChanged: (@MainActor () -> Void)?
 
-    func openSettings(extensionID: String, sectionID: String?) {
+    func openSettings(extensionID: String, sectionID: String?, anchor: String?) {
         mainSync {
             // nil sectionID → the extension's first sidebar section. Resolve it (an
             // "ext:<id>|" with an empty section is not a real sidebar id and would
@@ -515,7 +521,13 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
                 .settingsSections(placement: "sidebar")
                 .first { $0.record.id == extensionID }?.section.id
             guard let sid, !sid.isEmpty else { return }
-            self.settingsOpener?("ext:\(extensionID)|\(sid)")
+            let pane = "ext:\(extensionID)|\(sid)"
+            // Post BEFORE the window opens: the router holds the request until the
+            // pane mounts, so this works whether Settings is already up or not.
+            if let anchor, !anchor.isEmpty {
+                SettingsFocusRouter.shared.request(SettingsAnchor(pane: pane, section: anchor))
+            }
+            self.settingsOpener?(pane)
         }
     }
 
@@ -909,6 +921,10 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     func appWindowCount(bundleID: String) -> Int { mainSync { AppControl.windowCount(bundleID: bundleID) } }
     func appHide(bundleID: String) { Task { @MainActor in AppControl.hide(bundleID: bundleID) } }
     func runAppleScript(_ source: String) -> String { Scripting.runAppleScript(source) }
+    // Menu commands (§B). Both hit the MainActor-isolated `MenuCommandIndex`; the
+    // AX walk itself already ran off-main, so this is a cheap array read / index lookup.
+    func menusList() -> String { mainSync { MenuCommandIndex.shared.cachedJSON() } }
+    func menusPress(_ id: String) -> Bool { mainSync { MenuCommandIndex.shared.press(id: id) } }
     // Carbon TIS must be called on the main thread — these handlers fire on the
     // off-main async event lane (e.g. app.activated → per-app input switching), where
     // TISSelectInputSource silently no-ops. Funnel through mainSync like every other

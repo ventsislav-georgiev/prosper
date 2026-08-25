@@ -177,6 +177,59 @@ final class SettingsModel: ObservableObject {
             ShortcutRulesStore.shared.apply()
         }
     }
+
+    /// F2 renames the selection in Finder. Same shape as the quit guard — it is one
+    /// more built-in rule in the shared key engine, so re-apply on every change.
+    @Published var finderF2RenameEnabled: Bool {
+        didSet {
+            Preferences.finderF2RenameEnabled = finderF2RenameEnabled
+            ShortcutRulesStore.shared.apply()
+        }
+    }
+
+    /// \u{2318}X / \u{2318}V moves files in Finder. Reconciles the shared key tap on
+    /// every change: with the tap down (autocomplete off, no other consumer) the
+    /// preference would read ON while the feature was silently dead.
+    @Published var finderCutPasteEnabled: Bool {
+        didSet {
+            Preferences.finderCutPasteEnabled = finderCutPasteEnabled
+            onFinderCutPasteChanged?(finderCutPasteEnabled)
+        }
+    }
+
+    /// ⌘V in Finder saves a copied image as a PNG file. Rides the same tap, so it
+    /// goes through the same reconcile hook.
+    @Published var finderPasteImageEnabled: Bool {
+        didSet {
+            Preferences.finderPasteImageEnabled = finderPasteImageEnabled
+            onFinderCutPasteChanged?(finderPasteImageEnabled)
+        }
+    }
+
+    /// Caps-Lock hyper key. Each setter re-reconciles the shared key tap, because the
+    /// hidutil remap is installed by `AppDelegate.reconcileKeyTap()` only once that
+    /// tap is up (and removed as soon as it is not).
+    @Published var hyperKeyEnabled: Bool {
+        didSet {
+            Preferences.hyperKeyEnabled = hyperKeyEnabled
+            onHyperKeyChanged?(hyperKeyEnabled)
+            // Populated by the reconcile above when another tool owns Caps Lock.
+            hyperKeyConflict = HyperKey.shared.conflict
+        }
+    }
+    @Published var hyperKeyModifiers: Int {
+        didSet { Preferences.hyperKeyModifiers = hyperKeyModifiers }
+    }
+    @Published var hyperKeySoloAction: HyperSoloAction {
+        didSet { Preferences.hyperKeySoloAction = hyperKeySoloAction }
+    }
+    /// Set when another tool already owns the Caps Lock mapping; shown in Settings.
+    @Published var hyperKeyConflict: String?
+
+    static let hyperModifierChoices: [(String, Int)] = [
+        ("\u{2303}", HyperMods.ctrl), ("\u{2325}", HyperMods.alt),
+        ("\u{21E7}", HyperMods.shift), ("\u{2318}", HyperMods.cmd),
+    ]
     @Published var completionsEnabledByDefault: Bool { didSet { Preferences.completionsEnabledByDefault = completionsEnabledByDefault } }
     @Published var completionLength: CompletionLength { didSet { Preferences.completionLength = completionLength } }
     @Published var customInstructions: String { didSet { Preferences.customInstructions = customInstructions } }
@@ -330,6 +383,8 @@ final class SettingsModel: ObservableObject {
     var onClipboardHistoryChanged: ((Bool) -> Void)?
     var onClipboardMaxItemsChanged: (() -> Void)?
     var onShortcutsChanged: (() -> Void)?
+    var onHyperKeyChanged: ((Bool) -> Void)?
+    var onFinderCutPasteChanged: ((Bool) -> Void)?
     var onMenuBarIconChanged: ((Bool) -> Void)?
     var onDockIconChanged: ((Bool) -> Void)?
     var onDragSnapChanged: ((Bool) -> Void)?
@@ -338,6 +393,13 @@ final class SettingsModel: ObservableObject {
         autocompleteEnabled = Preferences.autocompleteEnabled
         agentEnabled = Preferences.agentEnabled
         doubleTapQuitEnabled = Preferences.doubleTapQuitEnabled
+        finderF2RenameEnabled = Preferences.finderF2RenameEnabled
+        finderCutPasteEnabled = Preferences.finderCutPasteEnabled
+        finderPasteImageEnabled = Preferences.finderPasteImageEnabled
+        hyperKeyEnabled = Preferences.hyperKeyEnabled
+        hyperKeyModifiers = Preferences.hyperKeyModifiers
+        hyperKeySoloAction = Preferences.hyperKeySoloAction
+        hyperKeyConflict = HyperKey.shared.conflict
         completionsEnabledByDefault = Preferences.completionsEnabledByDefault
         completionLength = Preferences.completionLength
         customInstructions = Preferences.customInstructions
@@ -624,6 +686,22 @@ private struct SettingsRootView: View {
     // Bumped on every registry change so the sidebar `groups` recompute when an
     // extension is enabled/disabled/installed (its section appears/disappears).
     @State private var registryRev = 0
+    /// Sidebar search text. Empty = normal grouped rail.
+    @State private var query = ""
+
+    /// `groups` already reads `registryRev`, so the extension half of the index is
+    /// recomputed whenever an extension is enabled/disabled/installed.
+    private var results: [SettingsIndexEntry] {
+        SettingsSearch.results(query, index: settingsSearchIndex(registry: registry, groups: groups))
+    }
+
+    /// Clicking a result: switch pane, ask the router to scroll+highlight the
+    /// section (held until that pane's NeonScroll mounts), drop back to the rail.
+    private func pick(_ entry: SettingsIndexEntry) {
+        selection = entry.paneID
+        SettingsFocusRouter.shared.request(entry.anchor)
+        query = ""
+    }
 
     private var groups: [(String, [SettingsTab])] {
         // Read registryRev so SwiftUI tracks it as a body dependency: the
@@ -669,6 +747,10 @@ private struct SettingsRootView: View {
         // Calendar: icon/grid appearance + per-calendar checklist ride in as the
         // FOOTER below the manifest's Permissions row and toggle shortcut.
         case "com.prosper.calendar": footer = AnyView(CalendarPane())
+        // Mouse: the per-scope exception lists ride in as the FOOTER below the
+        // manifest's Permissions row — the TOML control kinds have no app-list
+        // kind, so the picker has to be native.
+        case "com.prosper.mouse": footer = AnyView(MousePane())
         default: break
         }
         return ExtensionSettingsPane(registry: registry, record: record, section: section,
@@ -677,10 +759,14 @@ private struct SettingsRootView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SettingsSidebar(groups: groups, selection: $selection)
+            SettingsSidebar(groups: groups, selection: $selection, query: $query,
+                            results: results, onPick: pick)
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(SettingsBackground())
+                // Tells every NeonSection/NeonScroll below which pane they are in,
+                // which is what makes section anchors unique across panes.
+                .environment(\.settingsPaneID, selection)
         }
         .frame(minWidth: sz(820), minHeight: sz(480))
         .preferredColorScheme(.dark)
@@ -691,6 +777,8 @@ private struct SettingsRootView: View {
             model.onClipboardHistoryChanged = shared.onClipboardHistoryChanged
             model.onClipboardMaxItemsChanged = shared.onClipboardMaxItemsChanged
             model.onShortcutsChanged = shared.onShortcutsChanged
+            model.onHyperKeyChanged = shared.onHyperKeyChanged
+            model.onFinderCutPasteChanged = shared.onFinderCutPasteChanged
             model.onMenuBarIconChanged = shared.onMenuBarIconChanged
             model.onDockIconChanged = shared.onDockIconChanged
             model.onDragSnapChanged = shared.onDragSnapChanged
@@ -769,6 +857,13 @@ final class SettingsHooks {
     var onClipboardHistoryChanged: ((Bool) -> Void)?
     var onClipboardMaxItemsChanged: (() -> Void)?
     var onShortcutsChanged: (() -> Void)?
+    /// Caps-Lock hyper key toggled: AppDelegate prompts for Accessibility and
+    /// reconciles the shared key tap (which is what installs/removes the remap).
+    var onHyperKeyChanged: ((Bool) -> Void)?
+    /// Either Finder key-tap toggle changed (\u{2318}X/\u{2318}V move, or \u{2318}V
+    /// saves an image as PNG): AppDelegate prompts for Accessibility and reconciles
+    /// the shared key tap, which both features ride.
+    var onFinderCutPasteChanged: ((Bool) -> Void)?
     var onCheckForUpdates: (() -> Void)?
     /// Opens the Settings window. Lets surfaces outside AppDelegate (the runner's
     /// Actions menu / `:settings`) reach it without exposing the window itself.
@@ -1244,6 +1339,11 @@ private struct ContextPane: View {
                             Task {
                                 await Task.detached(priority: .userInitiated) {
                                     PermissionsManager.resetPrivacyGrant(service: "Accessibility")
+                                    // AppleEvents is keyed to the same signature and goes
+                                    // stale in exactly the same way, so a rebuild breaks
+                                    // the Finder move too — and unlike Accessibility there
+                                    // is no toggle to notice it with. Reset both.
+                                    PermissionsManager.resetPrivacyGrant(service: "AppleEvents")
                                 }.value
                                 PermissionsManager.ensureAccessibilityTrust(prompt: true)
                                 PermissionsManager.openAccessibilitySettings()
@@ -1417,26 +1517,6 @@ private struct AppsPane: View {
     }
 
     @ViewBuilder
-    private func bundleList(_ ids: [String], remove: @escaping (String) -> Void) -> some View {
-        if ids.isEmpty {
-            Text("None").foregroundStyle(Neon.textSecondary).font(Neon.font(.caption))
-        } else {
-            ForEach(Array(ids.enumerated()), id: \.element) { idx, id in
-                if idx > 0 { NeonDivider() }
-                HStack {
-                    Text(id).font(Neon.font(.body, design: .monospaced))
-                        .foregroundStyle(Neon.textPrimary)
-                    Spacer()
-                    Button(role: .destructive) { remove(id) } label: {
-                        Image(systemName: "minus.circle.fill")
-                            .foregroundStyle(Neon.magenta)
-                    }.buttonStyle(.borderless)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
     private func addRow(text: Binding<String>, placeholder: String, add: @escaping () -> Void) -> some View {
         HStack {
             TextField(placeholder, text: text)
@@ -1445,6 +1525,30 @@ private struct AppsPane: View {
             Button("Add", action: add)
                 .buttonStyle(.neon)
                 .disabled(text.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+    }
+}
+
+/// Bundle-id list with a remove button per row, shared by every per-app opt-in /
+/// opt-out section (completions, Tab, compatibility, and the mouse module's
+/// exceptions footer). File-scope rather than a method so panes in other files
+/// render the same list instead of re-typing it.
+@MainActor @ViewBuilder
+func bundleList(_ ids: [String], remove: @MainActor @escaping (String) -> Void) -> some View {
+    if ids.isEmpty {
+        Text("None").foregroundStyle(Neon.textSecondary).font(Neon.font(.caption))
+    } else {
+        ForEach(Array(ids.enumerated()), id: \.element) { idx, id in
+            if idx > 0 { NeonDivider() }
+            HStack {
+                Text(id).font(Neon.font(.body, design: .monospaced))
+                    .foregroundStyle(Neon.textPrimary)
+                Spacer()
+                Button(role: .destructive) { remove(id) } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .foregroundStyle(Neon.magenta)
+                }.buttonStyle(.borderless)
+            }
         }
     }
 }
@@ -1691,9 +1795,49 @@ private struct ShortcutsPane: View {
                 }
             }
 
+            NeonSection("Hyper Key",
+                        footer: "Remaps Caps Lock (via \u{201C}hidutil\u{201D}) so holding it presses the modifiers below \u{2014} \(HyperMods.glyphs(model.hyperKeyModifiers))H reaches the frontmost app as an ordinary \(HyperMods.glyphs(model.hyperKeyModifiers))H chord you can bind anywhere. Nothing locks: Caps Lock stops toggling capitals, so the tap action is how you get it back. The remap is removed when you turn this off or quit Prosper. Requires Accessibility permission.") {
+                Toggle("Hold Caps Lock as a hyper key", isOn: $model.hyperKeyEnabled)
+                if let conflict = model.hyperKeyConflict {
+                    Text("Caps Lock is already remapped to \(conflict) by another tool \u{2014} Prosper will not overwrite it. Remove that mapping first.")
+                        .font(Neon.font(.caption))
+                        .foregroundStyle(Neon.textSecondary)
+                }
+                NeonDivider()
+                HStack(spacing: sz(10)) {
+                    Text("Modifiers").foregroundStyle(Neon.textPrimary)
+                    Spacer()
+                    ForEach(SettingsModel.hyperModifierChoices, id: \.1) { label, bit in
+                        Toggle(label, isOn: Binding(
+                            get: { model.hyperKeyModifiers & bit != 0 },
+                            set: { _ in model.hyperKeyModifiers = HyperMods.toggled(model.hyperKeyModifiers, bit: bit) }
+                        ))
+                        .toggleStyle(.button)
+                    }
+                }
+                NeonDivider()
+                VStack(alignment: .leading, spacing: sz(8)) {
+                    Text("Tapping Caps Lock alone").foregroundStyle(Neon.textPrimary)
+                    Picker("", selection: $model.hyperKeySoloAction) {
+                        ForEach(HyperSoloAction.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+            }
+
             NeonSection("Quit Guard",
                         footer: "The first \u{2318}Q is swallowed; press it again within half a second to really quit. Prevents losing a window to a stray \u{2318}Q. Requires Accessibility permission.") {
                 Toggle("Require a double-tap of \u{2318}Q to quit", isOn: $model.doubleTapQuitEnabled)
+            }
+
+            NeonSection("Finder",
+                        footer: "The Windows habits, without leaving the home row. F2 sends Return to Finder, which is what Finder already uses to rename. \u{2318}X marks the selection and \u{2318}V moves it into the front window \u{2014} Finder itself keeps the progress window and the \u{2318}Z undo. A copied image pasted with \u{2318}V lands as Pasted_Image_<date>.png in the front window; copied FILES always paste as Finder would. All three only fire with Finder frontmost and no filename being edited. Needs Accessibility permission; the move also needs Automation permission for Finder, which macOS asks for the first time you use it.") {
+                Toggle("Press F2 to rename the selected file", isOn: $model.finderF2RenameEnabled)
+                NeonDivider()
+                Toggle("Press \u{2318}X then \u{2318}V to move files", isOn: $model.finderCutPasteEnabled)
+                NeonDivider()
+                Toggle("Press \u{2318}V to save a copied image as a PNG file", isOn: $model.finderPasteImageEnabled)
             }
 
             NeonSection("Key Remapping",
@@ -1876,7 +2020,7 @@ private struct CustomShortcutRow: View {
 /// A plain `Menu` was a several-hundred-item scroll with no way in but the mouse.
 /// This is the same shape as the agent history popover: filter field on top, a
 /// short scrolling list under it, Return to take the top match.
-private struct AppPickerMenu: View {
+struct AppPickerMenu: View {
     /// Bundle ids / paths currently chosen. Single-pick rows pass at most one.
     var selected: Set<String> = []
     /// Multi-select keeps the popover open, marks every chosen row, and offers the
@@ -3718,6 +3862,13 @@ enum ProsperVerify {
             && MenuBarLogic.spacingDefaultsValue(forSpacing: MenuBarSpacing.defaultSpacing) == nil
         print("part7 menubar-math-ok: \(mbOK)  (expect: true)")
         assert(mbOK, "MenuBarLogic section/spacing math regressed")
+
+        // ── Part 8: settings search index is populated. A zero here means the
+        // generated table or the manifest scan produced nothing and the sidebar
+        // search field silently finds nothing — invisible in a screenshot. ──
+        let extIndex = extensionSettingsIndex(registry: registry)
+        print("part8 search-index: native=\(nativeSettingsIndex.count) ext=\(extIndex.count)  (expect: both > 0)")
+        print("part8 search 'mixer': \(SettingsSearch.results("mixer", index: nativeSettingsIndex).map(\.paneID))")
 
         print("=== END PROSPER_VERIFY ===")
     }

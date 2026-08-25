@@ -1,0 +1,41 @@
+# System Settings — jump straight to a System Settings pane from the palette.
+# Pure Lua over host.ui.list; each row carries the pane's
+# `x-apple.systempreferences:` URL, which the runner opens natively (the same
+# open path Quicklinks and Bookmarks use). No host.shell, no permissions.
+# See docs/ADR-002-extensibility.md.
+
+[extension]
+id          = "com.prosper.sysprefs"
+name        = "sysprefs"
+title       = "System Settings"
+description = "Open a System Settings pane — Wi-Fi, Displays, Sound, Privacy & Security, Login Items…"
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "gearshape"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# `ss ` locks the launcher into this command; the rest of the query filters the
+# pane list. list_on_empty shows every pane on a bare `ss `, so it browses as
+# well as searches (the Bookmarks pattern).
+[[contributes.commands]]
+id            = "sysprefs.open"
+title         = "System Settings"
+description   = "Open a System Settings pane"
+mode          = "no-view"
+icon          = "gearshape"
+keywords      = ["ss", "settings", "preferences", "system settings", "system preferences", "pane"]
+match         = "^ss( |$)"
+prefix        = "ss "
+list_on_empty = true

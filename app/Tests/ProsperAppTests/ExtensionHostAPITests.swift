@@ -101,6 +101,11 @@ private final class FakeServices: ExtensionHostServices, @unchecked Sendable {
     func appWindowCount(bundleID: String) -> Int { windowCounts[bundleID] ?? 0 }
     func appHide(bundleID: String) { appHides.append(bundleID) }
 
+    var menusJSON = #"[{"id":"7:0","path":["File"],"title":"Export…","shortcut":"⇧⌘E"}]"#
+    var menuPresses: [String] = []
+    func menusList() -> String { menusJSON }
+    func menusPress(_ id: String) -> Bool { menuPresses.append(id); return id.hasPrefix("7:") }
+
     var scripts: [String] = []
     var scriptResult = #"{"ok":true,"output":"done","error":""}"#
     func runAppleScript(_ source: String) -> String { scripts.append(source); return scriptResult }
@@ -867,6 +872,44 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertEqual(try lua.callGlobal("go"), "true|true")
         XCTAssertEqual(svc.watches.first?.handler, "on_change")
         XCTAssertEqual(svc.unwatches, ["/tmp"])
+    }
+
+    /// `host.menus` on the automation tier: the JSON list decodes into a Lua array,
+    /// and `press` forwards the row id and returns the host's verdict.
+    func testMenusSurface() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("""
+        function go()
+            local rows = host.menus.list()
+            local ok = host.menus.press(rows[1].id)
+            local stale = host.menus.press("6:0")
+            return #rows .. "|" .. rows[1].title .. "|" .. rows[1].path[1] .. "|"
+                .. rows[1].shortcut .. "|" .. tostring(ok) .. "|" .. tostring(stale)
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "1|Export…|File|⇧⌘E|true|false")
+        // Both ids reach the service — staleness is the index's verdict, not the
+        // bridge's; the bridge only has to carry the id and the boolean back.
+        XCTAssertEqual(svc.menuPresses, ["7:0", "6:0"])
+    }
+
+    /// Untrusted hosts get the error stubs: an empty list, a false press, and the
+    /// service is never reached.
+    func testMenusGatedForUntrusted() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc,
+                          privileged: false, trusted: false).install(into: lua)
+        try lua.run("""
+        function go()
+            local rows = host.menus.list()
+            return #rows .. "|" .. tostring(host.menus.press("7:0"))
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "0|false")
+        XCTAssertTrue(svc.menuPresses.isEmpty)
     }
 
     /// Non-privileged extensions must NOT reach control surfaces: rules/injection,

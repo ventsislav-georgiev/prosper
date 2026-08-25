@@ -1,0 +1,116 @@
+[extension]
+id          = "com.prosper.toggles"
+name        = "toggles"
+title       = "Quick Toggles"
+description = "One-shot system actions: dark mode, hidden files, desktop icons, empty Trash, eject disks, lock screen."
+version     = "1.0.0"
+author      = "prosper"
+license     = "MIT"
+icon        = "switch.2"
+# system ⇒ privileged tier: unlocks host.shell + the automation surface
+# (host.osascript). Every mechanism here is one shell/AppleScript line; no Swift.
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# No [extension.activation] — nothing resident, nothing eager. Every command is
+# invoked on demand: no events, no timers, no menubar item. The VM spins up when
+# a row is selected and exits.
+
+# No [[contributes.keybindings]] — eight commands is eight chances to collide with
+# a user binding. Users bind what they want; the manifest ships none.
+
+# All commands are mode = "no-view" + runs_on_select = true and take no argument,
+# so they appear as parameterless palette rows (RunnerPanel `extRunsEmpty`) and
+# fire on Enter, returning one result line.
+
+[[contributes.commands]]
+id             = "toggles.dark"
+title          = "Toggle Dark Mode"
+description    = "Switch the system appearance between light and dark"
+mode           = "no-view"
+icon           = "circle.lefthalf.filled"
+# "theme" is the first keyword to drop if this buries the theme-* switchers.
+keywords       = ["dark", "light", "appearance", "theme", "mode", "toggle"]
+runs_on_select = true
+
+[[contributes.commands]]
+id             = "toggles.hidden"
+title          = "Toggle Hidden Files"
+description    = "Show or hide dotfiles in Finder (restarts Finder)"
+mode           = "no-view"
+icon           = "eye"
+keywords       = ["hidden", "dotfiles", "finder", "show", "files", "toggle"]
+runs_on_select = true
+
+[[contributes.commands]]
+id             = "toggles.desktop"
+title          = "Toggle Desktop Icons"
+description    = "Show or hide every icon on the desktop (restarts Finder)"
+mode           = "no-view"
+icon           = "menubar.dock.rectangle"
+keywords       = ["desktop", "icons", "hide", "clean", "finder", "toggle"]
+runs_on_select = true
+
+[[contributes.commands]]
+id             = "toggles.trash"
+title          = "Empty Trash"
+description    = "Permanently delete everything in the Trash (asks first)"
+mode           = "no-view"
+icon           = "trash"
+keywords       = ["trash", "empty", "delete", "bin", "clean"]
+runs_on_select = true
+
+[[contributes.commands]]
+id             = "toggles.eject"
+title          = "Eject All Disks"
+description    = "Eject every external disk in one go"
+mode           = "no-view"
+icon           = "eject"
+keywords       = ["eject", "disk", "usb", "unmount", "drive", "volume"]
+runs_on_select = true
+
+[[contributes.commands]]
+id             = "toggles.lock"
+title          = "Lock Screen"
+description    = "Lock the screen immediately"
+mode           = "no-view"
+icon           = "lock"
+keywords       = ["lock", "screen", "secure", "away"]
+runs_on_select = true
+
+[[contributes.commands]]
+id             = "toggles.screensaver"
+title          = "Start Screen Saver"
+description    = "Start the screen saver now"
+mode           = "no-view"
+icon           = "moon.stars"
+keywords       = ["screensaver", "screen saver", "idle", "away"]
+runs_on_select = true
+
+[[contributes.commands]]
+id             = "toggles.displayoff"
+title          = "Turn Display Off"
+description    = "Put the display to sleep without locking or sleeping the Mac"
+mode           = "no-view"
+icon           = "display"
+keywords       = ["display", "off", "sleep", "screen", "monitor", "dark"]
+runs_on_select = true
+
+# Dynamic (Tier-B) settings, rendered by `settings_render` and driven by
+# `settings_action`. NOT a static [[contributes.controls]] block: a static
+# kind = "toggle" persists its value to host.prefs, but these three switches
+# mirror the SYSTEM (`defaults`), which any other app can change. The truth has
+# to be re-read, so the section is rendered from Lua on every open.
+[[contributes.settings_sections]]
+id       = "toggles"
+title    = "Quick Toggles"
+icon     = "switch.2"
+accent   = "Toggles"
+subtitle = "One-click system actions"
+dynamic  = true

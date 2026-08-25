@@ -16,6 +16,29 @@ final class ClipboardMonitor {
 
     private(set) var isRunning = false
 
+    /// Whether a captured item is written to the history store. False when the
+    /// monitor runs ONLY to feed the `clipboard.changed` extension event (history
+    /// off, but an extension subscribes) — then a poll makes zero `ClipboardStore`
+    /// writes and nothing is persisted.
+    var captureHistory = true
+
+    /// Live gate consulted before the `clipboard.changed` payload is built, so a
+    /// copy costs nothing extra when no enabled extension subscribes.
+    /// nil = always emit (tests / unset), matching `SystemEventWatchers`.
+    var shouldEmitChange: (() -> Bool)?
+
+    /// Emits the `clipboard.changed` payload JSON for the registry to broadcast.
+    /// Set by `AppDelegate`; nil in headless runs.
+    var emitChange: ((String) -> Void)?
+
+    /// Set by `suppressNextChange()`, consumed by the next poll that sees a delta.
+    private var suppressNext = false
+
+    /// Byte cap on the payload's `text` field: a 40 MB paste must not be marshalled
+    /// across the JSON boundary into Lua. Handlers needing the whole clip call
+    /// `host.clipboard.read()`.
+    private static let maxEventTextBytes = 8 * 1024
+
     // Source-set markers we must not capture.
     private static let concealedTypes: Set<NSPasteboard.PasteboardType> = [
         NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"),
@@ -58,25 +81,42 @@ final class ClipboardMonitor {
         isRunning = false
     }
 
-    private func poll() {
-        let pb = NSPasteboard.general
+    /// Drops the `clipboard.changed` event for the next observed change. Called by
+    /// the host before every extension-originated write so a handler that writes
+    /// the clipboard cannot re-trigger itself forever. History capture is
+    /// unaffected — a host write is still a real clip worth remembering.
+    func suppressNextChange() { suppressNext = true }
+
+    /// Internal, and takes the pasteboard, so a test can drive one poll against its
+    /// own named pasteboard instead of the user's.
+    func poll(_ pb: NSPasteboard = .general) {
         guard pb.changeCount != lastChangeCount else { return }
         lastChangeCount = pb.changeCount
-        capture(pb)
+        let suppressed = suppressNext
+        suppressNext = false
+        // Concealed clips return nil here, so the event honours the same privacy
+        // guard as history — a password copy never reaches an extension.
+        guard let captured = capture(pb) else { return }
+        guard !suppressed, shouldEmitChange?() ?? true, let emitChange else { return }
+        emitChange(Self.changePayload(kind: captured.kind, text: captured.text))
     }
 
-    private func capture(_ pb: NSPasteboard) {
+    /// Classifies the pasteboard and, when `captureHistory` is on, records it in the
+    /// history store. Returns the event kind plus the text for `kind == "text"`, or
+    /// nil when there is nothing to report (concealed, or empty).
+    @discardableResult
+    private func capture(_ pb: NSPasteboard) -> (kind: String, text: String?)? {
         // Respect concealed/transient markers (passwords, OTP, etc.).
         if let types = pb.types, !Self.concealedTypes.isDisjoint(with: Set(types)) {
-            return
+            return nil
         }
 
         // 1. Files (one or many) — reference by path, don't copy bytes.
         if let urls = pb.readObjects(forClasses: [NSURL.self],
                                      options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
-            for url in urls { ClipboardStore.shared.addFile(url) }
-            return
+            if captureHistory { for url in urls { ClipboardStore.shared.addFile(url) } }
+            return ("file", nil)
         }
 
         // 2. Image.
@@ -86,14 +126,16 @@ final class ClipboardMonitor {
             // HARD guard on pixel count BEFORE decoding: a giant image's TIFF/PNG
             // would allocate hundreds of MB. Over the limit → metadata only.
             if w > 0, h > 0, w * h > Self.maxImagePixels {
-                ClipboardStore.shared.addOversizeImage(width: w, height: h)
-                return
+                if captureHistory { ClipboardStore.shared.addOversizeImage(width: w, height: h) }
+                return ("image", nil)
             }
             if let png = Self.pngData(from: image) {
                 // Keep + restore at any decoded size; encrypt only the small ones.
-                ClipboardStore.shared.addImage(image, pngData: png,
-                                               encrypt: png.count <= Self.softImageBytes)
-                return
+                if captureHistory {
+                    ClipboardStore.shared.addImage(image, pngData: png,
+                                                   encrypt: png.count <= Self.softImageBytes)
+                }
+                return ("image", nil)
             }
         }
 
@@ -101,15 +143,47 @@ final class ClipboardMonitor {
         if let string = pb.string(forType: .string),
            !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let bytes = string.utf8.count
-            if bytes > Self.maxTextBytes {
-                // HARD guard → metadata-only marker, never persist the payload.
-                ClipboardStore.shared.addOversizeText(byteCount: bytes,
-                                                      preview: String(string.prefix(140)))
-            } else {
-                // Keep + restore; encrypt only below the soft threshold.
-                ClipboardStore.shared.addText(string, encrypt: bytes <= Self.softTextBytes)
+            if captureHistory {
+                if bytes > Self.maxTextBytes {
+                    // HARD guard → metadata-only marker, never persist the payload.
+                    ClipboardStore.shared.addOversizeText(byteCount: bytes,
+                                                          preview: String(string.prefix(140)))
+                } else {
+                    // Keep + restore; encrypt only below the soft threshold.
+                    ClipboardStore.shared.addText(string, encrypt: bytes <= Self.softTextBytes)
+                }
             }
+            return ("text", string)
         }
+
+        return nil
+    }
+
+    /// `clipboard.changed` payload. `text` is carried only for `kind == "text"`, and
+    /// only up to `maxEventTextBytes`.
+    static func changePayload(kind: String, text: String?) -> String {
+        var obj: [String: Any] = ["kind": kind]
+        if let text { obj["text"] = clipped(text, maxBytes: maxEventTextBytes) }
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
+    }
+
+    /// Byte-capped prefix that cuts on a Character boundary, so the payload can
+    /// never carry a split UTF-8 sequence. The loop is bounded by `maxBytes`, not by
+    /// the input length.
+    static func clipped(_ s: String, maxBytes: Int) -> String {
+        guard s.utf8.count > maxBytes else { return s }
+        var out = ""
+        out.reserveCapacity(maxBytes)
+        var n = 0
+        for ch in s {
+            let w = ch.utf8.count
+            if n + w > maxBytes { break }
+            out.append(ch)
+            n += w
+        }
+        return out
     }
 
     /// Largest pixel dimensions across the image's representations (falls back to

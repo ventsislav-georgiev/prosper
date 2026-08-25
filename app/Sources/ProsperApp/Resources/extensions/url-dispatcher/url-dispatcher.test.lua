@@ -249,4 +249,68 @@ h.le(t_mixed, 1000, "clean on, mixed link under 1ms/link")
 h.le(t_heavy, 1000, "clean on, tracker-heavy link under 1ms/link")
 host.prefs.set("clean_tracking", "false")
 
+-- ── clean copied links (clipboard.changed → on_clipboard) ───────────────────
+-- The write-back is the loop-prone path: every host.clipboard.write bumps
+-- changeCount and would re-fire the event. Guard #1 is host-side
+-- (suppressNextChange); guard #2 is the no-change early-out asserted here.
+local on_clipboard = G.on_clipboard
+local function clip(kind, text)
+    env.clipboard = text or ""
+    env.actions = {}
+    on_clipboard(J{ kind = kind, text = text })
+end
+local function writes()
+    local n = 0
+    for _, a in ipairs(env.actions) do if a == "clip.write" then n = n + 1 end end
+    return n
+end
+
+-- 15. off by default: even a tracker-laden copy is left alone
+host.prefs.set("clean_tracking", "true") -- proves the two toggles are independent
+clip("text", "https://shop.example.com/i?id=42&utm_source=nl")
+h.eq(writes(), 0, "clean_copied off -> no write (independent of clean_tracking)")
+
+host.prefs.set("clean_copied", "true")
+
+-- 16. tracker-laden copy is rewritten in place
+clip("text", "https://shop.example.com/i?id=42&utm_source=nl&fbclid=XYZ&color=blue")
+h.eq(writes(), 1, "utm/fbclid copy -> exactly one write")
+h.eq(env.clipboard, "https://shop.example.com/i?id=42&color=blue", "trackers stripped, functional params kept")
+
+-- 17. loop guard #2: the cleaned URL cleans to itself -> no second write
+clip("text", "https://shop.example.com/i?id=42&color=blue")
+h.eq(writes(), 0, "already-clean URL -> no write (loop guard)")
+
+-- 18. no query at all
+clip("text", "https://example.com/page")
+h.eq(writes(), 0, "query-less URL -> no write")
+
+-- 19. non-URL text is never touched
+clip("text", "utm_source=nl just some notes")
+clip("text", "ftp://host/file?utm_source=x")
+clip("text", "")
+h.eq(writes(), 0, "non-http text -> no write")
+
+-- 20. a URL embedded in prose is the user's text, not ours to rewrite
+clip("text", "see https://x.com/a?utm_source=nl for details")
+h.eq(writes(), 0, "URL inside prose -> no write")
+
+-- 21. non-text kinds carry no text
+clip("image", nil)
+clip("file", nil)
+h.eq(writes(), 0, "image/file copies -> no write")
+
+-- 22. truncated payload (ClipboardMonitor caps text at 8 KB) must not be written
+-- back — that would silently destroy everything past the cap.
+clip("text", "https://x.com/a?utm_source=nl&pad=" .. string.rep("z", 8 * 1024))
+h.eq(writes(), 0, "8 KB-capped payload -> no write (never truncate the user's copy)")
+
+-- 23. malformed payloads never crash or write
+env.actions = {}
+on_clipboard(nil); on_clipboard(""); on_clipboard("123"); on_clipboard(J{ kind = "text" })
+h.eq(writes(), 0, "nil/garbage clipboard payloads -> no crash, no write")
+
+host.prefs.set("clean_copied", "false")
+host.prefs.set("clean_tracking", "false")
+
 print("url-dispatcher: ALL PASS")

@@ -61,6 +61,12 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     /// picked app as JSON `{bundleID, name}`, or "" if cancelled. UI affordance for
     /// settings panes (e.g. picking an app to override input source for).
     func chooseApp() -> String
+    // Menu commands of the frontmost app (§B). `menusList` returns the cached
+    // AX menu-bar walk as a JSON array of {id, path, title, shortcut}; `menusPress`
+    // fires the item behind an id, false when the id is stale or unknown. Automation
+    // tier — same AX grant `host.app.windows` already needs.
+    func menusList() -> String
+    func menusPress(_ id: String) -> Bool
     // Declarative per-app key remapping (§D) + synthetic key injection (§E). Rules
     // (a JSON array) are evaluated natively inside the shared event tap — NO Lua in
     // the keystroke path. An extension registers its full set from `on_launch`;
@@ -149,9 +155,10 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     // form/dialog submit handlers to dismiss themselves after persisting.
     func closeWindow()
     // Open the Prosper Settings window at this extension's settings pane
-    // (`host.settings.open(sectionID)`). `sectionID` nil → the extension's first
-    // section. Used by menubar "… Settings" items to deep-link into preferences.
-    func openSettings(extensionID: String, sectionID: String?)
+    // (`host.settings.open(sectionID, anchor)`). `sectionID` nil → the extension's
+    // first section; `anchor` is a section TITLE inside that pane to scroll to and
+    // highlight (nil → top). Used by menubar "… Settings" items to deep-link.
+    func openSettings(extensionID: String, sectionID: String?, anchor: String?)
     // Durable named timer (host.timer). The host owns the timer + persistence and
     // re-invokes a NAMED Lua handler (event "timer.fired") — no resident VM / live
     // closure. `every` distinguishes one-shot (after) from repeating; `seconds` is
@@ -202,6 +209,11 @@ extension ExtensionHostServices {
     /// (`LiveExtensionHostServices`) overrides this with a real `AppIndex` search.
     func appsSearch(_ query: String) -> String { "[]" }
 
+    /// Default: no menu index (test / minimal hosts). The live host
+    /// (`LiveExtensionHostServices`) overrides these with `MenuCommandIndex.shared`.
+    func menusList() -> String { "[]" }
+    func menusPress(_ id: String) -> Bool { false }
+
     /// Default: empty snippet store (test / minimal hosts). The live host
     /// (`LiveExtensionHostServices`) overrides these with the real `SnippetStore`.
     func snippetsAll() -> String { "[]" }
@@ -240,7 +252,7 @@ extension ExtensionHostServices {
 
     /// Default: no settings window (test / minimal hosts). The live host opens the
     /// real Prosper Settings window at the extension's pane.
-    func openSettings(extensionID: String, sectionID: String?) {}
+    func openSettings(extensionID: String, sectionID: String?, anchor: String?) {}
 
     /// Default: no scheduler (test / minimal hosts). The live host overrides these
     /// to drive `TimerScheduler`.
@@ -677,10 +689,13 @@ struct ExtensionHost {
             services.closeWindow()
             return 0
         }
-        // --- settings.open(sectionID?) — deep-link to this ext's prefs pane ---
+        // --- settings.open(sectionID?, anchor?) — deep-link to this ext's pane ---
         lua.register("__h_settings_open") { rt in
             let sec = rt.stringArgument(1)
-            services.openSettings(extensionID: extID, sectionID: (sec?.isEmpty ?? true) ? nil : sec)
+            let anchor = rt.stringArgument(2)
+            services.openSettings(extensionID: extID,
+                                  sectionID: (sec?.isEmpty ?? true) ? nil : sec,
+                                  anchor: (anchor?.isEmpty ?? true) ? nil : anchor)
             return 0
         }
 
@@ -877,6 +892,10 @@ struct ExtensionHost {
                 if let s = services.fsRead(rt.stringArgument(1) ?? "") { rt.push(s) } else { rt.pushNil() }
                 return 1
             }
+            lua.register("__h_menus_list") { rt in rt.push(services.menusList()); return 1 }
+            lua.register("__h_menus_press") { rt in
+                rt.push(services.menusPress(rt.stringArgument(1) ?? "")); return 1
+            }
         } else {
             for name in ["__h_app_launch", "__h_app_hide", "__h_keys_rules", "__h_keys_stroke",
                          "__h_keys_system", "__h_fs_watch", "__h_fs_unwatch"] {
@@ -886,6 +905,8 @@ struct ExtensionHost {
             lua.register("__h_osascript") { rt in rt.push(#"{"ok":false,"error":"not permitted"}"#); return 1 }
             lua.register("__h_kbd_set") { rt in rt.push(false); return 1 }
             lua.register("__h_url_set_default") { rt in rt.push(false); return 1 }
+            lua.register("__h_menus_list") { rt in rt.push("[]"); return 1 }
+            lua.register("__h_menus_press") { rt in rt.push(false); return 1 }
         }
 
         // Assemble the namespaced `host` table and hide the raw bindings.
@@ -1227,10 +1248,13 @@ struct ExtensionHost {
     __h_window_close = nil
 
     -- Open the Prosper Settings window at this extension's pane.
-    --   host.settings.open()            -- first declared section
-    --   host.settings.open("sectionId") -- a specific section
+    --   host.settings.open()                       -- first declared section
+    --   host.settings.open("sectionId")            -- a specific section
+    --   host.settings.open("sectionId", "Title")   -- ...scrolled to that section
     local raw_settings_open = __h_settings_open
-    host.settings = { open = function(sectionID) raw_settings_open(sectionID or "") end }
+    host.settings = { open = function(sectionID, anchor)
+        raw_settings_open(sectionID or "", anchor or "")
+    end }
     __h_settings_open = nil
 
     -- Filesystem (read-only). Lists the immediate subdirectory names of `path`
@@ -1373,6 +1397,19 @@ struct ExtensionHost {
     __h_apps_search = nil
     __h_app_launch = nil; __h_app_hide = nil; __h_app_frontmost = nil; __h_app_windows = nil
 
+    -- Menu commands of the frontmost app (automation tier; needs the accessibility
+    -- grant). The list is whatever the last menu-bar walk cached — empty until the
+    -- runner has warmed it, or when the grant is missing.
+    --   host.menus.list()    -> { { id=, path={...}, title=, shortcut= }, ... }
+    --   host.menus.press(id) -> boolean  (false when the id is stale/unknown)
+    local raw_menus_list  = __h_menus_list
+    local raw_menus_press = __h_menus_press
+    host.menus = {
+        list  = function() return json_decode(raw_menus_list()) or {} end,
+        press = function(id) return raw_menus_press(id or "") end,
+    }
+    __h_menus_list = nil; __h_menus_press = nil
+
     -- AppleScript / JXA bridge (privileged). Returns { ok=, output=, error= }.
     --   host.osascript.run(source) -> { ok=, output=, error= }
     local raw_osascript = __h_osascript
@@ -1404,6 +1441,12 @@ struct ExtensionHost {
     --   }
     --   host.keys.stroke("cmd+alt+i")   -- inject a combo
     --   host.keys.system("PLAY")        -- inject a media key
+    --
+    -- Caps-Lock hyper key (Settings → Shortcuts → Hyper Key) needs NOTHING special
+    -- here: it is a pre-pass that unions its modifiers onto the real event before the
+    -- chord is built, so a hyper chord is an ordinary chord. Bind it by spelling the
+    -- configured modifiers out — with the ⌃⌥⌘⇧ default, holding Caps Lock and pressing
+    -- H matches `{ from = "ctrl+alt+cmd+shift+h", launch = "Finder" }`.
     local raw_keys_rules  = __h_keys_rules
     local raw_keys_stroke = __h_keys_stroke
     local raw_keys_system = __h_keys_system

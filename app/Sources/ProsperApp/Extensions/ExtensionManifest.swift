@@ -90,7 +90,6 @@ struct Activation: Codable, Sendable, Equatable {
 struct Contributes: Codable, Sendable, Equatable {
     let commands: [CommandContribution]?
     let keybindings: [KeybindingContribution]?
-    let palette_entries: [PaletteEntry]?
     let views: [ViewContribution]?
     /// Pluggable Settings sections (own sidebar entry or inline), rendered natively
     /// from a declarative spec — static manifest `controls` and/or a dynamic render
@@ -110,7 +109,6 @@ struct Contributes: Codable, Sendable, Equatable {
 
     var allCommands: [CommandContribution] { commands ?? [] }
     var allKeybindings: [KeybindingContribution] { keybindings ?? [] }
-    var allPaletteEntries: [PaletteEntry] { palette_entries ?? [] }
     var allViews: [ViewContribution] { views ?? [] }
     var allSettingsSections: [SettingsSection] { settings_sections ?? [] }
     var allPlaceholders: [PlaceholderContribution] { placeholders ?? [] }
@@ -134,8 +132,10 @@ struct ThemeContribution: Codable, Sendable, Equatable {
 /// stateless — no resident VM, no live Lua closure held by native code. Recognized
 /// events: `system.launch` (one-shot at startup — the place to install key rules
 /// or filesystem watches), `battery.changed`, `network.changed`, `system.wake`,
-/// `app.activated`, `lid.changed`, `url.open`, plus `timer.fired` delivered by the
-/// durable scheduler.
+/// `app.activated`, `lid.changed`, `url.open`, `system.sleep`, `screen.locked`
+/// (`{locked}`), `clipboard.changed` (`{kind, text}` — `text` only for
+/// `kind == "text"`, capped at 8 KB), plus `timer.fired` delivered by the durable
+/// scheduler.
 struct EventSubscription: Codable, Sendable, Equatable {
     let event: String
     let handler: String       // Lua global invoked with the event payload (JSON string)
@@ -329,13 +329,6 @@ struct SettingsControl: Codable, Sendable, Equatable {
         if let i = try? c.decode(Int.self, forKey: key) { return Double(i) }
         return nil
     }
-}
-
-struct PaletteEntry: Codable, Sendable, Equatable {
-    let title: String
-    let keywords: [String]?
-    let url: String?
-    let command: String?
 }
 
 enum ViewKind: String, Codable, Sendable {

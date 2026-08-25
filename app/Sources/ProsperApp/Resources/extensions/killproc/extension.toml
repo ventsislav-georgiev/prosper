@@ -1,0 +1,52 @@
+# Kill Process — list running processes by CPU and terminate one. A pure-Lua
+# system extension over host.shell (`ps` / `kill`) + host.dialog.confirm. The
+# destructive half is a trust boundary: every pid is validated `^%d+$` before it
+# reaches a shell string, the process name is NEVER interpolated into a command,
+# and pid <= 1 / Prosper's own pid / a name blocklist are refused outright
+# (mirrors upstream's KillProcessSupport.isProtected).
+# See docs/ADR-002-extensibility.md.
+[extension]
+id          = "com.prosper.killproc"
+name        = "killproc"
+title       = "Kill Process"
+description = "List running processes by CPU and terminate one."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "xmark.octagon"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# Single no-view command. Typing "kill " locks the runner into it and lists the
+# top CPU consumers; further typing filters by name or pid.
+#
+# The kill itself is committed by a TRAILING "!" (`kill 1234!` = SIGTERM,
+# `kill 1234!!` = SIGKILL), never by Enter on a row. Reason: a locked runner mode
+# re-invokes this handler on EVERY keystroke, so any pid-shaped query would fire
+# at "1", "12", "123"… on the way to "1234" — and inline list rows cannot call
+# back into Lua on Enter (row `actions` dispatch natively to reserved `file.*`
+# ids only; see RunnerPanel.performRowAction). A trailing sentinel can never be an
+# accidental prefix of what the user is still typing. The confirm dialog is the
+# second gate on top of it.
+[[contributes.commands]]
+id          = "killproc.run"
+title       = "Kill Process"
+description = "List processes by CPU; type kill <pid>! to terminate (kill <pid>!! forces)."
+mode        = "no-view"
+icon        = "xmark.octagon"
+keywords    = ["kill", "process", "quit", "terminate", "ps", "task", "activity monitor"]
+match       = "^kill( |$)"
+# Runner-mode trigger: "kill " shows the "Kill Process" chip and strips the prefix.
+prefix      = "kill "
+# List the top CPU consumers the moment the mode opens (empty query).
+list_on_empty = true

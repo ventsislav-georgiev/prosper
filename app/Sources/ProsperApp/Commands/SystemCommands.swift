@@ -119,6 +119,10 @@ enum MetaCommand: String, Sendable {
     /// Opens the volume mixer popover from its menu-bar item. No-op when the
     /// mixer is off — there is then no status item to anchor the popover to.
     case openVolumeMixer
+    /// Drag a screen region, then copy whatever text (or barcode payload) it holds.
+    case copyScreenText
+    /// Pick a pixel colour anywhere on screen and copy its sRGB hex.
+    case pickColor
 
     static func parse(_ input: String) -> MetaCommand? {
         let s = input.trimmingCharacters(in: .whitespaces).lowercased()
@@ -130,6 +134,8 @@ enum MetaCommand: String, Sendable {
         // "preferences" (System Settings.app must still win that).
         case ":s", ":settings", ":prefs", ":preferences": return .openSettings
         case ":v", ":volume", ":mixer": return .openVolumeMixer
+        case ":ocr", ":text", ":scan": return .copyScreenText
+        case ":color", ":pick": return .pickColor
         default: return nil
         }
     }
@@ -141,6 +147,8 @@ enum MetaCommand: String, Sendable {
         case .newQuicklink: return "Create Quicklink"
         case .openSettings: return "Open Prosper Settings"
         case .openVolumeMixer: return "Open Volume Mixer"
+        case .copyScreenText: return "Copy Text from Screen"
+        case .pickColor: return "Pick Color from Screen"
         }
     }
 }

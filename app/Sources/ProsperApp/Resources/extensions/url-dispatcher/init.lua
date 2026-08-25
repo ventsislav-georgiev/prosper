@@ -48,6 +48,7 @@ end
 -- MARK: persistence (host.prefs) ------------------------------------------------
 
 local ROUTES_KEY, FALLBACK_KEY, CLEAN_KEY = "routes", "fallback", "clean_tracking"
+local COPIED_KEY = "clean_copied"
 
 -- routes: JSON array of { match = "<domain substring>", browser = "<bundle id>" }.
 local function load_routes()
@@ -64,6 +65,7 @@ local function load_fallback()
     return (id and #id > 0) and id or nil
 end
 local function load_clean() return host.prefs.get(CLEAN_KEY) == "true" end
+local function load_clean_copied() return host.prefs.get(COPIED_KEY) == "true" end
 
 -- MARK: tracking cleanup (opt-in, default off) ----------------------------------
 -- Strips analytics / click-id query params from a link before it is opened, so
@@ -193,6 +195,34 @@ function on_url(payload)
     host.url.open(url, browser)
 end
 
+-- MARK: clean copied links ------------------------------------------------------
+-- Same cleanup as on_url, applied to the pasteboard: copy a tracker-laden link
+-- and what you paste is the clean one. Opt-in (`clean_copied`, default off) —
+-- silently rewriting the clipboard is surprising.
+--
+-- Loop guard: writing the clipboard bumps changeCount and would re-fire this
+-- event. Two defences — the host's suppressNextChange after every extension
+-- write, and the no-change early-out below (a cleaned URL cleans to itself, so
+-- even a missed suppression converges after one pass instead of ping-ponging).
+local MAX_EVENT_TEXT = 8 * 1024 -- ClipboardMonitor truncates the payload here
+
+function on_clipboard(payload)
+    if not load_clean_copied() then return end
+    local data = payload and host.json.decode(payload) or nil
+    if type(data) ~= "table" or data.kind ~= "text" then return end
+    local text = data.text
+    -- A truncated payload is not the whole copy: writing it back would silently
+    -- destroy the tail. Absurd for a URL, cheap to refuse.
+    if type(text) ~= "string" or #text >= MAX_EVENT_TEXT then return end
+    -- Only a bare, single-token link — anything with surrounding prose is the
+    -- user's text, not ours to rewrite.
+    local url = text:match("^%s*(%S+)%s*$")
+    if not url or not url:lower():match("^https?://") then return end
+    local cleaned = clean_url(url)
+    if cleaned == url then return end -- nothing stripped: no write, no loop
+    host.clipboard.write(cleaned)
+end
+
 -- MARK: make-default ------------------------------------------------------------
 
 local function is_default() return host.url.default_browser() == PROSPER end
@@ -278,13 +308,18 @@ function settings_render(section_id, state)
     local privacy = s.section{
         id = "privacy", title = "Privacy",
         footer = "Strip analytics & click-tracking query parameters (utm_*, fbclid, "
-            .. "gclid, mc_eid, …) from links before opening them. Off by default. "
+            .. "gclid, mc_eid, …) from links before opening them, and — separately — "
+            .. "from a bare link the moment you copy it. Both off by default. "
             .. "Functional parameters are kept; only known trackers are removed.",
         rows = {
             s.row{ kind = "toggle", key = "clean_tracking",
                    title = "Remove tracking parameters",
                    subtitle = "Clean links before handing them to the browser",
                    value = load_clean() and "true" or "false" },
+            s.row{ kind = "toggle", key = "clean_copied",
+                   title = "Clean copied links",
+                   subtitle = "Strip trackers from a link the moment you copy it",
+                   value = load_clean_copied() and "true" or "false" },
         },
     }
 
@@ -310,6 +345,11 @@ function settings_action(section_id, action, value, form_json)
 
     if action == "set:clean_tracking" then
         host.prefs.set(CLEAN_KEY, value == "true" and "true" or "false")
+        return settings_render(section_id, "{}")
+    end
+
+    if action == "set:clean_copied" then
+        host.prefs.set(COPIED_KEY, value == "true" and "true" or "false")
         return settings_render(section_id, "{}")
     end
 

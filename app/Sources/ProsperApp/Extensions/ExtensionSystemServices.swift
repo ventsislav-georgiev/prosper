@@ -284,18 +284,48 @@ enum AppControl {
 enum Scripting {
     /// Run an AppleScript source string. Returns JSON { ok, output, error }.
     static func runAppleScript(_ source: String) -> String {
-        var errorInfo: NSDictionary?
-        let script = NSAppleScript(source: source)
-        let result = script?.executeAndReturnError(&errorInfo)
-        let obj: [String: Any]
-        if let err = errorInfo {
-            obj = ["ok": false, "output": "", "error": (err[NSAppleScript.errorMessage] as? String) ?? "script error"]
-        } else {
-            obj = ["ok": true, "output": result?.stringValue ?? "", "error": ""]
-        }
+        let result = run(source)
+        let obj: [String: Any] = ["ok": result.ok, "output": result.output, "error": result.error]
         guard let data = try? JSONSerialization.data(withJSONObject: obj),
               let s = String(data: data, encoding: .utf8) else { return #"{"ok":false}"# }
         return s
+    }
+
+    /// Run an AppleScript IN THIS PROCESS, keeping the AppleScript error number so
+    /// callers can tell a specific failure (a name collision, a declined Automation
+    /// consent at -1743/-1744) apart from a generic one. Blocks the calling thread
+    /// until the target app replies — call it off-main.
+    static func run(_ source: String) -> (ok: Bool, output: String, error: String, errorNumber: Int?) {
+        var errorInfo: NSDictionary?
+        let result = NSAppleScript(source: source)?.executeAndReturnError(&errorInfo)
+        if let err = errorInfo {
+            return (false, "",
+                    (err[NSAppleScript.errorMessage] as? String) ?? "script error",
+                    err[NSAppleScript.errorNumber] as? Int)
+        }
+        return (true, result?.stringValue ?? "", "", nil)
+    }
+
+    /// True when this app may script `bundleID`. Undetermined → shows the system
+    /// prompt (attributed to this app); granted → returns at once; denied → false
+    /// without nagging. Sending the events in-process rather than via `osascript`
+    /// is what attributes the Automation consent to Prosper itself, so it survives
+    /// updates and is re-requested if it was lost.
+    ///
+    /// From vorssaint-utils `Sources/Vorssaint/Services/ShellSupport.swift`
+    /// (`AppleScriptRunner.consentToAutomate`, GPL-3.0, Copyright (C) 2026
+    /// Vorssaint); `askUser` is threaded through so a Settings row can READ the
+    /// grant without popping a dialog at the user mid-scroll.
+    ///
+    /// Blocks while the prompt is up — call it off-main.
+    static func consentToAutomate(bundleID: String, askUser: Bool = true) -> Bool {
+        var target = AEAddressDesc()
+        let created = bundleID.withCString { ptr in
+            AECreateDesc(typeApplicationBundleID, ptr, bundleID.utf8.count, &target)
+        }
+        guard created == noErr else { return false }
+        defer { AEDisposeDesc(&target) }
+        return AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, askUser) == noErr
     }
 }
 
@@ -480,6 +510,8 @@ final class SystemEventWatchers {
     private var powerEdge = PowerEdgeFilter()
     private var reachability: SCNetworkReachability?
     private var wakeObserver: NSObjectProtocol?
+    private var sleepObserver: NSObjectProtocol?
+    private var lockObservers: [NSObjectProtocol] = []
     private var screenObserver: NSObjectProtocol?
     private var activateObserver: NSObjectProtocol?
     private var lastLidClosed: Bool?
@@ -518,6 +550,13 @@ final class SystemEventWatchers {
     func emitAppActivated(bundleID: String, name: String, pid: Int) {
         guard shouldEmit?("app.activated") ?? true else { return }
         emit?("app.activated", Self.json(["bundleID": bundleID, "name": name, "pid": pid]))
+    }
+
+    /// Forwards a screen lock/unlock edge. Extracted from the distributed-notification
+    /// observers so the payload is testable without actually locking the screen.
+    /// Same `{ "<state>": bool }` shape as `lid.changed`.
+    func emitScreenLocked(_ locked: Bool) {
+        emit?("screen.locked", Self.json(["locked": locked]))
     }
 
     // Battery / power-source changes via IOPSNotificationCreateRunLoopSource.
@@ -580,6 +619,21 @@ final class SystemEventWatchers {
         let wc = NSWorkspace.shared.notificationCenter
         wakeObserver = wc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.emit?("system.wake", "{}") }
+        }
+        // Mirror of wake. `willSleep` is posted before the machine goes down, so a
+        // handler gets its (short) chance to run; nothing is guaranteed to finish.
+        sleepObserver = wc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.emit?("system.sleep", "{}") }
+        }
+        // Screen lock/unlock exists only as a DISTRIBUTED notification — there is no
+        // NSWorkspace or other public equivalent. Undocumented but stable for a
+        // decade; the failure mode if Apple ever drops it is "the event never fires",
+        // never a crash.
+        let dnc = DistributedNotificationCenter.default()
+        for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
+            lockObservers.append(dnc.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.emitScreenLocked(locked) }
+            })
         }
         lastLidClosed = SystemInfo.lidClosed()
         screenObserver = NotificationCenter.default.addObserver(

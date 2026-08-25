@@ -1,0 +1,72 @@
+# Clipboard Auto-Clear — a copied password, OTP or token should not still be on
+# the pasteboard an hour later. Three triggers, all opt-in: an age-based sweep, a
+# wipe when the Mac sleeps, and a wipe when the screen locks.
+#
+# Opt-in as a whole (`default_disabled`): this deletes something the user put on
+# the clipboard, and subscribing to `clipboard.changed` is what starts the
+# pasteboard poll (extensions.md §5). Both are the user's call, not a default.
+[extension]
+id          = "com.prosper.clipclear"
+name        = "clipclear"
+title       = "Clipboard Auto-Clear"
+description = "Clear the clipboard automatically — after a delay, when the Mac sleeps, or when the screen locks."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "eraser"
+default_disabled = true
+# No `system = true`: nothing here needs the privileged tier (no shell, no agent,
+# no files.act). host.clipboard / host.timer / host.prefs are ungated.
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Nothing resident. system.launch arms the durable 60 s sweep (host.timer.schedule
+# is idempotent by id); the other three events each spin a worker and exit.
+[extension.activation]
+on_event = ["system.launch", "clipboard.changed", "system.sleep", "screen.locked"]
+eager    = true
+
+# No `prefix`: a prefixed command is re-invoked on every keystroke
+# (RunnerPanel.swift:741-765) and this one is destructive. Plain discovery row,
+# fires once on Enter.
+[[contributes.commands]]
+id          = "clipclear.now"
+title       = "Clear Clipboard Now"
+description = "Empty the clipboard immediately"
+mode        = "no-view"
+icon        = "eraser"
+keywords    = ["clipboard", "clear", "wipe", "empty", "paste", "password", "clipclear"]
+runs_on_select = true
+
+[[contributes.events]]
+event   = "system.launch"
+handler = "on_launch"
+
+# Stamps the moment of the copy, so the delay is measured from the copy itself
+# rather than from the tick that noticed it. The payload is not read at all.
+[[contributes.events]]
+event   = "clipboard.changed"
+handler = "on_copy"
+
+[[contributes.events]]
+event   = "system.sleep"
+handler = "on_sleep"
+
+[[contributes.events]]
+event   = "screen.locked"
+handler = "on_lock"
+
+# Dynamic (Tier-B) settings: the master switch, the delay, and the two
+# event triggers, plus a manual clear.
+[[contributes.settings_sections]]
+id       = "clipclear"
+title    = "Clipboard Auto-Clear"
+icon     = "eraser"
+accent   = "clipclear"
+subtitle = "Clear the clipboard on a delay, on sleep, or on lock"
+dynamic  = true

@@ -1,0 +1,57 @@
+# Menu Commands — search and press the frontmost app's menu-bar items from the
+# palette ("menu export pdf" → Safari › File › Export as PDF…). Reads the
+# natively-cached AX menu-bar walk through host.menus; same Accessibility grant
+# as window management and autocomplete.
+[extension]
+id          = "com.prosper.menus"
+name        = "menus"
+title       = "Menu Commands"
+description = "Search the frontmost app's menu bar and press any command."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "filemenu.and.selection"
+system      = true
+# Walking and pressing another app's menu bar is Accessibility, exactly like
+# host.window.*. Surfaced in Settings › Extensions so the grant is one click away.
+permissions = ["accessibility"]
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[extension.activation]
+on_event = []
+eager    = false
+
+# Runner-mode command. `menu ` locks the launcher into menu-search mode; the
+# rest of the query filters the frontmost app's menu items and Enter presses the
+# selected one (the reserved `menus.press` row action, handled natively).
+# `match` also lets a bare `m`/`menu` surface the command row in the launcher.
+[[contributes.commands]]
+id          = "menus.run"
+title       = "Menu Commands"
+description = "Search the frontmost app's menu bar and press a command"
+mode        = "no-view"
+icon        = "filemenu.and.selection"
+keywords    = ["menu", "menus", "menubar", "command", "shortcut"]
+match       = "^m(enu)?( |$)"
+prefix      = "menu "
+
+[[contributes.settings_sections]]
+id       = "menus"
+title    = "Menu Commands"
+icon     = "filemenu.and.selection"
+accent   = "Menus"
+subtitle = "Search and press the frontmost app's menu-bar commands"
+
+[[contributes.settings_sections.controls]]
+kind  = "group"
+title = "Permissions"
+
+[[contributes.settings_sections.controls]]
+kind = "permission"
+name = "accessibility"

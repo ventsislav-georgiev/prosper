@@ -243,7 +243,7 @@ Add commands without recompiling — small **Lua** scripts, auto-loaded, routed 
 
 <p align="center"><img width="764" height="523" alt="Extensions Marketplace — browse and install signed extensions" src="https://github.com/user-attachments/assets/29ba6637-b9fa-4f2b-907d-5bee73624229" /></p>
 
-The built-in commands above (calc, currency, units, base64, quicklinks, quickdirs, snippets, window, open, find files, translate, shell, browser bookmarks, plus the OpenLid and URL-dispatcher automations) *are* Lua extensions — open them in Settings to see how they're written, or use them as templates. Extensions can also **contribute themes** (a flat 12-token palette that re-skins the whole app, including menu-bar/dock chrome — pick one in **Settings → Personalization**) and drive **system automation** — global hotkeys, key remaps, app launchers, screen/power control, filesystem watches — the Hammerspoon territory, with a facade that even loads an unmodified `~/.hammerspoon/init.lua`. See [Writing extensions](extensions.md).
+The built-in commands above (calc, currency, units, base64, quicklinks, quickdirs, snippets, window, open, find files, translate, shell, browser bookmarks, System Settings panes, kill process, saved scripts, app updates, paste as plain text, plus the OpenLid, clipboard auto-clear and URL-dispatcher automations) *are* Lua extensions — open them in Settings to see how they're written, or use them as templates. Extensions can also **contribute themes** (a flat 12-token palette that re-skins the whole app, including menu-bar/dock chrome — pick one in **Settings → Personalization**) and drive **system automation** — global hotkeys, key remaps, app launchers, screen/power control, filesystem watches — the Hammerspoon territory, with a facade that even loads an unmodified `~/.hammerspoon/init.lua`. See [Writing extensions](extensions.md).
 
 ---
 
@@ -314,6 +314,8 @@ Prosper lives in the notification tray: toggle completions globally or per-app, 
 
 A full **Settings** window (`⌥\`) covers General (incl. AI Models) / Shortcuts / Windows / QuickLinks / QuickDirs / Extensions / Agent / Completions / Context / Apps / Personalization / Statistics / About — per-app enable lists, Disable-Tab list, model selector, custom AI instructions, hotkey rebinding, and usage stats.
 
+The sidebar has a search field (`⌘F` to focus, `Esc` to clear): type part of any pane or section name — "mixer", "clipboard", "themes" — and picking a result jumps straight to that section, scrolled to and briefly highlighted. Extension sections are searchable too, and appear or vanish with the extension.
+
 <p align="center"><img width="960" height="724" alt="prosper-demo-system" src="https://github.com/user-attachments/assets/e61519a5-1cc9-4452-ab09-aa7de9580adc" /></p>
 
 ---
@@ -374,11 +376,11 @@ Prosper is free and open source. Extend it without touching the core: write **Lu
 
 Prosper takes inspiration — ideas, UI/UX, and implementation know-how — from a number of projects we admire:
 
-- **[exelban/Stats](https://github.com/exelban/stats)** — the System Stats modules (CPU / RAM / GPU / network / sensors / fans) and their popups. Much of our know-how for the private IOReport / IOHID sensor paths and the SMC fan-control sequence came from studying it.
+- **[exelban/Stats](https://github.com/exelban/stats)** — the System Stats modules (CPU / RAM / GPU / network / disk / sensors / fans) and their popups. Much of our know-how for the private IOReport / IOHID sensor paths and the SMC fan-control sequence came from studying it.
 - **[jordanbaird/Ice](https://github.com/jordanbaird/Ice)** — the menu-bar management (hiding, reordering, layout).
 - **[Itsycal](https://github.com/sfsam/Itsycal)** — the menu-bar calendar: icon styles, month grid, and agenda.
 - **[openlid/openlid](https://github.com/openlid/openlid)** — the OpenLid lid-stay-awake feature.
-- **[vorssaint/vorssaint-utils](https://github.com/vorssaint/vorssaint-utils)** — the per-app volume mixer: the process-tap + aggregate-device engine, the boost limiter, the microphone input picker and mute-everything sweep, and the panel's UI/UX.
+- **[vorssaint/vorssaint-utils](https://github.com/vorssaint/vorssaint-utils)** — the per-app volume mixer: the process-tap + aggregate-device engine, the boost limiter, the microphone input picker and mute-everything sweep, and the panel's UI/UX; the drag-a-region screen-capture overlay behind Copy Text from Screen; and the Finder keyboard habits — F2 to rename the selection, ⌘X then ⌘V to move files into the front window, and ⌘V to save a copied image there as a PNG.
 - **[Raycast](https://www.raycast.com)** & **[Alfred](https://www.alfredapp.com)** — the command palette / launcher, clipboard history, snippets, and QuickLinks.
 - **[Cotypist](https://cotypist.app)** — on-device inline autocomplete.
 - **[Hammerspoon](https://github.com/Hammerspoon/hammerspoon)** — the Lua automation / scripting bridge.
