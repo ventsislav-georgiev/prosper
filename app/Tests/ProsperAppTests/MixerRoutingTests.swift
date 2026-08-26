@@ -295,7 +295,35 @@ final class MixerRoutingTests: XCTestCase {
         XCTAssertFalse(recheck([7], [7]))
     }
 
+    func testProcessObjectListenerAddressStaysFullyWildcarded() {
+        // Narrowing this back to the exact IsRunningOutput address registers
+        // without error and then never fires, which is what kept Safari and
+        // Spotify from flipping to playing. See the declaration for the
+        // measurement.
+        let address = MixerRoutingSupport.processObjectListenerAddress
+        XCTAssertEqual(address.mSelector, kAudioObjectPropertySelectorWildcard)
+        XCTAssertEqual(address.mScope, kAudioObjectPropertyScopeWildcard)
+        XCTAssertEqual(address.mElement, kAudioObjectPropertyElementWildcard)
+    }
+
     // MARK: - Helper-to-app attribution
+
+    func testWebKitHelperIsAttributedToItsBrowserThroughResponsibility() {
+        // Safari's audio renders in com.apple.WebKit.GPU, an XPC service
+        // launchd owns (parent pid 1), so the parent walk alone finds nothing:
+        // only the responsible pid points back at Safari.
+        let helper: pid_t = 97_539
+        let safari: pid_t = 97_456
+        XCTAssertEqual(MixerRoutingSupport.owningRegularAppPid(responsiblePid: safari,
+                                                               isRegularApp: { $0 == safari },
+                                                               parentPid: { _ in 1 }),
+                       safari)
+        // And a helper the system reports as responsible for itself has no
+        // owner to walk to, so it must not be attributed to launchd.
+        XCTAssertNil(MixerRoutingSupport.owningRegularAppPid(responsiblePid: helper,
+                                                             isRegularApp: { $0 == safari },
+                                                             parentPid: { _ in 1 }))
+    }
 
     func testOwningRegularAppWalksTheParentChain() {
         // helper 300 -> 200 -> 100, only 100 is a regular app.
@@ -315,6 +343,36 @@ final class MixerRoutingTests: XCTestCase {
         XCTAssertNil(MixerRoutingSupport.owningRegularAppPid(responsiblePid: 0,
                                                              isRegularApp: { _ in true },
                                                              parentPid: { _ in 0 }))
+    }
+
+    // MARK: - Row aggregation
+
+    private func row(_ id: String, objects: [AudioObjectID],
+                     playing: Bool, bypassed: Bool) -> MixerApp {
+        MixerApp(id: id, persistenceID: id, ownerPid: 1, name: id,
+                 audioObjects: objects, isPlaying: playing, isBypassed: bypassed,
+                 selectedOutputDeviceUID: nil, effectiveOutputDeviceUID: nil,
+                 outputDeviceUnavailable: false, volume: 1)
+    }
+
+    func testMergedRowsKeepPlaybackAndBypass() {
+        let merged = AppVolumeMixer.coalescingAppsWithDuplicateIDs([
+            row("com.apple.Safari", objects: [10], playing: false, bypassed: false),
+            row("com.apple.Safari", objects: [11], playing: true, bypassed: false),
+        ])
+        XCTAssertEqual(merged.count, 1)
+        // The helper is the one making sound; the app row is what the user sees.
+        XCTAssertTrue(merged[0].isPlaying)
+        XCTAssertEqual(merged[0].audioObjects, [10, 11])
+
+        // Bypass belongs to the app, not to one of its processes: a merge that
+        // dropped it would tap an app that must never be tapped.
+        let zoom = AppVolumeMixer.coalescingAppsWithDuplicateIDs([
+            row("us.zoom.xos", objects: [20], playing: false, bypassed: true),
+            row("us.zoom.xos", objects: [21], playing: true, bypassed: false),
+        ])
+        XCTAssertEqual(zoom.count, 1)
+        XCTAssertTrue(zoom[0].isBypassed)
     }
 
     // MARK: - Sound-output cycling

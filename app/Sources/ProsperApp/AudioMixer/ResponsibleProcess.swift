@@ -93,8 +93,12 @@ enum ResponsibleProcess {
         let key = "\(pid)@\(Int(pointSize))" as NSString
         let cost = estimatedBitmapCost(pointSize: pointSize)
         if let cached = iconCache.object(forKey: key) { return cached }
-        let source = NSRunningApplication(processIdentifier: pid)?.icon
-            ?? NSWorkspace.shared.icon(for: .unixExecutable)
+        guard let source = NSRunningApplication(processIdentifier: pid)?.icon else {
+            // A process the workspace cannot resolve yet (a row that just
+            // appeared) gets the generic icon, but it is not cached: the real
+            // one has to be able to replace it on the next redraw.
+            return resized(NSWorkspace.shared.icon(for: .unixExecutable), pointSize: pointSize)
+        }
         let image = resized(source, pointSize: pointSize)
         iconCache.setObject(image, forKey: key, cost: cost)
         return image

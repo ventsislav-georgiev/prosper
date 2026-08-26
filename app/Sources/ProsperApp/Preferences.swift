@@ -139,6 +139,7 @@ enum Preferences {
         static let agentEnabled = "agentEnabled"
         static let systemStatsEnabled = "systemStatsEnabled"
         static let mixerEnabled = "mixerEnabled"
+        static let mixerIconEnabled = "mixerIconEnabled"
         static let mixerPreferredInputDevice = "mixerPreferredInputDevice"
         static let doubleTapQuitEnabled = "doubleTapQuitEnabled"
         static let finderF2RenameEnabled = "finderF2RenameEnabled"
@@ -968,6 +969,17 @@ enum Preferences {
             return defaults.bool(forKey: Keys.mixerEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.mixerEnabled) }
+    }
+
+    /// Whether the mixer also shows its menu-bar item. Independent of the master
+    /// switch above: the engine keeps running with the icon hidden. Absent reads
+    /// as on, so everyone who had the old single toggle enabled keeps the icon.
+    static var mixerIconEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.mixerIconEnabled) == nil { return true }
+            return defaults.bool(forKey: Keys.mixerIconEnabled)
+        }
+        set { defaults.set(newValue, forKey: Keys.mixerIconEnabled) }
     }
 
     /// UID of the microphone the mixer re-selects whenever it is present. Absent

@@ -25,29 +25,43 @@ final class MixerPanelController {
     }()
 
     private lazy var popoverDelegate = MixerPopoverDelegate { [weak self] in
-        guard let self else { return }
-        self.updateOutsideClickMonitor()
-        if !self.popover.isShown {
-            // One turn later: AppKit is still unwinding the close when the
-            // delegate fires, and clearing the controller inside that unwind
-            // yanks the view out from under it.
-            DispatchQueue.main.async {
-                if !self.popover.isShown { self.popover.contentViewController = nil }
-            }
-        }
+        self?.updateOutsideClickMonitor()
+    }
+
+    /// Built once and reused for every open. Rebuilding the panel per click —
+    /// a hosting view, two pop-up buttons, then a slider, a pop-up button and
+    /// a text field for every app row — is what made the popover slow to show.
+    private var host: NSHostingController<Themed<MixerPanelView>>?
+
+    private func panelHost() -> NSHostingController<Themed<MixerPanelView>> {
+        if let host { return host }
+        // Themed because the view now outlives a single open: a theme or
+        // UI-size change while the popover is closed still has to reach it.
+        let created = NSHostingController(rootView: Themed { MixerPanelView() })
+        // Let the popover learn the view's real size BEFORE it positions
+        // itself, or AppKit anchors a 0×0 popover and then grows it — landing
+        // it offscreen above the bar or with a stray gap below.
+        created.sizingOptions = [.preferredContentSize]
+        host = created
+        return created
     }
 
     private init() {}
 
-    /// Bring the feature to match the preference. Idempotent — called at
-    /// launch and whenever `Preferences.mixerEnabled` flips.
+    /// Bring the feature to match the preferences. Idempotent — called at
+    /// launch and whenever `Preferences.mixerEnabled` or
+    /// `Preferences.mixerIconEnabled` flips.
     func reload() {
         // The service gates itself on the same preference, so sync first and
         // unconditionally: turning the mixer off has to tear the taps down
         // even though the status item is about to disappear.
         mixer.syncWithPreferences()
         AudioInputDeviceManager.shared.syncWithPreferences()
-        guard Preferences.mixerEnabled, MixerCore.isSupported else { teardown(); return }
+        // The engine follows the master switch alone (synced above); the item
+        // needs the separate icon toggle too, so hiding the icon leaves the
+        // taps and the microphone routing running.
+        guard Preferences.mixerEnabled, Preferences.mixerIconEnabled,
+              MixerCore.isSupported else { teardown(); return }
         syncItem()
     }
 
@@ -74,6 +88,9 @@ final class MixerPanelController {
         item.button?.toolTip = "Volume mixer"
         self.item = item
         updateGlyph()
+        // Load the panel one runloop turn later so the first click is as
+        // cheap as every later one without paying for it during launch.
+        DispatchQueue.main.async { [weak self] in _ = self?.panelHost().view }
 
         // The glyph mirrors the native volume icon, so it has to follow the
         // system output the same way — published state, not a poll.
@@ -153,12 +170,7 @@ final class MixerPanelController {
 
     @objc private func itemClicked(_ sender: NSStatusBarButton) {
         if popover.isShown { popover.performClose(sender); return }
-        let host = NSHostingController(rootView: MixerPanelView())
-        // Let the popover learn the view's real size BEFORE it positions
-        // itself, or AppKit anchors a 0×0 popover and then grows it — landing
-        // it offscreen above the bar or with a stray gap below.
-        host.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = host
+        popover.contentViewController = panelHost()
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
     }
 
@@ -180,12 +192,15 @@ final class MixerPanelController {
     private func teardown() {
         glyphObservers.removeAll()
         if popover.isShown { popover.performClose(nil) }
+        // Off means nothing of the panel survives, subscribed to the mixer.
+        popover.contentViewController = nil
+        host = nil
         if let item { NSStatusBar.system.removeStatusItem(item) }
         item = nil
     }
 }
 
-/// Bridges NSPopover open/close to the monitor + content teardown without the
+/// Bridges NSPopover open/close to the outside-click monitor without the
 /// controller having to conform to the delegate protocol itself.
 private final class MixerPopoverDelegate: NSObject, NSPopoverDelegate {
     let reconcile: () -> Void

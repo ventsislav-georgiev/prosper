@@ -531,6 +531,10 @@ struct SettingsSidebar: View {
     // Re-render the sidebar backdrop on opacity/frost without a teardown (see SettingsBackground).
     @ObservedObject private var theme = ThemeStore.shared
     @FocusState private var searchFocused: Bool
+    /// True while the pointer is over the search row (field, icon or clear button).
+    @State private var hoveringSearch = false
+    /// Local mouse-down monitor; live only while the sidebar is on screen.
+    @State private var clickMonitor: Any?
 
     private var searching: Bool {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -631,6 +635,26 @@ struct SettingsSidebar: View {
             Button("") { searchFocused = true }
                 .keyboardShortcut("f", modifiers: .command)
                 .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true))
+        .onHover { hoveringSearch = $0 }
+        // Any mouse-down that is not on the search row drops the caret. Sidebar
+        // rows and empty pane space are plain SwiftUI views that never take first
+        // responder, so without this the field stays focused and blinking.
+        // ponytail: hover flag stands in for a hit test — a click always lands
+        // where the pointer is; swap for window.contentView.hitTest if that
+        // ever stops holding.
+        .onAppear {
+            guard clickMonitor == nil else { return }
+            clickMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown]
+            ) { event in
+                if searchFocused, !hoveringSearch { searchFocused = false }
+                return event
+            }
+        }
+        .onDisappear {
+            if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+            clickMonitor = nil
+        }
         .padding(.horizontal, sz(2))
     }
 

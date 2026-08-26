@@ -756,6 +756,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(.menuBarToggleHidden) { MenuBarManager.shared.toggleHidden() }
         add(.calendarTogglePopup) { CalendarBarController.shared.togglePopup() }
         add(.mixerCycleOutput) { AppVolumeMixer.shared.cycleSoundOutput() }
+        add(.mixerToggleMicMute) { AudioInputDeviceManager.shared.toggleMicMute() }
         add(.copyScreenText) { ScreenTools.copyScreenText() }
         add(.pickColor) { ScreenTools.pickColor() }
 

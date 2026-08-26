@@ -194,6 +194,30 @@ enum MixerRoutingSupport {
     /// Only objects actually subscribed count: a registration the HAL refuses
     /// leaves the set unchanged, so a failing object can never arm an endless
     /// chain of re-reads.
+    /// The address every per-process listener is registered with.
+    ///
+    /// It has to be the fully wildcarded address. An audio process object does
+    /// send a change notification for `kAudioProcessPropertyIsRunningOutput`
+    /// (global scope, main element) the moment a process starts or stops
+    /// producing sound, but the HAL only ever hands it to listeners registered
+    /// with the wildcard address: a listener registered for the exact address
+    /// the notification carries registers without error and is never called.
+    /// Measured on macOS 26.6 with three listeners on the same object —
+    /// exact, selector-only, and full wildcard — where only the last one fired.
+    ///
+    /// That is what made playback detection depend on unrelated HAL traffic:
+    /// Safari's WebKit helper and Spotify both flipped unheard, and the row
+    /// only caught up when some other event (a device change, another app
+    /// starting) forced a refresh.
+    ///
+    /// The cost is a handful of extra notifications per object (its device
+    /// list changes alongside the running flag); they coalesce into the same
+    /// trailing refresh.
+    static let processObjectListenerAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioObjectPropertySelectorWildcard,
+        mScope: kAudioObjectPropertyScopeWildcard,
+        mElement: kAudioObjectPropertyElementWildcard)
+
     static func needsRunningRecheck(previouslyWatched: Set<AudioObjectID>,
                                     nowWatched: Set<AudioObjectID>) -> Bool {
         !nowWatched.isSubset(of: previouslyWatched)

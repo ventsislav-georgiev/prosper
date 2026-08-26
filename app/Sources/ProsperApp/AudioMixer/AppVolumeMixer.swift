@@ -386,7 +386,7 @@ final class AppVolumeMixer: ObservableObject {
 
     private func subscribeToRunningChanges(of object: AudioObjectID) {
         guard !runningListeners.contains(object) else { return }
-        var address = Self.isRunningOutputAddress()
+        var address = MixerRoutingSupport.processObjectListenerAddress
         if AudioObjectAddPropertyListener(object, &address, Self.listenerCallback, listenerClient) == noErr {
             runningListeners.insert(object)
         }
@@ -397,16 +397,10 @@ final class AppVolumeMixer: ObservableObject {
     /// either way.
     private func pruneRunningListeners(keeping current: Set<AudioObjectID>) {
         for object in runningListeners where !current.contains(object) {
-            var address = Self.isRunningOutputAddress()
+            var address = MixerRoutingSupport.processObjectListenerAddress
             AudioObjectRemovePropertyListener(object, &address, Self.listenerCallback, listenerClient)
             runningListeners.remove(object)
         }
-    }
-
-    private nonisolated static func isRunningOutputAddress() -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(mSelector: kAudioProcessPropertyIsRunningOutput,
-                                   mScope: kAudioObjectPropertyScopeGlobal,
-                                   mElement: kAudioObjectPropertyElementMain)
     }
 
     /// One hardware event fires the listeners back-to-back (device list,
@@ -1010,7 +1004,7 @@ final class AppVolumeMixer: ObservableObject {
                                processObjects: processObjects)
     }
 
-    private nonisolated static func coalescingAppsWithDuplicateIDs(_ apps: [MixerApp]) -> [MixerApp] {
+    nonisolated static func coalescingAppsWithDuplicateIDs(_ apps: [MixerApp]) -> [MixerApp] {
         var merged: [MixerApp] = []
         var indexesByID: [String: Int] = [:]
 
@@ -1029,6 +1023,11 @@ final class AppVolumeMixer: ObservableObject {
                                      name: existing.name,
                                      audioObjects: audioObjects,
                                      isPlaying: existing.isPlaying || app.isPlaying,
+                                     // Bypass is a property of the app, not of
+                                     // one of its processes: losing it here
+                                     // would tap an app that must never be
+                                     // tapped.
+                                     isBypassed: existing.isBypassed || app.isBypassed,
                                      selectedOutputDeviceUID: existing.selectedOutputDeviceUID,
                                      effectiveOutputDeviceUID: existing.effectiveOutputDeviceUID,
                                      outputDeviceUnavailable: existing.outputDeviceUnavailable,

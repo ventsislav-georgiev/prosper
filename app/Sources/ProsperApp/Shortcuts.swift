@@ -296,6 +296,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     case menuBarToggleHidden
     case calendarTogglePopup
     case mixerCycleOutput
+    case mixerToggleMicMute
     case copyScreenText
     case pickColor
 
@@ -318,6 +319,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .menuBarToggleHidden: return "Menu Bar: Reveal/Hide Section"
         case .calendarTogglePopup: return "Calendar: Toggle Calendar"
         case .mixerCycleOutput: return "Volume Mixer: Next Sound Output"
+        case .mixerToggleMicMute: return "Volume Mixer: Mute Every Microphone"
         case .copyScreenText: return "Screen: Copy Text from Region"
         case .pickColor: return "Screen: Pick Color"
         }
@@ -345,6 +347,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .mixerCycleOutput: return 17
         case .copyScreenText: return 18
         case .pickColor: return 19
+        case .mixerToggleMicMute: return 20
         }
     }
 
@@ -366,10 +369,13 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     /// disabled. Used to gate both global registration and the Settings listing.
     @MainActor
     func isAvailable(registry: ExtensionRegistry?) -> Bool {
-        // The output cycle drives the mixer service, which only keeps its device
-        // list live while the mixer is on — so the binding is hidden and left
-        // unregistered rather than firing into a stopped service.
-        if self == .mixerCycleOutput { return MixerCore.isSupported && Preferences.mixerEnabled }
+        // Both mixer shortcuts drive the mixer service, which only keeps its
+        // device list live while the mixer is on — so the binding is hidden and
+        // left unregistered rather than firing into a stopped service. They
+        // follow the master switch, not the menu-bar icon toggle.
+        if self == .mixerCycleOutput || self == .mixerToggleMicMute {
+            return MixerCore.isSupported && Preferences.mixerEnabled
+        }
         guard let ext = owningExtensionID else { return true }
         return registry?.record(id: ext)?.enabled ?? false
     }
@@ -429,6 +435,10 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .mixerCycleOutput:
             // Opt-in: cycling outputs behind a key the user did not choose is a
             // surprise, and the mixer panel already switches output by hand.
+            return unsetKeyCombo
+        case .mixerToggleMicMute:
+            // Opt-in for the same reason: silencing every microphone from a key
+            // nobody picked is the last thing to do by surprise.
             return unsetKeyCombo
         case .copyScreenText, .pickColor:
             // Opt-in: the runner (`:ocr` / `:color`) is the always-available trigger.

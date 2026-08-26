@@ -23,7 +23,7 @@ private enum MixerAccent {
 struct MixerPanelView: View {
     @ObservedObject private var mixer = AppVolumeMixer.shared
     @ObservedObject private var inputs = AudioInputDeviceManager.shared
-    @AppStorage(MixerDefaultsKey.hideInactiveApps) private var hideInactiveApps = false
+    @AppStorage(MixerDefaultsKey.hideInactiveApps) private var hideInactiveApps = true
     @State private var editingVolumeID: String?
     /// Where the system slider was before the mute button zeroed it. The HAL
     /// mute property has no setter on the service, so "mute" is volume 0 that
@@ -64,7 +64,6 @@ struct MixerPanelView: View {
             sectionLabel("Output")
             outputDeviceRow
             systemVolumeRow
-            soundEffectsRow
             if let outputSwitchError = mixer.outputSwitchError {
                 hint("Could not switch output: \(outputSwitchError)",
                      systemImage: "exclamationmark.triangle")
@@ -221,42 +220,8 @@ struct MixerPanelView: View {
         }
     }
 
-    private var soundEffectsRow: some View {
-        HStack(spacing: sz(8)) {
-            Image(systemName: "bell.fill")
-                .font(Neon.font(10.5, weight: .semibold))
-                .foregroundStyle(Neon.textSecondary)
-                .frame(width: sz(16))
-            Text("Alerts")
-                .font(Neon.font(11.5, weight: .medium))
-                .foregroundStyle(Neon.textSecondary)
-            Spacer(minLength: sz(6))
-            Picker("Sound effects output", selection: soundEffectsSelection) {
-                if mixer.currentSystemSoundOutputDeviceUID == nil {
-                    Text("Unavailable").tag(MixerRoutingSupport.systemDefaultSelectionID)
-                }
-                ForEach(soundEffectsDevices) { device in
-                    Text(soundEffectsTitle(device)).tag(device.uid)
-                }
-                if let selected = mixer.currentSystemSoundOutputDeviceUID,
-                   !soundEffectsDevices.contains(where: { $0.uid == selected }) {
-                    Text("Unavailable").tag(selected)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .controlSize(.small)
-            .frame(width: sz(178))
-            .disabled(soundEffectsDevices.isEmpty)
-        }
-    }
-
     private var universalOutputDevices: [MixerOutputDevice] {
         mixer.outputDevices.filter(\.canBeDefaultOutput)
-    }
-
-    private var soundEffectsDevices: [MixerOutputDevice] {
-        mixer.outputDevices.filter(\.canBeDefaultSystemOutput)
     }
 
     private var universalOutputSelection: Binding<String> {
@@ -265,19 +230,6 @@ struct MixerPanelView: View {
             set: { selection in
                 guard selection != MixerRoutingSupport.systemDefaultSelectionID else { return }
                 mixer.setUniversalOutputDeviceUID(selection)
-            }
-        )
-    }
-
-    private var soundEffectsSelection: Binding<String> {
-        Binding(
-            get: {
-                mixer.currentSystemSoundOutputDeviceUID
-                    ?? MixerRoutingSupport.systemDefaultSelectionID
-            },
-            set: { selection in
-                guard selection != MixerRoutingSupport.systemDefaultSelectionID else { return }
-                mixer.setSystemSoundOutputDeviceUID(selection)
             }
         )
     }
@@ -291,12 +243,6 @@ struct MixerPanelView: View {
 
     private func deviceTitle(_ device: MixerOutputDevice) -> String {
         device.isDefault ? "\(device.name) (current)" : device.name
-    }
-
-    private func soundEffectsTitle(_ device: MixerOutputDevice) -> String {
-        device.uid == mixer.currentSystemSoundOutputDeviceUID
-            ? "\(device.name) (current)"
-            : device.name
     }
 
     // MARK: - Per-app rows
@@ -366,9 +312,14 @@ struct MixerPanelView: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: sz(8)) {
             HStack(spacing: sz(8)) {
-                Button("Reset all apps") { mixer.resetAll() }
-                    .buttonStyle(.neon)
-                    .disabled(mixer.apps.isEmpty)
+                Button { mixer.resetAll() } label: {
+                    Image(systemName: "arrow.counterclockwise.circle")
+                        .font(Neon.font(12, weight: .semibold))
+                        .foregroundStyle(Neon.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(mixer.apps.isEmpty)
+                .help("Reset every app to 100% on the system default output")
                 Spacer(minLength: sz(6))
                 Button {
                     LiveExtensionHostServices.shared.settingsOpener?(Self.settingsSelection)

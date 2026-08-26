@@ -96,6 +96,20 @@ final class AppShortcutTests: XCTestCase {
         }
     }
 
+    /// Every fixed action needs its own hotkey id, or the later registration
+    /// silently replaces the earlier one.
+    func testFixedActionHotKeyIdsAreUnique() {
+        let ids = ShortcutAction.allCases.map(\.hotKeyId)
+        XCTAssertEqual(Set(ids).count, ids.count)
+    }
+
+    /// The mic-mute toggle ships unbound: silencing every microphone from a key
+    /// nobody chose is a surprise, and the pane toggle is the visible trigger.
+    func testMicMuteShortcutHasNoDefaultCombo() {
+        XCTAssertEqual(ShortcutAction.mixerToggleMicMute.defaultCombo, unsetKeyCombo)
+        XCTAssertFalse(ShortcutAction.mixerToggleMicMute.isWindowManagement)
+    }
+
     // MARK: - Duplicate combos
 
     /// macOS gives a combo to whoever registers first, so a duplicate silently never

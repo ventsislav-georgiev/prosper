@@ -106,6 +106,8 @@ tag from the now-released section and put it on the new top draft.
   whenever it reappears — dock, headset, USB interface — instead of letting macOS hand
   the default input to whatever was plugged in last. The panel's mic button also mutes
   every input at once, and an unmute never opens a microphone you had muted yourself.
+  The mute-every-microphone toggle can also ride a global shortcut (unbound by
+  default), recorded in **Settings → Volume Mixer**.
 - **Volume Mixer**: bind a global shortcut to cycle the sound output across the devices
   you tick in the pane, so speakers → headphones is one chord. Unbound by default.
 - **Volume Mixer**: the menu-bar glyph follows the output — AirPods, AirPods Pro and

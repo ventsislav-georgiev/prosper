@@ -237,7 +237,13 @@ final class AudioInputDeviceManager: ObservableObject {
 
     // MARK: - Mute every input
 
-    func toggleMicMute() { setMicMuted(!micMuted) }
+    /// The panel button and the global shortcut both land here. Inert while the
+    /// mixer is off — the listeners are down, so `micMuted` says nothing useful
+    /// and there would be no switch in sight to undo it with.
+    func toggleMicMute() {
+        guard Preferences.mixerEnabled, MixerCore.isSupported else { return }
+        setMicMuted(!micMuted)
+    }
 
     func setMicMuted(_ muted: Bool) {
         if muted { muteAllInputs() } else { unmuteRecordedInputs() }

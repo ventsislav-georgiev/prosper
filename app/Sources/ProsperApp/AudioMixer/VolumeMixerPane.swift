@@ -9,25 +9,46 @@ struct VolumeMixerPane: View {
     @ObservedObject private var mixer = AppVolumeMixer.shared
     @ObservedObject private var inputs = AudioInputDeviceManager.shared
     @State private var enabled = Preferences.mixerEnabled
+    @State private var iconEnabled = Preferences.mixerIconEnabled
     @State private var cycleCombo = ShortcutStore.combo(for: .mixerCycleOutput)
-    @AppStorage(MixerDefaultsKey.hideInactiveApps) private var hideInactiveApps = false
+    @State private var micMuteCombo = ShortcutStore.combo(for: .mixerToggleMicMute)
+    @AppStorage(MixerDefaultsKey.hideInactiveApps) private var hideInactiveApps = true
 
     var body: some View {
         NeonScroll {
             PaneTitle(title: "Volume Mixer", accent: "Mixer",
                       subtitle: "Per-app volume, boost and output routing, from your menu bar")
 
-            NeonSection("Menu Bar") {
+            NeonSection("Volume Mixer",
+                        footer: "Off means nothing runs \u{2014} no audio taps, no device listeners, no menu-bar item.") {
                 if MixerCore.isSupported {
-                    NeonRow("Show Volume Mixer",
-                            subtitle: "Adds a volume item to the menu bar, replacing the native sound control") {
+                    NeonRow("Enable volume mixer",
+                            subtitle: "The whole feature: per-app volume, microphone routing and output switching") {
                         Toggle("", isOn: $enabled).labelsHidden()
                             .onChange(of: enabled) { _, v in
                                 Preferences.mixerEnabled = v
                                 MixerPanelController.shared.reload()
-                                // The output-cycle hotkey is gated on this
-                                // preference, so it has to be (un)registered now.
+                                // Both mixer hotkeys are gated on this
+                                // preference, so they have to be (un)registered now.
                                 SettingsHooks.shared.onShortcutsChanged?()
+                            }
+                    }
+                } else {
+                    NeonRow("Enable volume mixer",
+                            subtitle: "Per-app volume needs macOS 14.4 or newer.") { EmptyView() }
+                }
+            }
+
+            if MixerCore.isSupported, enabled {
+                // The icon is a separate switch: hiding it leaves the engine,
+                // the shortcuts and the microphone routing running.
+                NeonSection("Menu Bar") {
+                    NeonRow("Show Volume Mixer",
+                            subtitle: "Adds a volume item to the menu bar, replacing the native sound control") {
+                        Toggle("", isOn: $iconEnabled).labelsHidden()
+                            .onChange(of: iconEnabled) { _, v in
+                                Preferences.mixerIconEnabled = v
+                                MixerPanelController.shared.reload()
                             }
                     }
                     NeonDivider()
@@ -35,13 +56,8 @@ struct VolumeMixerPane: View {
                             subtitle: "Lists only apps that are playing or already adjusted") {
                         Toggle("", isOn: $hideInactiveApps).labelsHidden()
                     }
-                } else {
-                    NeonRow("Show Volume Mixer",
-                            subtitle: "Per-app volume needs macOS 14.4 or newer.") { EmptyView() }
                 }
-            }
 
-            if MixerCore.isSupported, enabled {
                 if mixer.needsPermission {
                     NeonSection("Permission",
                                 footer: "Prosper taps each app's audio to re-render it at your chosen volume; macOS gates that behind System Audio Recording.") {
@@ -54,6 +70,28 @@ struct VolumeMixerPane: View {
                             }
                             .buttonStyle(.neon)
                         }
+                    }
+                }
+
+                NeonSection("Alerts",
+                            footer: "Alert and interface sounds can play on a different device than your music and video \u{2014} handy when the main output is a headset.") {
+                    NeonRow("Alert output",
+                            subtitle: "Where macOS plays sound effects") {
+                        Picker("", selection: soundEffectsSelection) {
+                            if mixer.currentSystemSoundOutputDeviceUID == nil {
+                                Text("Unavailable").tag(MixerRoutingSupport.systemDefaultSelectionID)
+                            }
+                            ForEach(soundEffectsDevices) { device in
+                                Text(soundEffectsTitle(device)).tag(device.uid)
+                            }
+                            if let selected = mixer.currentSystemSoundOutputDeviceUID,
+                               !soundEffectsDevices.contains(where: { $0.uid == selected }) {
+                                Text("Unavailable").tag(selected)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 200)
+                        .disabled(soundEffectsDevices.isEmpty)
                     }
                 }
 
@@ -77,7 +115,17 @@ struct VolumeMixerPane: View {
                     }
                     NeonDivider()
                     NeonRow("Mute every microphone",
-                            subtitle: "Silences all inputs at the device, whichever app is listening") {
+                            subtitle: micMuteSubtitle) {
+                        ShortcutRecorder(combo: micMuteCombo) { combo in
+                            setMicMuteCombo(combo)
+                        }
+                        .frame(width: sz(110), height: sz(24))
+                        .fixedSize()
+                        Button {
+                            setMicMuteCombo(unsetKeyCombo)
+                        } label: { Image(systemName: "xmark.circle") }
+                            .buttonStyle(.borderless)
+                            .help("Disable this shortcut")
                         Toggle("", isOn: Binding(get: { inputs.micMuted },
                                                  set: { inputs.setMicMuted($0) }))
                             .labelsHidden()
@@ -125,6 +173,29 @@ struct VolumeMixerPane: View {
         }
     }
 
+    private var soundEffectsDevices: [MixerOutputDevice] {
+        mixer.outputDevices.filter(\.canBeDefaultSystemOutput)
+    }
+
+    private var soundEffectsSelection: Binding<String> {
+        Binding(
+            get: {
+                mixer.currentSystemSoundOutputDeviceUID
+                    ?? MixerRoutingSupport.systemDefaultSelectionID
+            },
+            set: { selection in
+                guard selection != MixerRoutingSupport.systemDefaultSelectionID else { return }
+                mixer.setSystemSoundOutputDeviceUID(selection)
+            }
+        )
+    }
+
+    private func soundEffectsTitle(_ device: MixerOutputDevice) -> String {
+        device.uid == mixer.currentSystemSoundOutputDeviceUID
+            ? "\(device.name) (current)"
+            : device.name
+    }
+
     private var cyclableOutputs: [MixerOutputDevice] {
         mixer.outputDevices.filter(\.canBeDefaultOutput)
     }
@@ -133,6 +204,19 @@ struct VolumeMixerPane: View {
         if cycleCombo == unsetKeyCombo { return "No shortcut yet — click to record one" }
         if mixer.participatingOutputUIDs.count < 2 { return "Tick at least two outputs to cycle between" }
         return "Switches the system output to the next ticked device"
+    }
+
+    private var micMuteSubtitle: String {
+        if micMuteCombo == unsetKeyCombo {
+            return "Silences all inputs at the device, whichever app is listening"
+        }
+        return "Silences all inputs at the device \u{2014} the shortcut toggles it too"
+    }
+
+    private func setMicMuteCombo(_ combo: KeyCombo) {
+        micMuteCombo = combo
+        ShortcutStore.setCombo(combo, for: .mixerToggleMicMute)
+        SettingsHooks.shared.onShortcutsChanged?()
     }
 
     private func setCycleCombo(_ combo: KeyCombo) {
