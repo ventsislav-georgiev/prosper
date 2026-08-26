@@ -286,9 +286,27 @@ enum CommandRouter {
               let registry = await MainActor.run(body: { registry }),
               let raw = await registry.invokeAsync(commandID: routed.id, query: query)
         else { return nil }
+        // A handler that answers a bare `match` hit with a declarative component
+        // tree (Kill Process on "kill", Menu Commands on "m") is a runner-mode
+        // command, not a one-shot value: that list belongs to the locked mode,
+        // which renders it natively. Rendering it here would put the raw JSON in a
+        // search row's title as copyable text, so decline instead — the launcher
+        // falls through to the command's own discovery row, whose Enter locks the
+        // mode and re-runs the handler there.
+        if viewNode(raw) != nil { return nil }
         let parts = raw.components(separatedBy: "\t")
         if parts.count == 2 { return (routed.title, parts[0], parts[1]) }
         return (routed.title, raw, "")
+    }
+
+    /// A handler's raw return decoded as a declarative component tree, or nil when
+    /// it is a plain value / "value\tdetail" string. The cheap pre-check (a JSON
+    /// object carrying a `"type"` discriminator) keeps the hot path off the
+    /// decoder for ordinary string returns.
+    static func viewNode(_ raw: String) -> ExtensionViewNode? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{"), trimmed.contains("\"type\"") else { return nil }
+        return try? ExtensionViewNode.decode(json: trimmed)
     }
 
     /// Surfaces a window-launching extension command (manifest `launches_window`)
@@ -804,14 +822,9 @@ enum CommandRouter {
             return .ext(kind: title, value: "", detail: "")
         }
         // A handler may return a declarative component tree (host.ui.render(...))
-        // to be rendered inline as rich native UI. Detect it cheaply (JSON object
-        // carrying a "type" discriminator) and decode; anything else is a plain
-        // value / "value\tdetail" string row.
-        let trimmedRaw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedRaw.hasPrefix("{"), trimmedRaw.contains("\"type\""),
-           let node = try? ExtensionViewNode.decode(json: trimmedRaw) {
-            return .extView(node)
-        }
+        // to be rendered inline as rich native UI; anything else is a plain value /
+        // "value\tdetail" string row.
+        if let node = viewNode(raw) { return .extView(node) }
         let parts = raw.components(separatedBy: "\t")
         if parts.count == 2 { return .ext(kind: title, value: parts[0], detail: parts[1]) }
         return .ext(kind: title, value: raw, detail: "")

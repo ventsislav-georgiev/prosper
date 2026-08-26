@@ -4,12 +4,16 @@
 # Known ceiling: the rich pasteboard content is REPLACED, not restored — there is no
 # host.clipboard.snapshot()/restore(), so the styled original is gone after a paste,
 # and clipboard history (when enabled) gains one extra plain entry.
+#
+# Two ways in: the palette command (⌘⌥⇧V by default, below) and — off unless the
+# user picks a mode in Settings — the classic ⌘V / ⇧⌘V pair, where one chord pastes
+# plain and the other pastes the original. See init.lua for the interception path.
 [extension]
 id          = "com.prosper.pasteplain"
 name        = "pasteplain"
 title       = "Paste as Plain Text"
 description = "Paste the clipboard with all formatting stripped. Note: the rich clipboard content is replaced, not restored, and clipboard history gains a plain-text entry."
-version     = "1.0.0"
+version     = "1.1.0"
 author      = "Prosper"
 license     = "MIT"
 icon        = "doc.on.clipboard"
@@ -21,6 +25,17 @@ api_level   = 1
 
 [extension.entry]
 main = "init.lua"
+
+# Nothing resident. system.launch registers the ⌘V / ⇧⌘V key rules for whichever
+# mode the user picked (none by default), then the worker exits; from there the
+# native rule engine does the interception and re-invokes `pasteplain_chord`.
+[extension.activation]
+on_event = ["system.launch"]
+eager    = true
+
+[[contributes.events]]
+event   = "system.launch"
+handler = "on_launch"
 
 [[contributes.commands]]
 id             = "pasteplain.paste"
@@ -37,3 +52,15 @@ runs_on_select = true
 [[contributes.keybindings]]
 command = "pasteplain.paste"
 key     = "cmd+alt+shift+v"
+
+# Dynamic (Tier-B) settings: the ⌘V / ⇧⌘V mode picker. Dynamic rather than a
+# static `enum` control because changing the mode must re-register the key rules
+# immediately — a static control only writes the pref and nothing would re-read it
+# until the next launch.
+[[contributes.settings_sections]]
+id       = "pasteplain"
+title    = "Paste as Plain Text"
+icon     = "doc.on.clipboard"
+accent   = "pasteplain"
+subtitle = "Paste the clipboard with all formatting stripped"
+dynamic  = true

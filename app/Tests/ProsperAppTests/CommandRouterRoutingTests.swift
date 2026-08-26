@@ -273,4 +273,87 @@ final class CommandRouterRoutingTests: XCTestCase {
         try registry.setEnabled(true, id: "com.test.stress")
         XCTAssertEqual(registry.commandSearchEntries().count, 5, "memo must rebuild on re-enable")
     }
+
+    /// Regression (#067): a `no-view` command surfaced by its `match` regex whose
+    /// handler answers with a declarative component tree (Kill Process on "kill",
+    /// Menu Commands on "m") must NOT render that JSON as a search row's title.
+    /// The generic dispatch declines, so the launcher falls through to the
+    /// command's own discovery row — Enter there locks the runner mode, which is
+    /// where the list belongs.
+    private func makeListingExtension() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("listing-test-\(UUID().uuidString)", isDirectory: true)
+        let dir = root.appendingPathComponent("lister", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try """
+        [extension]
+        id = "com.test.lister"
+        name = "lister"
+        title = "Lister"
+        description = "returns a view tree from a no-view command"
+        version = "1.0.0"
+        author = "test"
+        system = true
+
+        [extension.host]
+        min_version = "2.0.0"
+        api_level = 1
+
+        [extension.entry]
+        main = "init.lua"
+
+        [[contributes.commands]]
+        id = "lister.run"
+        title = "Lister"
+        mode = "no-view"
+        keywords = ["lister"]
+        match = "^lister( |$)"
+        prefix = "lister "
+        list_on_empty = true
+        """.write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+        try """
+        function lister_run(query)
+            return '{"type":"list","items":[{"id":"a","title":"Row A"}]}'
+        end
+        """.write(to: dir.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+        return root
+    }
+
+    @MainActor
+    func testViewTreeNeverLeaksIntoSearchRow() async throws {
+        let root = try makeListingExtension()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let registry = ExtensionRegistry(
+            systemDir: root,
+            userDir: FileManager.default.temporaryDirectory
+                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            defaults: UserDefaults(suiteName: "listing-test-\(UUID().uuidString)")!
+        )
+        registry.discover()
+        try XCTSkipIf(registry.command(id: "lister.run") == nil, "lister.run not discovered")
+
+        let previous = CommandRouter.registry
+        CommandRouter.registry = registry
+        defer { CommandRouter.registry = previous }
+
+        // Universal launcher: the JSON must never become row text.
+        let out = await CommandRouter.run("lister")
+        if case .ext(_, let value, let detail) = out {
+            XCTFail("view tree leaked as a text row: \(value) / \(detail)")
+        }
+        XCTAssertFalse(out.copyText.contains("{"), "raw JSON must not be copyable row text")
+        // …and the command still surfaces as a mode-entering discovery row.
+        guard case .search(let hits) = out else { return XCTFail("expected .search, got \(out)") }
+        XCTAssertTrue(hits.contains { $0.commandID == "lister.run" && !$0.commandLaunchesWindow },
+                      "the command row must still be offered")
+
+        // Locked mode keeps rendering the same payload natively.
+        let locked = await CommandRouter.run(
+            "", mode: .ext(id: "lister.run", title: "Lister", icon: "list.bullet"))
+        guard case .extView(.list(let node)) = locked else {
+            return XCTFail("expected an inline list in locked mode, got \(locked)")
+        }
+        XCTAssertEqual(node.items.first?.title, "Row A")
+    }
 }

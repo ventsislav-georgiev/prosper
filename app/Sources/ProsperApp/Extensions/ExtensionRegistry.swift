@@ -868,15 +868,25 @@ final class ExtensionRegistry: ObservableObject {
     /// changes whether the local model must stay loaded). Set by AppDelegate.
     var onEnabledChanged: (@MainActor () -> Void)?
 
+    /// Drop everything an extension left running in the host: its VM (both lanes),
+    /// durable timers, and the native resources it registered — power assertions,
+    /// menubar items, FS watches, and KEY RULES. The key rules matter most: the
+    /// shared tap swallows a matched chord in its hot path and only then dispatches
+    /// to the (now gone) extension, so a lingering rule silently eats the keystroke
+    /// system-wide until relaunch — e.g. pasteplain's opt-in ⌘V would stop pasting
+    /// anything at all. Shared by disable and uninstall so neither can drift.
+    private func teardown(_ record: ExtensionRecord) {
+        record.runtime = nil
+        TimerScheduler.shared.cancelAll(extID: record.id)
+        services.resetResources(extensionID: record.id)
+        asyncRuntimes.invalidate(id: record.id)     // the off-main twin
+    }
+
     func setEnabled(_ enabled: Bool, id: String) throws {
         guard let record = record(id: id) else { throw ExtensionError.notFound(id) }
         record.enabled = enabled
-        if !enabled {
-            record.runtime = nil                // tear down VM when disabled
-            TimerScheduler.shared.cancelAll(extID: id)  // and its durable timers
-            services.resetResources(extensionID: id)    // and native resources (assertions/pmset)
-        }
-        asyncRuntimes.invalidate(id: id)        // and its off-main twin
+        if !enabled { teardown(record) }
+        asyncRuntimes.invalidate(id: id)        // re-enable drops the stale twin too
         persistDisabled()
         persistEnabled()
         rebuildRoutes()
@@ -894,6 +904,10 @@ final class ExtensionRegistry: ObservableObject {
         // re-grant. (In-place upgrades go through installLocal's overwrite, not here,
         // so an update of a privileged extension keeps its privilege.)
         clearPrivilege(id: id)
+        // Same teardown as disabling. `discover()` below only rebuilds the record
+        // list — it does not reach into the host, so without this an uninstalled
+        // extension's key rules, menubar items, watches and timers all outlive it.
+        teardown(record)
         try FileManager.default.removeItem(at: record.loaded.directory)
         discover()
     }

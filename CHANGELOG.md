@@ -49,10 +49,15 @@ tag from the now-released section and put it on the new top draft.
   Prosper re-checks in the background every 6 hours (configurable) and notifies only
   when something *new* appears; the palette command shows that cached result instantly,
   since the macOS check itself can take a minute. "Check for Updates Now" runs the slow
-  path on demand. In **Settings → App Updates**.
+  path on demand. Off by
+  default — turn it on in **Settings → Extensions**; configure it in
+  **Settings → App Updates**.
 - **Launcher**: **Paste as Plain Text** — ⌘⌥⇧V pastes the clipboard with all formatting
   stripped, straight into the app you are typing in without the launcher appearing.
-  Needs Accessibility. Note that the rich clipboard content is replaced rather than
+  Prefer a plainer chord? The extension's settings offer an opt-in mode that makes
+  ⌘V itself paste plain (with ⇧⌘V keeping the formatting), or the reverse — ⇧⌘V
+  pastes plain and ⌘V is left untouched. Finder is exempt either way, since its ⌘V
+  pastes files. Needs Accessibility. Note that the rich clipboard content is replaced rather than
   restored, so the styled original is gone after the paste.
 - **New extension — Clipboard Auto-Clear**: a copied password, OTP or token should not
   still be on the pasteboard an hour later. Clears the clipboard a set time after the

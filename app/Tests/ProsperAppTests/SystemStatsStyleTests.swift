@@ -129,4 +129,42 @@ final class SystemStatsStyleTests: XCTestCase {
         let back = try JSONDecoder().decode(StatsWidgetStyle.self, from: data)
         XCTAssertEqual(style, back)
     }
+
+    // MARK: - Store: order reconciliation for modules added after a blob was saved
+
+    private static let storeKey = "systemStatsWidgetStyle"
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: Self.storeKey)
+        super.tearDown()
+    }
+
+    /// Disk was added to the default order after the first beta shipped, so a
+    /// persisted blob can carry an `order` with no slot for it. `enabledModules`
+    /// only walks `order`, so without reconciliation switching Disk on in the
+    /// settings pane produced no menu-bar item at all.
+    func testLoadRestoresModulesMissingFromPersistedOrder() throws {
+        var legacy = StatsWidgetStyle.default
+        legacy.order.removeAll { $0 == StatsModule.disk.rawValue }
+        legacy.modules[StatsModule.disk.rawValue]?.enabled = true
+        UserDefaults.standard.set(try JSONEncoder().encode(legacy), forKey: Self.storeKey)
+
+        XCTAssertFalse(legacy.enabledModules.contains(.disk), "the bug: enabled but absent from order")
+
+        let loaded = SystemStatsStore.load()
+        XCTAssertEqual(Set(loaded.order), Set(StatsModule.allCases.map(\.rawValue)),
+                       "every module gets a slot in order")
+        XCTAssertTrue(loaded.enabledModules.contains(.disk), "enabling Disk now reaches the menu bar")
+    }
+
+    func testLoadKeepsPersistedOrderAndDropsUnknownKeys() throws {
+        var saved = StatsWidgetStyle.default
+        saved.order = ["bogus", StatsModule.gpu.rawValue, StatsModule.cpu.rawValue]
+        UserDefaults.standard.set(try JSONEncoder().encode(saved), forKey: Self.storeKey)
+
+        let loaded = SystemStatsStore.load()
+        XCTAssertEqual(Array(loaded.order.prefix(2)), [StatsModule.gpu.rawValue, StatsModule.cpu.rawValue],
+                       "the user's own arrangement leads; unknown keys are dropped")
+        XCTAssertEqual(Set(loaded.order), Set(StatsModule.allCases.map(\.rawValue)))
+    }
 }

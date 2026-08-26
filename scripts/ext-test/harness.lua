@@ -484,6 +484,12 @@ function M.makeHost(opts)
                 env.strokes[#env.strokes + 1] = spec
                 env.actions[#env.actions + 1] = "keys.stroke:" .. tostring(spec)
             end,
+            -- Declarative key rules. The real host replaces the extension's whole
+            -- rule set on every call, so the stub keeps only the latest list.
+            set_rules = function(rules)
+                env.keyRules = rules or {}
+                env.actions[#env.actions + 1] = "keys.set_rules:" .. tostring(#env.keyRules)
+            end,
         },
 
         -- Snippet store, backed by env tables so management verbs can be tested.

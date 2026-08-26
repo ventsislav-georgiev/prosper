@@ -307,18 +307,17 @@ function settings_render(section_id, state)
 
     local privacy = s.section{
         id = "privacy", title = "Privacy",
-        footer = "Strip analytics & click-tracking query parameters (utm_*, fbclid, "
-            .. "gclid, mc_eid, …) from links before opening them, and — separately — "
-            .. "from a bare link the moment you copy it. Both off by default. "
-            .. "Functional parameters are kept; only known trackers are removed.",
+        footer = "Strips analytics & click-tracking query parameters (utm_*, fbclid, "
+            .. "gclid, mc_eid, …). Functional parameters are kept; only known trackers "
+            .. "are removed. Both off by default.",
         rows = {
             s.row{ kind = "toggle", key = "clean_tracking",
-                   title = "Remove tracking parameters",
-                   subtitle = "Clean links before handing them to the browser",
+                   title = "Clean links you open",
+                   subtitle = "Strip trackers when a link is handed to the browser",
                    value = load_clean() and "true" or "false" },
             s.row{ kind = "toggle", key = "clean_copied",
-                   title = "Clean copied links",
-                   subtitle = "Strip trackers from a link the moment you copy it",
+                   title = "Clean links you copy",
+                   subtitle = "Strip trackers the moment a bare link lands on the clipboard",
                    value = load_clean_copied() and "true" or "false" },
         },
     }
