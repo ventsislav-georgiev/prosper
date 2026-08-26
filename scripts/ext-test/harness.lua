@@ -263,6 +263,12 @@ function M.makeHost(opts)
         windowClosed = 0,
         -- shellRouter(cmd) -> string lets a test return different output per command.
         shellRouter = opts.shellRouter,
+        -- host.process (native KillProcessSupport in production). The refusal rules
+        -- are NOT reimplemented here — a test states the answers it wants as
+        -- { [pid string] = "reason" }; anything absent is killable. env.kills is the
+        -- ordered log of signals that got through: { { pid = "501", force = false } }.
+        processRefusals = opts.processRefusals or {},
+        kills = {},
         -- Every AppleScript source passed to host.osascript.run, in order.
         -- osaRouter(src) -> { ok=, output=, error= } lets a test fail a specific
         -- script (e.g. an Automation grant denied); default is a silent success.
@@ -298,6 +304,15 @@ function M.makeHost(opts)
         },
         json = { encode = encode, decode = decode },
         shell = { run = shell_run },
+        process = {
+            refusal = function(pid) return env.processRefusals[tostring(pid)] end,
+            kill = function(pid, force)
+                local why = env.processRefusals[tostring(pid)]
+                if why then return why end
+                env.kills[#env.kills + 1] = { pid = tostring(pid), force = force and true or false }
+                return nil
+            end,
+        },
         timer = {
             schedule = function(o) env.calls.timerSchedule = env.calls.timerSchedule + 1; env.timers[o.id] = o end,
             cancel = function(id) env.calls.timerCancel = env.calls.timerCancel + 1; env.timers[id] = nil end,

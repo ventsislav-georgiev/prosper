@@ -76,6 +76,83 @@ struct StatsPopupView: View {
     @State private var fanBusy = false           // engage in flight (daemon round-trip)
     @State private var fanError: String?         // last engage failure, shown inline
 
+    // MARK: Process-list selection (the kill affordance)
+    //
+    // Clicking a row selects it, which does two things: it reveals an ✕ on that
+    // row, and it PINS the table — the rows keep the order they had at that
+    // moment, so a refresh can't slide the ✕ out from under the cursor. Values
+    // keep updating; a process that exits still leaves. Clicking the same row
+    // again (or the ✕ after a kill) unpins. The kill itself goes through
+    // `KillProcessSupport`, the same guard seam the killproc extension calls.
+
+    /// pid of the selected row; nil = nothing selected and the table is live.
+    @State private var selectedPID: Int32?
+    /// Row order frozen at selection time (pids, most-important first).
+    @State private var pinnedPIDs: [Int32]?
+    /// Result of the last kill attempt, shown under the table.
+    @State private var killNote: String?
+
+    /// Whether the Kill Process extension is enabled — the kill button is its
+    /// feature, so it obeys the same switch in Settings › Extensions.
+    private var killEnabled: Bool {
+        SettingsHooks.shared.extensionRegistry?.record(id: "com.prosper.killproc")?.enabled == true
+    }
+
+    /// Rows in the pinned order while a row is selected, untouched otherwise.
+    /// Processes that appeared since the pin are appended in their current order.
+    private func pinnedRows<T>(_ rows: [T], _ pid: (T) -> Int32) -> [T] {
+        guard let order = pinnedPIDs else { return rows }
+        var byPID = Dictionary(rows.map { (pid($0), $0) }, uniquingKeysWith: { a, _ in a })
+        var out = order.compactMap { byPID.removeValue(forKey: $0) }
+        out.append(contentsOf: rows.filter { byPID[pid($0)] != nil })
+        return out
+    }
+
+    private func selectRow(_ pid: Int32, in rows: [Int32]) {
+        killNote = nil
+        if selectedPID == pid { selectedPID = nil; pinnedPIDs = nil; return }
+        if pinnedPIDs == nil { pinnedPIDs = rows }
+        selectedPID = pid
+    }
+
+    private func killSelected(_ pid: Int32, _ name: String) {
+        guard killEnabled else {
+            killNote = "Kill Process must be enabled in Settings › Extensions."
+            return
+        }
+        if let why = KillProcessSupport.kill(pid: pid, force: false) {
+            killNote = "Can't quit \(name): \(why)."
+        } else {
+            killNote = "Asked \(name) to quit."
+            selectedPID = nil
+            pinnedPIDs = nil
+        }
+    }
+
+    /// A process row plus its selection behaviour and, when selected, the ✕.
+    private func killableRow<V: View>(pid: Int32, name: String, order: [Int32],
+                                      @ViewBuilder content: () -> V) -> some View {
+        HStack(spacing: sz(6)) {
+            content()
+            if selectedPID == pid {
+                Button { killSelected(pid, name) } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(Neon.font(12, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(killEnabled ? Neon.magenta : Neon.textSecondary.opacity(0.5))
+                .help(killEnabled ? "Quit \(name) (pid \(pid))"
+                                  : "Kill Process must be enabled in Settings › Extensions")
+            }
+        }
+        .padding(.horizontal, sz(4))
+        .padding(.vertical, sz(1))
+        .background(RoundedRectangle(cornerRadius: sz(4))
+            .fill(selectedPID == pid ? Neon.cardHi : .clear))
+        .contentShape(Rectangle())
+        .onTapGesture { selectRow(pid, in: order) }
+    }
+
     /// Sensor the user pinned as the headline (menu bar + big readout); nil = auto.
     @State private var headlineSensor = Preferences.sensorsHeadlineSensor
     @State private var namedOrder = Preferences.sensorsNamedOrder
@@ -89,6 +166,12 @@ struct StatsPopupView: View {
             if module == .cpu || module == .memory || module == .battery { topProcesses }
             if module == .network { networkProcesses }
             if module == .disk { diskProcesses }
+            if let killNote {
+                Text(killNote)
+                    .font(Neon.font(.caption))
+                    .foregroundStyle(Neon.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(sz(16))
         .frame(width: sz(320))
@@ -966,9 +1049,9 @@ struct StatsPopupView: View {
         // popups keep their own axes.
         let byMem = module == .memory
         let byEnergy = module == .battery
-        let procs = byMem ? store.snapshot.topByMemory
-                  : byEnergy ? store.snapshot.topByPower
-                  : store.snapshot.topByCPU
+        let procs = (byMem ? store.snapshot.topByMemory
+                     : byEnergy ? store.snapshot.topByPower
+                     : store.snapshot.topByCPU).map { pinnedRows($0, \.pid) }
         return VStack(alignment: .leading, spacing: sz(5)) {
             section("Top processes")
             HStack {
@@ -981,7 +1064,8 @@ struct StatsPopupView: View {
                 ForEach(procs, id: \.pid) { p in
                     procRow(p, byMem ? StatsFormat.bytes(Double(p.memory))
                               : byEnergy ? String(format: "%.1f", p.power)
-                              : StatsFormat.percent(p.cpu))
+                              : StatsFormat.percent(p.cpu),
+                            order: procs.map(\.pid))
                 }
             } else {
                 Text("Sampling…").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
@@ -989,19 +1073,21 @@ struct StatsPopupView: View {
         }
     }
 
-    private func procRow(_ p: ProcInfo, _ value: String) -> some View {
-        HStack(spacing: sz(7)) {
-            ProcessIcon(pid: p.pid)
-            Text(p.name).font(Neon.font(.caption)).foregroundStyle(Neon.textPrimary).lineLimit(1)
-            Spacer(minLength: sz(8))
-            Text(value).font(Neon.font(.caption, weight: .semibold).monospacedDigit())
+    private func procRow(_ p: ProcInfo, _ value: String, order: [Int32]) -> some View {
+        killableRow(pid: p.pid, name: p.name, order: order) {
+            HStack(spacing: sz(7)) {
+                ProcessIcon(pid: p.pid)
+                Text(p.name).font(Neon.font(.caption)).foregroundStyle(Neon.textPrimary).lineLimit(1)
+                Spacer(minLength: sz(8))
+                Text(value).font(Neon.font(.caption, weight: .semibold).monospacedDigit())
+            }
         }
     }
 
     /// Per-process network throughput (nettop-backed): name + down/up rate columns,
     /// each column headed by its colour dot. exelban's network "Top processes".
     private var networkProcesses: some View {
-        let procs = store.snapshot.topByNetwork
+        let procs = store.snapshot.topByNetwork.map { pinnedRows($0, \.pid) }
         let cfg = store.style.config(.network)
         return VStack(alignment: .leading, spacing: sz(5)) {
             section("Top processes")
@@ -1016,29 +1102,32 @@ struct StatsPopupView: View {
                     .frame(width: sz(64), alignment: .trailing)
             }
             if let procs, !procs.isEmpty {
-                ForEach(procs, id: \.pid) { netProcRow($0) }
+                ForEach(procs, id: \.pid) { p in
+                    ioProcRow(pid: p.pid, name: p.name,
+                              in: p.downBytesPerSec, out: p.upBytesPerSec,
+                              order: procs.map(\.pid))
+                }
             } else {
                 Text("Sampling…").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             }
         }
     }
 
-    private func netProcRow(_ p: NetProcInfo) -> some View {
-        ioProcRow(pid: p.pid, name: p.name, in: p.downBytesPerSec, out: p.upBytesPerSec)
-    }
-
     /// Two-rate process row (in/out columns) shared by the network and disk tables.
-    private func ioProcRow(pid: Int32, name: String, in inRate: Double, out outRate: Double) -> some View {
-        HStack(spacing: sz(7)) {
-            ProcessIcon(pid: pid)
-            Text(name).font(Neon.font(.caption)).foregroundStyle(Neon.textPrimary).lineLimit(1)
-            Spacer(minLength: sz(8))
-            Text(StatsFormat.rateMenu(inRate))
-                .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
-                .frame(width: sz(71), alignment: .trailing)
-            Text(StatsFormat.rateMenu(outRate))
-                .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
-                .frame(width: sz(71), alignment: .trailing)
+    private func ioProcRow(pid: Int32, name: String, in inRate: Double, out outRate: Double,
+                           order: [Int32]) -> some View {
+        killableRow(pid: pid, name: name, order: order) {
+            HStack(spacing: sz(7)) {
+                ProcessIcon(pid: pid)
+                Text(name).font(Neon.font(.caption)).foregroundStyle(Neon.textPrimary).lineLimit(1)
+                Spacer(minLength: sz(8))
+                Text(StatsFormat.rateMenu(inRate))
+                    .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
+                    .frame(width: sz(71), alignment: .trailing)
+                Text(StatsFormat.rateMenu(outRate))
+                    .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
+                    .frame(width: sz(71), alignment: .trailing)
+            }
         }
     }
 
@@ -1046,7 +1135,7 @@ struct StatsPopupView: View {
     /// Unprivileged libproc can't read root-owned daemons, so this table is the user's
     /// own processes — the ones a "why is my disk thrashing" question is usually about.
     private var diskProcesses: some View {
-        let procs = store.snapshot.topByDisk
+        let procs = store.snapshot.topByDisk.map { pinnedRows($0, \.pid) }
         let cfg = store.style.config(.disk)
         return VStack(alignment: .leading, spacing: sz(5)) {
             section("Top processes")
@@ -1062,7 +1151,8 @@ struct StatsPopupView: View {
             }
             if let procs, !procs.isEmpty {
                 ForEach(procs, id: \.pid) { ioProcRow(pid: $0.pid, name: $0.name,
-                                                      in: $0.diskRead, out: $0.diskWrite) }
+                                                      in: $0.diskRead, out: $0.diskWrite,
+                                                      order: procs.map(\.pid)) }
             } else {
                 // nil = the first sample hasn't landed; empty = sampled, disk is idle.
                 Text(procs == nil ? "Sampling…" : "No disk activity")

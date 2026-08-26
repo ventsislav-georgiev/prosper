@@ -106,6 +106,7 @@ requires        = ["model"]               # hidden until the local LLM is downlo
 list_on_empty   = true                    # run on an empty query so the mode opens pre-populated
 launches_window = false                   # surface as a row that opens a window on Enter (no per-keystroke run)
 runs_on_select  = false                   # discovery-list pick runs immediately (for parameterless toggles)
+bindable_items  = true                    # each listed row becomes its own bindable global shortcut
 ```
 
 | Field | Effect |
@@ -119,8 +120,9 @@ runs_on_select  = false                   # discovery-list pick runs immediately
 | `list_on_empty` | Run the handler on an empty query so a listing mode opens pre-populated then filters as you type ([`bookmarks`](app/Sources/ProsperApp/Resources/extensions/bookmarks/)). Off = clear the result on empty input (right default for a scalar like Translate). |
 | `launches_window` | Surface as a row that opens its own window on Enter instead of running per keystroke. |
 | `runs_on_select` | Picking the command from the discovery list runs the handler immediately rather than entering its input mode. Reserve for **parameterless, non-destructive** actions (toggles/status, e.g. [`openlid`](app/Sources/ProsperApp/Resources/extensions/openlid/)'s "Toggle Mac Awake"). It never auto-fires on a keystroke — only on an explicit Enter on the selected row. |
+| `bindable_items` | With `list_on_empty`, expand the command in Settings › Shortcuts into **one bindable global shortcut per listed row**, so a hotkey can open one specific [`sysprefs`](app/Sources/ProsperApp/Resources/extensions/sysprefs/) pane or run one saved [`scripts`](app/Sources/ProsperApp/Resources/extensions/scripts/) entry. Firing sends `prefix + row title` to the handler and then performs that row's `url` / `launch` / first action. Opt in only when the rows are **stable and individually addressable** — a listing of live processes or of thousands of bookmarks makes for dead or unusable bindings. |
 
-Other contribution arrays under `[contributes]`: `keybindings` (`{ command, key, when }`), `views`, `placeholders` (snippet tokens, §6), `events` (§5), `themes` (§7), `settings_sections` (§8).
+Other contribution arrays under `[contributes]`: `keybindings` (`{ command, key, when }` — a default global hotkey that runs the command with no visible runner; every one of them is listed, rebindable, and clearable in Settings › Shortcuts › Extension Commands, where the user's override wins over the manifest key), `views`, `placeholders` (snippet tokens, §6), `events` (§5), `themes` (§7), `settings_sections` (§8).
 
 Any installed extension whose `match` accepts the query is dispatched on its own **off-main async lane** — that is how [`quicklinks`](app/Sources/ProsperApp/Resources/extensions/quicklinks/) and your own extensions surface as palette commands. [`currency`](app/Sources/ProsperApp/Resources/extensions/currency/) is the canonical async example: it fetches daily FX over `host.http` (with retry), caches via `host.prefs`/`host.time`, and never blocks the main thread.
 

@@ -827,24 +827,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
 
-        // Extension-contributed global hotkeys (`[[contributes.keybindings]]`):
-        // each maps a key string to a command id that the host runs through normal
-        // dispatch on press — no Lua callback, no resident VM (host API plan §C).
-        // Ids start at 300 to stay clear of the fixed + custom-shortcut ids above.
-        var hotkeyIndex = 0
-        for record in extensions.records where record.isLive {
-            for kb in record.manifest.contributes?.allKeybindings ?? [] {
-                guard let combo = KeyCombo.parse(kb.key), combo.carbonModifiers != 0 else { continue }
-                let command = kb.command
-                bound.append(
-                    (GlobalHotKey(keyCode: combo.keyCode, modifiers: combo.carbonModifiers,
-                                  id: GlobalHotKey.extensionIdBase + UInt32(hotkeyIndex)) { [weak self] in
-                        Task { @MainActor in _ = await self?.extensions.invokeAsync(commandID: command, query: "") }
-                    },
-                     "\(record.manifest.extension.title) · \(combo.display)")
-                )
-                hotkeyIndex += 1
-            }
+        // Extension-command hotkeys, in ONE range (300+) with one registrar: the
+        // manifest-declared `[[contributes.keybindings]]` of every live extension
+        // (with the user's Settings override applied) followed by the shortcuts
+        // the user bound to extension actions themselves. Each runs its command
+        // through normal dispatch on press — no Lua callback, no resident VM, no
+        // visible runner (host API plan §C).
+        //
+        // Both kinds come from one pure builder so a manifest default and a user
+        // binding can never land on the same id, and so a disabled extension drops
+        // its hotkeys: the walk is gated on `isLive`, and this whole function
+        // re-runs from `extensions.onEnabledChanged`.
+        for (i, reg) in ExtensionShortcuts.registrations(
+            registry: extensions,
+            overrides: ShortcutStore.extensionKeybindings(),
+            userShortcuts: ShortcutStore.extensionShortcuts()).enumerated() {
+            let commandID = reg.commandID
+            let item = reg.item
+            bound.append(
+                (GlobalHotKey(keyCode: reg.combo.keyCode, modifiers: reg.combo.carbonModifiers,
+                              id: GlobalHotKey.extensionIdBase + UInt32(i)) { [weak self] in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        await ExtensionShortcuts.fire(commandID: commandID, item: item,
+                                                      registry: self.extensions)
+                    }
+                },
+                 reg.label)
+            )
         }
 
         hotKeys = bound.map(\.key)

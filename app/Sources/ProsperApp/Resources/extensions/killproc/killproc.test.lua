@@ -1,7 +1,14 @@
--- Unit tests for killproc/init.lua. The guard table IS the test: this extension
--- shells out to `kill`, so every refusal rule gets a case, and every end-to-end
--- case asserts on the RECORDED shell commands (the harness stub never runs a real
--- shell, so nothing on this machine is ever signalled).
+-- Unit tests for killproc/init.lua.
+--
+-- The refusal RULES are not tested here any more — they live natively in
+-- KillProcessSupport (see KillProcessSupportTests.swift), and this extension only
+-- asks for them through host.process. What is tested here is everything this file
+-- still owns: the listing, the filter, the trailing-"!" commit gesture, the
+-- confirm gate, and the two shell-safety invariants (only a validated pid is ever
+-- interpolated, the process name never is).
+--
+-- The harness's host.process never signals anything real: a kill that gets past
+-- the stubbed refusals just appends to env.kills.
 
 local h = require("harness")
 
@@ -15,16 +22,24 @@ local PS = table.concat({
     "garbage line that must be ignored",
 }, "\n")
 
--- shellRouter answers `ps`, `echo $PPID` and records every command; a `kill`
--- returns "" but is visible in env.shellLog.
+-- What the native guard would say about the pids in PS.
+local REFUSALS = {
+    ["0"] = "system pid",
+    ["1"] = "system pid",
+    ["777"] = "protected: WindowServer",
+    ["4242"] = "that's Prosper",
+}
+
+-- shellRouter answers `ps` and records every command; opts.comm supplies the
+-- targeted `ps -o comm= -p <pid>` lookup (display name only).
 local function newHost(opts)
     opts = opts or {}
     local log = {}
     local host, env
     host, env = h.makeHost{
+        processRefusals = opts.refusals or REFUSALS,
         shellRouter = function(cmd)
             log[#log + 1] = cmd
-            if cmd:find("echo %$PPID") then return tostring(opts.ownPid or 4242) end
             if cmd:find("^ps %-Ao") then return PS end
             local pid = cmd:match("^ps %-o comm= %-p (%d+)$")
             if pid then return (opts.comm and opts.comm[pid]) or "" end
@@ -35,51 +50,14 @@ local function newHost(opts)
     return host, env
 end
 
-local function killCmds(env)
-    local out = {}
-    for _, c in ipairs(env.shellLog) do
-        if c:match("^kill ") then out[#out + 1] = c end
-    end
-    return out
-end
-
 local host, env = newHost()
 local G = h.load(h.dir() .. "init.lua", host)
-local guard, run = G.killproc_guard, G.killproc_run
+local run = G.killproc_run
 
--- ── 1. guard: the pid must be `^%d+$` (shell-injection boundary) ─────────────
-for _, bad in ipairs({
-    "12; rm -rf ~", "12 && reboot", "$(id)", "`id`", "12|cat", "-1", "1 2",
-    "0x10", "12.0", " 12", "12 ", "", "abc", "12\n34",
-}) do
-    h.eq(guard(bad, "/usr/bin/vim", 4242), "not a pid",
-         "non-numeric pid refused: " .. string.format("%q", bad))
-end
-h.eq(guard(nil, "/usr/bin/vim", 4242), "not a pid", "nil pid refused")
-h.eq(guard(500, "/usr/bin/vim", 4242), nil, "numeric pid accepted (not just strings)")
+-- ── 1. the guard rules are NOT duplicated in Lua ─────────────────────────────
+h.eq(G.killproc_guard, nil, "no Lua-side guard function survives (rules live natively)")
 
--- ── 2. guard: pid <= 1 ───────────────────────────────────────────────────────
-h.eq(guard("0", "kernel_task", 4242), "system pid", "pid 0 refused")
-h.eq(guard("1", "/sbin/launchd", 4242), "system pid", "pid 1 refused")
-h.eq(guard("2", "/usr/bin/vim", 4242), nil, "pid 2 allowed")
-
--- ── 3. guard: our own pid ────────────────────────────────────────────────────
-h.eq(guard("4242", "/usr/bin/vim", 4242), "that's Prosper", "own pid refused")
-h.eq(guard("4243", "/usr/bin/vim", 4242), nil, "neighbouring pid allowed")
-
--- ── 4. guard: the name blocklist, by bare name AND by full ps path ───────────
-for _, name in ipairs({ "kernel_task", "launchd", "WindowServer", "loginwindow", "Prosper" }) do
-    h.eq(guard("9001", name, 4242), "protected: " .. name, "blocked bare: " .. name)
-    h.eq(guard("9001", "/System/Library/CoreServices/" .. name, 4242),
-         "protected: " .. name, "blocked by basename: " .. name)
-end
-h.eq(guard("9001", "/usr/bin/Prosperity", 4242), nil, "substring of a blocked name is NOT blocked")
-
--- ── 5. guard: unknown / vanished process ─────────────────────────────────────
-h.eq(guard("9001", nil, 4242), "no such process", "missing comm refused")
-h.eq(guard("9001", "   ", 4242), "no such process", "blank comm refused")
-
--- ── 6. listing: parsed, CPU-sorted, protected rows flagged, no kill ──────────
+-- ── 2. listing: parsed, CPU-sorted, refused rows flagged, no kill ────────────
 local out = run("kill ")
 h.eq(out.kind, "list", "empty query renders a list")
 h.eq(out.items[1].title, "Prosper", "sorted by CPU desc (55.9 first)")
@@ -89,75 +67,84 @@ h.eq(out.items[3].accessory, "protected: WindowServer", "blocklisted row flagged
 h.eq(out.items[#out.items].title, "kernel_task", "lowest CPU last")
 h.eq(out.items[2].accessory, "kill 501!", "killable row shows the commit gesture")
 h.eq(out.items[2].subtitle, "pid 501  ·  12.5% CPU  ·  512 MB", "subtitle = pid · cpu · rss")
-h.eq(#killCmds(env), 0, "listing never kills")
+h.eq(#env.kills, 0, "listing never kills")
 
 -- filter by name and by pid
 h.eq(run("kill saf").items[1].title, "Safari", "filters by name (case-insensitive)")
 h.eq(#run("kill 900").items, 1, "filters by pid substring")
 h.eq(run("kill nosuchthing"), "No process matches 'nosuchthing'", "no match -> message")
 
--- ── 7. a bare pid NEVER kills (the per-keystroke hazard) ─────────────────────
+-- ── 3. a bare pid NEVER kills (the per-keystroke hazard) ─────────────────────
 host, env = newHost{ comm = { ["501"] = "/Applications/Safari.app/Contents/MacOS/Safari" } }
-G = h.load(h.dir() .. "init.lua", host)
-run = G.killproc_run
+G = h.load(h.dir() .. "init.lua", host); run = G.killproc_run
 for _, q in ipairs({ "kill 5", "kill 50", "kill 501", "kill 501 " }) do run(q) end
-h.eq(#killCmds(env), 0, "typing a pid without the ! sentinel never signals anything")
+h.eq(#env.kills, 0, "typing a pid without the ! sentinel never signals anything")
 
--- ── 8. `<pid>!` -> confirm -> kill -TERM, exactly once ───────────────────────
+-- ── 4. `<pid>!` -> confirm -> SIGTERM, exactly once ──────────────────────────
 local msg = run("kill 501!")
-h.eq(#killCmds(env), 1, "one kill issued")
-h.eq(killCmds(env)[1], "kill -TERM 501", "SIGTERM by default")
+h.eq(#env.kills, 1, "one kill issued")
+h.eq(env.kills[1].pid, "501", "the pid from the query")
+h.eq(env.kills[1].force, false, "SIGTERM by default")
 h.eq(env.dialogConfirm.message, "Send -TERM to Safari (pid 501)?", "confirm names the process")
 h.eq(msg, "Sent -TERM to Safari (pid 501)", "result text")
 h.eq(env.notifications[1].title, "Sent -TERM", "notified")
 
--- ── 9. `<pid>!!` -> SIGKILL ──────────────────────────────────────────────────
+-- ── 5. `<pid>!!` -> SIGKILL ──────────────────────────────────────────────────
 host, env = newHost{ comm = { ["501"] = "/Applications/Safari.app/Contents/MacOS/Safari" } }
 G = h.load(h.dir() .. "init.lua", host); run = G.killproc_run
 run("kill 501!!")
-h.eq(killCmds(env)[1], "kill -9 501", "double bang forces SIGKILL")
+h.eq(env.kills[1].force, true, "double bang forces SIGKILL")
 
--- ── 10. a declined confirm kills nothing ─────────────────────────────────────
+-- ── 6. a declined confirm kills nothing ──────────────────────────────────────
 host, env = newHost{ comm = { ["501"] = "/Applications/Safari.app/Contents/MacOS/Safari" } }
 G = h.load(h.dir() .. "init.lua", host); run = G.killproc_run
 env.confirmReply = false
 h.eq(run("kill 501!"), "Cancelled", "declined confirm cancels")
-h.eq(#killCmds(env), 0, "declined confirm issues no kill")
+h.eq(#env.kills, 0, "declined confirm issues no kill")
 
--- ── 11. end-to-end refusals: every guard rule blocks the shell call ──────────
-local REFUSALS = {
-    { q = "kill 0!",    comm = { ["0"] = "kernel_task" },              want = "Refused (0): system pid" },
-    { q = "kill 1!!",   comm = { ["1"] = "/sbin/launchd" },            want = "Refused (1): system pid" },
-    { q = "kill 4242!", comm = { ["4242"] = "/Applications/Prosper.app/Contents/MacOS/Prosper" },
-                                                                       want = "Refused (4242): that's Prosper" },
-    { q = "kill 777!",  comm = { ["777"] = "/usr/sbin/WindowServer" }, want = "Refused (777): protected: WindowServer" },
-    { q = "kill 778!",  comm = { ["778"] = "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow" },
-                                                                       want = "Refused (778): protected: loginwindow" },
-    { q = "kill 999!",  comm = {},                                     want = "Refused (999): no such process" },
-}
-for _, c in ipairs(REFUSALS) do
-    host, env = newHost{ comm = c.comm }
+-- ── 7. a native refusal blocks the kill AND the dialog ───────────────────────
+for _, c in ipairs({
+    { q = "kill 0!",    want = "Refused (0): system pid" },
+    { q = "kill 1!!",   want = "Refused (1): system pid" },
+    { q = "kill 4242!", want = "Refused (4242): that's Prosper" },
+    { q = "kill 777!",  want = "Refused (777): protected: WindowServer" },
+    { q = "kill 999!",  want = "Refused (999): no such process",
+      refusals = { ["999"] = "no such process" } },
+}) do
+    host, env = newHost{ refusals = c.refusals }
     G = h.load(h.dir() .. "init.lua", host); run = G.killproc_run
     h.eq(run(c.q), c.want, "refusal text: " .. c.q)
-    h.eq(#killCmds(env), 0, "no kill issued for " .. c.q)
+    h.eq(#env.kills, 0, "no kill issued for " .. c.q)
+    h.eq(env.dialogConfirm, nil, "a refused kill never asks the user: " .. c.q)
 end
 
--- ── 12. a hostile process name never reaches a shell string ──────────────────
+-- ── 8. the native guard is authoritative even past the confirm ───────────────
+-- The pid can be recycled while the dialog is up, so host.process.kill re-checks:
+-- refusal() says yes, kill() says no, and the extension must report the refusal.
+host, env = newHost{ comm = { ["501"] = "/Applications/Safari.app/Contents/MacOS/Safari" } }
+G = h.load(h.dir() .. "init.lua", host); run = G.killproc_run
+host.process.kill = function() return "protected: WindowServer" end
+h.eq(run("kill 501!"), "Refused (501): protected: WindowServer",
+     "a refusal at the kill call wins over the earlier refusal() pass")
+h.eq(#env.notifications, 0, "and nothing is reported as sent")
+
+-- ── 9. a hostile process name never reaches a shell string ───────────────────
 host, env = newHost{ comm = { ["501"] = "/tmp/evil; rm -rf ~ #" } }
 G = h.load(h.dir() .. "init.lua", host); run = G.killproc_run
 run("kill 501!")
-h.eq(killCmds(env)[1], "kill -TERM 501", "only the validated pid is interpolated")
+h.eq(env.kills[1].pid, "501", "the kill takes a pid, never a command")
 for _, c in ipairs(env.shellLog) do
     h.eq(c:find("rm -rf", 1, true), nil, "no shell command ever contains the process name: " .. c)
+    h.eq(c:match("^kill"), nil, "nothing is killed through a shell any more: " .. c)
 end
 
--- ── 13. a non-numeric commit form is inert (never reaches the shell) ─────────
+-- ── 10. a non-numeric commit form is inert ───────────────────────────────────
 host, env = newHost()
 G = h.load(h.dir() .. "init.lua", host); run = G.killproc_run
 for _, q in ipairs({ "kill 501; rm -rf ~!", "kill $(id)!", "kill abc!", "kill -1!" }) do
     run(q)
 end
-h.eq(#killCmds(env), 0, "garbage commit forms fall through to the filter, never to kill")
+h.eq(#env.kills, 0, "garbage commit forms fall through to the filter, never to kill")
 for _, c in ipairs(env.shellLog) do
     h.eq(c:match("^ps %-o comm=") ~= nil and c:match("^ps %-o comm= %-p %d+$") == nil, false,
          "the targeted ps lookup only ever sees a numeric pid: " .. c)

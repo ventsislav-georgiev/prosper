@@ -63,6 +63,27 @@ if git rev-parse "$NEXT" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Preflight: a bundled extension whose contents changed since the previous
+# release but whose extension.toml version did NOT bump would ship silently —
+# seedSystemExtensions only refreshes a seeded system extension when the
+# bundled version is NEWER than what's installed (ExtensionRegistry.swift),
+# so stamped installs would keep the stale copy forever. Catch it here.
+PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+if [[ -n "$PREV_TAG" ]]; then
+  for dir in app/Sources/ProsperApp/Resources/extensions/*/; do
+    dir="${dir%/}"
+    toml="$dir/extension.toml"
+    [[ -f "$toml" ]] || continue
+    git diff --quiet "$PREV_TAG" HEAD -- "$dir" && continue
+    old_ver=$(git show "$PREV_TAG:$toml" 2>/dev/null | grep -m1 '^version' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+    new_ver=$(grep -m1 '^version' "$toml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+    if [[ -n "$old_ver" && "$old_ver" == "$new_ver" ]]; then
+      echo "error: $dir changed since $PREV_TAG but extension.toml version is still $new_ver — bump it" >&2
+      exit 1
+    fi
+  done
+fi
+
 echo "Releasing $NEXT (from ${LATEST:-explicit})"
 
 # Push main first so the branch ref advances with the tag, then push the tag.

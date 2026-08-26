@@ -6,7 +6,7 @@ id          = "com.prosper.scripts"
 name        = "scripts"
 title       = "Scripts"
 description = "Save shell commands and run them by name; each runs to completion, then shows its output."
-version     = "1.0.0"
+version     = "1.1.0"
 author      = "Prosper"
 license     = "MIT"
 icon        = "terminal"
@@ -39,6 +39,9 @@ prefix      = "sc "
 # List every saved script on an empty query, then filter as the user types
 # (same as bm/sn).
 list_on_empty = true
+# Each saved script is its own bindable target in Settings › Shortcuts: the
+# names are user-chosen and stable, so a hotkey can run one script directly.
+bindable_items = true
 
 # Dynamic (Tier-B) settings: its own sidebar section, rendered by the extension's
 # settings_render handler and edited via settings_action. The editable script list

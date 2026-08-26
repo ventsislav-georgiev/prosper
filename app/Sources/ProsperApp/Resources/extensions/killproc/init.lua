@@ -10,55 +10,23 @@
 -- Enter (row `actions` dispatch natively to reserved `file.*` ids only). A
 -- trailing sentinel can never be a prefix of what the user is still typing.
 --
--- TRUST BOUNDARY. `killproc_guard` is the whole safety story and is exported so
--- killproc.test.lua can hammer it directly:
---   * the pid must match `^%d+$` — checked BEFORE it is ever put in a shell string
---   * pid <= 1 is refused (kernel_task / launchd)
---   * Prosper's own pid is refused
---   * a name blocklist is refused (mirrors upstream KillProcessSupport.isProtected)
+-- TRUST BOUNDARY — and it is NOT here. The refusal rules (pid <= 1, Prosper's own
+-- pid, the protected-name blocklist, a process that no longer exists) live once,
+-- natively, in KillProcessSupport, reached through `host.process`:
+--   * host.process.refusal(pid) -> nil when the kill is allowed, else the reason
+--   * host.process.kill(pid, force) -> nil when sent, else the reason
+-- The native side re-checks every rule and resolves the process name from the pid
+-- itself, so nothing this file does can talk a kill past a guard. The stats popups
+-- call the same seam natively. What stays local to this file:
+--   * the pid must match `^%d+$` before it is ever put in a shell string
 --   * the process NAME is never interpolated into a command, only ever displayed
 
-local BLOCKLIST = {
-    kernel_task = true,
-    launchd     = true,
-    WindowServer = true,
-    loginwindow = true,
-    Prosper     = true,
-}
-
--- `ps -o comm=` prints the full executable path; the blocklist is by name.
+-- `ps -o comm=` prints the full executable path; the display wants the name.
 local function basename(path)
     return (tostring(path or ""):gsub("^.*/", ""))
 end
 
 local function trim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
-
--- Refusal reason for killing `pid` (a string or number) named `comm`, or nil when
--- the kill is allowed. `own` is Prosper's own pid. Pure — no host calls — so the
--- guard table is directly testable.
-function killproc_guard(pid, comm, own)
-    local s = tostring(pid or "")
-    if not s:match("^%d+$") then return "not a pid" end
-    local n = tonumber(s)
-    if n == nil or n <= 1 then return "system pid" end
-    if own and n == own then return "that's Prosper" end
-    if comm == nil or trim(comm) == "" then return "no such process" end
-    local name = basename(trim(comm))
-    if BLOCKLIST[name] then return "protected: " .. name end
-    return nil
-end
-
--- Prosper's own pid. host.shell.run spawns `/bin/zsh -lc` as a DIRECT child of
--- the app, so the login shell's $PPID is us.
--- ponytail: one cached shell hop because the host exposes no own-pid API; add
--- host.apps.self() if anything else ever needs it.
-local OWN_PID
-local function own_pid()
-    if OWN_PID == nil then
-        OWN_PID = tonumber((host.shell.run("echo $PPID") or ""):match("%d+")) or -1
-    end
-    return OWN_PID
-end
 
 -- MARK: listing ---------------------------------------------------------------
 
@@ -95,11 +63,11 @@ local function matches(p, q)
     return p.name:lower():find(q, 1, true) ~= nil or p.pid:find(q, 1, true) ~= nil
 end
 
-local function listing(q, own)
+local function listing(q)
     local items = {}
     for _, p in ipairs(processes()) do
         if matches(p, q) and #items < 50 then
-            local why = killproc_guard(p.pid, p.comm, own)
+            local why = host.process.refusal(tonumber(p.pid))
             items[#items + 1] = {
                 id = tostring(#items),
                 title = p.name,
@@ -126,18 +94,17 @@ local function comm_for(pid)
 end
 
 local function do_kill(pid, force)
-    -- Re-validate before ANY shell use — comm_for below interpolates the pid, and
-    -- it runs BEFORE killproc_guard (the guard needs the name `ps` reports). The
+    -- Re-validate before ANY shell use — comm_for below interpolates the pid. The
     -- only caller's pattern already constrains this to digits; kept as the local
     -- precondition of the interpolation so it survives a future second caller.
     if not pid:match("^%d+$") then return "Refused: not a pid" end
 
-    local own = own_pid()
-    local comm = comm_for(pid)
-    local why = killproc_guard(pid, comm, own)
+    -- Ask the native guard first so a refusal never costs the user a dialog. The
+    -- kill below re-checks anyway — this call is a courtesy, not the gate.
+    local why = host.process.refusal(tonumber(pid))
     if why then return "Refused (" .. pid .. "): " .. why end
 
-    local name = basename(comm)
+    local name = basename(comm_for(pid))
     local signal = force and "-9" or "-TERM"
     if not host.dialog.confirm{
         title = force and "Force kill?" or "Kill process?",
@@ -148,8 +115,11 @@ local function do_kill(pid, force)
         return "Cancelled"
     end
 
-    -- Only the validated pid is interpolated; `name` is display-only.
-    host.shell.run("kill " .. signal .. " " .. pid)
+    -- No shell: the signal goes through the native seam, which runs the guards
+    -- again against the pid's CURRENT identity (it may have been recycled while
+    -- the confirm dialog was up).
+    local refused = host.process.kill(tonumber(pid), force)
+    if refused then return "Refused (" .. pid .. "): " .. refused end
     host.notify("Sent " .. signal, name .. " (pid " .. pid .. ")")
     return string.format("Sent %s to %s (pid %s)", signal, name, pid)
 end
@@ -167,5 +137,5 @@ function killproc_run(query)
         return do_kill(pid, #bangs >= 2)
     end
 
-    return listing(q:lower(), own_pid())
+    return listing(q:lower())
 end

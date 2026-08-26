@@ -21,6 +21,17 @@ tag from the now-released section and put it on the new top draft.
 ## v2.141.0 *(unreleased)*
 
 ### Improvements
+- **Shortcuts**: a new **Extension Commands** section in **Settings → Shortcuts**
+  binds a global hotkey that RUNS an extension command outright — no launcher,
+  nothing to type. Extensions that list a fixed set of targets are expanded into
+  one bindable action each, so a hotkey can open one specific System Settings
+  pane, fire one Quick Toggle (dark mode, hidden files, empty Trash…), or run one
+  saved script. The default shortcuts extensions ship with (`contributes.keybindings`,
+  like PastePlain's ⌘⌥⇧V) are finally visible there too: rebind or turn off any of
+  them, and your choice survives a relaunch. Turning an extension off takes its
+  shortcuts off the keyboard with it. Menu commands are the one exception — they
+  belong to whichever app is frontmost, so there is no fixed list to bind; use a
+  Command Shortcut to open the launcher in menu-search mode instead.
 - **Screen tools**: two new commands, on the launcher (`:ocr` / `:text` / `:scan` and
   `:color` / `:pick`) and rebindable in **Settings → Shortcuts** (no default key).
   **Copy Text from Screen** drags a region and copies what it holds — QR and other
@@ -140,6 +151,17 @@ tag from the now-released section and put it on the new top draft.
   switches to that pane, scrolls to the matched section and highlights it for a moment.
   Covers extension settings sections as well, and the index is built from the panes
   themselves, so a new section is searchable without anyone maintaining a keyword list.
+
+- **System Stats**: the process lists in the CPU, RAM, Network and Disk popups can
+  now kill — click a process row and the list holds its order (values keep updating,
+  rows stop shuffling) and shows a ✕ on that row. The ✕ sends a regular terminate,
+  guarded by the same refusals as the `kill` launcher command — never Prosper, never
+  the system's critical processes. Click the row again to let the list flow. Needs the
+  **Kill Process** extension enabled; when it's off the ✕ is dimmed and says so.
+- **Settings**: switching panes is noticeably faster. The window used to lay out every
+  section of the incoming pane before showing it — Shortcuts alone holds ~25 shortcut
+  recorders — so each switch stalled; now only what's on screen is laid out (worst
+  pane 148 → 85 ms in debug measurements).
 
 ## v2.139.0
 

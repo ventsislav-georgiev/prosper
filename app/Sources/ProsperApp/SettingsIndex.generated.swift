@@ -19,6 +19,7 @@ let nativeSettingsIndex: [SettingsIndexEntry] = [
     SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: ""),
     SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: "Prosper Shortcuts (click to rebind)"),
     SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: "Command Shortcuts"),
+    SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: "Extension Commands"),
     SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: "App Shortcuts"),
     SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: "Hyper Key"),
     SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: "Quit Guard"),

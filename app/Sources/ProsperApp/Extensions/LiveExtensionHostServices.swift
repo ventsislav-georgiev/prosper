@@ -115,6 +115,16 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         await ShellRunner.run(command)
     }
 
+    // MARK: Process control — the shared guard seam (see KillProcessSupport)
+
+    func processKillRefusal(pid: Int32) -> String? {
+        KillProcessSupport.refusal(pid: pid)
+    }
+
+    func processKill(pid: Int32, force: Bool) -> String? {
+        KillProcessSupport.kill(pid: pid, force: force)
+    }
+
     // MARK: Outbound HTTP (trusted-extension capability)
 
     /// Perform an http/https request. Restricted to those two schemes, time-boxed,

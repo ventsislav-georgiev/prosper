@@ -23,7 +23,9 @@ final class GlobalHotKey {
     ///   1…16     fixed `ShortcutAction`s (`ShortcutAction.hotKeyId`)
     ///   100…199  user custom shortcuts (`customIdBase` + `customMaxRegistered`)
     ///   200…299  app shortcuts (`AppShortcut.hotKeyIdBase` + `maxRegistered`)
-    ///   300+     extension keybindings (`extensionIdBase`)
+    ///   300+     extension commands (`extensionIdBase`) — manifest keybindings
+    ///            AND user-bound extension shortcuts, numbered by one registrar
+    ///            (`ExtensionShortcuts.registrations`) so they cannot collide
     ///
     /// An overlap is invisible at runtime: the later registrar just overwrites the
     /// earlier closure, so a user's shortcut quietly starts doing something else.

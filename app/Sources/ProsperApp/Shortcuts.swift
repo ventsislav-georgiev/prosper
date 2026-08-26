@@ -516,4 +516,45 @@ enum ShortcutStore {
         guard let data = try? JSONEncoder().encode(list) else { return }
         defaults.set(data, forKey: appsKey)
     }
+
+    // MARK: - Extension shortcuts (hotkey → run one extension command directly)
+
+    /// Both keys keep the `shortcut.` prefix so `SyncCoordinator.SyncedKeys.prefixes`
+    /// carries them across devices alongside the app/custom shortcuts.
+    static let extensionsKey = "shortcut.extensions"
+    static let extensionKeybindingsKey = "shortcut.extensionKeybindings"
+
+    /// All user-bound extension shortcuts (empty by default).
+    static func extensionShortcuts() -> [ExtensionShortcut] {
+        guard let data = defaults.data(forKey: extensionsKey) else { return [] }
+        guard let list = try? JSONDecoder().decode([ExtensionShortcut].self, from: data) else {
+            NSLog("prosper: %@ failed to decode (%d bytes) — treating as empty",
+                  extensionsKey, data.count)
+            return []
+        }
+        return list
+    }
+
+    static func setExtensionShortcuts(_ list: [ExtensionShortcut]) {
+        guard let data = try? JSONEncoder().encode(list) else { return }
+        defaults.set(data, forKey: extensionsKey)
+    }
+
+    /// User overrides of extension-declared default keybindings
+    /// (`[[contributes.keybindings]]`), keyed by command id. An entry equal to
+    /// `unsetKeyCombo` is a deliberate "off" — that is how clearing a manifest
+    /// default persists, since removing the entry would restore the default.
+    static func extensionKeybindings() -> [String: KeyCombo] {
+        guard let data = defaults.data(forKey: extensionKeybindingsKey),
+              let map = try? JSONDecoder().decode([String: KeyCombo].self, from: data)
+        else { return [:] }
+        return map
+    }
+
+    static func setExtensionKeybinding(_ combo: KeyCombo?, for commandID: String) {
+        var map = extensionKeybindings()
+        if let combo { map[commandID] = combo } else { map.removeValue(forKey: commandID) }
+        guard let data = try? JSONEncoder().encode(map) else { return }
+        defaults.set(data, forKey: extensionKeybindingsKey)
+    }
 }

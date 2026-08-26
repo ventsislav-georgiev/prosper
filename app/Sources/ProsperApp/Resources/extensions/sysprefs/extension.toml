@@ -9,7 +9,7 @@ id          = "com.prosper.sysprefs"
 name        = "sysprefs"
 title       = "System Settings"
 description = "Open a System Settings pane — Wi-Fi, Displays, Sound, Privacy & Security, Login Items…"
-version     = "1.0.0"
+version     = "1.1.0"
 author      = "prosper"
 license     = "MIT"
 icon        = "gearshape"
@@ -39,3 +39,6 @@ keywords      = ["ss", "settings", "preferences", "system settings", "system pre
 match         = "^ss( |$)"
 prefix        = "ss "
 list_on_empty = true
+# Each pane is its own bindable target in Settings › Shortcuts, so a hotkey can
+# open one specific pane (Displays, Sound, Full Disk Access) with no launcher.
+bindable_items = true

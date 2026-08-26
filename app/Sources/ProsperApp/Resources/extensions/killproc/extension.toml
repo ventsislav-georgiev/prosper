@@ -1,16 +1,18 @@
-# Kill Process — list running processes by CPU and terminate one. A pure-Lua
-# system extension over host.shell (`ps` / `kill`) + host.dialog.confirm. The
-# destructive half is a trust boundary: every pid is validated `^%d+$` before it
-# reaches a shell string, the process name is NEVER interpolated into a command,
-# and pid <= 1 / Prosper's own pid / a name blocklist are refused outright
-# (mirrors upstream's KillProcessSupport.isProtected).
+# Kill Process — list running processes by CPU and terminate one. The listing is
+# Lua over host.shell (`ps`); the destructive half is NOT. Every refusal rule
+# (pid <= 1, Prosper's own pid, the protected-name blocklist, a vanished process)
+# lives once in the native KillProcessSupport and is reached through
+# host.process.refusal / host.process.kill — the same seam the stats popups' kill
+# button uses. No pid ever reaches a `kill` shell string; the pid is still
+# validated `^%d+$` here because the display-only `ps -o comm=` lookup
+# interpolates it, and the process name is NEVER interpolated into a command.
 # See docs/ADR-002-extensibility.md.
 [extension]
 id          = "com.prosper.killproc"
 name        = "killproc"
 title       = "Kill Process"
 description = "List running processes by CPU and terminate one."
-version     = "1.0.0"
+version     = "1.1.0"
 author      = "Prosper"
 license     = "MIT"
 icon        = "xmark.octagon"

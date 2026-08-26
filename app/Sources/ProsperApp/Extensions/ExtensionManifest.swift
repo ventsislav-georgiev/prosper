@@ -213,6 +213,19 @@ struct CommandContribution: Codable, Sendable, Equatable {
     /// commands ignore this (they always open their window on select).
     let runs_on_select: Bool?
 
+    /// When true, the rows this command lists for a bare prefix are STABLE,
+    /// individually addressable targets — so Settings › Shortcuts expands the
+    /// command into one bindable action per row (each of the 43 System Settings
+    /// panes, each saved script) instead of a single "open this mode" entry.
+    /// Only meaningful together with `list_on_empty`.
+    ///
+    /// Opt-in rather than derived from `list_on_empty`, because most listing
+    /// commands have nothing worth binding: killproc's rows are processes that
+    /// come and go, Bookmarks lists thousands of entries, and Snippets' row
+    /// titles are the snippet bodies themselves. Binding those would either fill
+    /// the picker with noise or hand the user a shortcut that no longer resolves.
+    let bindable_items: Bool?
+
     /// True when this command depends on the local AI model (`host.llm`).
     var requiresModel: Bool { (requires ?? []).contains("model") }
 
@@ -227,6 +240,11 @@ struct CommandContribution: Codable, Sendable, Equatable {
     /// True when invoking this command opens its own window rather than returning
     /// an inline result (see `launches_window`).
     var launchesWindow: Bool { launches_window ?? false }
+
+    /// True when each listed row is its own bindable shortcut target (see
+    /// `bindable_items`). Requires `list_on_empty` — without it there is no bare
+    /// listing to enumerate.
+    var bindableItems: Bool { (bindable_items ?? false) && listsOnEmpty }
 
     /// All runner-mode prefixes for this command: the canonical `prefix` plus any
     /// `prefixes` aliases. Empty when the command declares no prefix.

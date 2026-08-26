@@ -377,6 +377,13 @@ final class SettingsModel: ObservableObject {
     /// User-defined app shortcuts (hotkey launches/focuses one app directly).
     @Published var appShortcuts: [AppShortcut]
 
+    /// User-defined extension shortcuts (hotkey runs one extension command
+    /// directly — a System Settings pane, a toggle, a saved script).
+    @Published var extensionShortcuts: [ExtensionShortcut]
+
+    /// User overrides of extension-declared default keybindings, by command id.
+    @Published var extensionKeybindings: [String: KeyCombo]
+
     /// Side-effect hooks owned by AppDelegate (start/stop engines, login item).
     var onAutocompleteChanged: ((Bool) -> Void)?
     var onLaunchAtLoginChanged: ((Bool) -> Void)?
@@ -454,6 +461,8 @@ final class SettingsModel: ObservableObject {
         shortcutCombos = combos
         customShortcuts = ShortcutStore.customShortcuts()
         appShortcuts = ShortcutStore.appShortcuts()
+        extensionShortcuts = ShortcutStore.extensionShortcuts()
+        extensionKeybindings = ShortcutStore.extensionKeybindings()
 
         // Let AppDelegate silently revert the picker after a cancelled/failed switch.
         SettingsHooks.shared.revertModelSelection = { [weak self] id in
@@ -553,6 +562,48 @@ final class SettingsModel: ObservableObject {
     func removeAppShortcut(id: UUID) {
         appShortcuts.removeAll { $0.id == id }
         persistAppShortcuts()
+    }
+
+    // MARK: - Extension shortcuts (hotkey → run one extension command directly)
+
+    private func persistExtensionShortcuts() {
+        ShortcutStore.setExtensionShortcuts(extensionShortcuts)
+        onShortcutsChanged?()  // → AppDelegate.registerHotKeys()
+    }
+
+    /// Adds an empty extension-shortcut row: no action and no combo yet, so it
+    /// registers nothing until the user picks both.
+    func addExtensionShortcut() {
+        extensionShortcuts.append(
+            ExtensionShortcut(commandID: "", combo: unsetKeyCombo, label: ""))
+        persistExtensionShortcuts()
+    }
+
+    func updateExtensionShortcutAction(id: UUID, action: BindableExtensionAction) {
+        guard let i = extensionShortcuts.firstIndex(where: { $0.id == id }) else { return }
+        extensionShortcuts[i].commandID = action.commandID
+        extensionShortcuts[i].item = action.item
+        extensionShortcuts[i].label = action.label
+        persistExtensionShortcuts()
+    }
+
+    func updateExtensionShortcutCombo(id: UUID, combo: KeyCombo) {
+        guard let i = extensionShortcuts.firstIndex(where: { $0.id == id }) else { return }
+        extensionShortcuts[i].combo = combo
+        persistExtensionShortcuts()
+    }
+
+    func removeExtensionShortcut(id: UUID) {
+        extensionShortcuts.removeAll { $0.id == id }
+        persistExtensionShortcuts()
+    }
+
+    /// Rebinds an extension's declared default keybinding. `nil` restores the
+    /// manifest default; `unsetKeyCombo` turns it off and keeps it off.
+    func setExtensionKeybinding(_ combo: KeyCombo?, for commandID: String) {
+        ShortcutStore.setExtensionKeybinding(combo, for: commandID)
+        extensionKeybindings = ShortcutStore.extensionKeybindings()
+        onShortcutsChanged?()
     }
 
     // MARK: - Native key mappings (launch app / remap / media — replaces the old
@@ -1770,6 +1821,8 @@ private struct ShortcutsPane: View {
                 }
             }
 
+            ExtensionShortcutsSection(model: model)
+
             NeonSection("App Shortcuts",
                         footer: "Bind a hotkey that launches an app \u{2014} or brings it to the front when it's already running (\u{2318}\u{21E7}D \u{2192} DBeaver). Works without Accessibility permission. You can also bind one straight from the launcher with \u{2318}\u{21E7}K on an app result.") {
                 let duplicates = AppShortcut.duplicateComboIDs(model.appShortcuts)
@@ -1922,6 +1975,152 @@ private struct ExtensionActivatorRow: View {
             if !trigger.extensionTitle.isEmpty {
                 Text(trigger.extensionTitle).foregroundStyle(Neon.textSecondary)
             }
+        }
+    }
+}
+
+/// Settings › Shortcuts › Extension Commands: bind a global hotkey that RUNS an
+/// extension command outright, with no launcher and nothing to type.
+///
+/// Two kinds of row share the section. First the default shortcuts extensions
+/// declare in their manifests (`[[contributes.keybindings]]`) — until now those
+/// registered invisibly and could not be seen, rebound, or turned off. Then the
+/// bindings the user makes themselves, over every action the live extensions
+/// offer: a parameterless command, one specific System Settings pane, one Quick
+/// Toggle, one saved script.
+///
+/// The action list is built in `.task` because half of it comes from ASKING each
+/// listing extension for its rows, which spins up a Lua VM — that belongs off the
+/// pane-switch render path.
+private struct ExtensionShortcutsSection: View {
+    @ObservedObject var model: SettingsModel
+    @State private var actions: [BindableExtensionAction] = []
+
+    var body: some View {
+        let registry = SettingsHooks.shared.extensionRegistry
+        let declared = registry.map { ExtensionShortcuts.manifestKeybindings(registry: $0) } ?? []
+        NeonSection("Extension Commands",
+                    footer: "Run an extension command straight from a hotkey \u{2014} no launcher, nothing to type. Extensions that list a fixed set of targets are expanded here, so you can bind one specific System Settings pane, one Quick Toggle, or one saved script. Shortcuts an extension ships with are listed first: click to rebind, \u{21A9} to restore the extension's default, \u{2715} to turn it off. Menu commands are the exception \u{2014} they belong to whichever app is frontmost, so there is no fixed list to choose from; bind a Command Shortcut to Menu Commands instead and search them in the launcher.") {
+            ForEach(Array(declared.enumerated()), id: \.element.id) { idx, kb in
+                if idx > 0 { NeonDivider() }
+                ManifestKeybindingRow(model: model, keybinding: kb)
+            }
+            if !declared.isEmpty { NeonDivider() }
+            ForEach(Array(model.extensionShortcuts.enumerated()), id: \.element.id) { idx, sc in
+                if idx > 0 { NeonDivider() }
+                ExtensionShortcutRow(model: model, shortcut: sc, actions: actions)
+            }
+            if !model.extensionShortcuts.isEmpty { NeonDivider() }
+            HStack {
+                Button {
+                    model.addExtensionShortcut()
+                } label: { Label("Add Extension Shortcut", systemImage: "plus") }
+                    .buttonStyle(.neon)
+                    // Nothing to pick means every extension is off (or still
+                    // loading); an empty row would be a dead end.
+                    .disabled(actions.isEmpty)
+                Spacer()
+            }
+        }
+        .task {
+            guard let registry else { return }
+            actions = await ExtensionShortcuts.bindableActions(registry: registry)
+        }
+    }
+}
+
+/// One extension-declared default shortcut: name + recorder + restore/disable.
+/// The recorder shows the user's override when there is one, the manifest key
+/// otherwise, so what the row displays is always what actually registers.
+private struct ManifestKeybindingRow: View {
+    @ObservedObject var model: SettingsModel
+    let keybinding: ExtensionShortcuts.ManifestKeybinding
+
+    var body: some View {
+        HStack {
+            Text(keybinding.label).foregroundStyle(Neon.textPrimary)
+            Spacer()
+            ShortcutRecorder(
+                combo: model.extensionKeybindings[keybinding.commandID] ?? keybinding.defaultCombo
+            ) { combo in
+                model.setExtensionKeybinding(combo, for: keybinding.commandID)
+            }
+            .frame(width: sz(110), height: sz(24))
+            .fixedSize()
+            Button {
+                model.setExtensionKeybinding(nil, for: keybinding.commandID)
+            } label: { Image(systemName: "arrow.uturn.backward") }
+                .buttonStyle(.borderless)
+                .help("Restore the extension's default")
+            Button {
+                // Stored as an explicit unset rather than removed: removing the
+                // override is what RESTORES the manifest default, so "off" has to
+                // be a value of its own to survive a relaunch.
+                model.setExtensionKeybinding(unsetKeyCombo, for: keybinding.commandID)
+            } label: { Image(systemName: "xmark.circle") }
+                .buttonStyle(.borderless)
+                .help("Disable this shortcut")
+        }
+    }
+}
+
+/// One user-bound extension shortcut: action picker + recorder + delete.
+private struct ExtensionShortcutRow: View {
+    @ObservedObject var model: SettingsModel
+    let shortcut: ExtensionShortcut
+    let actions: [BindableExtensionAction]
+
+    private static let unpicked = BindableExtensionAction(
+        saved: ExtensionShortcut(commandID: "", combo: unsetKeyCombo,
+                                 label: "Choose an action\u{2026}"))
+
+    /// The live actions, plus whatever this row is already bound to. A saved
+    /// binding whose extension is now disabled has to stay in the list — dropping
+    /// it would leave the picker showing a neighbour's action and overwrite the
+    /// binding on the next edit.
+    private var choices: [BindableExtensionAction] {
+        if shortcut.commandID.isEmpty { return [Self.unpicked] + actions }
+        let saved = BindableExtensionAction(saved: shortcut)
+        return actions.contains { $0.id == saved.id } ? actions : actions + [saved]
+    }
+
+    private var selection: Binding<BindableExtensionAction> {
+        Binding(
+            get: {
+                let list = choices
+                return list.first { $0.commandID == shortcut.commandID && $0.item == shortcut.item }
+                    ?? list[0]
+            },
+            set: { action in
+                guard !action.commandID.isEmpty else { return }
+                model.updateExtensionShortcutAction(id: shortcut.id, action: action)
+            }
+        )
+    }
+
+    var body: some View {
+        HStack {
+            Picker("", selection: selection) {
+                ForEach(choices) { action in
+                    Text(action.label).tag(action)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+
+            Spacer()
+
+            ShortcutRecorder(combo: shortcut.combo) { combo in
+                model.updateExtensionShortcutCombo(id: shortcut.id, combo: combo)
+            }
+            .frame(width: sz(110), height: sz(24))
+            .fixedSize()
+
+            Button {
+                model.removeExtensionShortcut(id: shortcut.id)
+            } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless)
+                .help("Remove this shortcut")
         }
     }
 }
@@ -2558,7 +2757,7 @@ private struct AboutPane: View {
                 NeonDivider()
                 Text("Acknowledgments: mlx-swift, swift-transformers, GRDB.swift (encrypted store), Sparkle (auto-update), TOMLDecoder, Aptabase (anonymous analytics), and Apple's Vision / ScreenCaptureKit for screen context.")
                     .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
-                Text("Inspiration & know-how — System Stats from exelban/Stats, menu-bar management from jordanbaird/Ice, the menu-bar calendar from Itsycal, OpenLid from openlid/openlid, the command palette / clipboard history / snippets / QuickLinks from Raycast and Alfred, the Lua bridge from Hammerspoon, window snapping from Rectangle, and window layouts from Mosaic. Huge thanks to all — their implementations and UI/UX shaped ours.")
+                Text("Inspiration & know-how — System Stats from exelban/Stats, menu-bar management from jordanbaird/Ice, the menu-bar calendar from Itsycal, OpenLid from openlid/openlid, the per-app volume mixer, screen-capture overlay, and Finder habits from vorssaint/vorssaint-utils, the command palette / clipboard history / snippets / QuickLinks from Raycast and Alfred, on-device inline autocomplete from Cotypist, the Lua bridge from Hammerspoon, window snapping from Rectangle, and window layouts from Mosaic. Huge thanks to all — their implementations and UI/UX shaped ours.")
                     .font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
             }
 

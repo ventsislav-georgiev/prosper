@@ -19,6 +19,11 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func llmChat(_ prompt: String) async -> String
     // Shell (user-permissioned).
     func shellRun(_ command: String) async -> String
+    // Process control (privileged). Both route through `KillProcessSupport`, the
+    // one place the refusal rules live — `processKill` re-checks them itself, so
+    // an extension can never reach a signal past a guard.
+    func processKillRefusal(pid: Int32) -> String?
+    func processKill(pid: Int32, force: Bool) -> String?
     // Outbound HTTP (trusted-extension capability; http/https only, size-capped).
     func httpRequest(method: String, url: String, headers: [String: String],
                      body: String?, timeout: TimeInterval) async -> HTTPResponse?
@@ -328,6 +333,11 @@ extension ExtensionHostServices {
     func fallbackMode() -> Bool { true }
     func fallbackSetMode(_ on: Bool) {}
     func fallbackImport() -> Int { 0 }
+
+    /// Default: no process control (test / minimal hosts). The live host routes
+    /// both to `KillProcessSupport`.
+    func processKillRefusal(pid: Int32) -> String? { "process control unavailable" }
+    func processKill(pid: Int32, force: Bool) -> String? { "process control unavailable" }
     func fsExists(_ path: String) -> Bool { false }
     func fsAttributesJSON(_ path: String) -> String { #"{"exists":false}"# }
     func fsRead(_ path: String) -> String? { nil }
@@ -458,6 +468,33 @@ struct ExtensionHost {
         } else {
             lua.register("__h_shell_run") { rt in
                 rt.push("error: host.shell is restricted to system extensions")
+                return 1
+            }
+        }
+
+        // --- process control (system extensions only) ---
+        // Both return nil when there is nothing to refuse: `refusal(pid)` nil = the
+        // kill is allowed, `kill(pid, force)` nil = the signal was sent. Any other
+        // return is the refusal reason, straight from KillProcessSupport.
+        if privileged {
+            lua.register("__h_proc_refusal") { rt in
+                let pid = Int32(rt.numberArgument(1) ?? 0)
+                if let why = services.processKillRefusal(pid: pid) { rt.push(why) } else { rt.pushNil() }
+                return 1
+            }
+            lua.register("__h_proc_kill") { rt in
+                let pid = Int32(rt.numberArgument(1) ?? 0)
+                let force = rt.boolArgument(2) ?? false
+                if let why = services.processKill(pid: pid, force: force) { rt.push(why) } else { rt.pushNil() }
+                return 1
+            }
+        } else {
+            lua.register("__h_proc_refusal") { rt in
+                rt.push("host.process is restricted to system extensions")
+                return 1
+            }
+            lua.register("__h_proc_kill") { rt in
+                rt.push("host.process is restricted to system extensions")
                 return 1
             }
         }
@@ -938,6 +975,10 @@ struct ExtensionHost {
             chat      = __h_llm_chat,
         },
         shell  = { run = __h_shell_run },
+        -- Process control. refusal(pid) -> nil when the kill is allowed, else the
+        -- reason; kill(pid, force) -> nil when the signal was sent, else the reason.
+        -- The rules live natively (KillProcessSupport) and kill re-checks them.
+        process = { refusal = __h_proc_refusal, kill = __h_proc_kill },
         prefs  = { get = __h_pref_get, set = __h_pref_set },
         perms  = { has = __h_perms_has },
         notify = __h_notify,
@@ -979,6 +1020,7 @@ struct ExtensionHost {
     __h_clip_read = nil; __h_clip_write = nil; __h_clip_history = nil
     __h_llm_complete = nil; __h_llm_translate = nil
     __h_shell_run = nil
+    __h_proc_refusal = nil; __h_proc_kill = nil
     __h_fallback_list = nil; __h_fallback_save = nil
     __h_fallback_mode_get = nil; __h_fallback_mode_set = nil; __h_fallback_import = nil
     __h_pref_get = nil; __h_pref_set = nil
