@@ -26,18 +26,36 @@ struct AppearanceSettingsPane: View {
 
             NeonSection("Theme",
                         footer: "An extension can ship a theme via [[contributes.themes]]. One theme is active at a time. ↑/↓ moves the selection.") {
-                ForEach(Array(theme.available.enumerated()), id: \.element.id) { idx, d in
-                    if idx > 0 { NeonDivider() }
-                    row(d)
+                // The list of rows is its own VStack (not just the bare ForEach)
+                // so `.focusable()` below wraps ONE region sized to just the rows
+                // — not the title/footer too, and not per-row (a modifier chained
+                // onto a bare ForEach applies to each generated row individually,
+                // not to the list as a whole). `spacing: sz(14)` reproduces the
+                // gap the section's own VStack used to provide when the ForEach
+                // was its only, and therefore un-spaced-from-siblings, child.
+                VStack(alignment: .leading, spacing: sz(14)) {
+                    ForEach(Array(theme.available.enumerated()), id: \.element.id) { idx, d in
+                        if idx > 0 { NeonDivider() }
+                        row(d)
+                    }
                 }
+                .focusable()
+                .focused($themeListFocused)
+                // Keep the list keyboard-interactive but drop the native blue
+                // ring — the selected row already reads as selected (checkmark +
+                // tint, see `row(_:)`), so the ring was pure visual noise on top
+                // of that. Also shrinks the focusable region to just these rows
+                // instead of the whole section, which cut the scroll stutter
+                // reported in QA — a smaller focus/key-event region than the
+                // full section (title + footer included) is cheaper for AppKit
+                // to keep tracking as this pane scrolls under it.
+                .focusEffectDisabled()
+                .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
+                .onKeyPress(.downArrow) { moveSelection(1); return .handled }
+                // The pane starts with the list focused, so arrows work right away —
+                // no click needed first.
+                .onAppear { themeListFocused = true }
             }
-            .focusable()
-            .focused($themeListFocused)
-            .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
-            .onKeyPress(.downArrow) { moveSelection(1); return .handled }
-            // The pane starts with the list focused, so arrows work right away —
-            // no click needed first.
-            .onAppear { themeListFocused = true }
 
             NeonSection("UI Size", accent: "Size",
                         footer: "Scales all text and spacing across Prosper. Affects every window.") {

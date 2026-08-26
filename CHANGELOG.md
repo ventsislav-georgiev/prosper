@@ -163,6 +163,10 @@ tag from the now-released section and put it on the new top draft.
   section of the incoming pane before showing it — Shortcuts alone holds ~25 shortcut
   recorders — so each switch stalled; now only what's on screen is laid out (worst
   pane 148 → 85 ms in debug measurements).
+- **Settings → Appearance**: picking a theme no longer resets your scroll position,
+  and the whole window repaints to the new palette immediately — including the
+  theme list itself. The selected theme row can be moved with ↑/↓, with no focus
+  ring drawn around the list, and scrolling the pane stays smooth.
 
 ## v2.139.0
 

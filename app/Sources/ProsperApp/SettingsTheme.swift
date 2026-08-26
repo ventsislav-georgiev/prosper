@@ -310,6 +310,9 @@ struct NeonScroll<Content: View>: View {
     @Environment(\.settingsPaneID) private var paneID
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var focus = SettingsFocusRouter.shared
+    // #078 round 2: observe the store so the `.id()` below can key off
+    // `generation` — see that comment for why.
+    @ObservedObject private var theme = ThemeStore.shared
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -325,6 +328,25 @@ struct NeonScroll<Content: View>: View {
                 LazyVStack(alignment: .leading, spacing: sz(22)) {
                     content()
                 }
+                // #078 round 2: key CONTENT (not the ScrollView above) on
+                // `generation`. A parent re-running its body on an @Published
+                // change does NOT force a non-observing descendant to re-render —
+                // SwiftUI diffs the child view values and skips ones whose own
+                // stored properties didn't change — and `Neon.*` tokens are
+                // static computed reads, not stored properties, so a row that
+                // doesn't itself observe ThemeStore silently kept showing the old
+                // palette after a theme select (beta.7 QA: sidebar/background
+                // repainted, pane content stayed stale). `.id()` sidesteps that by
+                // discarding and rebuilding this subtree outright on every
+                // `generation` bump, forcing every `Neon.*` call site under
+                // `content()` to re-read fresh — one seam, applies to every
+                // Settings pane, since they all render through `NeonScroll`.
+                // The ScrollView node itself is NOT `.id()`'d, so its identity
+                // (and the NSScrollView + scroll offset backing it) survives;
+                // only the LazyVStack content below is torn down. A palette swap
+                // never changes text or layout, so content height is unchanged
+                // and the preserved offset still points at the same place.
+                .id(theme.generation)
                 .padding(.horizontal, sz(26))
                 .padding(.vertical, sz(24))
                 .frame(maxWidth: .infinity, alignment: .leading)
