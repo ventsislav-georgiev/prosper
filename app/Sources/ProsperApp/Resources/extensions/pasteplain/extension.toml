@@ -5,15 +5,18 @@
 # host.clipboard.snapshot()/restore(), so the styled original is gone after a paste,
 # and clipboard history (when enabled) gains one extra plain entry.
 #
-# Two ways in: the palette command (⌘⌥⇧V by default, below) and — off unless the
-# user picks a mode in Settings — the classic ⌘V / ⇧⌘V pair, where one chord pastes
-# plain and the other pastes the original. See init.lua for the interception path.
+# Two ways in: the palette command — no default chord, bind one in Settings ›
+# Shortcuts › Extension Commands (invokeAsync WITHOUT opening the runner, so the
+# frontmost app keeps focus and the synthesized ⌘V lands in it — AppDelegate.swift:798-816)
+# — and, off unless the user picks a mode in Settings, the classic ⌘V / ⇧⌘V pair,
+# where one chord pastes plain and the other pastes the original. See init.lua for
+# the interception path.
 [extension]
 id          = "com.prosper.pasteplain"
 name        = "pasteplain"
 title       = "Paste as Plain Text"
 description = "Paste the clipboard with all formatting stripped. Note: the rich clipboard content is replaced, not restored, and clipboard history gains a plain-text entry."
-version     = "1.2.0"
+version     = "1.3.0"
 author      = "Prosper"
 license     = "MIT"
 icon        = "doc.on.clipboard"
@@ -45,13 +48,6 @@ mode           = "no-view"
 icon           = "doc.on.clipboard"
 keywords       = ["paste", "plain", "plain text", "unformatted", "strip formatting", "clipboard"]
 runs_on_select = true
-
-# Carbon global hotkey → invokeAsync(commandID:query:"") WITHOUT opening the runner
-# (AppDelegate.swift:798-816), so the frontmost app keeps focus and the synthesized
-# ⌘V lands in it. That is the whole trick — no Swift changes needed.
-[[contributes.keybindings]]
-command = "pasteplain.paste"
-key     = "cmd+alt+shift+v"
 
 # Dynamic (Tier-B) settings: the ⌘V / ⇧⌘V mode picker. Dynamic rather than a
 # static `enum` control because changing the mode must re-register the key rules

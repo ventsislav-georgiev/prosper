@@ -1,12 +1,13 @@
 import XCTest
 @testable import ProsperApp
 
-/// The pasteplain extension has two host-side contracts that no Lua test can see:
-/// its manifest keybinding (the palette command's default ⌘⌥⇧V, claimed natively
-/// through `[[contributes.keybindings]]`), and the key rules it registers for the
-/// opt-in ⌘V / ⇧⌘V pair, which are resolved by the native rule engine. Both are
-/// pinned here against the SHIPPED manifest and the exact rule shapes init.lua
-/// emits, so a rename on either side fails loudly instead of silently doing nothing.
+/// The pasteplain extension has host-side contracts that no Lua test can see:
+/// it ships NO manifest keybinding (the palette command is bindable only through
+/// Settings › Shortcuts › Extension Commands, same as any other extension command —
+/// see ExtensionShortcutsTests), and it registers key rules for the opt-in ⌘V /
+/// ⇧⌘V pair, which are resolved by the native rule engine. Both are pinned here
+/// against the SHIPPED manifest and the exact rule shapes init.lua emits, so a
+/// rename on either side fails loudly instead of silently doing nothing.
 final class PastePlainTests: XCTestCase {
 
     /// …/app/Sources/ProsperApp/Resources/extensions
@@ -25,25 +26,18 @@ final class PastePlainTests: XCTestCase {
         return try ExtensionLoader.load(directory: dir, isSystem: true, hostVersion: "0.0.0").manifest
     }
 
-    // MARK: - The contributed default shortcut
+    // MARK: - No contributed default shortcut
 
-    /// The whole path from manifest to Carbon registration, minus the OS call:
-    /// the keybinding decodes, names a command that actually exists, and parses
-    /// into a combo that `registerHotKeys` will accept (its only filter is a
-    /// non-empty modifier mask — an unparsed or bare key is skipped silently).
-    func testPalettePasteKeybindingIsRegistrable() throws {
+    /// Beta.6 QA call: a global default silently swallowed the chord many apps use
+    /// natively for Paste and Match Style, and the mode picker plus Extension
+    /// Commands already cover the day-to-day cases. So the manifest contributes NO
+    /// keybinding — the command still exists and is bindable, just never by default.
+    func testPalettePasteHasNoManifestKeybinding() throws {
         let manifest = try loadManifest()
         let bindings = manifest.contributes?.allKeybindings ?? []
-        XCTAssertEqual(bindings.count, 1)
-        let kb = try XCTUnwrap(bindings.first)
-        XCTAssertEqual(kb.command, "pasteplain.paste")
-        XCTAssertTrue(manifest.contributes?.allCommands.contains { $0.id == kb.command } == true,
-                      "the keybinding names a command the manifest does not contribute")
-
-        let combo = try XCTUnwrap(KeyCombo.parse(kb.key), "\(kb.key) does not parse — never registered")
-        XCTAssertNotEqual(combo.carbonModifiers, 0, "a bare key is skipped by registerHotKeys")
-        XCTAssertEqual(KeyChord(carbonKeyCode: combo.keyCode, carbonModifiers: combo.carbonModifiers),
-                       KeyChord(spec: "cmd+alt+shift+v"))
+        XCTAssertTrue(bindings.isEmpty, "pasteplain must not ship a default keybinding")
+        XCTAssertTrue(manifest.contributes?.allCommands.contains { $0.id == "pasteplain.paste" } == true,
+                      "the command must still exist so it stays bindable via Extension Commands")
     }
 
     /// The mode picker lives in a Tier-B section, and the rules are (re)registered

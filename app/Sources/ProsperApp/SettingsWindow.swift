@@ -44,7 +44,12 @@ final class SettingsWindow {
             return
         }
         let root = SettingsRootView()
-        let hosting = NSHostingController(rootView: Themed { root })
+        // rebuildOnSizeChangeOnly: true — every Settings surface that needs live
+        // Neon.* colors already self-observes ThemeStore (SettingsBackground,
+        // NeonPanelSurface, SettingsSidebar, AppearanceSettingsPane), so a plain
+        // theme select refreshes in place instead of tearing the window down and
+        // losing the Appearance pane's scroll position. See ThemedRoot.swift.
+        let hosting = NSHostingController(rootView: Themed(rebuildOnSizeChangeOnly: true) { root })
         // Don't let SwiftUI drive the window size. On macOS 13+ NSHostingController
         // defaults to growing the window to the view's intrinsic height, so a tall
         // pane (the openlid Remote Wake section with its help expanded) stretched the

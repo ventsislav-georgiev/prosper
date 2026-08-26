@@ -129,7 +129,7 @@ function settings_render(section_id, state)
                            subtitle = "Which of the two paste chords strips formatting",
                            value = mode(), options = MODE_VALUES, optionLabels = MODE_LABELS },
                     s.row{ kind = "info", title = "Command shortcut",
-                           subtitle = "⌘⌥⇧V by default — see, rebind or turn it off in "
+                           subtitle = "No default — bind one in "
                                .. "Settings › Shortcuts › Extension Commands." },
                 },
             },

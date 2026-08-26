@@ -27,7 +27,7 @@ tag from the now-released section and put it on the new top draft.
   one bindable action each, so a hotkey can open one specific System Settings
   pane, fire one Quick Toggle (dark mode, hidden files, empty Trash…), or run one
   saved script. The default shortcuts extensions ship with (`contributes.keybindings`,
-  like PastePlain's ⌘⌥⇧V) are finally visible there too: rebind or turn off any of
+  like OpenLid's ⌘⌥⌃L) are finally visible there too: rebind or turn off any of
   them, and your choice survives a relaunch. Turning an extension off takes its
   shortcuts off the keyboard with it. Menu commands are the one exception — they
   belong to whichever app is frontmost, so there is no fixed list to bind; use a
@@ -63,13 +63,14 @@ tag from the now-released section and put it on the new top draft.
   path on demand. Off by
   default — turn it on in **Settings → Extensions**; configure it in
   **Settings → App Updates**.
-- **Launcher**: **Paste as Plain Text** — ⌘⌥⇧V pastes the clipboard with all formatting
-  stripped, straight into the app you are typing in without the launcher appearing.
-  Prefer a plainer chord? The extension's settings offer an opt-in mode that makes
-  ⌘V itself paste plain (with ⇧⌘V keeping the formatting), or the reverse — ⇧⌘V
+- **Launcher**: **Paste as Plain Text** — strip formatting from the clipboard on the
+  way in, without the launcher ever appearing. Two opt-in modes make it the default
+  paste behavior: ⌘V pastes plain (⇧⌘V keeps the formatting), or the reverse — ⇧⌘V
   pastes plain and ⌘V is left untouched. Finder is exempt either way, since its ⌘V
-  pastes files. Needs Accessibility. Note that the rich clipboard content is replaced rather than
-  restored, so the styled original is gone after the paste.
+  pastes files. Or skip the modes and bind your own chord to the one-shot command in
+  **Settings → Shortcuts → Extension Commands**. Needs Accessibility. Note that the
+  rich clipboard content is replaced rather than restored, so the styled original is
+  gone after the paste.
 - **New extension — Clipboard Auto-Clear**: a copied password, OTP or token should not
   still be on the pasteboard an hour later. Clears the clipboard a set time after the
   copy (5 minutes by default), when the Mac sleeps, and/or when the screen locks —

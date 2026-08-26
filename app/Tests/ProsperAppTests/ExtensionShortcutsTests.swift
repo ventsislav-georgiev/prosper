@@ -231,8 +231,13 @@ final class ExtensionShortcutsTests: XCTestCase {
     // MARK: - Label dedupe
 
     /// pasteplain's extension title and its one command's title are both "Paste
-    /// as Plain Text" — both label builders must collapse the doubled
-    /// "X › X" down to a single "X" rather than showing the same words twice.
+    /// as Plain Text" — the bindableActions label builder must collapse the
+    /// doubled "X › X" down to a single "X" rather than showing the same words
+    /// twice. Beta.6 QA also pulled pasteplain's default chord (it globally
+    /// swallowed the native Paste-and-Match-Style chord many apps use, and the
+    /// mode picker + Extension Commands already cover the day-to-day binding
+    /// case), so this is also where that contract is pinned: pasteplain must
+    /// declare NO manifest keybinding at all.
     @MainActor
     func testDoubledExtensionAndCommandTitleCollapsesToOne() async throws {
         let (registry, root) = try makeRegistry(["pasteplain"])
@@ -243,7 +248,6 @@ final class ExtensionShortcutsTests: XCTestCase {
         XCTAssertEqual(paste.label, "Paste as Plain Text")
 
         let declared = ExtensionShortcuts.manifestKeybindings(registry: registry)
-        let kb = try XCTUnwrap(declared.first { $0.commandID == "pasteplain.paste" })
-        XCTAssertEqual(kb.label, "Paste as Plain Text")
+        XCTAssertTrue(declared.isEmpty, "pasteplain must not ship a default keybinding")
     }
 }

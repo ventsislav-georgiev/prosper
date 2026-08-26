@@ -255,6 +255,23 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(ThemeRuntime.palette, .default, "reverting to Default restores the default palette")
     }
 
+    // MARK: appearance pane — arrow-key theme selection (#078)
+
+    func testNextThemeIndexMovesWithinBounds() {
+        XCTAssertEqual(AppearanceSettingsPane.nextThemeIndex(current: 1, delta: 1, count: 5), 2)
+        XCTAssertEqual(AppearanceSettingsPane.nextThemeIndex(current: 1, delta: -1, count: 5), 0)
+    }
+
+    func testNextThemeIndexStopsAtEndsWithoutWrapping() {
+        XCTAssertNil(AppearanceSettingsPane.nextThemeIndex(current: 0, delta: -1, count: 5), "up at the top must not wrap to the bottom")
+        XCTAssertNil(AppearanceSettingsPane.nextThemeIndex(current: 4, delta: 1, count: 5), "down at the bottom must not wrap to the top")
+    }
+
+    func testNextThemeIndexOnEmptyListReturnsNil() {
+        XCTAssertNil(AppearanceSettingsPane.nextThemeIndex(current: 0, delta: 1, count: 0))
+        XCTAssertNil(AppearanceSettingsPane.nextThemeIndex(current: 0, delta: -1, count: 0))
+    }
+
     // MARK: assets
 
     func testInlineDataAssetDecodes() async {

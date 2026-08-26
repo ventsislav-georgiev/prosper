@@ -6,6 +6,12 @@ import SwiftUI
 /// switch is instant: tapping a row re-skins every window live.
 struct AppearanceSettingsPane: View {
     @ObservedObject private var theme = ThemeStore.shared
+    /// Keyboard focus for the theme list: while focused, ↑/↓ move the selection
+    /// and apply the theme live (see `moveSelection`). SwiftUI's focus system is
+    /// exclusive, so this is automatically false — and the arrows silently do
+    /// nothing here — whenever some other control (e.g. the sidebar search
+    /// field) holds focus instead.
+    @FocusState private var themeListFocused: Bool
 
     var body: some View {
         NeonScroll {
@@ -19,12 +25,19 @@ struct AppearanceSettingsPane: View {
             .padding(.bottom, sz(2))
 
             NeonSection("Theme",
-                        footer: "An extension can ship a theme via [[contributes.themes]]. One theme is active at a time.") {
+                        footer: "An extension can ship a theme via [[contributes.themes]]. One theme is active at a time. ↑/↓ moves the selection.") {
                 ForEach(Array(theme.available.enumerated()), id: \.element.id) { idx, d in
                     if idx > 0 { NeonDivider() }
                     row(d)
                 }
             }
+            .focusable()
+            .focused($themeListFocused)
+            .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
+            .onKeyPress(.downArrow) { moveSelection(1); return .handled }
+            // The pane starts with the list focused, so arrows work right away —
+            // no click needed first.
+            .onAppear { themeListFocused = true }
 
             NeonSection("UI Size", accent: "Size",
                         footer: "Scales all text and spacing across Prosper. Affects every window.") {
@@ -73,10 +86,14 @@ struct AppearanceSettingsPane: View {
         }
     }
 
-    // Discrete presets, not sliders: changing size/opacity bumps the theme
-    // `generation`, which rebuilds the whole window via `.id()`. A continuous
-    // slider drag would get its gesture state torn out from under it on every
-    // step; segmented taps rebuild once per change, cleanly.
+    // Discrete presets, not sliders: changing size bumps the theme `generation`,
+    // which still rebuilds the whole Settings window via `.id()` (see
+    // ThemedRoot.swift — only a plain theme *select* was narrowed to refresh in
+    // place for #078; size still needs every sz()-driven layout constant
+    // recomputed fresh). A continuous slider drag would get its gesture state
+    // torn out from under it on every step; segmented taps rebuild once per
+    // change, cleanly. (Opacity/frost are lighter — they only bump `backdropTick`
+    // and never tear the window down; see ThemeStore.setOpacity/setFrost.)
     static let sizePresets: [CGFloat] = [0.7, 0.85, 1.0, 1.15, 1.3, 1.45]
     static let opacityPresets: [CGFloat] = [1.0, 0.9, 0.8, 0.75, 0.65, 0.5, 0.35]
 
@@ -85,6 +102,25 @@ struct AppearanceSettingsPane: View {
     }
 
     static func percent(_ v: CGFloat) -> String { "\(Int((v * 100).rounded()))%" }
+
+    /// ↑ (delta -1) / ↓ (delta +1) from `current` into a list of `count` themes.
+    /// Pure + no wrap-around: nil past either end (including an empty list), so
+    /// the caller simply does nothing at the ends. Kept free of `ThemeStore` so
+    /// it is testable headlessly.
+    static func nextThemeIndex(current: Int, delta: Int, count: Int) -> Int? {
+        let next = current + delta
+        return (0..<count).contains(next) ? next : nil
+    }
+
+    /// Arrow-key row navigation: moves off the currently active theme and
+    /// applies the new one immediately, same call as clicking a row.
+    private func moveSelection(_ delta: Int) {
+        let list = theme.available
+        guard let current = list.firstIndex(where: { $0.id == theme.activeID }),
+              let next = Self.nextThemeIndex(current: current, delta: delta, count: list.count)
+        else { return }
+        theme.select(id: list[next].id)
+    }
 
     /// Snap an arbitrary stored value to the closest preset so the segmented
     /// control always shows a selection even after clamping or a manual default edit.
@@ -97,6 +133,9 @@ struct AppearanceSettingsPane: View {
         let palette = theme.previews[d.id] ?? .default
         return Button {
             theme.select(id: d.id)
+            // A click reclaims list focus too, so arrows keep working right
+            // after — same "pick up where you clicked" contract as the sidebar.
+            themeListFocused = true
         } label: {
             HStack(spacing: sz(12)) {
                 swatches(palette)
@@ -113,6 +152,14 @@ struct AppearanceSettingsPane: View {
                 }
             }
             .padding(.vertical, sz(6))
+            // Selected-row highlight — same fill + border treatment as the
+            // sidebar's selected tab (SettingsSidebar.row in SettingsTheme.swift).
+            .background(
+                RoundedRectangle(cornerRadius: sz(8), style: .continuous)
+                    .fill(selected ? Neon.blue.opacity(0.14) : .clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: sz(8), style: .continuous)
+                            .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
