@@ -128,8 +128,9 @@ function settings_render(section_id, state)
                     s.row{ kind = "enum", key = P_MODE, title = "Plain-text paste shortcut",
                            subtitle = "Which of the two paste chords strips formatting",
                            value = mode(), options = MODE_VALUES, optionLabels = MODE_LABELS },
-                    s.row{ kind = "info", title = "Command shortcut", value = "⌘⌥⇧V",
-                           subtitle = "Runs Paste as Plain Text once, whatever is chosen above." },
+                    s.row{ kind = "info", title = "Command shortcut",
+                           subtitle = "⌘⌥⇧V by default — see, rebind or turn it off in "
+                               .. "Settings › Shortcuts › Extension Commands." },
                 },
             },
             s.section{

@@ -1,6 +1,14 @@
 import AppKit
 import Foundation
 
+/// "Extension › Command", collapsed to just the shared title when both halves
+/// are identical (pasteplain: extension title and its one command are both
+/// "Paste as Plain Text") — otherwise the row reads as "Paste as Plain Text ›
+/// Paste as Plain Text".
+private func extensionCommandLabel(_ extensionTitle: String, _ commandTitle: String) -> String {
+    extensionTitle == commandTitle ? extensionTitle : "\(extensionTitle) \u{203A} \(commandTitle)"
+}
+
 /// A global hotkey the user bound to ONE extension command, fired directly: no
 /// launcher, nothing to type (⌃⌥D → Toggle Dark Mode, ⌃⌥P → System Settings ›
 /// Displays). Unlike `CustomShortcut`, which opens the runner pre-seeded with an
@@ -48,7 +56,7 @@ struct BindableExtensionAction: Identifiable, Hashable, Sendable {
          commandTitle: String, icon: String) {
         self.commandID = commandID
         self.item = item
-        self.label = "\(extensionTitle) \u{203A} \(item.isEmpty ? commandTitle : item)"
+        self.label = extensionCommandLabel(extensionTitle, item.isEmpty ? commandTitle : item)
         self.icon = icon
     }
 
@@ -137,7 +145,7 @@ enum ExtensionShortcuts {
         let commandTitle: String
         let defaultCombo: KeyCombo
         var id: String { commandID }
-        var label: String { "\(extensionTitle) \u{203A} \(commandTitle)" }
+        var label: String { extensionCommandLabel(extensionTitle, commandTitle) }
     }
 
     @MainActor

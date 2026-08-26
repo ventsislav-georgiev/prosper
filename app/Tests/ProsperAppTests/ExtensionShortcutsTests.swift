@@ -227,4 +227,23 @@ final class ExtensionShortcutsTests: XCTestCase {
                          "restoring the default removes the override")
         }
     }
+
+    // MARK: - Label dedupe
+
+    /// pasteplain's extension title and its one command's title are both "Paste
+    /// as Plain Text" — both label builders must collapse the doubled
+    /// "X › X" down to a single "X" rather than showing the same words twice.
+    @MainActor
+    func testDoubledExtensionAndCommandTitleCollapsesToOne() async throws {
+        let (registry, root) = try makeRegistry(["pasteplain"])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let actions = await ExtensionShortcuts.bindableActions(registry: registry)
+        let paste = try XCTUnwrap(actions.first { $0.commandID == "pasteplain.paste" })
+        XCTAssertEqual(paste.label, "Paste as Plain Text")
+
+        let declared = ExtensionShortcuts.manifestKeybindings(registry: registry)
+        let kb = try XCTUnwrap(declared.first { $0.commandID == "pasteplain.paste" })
+        XCTAssertEqual(kb.label, "Paste as Plain Text")
+    }
 }
