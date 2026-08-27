@@ -6,12 +6,6 @@ import SwiftUI
 /// switch is instant: tapping a row re-skins every window live.
 struct AppearanceSettingsPane: View {
     @ObservedObject private var theme = ThemeStore.shared
-    /// Keyboard focus for the theme list: while focused, ↑/↓ move the selection
-    /// and apply the theme live (see `moveSelection`). SwiftUI's focus system is
-    /// exclusive, so this is automatically false — and the arrows silently do
-    /// nothing here — whenever some other control (e.g. the sidebar search
-    /// field) holds focus instead.
-    @FocusState private var themeListFocused: Bool
 
     var body: some View {
         NeonScroll {
@@ -27,34 +21,28 @@ struct AppearanceSettingsPane: View {
             NeonSection("Theme",
                         footer: "An extension can ship a theme via [[contributes.themes]]. One theme is active at a time. ↑/↓ moves the selection.") {
                 // The list of rows is its own VStack (not just the bare ForEach)
-                // so `.focusable()` below wraps ONE region sized to just the rows
-                // — not the title/footer too, and not per-row (a modifier chained
-                // onto a bare ForEach applies to each generated row individually,
-                // not to the list as a whole). `spacing: sz(14)` reproduces the
-                // gap the section's own VStack used to provide when the ForEach
-                // was its only, and therefore un-spaced-from-siblings, child.
+                // so `spacing: sz(14)` reproduces the gap the section's own VStack
+                // used to provide when the ForEach was its only, and therefore
+                // un-spaced-from-siblings, child.
+                //
+                // ↑/↓ navigation is NOT SwiftUI focus (`.focusable()`/`@FocusState`/
+                // `.onKeyPress`) — that was round 2's approach, and round 3 QA (a
+                // click stealing focus to the sidebar search field) traced back to
+                // it: this whole subtree sits inside NeonScroll's
+                // `.id(theme.generation)` (see that comment), which is torn down
+                // and rebuilt on EVERY select — click or arrow-driven, since
+                // `moveSelection` calls the same `theme.select(id:)` — and
+                // destroying the focused view mid-interaction handed first
+                // responder to the next key view (the search field). See
+                // `KeyHandling` below: a window-scoped NSEvent monitor, attached
+                // outside this `.id()`'d subtree, replaces it — no focus is ever
+                // claimed, so there's nothing for AppKit to reassign.
                 VStack(alignment: .leading, spacing: sz(14)) {
                     ForEach(Array(theme.available.enumerated()), id: \.element.id) { idx, d in
                         if idx > 0 { NeonDivider() }
                         row(d)
                     }
                 }
-                .focusable()
-                .focused($themeListFocused)
-                // Keep the list keyboard-interactive but drop the native blue
-                // ring — the selected row already reads as selected (checkmark +
-                // tint, see `row(_:)`), so the ring was pure visual noise on top
-                // of that. Also shrinks the focusable region to just these rows
-                // instead of the whole section, which cut the scroll stutter
-                // reported in QA — a smaller focus/key-event region than the
-                // full section (title + footer included) is cheaper for AppKit
-                // to keep tracking as this pane scrolls under it.
-                .focusEffectDisabled()
-                .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
-                .onKeyPress(.downArrow) { moveSelection(1); return .handled }
-                // The pane starts with the list focused, so arrows work right away —
-                // no click needed first.
-                .onAppear { themeListFocused = true }
             }
 
             NeonSection("UI Size", accent: "Size",
@@ -102,6 +90,11 @@ struct AppearanceSettingsPane: View {
                 .disabled(reduceTransparency)
             }
         }
+        // Attached OUTSIDE NeonScroll's content closure — i.e. outside the
+        // `.id(theme.generation)`'d subtree — so it mounts once when this pane
+        // appears and unmounts once when it disappears, untouched by a theme
+        // select's teardown/rebuild in between. See `KeyHandling` below.
+        .background(KeyHandling(onUp: { moveSelection(-1) }, onDown: { moveSelection(1) }))
     }
 
     // Discrete presets, not sliders: changing size bumps the theme `generation`,
@@ -130,6 +123,17 @@ struct AppearanceSettingsPane: View {
         return (0..<count).contains(next) ? next : nil
     }
 
+    /// Whether `KeyHandling`'s NSEvent monitor should consume a keyDown as list
+    /// navigation. Pure so this is testable without a live NSEvent/window: only
+    /// up/down arrows (kVK_UpArrow 126 / kVK_DownArrow 125) are ever candidates,
+    /// and only while the Appearance pane is visible and the window's first
+    /// responder isn't a text-input view (so typing in the sidebar search field,
+    /// including its own cursor-movement arrows, is never intercepted).
+    static func shouldSwallowArrowKey(paneVisible: Bool, firstResponderIsTextInput: Bool, keyCode: UInt16) -> Bool {
+        guard paneVisible, !firstResponderIsTextInput else { return false }
+        return keyCode == 126 || keyCode == 125
+    }
+
     /// Arrow-key row navigation: moves off the currently active theme and
     /// applies the new one immediately, same call as clicking a row.
     private func moveSelection(_ delta: Int) {
@@ -150,10 +154,10 @@ struct AppearanceSettingsPane: View {
         let selected = theme.activeID == d.id
         let palette = theme.previews[d.id] ?? .default
         return Button {
+            // Selecting is all a click does — it never touches first responder,
+            // so keyboard focus (e.g. the sidebar search field) stays exactly
+            // where it was. Arrows keep working regardless: see `KeyHandling`.
             theme.select(id: d.id)
-            // A click reclaims list focus too, so arrows keep working right
-            // after — same "pick up where you clicked" contract as the sidebar.
-            themeListFocused = true
         } label: {
             HStack(spacing: sz(12)) {
                 swatches(palette)
@@ -193,5 +197,85 @@ struct AppearanceSettingsPane: View {
         .clipShape(RoundedRectangle(cornerRadius: sz(6), style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: sz(6), style: .continuous)
             .strokeBorder(Neon.stroke, lineWidth: 1))
+    }
+}
+
+/// Arrow-key theme navigation via a window-scoped local NSEvent monitor — same
+/// idiom as `RunnerPanel.KeyHandling` — instead of SwiftUI focus
+/// (`.focusable()`/`@FocusState`/`.onKeyPress`), which round 2 used and round 3
+/// QA broke: the theme list sits inside NeonScroll's `.id(theme.generation)`
+/// (see that comment), torn down and rebuilt on every select — including an
+/// arrow-driven one, since `moveSelection` calls the same `theme.select(id:)`
+/// as a click. Destroying the focused view mid-interaction handed first
+/// responder to the next key view (the sidebar search field), stealing focus
+/// after the very first press or click.
+///
+/// This view is attached via `.background(...)` OUTSIDE that `.id()`'d
+/// subtree (see `AppearanceSettingsPane.body`), so its own mount/dismount is
+/// tied to the Appearance pane as a whole, not to individual selects:
+/// `makeNSView` runs once when the pane appears, `dismantleNSView` once when
+/// it disappears. No focus is ever claimed, so there's nothing for AppKit to
+/// reassign, and no reinstall-per-select race to reason about.
+private struct KeyHandling: NSViewRepresentable {
+    let onUp: () -> Void
+    let onDown: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        context.coordinator.onUp = onUp
+        context.coordinator.onDown = onDown
+        context.coordinator.start()
+        DispatchQueue.main.async { [weak v] in context.coordinator.window = v?.window }
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onUp = onUp
+        context.coordinator.onDown = onDown
+        if context.coordinator.window == nil { context.coordinator.window = nsView.window }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class Coordinator {
+        var onUp: (() -> Void)?
+        var onDown: (() -> Void)?
+        weak var window: NSWindow?
+        private var monitor: Any?
+
+        func start() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                self?.handle(event) ?? event
+            }
+        }
+
+        func stop() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        private func handle(_ e: NSEvent) -> NSEvent? {
+            guard let w = window, e.window === w else { return e }
+            // Same "is the field editor active" check as
+            // CommandWClosableWindow.sendEvent (SettingsWindow.swift) — this
+            // window's own Tab-cycling override.
+            let firstResponder = w.firstResponder
+            let isTextInput = firstResponder is NSText || firstResponder is NSTextView
+            // ponytail: paneVisible is always true here — this NSView's own
+            // mount/dismount above already tracks "Appearance pane on screen";
+            // there's no separate runtime signal to thread through. Kept as a
+            // real parameter on the predicate (not hardcoded inside it) so
+            // `shouldSwallowArrowKey` stays testable on its own.
+            guard AppearanceSettingsPane.shouldSwallowArrowKey(
+                paneVisible: true, firstResponderIsTextInput: isTextInput, keyCode: e.keyCode)
+            else { return e }
+            if e.keyCode == 126 { onUp?() } else { onDown?() }
+            return nil
+        }
     }
 }

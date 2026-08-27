@@ -272,6 +272,36 @@ final class ThemeTests: XCTestCase {
         XCTAssertNil(AppearanceSettingsPane.nextThemeIndex(current: 0, delta: -1, count: 0))
     }
 
+    // MARK: appearance pane — arrow-key monitor swallow predicate (#078 round 3)
+
+    func testShouldSwallowArrowKeyOnlyForUpDownWhenPaneVisibleAndNotEditingText() {
+        XCTAssertTrue(AppearanceSettingsPane.shouldSwallowArrowKey(
+            paneVisible: true, firstResponderIsTextInput: false, keyCode: 126), "up arrow")
+        XCTAssertTrue(AppearanceSettingsPane.shouldSwallowArrowKey(
+            paneVisible: true, firstResponderIsTextInput: false, keyCode: 125), "down arrow")
+    }
+
+    func testShouldSwallowArrowKeyIgnoresNonArrowKeys() {
+        XCTAssertFalse(AppearanceSettingsPane.shouldSwallowArrowKey(
+            paneVisible: true, firstResponderIsTextInput: false, keyCode: 36), "return key")
+        XCTAssertFalse(AppearanceSettingsPane.shouldSwallowArrowKey(
+            paneVisible: true, firstResponderIsTextInput: false, keyCode: 123), "left arrow")
+    }
+
+    func testShouldSwallowArrowKeyLetsTextInputKeepItsOwnArrows() {
+        // The sidebar search field editing arrows for cursor movement — must
+        // never be intercepted, even while the Appearance pane is visible.
+        XCTAssertFalse(AppearanceSettingsPane.shouldSwallowArrowKey(
+            paneVisible: true, firstResponderIsTextInput: true, keyCode: 126))
+        XCTAssertFalse(AppearanceSettingsPane.shouldSwallowArrowKey(
+            paneVisible: true, firstResponderIsTextInput: true, keyCode: 125))
+    }
+
+    func testShouldSwallowArrowKeyRequiresPaneVisible() {
+        XCTAssertFalse(AppearanceSettingsPane.shouldSwallowArrowKey(
+            paneVisible: false, firstResponderIsTextInput: false, keyCode: 126))
+    }
+
     // MARK: assets
 
     func testInlineDataAssetDecodes() async {
