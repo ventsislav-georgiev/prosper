@@ -62,10 +62,58 @@ enum ScreenToolsSupport {
     /// Deliberately `screens[0]` (the primary) and NOT `screens.map(\.frame.maxY).max()`.
     /// The `max` form diverges the moment a secondary display is arranged *above*
     /// the primary, which puts every converted capture rect at the wrong Y.
-    /// `VisionContext.cgRegion` / `cgRegionAbove` still use the `max` form; that
-    /// is a separate, out-of-scope fix — do not copy it here.
+    /// `VisionContext.cgRegion` / `cgRegionAbove` / `normalizedToAppKit` route
+    /// through `flippedY(_:primaryTop:)` below, fed their own `screens.first`
+    /// lookup (they run off the main actor sometimes, so they can't call this
+    /// `@MainActor` property directly).
     @MainActor
     static var primaryTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
+
+    /// Flips a Y coordinate between AppKit (bottom-left origin) and CoreGraphics
+    /// (top-left origin of the PRIMARY display) screen space. Self-inverse — the
+    /// same call converts either direction — so every AppKit↔CG y-flip should
+    /// route through this instead of re-deriving the constant.
+    ///
+    /// `primaryTop` must be the PRIMARY screen's `frame.maxY` (`NSScreen.screens[0]`
+    /// — AppKit guarantees index 0 is the display with the menu bar, at Cocoa
+    /// origin (0, 0)), NEVER `screens.map(\.frame.maxY).max()`: the CG global
+    /// origin tracks the primary display, not the topmost one.
+    static func flippedY(_ y: CGFloat, primaryTop: CGFloat) -> CGFloat {
+        primaryTop - y
+    }
+
+    /// Converts a Cocoa (bottom-left origin) screen rect into a padded
+    /// CoreGraphics (top-left origin) capture rect. Pure — `primaryTop` injected
+    /// — so `VisionContext.cgRegion` (a thin NSScreen wrapper around this) is
+    /// unit-testable for every screen layout without NSScreen. X is untouched:
+    /// AppKit and CG share the same X origin/direction, only Y flips.
+    static func cgRegion(around caretRect: CGRect, padX: CGFloat, padY: CGFloat,
+                         primaryTop: CGFloat) -> CGRect {
+        var rect = caretRect.insetBy(dx: -padX, dy: -padY)
+        if rect.width < 8 || rect.height < 8 {
+            rect = CGRect(x: caretRect.minX - padX, y: caretRect.minY - padY,
+                          width: padX * 2, height: padY * 2)
+        }
+        return CGRect(x: rect.minX, y: flippedY(rect.maxY, primaryTop: primaryTop),
+                     width: rect.width, height: rect.height)
+    }
+
+    /// Builds a capture rect that extends mostly *upward* from `caretRect` (the
+    /// chat history sits above the input field), flipped into CoreGraphics
+    /// (top-left origin) coordinates. Pure — `primaryTop` injected — so
+    /// `VisionContext.cgRegionAbove` (a thin NSScreen wrapper around this) is
+    /// unit-testable for every screen layout without NSScreen.
+    static func cgRegionAbove(_ caretRect: CGRect, padX: CGFloat, padUp: CGFloat,
+                              padDown: CGFloat, primaryTop: CGFloat) -> CGRect {
+        let minX = caretRect.minX - padX
+        let width = max(caretRect.width, 1) + padX * 2
+        // Cocoa (bottom-left origin): +Y is up, so the history is above the caret.
+        let topY = caretRect.maxY + padUp
+        let bottomY = caretRect.minY - padDown
+        let height = topY - bottomY
+        return CGRect(x: minX, y: flippedY(topY, primaryTop: primaryTop),
+                     width: width, height: height)
+    }
 
     /// A rect in a flipped (top-left origin) view covering `screenFrame` exactly,
     /// into the global top-left-origin points rect `VisionContext.capture` wants.

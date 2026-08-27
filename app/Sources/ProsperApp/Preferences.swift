@@ -131,14 +131,16 @@ enum EmojiGender: String, CaseIterable {
 }
 
 /// Selected menu-bar icon source (Settings → Appearance → Menu Bar Icon).
-/// `.prosper` is the default and preserves today's behavior exactly (bundled
-/// or theme-provided icon, full color). `.sfSymbol` and the Vulcan `.emoji`
-/// preset render as a TEMPLATE image, auto-tinting white-on-dark /
-/// dark-on-light like every built-in status item; any OTHER custom `.emoji`
-/// renders full color instead (a colored glyph collapses to a solid
-/// silhouette under template tinting — see `MenuBarController.templateImage()`
-/// for the actual rendering, kept out of this file so this enum stays
-/// AppKit-free and headlessly testable).
+/// `.vulcan` (#102) is the default for an absent/unrecognized stored value —
+/// `.sfSymbol` and the Vulcan `.emoji` preset render as a TEMPLATE image,
+/// auto-tinting white-on-dark / dark-on-light like every built-in status
+/// item; any OTHER custom `.emoji` renders full color instead (a colored
+/// glyph collapses to a solid silhouette under template tinting — see
+/// `MenuBarController.templateImage()` for the actual rendering, kept out of
+/// this file so this enum stays AppKit-free and headlessly testable).
+/// `.prosper` (the bundled/theme icon, full color) is still explicitly
+/// selectable and still round-trips — it's just no longer what an absent
+/// stored value falls back to.
 enum MenuBarIconChoice: Equatable, Hashable {
     case prosper
     case sfSymbol(String)
@@ -148,30 +150,43 @@ enum MenuBarIconChoice: Equatable, Hashable {
     static let sfSymbolOptions: [String] = ["sparkles", "bolt.fill", "command", "terminal", "cpu"]
 
     /// One hand, vulcan salute — the "matches native coloring" preset the user
-    /// asked for by name. Not the default; just another selectable `.emoji`.
+    /// asked for by name. #102: promoted to THE default (absent/unrecognized
+    /// stored value falls back here — see `init(stored:)`), same as picking
+    /// this swatch explicitly; still just another selectable `.emoji` otherwise.
     static let vulcanEmoji = "\u{1F596}"
     static let vulcan = MenuBarIconChoice.emoji(vulcanEmoji)
 
     private static let sfPrefix = "sf:"
     private static let emojiPrefix = "emoji:"
+    private static let prosperStored = "prosper"
 
     /// Round-trips through `UserDefaults` as a single plain string — no JSON,
     /// same "one key, encoded string" idiom as `dragSnapStyle`/`runnerPlacement`.
     var stored: String {
         switch self {
-        case .prosper: return "prosper"
+        case .prosper: return Self.prosperStored
         case .sfSymbol(let name): return Self.sfPrefix + name
         case .emoji(let value): return Self.emojiPrefix + value
         }
     }
 
+    /// #102: an absent key reads as `""` (see `Preferences.menuBarIconChoice`),
+    /// and any string that isn't one of the three recognized encodings
+    /// (`"prosper"`, `sf:`-prefixed, `emoji:`-prefixed) is garbage — both fall
+    /// back to `.vulcan`, the new default, matching exactly what
+    /// `ThemeStore.setMenuBarIconChoice(.vulcan)` persists when the user
+    /// clicks the Vulcan swatch. `"prosper"` is checked explicitly (not just
+    /// swallowed by the fallback) so an EXPLICIT `.prosper` choice still
+    /// round-trips instead of silently becoming Vulcan.
     init(stored: String) {
         if let name = stored.droppingPrefix(Self.sfPrefix) {
             self = .sfSymbol(name)
         } else if let value = stored.droppingPrefix(Self.emojiPrefix) {
             self = .emoji(value)
-        } else {
+        } else if stored == Self.prosperStored {
             self = .prosper
+        } else {
+            self = .vulcan
         }
     }
 
@@ -189,12 +204,13 @@ enum MenuBarIconChoice: Equatable, Hashable {
 }
 
 /// Selected menu-bar icon SIZE (Settings → Appearance → Menu Bar Icon).
-/// `.large` is the default and preserves today's fixed
-/// `NSStatusBar.system.thickness` sizing exactly — `.small`/`.medium` are
-/// smaller, opt-in steps. The point-size mapping lives on this enum in
-/// `MenuBarController.swift` (needs no AppKit types, but keeping rendering
-/// concerns together matches `MenuBarIconChoice`'s split of "pure enum here,
-/// rendering there").
+/// `.medium` (#102) is the default for an absent/unrecognized stored value.
+/// `.large` still resolves to the fixed `NSStatusBar.system.thickness` sizing
+/// exactly (today's pre-#092 sizing, byte-identical) and is still explicitly
+/// selectable — it's just no longer what an absent stored value falls back
+/// to. The point-size mapping lives on this enum in `MenuBarController.swift`
+/// (needs no AppKit types, but keeping rendering concerns together matches
+/// `MenuBarIconChoice`'s split of "pure enum here, rendering there").
 enum MenuBarIconSize: String, CaseIterable {
     case small, medium, large
 
@@ -573,18 +589,21 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.uiFrost) }
     }
 
-    /// Selected menu-bar icon (Settings → Appearance → Menu Bar Icon). Default
-    /// `.prosper` — unchanged behavior for a fresh or existing install.
+    /// Selected menu-bar icon (Settings → Appearance → Menu Bar Icon). #102:
+    /// default `.vulcan` for a fresh install AND an existing install with no
+    /// stored value (or a corrupted one) — `MenuBarIconChoice(stored:)` maps
+    /// the absent-key `""` the same way it maps any unrecognized string.
+    /// An explicit stored `.prosper` (or any other choice) still round-trips.
     static var menuBarIconChoice: MenuBarIconChoice {
         get { MenuBarIconChoice(stored: defaults.string(forKey: Keys.menuBarIconChoice) ?? "") }
         set { defaults.set(newValue.stored, forKey: Keys.menuBarIconChoice) }
     }
 
-    /// Selected menu-bar icon size. Default `.large` — unchanged sizing for a
-    /// fresh or existing install. An unrecognized/absent stored value also
-    /// falls back to `.large`.
+    /// Selected menu-bar icon size. #102: default `.medium` for a fresh
+    /// install AND an existing install with no stored value (or a corrupted
+    /// one). An explicit stored size still round-trips.
     static var menuBarIconSize: MenuBarIconSize {
-        get { MenuBarIconSize(rawValue: defaults.string(forKey: Keys.menuBarIconSize) ?? "") ?? .large }
+        get { MenuBarIconSize(rawValue: defaults.string(forKey: Keys.menuBarIconSize) ?? "") ?? .medium }
         set { defaults.set(newValue.rawValue, forKey: Keys.menuBarIconSize) }
     }
 

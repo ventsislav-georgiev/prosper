@@ -198,6 +198,85 @@ enum SystemInfo {
 
 // MARK: - App control (§G) / scripting (§P) / keyboard input source (§F)
 
+/// The frontmost app's identity (name / bundle id / pid), cached so reading it is
+/// a memory hit instead of a synchronous LaunchServices XPC.
+///
+/// Why this exists: `NSRunningApplication.localizedName` goes through
+/// `_LSCopyApplicationInformation`, which blocks in
+/// `xpc_connection_send_message_with_reply_sync`. A Lua eventtap calls
+/// `host.apps.frontmost()` on EVERY keystroke, from inside the CGEventTap callback
+/// on the main thread — a live sample of the running app caught 8 of 9 samples
+/// parked in `mach_msg2_trap` under exactly that chain. An overrunning tap is
+/// disabled by the window server, which drops keystrokes system-wide, so this is
+/// the same hazard class the 0.25s AX bound in `windowCount` guards against.
+///
+/// Invalidation: the identity can only change when another app activates, which is
+/// exactly `NSWorkspace.didActivateApplicationNotification` — and the note carries
+/// the new `NSRunningApplication`, so the one `localizedName` read happens there,
+/// off the hot path. It fires for Prosper's own activation too (see
+/// `MenuBarController`, which has to filter our bundle id out of the same
+/// notification), so self-focus does not strand a stale value.
+///
+/// Threading: the workspace observer is delivered on the main queue and the tap
+/// callback reads on the main thread (`LiveExtensionHostServices.mainSync`), so the
+/// state is single-threaded — @MainActor is the whole synchronization story, no lock.
+@MainActor
+final class FrontmostApp {
+
+    struct Identity: Equatable {
+        let name: String
+        let bundleID: String
+        let pid: Int
+
+        init(name: String, bundleID: String, pid: Int) {
+            self.name = name
+            self.bundleID = bundleID
+            self.pid = pid
+        }
+
+        /// Reads `localizedName` — only call where blocking is acceptable.
+        init(_ app: NSRunningApplication) {
+            self.init(name: app.localizedName ?? "",
+                      bundleID: app.bundleIdentifier ?? "",
+                      pid: Int(app.processIdentifier))
+        }
+    }
+
+    static let shared = FrontmostApp()
+
+    private var cached: Identity?
+    private let read: @MainActor () -> Identity?
+
+    /// `center` / `read` are seams for tests; production observes NSWorkspace.
+    /// The observer is registered BEFORE the first read, so an activation can never
+    /// slip between populating the cache and starting to watch for changes.
+    init(center: NotificationCenter = NSWorkspace.shared.notificationCenter,
+         read: @escaping @MainActor () -> Identity? = {
+             NSWorkspace.shared.frontmostApplication.map(Identity.init)
+         }) {
+        self.read = read
+        center.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            else { return }
+            MainActor.assumeIsolated { self?.update(Identity(app)) }
+        }
+    }
+
+    /// The cached identity, populated on first read. A nil read (no frontmost app)
+    /// is deliberately NOT cached, so the answer can still arrive on a later call.
+    var current: Identity? {
+        if let cached { return cached }
+        cached = read()
+        return cached
+    }
+
+    /// Replace the cached identity. The activation observer is the only production
+    /// caller; tests drive it directly.
+    func update(_ identity: Identity) { cached = identity }
+}
+
 /// Running-app control + frontmost/window reads via NSWorkspace + Accessibility.
 @MainActor
 enum AppControl {
@@ -244,12 +323,16 @@ enum AppControl {
         ws.openApplication(at: url, configuration: cfg)
     }
 
+    /// `{ name, bundleID, pid }` of the frontmost app, or `{}` when there is none.
+    /// Served from `FrontmostApp.shared` — an eventtap extension calls this on every
+    /// keystroke inside the CGEventTap callback, where the LaunchServices XPC behind
+    /// `localizedName` is fatal (see `FrontmostApp`).
     static func frontmostJSON() -> String {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return "{}" }
+        guard let app = FrontmostApp.shared.current else { return "{}" }
         return json([
-            "name": app.localizedName ?? "",
-            "bundleID": app.bundleIdentifier ?? "",
-            "pid": Int(app.processIdentifier),
+            "name": app.name,
+            "bundleID": app.bundleID,
+            "pid": app.pid,
         ])
     }
 

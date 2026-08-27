@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import XCTest
 @testable import ProsperApp
 
@@ -40,5 +41,31 @@ final class OCRCaretAnchorTests: XCTestCase {
         let bottom = CGRect(x: 0, y: 0.0, width: 0, height: 0.1)
         let rb = VisionContext.normalizedToAppKit(bottom, capturedCGRect: cg)
         XCTAssertLessThan(rb.minY, r.minY)
+    }
+
+    /// Vision rejects any image with a side of 2px or less, and signals that failure
+    /// BOTH by completing the request and by throwing from `perform`. The old
+    /// completion-handler-plus-`catch` shape therefore resumed its `CheckedContinuation`
+    /// twice and trapped ("SWIFT TASK CONTINUATION MISUSE"). Reachable for real: a
+    /// stray thin drag in the screen reader clears the 4pt click threshold and hands
+    /// `ScreenTools.readRegion` a sliver. Every entry point must return empty instead.
+    func testRejectedImageReturnsEmptyInsteadOfTrapping() async throws {
+        let ctx = try XCTUnwrap(CGContext(data: nil,
+                                          width: 60,
+                                          height: 1,
+                                          bitsPerComponent: 8,
+                                          bytesPerRow: 0,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let sliver = try XCTUnwrap(ctx.makeImage())
+
+        let accurate = await VisionOCR.recognizeLines(in: sliver)
+        XCTAssertTrue(accurate.isEmpty, "got \(accurate.map(\.text))")
+        let fast = await VisionOCR.recognizeLines(in: sliver, level: .fast)
+        XCTAssertTrue(fast.isEmpty, "got \(fast.map(\.text))")
+        let ci = await VisionOCR.recognizeLines(in: CIImage(cgImage: sliver))
+        XCTAssertTrue(ci.isEmpty, "got \(ci.map(\.text))")
+        let anchor = await VisionOCR.caretAnchor(in: sliver, targetLine: "hello there", column: 4)
+        XCTAssertNil(anchor)
     }
 }

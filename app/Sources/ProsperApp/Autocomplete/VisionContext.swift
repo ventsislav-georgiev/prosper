@@ -108,7 +108,7 @@ enum VisionContext {
     /// AppKit screen rect (bottom-left origin). Pure and self-consistent; the exact
     /// pixel mapping still wants live calibration on multi-display setups.
     static func normalizedToAppKit(_ n: CGRect, capturedCGRect cg: CGRect) -> CGRect {
-        let globalTop = NSScreen.screens.map { $0.frame.maxY }.max() ?? cg.maxY
+        let primaryTop = NSScreen.screens.first?.frame.maxY ?? cg.maxY
         let px = cg.minX + n.minX * cg.width
         let widthPts = n.width * cg.width
         let heightPts = n.height * cg.height
@@ -116,7 +116,7 @@ enum VisionContext {
         //   region top edge in CG = cg.minY; box top is (1 - n.maxY) down from it.
         let cgYtop = cg.minY + (1 - n.maxY) * cg.height
         // CG(top-left) global → AppKit(bottom-left).
-        let appKitY = globalTop - cgYtop - heightPts
+        let appKitY = ScreenToolsSupport.flippedY(cgYtop, primaryTop: primaryTop) - heightPts
         return CGRect(x: px, y: appKitY, width: widthPts, height: heightPts)
     }
 
@@ -125,34 +125,23 @@ enum VisionContext {
     /// Builds a capture rect that extends mostly *upward* from the caret (the chat
     /// history sits above the input field), flipped into CoreGraphics (top-left
     /// origin) coordinates. `capture` clamps an over-tall rect to the display.
+    /// The pad+flip math itself lives in `ScreenToolsSupport.cgRegionAbove` (pure,
+    /// `primaryTop` injected) — this is just the NSScreen lookup around it.
     private static func cgRegionAbove(_ caretRect: CGRect, padX: CGFloat,
                                       padUp: CGFloat, padDown: CGFloat) -> CGRect? {
-        guard let screens = NSScreen.screens.first else { return nil }
-        let globalTop = NSScreen.screens.map { $0.frame.maxY }.max() ?? screens.frame.maxY
-        let minX = caretRect.minX - padX
-        let width = max(caretRect.width, 1) + padX * 2
-        // Cocoa (bottom-left origin): +Y is up, so the history is above the caret.
-        let topY = caretRect.maxY + padUp
-        let bottomY = caretRect.minY - padDown
-        let height = topY - bottomY
-        let cgY = globalTop - topY          // flip: CG origin top-left, use top edge.
-        return CGRect(x: minX, y: cgY, width: width, height: height)
+        guard let primary = NSScreen.screens.first else { return nil }
+        return ScreenToolsSupport.cgRegionAbove(caretRect, padX: padX, padUp: padUp,
+                                                padDown: padDown, primaryTop: primary.frame.maxY)
     }
 
     /// Converts a Cocoa (bottom-left origin) screen rect into a padded
     /// CoreGraphics (top-left origin) capture rect, clamped to the desktop.
+    /// The pad+flip math itself lives in `ScreenToolsSupport.cgRegion` (pure,
+    /// `primaryTop` injected) — this is just the NSScreen lookup around it.
     private static func cgRegion(around caretRect: CGRect, padX: CGFloat, padY: CGFloat) -> CGRect? {
-        guard let screens = NSScreen.screens.first else { return nil }
-        // Global top edge = max Y across all screens (Cocoa coordinates).
-        let globalTop = NSScreen.screens.map { $0.frame.maxY }.max() ?? screens.frame.maxY
-        var rect = caretRect.insetBy(dx: -padX, dy: -padY)
-        if rect.width < 8 || rect.height < 8 {
-            rect = CGRect(x: caretRect.minX - padX, y: caretRect.minY - padY,
-                          width: padX * 2, height: padY * 2)
-        }
-        // Flip Y: CG origin is top-left.
-        let cgY = globalTop - rect.maxY
-        return CGRect(x: rect.minX, y: cgY, width: rect.width, height: rect.height)
+        guard let primary = NSScreen.screens.first else { return nil }
+        return ScreenToolsSupport.cgRegion(around: caretRect, padX: padX, padY: padY,
+                                           primaryTop: primary.frame.maxY)
     }
 
     /// Captures a screen region (`globalRect` is top-left-origin, global, in

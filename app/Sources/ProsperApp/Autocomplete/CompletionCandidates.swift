@@ -1,24 +1,30 @@
+import AppKit
 import Foundation
 
 /// Non-LLM completion candidates derived from the text around the cursor.
 ///
 /// This is the glue that turns the bundled `Lexicon` (prefix completion, bigram
-/// next-word, SymSpell typo correction) plus the OS lexicon into a small ranked
-/// list of plausible words, which `CoreBridge` injects into the LLM prompt as
-/// hints. The LLM always runs — these candidates only steer it.
+/// next-word) plus the OS lexicon into a small ranked list of plausible words,
+/// which `CoreBridge` injects into the LLM prompt as hints. The LLM always runs —
+/// these candidates only steer it.
 ///
 /// Two situations, detected from `before`:
 ///   * **Mid-word** — `before` ends with a word character ("website d"). There is
 ///     a `fragment` ("d") under the cursor. Candidates are words that start with
 ///     the fragment, ranked so that words which *also* commonly follow the
 ///     preceding word ("website") come first → "download"/"design" beat a generic
-///     high-frequency "do".
+///     high-frequency "do". When the fragment isn't a known word, typo corrections
+///     from the OS spell checker (NSSpellChecker) are added too.
 ///   * **At a boundary** — `before` ends with a separator ("website "). There is no
 ///     fragment; candidates are the words that most often follow the last word
 ///     (pure bigram next-word prediction).
 ///
-/// Pure and deterministic given its inputs, so it is unit-tested directly with a
-/// small hand-built `Lexicon` and no `Bundle.main`.
+/// Deterministic given its inputs EXCEPT the typo-correction branch, which asks
+/// the live OS spell checker — so `testDeriveIncludesTypoCorrection` depends on
+/// the system dictionary recognizing a common misspelling, same as every other
+/// NSSpellChecker call in this codebase (it works fine under `swift test`, not
+/// sandboxed out). Everything else is unit-tested directly with a small
+/// hand-built `Lexicon` and no `Bundle.main`.
 struct CompletionCandidates {
     /// Partial word under the cursor, lowercased. Empty when at a boundary.
     let fragment: String
@@ -40,6 +46,11 @@ struct CompletionCandidates {
     ///   - osCompletions: prefix completions from the OS lexicon (NSSpellChecker),
     ///     already full words; pass [] when unavailable.
     ///   - limit: max candidates returned.
+    ///
+    /// Main-actor isolated: the typo-correction branch calls NSSpellChecker,
+    /// which (like every other NSSpellChecker call in this codebase) wants the
+    /// main thread.
+    @MainActor
     static func derive(
         before: String,
         after: String = "",
@@ -73,8 +84,14 @@ struct CompletionCandidates {
             ranked += lexicon.prefixCompletions(fragment, limit: limit + 4)
             // Typo correction: only when the fragment isn't itself a known word and
             // the correction isn't merely a prefix-extension (those are covered above).
+            // Source: the OS spell checker (NSSpellChecker) — no bundled index.
             if !lexicon.isKnownWord(fragment) {
-                ranked += lexicon.symSpell.lookup(fragment, limit: 3)
+                let checker = NSSpellChecker.shared
+                let range = NSRange(location: 0, length: (fragment as NSString).length)
+                let guesses = checker.guesses(
+                    forWordRange: range, in: fragment, language: nil, inSpellDocumentWithTag: 0
+                ) ?? []
+                ranked += guesses.prefix(3).map { $0.lowercased() }
                     .filter { !$0.hasPrefix(fragment) }
             }
         } else if let head, !head.isEmpty {

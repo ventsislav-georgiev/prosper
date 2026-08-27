@@ -328,6 +328,25 @@ actor LlamaInlineEngine {
         TraceLog.emit("llama: model loaded (\(path))")
     }
 
+    /// Free the context, the weights and the batch. Idempotent (every field is
+    /// optional-guarded), so the idle unloader can call it unconditionally.
+    ///
+    /// This IS the "unload if idle" path — no busy counter needed. `ensureLoaded`,
+    /// `complete` and `generate` are non-suspending actor methods (no `await` in their
+    /// bodies; the decode loop is straight-line C), so the actor's executor runs each to
+    /// completion atomically and an `unload()` message can only land BETWEEN requests.
+    /// **Adding an `await` inside any of them breaks that invariant** and would let this
+    /// free `ctx` out from under a live decode — add an `activeGenerations` guard like
+    /// `MLXEngine`'s if that ever happens.
+    ///
+    /// Reload is lazy: `complete`/`generate` open with `try ensureLoaded(...)`, which
+    /// re-runs `llama_backend_init` + model + context load when `ctx == nil`.
+    ///
+    /// Backend-level teardown is deliberately absent: `llama_backend_free()` in b9866 is
+    /// a tail-call to `ggml_quantize_free()` (frees only IQ2/IQ3 quantization grids that
+    /// inference never allocates), and ggml's Metal device — the rsets keep-alive thread
+    /// plus the compiled shader library — is a process-lifetime singleton with no
+    /// public free. See #096.
     func unload() {
         Self.isLoadedSnapshot = false
         Self.residentBytesSnapshot = 0

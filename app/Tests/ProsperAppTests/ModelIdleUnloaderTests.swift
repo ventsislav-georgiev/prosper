@@ -1,3 +1,5 @@
+import Darwin
+import Foundation
 import XCTest
 @testable import ProsperApp
 
@@ -106,6 +108,36 @@ final class ModelIdleUnloaderTests: XCTestCase {
         XCTAssertEqual(ModelIdleUnloader.minutes(fromPref: "1e400"), 2) // overflow → default
     }
 
+    // MARK: real unload path (#096)
+
+    /// The default `unloadAction` must reach BOTH runtimes. Before #096 it only hit
+    /// `MLXEngine`, so on the default engine path (`LlamaInlineEngine.isEnabled` → true)
+    /// an idle unload reclaimed nothing and the GGUF stayed resident for the process's
+    /// life. Headless half of the proof: the seam exists, runs against the live
+    /// singletons, is safe with nothing loaded and is idempotent (a second call must not
+    /// double-free). The load → unload → reload round-trip needs the real GGUF and lives
+    /// in `LlamaInlineEngineTests.testUnloadReloadRoundTrip` (PROSPER_LLAMA_SMOKE=1).
+    func testUnloadIdleEnginesIsSafeAndIdempotentWithNothingLoaded() async {
+        await ModelIdleUnloader.unloadIdleEngines()
+        await ModelIdleUnloader.unloadIdleEngines()
+        XCTAssertFalse(LlamaInlineEngine.isLoadedSnapshot)
+        XCTAssertFalse(MLXEngine.isInlineModelLoaded)
+        XCTAssertEqual(LlamaInlineEngine.residentBytesSnapshot, 0)
+        let llamaLoaded = await LlamaInlineEngine.shared.isLoaded
+        XCTAssertFalse(llamaLoaded)
+    }
+
+    /// `fire()` with the SHIPPING `unloadAction` (not an injected fake) must drive the
+    /// real teardown without crashing — locks the default closure's wiring, which the
+    /// injected-seam tests above deliberately bypass.
+    func testFireWithDefaultUnloadActionDrivesRealTeardown() async {
+        let u = ModelIdleUnloader()
+        u.isAutocompleteEnabled = { false }
+        u.fire()                                   // spawns the unload Task
+        await ModelIdleUnloader.unloadIdleEngines() // join: same actors, so this queues behind it
+        XCTAssertFalse(LlamaInlineEngine.isLoadedSnapshot)
+    }
+
     // MARK: hot-path budget
     //
     // The idle-unload machinery must add ZERO cost to the inline-autocomplete keystroke
@@ -124,6 +156,28 @@ final class ModelIdleUnloaderTests: XCTestCase {
     }
 
     // Timer firing path: scheduler captures fire callback; invoking it unloads.
+    // MARK: relieveMemoryPressure (perf F5, #098)
+
+    /// Small-scale, always-on (no PROSPER_LLAMA_SMOKE gate) proof that
+    /// `malloc_zone_pressure_relief` — the call `unloadIdleEngines()` now runs after
+    /// freeing both engines — is callable and returns promptly. Can't drive a real
+    /// multi-GB model load headlessly here; the ~3.3 GB GGUF numbers are measured by
+    /// `LlamaInlineEngineTests.testUnloadThenPressureReliefReturnsHeapToOS` under
+    /// PROSPER_LLAMA_SMOKE=1.
+    func testMallocPressureReliefIsCallableAndFast() {
+        var ptrs: [UnsafeMutableRawPointer] = []
+        for _ in 0..<40 {                    // 40 × 8 MB ≈ 320 MB, roughly the F5 finding's size
+            guard let p = malloc(8 * 1024 * 1024) else { continue }
+            memset(p, 0xAB, 8 * 1024 * 1024) // touch every page so it's actually dirty/resident
+            ptrs.append(p)
+        }
+        for p in ptrs { free(p) }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        _ = malloc_zone_pressure_relief(nil, 0)
+        let duration = CFAbsoluteTimeGetCurrent() - t0
+        XCTAssertLessThan(duration, 2.0, "pressure relief must not stall")
+    }
+
     func testScheduledCallbackUnloads() {
         let u = ModelIdleUnloader()
         u.isAutocompleteEnabled = { false }

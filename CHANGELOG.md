@@ -18,7 +18,44 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.142.0 *(unreleased)*
+## v2.143.0 *(unreleased)*
+
+- **New menu-bar defaults: the Vulcan salute at Medium size.** A fresh install (or
+  one that never picked an icon or size) now shows the Vulcan 🖖 template glyph at
+  the Medium size in the menu bar. Anything you picked explicitly — including the
+  classic Prosper icon and the Large size — is untouched and still wins.
+
+### Performance
+- **Typing latency**: with an extension key-listener active, every keystroke used to
+  make a blocking system call (LaunchServices, over XPC) to name the frontmost app —
+  inside the system-wide event tap, where a slow callback stalls every app's input.
+  The frontmost app is now cached and refreshed only when you actually switch apps,
+  so the per-keystroke path is a memory read.
+- **~100-120 MB less memory, permanently**: the bundled spell-correction index (a
+  16-20x blowup of a 6 MB dictionary) is gone — typo corrections for the completion
+  hints now come from the macOS spell checker, which was already loaded and gives
+  better corrections from the full system dictionary.
+- **Gigabytes back after AI use**: the idle model unloader only ever freed the MLX
+  engine, but the default translate/chat engine is llama.cpp — so after a
+  translation, ~3.3 GB of model weights stayed resident until you quit the app. The
+  idle unload now frees both engines (the next AI request transparently reloads,
+  ~0.4 s), and then asks the allocator to hand freed pages back to the OS.
+- **Audio limiter overhead halved**: the boost limiter's per-sample loop was
+  rebuilding buffer-list iterators on the real-time audio thread; the buffer layout
+  is now resolved once per callback. Output is bit-identical.
+
+### Fixes
+- **Screen-context OCR could crash the app**: dragging a sliver-thin capture region
+  (or any image with a side of 2px or less) made Vision report the failure twice,
+  which trapped. All OCR entry points now have a single result path and return
+  empty results instead.
+- **Multi-display capture regions**: with a second display arranged *above* the
+  primary, caret-context screen captures landed on the wrong spot — the
+  AppKit-to-CoreGraphics flip anchored to the topmost display instead of the
+  primary one. All conversions now share one primary-anchored helper, unit-tested
+  across every arrangement (above, below, left, right, mixed).
+
+## v2.142.0
 
 ### Improvements
 - **Settings → Appearance: pick your menu-bar icon — and its size.** A new **Menu Bar

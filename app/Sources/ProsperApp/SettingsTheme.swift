@@ -311,6 +311,20 @@ struct NeonSection<Content: View>: View {
                 // needs the teardown to reach it. The key is combined with
                 // `title` (not bare `generation`) so no two sections' interior
                 // ids are ever equal by construction, per the round-6 fix.
+                //
+                // #100 measured that last claim rather than assuming it, since
+                // #089 had just retired the rest of the saga's identity churn:
+                // delete this `.id(...)` and
+                // `ThemeCardRepaintTests.testStableRowIDsRepaintOnSelect` goes
+                // red on exactly that case, 100% stale pixels (760/760 and
+                // 2280/2280 in the two nesting positions it probes): a
+                // non-observing child `View` whose stored properties never
+                // change, which SwiftUI compares equal on rebuild and answers
+                // with its memoized body. So this one stays — it is the only
+                // thing that reaches a caller's own view types. (The theme
+                // rows' anchors did NOT need a matching fold; the teardown this
+                // id drives reaches straight through them. See
+                // `AppearanceSettingsPane.rowAnchor`, where #100 removed it.)
                 VStack(alignment: .leading, spacing: sz(14)) {
                     content()
                 }
@@ -431,11 +445,12 @@ struct NeonScroll<Content: View>: View {
         // so the row's fresh `.id()` is already registered with `proxy` by the
         // time scrollTo runs. `.id(anchor)` itself (the stable per-section
         // identity `scrollTo`/search-jump actually target) never changes, so it
-        // was never the thing needing this hop. #082: the row's OWN `.id()`
-        // (AppearanceSettingsPane.rowAnchor) now also folds in `generation` —
-        // this hop's ordering is exactly what makes the request target the
-        // POST-rebuild row id instead of a now-stale one; see that type's
-        // comment for why the row needed a changing id at all.
+        // was never the thing needing this hop. The row's own `.id()`
+        // (AppearanceSettingsPane.rowAnchor) doesn't change either — #082 made
+        // it fold in `generation`, #100 removed that again — but the row is
+        // still momentarily UNMOUNTED while the section's interior subtree
+        // rebuilds, and `scrollTo` to an unmounted id is a no-op, so the hop
+        // stays load-bearing for the arrow-key path.
         DispatchQueue.main.async {
             if reduceMotion {
                 proxy.scrollTo(anchor, anchor: scrollAnchor)

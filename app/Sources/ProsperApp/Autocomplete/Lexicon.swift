@@ -11,7 +11,9 @@ import os.log
 ///   2. **Bigram next-word** — given the last completed word ("website"), list
 ///      the words that most often follow it in the corpus ("design", "development",
 ///      "uses", …). Implemented as a head-word → ranked-next-words map.
-///   3. **Typo correction** — `SymSpell` over the same frequency map.
+///
+/// Typo correction is NOT done here — `CompletionCandidates` calls the OS spell
+/// checker (NSSpellChecker) directly for that (see its `derive`).
 ///
 /// Crucially, intersecting (1) and (2) is what makes a small LLM produce a *good*
 /// completion for "website d": words that both start with "d" *and* commonly
@@ -34,8 +36,6 @@ final class Lexicon: @unchecked Sendable {
     private let sortedWords: [String]
     /// head word → next words, already ordered most-frequent-first (bounded).
     private let bigrams: [String: [String]]
-    /// Shared spelling corrector built from `frequency`.
-    let symSpell: SymSpell
 
     private static let log = Logger(subsystem: "com.prosper.app", category: "Lexicon")
 
@@ -47,7 +47,6 @@ final class Lexicon: @unchecked Sendable {
         self.frequency = frequency
         self.sortedWords = frequency.keys.sorted()
         self.bigrams = bigrams
-        self.symSpell = SymSpell(frequency: frequency)
     }
 
     /// Empty lexicon — every query returns nothing. Used as the not-yet-loaded

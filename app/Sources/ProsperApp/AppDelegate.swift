@@ -1163,6 +1163,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // the free until that generation finishes instead of clearing GPU buffers
             // under an active compute.
             Task { await MLXEngine.shared.requestUnload() }
+            // …and the llama.cpp engine, which is the DEFAULT inline/translate path
+            // (`LlamaInlineEngine.isEnabled`). Without this, turning autocomplete off
+            // freed only the (empty) MLX engine and pinned ~3 GB of GGUF weights + KV
+            // for the life of the process. Its actor serializes the free behind any
+            // in-flight decode, and `complete`/`generate` re-`ensureLoaded` lazily.
+            Task { await LlamaInlineEngine.shared.unload() }
         }
     }
 

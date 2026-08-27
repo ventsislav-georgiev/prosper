@@ -64,7 +64,7 @@ enum HeadlessBenchCLI {
                 // Replicate AutocompleteEngine.showInstantGhost's DECISION (pure part:
                 // derive + the mid-word hasPrefix guard) so we can prove headlessly
                 // whether the instant lexicon ghost would fire garbage or suppress.
-                let ghost = instantGhostRemainder(shadow: c.prefix)
+                let ghost = await instantGhostRemainder(shadow: c.prefix)
                 print("  \(c.id) \(c.lang) → \(completion.map { "\"\($0)\"" } ?? "∅")  (\(ms)ms, \(detected ?? "auto")\(latinBg ? "+bg" : ""))  snap=\(ghost.map { "\"\($0)\"" } ?? "—")")
                 out.append([
                     "id": c.id, "lang": c.lang, "kind": c.kind ?? "", "prefix": c.prefix,
@@ -94,9 +94,9 @@ enum HeadlessBenchCLI {
     /// ≥2, and mid-word requires the candidate word to actually start with the
     /// fragment. If this returns a bad word for a Cyrillic-transliterated fragment,
     /// the artifact IS a real product bug, not a bench-capture quirk.
-    private static func instantGhostRemainder(shadow: String) -> String? {
+    private static func instantGhostRemainder(shadow: String) async -> String? {
         guard shadow.count >= 2 else { return nil }
-        let cands = CompletionCandidates.derive(before: shadow, after: "", lexicon: Lexicon.shared)
+        let cands = await CompletionCandidates.derive(before: shadow, after: "", lexicon: Lexicon.shared)
         guard let word = cands.words.first else { return nil }
         if cands.atBoundary { return " " + word }
         let frag = cands.fragment

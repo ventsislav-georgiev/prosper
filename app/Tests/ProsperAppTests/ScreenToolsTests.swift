@@ -157,7 +157,201 @@ final class ScreenToolsTests: XCTestCase {
         XCTAssertNotEqual(buggy, correct)
     }
 
-    // MARK: - 5. openableURL safety matrix
+    // MARK: - 5. cgRegion / cgRegionAbove screen layouts
+
+    /// `VisionContext.cgRegion` / `cgRegionAbove` are private, thin NSScreen
+    /// wrappers around `ScreenToolsSupport.cgRegion` / `cgRegionAbove` — the same
+    /// pad+flip math with `primaryTop` injected, so every screen arrangement is
+    /// exercised here without a real NSScreen. Frames are Cocoa (bottom-left
+    /// origin, y up); the primary is always 1920x1080 at the Cocoa origin
+    /// (primaryTop == 1080) — AppKit guarantees `screens[0]` is the primary
+    /// regardless of how many/which secondaries exist or where they sit.
+    private let primaryFrame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+
+    /// A caret on the primary produces the identical region in every layout
+    /// below — secondaries elsewhere must never perturb a primary-side capture.
+    private let primaryCaretRegion = CGRect(x: 460, y: 552, width: 82, height: 40)
+
+    private func cgRegionOnPrimary(primaryTop: CGFloat = 1080) -> CGRect {
+        // padX 40 / padY 12 matches `averageColorAroundCaret`'s real call.
+        ScreenToolsSupport.cgRegion(around: CGRect(x: 500, y: 500, width: 2, height: 16),
+                                    padX: 40, padY: 12, primaryTop: primaryTop)
+    }
+
+    func testCgRegionPrimaryOnlyLayout() {
+        XCTAssertEqual(cgRegionOnPrimary(), primaryCaretRegion)
+    }
+
+    /// The bug case: a secondary display arranged directly ABOVE the primary.
+    /// The old `screens.map(\.frame.maxY).max()` form (2160) puts the captured
+    /// region on the PRIMARY; the fixed, primary-anchored form (1080) puts it
+    /// on the secondary, where the caret actually is.
+    func testCgRegionSecondaryAbovePrimaryLandsOnSecondaryNotPrimary() {
+        let secondary = CGRect(x: 0, y: 1080, width: 1920, height: 1080)
+        let primaryTop = primaryFrame.maxY // == NSScreen.screens[0].frame.maxY == 1080
+
+        XCTAssertEqual(cgRegionOnPrimary(primaryTop: primaryTop), primaryCaretRegion)
+
+        let caretOnSecondary = CGRect(x: 500, y: 1600, width: 2, height: 16)
+        let region = ScreenToolsSupport.cgRegion(around: caretOnSecondary, padX: 40, padY: 12,
+                                                 primaryTop: primaryTop)
+        XCTAssertEqual(region, CGRect(x: 460, y: -548, width: 82, height: 40))
+
+        // CG bounds of each display, derived the same primary-anchored way.
+        let primaryCGBounds = CGRect(x: primaryFrame.minX,
+                                     y: ScreenToolsSupport.flippedY(primaryFrame.maxY, primaryTop: primaryTop),
+                                     width: primaryFrame.width, height: primaryFrame.height)
+        let secondaryCGBounds = CGRect(x: secondary.minX,
+                                       y: ScreenToolsSupport.flippedY(secondary.maxY, primaryTop: primaryTop),
+                                       width: secondary.width, height: secondary.height)
+        XCTAssertTrue(secondaryCGBounds.contains(region), "expected \(region) inside secondary \(secondaryCGBounds)")
+        XCTAssertFalse(primaryCGBounds.contains(region), "region must not land back on the primary")
+
+        // What the buggy `max` form would have produced, kept as the counter-example.
+        let buggyTop = [primaryFrame, secondary].map(\.maxY).max() ?? 0
+        XCTAssertEqual(buggyTop, 2160)
+        let buggyRegion = ScreenToolsSupport.cgRegion(around: caretOnSecondary, padX: 40, padY: 12,
+                                                       primaryTop: buggyTop)
+        XCTAssertEqual(buggyRegion, CGRect(x: 460, y: 532, width: 82, height: 40))
+        XCTAssertTrue(primaryCGBounds.contains(buggyRegion), "the bug: region lands on the primary instead")
+        XCTAssertNotEqual(buggyRegion, region)
+    }
+
+    func testCgRegionSecondaryBelowPrimaryLandsOnSecondary() {
+        let secondary = CGRect(x: 0, y: -1080, width: 1920, height: 1080)
+        let primaryTop = primaryFrame.maxY
+
+        XCTAssertEqual(cgRegionOnPrimary(primaryTop: primaryTop), primaryCaretRegion)
+
+        let caretOnSecondary = CGRect(x: 500, y: -500, width: 2, height: 16)
+        let region = ScreenToolsSupport.cgRegion(around: caretOnSecondary, padX: 40, padY: 12,
+                                                 primaryTop: primaryTop)
+        XCTAssertEqual(region, CGRect(x: 460, y: 1552, width: 82, height: 40))
+
+        let secondaryCGBounds = CGRect(x: secondary.minX,
+                                       y: ScreenToolsSupport.flippedY(secondary.maxY, primaryTop: primaryTop),
+                                       width: secondary.width, height: secondary.height)
+        XCTAssertTrue(secondaryCGBounds.contains(region))
+
+        // "Below" never made the old `max` form diverge — a screen below the
+        // primary can't out-max the primary's own top edge.
+        let oldTop = [primaryFrame, secondary].map(\.maxY).max() ?? 0
+        XCTAssertEqual(oldTop, primaryTop)
+    }
+
+    func testCgRegionSecondaryLeftOfPrimaryLandsOnSecondary() {
+        let secondary = CGRect(x: -1920, y: 0, width: 1920, height: 1080) // same top edge as primary
+        let primaryTop = primaryFrame.maxY
+
+        XCTAssertEqual(cgRegionOnPrimary(primaryTop: primaryTop), primaryCaretRegion)
+
+        let caretOnSecondary = CGRect(x: -1000, y: 500, width: 2, height: 16)
+        let region = ScreenToolsSupport.cgRegion(around: caretOnSecondary, padX: 40, padY: 12,
+                                                 primaryTop: primaryTop)
+        XCTAssertEqual(region, CGRect(x: -1040, y: 552, width: 82, height: 40))
+
+        let secondaryCGBounds = CGRect(x: secondary.minX,
+                                       y: ScreenToolsSupport.flippedY(secondary.maxY, primaryTop: primaryTop),
+                                       width: secondary.width, height: secondary.height)
+        XCTAssertTrue(secondaryCGBounds.contains(region))
+
+        let oldTop = [primaryFrame, secondary].map(\.maxY).max() ?? 0
+        XCTAssertEqual(oldTop, primaryTop) // same top edge: old and new coincide
+    }
+
+    func testCgRegionSecondaryRightOfPrimaryLandsOnSecondary() {
+        let secondary = CGRect(x: 1920, y: 0, width: 1600, height: 900) // shorter, same bottom edge
+        let primaryTop = primaryFrame.maxY
+
+        XCTAssertEqual(cgRegionOnPrimary(primaryTop: primaryTop), primaryCaretRegion)
+
+        let caretOnSecondary = CGRect(x: 2500, y: 400, width: 2, height: 16)
+        let region = ScreenToolsSupport.cgRegion(around: caretOnSecondary, padX: 40, padY: 12,
+                                                 primaryTop: primaryTop)
+        XCTAssertEqual(region, CGRect(x: 2460, y: 652, width: 82, height: 40))
+
+        let secondaryCGBounds = CGRect(x: secondary.minX,
+                                       y: ScreenToolsSupport.flippedY(secondary.maxY, primaryTop: primaryTop),
+                                       width: secondary.width, height: secondary.height)
+        XCTAssertTrue(secondaryCGBounds.contains(region))
+
+        let oldTop = [primaryFrame, secondary].map(\.maxY).max() ?? 0
+        XCTAssertEqual(oldTop, primaryTop) // shorter than primary: old and new coincide
+    }
+
+    /// Mixed layout: one secondary above (the bug trigger) plus one to the
+    /// right. `primaryTop` must still come from `screens[0]` alone — an extra,
+    /// unrelated secondary must not change the flip for either display.
+    func testCgRegionMixedAboveAndRightLayout() {
+        let above = CGRect(x: 0, y: 1080, width: 1920, height: 1080)
+        let right = CGRect(x: 1920, y: 0, width: 1600, height: 900)
+        let primaryTop = primaryFrame.maxY
+
+        XCTAssertEqual(cgRegionOnPrimary(primaryTop: primaryTop), primaryCaretRegion)
+
+        let caretOnAbove = CGRect(x: 500, y: 1600, width: 2, height: 16)
+        let regionOnAbove = ScreenToolsSupport.cgRegion(around: caretOnAbove, padX: 40, padY: 12,
+                                                        primaryTop: primaryTop)
+        // Identical to the pure "secondary above" layout — the extra "right"
+        // display is irrelevant to this flip.
+        XCTAssertEqual(regionOnAbove, CGRect(x: 460, y: -548, width: 82, height: 40))
+
+        let buggyTop = [primaryFrame, above, right].map(\.maxY).max() ?? 0
+        XCTAssertEqual(buggyTop, 2160) // still wrong, and still the "above" display's maxY
+    }
+
+    /// NO REGRESSION: with exactly one display the old `screens.map(\.frame.maxY).max()`
+    /// constant and the new primary-anchored one are numerically identical, so
+    /// both codepaths must produce byte-identical regions.
+    func testCgRegionSingleDisplayMatchesOldMaxYFormByteIdentical() {
+        let caret = CGRect(x: 500, y: 500, width: 2, height: 16)
+        let newTop = primaryFrame.maxY
+        let oldTop = [primaryFrame].map(\.maxY).max() ?? 0
+        XCTAssertEqual(newTop, oldTop)
+
+        let usingNew = ScreenToolsSupport.cgRegion(around: caret, padX: 40, padY: 12, primaryTop: newTop)
+        let usingOld = ScreenToolsSupport.cgRegion(around: caret, padX: 40, padY: 12, primaryTop: oldTop)
+        XCTAssertEqual(usingNew, usingOld)
+    }
+
+    /// Same NO-REGRESSION guarantee for `cgRegionAbove` (the `conversationText`
+    /// caller), whose pad shape (`padUp`/`padDown`) differs from `cgRegion` but
+    /// shares the same `flippedY` flip.
+    func testCgRegionAboveSingleDisplayMatchesOldMaxYFormByteIdentical() {
+        let caret = CGRect(x: 500, y: 500, width: 2, height: 16)
+        let newTop = primaryFrame.maxY
+        let oldTop = [primaryFrame].map(\.maxY).max() ?? 0
+
+        // padX/padUp/padDown match `conversationText`'s real call.
+        let usingNew = ScreenToolsSupport.cgRegionAbove(caret, padX: 420, padUp: 1100, padDown: 60, primaryTop: newTop)
+        let usingOld = ScreenToolsSupport.cgRegionAbove(caret, padX: 420, padUp: 1100, padDown: 60, primaryTop: oldTop)
+        XCTAssertEqual(usingNew, usingOld)
+    }
+
+    /// `cgRegionAbove` reaches far above the caret — exactly the shape that hits
+    /// this bug hardest, since a display arranged above the primary is precisely
+    /// where that upward reach needs to land. The old `max` form under-shifts
+    /// the region by the secondary's full height (1080pt here).
+    func testCgRegionAboveSecondaryAbovePrimaryUsesPrimaryTopNotMaxTop() {
+        let secondary = CGRect(x: 0, y: 1080, width: 1920, height: 1080)
+        let primaryTop = primaryFrame.maxY
+
+        let caretOnSecondary = CGRect(x: 500, y: 1600, width: 2, height: 16)
+        let region = ScreenToolsSupport.cgRegionAbove(caretOnSecondary, padX: 420, padUp: 1100, padDown: 60,
+                                                       primaryTop: primaryTop)
+        XCTAssertEqual(region, CGRect(x: 80, y: -1636, width: 842, height: 1176))
+
+        let buggyTop = [primaryFrame, secondary].map(\.maxY).max() ?? 0
+        let buggyRegion = ScreenToolsSupport.cgRegionAbove(caretOnSecondary, padX: 420, padUp: 1100, padDown: 60,
+                                                            primaryTop: buggyTop)
+        XCTAssertEqual(buggyRegion, CGRect(x: 80, y: -556, width: 842, height: 1176))
+
+        // The old form is off by exactly the secondary's height (2160 - 1080).
+        XCTAssertEqual(buggyRegion.minY - region.minY, secondary.height)
+        XCTAssertNotEqual(buggyRegion, region)
+    }
+
+    // MARK: - 6. openableURL safety matrix
 
     func testOpenableURLAcceptsOnlyHTTPAndHTTPS() {
         XCTAssertEqual(ScreenToolsSupport.openableURL(from: "http://example.com")?.absoluteString,
@@ -194,7 +388,7 @@ final class ScreenToolsTests: XCTestCase {
         XCTAssertEqual(joined, "https://a.test\nhttps://b.test")
     }
 
-    // MARK: - 6. selectionRect / isClick / hexString
+    // MARK: - 7. selectionRect / isClick / hexString
 
     func testSelectionRectNormalizesNegativeDrag() {
         XCTAssertEqual(ScreenToolsSupport.selectionRect(from: CGPoint(x: 100, y: 100),

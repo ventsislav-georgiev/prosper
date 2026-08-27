@@ -215,61 +215,80 @@ final class BoostLookaheadBufferListLimiter {
         }
 
         let ceiling = BoostLimiter.ceiling
-        for frame in 0..<frames {
-            var peak: Float = 0
+        // `buffers` is an UnsafeMutableAudioBufferListPointer: walking it is a
+        // generic Collection conformance the specializer cannot see through
+        // (it lives in libswiftCoreAudio), so doing that per frame rebuilds an
+        // IndexingIterator and redoes assumingMemoryBound 512 times a render
+        // callback. The buffer/channel shape cannot change within one call,
+        // so it is resolved once here — a small, allocation-free per-call
+        // walk over the handful of buffers a device has — and the frame loop
+        // below runs over the flattened result instead.
+        withUnsafeTemporaryAllocation(
+            of: (samples: UnsafeMutablePointer<Float>, channels: Int, channelOffset: Int).self,
+            capacity: buffers.count
+        ) { flat in
+            var bufferCount = 0
+            var channelOffset = 0
             for buffer in buffers {
                 let count = Int(buffer.mNumberChannels)
                 guard count > 0,
                       let samples = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                let base = frame * count
-                for channel in 0..<count {
-                    peak = max(peak, abs(samples[base + channel]))
-                }
+                flat[bufferCount] = (samples, count, channelOffset)
+                bufferCount += 1
+                channelOffset += count
             }
 
-            let requiredGain = peak > ceiling ? ceiling / peak : 1
-            let isOverCeiling = requiredGain < 1
-            if requiredGain < targetGain {
-                targetGain = requiredGain
-                let nextStep = (targetGain - gain)
-                    / Float(BoostLookaheadLimiter.lookaheadFrames)
-                attackStep = attackFrames > 0 ? min(attackStep, nextStep) : nextStep
-                attackFrames = BoostLookaheadLimiter.lookaheadFrames
-            }
-            if isOverCeiling { holdFrames = BoostLookaheadLimiter.lookaheadFrames }
-
-            if attackFrames > 0 {
-                gain += attackStep
-                attackFrames -= 1
-                if gain <= targetGain {
-                    gain = targetGain
-                    attackFrames = 0
+            for frame in 0..<frames {
+                var peak: Float = 0
+                for i in 0..<bufferCount {
+                    let (samples, count, _) = flat[i]
+                    let base = frame * count
+                    for channel in 0..<count {
+                        peak = max(peak, abs(samples[base + channel]))
+                    }
                 }
-            } else if !isOverCeiling, holdFrames > 0 {
-                holdFrames -= 1
-            } else if !isOverCeiling {
-                gain = 1 + (gain - 1) * release
-                targetGain = gain
-            }
 
-            let delayedBase = position * channelCapacity
-            var channelIndex = 0
-            for buffer in buffers {
-                let count = Int(buffer.mNumberChannels)
-                guard count > 0,
-                      let samples = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                let base = frame * count
-                for channel in 0..<count {
-                    let delayed = filledFrames >= BoostLookaheadLimiter.lookaheadFrames
-                        ? delay[delayedBase + channelIndex] : 0
-                    delay[delayedBase + channelIndex] = samples[base + channel]
-                    samples[base + channel] = delayed * gain
-                    channelIndex += 1
+                let requiredGain = peak > ceiling ? ceiling / peak : 1
+                let isOverCeiling = requiredGain < 1
+                if requiredGain < targetGain {
+                    targetGain = requiredGain
+                    let nextStep = (targetGain - gain)
+                        / Float(BoostLookaheadLimiter.lookaheadFrames)
+                    attackStep = attackFrames > 0 ? min(attackStep, nextStep) : nextStep
+                    attackFrames = BoostLookaheadLimiter.lookaheadFrames
                 }
+                if isOverCeiling { holdFrames = BoostLookaheadLimiter.lookaheadFrames }
+
+                if attackFrames > 0 {
+                    gain += attackStep
+                    attackFrames -= 1
+                    if gain <= targetGain {
+                        gain = targetGain
+                        attackFrames = 0
+                    }
+                } else if !isOverCeiling, holdFrames > 0 {
+                    holdFrames -= 1
+                } else if !isOverCeiling {
+                    gain = 1 + (gain - 1) * release
+                    targetGain = gain
+                }
+
+                let delayedBase = position * channelCapacity
+                for i in 0..<bufferCount {
+                    let (samples, count, channelOffset) = flat[i]
+                    let base = frame * count
+                    for channel in 0..<count {
+                        let channelIndex = channelOffset + channel
+                        let delayed = filledFrames >= BoostLookaheadLimiter.lookaheadFrames
+                            ? delay[delayedBase + channelIndex] : 0
+                        delay[delayedBase + channelIndex] = samples[base + channel]
+                        samples[base + channel] = delayed * gain
+                    }
+                }
+                position += 1
+                if position == BoostLookaheadLimiter.lookaheadFrames { position = 0 }
+                if filledFrames < BoostLookaheadLimiter.lookaheadFrames { filledFrames += 1 }
             }
-            position += 1
-            if position == BoostLookaheadLimiter.lookaheadFrames { position = 0 }
-            if filledFrames < BoostLookaheadLimiter.lookaheadFrames { filledFrames += 1 }
         }
         return true
     }
@@ -284,25 +303,41 @@ struct BoostBufferListLimiter {
                           frames: Int,
                           release: Float) {
         guard frames > 0 else { return }
-        for frame in 0..<frames {
-            var peak: Float = 0
+        var envelope = self.envelope
+        let ceiling = BoostLimiter.ceiling
+        // Same hoist as BoostLookaheadBufferListLimiter.process above: resolve
+        // the buffer/channel shape once per call instead of walking the
+        // generic `buffers` Collection inside the frame loop.
+        withUnsafeTemporaryAllocation(
+            of: (samples: UnsafeMutablePointer<Float>, channels: Int).self,
+            capacity: buffers.count
+        ) { flat in
+            var bufferCount = 0
             for buffer in buffers {
                 let channels = Int(buffer.mNumberChannels)
                 guard channels > 0,
                       let samples = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                let base = frame * channels
-                for channel in 0..<channels { peak = max(peak, abs(samples[base + channel])) }
+                flat[bufferCount] = (samples, channels)
+                bufferCount += 1
             }
-            envelope = peak > envelope ? peak : peak + (envelope - peak) * release
-            guard envelope > BoostLimiter.ceiling else { continue }
-            let gain = BoostLimiter.ceiling / envelope
-            for buffer in buffers {
-                let channels = Int(buffer.mNumberChannels)
-                guard channels > 0,
-                      let samples = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                let base = frame * channels
-                for channel in 0..<channels { samples[base + channel] *= gain }
+
+            for frame in 0..<frames {
+                var peak: Float = 0
+                for i in 0..<bufferCount {
+                    let (samples, channels) = flat[i]
+                    let base = frame * channels
+                    for channel in 0..<channels { peak = max(peak, abs(samples[base + channel])) }
+                }
+                envelope = peak > envelope ? peak : peak + (envelope - peak) * release
+                guard envelope > ceiling else { continue }
+                let gain = ceiling / envelope
+                for i in 0..<bufferCount {
+                    let (samples, channels) = flat[i]
+                    let base = frame * channels
+                    for channel in 0..<channels { samples[base + channel] *= gain }
+                }
             }
         }
+        self.envelope = envelope
     }
 }

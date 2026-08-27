@@ -366,32 +366,23 @@ final class ThemeTests: XCTestCase {
 
     // MARK: appearance pane — arrow-select auto-scroll anchor (#078 round 4)
 
-    func testRowAnchorIsStablePerThemeIDAndGeneration() {
-        // Must resolve identically across calls — moveSelection's request and
-        // the row's own `.id()` are built by two separate calls (moveSelection
-        // reads `theme.generation` post-select, the row reads it in its own
-        // body) and have to agree, or ScrollViewReader has nothing matching to
-        // scroll to.
-        let a1 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 3)
-        let a2 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 3)
+    // #100: the anchor is deliberately STABLE across a select now — `moveSelection`
+    // builds its `SettingsFocusRouter` request and the row builds its own `.id()`
+    // from two separate calls, and they have to agree or `ScrollViewReader` has
+    // nothing matching to scroll to. #082's generation fold (and the "read
+    // `theme.generation` strictly after `select`" dance it forced on
+    // `moveSelection`) is gone; `ThemeCardRepaintTests.testStableRowIDsRepaintOnSelect`
+    // is the pixel evidence that nothing goes stale without it.
+    func testRowAnchorIsStableAcrossSelects() {
+        let a1 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber")
+        let a2 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber")
         XCTAssertEqual(a1, a2)
     }
 
     func testRowAnchorsAreDistinctPerThemeID() {
-        let amber = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 3)
-        let dflt = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: ThemeDescriptor.builtInID, generation: 3)
+        let amber = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber")
+        let dflt = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: ThemeDescriptor.builtInID)
         XCTAssertNotEqual(amber, dflt)
-    }
-
-    // #082 (v2.141.0 regression): the row's `.id()` must change every select or
-    // NeonScroll's LazyVStack reuses the row's previously-rendered content for
-    // that identity instead of the freshly-described one (see `rowAnchor`'s
-    // comment) — the theme list stayed on stale colors until the whole pane
-    // remounted. Folding `generation` in is what invalidates that reuse.
-    func testRowAnchorChangesWithGeneration() {
-        let before = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 3)
-        let after = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 4)
-        XCTAssertNotEqual(before, after)
     }
 
     func testRowAnchorNeverCollidesWithASectionTitleAnchor() {
@@ -401,7 +392,7 @@ final class ThemeTests: XCTestCase {
         // section-glow highlight, which no requirement asked for.
         for title in ["Menu Bar Icon", "Theme", "UI Size", "Transparency", "Frost"] {
             let sectionAnchor = SettingsAnchor(pane: "appearance", section: title)
-            let rowAnchor = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: title, generation: 3)
+            let rowAnchor = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: title)
             XCTAssertNotEqual(sectionAnchor, rowAnchor, "row id must not collide with the \"\(title)\" section anchor")
         }
     }
@@ -414,9 +405,16 @@ final class ThemeTests: XCTestCase {
         }
     }
 
-    func testMenuBarIconChoiceDefaultsToProsperForUnknownOrEmptyStoredValue() {
-        XCTAssertEqual(MenuBarIconChoice(stored: ""), .prosper)
-        XCTAssertEqual(MenuBarIconChoice(stored: "garbage"), .prosper)
+    func testMenuBarIconChoiceDefaultsToVulcanForUnknownOrEmptyStoredValue() {
+        // #102: absent (`""`) and garbage stored values both fall back to
+        // `.vulcan` now — the same value `.stored`/`init(stored:)` round-trip
+        // for an EXPLICIT Vulcan-swatch pick, so default-by-fallback and
+        // default-by-selection are indistinguishable.
+        XCTAssertEqual(MenuBarIconChoice(stored: ""), .vulcan)
+        XCTAssertEqual(MenuBarIconChoice(stored: "garbage"), .vulcan)
+        // An explicit `.prosper` choice must still round-trip, not collapse
+        // into the new fallback (see testMenuBarIconChoiceStoredRoundTrip).
+        XCTAssertEqual(MenuBarIconChoice(stored: "prosper"), .prosper)
     }
 
     func testMenuBarIconChoiceIsValidEmojiAcceptsRealEmoji() {
@@ -467,6 +465,56 @@ final class ThemeTests: XCTestCase {
         // can't tell the two apart, and doesn't need to.
         XCTAssertNil(MenuBarIconChoice.emoji("not an emoji").templateImage())
         XCTAssertNil(MenuBarIconChoice.emoji("").templateImage())
+    }
+
+    /// #102: integration-level pin, through `Preferences`/real `UserDefaults`
+    /// (not just the pure `init(stored:)` fallback above) — a fresh install,
+    /// or an existing one that never touched these keys (or has a corrupted
+    /// value), must come up as Vulcan @ medium, and it must render exactly
+    /// like the picker's own Vulcan swatch: a TEMPLATE image (`isTemplate ==
+    /// true`), never the bundled/theme full-color icon. Also pins that this
+    /// is a pure fallback, not a stored write: explicit choices made
+    /// afterwards still win and still round-trip.
+    @MainActor
+    func testMenuBarDefaultsThroughPreferencesAreVulcanAtMediumForAbsentOrGarbageStoredValue() {
+        let choiceKey = "menuBarIconChoice"
+        let sizeKey = "menuBarIconSize"
+        let savedChoice = UserDefaults.standard.object(forKey: choiceKey)
+        let savedSize = UserDefaults.standard.object(forKey: sizeKey)
+        defer {
+            if let savedChoice { UserDefaults.standard.set(savedChoice, forKey: choiceKey) }
+            else { UserDefaults.standard.removeObject(forKey: choiceKey) }
+            if let savedSize { UserDefaults.standard.set(savedSize, forKey: sizeKey) }
+            else { UserDefaults.standard.removeObject(forKey: sizeKey) }
+        }
+
+        for storedChoice in [nil, "garbage"] {
+            if let storedChoice { UserDefaults.standard.set(storedChoice, forKey: choiceKey) }
+            else { UserDefaults.standard.removeObject(forKey: choiceKey) }
+            for storedSize in [nil, "garbage"] {
+                if let storedSize { UserDefaults.standard.set(storedSize, forKey: sizeKey) }
+                else { UserDefaults.standard.removeObject(forKey: sizeKey) }
+
+                XCTAssertEqual(Preferences.menuBarIconChoice, .vulcan)
+                XCTAssertEqual(Preferences.menuBarIconSize, .medium)
+                let image = Preferences.menuBarIconChoice.templateImage()
+                XCTAssertNotNil(image)
+                XCTAssertEqual(image?.isTemplate, true)
+            }
+        }
+
+        // No regression: explicit stored choices still win and still
+        // round-trip through the very same getters.
+        Preferences.menuBarIconChoice = .prosper
+        Preferences.menuBarIconSize = .large
+        XCTAssertEqual(Preferences.menuBarIconChoice, .prosper)
+        XCTAssertEqual(Preferences.menuBarIconSize, .large)
+        XCTAssertNil(Preferences.menuBarIconChoice.templateImage())
+
+        Preferences.menuBarIconChoice = .sfSymbol("bolt.fill")
+        Preferences.menuBarIconSize = .small
+        XCTAssertEqual(Preferences.menuBarIconChoice, .sfSymbol("bolt.fill"))
+        XCTAssertEqual(Preferences.menuBarIconSize, .small)
     }
 
     // MARK: menu-bar swatch tint (#093)
@@ -524,17 +572,19 @@ final class ThemeTests: XCTestCase {
         }
     }
 
-    func testMenuBarIconSizeDefaultsToLargeForUnknownOrAbsentStoredValue() {
-        // `.large` == today's exact (pre-#092) sizing, so an existing install
-        // with no stored value — or a corrupted one — keeps its icon size.
-        XCTAssertEqual(MenuBarIconSize(rawValue: "garbage") ?? .large, .large)
-        XCTAssertEqual(MenuBarIconSize(rawValue: "") ?? .large, .large)
+    func testMenuBarIconSizeDefaultsToMediumForUnknownOrAbsentStoredValue() {
+        // #102: `.medium` is now the fallback for an existing install with no
+        // stored value — or a corrupted one. `.large` (the pre-#102 default,
+        // still today's exact pre-#092 sizing) remains explicitly selectable.
+        XCTAssertEqual(MenuBarIconSize(rawValue: "garbage") ?? .medium, .medium)
+        XCTAssertEqual(MenuBarIconSize(rawValue: "") ?? .medium, .medium)
     }
 
     func testMenuBarIconSizeScaleOrderingSmallLessThanMediumLessThanLarge() {
         // Pure comparison of the mapping constants — no live status bar
-        // needed. `.large` is exactly 1.0 (today's shipped sizing, and the
-        // default — see the redo note below).
+        // needed. `.large` is exactly 1.0 (today's shipped, pre-#092 sizing;
+        // #102 made `.medium`, not `.large`, the default — see the redo note
+        // below).
         XCTAssertLessThan(MenuBarIconSize.small.scale, MenuBarIconSize.medium.scale)
         XCTAssertLessThan(MenuBarIconSize.medium.scale, MenuBarIconSize.large.scale)
         XCTAssertEqual(MenuBarIconSize.large.scale, 1.0)
@@ -547,8 +597,10 @@ final class ThemeTests: XCTestCase {
         for size: MenuBarIconSize in [.small, .medium, .large] {
             XCTAssertLessThanOrEqual(size.pointSize(thickness: thickness), thickness)
         }
-        // `.large` must be byte-identical to the pre-#092 hardcoded sizing —
-        // it is now the default, so this is the "nothing changed" guarantee.
+        // `.large` must still be byte-identical to the pre-#092 hardcoded
+        // sizing when explicitly selected — #102 changed only the default
+        // (now `.medium`, see testMenuBarIconSizeDefaultsToMediumForUnknownOrAbsentStoredValue),
+        // not this mapping.
         XCTAssertEqual(MenuBarIconSize.large.pointSize(thickness: thickness), thickness)
         // Redo regression guard: all three steps must be visually distinct at
         // the real bar height (the bug this redo exists to fix was

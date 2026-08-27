@@ -1,10 +1,13 @@
 import XCTest
 @testable import ProsperApp
 
-/// Covers the non-LLM completion-candidate pipeline: `SymSpell` typo correction,
-/// `Lexicon` prefix/bigram prediction, the `CompletionCandidates` provider that
-/// merges them, and the prompt builders that feed candidates to the LLM. All use
-/// small hand-built dictionaries (no `Bundle.main`), so they are deterministic.
+/// Covers the non-LLM completion-candidate pipeline: `Lexicon` prefix/bigram
+/// prediction, the `CompletionCandidates` provider that merges them (plus OS
+/// spell-checker typo correction), and the prompt builders that feed candidates
+/// to the LLM. Most cases use small hand-built dictionaries (no `Bundle.main`),
+/// so they are deterministic; `derive` itself is `@MainActor` (it calls
+/// NSSpellChecker for typo corrections), hence the class-level annotation.
+@MainActor
 final class CompletionCandidatesTests: XCTestCase {
 
     /// A compact lexicon mirroring the "website d → download" scenario.
@@ -22,53 +25,6 @@ final class CompletionCandidatesTests: XCTestCase {
             "the": ["website", "design", "download"],
         ]
         return Lexicon(frequency: freq, bigrams: bigrams)
-    }
-
-    // MARK: - SymSpell
-
-    func testSymSpellCorrectsTransposition() {
-        let s = makeLexicon().symSpell
-        // "downlaod" — transposed a/o — distance 1 from "download".
-        XCTAssertTrue(s.lookup("downlaod").contains("download"))
-    }
-
-    func testSymSpellCorrectsInsertionTypo() {
-        let s = makeLexicon().symSpell
-        // "downlload" — an extra l — distance 1 from "download".
-        XCTAssertTrue(s.lookup("downlload").contains("download"))
-    }
-
-    func testSymSpellCorrectsDeletionTypo() {
-        let s = makeLexicon().symSpell
-        // "donload" — missing w — distance 1 from "download".
-        XCTAssertTrue(s.lookup("donload").contains("download"))
-    }
-
-    func testSymSpellReturnsKnownWordAsItself() {
-        let s = makeLexicon().symSpell
-        XCTAssertTrue(s.isKnownWord("download"))
-        XCTAssertTrue(s.lookup("download").contains("download"))
-    }
-
-    func testSymSpellRanksByFrequency() {
-        // "thes" is distance 1 from both "the" (freq 100k) and "there"/"three";
-        // the most frequent correction comes first.
-        let s = makeLexicon().symSpell
-        let hits = s.lookup("thee", limit: 3)
-        XCTAssertEqual(hits.first, "the")
-    }
-
-    func testSymSpellEmptyOnGibberish() {
-        let s = makeLexicon().symSpell
-        XCTAssertTrue(s.lookup("xqzkw").isEmpty)
-    }
-
-    func testEditDistanceBasics() {
-        XCTAssertEqual(SymSpell.editDistance("download", "downlaod"), 1) // adjacent transposition = 1 (Damerau/OSA)
-        XCTAssertEqual(SymSpell.editDistance("cat", "cat"), 0)
-        XCTAssertEqual(SymSpell.editDistance("cat", "cot"), 1)
-        XCTAssertEqual(SymSpell.editDistance("", "abc"), 3)
-        XCTAssertEqual(SymSpell.editDistance("kitten", "sitting"), 3)
     }
 
     // MARK: - Lexicon prefix + bigram
@@ -166,10 +122,17 @@ final class CompletionCandidatesTests: XCTestCase {
     }
 
     func testDeriveIncludesTypoCorrection() {
-        // "downlaod" is a transposition typo; no prefix completion exists, so the
-        // SymSpell correction "download" must surface.
+        // "downlaod" is a transposition typo; no prefix completion exists, so an
+        // OS spell-checker (NSSpellChecker) correction "download" must surface.
         let c = CompletionCandidates.derive(before: "the downlaod", lexicon: makeLexicon())
         XCTAssertTrue(c.words.contains("download"))
+    }
+
+    func testDeriveIncludesTypoCorrectionForCommonMisspelling() {
+        // "recieve" -> "receive": classic i/e swap, not a prefix of anything in
+        // the tiny hand-built lexicon, so this only passes via the OS corrector.
+        let c = CompletionCandidates.derive(before: "please recieve", lexicon: makeLexicon())
+        XCTAssertTrue(c.words.contains("receive"))
     }
 
     func testDeriveEmptyLexiconNoCandidates() {

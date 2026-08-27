@@ -101,7 +101,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         super.init()
 
-        setMenuBarImage(nil)   // bundled default; a theme can swap it later
+        setMenuBarImage(nil)   // #102: nothing stored yet → renders the Vulcan template glyph (see setMenuBarImage)
 
         statusItem.menu = buildMenu()
         statusItem.isVisible = Preferences.showMenuBarIcon
@@ -143,17 +143,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// This is also THE seam for a user-selected icon (Settings → Appearance →
     /// Menu Bar Icon): `Preferences.menuBarIconChoice` is checked first, and a
     /// non-`.prosper` choice wins outright, overriding even a theme-provided
-    /// `themed` image. `.prosper` (the default; unchanged behavior) falls
-    /// through to the existing theme/bundled logic below. `ThemeStore.onChange`
-    /// already calls this on every theme apply, and `setMenuBarIconChoice`
-    /// pokes that same `onChange`, so a fresh selection applies immediately —
-    /// no separate re-apply path needed.
+    /// `themed` image. `.prosper` falls through to the existing theme/bundled
+    /// logic below. #102: the default (nothing stored) is now `.vulcan`, a
+    /// non-`.prosper` choice, so a fresh/never-touched install renders the
+    /// Vulcan template glyph here and overrides a theme-provided icon too —
+    /// same override order as an explicit selection, just now also true by
+    /// default. `ThemeStore.onChange` already calls this on every theme
+    /// apply, and `setMenuBarIconChoice` pokes that same `onChange`, so a
+    /// fresh selection applies immediately — no separate re-apply path needed.
     func setMenuBarImage(_ themed: NSImage?) {
         guard let button = statusItem.button else { return }
         // One size for every choice below (Prosper image, SF symbol, emoji) —
-        // see `MenuBarIconSize.pointSize(thickness:)`. `.large` (the default)
-        // resolves to exactly `NSStatusBar.system.thickness`, i.e.
-        // byte-identical to the pre-#092 hardcoded `h`.
+        // see `MenuBarIconSize.pointSize(thickness:)`. #102: `.medium` is now
+        // the default; `.large` still resolves to exactly
+        // `NSStatusBar.system.thickness`, i.e. byte-identical to the
+        // pre-#092 hardcoded `h`, when explicitly selected.
         let h = Preferences.menuBarIconSize.pointSize(thickness: NSStatusBar.system.thickness)
         if let picked = Preferences.menuBarIconChoice.templateImage() {
             picked.size = NSSize(width: h, height: h)

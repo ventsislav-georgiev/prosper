@@ -31,24 +31,13 @@ enum VisionOCR {
     static func recognizeLines(in image: CGImage,
                                level: VNRequestTextRecognitionLevel = .accurate) async -> [OCRLine] {
         await withCheckedContinuation { (continuation: CheckedContinuation<[OCRLine], Never>) in
-            let request = VNRecognizeTextRequest { request, _ in
-                let observations = request.results as? [VNRecognizedTextObservation] ?? []
-                let lines: [OCRLine] = observations.compactMap { obs in
-                    guard let best = obs.topCandidates(1).first else { return nil }
-                    return OCRLine(text: best.string, boundingBox: obs.boundingBox)
-                }
-                continuation.resume(returning: lines)
-            }
+            let request = VNRecognizeTextRequest()
             request.recognitionLevel = level
             request.usesLanguageCorrection = (level == .accurate)
 
             let handler = VNImageRequestHandler(cgImage: image, options: [:])
             DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    try handler.perform([request])
-                } catch {
-                    continuation.resume(returning: [])
-                }
+                continuation.resume(returning: Self.lines(from: Self.observations(handler, request)))
             }
         }
     }
@@ -57,25 +46,37 @@ enum VisionOCR {
     /// avoiding a CIImage→CGImage round-trip — Vision accepts CIImage natively.
     static func recognizeLines(in image: CIImage) async -> [OCRLine] {
         await withCheckedContinuation { (continuation: CheckedContinuation<[OCRLine], Never>) in
-            let request = VNRecognizeTextRequest { request, _ in
-                let observations = request.results as? [VNRecognizedTextObservation] ?? []
-                let lines: [OCRLine] = observations.compactMap { obs in
-                    guard let best = obs.topCandidates(1).first else { return nil }
-                    return OCRLine(text: best.string, boundingBox: obs.boundingBox)
-                }
-                continuation.resume(returning: lines)
-            }
+            let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
 
             let handler = VNImageRequestHandler(ciImage: image, options: [:])
             DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    try handler.perform([request])
-                } catch {
-                    continuation.resume(returning: [])
-                }
+                continuation.resume(returning: Self.lines(from: Self.observations(handler, request)))
             }
+        }
+    }
+
+    /// Runs `request` synchronously and hands back what it recognized.
+    ///
+    /// The results are read off the request AFTER `perform` returns rather than from a
+    /// `VNRequest` completion handler, so every caller has exactly ONE exit path.
+    /// Vision reports a failure BOTH ways — an image with a side of 2px or less fires
+    /// the completion handler *and* throws ("The image is too small in at least one
+    /// dimension") — and the previous handler-plus-`catch` shape then resumed its
+    /// `CheckedContinuation` twice, trapping with CONTINUATION MISUSE. Reachable from
+    /// `ScreenTools` on a thin stray drag.
+    private static func observations(_ handler: VNImageRequestHandler,
+                                     _ request: VNRecognizeTextRequest)
+        -> [VNRecognizedTextObservation] {
+        try? handler.perform([request])
+        return request.results as? [VNRecognizedTextObservation] ?? []
+    }
+
+    private static func lines(from observations: [VNRecognizedTextObservation]) -> [OCRLine] {
+        observations.compactMap { obs in
+            guard let best = obs.topCandidates(1).first else { return nil }
+            return OCRLine(text: best.string, boundingBox: obs.boundingBox)
         }
     }
 
@@ -87,40 +88,39 @@ enum VisionOCR {
     /// (terminals/TUIs). Returns nil when OCR finds no acceptable matching line.
     static func caretAnchor(in image: CGImage, targetLine: String, column: Int) async -> CGRect? {
         await withCheckedContinuation { (continuation: CheckedContinuation<CGRect?, Never>) in
-            let request = VNRecognizeTextRequest { request, _ in
-                let observations = request.results as? [VNRecognizedTextObservation] ?? []
-                let texts: [(obs: VNRecognizedTextObservation, cand: VNRecognizedText)] =
-                    observations.compactMap { o in o.topCandidates(1).first.map { (o, $0) } }
-                guard let idx = Self.bestMatchIndex(candidates: texts.map { $0.cand.string },
-                                                    target: targetLine) else {
-                    continuation.resume(returning: nil); return
-                }
-                let cand = texts[idx].cand
-                let s = cand.string
-                let col = max(0, min(column, s.count))
-                // Range = the `col`-char prefix; its trailing edge is the caret. For a
-                // zero-length prefix, anchor at the line box's leading edge.
-                guard col > 0 else {
-                    continuation.resume(returning: texts[idx].obs.boundingBox)
-                    return
-                }
-                let range = s.startIndex ..< s.index(s.startIndex, offsetBy: col)
-                guard let rectObs = try? cand.boundingBox(for: range) else {
-                    continuation.resume(returning: texts[idx].obs.boundingBox); return
-                }
-                let box = rectObs.boundingBox // axis-aligned normalized rect
-                // Caret = trailing edge of the measured prefix (zero-width).
-                continuation.resume(returning: CGRect(
-                    x: box.maxX, y: box.minY, width: 0, height: box.height))
-            }
+            let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = false // exact glyph positions, no rewrite
             let handler = VNImageRequestHandler(cgImage: image, options: [:])
             DispatchQueue.global(qos: .userInitiated).async {
-                do { try handler.perform([request]) }
-                catch { continuation.resume(returning: nil) }
+                continuation.resume(returning: Self.anchor(in: Self.observations(handler, request),
+                                                           targetLine: targetLine,
+                                                           column: column))
             }
         }
+    }
+
+    /// The caret rect inside whichever observation best matches `targetLine`. Pure.
+    private static func anchor(in observations: [VNRecognizedTextObservation],
+                               targetLine: String,
+                               column: Int) -> CGRect? {
+        let texts: [(obs: VNRecognizedTextObservation, cand: VNRecognizedText)] =
+            observations.compactMap { o in o.topCandidates(1).first.map { (o, $0) } }
+        guard let idx = bestMatchIndex(candidates: texts.map { $0.cand.string },
+                                       target: targetLine) else { return nil }
+        let cand = texts[idx].cand
+        let s = cand.string
+        let col = max(0, min(column, s.count))
+        // Range = the `col`-char prefix; its trailing edge is the caret. For a
+        // zero-length prefix, anchor at the line box's leading edge.
+        guard col > 0 else { return texts[idx].obs.boundingBox }
+        let range = s.startIndex ..< s.index(s.startIndex, offsetBy: col)
+        guard let rectObs = try? cand.boundingBox(for: range) else {
+            return texts[idx].obs.boundingBox
+        }
+        let box = rectObs.boundingBox // axis-aligned normalized rect
+        // Caret = trailing edge of the measured prefix (zero-width).
+        return CGRect(x: box.maxX, y: box.minY, width: 0, height: box.height)
     }
 
     /// Picks the OCR line that best matches `target` (the user's current input line),

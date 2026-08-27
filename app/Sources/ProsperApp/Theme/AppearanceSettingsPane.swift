@@ -93,12 +93,16 @@ struct AppearanceSettingsPane: View {
                 // to scroll an off-screen arrow-selected row into view. See
                 // `moveSelection` for why a click never does this.
                 //
-                // #078/#082: the id folds in `theme.generation` (see
-                // `rowAnchor`'s comment) so each row's identity changes on every
-                // select, same as the section's own interior content id — a row
-                // that kept a generation-INDEPENDENT id here is what caused the
-                // v2.141.0 regression (the list never repainting on select; see
-                // `rowAnchor`).
+                // #100: that anchor is the row's ONLY job for `.id()` — it is
+                // stable across a select and deliberately carries no
+                // `theme.generation` fold. #082 added one; #089 then found the
+                // real reason the list looked frozen (the `.neonCard()`
+                // ViewModifier memoizing its body), and the pixel harness
+                // re-run — `ThemeCardRepaintTests.testStableRowIDsRepaintOnSelect`
+                // — shows the fold buys nothing now: the section's interior
+                // teardown reaches straight through a row's stable explicit id,
+                // repainting even a non-observing child view nested under it.
+                // See `rowAnchor`.
                 //
                 // #090: rendered in `orderedThemes` (dark group, then light —
                 // see `orderedByAppearance`), NOT raw `theme.available` order.
@@ -107,7 +111,7 @@ struct AppearanceSettingsPane: View {
                 VStack(alignment: .leading, spacing: sz(14)) {
                     ForEach(Array(orderedThemes.enumerated()), id: \.element.id) { idx, d in
                         if idx > 0 { NeonDivider() }
-                        row(d).id(Self.rowAnchor(pane: paneID, themeID: d.id, generation: theme.generation))
+                        row(d).id(Self.rowAnchor(pane: paneID, themeID: d.id))
                     }
                 }
             }
@@ -208,29 +212,27 @@ struct AppearanceSettingsPane: View {
     /// title like "Theme") — see `NeonSection.anchor` in SettingsTheme.swift —
     /// so `SettingsFocusRouter.highlight`'s section-glow never lights up for it.
     ///
-    /// #082 (v2.141.0 QA, regression from #078 round 6): folds `generation` in
-    /// too, same as `NeonSection.card`'s interior content id. Without this the
-    /// row kept the SAME explicit id across a select (only `pane`/`themeID`,
-    /// both unchanged by picking a different theme) while its ANCESTOR (the
-    /// section's interior content id) changed — an explicit `.id()` nested
-    /// inside a `LazyVStack` whose own realization/reuse bookkeeping is
-    /// literally keyed by explicit ids (the mechanism #078 round 6 already
-    /// established corrupts *scroll range* when stacked at the LazyVStack's
-    /// own direct-child boundary) let the row's PREVIOUS rendered content
-    /// survive the ancestor's teardown intact — stale colors, stale checkmark
-    /// position — even though the row is self-observing (`AppearanceSettingsPane`
-    /// holds `@ObservedObject theme`) and its body closure genuinely does run
-    /// fresh on every select: self-observation makes SwiftUI DESCRIBE fresh
-    /// content, but the row's unchanged id let the lazy container's own reuse
-    /// pool substitute cached content for that identity anyway, which is why
-    /// only a full pane remount (a new identity from further up) ever cleared
-    /// it. Folding `generation` into the id, like the section's own interior
-    /// key, invalidates that reuse-pool entry every select. `moveSelection`
-    /// (below) computes the matching value for `SettingsFocusRouter` — read
-    /// `theme.generation` only AFTER `theme.select(id:)` so it's the value the
-    /// rebuilt row will actually carry.
-    static func rowAnchor(pane: String, themeID: String, generation: Int) -> SettingsAnchor {
-        SettingsAnchor(pane: pane, section: "theme-row:\(themeID):\(generation)")
+    /// Stable across a theme select, on purpose. #082 folded `theme.generation`
+    /// in here (v2.141.0 QA, blaming a `LazyVStack` reuse pool for serving the
+    /// row's previously-rendered content under an unchanged explicit id); #089
+    /// then found the actual reason the list looked frozen — `NeonCardModifier`
+    /// is a property-less `ViewModifier`, so SwiftUI kept its memoized body and
+    /// the CARD's fill never repainted, no matter what the content inside it
+    /// did. #100 re-ran the #082 scenario against the fixed code with a pixel
+    /// harness (`ThemeCardRepaintTests.testStableRowIDsRepaintOnSelect`: the
+    /// real `NeonScroll` → `LazyVStack` → `NeonSection` → per-row `.id()`
+    /// composition): with generation-free row ids, zero stale pixels survive a
+    /// select — not in the rows, and not in a deliberately memoization-prone
+    /// non-observing child view nested UNDER a row's stable id. The reuse pool
+    /// does not shield a row's subtree from its ancestor's teardown, so the
+    /// fold was removed: it bought nothing, and it forced `moveSelection` into
+    /// a read-order dance (build the router request from a `generation` sampled
+    /// strictly after `select`, or `scrollTo` targets an id no row carries)
+    /// that a stable anchor cannot get wrong. (`NeonSection.card`'s interior
+    /// content key is a different story —
+    /// the same harness shows it is load-bearing; see its comment.)
+    static func rowAnchor(pane: String, themeID: String) -> SettingsAnchor {
+        SettingsAnchor(pane: pane, section: "theme-row:\(themeID)")
     }
 
     /// #090: stable sort — all `.dark`-appearance themes first, then all
@@ -267,11 +269,15 @@ struct AppearanceSettingsPane: View {
         else { return }
         let id = list[next].id
         theme.select(id: id)
-        // Read `theme.generation` AFTER select (it bumps synchronously, see
-        // `ThemeStore.apply`) so this matches the id the rebuilt row will
-        // actually carry — see `rowAnchor`'s comment.
-        SettingsFocusRouter.shared.request(
-            Self.rowAnchor(pane: paneID, themeID: id, generation: theme.generation), scrollAnchor: nil)
+        // #100: the anchor is generation-free, so it cannot disagree with the id
+        // the rebuilt row carries — order relative to `select` no longer matters
+        // (#082's version had to read `theme.generation` strictly AFTER it).
+        // `NeonScroll.consume`'s one main-queue hop is still what makes this
+        // land: the select tears down and rebuilds the section's interior
+        // content subtree, so the row is momentarily unmounted when the request
+        // is published; the hop runs `scrollTo` after that rebuild commits, with
+        // the row re-registered under this same id.
+        SettingsFocusRouter.shared.request(Self.rowAnchor(pane: paneID, themeID: id), scrollAnchor: nil)
     }
 
     /// Snap an arbitrary stored value to the closest preset so the segmented
