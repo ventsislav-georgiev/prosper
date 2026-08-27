@@ -170,8 +170,14 @@ final class MixerPanelController {
 
     @objc private func itemClicked(_ sender: NSStatusBarButton) {
         if popover.isShown { popover.performClose(sender); return }
-        popover.contentViewController = panelHost()
+        let host = panelHost()
+        popover.contentViewController = host
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        // Accessory-app popover: without key status the first click inside only
+        // activates the window and SwiftUI never sees it (sliders/buttons need a
+        // key window for their first click). Same fix as StatsController /
+        // CalendarBarController: make it key on open.
+        host.view.window?.makeKey()
     }
 
     /// Arm the monitor while the popover is shown, drop it when closed (no

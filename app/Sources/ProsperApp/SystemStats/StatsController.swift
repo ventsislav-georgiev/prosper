@@ -210,6 +210,12 @@ final class StatsController {
         host.sizingOptions = [.preferredContentSize]
         popover.contentViewController = host
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        // Accessory-app popover: without key status the first click inside only
+        // activates the window and SwiftUI never sees it — the process row's
+        // `.onTapGesture` needs a key window to recognize a first click, so it
+        // silently swallows one and the second click (now key) succeeds. Same
+        // fix as CalendarBarController's day-picker popover: make it key on open.
+        host.view.window?.makeKey()
     }
 
     /// Arm the monitor while the popover is shown, drop it when closed (no idle
