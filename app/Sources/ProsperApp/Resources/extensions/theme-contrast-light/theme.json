@@ -1,11 +1,11 @@
 {
   "appearance": "light",
   "colors": {
-    "blue":          "#0033CC",
-    "blueBright":    "#0055FF",
-    "indigo":        "#5500CC",
-    "magenta":       "#C4007A",
-    "terminal":      "#006633",
+    "blue":          "#0000C2",
+    "blueBright":    "#2E2EDB",
+    "indigo":        "#6A00B8",
+    "magenta":       "#B3006B",
+    "terminal":      "#00602E",
     "bgTop":         "#FFFFFF",
     "bgBottom":      "#FFFFFF",
     "sidebar":       "#FFFFFF",

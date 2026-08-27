@@ -40,6 +40,14 @@ final class ThemeStore: ObservableObject {
     /// `ThemeRuntime.frost`. Forced off while system "Reduce transparency" is on.
     @Published private(set) var frost = false
 
+    /// Selected menu-bar icon (Settings → Appearance → Menu Bar Icon).
+    /// Persisted via Preferences. Published (not gated behind `generation` or
+    /// `backdropTick`) purely so the picker's own selected-state checkmark
+    /// repaints — same proven path as the Transparency picker reading
+    /// `theme.opacity` live from inside a `NeonSection`'s `content()` closure
+    /// with no id/generation trick involved. See `setMenuBarIconChoice`.
+    @Published private(set) var menuBarIconChoice: MenuBarIconChoice = Preferences.menuBarIconChoice
+
     /// Bumped on opacity/frost changes. Unlike `generation` (which keys `Themed`'s
     /// `.id()` and tears the whole window subtree down — needed for scale/palette
     /// swaps that touch every view), these only affect the few backdrop views. They
@@ -156,6 +164,19 @@ final class ThemeStore: ObservableObject {
         frost = value
         ThemeRuntime.frost = Self.effectiveFrost(value)
         backdropTick &+= 1
+        onChange?()
+    }
+
+    /// User picked a menu-bar icon. Persists, updates the published value (for
+    /// the picker's own repaint), and pokes `onChange` — the SAME hook
+    /// `applyThemeToAppKit` already listens on to re-call
+    /// `MenuBarController.setMenuBarImage`, which reads
+    /// `Preferences.menuBarIconChoice` itself, so this applies to the live
+    /// status item immediately with no extra wiring.
+    func setMenuBarIconChoice(_ choice: MenuBarIconChoice) {
+        Preferences.menuBarIconChoice = choice
+        guard choice != menuBarIconChoice else { return }
+        menuBarIconChoice = choice
         onChange?()
     }
 

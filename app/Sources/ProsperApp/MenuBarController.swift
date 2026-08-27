@@ -139,8 +139,23 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// SF Symbol fallback if even that is missing). Either way it's scaled to fill
     /// the bar height. Not a template image — we want the color/glow, not a flat
     /// glyph. The bundled PNG ships in Contents/Resources via scripts/bundle.sh.
+    ///
+    /// This is also THE seam for a user-selected icon (Settings → Appearance →
+    /// Menu Bar Icon): `Preferences.menuBarIconChoice` is checked first, and a
+    /// non-`.prosper` choice wins outright, overriding even a theme-provided
+    /// `themed` image. `.prosper` (the default; unchanged behavior) falls
+    /// through to the existing theme/bundled logic below. `ThemeStore.onChange`
+    /// already calls this on every theme apply, and `setMenuBarIconChoice`
+    /// pokes that same `onChange`, so a fresh selection applies immediately —
+    /// no separate re-apply path needed.
     func setMenuBarImage(_ themed: NSImage?) {
         guard let button = statusItem.button else { return }
+        if let picked = Preferences.menuBarIconChoice.templateImage() {
+            let h = NSStatusBar.system.thickness
+            picked.size = NSSize(width: h, height: h)
+            button.image = picked
+            return
+        }
         // Copy: `themed` is the cached NSImage owned by ThemeStore; resizing it in
         // place would corrupt the shared instance (also used for the dock icon path).
         let icon = (themed?.copy() as? NSImage)
@@ -444,5 +459,50 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func quitSelected() {
         onQuit()
+    }
+}
+
+extension MenuBarIconChoice {
+    /// Template image for this choice, or nil for `.prosper` (the caller then
+    /// falls through to the existing theme/bundled-icon path — see
+    /// `MenuBarController.setMenuBarImage`). Every non-nil result comes back
+    /// with `isTemplate = true` already set, so it auto-tints white-on-dark /
+    /// dark-on-light exactly like every other built-in status item — never a
+    /// hand-rolled light/dark variant.
+    @MainActor
+    func templateImage() -> NSImage? {
+        switch self {
+        case .prosper:
+            return nil
+        case .sfSymbol(let name):
+            let image = NSImage(systemSymbolName: name, accessibilityDescription: name)
+            image?.isTemplate = true
+            return image
+        case .emoji(let raw):
+            // Graceful fallback for garbage typed into the custom-emoji field
+            // (never a blank status item — nil here sends the caller back to
+            // the default icon).
+            guard MenuBarIconChoice.isValidEmoji(raw) else { return nil }
+            return MenuBarIconChoice.renderEmojiTemplate(raw)
+        }
+    }
+
+    /// Rasterizes `emoji` into a template `NSImage`. AppKit recolors a
+    /// template image purely from its ALPHA channel — the original full-color
+    /// emoji ink becomes a solid tinted silhouette automatically once
+    /// `isTemplate` is set, so drawing the glyph normally (transparent
+    /// background, opaque glyph) onto an otherwise-blank image is the whole
+    /// trick; no manual mask math needed.
+    @MainActor
+    static func renderEmojiTemplate(_ emoji: String, pointSize: CGFloat = 16) -> NSImage? {
+        let attributed = NSAttributedString(string: emoji, attributes: [.font: NSFont.systemFont(ofSize: pointSize)])
+        let size = attributed.size()
+        guard size.width > 0, size.height > 0 else { return nil }
+        let image = NSImage(size: size)
+        image.lockFocus()
+        attributed.draw(at: .zero)
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
     }
 }

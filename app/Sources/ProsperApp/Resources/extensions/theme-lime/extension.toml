@@ -1,9 +1,9 @@
 [extension]
-id          = "com.prosper.theme.solar"
-name        = "theme-solar"
-title       = "Solar Theme"
-description = "Warm paper with deep ochre accents and a teal counterpoint."
-version     = "1.1.0"
+id          = "com.prosper.theme.lime"
+name        = "theme-lime"
+title       = "Lime Theme"
+description = "Acid lime on black moss, with a cool blue counter-accent."
+version     = "1.0.0"
 author      = "prosper"
 license     = "MIT"
 icon        = "paintpalette.fill"
@@ -21,7 +21,7 @@ on_event = []
 eager    = false
 
 [[contributes.themes]]
-id         = "com.prosper.theme.solar"
-title      = "Solar"
+id         = "com.prosper.theme.lime"
+title      = "Lime"
 path       = "theme.json"
-appearance = "light"
+appearance = "dark"

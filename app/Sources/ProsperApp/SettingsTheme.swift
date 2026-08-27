@@ -417,7 +417,11 @@ struct NeonScroll<Content: View>: View {
         // so the row's fresh `.id()` is already registered with `proxy` by the
         // time scrollTo runs. `.id(anchor)` itself (the stable per-section
         // identity `scrollTo`/search-jump actually target) never changes, so it
-        // was never the thing needing this hop.
+        // was never the thing needing this hop. #082: the row's OWN `.id()`
+        // (AppearanceSettingsPane.rowAnchor) now also folds in `generation` —
+        // this hop's ordering is exactly what makes the request target the
+        // POST-rebuild row id instead of a now-stale one; see that type's
+        // comment for why the row needed a changing id at all.
         DispatchQueue.main.async {
             if reduceMotion {
                 proxy.scrollTo(anchor, anchor: scrollAnchor)

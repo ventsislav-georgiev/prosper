@@ -19,6 +19,38 @@ struct AppearanceSettingsPane: View {
             }
             .padding(.bottom, sz(2))
 
+            // #084: no explicit `.id()` anywhere in this section — the swatches
+            // don't need a `SettingsFocusRouter` scroll target (no arrow-key nav
+            // here, just clicks), so there's nothing that needs its own identity
+            // at all. That sidesteps the whole #078/#082 "explicit id nested in a
+            // LazyVStack child" bug class outright rather than having to get a
+            // generation-fold right: this section's selected-state checkmark
+            // repaints the same way `UI Size`/`Transparency`'s pickers already do
+            // — reading `theme.menuBarIconChoice` live from inside `content()`,
+            // no id trick needed (see `ThemeStore.menuBarIconChoice`'s comment).
+            NeonSection("Menu Bar Icon",
+                        footer: "Applies immediately. Native and emoji options use the menu bar's own black/white tinting — no restart needed.") {
+                VStack(alignment: .leading, spacing: sz(10)) {
+                    HStack(spacing: sz(10)) {
+                        iconSwatch(.prosper, label: "Prosper")
+                        ForEach(MenuBarIconChoice.sfSymbolOptions, id: \.self) { name in
+                            iconSwatch(.sfSymbol(name), label: Self.sfSymbolLabel(name))
+                        }
+                        iconSwatch(.vulcan, label: "Vulcan")
+                    }
+                    HStack(spacing: sz(8)) {
+                        Text("Custom emoji").font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
+                        TextField("🙂", text: customEmojiBinding)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: sz(64))
+                        if isCustomEmojiActive {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(Neon.blueBright)
+                        }
+                    }
+                }
+            }
+
             NeonSection("Theme",
                         footer: "An extension can ship a theme via [[contributes.themes]]. One theme is active at a time. ↑/↓ moves the selection.") {
                 // The list of rows is its own VStack (not just the bare ForEach)
@@ -46,10 +78,17 @@ struct AppearanceSettingsPane: View {
                 // ScrollViewReader — which this view has no direct handle to —
                 // to scroll an off-screen arrow-selected row into view. See
                 // `moveSelection` for why a click never does this.
+                //
+                // #078/#082: the id folds in `theme.generation` (see
+                // `rowAnchor`'s comment) so each row's identity changes on every
+                // select, same as the section's own interior content id — a row
+                // that kept a generation-INDEPENDENT id here is what caused the
+                // v2.141.0 regression (the list never repainting on select; see
+                // `rowAnchor`).
                 VStack(alignment: .leading, spacing: sz(14)) {
                     ForEach(Array(theme.available.enumerated()), id: \.element.id) { idx, d in
                         if idx > 0 { NeonDivider() }
-                        row(d).id(Self.rowAnchor(pane: paneID, themeID: d.id))
+                        row(d).id(Self.rowAnchor(pane: paneID, themeID: d.id, generation: theme.generation))
                     }
                 }
             }
@@ -149,8 +188,30 @@ struct AppearanceSettingsPane: View {
     /// title anchor (`SettingsAnchor(pane:section:)` with `section` a plain
     /// title like "Theme") — see `NeonSection.anchor` in SettingsTheme.swift —
     /// so `SettingsFocusRouter.highlight`'s section-glow never lights up for it.
-    static func rowAnchor(pane: String, themeID: String) -> SettingsAnchor {
-        SettingsAnchor(pane: pane, section: "theme-row:\(themeID)")
+    ///
+    /// #082 (v2.141.0 QA, regression from #078 round 6): folds `generation` in
+    /// too, same as `NeonSection.card`'s interior content id. Without this the
+    /// row kept the SAME explicit id across a select (only `pane`/`themeID`,
+    /// both unchanged by picking a different theme) while its ANCESTOR (the
+    /// section's interior content id) changed — an explicit `.id()` nested
+    /// inside a `LazyVStack` whose own realization/reuse bookkeeping is
+    /// literally keyed by explicit ids (the mechanism #078 round 6 already
+    /// established corrupts *scroll range* when stacked at the LazyVStack's
+    /// own direct-child boundary) let the row's PREVIOUS rendered content
+    /// survive the ancestor's teardown intact — stale colors, stale checkmark
+    /// position — even though the row is self-observing (`AppearanceSettingsPane`
+    /// holds `@ObservedObject theme`) and its body closure genuinely does run
+    /// fresh on every select: self-observation makes SwiftUI DESCRIBE fresh
+    /// content, but the row's unchanged id let the lazy container's own reuse
+    /// pool substitute cached content for that identity anyway, which is why
+    /// only a full pane remount (a new identity from further up) ever cleared
+    /// it. Folding `generation` into the id, like the section's own interior
+    /// key, invalidates that reuse-pool entry every select. `moveSelection`
+    /// (below) computes the matching value for `SettingsFocusRouter` — read
+    /// `theme.generation` only AFTER `theme.select(id:)` so it's the value the
+    /// rebuilt row will actually carry.
+    static func rowAnchor(pane: String, themeID: String, generation: Int) -> SettingsAnchor {
+        SettingsAnchor(pane: pane, section: "theme-row:\(themeID):\(generation)")
     }
 
     /// Arrow-key row navigation: moves off the currently active theme, applies
@@ -167,7 +228,11 @@ struct AppearanceSettingsPane: View {
         else { return }
         let id = list[next].id
         theme.select(id: id)
-        SettingsFocusRouter.shared.request(Self.rowAnchor(pane: paneID, themeID: id), scrollAnchor: nil)
+        // Read `theme.generation` AFTER select (it bumps synchronously, see
+        // `ThemeStore.apply`) so this matches the id the rebuilt row will
+        // actually carry — see `rowAnchor`'s comment.
+        SettingsFocusRouter.shared.request(
+            Self.rowAnchor(pane: paneID, themeID: id, generation: theme.generation), scrollAnchor: nil)
     }
 
     /// Snap an arbitrary stored value to the closest preset so the segmented
@@ -211,6 +276,91 @@ struct AppearanceSettingsPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// The bundled default icon, for an accurate "Prosper" swatch preview —
+    /// same PNG `MenuBarController.setMenuBarImage` falls back to. Loaded once;
+    /// nil (rare — a broken bundle) just drops to a plain glyph in the picker.
+    private static let prosperPreviewImage: NSImage? =
+        Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
+
+    /// Friendly title for a handful of known SF Symbol names; anything else
+    /// (there is nothing else today — see `MenuBarIconChoice.sfSymbolOptions`)
+    /// falls back to a capitalized raw name so a future addition never crashes.
+    private static func sfSymbolLabel(_ name: String) -> String {
+        switch name {
+        case "sparkles": return "Sparkles"
+        case "bolt.fill": return "Bolt"
+        case "command": return "Command"
+        case "terminal": return "Terminal"
+        case "cpu": return "CPU"
+        default: return name.capitalized
+        }
+    }
+
+    /// One selectable icon swatch: a small preview (rendered the same way it
+    /// will actually look, minus the menu bar's own template tinting) plus a
+    /// label, highlighted like a theme row when it's the active choice.
+    private func iconSwatch(_ choice: MenuBarIconChoice, label: String) -> some View {
+        let selected = theme.menuBarIconChoice == choice
+        return Button {
+            theme.setMenuBarIconChoice(choice)
+        } label: {
+            VStack(spacing: sz(4)) {
+                Group {
+                    switch choice {
+                    case .prosper:
+                        if let img = Self.prosperPreviewImage {
+                            Image(nsImage: img).resizable().scaledToFit()
+                        } else {
+                            Image(systemName: "star.fill")
+                        }
+                    case .sfSymbol(let name):
+                        Image(systemName: name)
+                    case .emoji(let value):
+                        Text(value)
+                    }
+                }
+                .font(Neon.font(16))
+                .frame(width: sz(28), height: sz(28))
+                .foregroundStyle(Neon.textPrimary)
+                Text(label).font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
+            }
+            .padding(sz(6))
+            .background(
+                RoundedRectangle(cornerRadius: sz(8), style: .continuous)
+                    .fill(selected ? Neon.blue.opacity(0.14) : .clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: sz(8), style: .continuous)
+                            .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Reads/writes the custom-emoji field straight off `theme.menuBarIconChoice`
+    /// — no local `@State` needed, same "Binding(get:set:) over ThemeStore" idiom
+    /// as the UI Size/Transparency pickers above. Every keystroke applies
+    /// immediately (including invalid input): `MenuBarIconChoice.templateImage()`
+    /// already returns nil for anything that fails `isValidEmoji`, which sends
+    /// `MenuBarController.setMenuBarImage` back to the default icon — so garbage
+    /// here degrades gracefully for free, with no separate validation path in
+    /// this view. Never shows the Vulcan preset's own emoji, so picking Vulcan
+    /// doesn't make the custom field look independently "filled in".
+    private var customEmojiBinding: Binding<String> {
+        Binding(
+            get: {
+                if case .emoji(let v) = theme.menuBarIconChoice, v != MenuBarIconChoice.vulcanEmoji { return v }
+                return ""
+            },
+            set: { theme.setMenuBarIconChoice(.emoji($0)) })
+    }
+
+    private var isCustomEmojiActive: Bool {
+        if case .emoji(let v) = theme.menuBarIconChoice, v != MenuBarIconChoice.vulcanEmoji, !v.isEmpty {
+            return true
+        }
+        return false
     }
 
     /// A tiny preview strip: background, accent, secondary accent, text.

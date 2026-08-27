@@ -18,7 +18,30 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.141.0 *(unreleased)*
+## v2.142.0 *(unreleased)*
+
+### Improvements
+- **Settings → Appearance: pick your menu-bar icon.** A new **Menu Bar Icon** section
+  (above the theme list) offers the classic Prosper icon (still the default), a handful
+  of macOS-native symbols (sparkles, bolt, command, terminal, cpu), a Vulcan salute 🖖,
+  or any emoji you type — the non-Prosper options render as template glyphs, so they
+  take the menu bar's native white-on-dark / dark-on-light coloring automatically and
+  sit seamlessly next to the built-in status items. Your choice applies instantly and
+  wins over theme-provided icons until you switch back.
+- **The built-in themes got a color overhaul.** The recently added themes blended
+  together — several were near-duplicates and a few even rendered error text in a gray
+  indistinguishable from their accent (Graphite, Silver). Every non-default theme now
+  has a clearly distinct accent, deeper light-theme contrast, and readable alert/success
+  colors (all themes clear WCAG AA); Gold, Rose and Contrast Dark were re-tuned away
+  from their look-alikes, and two new themes — **Lime** and **Fern** — fill the gaps.
+  Default and Amber are untouched.
+
+### Fixes
+- **Settings → Appearance**: the theme list itself now repaints the moment you pick a
+  theme — previously every other window changed while the list kept the old colors
+  until you switched sections and back.
+
+## v2.141.0
 
 ### Improvements
 - **Shortcuts**: a new **Extension Commands** section in **Settings → Shortcuts**

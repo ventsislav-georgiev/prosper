@@ -272,6 +272,25 @@ appearance = "dark"         # "dark" (default) | "light" — selector hint
 }
 ```
 
+Every token has a **role**, and the app colors by role — a theme that ignores them still
+renders, it just renders wrong (an error message the same color as a heading, a success
+checkmark in red):
+
+| Token | Role |
+| ----- | ---- |
+| `blue` | The everyday accent — links, selection, focus rings, the active tab. The theme's identity. |
+| `blueBright` | A lighter `blue` for glows, hovers, and the selected checkmark. |
+| `indigo` | The second voice — decorative gradients and secondary chrome. Give it its own hue, not a tint of `blue`. |
+| `magenta` | **Alert**: errors, warnings, destructive buttons, muted state. Must be tellable apart from `blue` at a glance — in a red or pink theme, push it toward orange rather than matching the accent. |
+| `terminal` | **Success**: confirmations, "connected", "supporter", agent output. Reads as positive — green in every built-in theme but Amber. |
+| `bgTop` / `bgBottom` / `sidebar` | Window ground, top to bottom, plus the sidebar. |
+| `card` / `cardHi` | Panel surfaces: resting and elevated/hover. Keep them a step off `bgTop` so panels read as panels. |
+| `textPrimary` / `textSecondary` | Body and muted text. Both need WCAG AA (4.5:1) against `bgTop` *and* `card`. |
+
+`ThemeTests.testBundledThemeAccentsAreDistinguishable` enforces the two rules that are easiest
+to break by accident: no two bundled themes of the same appearance may share an accent, and
+`magenta` may never collapse onto `blue`.
+
 Pick a theme in **Settings → Personalization**; the whole app (and the AppKit menu-bar / dock chrome) redraws instantly. Missing tokens fall back to the default palette, so a partial palette is valid. Selecting a theme **never spawns the extension's Lua VM** — it is pure declarative data.
 
 ---
@@ -410,7 +429,7 @@ Bundled features ship as **system extensions**: editable and disablable, **reset
 | [`inputswitch`](app/Sources/ProsperApp/Resources/extensions/inputswitch/) | Per-app keyboard input source | **opt-in**; `app.activated` event; `host.keyboard` |
 | [`menubar`](app/Sources/ProsperApp/Resources/extensions/menubar/) | Ice/Bartender-style menu-bar control | **opt-in**; native footer pane |
 | [`fallback-search`](app/Sources/ProsperApp/Resources/extensions/fallback-search/) | Web-search default results | settings UI only; native row building via system-only `host.fallback.*` |
-| [`theme-default`](app/Sources/ProsperApp/Resources/extensions/theme-default/) · [`theme-amber`](app/Sources/ProsperApp/Resources/extensions/theme-amber/) · `theme-*` (crimson, ember, gold, emerald, teal, indigo, violet, rose, graphite, contrast-dark + light: daylight, mint, solar, lavender, blossom, silver, contrast-light) | Color themes | declarative `theme.json`, no Lua |
+| [`theme-default`](app/Sources/ProsperApp/Resources/extensions/theme-default/) · [`theme-amber`](app/Sources/ProsperApp/Resources/extensions/theme-amber/) · `theme-*` (dark: crimson, ember, gold, lime, emerald, teal, indigo, violet, rose, graphite, contrast-dark — light: daylight, fern, mint, solar, lavender, blossom, silver, contrast-light) | Color themes | declarative `theme.json`, no Lua |
 
 The conversion engines keep a **native fallback**, so a disabled or edited extension never loses the feature.
 

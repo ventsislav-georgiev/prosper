@@ -1,17 +1,17 @@
 {
   "appearance": "light",
   "colors": {
-    "blue":          "#0E9F6E",
-    "blueBright":    "#34C98E",
-    "indigo":        "#0C8599",
-    "magenta":       "#D64596",
-    "terminal":      "#0B7A55",
-    "bgTop":         "#F3FAF6",
-    "bgBottom":      "#E4F2EA",
-    "sidebar":       "#EAF5EF",
+    "blue":          "#057A57",
+    "blueBright":    "#11AC78",
+    "indigo":        "#BA3412",
+    "magenta":       "#B51248",
+    "terminal":      "#0A7136",
+    "bgTop":         "#EDF7F4",
+    "bgBottom":      "#DFF1EA",
+    "sidebar":       "#E7F4EF",
     "card":          "#FFFFFF",
-    "cardHi":        "#EDF6F1",
-    "textPrimary":   "#16281F",
-    "textSecondary": "#587065"
+    "cardHi":        "#F2F8F6",
+    "textPrimary":   "#143429",
+    "textSecondary": "#527267"
   }
 }

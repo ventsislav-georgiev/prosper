@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 import SwiftUI
 @testable import ProsperApp
@@ -175,15 +176,8 @@ final class ThemeTests: XCTestCase {
     /// theme.json decodes, every token is a recognized name, manifest appearance
     /// matches the JSON, and the full 12-token palette is provided.
     func testBundledThemeExtensionsAreValid() throws {
-        let extensionsDir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()           // …/app/Tests/ProsperAppTests
-            .deletingLastPathComponent()           // …/app/Tests
-            .deletingLastPathComponent()           // …/app
-            .appendingPathComponent("Sources/ProsperApp/Resources/extensions", isDirectory: true)
-        let themeDirs = try FileManager.default.contentsOfDirectory(
-            at: extensionsDir, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix("theme-") }
-        XCTAssertGreaterThanOrEqual(themeDirs.count, 15, "bundled theme set went missing")
+        let themeDirs = try bundledThemeDirs()
+        XCTAssertGreaterThanOrEqual(themeDirs.count, 21, "bundled theme set went missing")
 
         for dir in themeDirs {
             let loaded = try ExtensionLoader.load(directory: dir, isSystem: true, hostVersion: "2.0.0")
@@ -200,6 +194,74 @@ final class ThemeTests: XCTestCase {
             XCTAssertEqual(Set(spec.colors.keys), Set(ThemePalette.tokenNames),
                            "\(dir.lastPathComponent): token set incomplete or misspelled")
         }
+    }
+
+    /// The catalog's two colour invariants, both of which silently rotted once
+    /// before (themes shipped as monochrome ramps of one hue):
+    ///
+    /// 1. No two themes of the same appearance may share a look. A theme's
+    ///    identity is its `blue` accent — the widest stripe in the picker's
+    ///    preview strip — so two accents that match on hue AND saturation AND
+    ///    brightness make two rows the user cannot tell apart.
+    /// 2. `magenta` is the alert/destructive role (errors, muted, "delete") and
+    ///    `blue` is the everyday accent. When those two are the same colour, an
+    ///    error message is invisible — which is exactly what Graphite and Silver
+    ///    shipped (a 2-3° hue gap between the two).
+    func testBundledThemeAccentsAreDistinguishable() throws {
+        var byAppearance: [String: [(name: String, accent: NSColor, alert: NSColor)]] = [:]
+        for dir in try bundledThemeDirs() {
+            let loaded = try ExtensionLoader.load(directory: dir, isSystem: true, hostVersion: "2.0.0")
+            guard let t = loaded.manifest.contributes?.allThemes.first else { continue }
+            let spec = try ThemeSpec.decode(Data(contentsOf: dir.appendingPathComponent(t.path)))
+            guard let blue = spec.colors["blue"], let magenta = spec.colors["magenta"] else {
+                return XCTFail("\(dir.lastPathComponent): missing blue/magenta")
+            }
+            byAppearance[spec.appearance.rawValue, default: []]
+                .append((dir.lastPathComponent, Self.srgb(blue), Self.srgb(magenta)))
+        }
+        XCTAssertEqual(byAppearance.keys.sorted(), ["dark", "light"])
+
+        for (_, themes) in byAppearance {
+            for t in themes {
+                // (2) alert must not read as the everyday accent.
+                XCTAssertGreaterThanOrEqual(
+                    Self.hueDistance(t.accent, t.alert), 30,
+                    "\(t.name): magenta (alert) is the same hue as blue (accent) — errors would be invisible")
+            }
+            // (1) pairwise distinctness within an appearance mode.
+            for (a, b) in Self.pairs(themes) {
+                let sameHue = Self.hueDistance(a.accent, b.accent) < 22
+                let sameSat = abs(a.accent.saturationComponent - b.accent.saturationComponent) < 0.30
+                let sameBri = abs(a.accent.brightnessComponent - b.accent.brightnessComponent) < 0.22
+                XCTAssertFalse(sameHue && sameSat && sameBri,
+                               "\(a.name) and \(b.name) have look-alike accents")
+            }
+        }
+    }
+
+    private func bundledThemeDirs() throws -> [URL] {
+        let extensionsDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()           // …/app/Tests/ProsperAppTests
+            .deletingLastPathComponent()           // …/app/Tests
+            .deletingLastPathComponent()           // …/app
+            .appendingPathComponent("Sources/ProsperApp/Resources/extensions", isDirectory: true)
+        return try FileManager.default.contentsOfDirectory(at: extensionsDir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("theme-") }
+    }
+
+    private static func srgb(_ c: Color) -> NSColor {
+        let n = NSColor(c)
+        return n.usingColorSpace(.sRGB) ?? n
+    }
+
+    /// Shortest arc between two hues, in degrees.
+    private static func hueDistance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+        let d = abs(a.hueComponent - b.hueComponent).truncatingRemainder(dividingBy: 1) * 360
+        return min(d, 360 - d)
+    }
+
+    private static func pairs<T>(_ xs: [T]) -> [(T, T)] {
+        xs.indices.dropLast().flatMap { i in xs[(i + 1)...].map { (xs[i], $0) } }
     }
 
     // MARK: ThemeStore
@@ -304,19 +366,32 @@ final class ThemeTests: XCTestCase {
 
     // MARK: appearance pane — arrow-select auto-scroll anchor (#078 round 4)
 
-    func testRowAnchorIsStablePerThemeID() {
+    func testRowAnchorIsStablePerThemeIDAndGeneration() {
         // Must resolve identically across calls — moveSelection's request and
-        // the row's own `.id()` are built by two separate calls and have to
-        // agree, or ScrollViewReader has nothing matching to scroll to.
-        let a1 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber")
-        let a2 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber")
+        // the row's own `.id()` are built by two separate calls (moveSelection
+        // reads `theme.generation` post-select, the row reads it in its own
+        // body) and have to agree, or ScrollViewReader has nothing matching to
+        // scroll to.
+        let a1 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 3)
+        let a2 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 3)
         XCTAssertEqual(a1, a2)
     }
 
     func testRowAnchorsAreDistinctPerThemeID() {
-        let amber = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber")
-        let dflt = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: ThemeDescriptor.builtInID)
+        let amber = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 3)
+        let dflt = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: ThemeDescriptor.builtInID, generation: 3)
         XCTAssertNotEqual(amber, dflt)
+    }
+
+    // #082 (v2.141.0 regression): the row's `.id()` must change every select or
+    // NeonScroll's LazyVStack reuses the row's previously-rendered content for
+    // that identity instead of the freshly-described one (see `rowAnchor`'s
+    // comment) — the theme list stayed on stale colors until the whole pane
+    // remounted. Folding `generation` in is what invalidates that reuse.
+    func testRowAnchorChangesWithGeneration() {
+        let before = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 3)
+        let after = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber", generation: 4)
+        XCTAssertNotEqual(before, after)
     }
 
     func testRowAnchorNeverCollidesWithASectionTitleAnchor() {
@@ -324,11 +399,64 @@ final class ThemeTests: XCTestCase {
         // "Theme"). A row anchor must never equal one of those, or an
         // arrow-driven auto-scroll would also light up SettingsFocusRouter's
         // section-glow highlight, which no requirement asked for.
-        for title in ["Theme", "UI Size", "Transparency", "Frost"] {
+        for title in ["Menu Bar Icon", "Theme", "UI Size", "Transparency", "Frost"] {
             let sectionAnchor = SettingsAnchor(pane: "appearance", section: title)
-            let rowAnchor = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: title)
+            let rowAnchor = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: title, generation: 3)
             XCTAssertNotEqual(sectionAnchor, rowAnchor, "row id must not collide with the \"\(title)\" section anchor")
         }
+    }
+
+    // MARK: menu-bar icon (#084)
+
+    func testMenuBarIconChoiceStoredRoundTrip() {
+        for choice: MenuBarIconChoice in [.prosper, .sfSymbol("bolt.fill"), .emoji("🖖"), .emoji("")] {
+            XCTAssertEqual(MenuBarIconChoice(stored: choice.stored), choice)
+        }
+    }
+
+    func testMenuBarIconChoiceDefaultsToProsperForUnknownOrEmptyStoredValue() {
+        XCTAssertEqual(MenuBarIconChoice(stored: ""), .prosper)
+        XCTAssertEqual(MenuBarIconChoice(stored: "garbage"), .prosper)
+    }
+
+    func testMenuBarIconChoiceIsValidEmojiAcceptsRealEmoji() {
+        XCTAssertTrue(MenuBarIconChoice.isValidEmoji("🖖"))
+        XCTAssertTrue(MenuBarIconChoice.isValidEmoji("😀"))
+        XCTAssertTrue(MenuBarIconChoice.isValidEmoji("👨‍👩‍👧‍👦"))   // ZWJ family sequence, one grapheme cluster
+        XCTAssertTrue(MenuBarIconChoice.isValidEmoji("  🚀  "))     // surrounding whitespace trimmed
+    }
+
+    func testMenuBarIconChoiceIsValidEmojiRejectsGarbage() {
+        XCTAssertFalse(MenuBarIconChoice.isValidEmoji(""))
+        XCTAssertFalse(MenuBarIconChoice.isValidEmoji("   "))
+        XCTAssertFalse(MenuBarIconChoice.isValidEmoji("abc"))
+        // Bare digits/`#`/`*` satisfy Unicode's `isEmoji` scalar property (they're
+        // valid in keycap sequences) but typed alone are just characters, not a
+        // picture — must be rejected, not accepted as "an emoji".
+        XCTAssertFalse(MenuBarIconChoice.isValidEmoji("5"))
+        XCTAssertFalse(MenuBarIconChoice.isValidEmoji("#"))
+        XCTAssertFalse(MenuBarIconChoice.isValidEmoji("ab"))   // more than one grapheme cluster
+    }
+
+    @MainActor
+    func testMenuBarIconChoiceTemplateImageResolution() {
+        // `.prosper` is nil — the caller falls through to the existing
+        // theme/bundled-icon path (see MenuBarController.setMenuBarImage).
+        XCTAssertNil(MenuBarIconChoice.prosper.templateImage())
+
+        let sf = MenuBarIconChoice.sfSymbol("bolt.fill").templateImage()
+        XCTAssertNotNil(sf)
+        XCTAssertEqual(sf?.isTemplate, true)
+
+        let vulcan = MenuBarIconChoice.vulcan.templateImage()
+        XCTAssertNotNil(vulcan)
+        XCTAssertEqual(vulcan?.isTemplate, true)
+
+        // Graceful fallback: invalid custom-emoji text resolves to nil (never a
+        // blank status item), same as `.prosper` — MenuBarController's caller
+        // can't tell the two apart, and doesn't need to.
+        XCTAssertNil(MenuBarIconChoice.emoji("not an emoji").templateImage())
+        XCTAssertNil(MenuBarIconChoice.emoji("").templateImage())
     }
 
     // MARK: assets

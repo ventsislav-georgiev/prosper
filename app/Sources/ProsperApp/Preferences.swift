@@ -130,6 +130,68 @@ enum EmojiGender: String, CaseIterable {
     }
 }
 
+/// Selected menu-bar icon source (Settings → Appearance → Menu Bar Icon).
+/// `.prosper` is the default and preserves today's behavior exactly (bundled
+/// or theme-provided icon, full color) — picking either other case renders a
+/// TEMPLATE image instead, so it auto-tints white-on-dark / dark-on-light like
+/// every built-in status item. See `MenuBarController.templateImage()` for the
+/// actual rendering (kept out of this file so this enum stays AppKit-free and
+/// headlessly testable).
+enum MenuBarIconChoice: Equatable, Hashable {
+    case prosper
+    case sfSymbol(String)
+    case emoji(String)
+
+    /// A handful of tasteful, distinct SF Symbols for the "macOS-native" row.
+    static let sfSymbolOptions: [String] = ["sparkles", "bolt.fill", "command", "terminal", "cpu"]
+
+    /// One hand, vulcan salute — the "matches native coloring" preset the user
+    /// asked for by name. Not the default; just another selectable `.emoji`.
+    static let vulcanEmoji = "\u{1F596}"
+    static let vulcan = MenuBarIconChoice.emoji(vulcanEmoji)
+
+    private static let sfPrefix = "sf:"
+    private static let emojiPrefix = "emoji:"
+
+    /// Round-trips through `UserDefaults` as a single plain string — no JSON,
+    /// same "one key, encoded string" idiom as `dragSnapStyle`/`runnerPlacement`.
+    var stored: String {
+        switch self {
+        case .prosper: return "prosper"
+        case .sfSymbol(let name): return Self.sfPrefix + name
+        case .emoji(let value): return Self.emojiPrefix + value
+        }
+    }
+
+    init(stored: String) {
+        if let name = stored.droppingPrefix(Self.sfPrefix) {
+            self = .sfSymbol(name)
+        } else if let value = stored.droppingPrefix(Self.emojiPrefix) {
+            self = .emoji(value)
+        } else {
+            self = .prosper
+        }
+    }
+
+    /// Loosely: exactly one grapheme cluster carrying Unicode's `isEmoji`
+    /// property, excluding bare ASCII (digits/`#`/`*` satisfy `isEmoji` too —
+    /// they're valid in keycap sequences — but typed alone they're just a
+    /// digit, not a picture). A pure heuristic, not a full emoji-grammar
+    /// parser, matching what someone actually pastes/types into the field;
+    /// anything else is graceful-fallback garbage (see `templateImage()`).
+    static func isValidEmoji(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count == 1, let only = trimmed.first, !only.isASCII else { return false }
+        return only.unicodeScalars.contains { $0.properties.isEmoji }
+    }
+}
+
+private extension String {
+    func droppingPrefix(_ prefix: String) -> String? {
+        hasPrefix(prefix) ? String(dropFirst(prefix.count)) : nil
+    }
+}
+
 /// Centralized UserDefaults-backed preferences.
 enum Preferences {
     private static var defaults: UserDefaults { UserDefaults.standard }
@@ -206,6 +268,7 @@ enum Preferences {
         static let improveAppearanceFromScreenshot = "improveAppearanceFromScreenshot"
         static let useOCRContext = "useOCRContext"
         static let showMenuBarIcon = "showMenuBarIcon"
+        static let menuBarIconChoice = "menuBarIconChoice"
         static let showDockIcon = "showDockIcon"
         static let showAccessoryButton = "showAccessoryButton"
         static let dismissOverlaysOnClick = "dismissOverlaysOnClick"
@@ -486,6 +549,13 @@ enum Preferences {
     static var uiFrost: Bool {
         get { defaults.bool(forKey: Keys.uiFrost) }
         set { defaults.set(newValue, forKey: Keys.uiFrost) }
+    }
+
+    /// Selected menu-bar icon (Settings → Appearance → Menu Bar Icon). Default
+    /// `.prosper` — unchanged behavior for a fresh or existing install.
+    static var menuBarIconChoice: MenuBarIconChoice {
+        get { MenuBarIconChoice(stored: defaults.string(forKey: Keys.menuBarIconChoice) ?? "") }
+        set { defaults.set(newValue.stored, forKey: Keys.menuBarIconChoice) }
     }
 
     /// Which screen the command runner and Clipboard History open on. Default

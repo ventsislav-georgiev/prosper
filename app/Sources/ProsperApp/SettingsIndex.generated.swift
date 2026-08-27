@@ -27,6 +27,7 @@ let nativeSettingsIndex: [SettingsIndexEntry] = [
     SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: "Key Remapping"),
     SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: "Extension Activators"),
     SettingsIndexEntry(paneID: "appearance", paneTitle: "Appearance", section: ""),
+    SettingsIndexEntry(paneID: "appearance", paneTitle: "Appearance", section: "Menu Bar Icon"),
     SettingsIndexEntry(paneID: "appearance", paneTitle: "Appearance", section: "Theme"),
     SettingsIndexEntry(paneID: "appearance", paneTitle: "Appearance", section: "UI Size"),
     SettingsIndexEntry(paneID: "appearance", paneTitle: "Appearance", section: "Transparency"),
