@@ -118,21 +118,58 @@ final class MixerPanelController {
     /// AirPods glyph is narrower than speaker.wave.3, so they fit unchanged.
     private static let itemWidth: CGFloat = 24
 
-    private func updateGlyph() {
-        guard let button = item?.button else { return }
-        let glyph = Self.glyph(volume: mixer.systemOutputVolume,
-                               muted: mixer.systemOutputMuted,
-                               outputDeviceName: mixer.outputDevices.first(where: \.isDefault)?.name)
+    /// The same reasoning one level down, for the button inside the item.
+    /// `NSStatusBarButton` autosizes to its image and sits centred in the
+    /// item's window, so glyphs of different intrinsic height — speaker.slash
+    /// is 14x16, speaker.wave.3 22x15, airpodspro 21x14 — each give the button
+    /// a different box. The panel is anchored to `button.bounds`, so every
+    /// glyph swap moved the anchor a point and slid the whole open panel.
+    /// Stamping every glyph into one box, sized to the largest so nothing ever
+    /// scales down, pins the anchor for good.
+    static let glyphBox = NSSize(width: 22, height: 16)
+
+    /// Centred at its own size inside `glyphBox` — never stretched, never
+    /// scaled up, so the drawn glyph is pixel-identical to the bare symbol.
+    static func boxedGlyph(_ image: NSImage) -> NSImage {
+        let boxed = NSImage(size: glyphBox, flipped: false) { rect in
+            let size = image.size
+            guard size.width > 0, size.height > 0 else { return false }
+            let scale = min(rect.width / size.width, rect.height / size.height, 1)
+            let drawn = NSSize(width: size.width * scale, height: size.height * scale)
+            image.draw(in: NSRect(x: rect.midX - drawn.width / 2,
+                                  y: rect.midY - drawn.height / 2,
+                                  width: drawn.width,
+                                  height: drawn.height))
+            return true
+        }
+        boxed.isTemplate = true
+        return boxed
+    }
+
+    /// Exactly what the menu-bar button is given, so a test can measure the
+    /// button box the panel anchors to without driving CoreAudio.
+    static func glyphImage(volume: Double?,
+                           muted: Bool?,
+                           outputDeviceName: String?) -> NSImage? {
+        let glyph = glyph(volume: volume, muted: muted, outputDeviceName: outputDeviceName)
         // A symbol the running system does not carry resolves to nil
         // (airpods.gen4 lands in macOS 15), so the speaker glyph takes over.
         let image = NSImage(systemSymbolName: glyph.name,
                             variableValue: glyph.value,
                             accessibilityDescription: "Volume")
             ?? NSImage(systemSymbolName: "speaker.wave.3.fill",
-                       variableValue: mixer.systemOutputVolume ?? 0.66,
+                       variableValue: volume ?? 0.66,
                        accessibilityDescription: "Volume")
         image?.isTemplate = true
-        button.image = image
+        return image.map(boxedGlyph)
+    }
+
+    private func updateGlyph() {
+        guard let button = item?.button else { return }
+        button.image = Self.glyphImage(
+            volume: mixer.systemOutputVolume,
+            muted: mixer.systemOutputMuted,
+            outputDeviceName: mixer.outputDevices.first(where: \.isDefault)?.name)
     }
 
     /// Variable rendering draws every wave arc and dims the ones above the

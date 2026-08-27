@@ -369,6 +369,10 @@ private struct FormRender: View {
 /// Shared input chrome for extension form controls: dark card fill + neon
 /// hairline, matching the Settings inputs.
 private struct NeonFieldChrome: ViewModifier {
+    // Same #089 defect as `NeonCardModifier`: a property-less ViewModifier's body
+    // is memoized on its (unchanging) value, so these `Neon.*` reads froze at the
+    // palette that was live when the field first rendered. Observe the store.
+    @ObservedObject private var theme = ThemeStore.shared
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, sz(10))

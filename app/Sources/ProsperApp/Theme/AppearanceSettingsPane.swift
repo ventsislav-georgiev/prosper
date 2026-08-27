@@ -29,14 +29,14 @@ struct AppearanceSettingsPane: View {
             // — reading `theme.menuBarIconChoice` live from inside `content()`,
             // no id trick needed (see `ThemeStore.menuBarIconChoice`'s comment).
             NeonSection("Menu Bar Icon",
-                        footer: "Applies immediately. Native and emoji options use the menu bar's own black/white tinting — no restart needed.") {
+                        footer: "Applies immediately. Native symbols and the Vulcan preset use the menu bar's own black/white tinting; other emoji show in full color.") {
                 VStack(alignment: .leading, spacing: sz(10)) {
                     HStack(spacing: sz(10)) {
                         iconSwatch(.prosper, label: "Prosper")
+                        iconSwatch(.vulcan, label: "Vulcan")
                         ForEach(MenuBarIconChoice.sfSymbolOptions, id: \.self) { name in
                             iconSwatch(.sfSymbol(name), label: Self.sfSymbolLabel(name))
                         }
-                        iconSwatch(.vulcan, label: "Vulcan")
                     }
                     HStack(spacing: sz(8)) {
                         Text("Custom emoji").font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
@@ -47,6 +47,20 @@ struct AppearanceSettingsPane: View {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundStyle(Neon.blueBright)
                         }
+                    }
+                    HStack(spacing: sz(8)) {
+                        Text("Icon Size").font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
+                        Picker("", selection: Binding(
+                            get: { theme.menuBarIconSize },
+                            set: { theme.setMenuBarIconSize($0) })) {
+                            ForEach(MenuBarIconSize.allCases, id: \.self) { size in
+                                Text(size.title).tag(size)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .frame(width: sz(180))
                     }
                 }
             }
@@ -85,8 +99,13 @@ struct AppearanceSettingsPane: View {
                 // that kept a generation-INDEPENDENT id here is what caused the
                 // v2.141.0 regression (the list never repainting on select; see
                 // `rowAnchor`).
+                //
+                // #090: rendered in `orderedThemes` (dark group, then light —
+                // see `orderedByAppearance`), NOT raw `theme.available` order.
+                // `moveSelection` below walks that same `orderedThemes` list so
+                // ↑/↓ tracks the rows actually on screen.
                 VStack(alignment: .leading, spacing: sz(14)) {
-                    ForEach(Array(theme.available.enumerated()), id: \.element.id) { idx, d in
+                    ForEach(Array(orderedThemes.enumerated()), id: \.element.id) { idx, d in
                         if idx > 0 { NeonDivider() }
                         row(d).id(Self.rowAnchor(pane: paneID, themeID: d.id, generation: theme.generation))
                     }
@@ -214,6 +233,26 @@ struct AppearanceSettingsPane: View {
         SettingsAnchor(pane: pane, section: "theme-row:\(themeID):\(generation)")
     }
 
+    /// #090: stable sort — all `.dark`-appearance themes first, then all
+    /// `.light`, preserving each group's existing relative (registry/
+    /// discovery) order. `Array.sorted(by:)` is a stable sort as of Swift 5,
+    /// so two themes of the same appearance never swap: the comparator
+    /// returns `false` for either ordering of a tied pair, which is exactly
+    /// what stability requires. Pure + free of `ThemeStore`, so it's
+    /// unit-testable without a live store. Display-only: never reorders
+    /// `theme.available` (the registry/storage list) itself — see
+    /// `orderedThemes`, the only call site, and `moveSelection` below, which
+    /// walks this same order so ↑/↓ matches the rows on screen.
+    static func orderedByAppearance(_ themes: [ThemeDescriptor]) -> [ThemeDescriptor] {
+        themes.sorted { $0.appearance == .dark && $1.appearance != .dark }
+    }
+
+    /// The theme list as actually rendered (and navigated) — see
+    /// `orderedByAppearance`. Default is `.dark` and already sorts first in
+    /// `theme.available` (see `ThemeStore.setAvailable`), so it stays first
+    /// here too.
+    private var orderedThemes: [ThemeDescriptor] { Self.orderedByAppearance(theme.available) }
+
     /// Arrow-key row navigation: moves off the currently active theme, applies
     /// the new one immediately (same call as clicking a row), then asks
     /// NeonScroll to scroll the new row into view — minimal movement only
@@ -222,7 +261,7 @@ struct AppearanceSettingsPane: View {
     /// visible by definition, and round-1/2 QA already established that a
     /// select must not otherwise move the scroll position.
     private func moveSelection(_ delta: Int) {
-        let list = theme.available
+        let list = orderedThemes
         guard let current = list.firstIndex(where: { $0.id == theme.activeID }),
               let next = Self.nextThemeIndex(current: current, delta: delta, count: list.count)
         else { return }

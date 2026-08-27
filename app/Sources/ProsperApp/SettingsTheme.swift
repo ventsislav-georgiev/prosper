@@ -154,6 +154,20 @@ struct SettingsBackground: View {
 // MARK: - Card + section
 
 private struct NeonCardModifier: ViewModifier {
+    // #089 (the #078 saga's actual root cause): a ViewModifier's `body` gets the
+    // content as an opaque `_ViewModifier_Content` placeholder, so its output
+    // depends ONLY on the modifier's own value — never on what it wraps. This
+    // struct had no stored properties, so every rebuild handed SwiftUI a value
+    // byte-identical to the last one and the graph kept the memoized body,
+    // colors and all. That is why six rounds of `.id()` nudges on the wrapped
+    // content (NeonSection's interior key, the theme rows' generation-folded
+    // anchors) never repainted the card: they all sit INSIDE this modifier, and
+    // the palette read happens out here. Observing the store the same way
+    // `NeonPanelSurface`/`SettingsBackground` already do invalidates this body
+    // on a select, so `Neon.card`/`Neon.cardStroke` are re-read — and it works
+    // for callers that don't observe the store themselves (`StatCard`,
+    // SettingsWindow, RunnerPanel), which a stored-palette property would not.
+    @ObservedObject private var theme = ThemeStore.shared
     func body(content: Content) -> some View {
         // The drop shadow rides on the fill SHAPE, not on `content`. Shadowing
         // `content` forces SwiftUI to rasterize the whole card — text glyphs and

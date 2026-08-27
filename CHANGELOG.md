@@ -21,25 +21,32 @@ tag from the now-released section and put it on the new top draft.
 ## v2.142.0 *(unreleased)*
 
 ### Improvements
-- **Settings → Appearance: pick your menu-bar icon.** A new **Menu Bar Icon** section
-  (above the theme list) offers the classic Prosper icon (still the default), a handful
-  of macOS-native symbols (sparkles, bolt, command, terminal, cpu), a Vulcan salute 🖖,
-  or any emoji you type — the non-Prosper options render as template glyphs, so they
-  take the menu bar's native white-on-dark / dark-on-light coloring automatically and
-  sit seamlessly next to the built-in status items. Your choice applies instantly and
-  wins over theme-provided icons until you switch back.
+- **Settings → Appearance: pick your menu-bar icon — and its size.** A new **Menu Bar
+  Icon** section (above the theme list) offers the classic Prosper icon (still the
+  default), a Vulcan salute 🖖 right next to it, a handful of macOS-native symbols
+  (sparkles, bolt, command, terminal, cpu), or any emoji you type. The native symbols
+  and the Vulcan preset render as template glyphs, taking the menu bar's own
+  white-on-dark / dark-on-light coloring so they sit seamlessly next to the built-in
+  status items; a custom emoji keeps its full color, exactly like emoji in the menu
+  bar's own text. An **Icon Size** control (Small / Medium / Large — Large is the
+  default and matches the previous size) scales whichever icon you picked. Everything
+  applies instantly and wins over theme-provided icons until you switch back.
 - **The built-in themes got a color overhaul.** The recently added themes blended
   together — several were near-duplicates and a few even rendered error text in a gray
   indistinguishable from their accent (Graphite, Silver). Every non-default theme now
   has a clearly distinct accent, deeper light-theme contrast, and readable alert/success
   colors (all themes clear WCAG AA); Gold, Rose and Contrast Dark were re-tuned away
   from their look-alikes, and two new themes — **Lime** and **Fern** — fill the gaps.
-  Default and Amber are untouched.
+  Default and Amber are untouched. The theme list now also groups all dark themes
+  first, then all light ones.
 
 ### Fixes
-- **Settings → Appearance**: the theme list itself now repaints the moment you pick a
-  theme — previously every other window changed while the list kept the old colors
-  until you switched sections and back.
+- **Settings → Appearance**: the Appearance pane now repaints fully the moment you pick
+  a theme — previously every other window changed while the pane's own cards and theme
+  list kept the old colors until you switched sections and back.
+- **Volume mixer**: the popup no longer slides down a point when the system output goes
+  from muted to sound (and back up on mute) while it is open. The menu-bar glyph swap
+  was resizing the button the popup anchors to; every glyph now renders in a fixed box.
 
 ## v2.141.0
 

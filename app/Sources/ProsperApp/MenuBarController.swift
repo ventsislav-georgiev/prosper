@@ -150,8 +150,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// no separate re-apply path needed.
     func setMenuBarImage(_ themed: NSImage?) {
         guard let button = statusItem.button else { return }
+        // One size for every choice below (Prosper image, SF symbol, emoji) —
+        // see `MenuBarIconSize.pointSize(thickness:)`. `.large` (the default)
+        // resolves to exactly `NSStatusBar.system.thickness`, i.e.
+        // byte-identical to the pre-#092 hardcoded `h`.
+        let h = Preferences.menuBarIconSize.pointSize(thickness: NSStatusBar.system.thickness)
         if let picked = Preferences.menuBarIconChoice.templateImage() {
-            let h = NSStatusBar.system.thickness
             picked.size = NSSize(width: h, height: h)
             button.image = picked
             return
@@ -162,7 +166,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             ?? Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png")
                 .flatMap { NSImage(contentsOf: $0) }
         if let icon {
-            let h = NSStatusBar.system.thickness
             let w = h * (icon.size.width / max(icon.size.height, 1))
             icon.size = NSSize(width: w, height: h)
             icon.isTemplate = false
@@ -463,12 +466,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 }
 
 extension MenuBarIconChoice {
-    /// Template image for this choice, or nil for `.prosper` (the caller then
+    /// Rendered image for this choice, or nil for `.prosper` (the caller then
     /// falls through to the existing theme/bundled-icon path — see
-    /// `MenuBarController.setMenuBarImage`). Every non-nil result comes back
-    /// with `isTemplate = true` already set, so it auto-tints white-on-dark /
+    /// `MenuBarController.setMenuBarImage`). SF symbols and the Vulcan preset
+    /// come back with `isTemplate = true`, auto-tinting white-on-dark /
     /// dark-on-light exactly like every other built-in status item — never a
-    /// hand-rolled light/dark variant.
+    /// hand-rolled light/dark variant. Any OTHER custom emoji comes back full
+    /// color (`isTemplate = false`): AppKit's template tinting keeps only the
+    /// alpha channel, so a colored glyph collapses to a solid silhouette (a
+    /// round face reads as a blank egg) — full color matches how macOS shows
+    /// emoji in the menu bar's own text.
     @MainActor
     func templateImage() -> NSImage? {
         switch self {
@@ -483,18 +490,24 @@ extension MenuBarIconChoice {
             // (never a blank status item — nil here sends the caller back to
             // the default icon).
             guard MenuBarIconChoice.isValidEmoji(raw) else { return nil }
-            return MenuBarIconChoice.renderEmojiTemplate(raw)
+            // The Vulcan PRESET is the one emoji the user explicitly asked to
+            // keep native-tinted; matched by exact value (same equality the
+            // picker/field already use — see `AppearanceSettingsPane.
+            // isCustomEmojiActive`), not by trimming/normalizing, so it stays
+            // a single well-known case rather than a fuzzy heuristic.
+            return MenuBarIconChoice.renderEmoji(raw, template: raw == MenuBarIconChoice.vulcanEmoji)
         }
     }
 
-    /// Rasterizes `emoji` into a template `NSImage`. AppKit recolors a
-    /// template image purely from its ALPHA channel — the original full-color
-    /// emoji ink becomes a solid tinted silhouette automatically once
-    /// `isTemplate` is set, so drawing the glyph normally (transparent
-    /// background, opaque glyph) onto an otherwise-blank image is the whole
-    /// trick; no manual mask math needed.
+    /// Rasterizes `emoji` into an `NSImage`. When `template` is true, AppKit
+    /// recolors purely from the ALPHA channel — the original full-color emoji
+    /// ink becomes a solid tinted silhouette automatically once `isTemplate`
+    /// is set, so drawing the glyph normally (transparent background, opaque
+    /// glyph) onto an otherwise-blank image is the whole trick; no manual
+    /// mask math needed. When `template` is false the glyph's own color
+    /// renders as-is.
     @MainActor
-    static func renderEmojiTemplate(_ emoji: String, pointSize: CGFloat = 16) -> NSImage? {
+    static func renderEmoji(_ emoji: String, pointSize: CGFloat = 16, template: Bool) -> NSImage? {
         let attributed = NSAttributedString(string: emoji, attributes: [.font: NSFont.systemFont(ofSize: pointSize)])
         let size = attributed.size()
         guard size.width > 0, size.height > 0 else { return nil }
@@ -502,7 +515,34 @@ extension MenuBarIconChoice {
         image.lockFocus()
         attributed.draw(at: .zero)
         image.unlockFocus()
-        image.isTemplate = true
+        image.isTemplate = template
         return image
+    }
+}
+
+extension MenuBarIconSize {
+    /// Fraction of `NSStatusBar.system.thickness` this size targets. `.large`
+    /// is exactly 1.0 — today's shipped sizing, byte-identical (fills the bar
+    /// height edge to edge); `.small`/`.medium` are fractions below it, so all
+    /// three are visually distinct on today's real bar. `pointSize(thickness:)`
+    /// below still clamps to `thickness` as a guard (belt-and-suspenders
+    /// against a future scale >= 1 or an unusually short bar), not because any
+    /// current case needs it. Pure + AppKit-free so ordering is unit-testable
+    /// without a live status bar.
+    var scale: CGFloat {
+        switch self {
+        case .small: return 0.70
+        case .medium: return 0.85
+        case .large: return 1.0
+        }
+    }
+
+    /// The point size to render/resize the icon to, given the menu bar's real
+    /// height. Clamped to `thickness` as a guard — the status item would clip
+    /// otherwise. Takes `thickness` as a parameter instead of reading
+    /// `NSStatusBar.system.thickness` itself so it stays testable against an
+    /// arbitrary value.
+    func pointSize(thickness: CGFloat) -> CGFloat {
+        min(scale * thickness, thickness)
     }
 }

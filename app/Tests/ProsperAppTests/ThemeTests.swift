@@ -448,15 +448,98 @@ final class ThemeTests: XCTestCase {
         XCTAssertNotNil(sf)
         XCTAssertEqual(sf?.isTemplate, true)
 
+        // #088: the Vulcan PRESET keeps native black/white tinting — the user
+        // explicitly asked for that.
         let vulcan = MenuBarIconChoice.vulcan.templateImage()
         XCTAssertNotNil(vulcan)
         XCTAssertEqual(vulcan?.isTemplate, true)
+
+        // #088: any OTHER custom emoji renders FULL COLOR. Template tinting
+        // keeps only the alpha channel, collapsing a colored glyph into a
+        // solid silhouette (a round face reads as a blank egg) — this is the
+        // exact bug report ("the custom emoji ... always shows an egg").
+        let custom = MenuBarIconChoice.emoji("🎉").templateImage()
+        XCTAssertNotNil(custom)
+        XCTAssertEqual(custom?.isTemplate, false)
 
         // Graceful fallback: invalid custom-emoji text resolves to nil (never a
         // blank status item), same as `.prosper` — MenuBarController's caller
         // can't tell the two apart, and doesn't need to.
         XCTAssertNil(MenuBarIconChoice.emoji("not an emoji").templateImage())
         XCTAssertNil(MenuBarIconChoice.emoji("").templateImage())
+    }
+
+    // MARK: theme ordering (#090)
+
+    @MainActor
+    func testOrderedByAppearanceGroupsDarkBeforeLightStably() {
+        let d1 = ThemeDescriptor(id: "d1", title: "D1", appearance: .dark, extensionID: "e", jsonPath: nil)
+        let l1 = ThemeDescriptor(id: "l1", title: "L1", appearance: .light, extensionID: "e", jsonPath: nil)
+        let d2 = ThemeDescriptor(id: "d2", title: "D2", appearance: .dark, extensionID: "e", jsonPath: nil)
+        let l2 = ThemeDescriptor(id: "l2", title: "L2", appearance: .light, extensionID: "e", jsonPath: nil)
+
+        let ordered = AppearanceSettingsPane.orderedByAppearance([l1, d1, l2, d2])
+
+        XCTAssertEqual(ordered.map(\.id), ["d1", "d2", "l1", "l2"])
+    }
+
+    @MainActor
+    func testOrderedByAppearanceKeepsBuiltInDefaultFirst() {
+        // `ThemeStore.setAvailable` guarantees Default is already first among
+        // `theme.available` (see `testStoreDefaultAlwaysPresentAndFirst`).
+        // Stability means grouping by appearance must never displace it from
+        // the front of its (dark) group.
+        let other = ThemeDescriptor(id: "z.other", title: "Z", appearance: .dark, extensionID: "e", jsonPath: nil)
+        let light = ThemeDescriptor(id: "l1", title: "L1", appearance: .light, extensionID: "e", jsonPath: nil)
+
+        let ordered = AppearanceSettingsPane.orderedByAppearance([ThemeDescriptor.builtIn, other, light])
+
+        XCTAssertEqual(ordered.first?.id, ThemeDescriptor.builtInID)
+    }
+
+    // MARK: menu-bar icon size (#092)
+
+    func testMenuBarIconSizeStoredRoundTrip() {
+        let saved = Preferences.menuBarIconSize
+        defer { Preferences.menuBarIconSize = saved }
+
+        for size: MenuBarIconSize in [.small, .medium, .large] {
+            Preferences.menuBarIconSize = size
+            XCTAssertEqual(Preferences.menuBarIconSize, size)
+        }
+    }
+
+    func testMenuBarIconSizeDefaultsToLargeForUnknownOrAbsentStoredValue() {
+        // `.large` == today's exact (pre-#092) sizing, so an existing install
+        // with no stored value — or a corrupted one — keeps its icon size.
+        XCTAssertEqual(MenuBarIconSize(rawValue: "garbage") ?? .large, .large)
+        XCTAssertEqual(MenuBarIconSize(rawValue: "") ?? .large, .large)
+    }
+
+    func testMenuBarIconSizeScaleOrderingSmallLessThanMediumLessThanLarge() {
+        // Pure comparison of the mapping constants — no live status bar
+        // needed. `.large` is exactly 1.0 (today's shipped sizing, and the
+        // default — see the redo note below).
+        XCTAssertLessThan(MenuBarIconSize.small.scale, MenuBarIconSize.medium.scale)
+        XCTAssertLessThan(MenuBarIconSize.medium.scale, MenuBarIconSize.large.scale)
+        XCTAssertEqual(MenuBarIconSize.large.scale, 1.0)
+    }
+
+    func testMenuBarIconSizePointSizeNeverExceedsThicknessAndLargeMatchesItExactly() {
+        // Confirmed headlessly safe: `NSStatusBar.system.thickness` does not
+        // require a running NSApplication.
+        let thickness = NSStatusBar.system.thickness
+        for size: MenuBarIconSize in [.small, .medium, .large] {
+            XCTAssertLessThanOrEqual(size.pointSize(thickness: thickness), thickness)
+        }
+        // `.large` must be byte-identical to the pre-#092 hardcoded sizing —
+        // it is now the default, so this is the "nothing changed" guarantee.
+        XCTAssertEqual(MenuBarIconSize.large.pointSize(thickness: thickness), thickness)
+        // Redo regression guard: all three steps must be visually distinct at
+        // the real bar height (the bug this redo exists to fix was
+        // large == medium on today's 22pt bar).
+        XCTAssertLessThan(MenuBarIconSize.small.pointSize(thickness: thickness), MenuBarIconSize.medium.pointSize(thickness: thickness))
+        XCTAssertLessThan(MenuBarIconSize.medium.pointSize(thickness: thickness), MenuBarIconSize.large.pointSize(thickness: thickness))
     }
 
     // MARK: assets

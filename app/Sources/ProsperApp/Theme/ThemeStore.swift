@@ -48,6 +48,11 @@ final class ThemeStore: ObservableObject {
     /// with no id/generation trick involved. See `setMenuBarIconChoice`.
     @Published private(set) var menuBarIconChoice: MenuBarIconChoice = Preferences.menuBarIconChoice
 
+    /// Selected menu-bar icon size (Settings → Appearance → Menu Bar Icon).
+    /// Same "published for the picker's own repaint, no id/generation trick"
+    /// pattern as `menuBarIconChoice` above.
+    @Published private(set) var menuBarIconSize: MenuBarIconSize = Preferences.menuBarIconSize
+
     /// Bumped on opacity/frost changes. Unlike `generation` (which keys `Themed`'s
     /// `.id()` and tears the whole window subtree down — needed for scale/palette
     /// swaps that touch every view), these only affect the few backdrop views. They
@@ -177,6 +182,18 @@ final class ThemeStore: ObservableObject {
         Preferences.menuBarIconChoice = choice
         guard choice != menuBarIconChoice else { return }
         menuBarIconChoice = choice
+        onChange?()
+    }
+
+    /// User picked a menu-bar icon size. Same pattern as
+    /// `setMenuBarIconChoice` — `onChange` re-invokes
+    /// `MenuBarController.setMenuBarImage`, which reads
+    /// `Preferences.menuBarIconSize` itself, so a fresh selection applies to
+    /// the live status item immediately.
+    func setMenuBarIconSize(_ size: MenuBarIconSize) {
+        Preferences.menuBarIconSize = size
+        guard size != menuBarIconSize else { return }
+        menuBarIconSize = size
         onChange?()
     }
 

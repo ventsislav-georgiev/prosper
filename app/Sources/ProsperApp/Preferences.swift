@@ -132,11 +132,13 @@ enum EmojiGender: String, CaseIterable {
 
 /// Selected menu-bar icon source (Settings → Appearance → Menu Bar Icon).
 /// `.prosper` is the default and preserves today's behavior exactly (bundled
-/// or theme-provided icon, full color) — picking either other case renders a
-/// TEMPLATE image instead, so it auto-tints white-on-dark / dark-on-light like
-/// every built-in status item. See `MenuBarController.templateImage()` for the
-/// actual rendering (kept out of this file so this enum stays AppKit-free and
-/// headlessly testable).
+/// or theme-provided icon, full color). `.sfSymbol` and the Vulcan `.emoji`
+/// preset render as a TEMPLATE image, auto-tinting white-on-dark /
+/// dark-on-light like every built-in status item; any OTHER custom `.emoji`
+/// renders full color instead (a colored glyph collapses to a solid
+/// silhouette under template tinting — see `MenuBarController.templateImage()`
+/// for the actual rendering, kept out of this file so this enum stays
+/// AppKit-free and headlessly testable).
 enum MenuBarIconChoice: Equatable, Hashable {
     case prosper
     case sfSymbol(String)
@@ -183,6 +185,25 @@ enum MenuBarIconChoice: Equatable, Hashable {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count == 1, let only = trimmed.first, !only.isASCII else { return false }
         return only.unicodeScalars.contains { $0.properties.isEmoji }
+    }
+}
+
+/// Selected menu-bar icon SIZE (Settings → Appearance → Menu Bar Icon).
+/// `.large` is the default and preserves today's fixed
+/// `NSStatusBar.system.thickness` sizing exactly — `.small`/`.medium` are
+/// smaller, opt-in steps. The point-size mapping lives on this enum in
+/// `MenuBarController.swift` (needs no AppKit types, but keeping rendering
+/// concerns together matches `MenuBarIconChoice`'s split of "pure enum here,
+/// rendering there").
+enum MenuBarIconSize: String, CaseIterable {
+    case small, medium, large
+
+    var title: String {
+        switch self {
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .large: return "Large"
+        }
     }
 }
 
@@ -269,6 +290,7 @@ enum Preferences {
         static let useOCRContext = "useOCRContext"
         static let showMenuBarIcon = "showMenuBarIcon"
         static let menuBarIconChoice = "menuBarIconChoice"
+        static let menuBarIconSize = "menuBarIconSize"
         static let showDockIcon = "showDockIcon"
         static let showAccessoryButton = "showAccessoryButton"
         static let dismissOverlaysOnClick = "dismissOverlaysOnClick"
@@ -556,6 +578,14 @@ enum Preferences {
     static var menuBarIconChoice: MenuBarIconChoice {
         get { MenuBarIconChoice(stored: defaults.string(forKey: Keys.menuBarIconChoice) ?? "") }
         set { defaults.set(newValue.stored, forKey: Keys.menuBarIconChoice) }
+    }
+
+    /// Selected menu-bar icon size. Default `.large` — unchanged sizing for a
+    /// fresh or existing install. An unrecognized/absent stored value also
+    /// falls back to `.large`.
+    static var menuBarIconSize: MenuBarIconSize {
+        get { MenuBarIconSize(rawValue: defaults.string(forKey: Keys.menuBarIconSize) ?? "") ?? .large }
+        set { defaults.set(newValue.rawValue, forKey: Keys.menuBarIconSize) }
     }
 
     /// Which screen the command runner and Clipboard History open on. Default
