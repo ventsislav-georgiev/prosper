@@ -469,6 +469,21 @@ final class ThemeTests: XCTestCase {
         XCTAssertNil(MenuBarIconChoice.emoji("").templateImage())
     }
 
+    // MARK: menu-bar swatch tint (#093)
+
+    /// `AppleInterfaceStyle` is nil/anything-but-"Dark" in light mode — never
+    /// literally "Light" — and "Dark" (macOS's own casing) in dark mode.
+    /// Case-insensitive on the "Dark" match as a light defensive touch, not
+    /// because macOS is known to vary it.
+    func testMenuBarTintIsSystemDarkReadsAppleInterfaceStyle() {
+        XCTAssertTrue(MenuBarTint.isSystemDark(interfaceStyle: "Dark"))
+        XCTAssertTrue(MenuBarTint.isSystemDark(interfaceStyle: "dark"))
+        XCTAssertFalse(MenuBarTint.isSystemDark(interfaceStyle: nil))
+        XCTAssertFalse(MenuBarTint.isSystemDark(interfaceStyle: "Light"))
+        XCTAssertFalse(MenuBarTint.isSystemDark(interfaceStyle: ""))
+        XCTAssertFalse(MenuBarTint.isSystemDark(interfaceStyle: "garbage"))
+    }
+
     // MARK: theme ordering (#090)
 
     @MainActor

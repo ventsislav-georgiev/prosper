@@ -338,8 +338,9 @@ struct AppearanceSettingsPane: View {
     }
 
     /// One selectable icon swatch: a small preview (rendered the same way it
-    /// will actually look, minus the menu bar's own template tinting) plus a
-    /// label, highlighted like a theme row when it's the active choice.
+    /// will actually look — SF symbols and the Vulcan preset go through the
+    /// same real menu-bar tinting, see `menuBarTint`/`emojiGlyph`, #093) plus
+    /// a label, highlighted like a theme row when it's the active choice.
     private func iconSwatch(_ choice: MenuBarIconChoice, label: String) -> some View {
         let selected = theme.menuBarIconChoice == choice
         return Button {
@@ -355,9 +356,29 @@ struct AppearanceSettingsPane: View {
                             Image(systemName: "star.fill")
                         }
                     case .sfSymbol(let name):
+                        // #093: was plain `Image(systemName: name)`, which
+                        // (like everything else in this Group) inherited
+                        // `.foregroundStyle(Neon.textPrimary)` below — the
+                        // active THEME's text color, not the real menu bar's
+                        // black/white template tint. Same class of bug as
+                        // Vulcan, just less jarring (still monochrome): a
+                        // light Prosper theme's dark `textPrimary` would
+                        // preview a dark glyph even while the system menu bar
+                        // (dark) actually renders it white. No NSImage/
+                        // `templateImage()` round-trip needed here — SF
+                        // symbols are vector-rendered natively by SwiftUI, so
+                        // overriding just the tint is the whole fix.
                         Image(systemName: name)
+                            .foregroundStyle(Self.menuBarTint)
                     case .emoji(let value):
-                        Text(value)
+                        // Only reachable via the Vulcan swatch (the only
+                        // `.emoji` choice ever passed to `iconSwatch` — see
+                        // `body` above; free-typed custom emoji has its own
+                        // separate preview-less field). Extracted to its own
+                        // `@ViewBuilder` (rather than an inline `if`/`else`
+                        // here) — the type checker chokes on the combined
+                        // branch complexity otherwise.
+                        Self.emojiGlyph(value, choice: choice)
                     }
                 }
                 .font(Neon.font(16))
@@ -376,6 +397,37 @@ struct AppearanceSettingsPane: View {
         }
         .buttonStyle(.plain)
     }
+
+    /// #093: the `.emoji` swatch glyph — full color, except the Vulcan preset
+    /// which previews the exact template `NSImage` the menu bar renders
+    /// (`MenuBarIconChoice.templateImage()` — never re-rasterized here),
+    /// tinted `menuBarTint`. SwiftUI does not auto-tint a template `NSImage`
+    /// the way AppKit does, so `.renderingMode(.template)` +
+    /// `.foregroundStyle` stands in for AppKit's own `isTemplate` tinting.
+    /// Any other `.emoji` value (defensive — not reachable today, see the
+    /// call site in `iconSwatch`) keeps rendering full color, matching #088.
+    @ViewBuilder
+    private static func emojiGlyph(_ value: String, choice: MenuBarIconChoice) -> some View {
+        if value == MenuBarIconChoice.vulcanEmoji, let img = choice.templateImage() {
+            Image(nsImage: img)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(Self.menuBarTint)
+        } else {
+            Text(value)
+        }
+    }
+
+    /// #093: the color a template menu-bar image (SF symbols, the Vulcan
+    /// preset) actually renders as in the real menu bar — matches AppKit's
+    /// own template-image tinting exactly (plain white/black, not e.g.
+    /// `.labelColor`, which could drift from what a real status item shows).
+    /// See `MenuBarTint.isSystemDark`'s doc for why this has to read the real
+    /// system appearance rather than `theme.appearance` (tracks the selected
+    /// Prosper THEME, which can disagree) or this window's own hardcoded
+    /// `.darkAqua` (`SettingsWindow.swift`).
+    private static var menuBarTint: Color { MenuBarTint.isSystemDark ? .white : .black }
 
     /// Reads/writes the custom-emoji field straight off `theme.menuBarIconChoice`
     /// — no local `@State` needed, same "Binding(get:set:) over ThemeStore" idiom

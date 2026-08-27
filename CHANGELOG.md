@@ -30,7 +30,9 @@ tag from the now-released section and put it on the new top draft.
   status items; a custom emoji keeps its full color, exactly like emoji in the menu
   bar's own text. An **Icon Size** control (Small / Medium / Large — Large is the
   default and matches the previous size) scales whichever icon you picked. Everything
-  applies instantly and wins over theme-provided icons until you switch back.
+  applies instantly and wins over theme-provided icons until you switch back. The
+  swatches preview the exact tint the menu bar will use — the system appearance's
+  black or white — rather than the current theme's colors.
 - **The built-in themes got a color overhaul.** The recently added themes blended
   together — several were near-duplicates and a few even rendered error text in a gray
   indistinguishable from their accent (Graphite, Silver). Every non-default theme now
