@@ -8,6 +8,10 @@ import SwiftUI
 /// in ExtensionRegistry (installed-but-inert until the user clicks Trust).
 struct ExtensionsPane: View {
     @ObservedObject var registry: ExtensionRegistry
+    // #078 round 5: the marketplace button block below sits directly inside
+    // NeonScroll, outside any NeonSection — needs its own observe + id, same as
+    // PaneTitle (whose own fix covers the header text right above it).
+    @ObservedObject private var theme = ThemeStore.shared
 
     @State private var checkingUpdates = false
 
@@ -42,14 +46,7 @@ struct ExtensionsPane: View {
 
     var body: some View {
         NeonScroll {
-            VStack(alignment: .leading, spacing: sz(3)) {
-                Text("Extensions")
-                    .font(Neon.font(22, weight: .bold, design: .rounded))
-                    .foregroundStyle(Neon.textPrimary)
-                Text("Install and manage Lua extensions")
-                    .font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
-            }
-            .padding(.bottom, sz(2))
+            PaneTitle(title: "Extensions", subtitle: "Install and manage Lua extensions")
 
             // Discovery lives in its own window — a marketplace full of packages wants
             // room to search/sort/scroll, which would crowd this settings pane.
@@ -64,6 +61,7 @@ struct ExtensionsPane: View {
                 Spacer()
             }
             .padding(.bottom, sz(4))
+            .id(theme.generation)
 
             NeonSection("User Extensions", collapsed: $userCollapsed) {
                 HStack {

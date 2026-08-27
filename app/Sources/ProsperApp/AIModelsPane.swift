@@ -60,6 +60,9 @@ struct AIModelsPane: View {
 
     @ObservedObject var model: SettingsModel
     @ObservedObject private var downloads = ModelDownloadManager.shared
+    // #078 round 5: the error Text below sits directly inside NeonScroll, outside
+    // any NeonSection — needs its own observe + id, same as PaneTitle.
+    @ObservedObject private var theme = ThemeStore.shared
     @StateObject private var monitor = LoadedModelMonitor()
     @State private var loadingRoles: Set<ModelRole> = []
     @State private var sheet: ActiveSheet?
@@ -82,6 +85,7 @@ struct AIModelsPane: View {
                     .font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .id(theme.generation)
             }
 
             if LlamaInlineEngine.isEnabled {

@@ -941,11 +941,18 @@ final class SettingsHooks {
 
 // MARK: - Pane header
 
-/// Big neon title shown at the top of each pane's scrolling column.
+/// Big neon title shown at the top of each pane's scrolling column. Used
+/// directly inside `NeonScroll { ... }`, outside any `NeonSection` — round 5's
+/// per-section `.id(theme.generation)` (see `NeonSection.card`) doesn't reach
+/// it, so it needs its own repaint trigger: a plain non-observing View type
+/// embedded as a child does NOT get its own `body` re-evaluated just because
+/// an ancestor pane observes ThemeStore and re-runs (SwiftUI skips a child
+/// whose constructor params look unchanged) — #078 round 1/2 QA.
 struct PaneTitle: View {
     let title: String
     var accent: String? = nil
     let subtitle: String
+    @ObservedObject private var theme = ThemeStore.shared
     var body: some View {
         VStack(alignment: .leading, spacing: sz(3)) {
             neonAccentedText(title, accent: accent)
@@ -956,6 +963,7 @@ struct PaneTitle: View {
                 .foregroundStyle(Neon.textSecondary)
         }
         .padding(.bottom, sz(2))
+        .id(theme.generation)
     }
 }
 
@@ -1612,6 +1620,10 @@ func bundleList(_ ids: [String], remove: @MainActor @escaping (String) -> Void) 
 // MARK: - Statistics
 
 private struct StatisticsPane: View {
+    // #078 round 5: the tile grid below sits directly inside NeonScroll, outside
+    // any NeonSection, so NeonSection's own `.id(theme.generation)` doesn't reach
+    // it — needs its own observe + id, same as PaneTitle.
+    @ObservedObject private var theme = ThemeStore.shared
     @State private var total = CompletionStats.totalCompletions
     @State private var words = CompletionStats.totalWords
     @State private var chars = CompletionStats.totalChars
@@ -1650,6 +1662,7 @@ private struct StatisticsPane: View {
                 NeonStatTile(value: "\(chars)", label: "Characters", icon: "character")
                 NeonStatTile(value: rangeLabel, label: "Range", icon: "calendar")
             }
+            .id(theme.generation)
 
             NeonSection("Activity") {
                 HStack(spacing: sz(16)) {
@@ -2647,6 +2660,9 @@ private struct AboutPane: View {
     // countdown; a stored Date keeps the schedule fixed across rebuilds.
     @State private var clock = Date()
     @StateObject private var supporters = SupportersLoader()
+    // #078 round 5: the icon/title header below sits directly inside NeonScroll,
+    // outside any NeonSection — needs its own observe + id, same as PaneTitle.
+    @ObservedObject private var theme = ThemeStore.shared
     // @AppStorage so the toggle re-renders on change — a hand-rolled Binding reading
     // UserDefaults.bool directly never invalidates the body, so the switch never flips.
     @AppStorage(TraceLog.key) private var traceVerbose = false
@@ -2701,6 +2717,7 @@ private struct AboutPane: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, sz(8))
+            .id(theme.generation)
 
             // TimelineView's periodic schedule pauses while the view is offscreen.
             // The settings window outlives close (isReleasedWhenClosed = false), so

@@ -29,9 +29,9 @@ struct AppearanceSettingsPane: View {
                 // ↑/↓ navigation is NOT SwiftUI focus (`.focusable()`/`@FocusState`/
                 // `.onKeyPress`) — that was round 2's approach, and round 3 QA (a
                 // click stealing focus to the sidebar search field) traced back to
-                // it: this whole subtree sits inside NeonScroll's
-                // `.id(theme.generation)` (see that comment), which is torn down
-                // and rebuilt on EVERY select — click or arrow-driven, since
+                // it: this whole subtree sits inside this "Theme" NeonSection's own
+                // `.id(theme.generation)` (see `NeonSection.card`), which is torn
+                // down and rebuilt on EVERY select — click or arrow-driven, since
                 // `moveSelection` calls the same `theme.select(id:)` — and
                 // destroying the focused view mid-interaction handed first
                 // responder to the next key view (the search field). See
@@ -97,10 +97,11 @@ struct AppearanceSettingsPane: View {
                 .disabled(reduceTransparency)
             }
         }
-        // Attached OUTSIDE NeonScroll's content closure — i.e. outside the
-        // `.id(theme.generation)`'d subtree — so it mounts once when this pane
-        // appears and unmounts once when it disappears, untouched by a theme
-        // select's teardown/rebuild in between. See `KeyHandling` below.
+        // Attached OUTSIDE NeonScroll's content closure — i.e. outside every
+        // NeonSection's own `.id(theme.generation)`'d subtree — so it mounts
+        // once when this pane appears and unmounts once when it disappears,
+        // untouched by a theme select's teardown/rebuild in between. See
+        // `KeyHandling` below.
         .background(KeyHandling(onUp: { moveSelection(-1) }, onDown: { moveSelection(1) }))
     }
 
@@ -226,12 +227,13 @@ struct AppearanceSettingsPane: View {
 /// Arrow-key theme navigation via a window-scoped local NSEvent monitor — same
 /// idiom as `RunnerPanel.KeyHandling` — instead of SwiftUI focus
 /// (`.focusable()`/`@FocusState`/`.onKeyPress`), which round 2 used and round 3
-/// QA broke: the theme list sits inside NeonScroll's `.id(theme.generation)`
-/// (see that comment), torn down and rebuilt on every select — including an
-/// arrow-driven one, since `moveSelection` calls the same `theme.select(id:)`
-/// as a click. Destroying the focused view mid-interaction handed first
-/// responder to the next key view (the sidebar search field), stealing focus
-/// after the very first press or click.
+/// QA broke: the theme list sits inside the "Theme" NeonSection's own
+/// `.id(theme.generation)` (see `NeonSection.card` in SettingsTheme.swift),
+/// torn down and rebuilt on every select — including an arrow-driven one,
+/// since `moveSelection` calls the same `theme.select(id:)` as a click.
+/// Destroying the focused view mid-interaction handed first responder to the
+/// next key view (the sidebar search field), stealing focus after the very
+/// first press or click.
 ///
 /// This view is attached via `.background(...)` OUTSIDE that `.id()`'d
 /// subtree (see `AppearanceSettingsPane.body`), so its own mount/dismount is
