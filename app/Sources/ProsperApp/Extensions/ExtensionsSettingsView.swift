@@ -9,8 +9,16 @@ import SwiftUI
 struct ExtensionsPane: View {
     @ObservedObject var registry: ExtensionRegistry
     // #078 round 5: the marketplace button block below sits directly inside
-    // NeonScroll, outside any NeonSection — needs its own observe + id, same as
-    // PaneTitle (whose own fix covers the header text right above it).
+    // NeonScroll, outside any NeonSection — needs its own repaint trigger.
+    // Round 6 dropped the `.id(theme.generation)` this used to carry (see
+    // `SettingsWindow.swift`'s `PaneTitle` comment for why that was a bug —
+    // this block and `PaneTitle` right above it were two direct `LazyVStack`
+    // children sharing the identical id value, exactly the collision that
+    // corrupted manual scroll): the HStack is written directly in this
+    // type's own body, so self-observing alone is enough. The property is
+    // unused elsewhere but still required — holding `@ObservedObject` is what
+    // subscribes this view to `ThemeStore.objectWillChange` and forces `body`
+    // to re-run on a select.
     @ObservedObject private var theme = ThemeStore.shared
 
     @State private var checkingUpdates = false
@@ -61,7 +69,6 @@ struct ExtensionsPane: View {
                 Spacer()
             }
             .padding(.bottom, sz(4))
-            .id(theme.generation)
 
             NeonSection("User Extensions", collapsed: $userCollapsed) {
                 HStack {

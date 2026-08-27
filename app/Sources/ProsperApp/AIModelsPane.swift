@@ -61,7 +61,13 @@ struct AIModelsPane: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject private var downloads = ModelDownloadManager.shared
     // #078 round 5: the error Text below sits directly inside NeonScroll, outside
-    // any NeonSection — needs its own observe + id, same as PaneTitle.
+    // any NeonSection — needs its own repaint trigger. Round 6 dropped the
+    // `.id(theme.generation)` this used to carry (see `SettingsWindow.swift`'s
+    // `PaneTitle` comment for why that was a bug): the Text is written
+    // directly in this type's own body, so self-observing alone is enough.
+    // The property is unused elsewhere but still required — holding
+    // `@ObservedObject` is what subscribes this view to
+    // `ThemeStore.objectWillChange` and forces `body` to re-run on a select.
     @ObservedObject private var theme = ThemeStore.shared
     @StateObject private var monitor = LoadedModelMonitor()
     @State private var loadingRoles: Set<ModelRole> = []
@@ -85,7 +91,6 @@ struct AIModelsPane: View {
                     .font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .id(theme.generation)
             }
 
             if LlamaInlineEngine.isEnabled {

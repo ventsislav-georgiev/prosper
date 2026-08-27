@@ -205,9 +205,13 @@ struct NeonSection<Content: View>: View {
     @Environment(\.settingsPaneID) private var paneID
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var focus = SettingsFocusRouter.shared
-    // #078 round 5: observe the store so `card`'s `.id()` below can key off
-    // `generation` — see that comment for why the teardown lives here now,
-    // not on NeonScroll's shared LazyVStack.
+    // #078 round 5: observe the store so `card`'s interior `.id()` (see that
+    // property's comment, round 6 pins down exactly where inside `card` it
+    // lives) can key off `generation` — this is also what makes `titleRow`
+    // and the footer `Text` repaint on a select with no id of their own: they
+    // are written directly in this type's own body, and a self-observing
+    // view's own inline content re-reads fresh `Neon.*` values every time its
+    // body re-runs, same as `PaneTitle`.
     @ObservedObject private var theme = ThemeStore.shared
 
     init(_ title: String? = nil, accent: String? = nil, footer: String? = nil,
@@ -258,9 +262,45 @@ struct NeonSection<Content: View>: View {
                 titleRow(title)
             }
             if !isCollapsed {
+                // #078 round 6: the id lives on THIS inner VStack — below the
+                // padding/frame/`.neonCard()` chrome, and below `titleRow`/the
+                // footer `Text` above/below it — not on `card`'s own outer node.
+                // Round 5 put `.id(theme.generation)` on `card`'s outer VStack,
+                // which `body` (below) then wraps in `.id(anchor)` for anchored
+                // sections: two explicit `.id()`s stacked directly on the same
+                // node, one right outside the other, with nothing structural in
+                // between. That is exactly the node LazyVStack uses to track this
+                // child's realized geometry — stacking a second, select-driven id
+                // there (rather than deeper inside the child's own subtree) is
+                // what corrupted its realization bookkeeping: manual scroll (no
+                // select involved) showed roughly double the real content, with
+                // the same rows re-appearing after scrolling fully past them in
+                // either direction (beta.11 QA). For an anchor-less section
+                // (no title, so `body` returns bare `card` with no `.id(anchor)`
+                // wrapper) round 5's id sat bare on that same outer node, making
+                // it the child's ONLY explicit identity and, worse, identical in
+                // value to every other anchor-less section's id in the pane.
+                // Moving the id here fixes both: `card`'s own outer node (and
+                // thus what `body` hands the LazyVStack) now carries no id of
+                // its own — anchored sections present exactly one explicit id
+                // (`.id(anchor)`, stable across a select) at that boundary,
+                // anchor-less ones present plain structural identity — and the
+                // teardown driving the repaint moves to a node nested one level
+                // inside, well past that boundary. `titleRow` and the footer
+                // `Text` don't need this id at all: they're written directly in
+                // `card`'s own body (not a caller-supplied closure), and this
+                // type self-observes `ThemeStore`, so they get fresh `Neon.*`
+                // values every time `body` re-runs, the same way `PaneTitle`'s
+                // own inline content does (see that type's comment). Only
+                // `content()` — the caller's closure, which can embed arbitrary
+                // non-observing custom view types from any file — genuinely
+                // needs the teardown to reach it. The key is combined with
+                // `title` (not bare `generation`) so no two sections' interior
+                // ids are ever equal by construction, per the round-6 fix.
                 VStack(alignment: .leading, spacing: sz(14)) {
                     content()
                 }
+                .id("neon-section-content:\(title ?? ""):\(theme.generation)")
                 .padding(sz(16))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .neonCard()
@@ -272,26 +312,6 @@ struct NeonSection<Content: View>: View {
                 }
             }
         }
-        // #078 round 5: key THIS section's own subtree (title + content + footer)
-        // on `generation`, not NeonScroll's shared LazyVStack (round 2's approach,
-        // reverted — see NeonScroll's comment for why). A parent re-running its
-        // body on an @Published change does NOT force a non-observing descendant
-        // to re-render — SwiftUI diffs the child view values and skips ones whose
-        // own stored properties didn't change — and `Neon.*` tokens are static
-        // computed reads, not stored properties, so a row that doesn't itself
-        // observe ThemeStore silently kept showing the old palette after a theme
-        // select. `.id()` sidesteps that by discarding and rebuilding this
-        // section's subtree outright on every `generation` bump, forcing every
-        // `Neon.*` call site under `content()` to re-read fresh. Scoping the
-        // teardown to one section (nested inside `body`'s own `.id(anchor)` below,
-        // when there is one) — rather than the whole LazyVStack at once — keeps
-        // the LazyVStack's own view of every section's position/geometry stable
-        // across a select, which is what a whole-content teardown was breaking:
-        // discarding the entire lazy container forced it to re-estimate the
-        // height of every child (including off-screen, unrealized ones), and the
-        // preserved NSScrollView offset then mapped to a different visual
-        // position post-rebuild — a "scroll resets, then animates back" jump.
-        .id(theme.generation)
     }
 
     @ViewBuilder
@@ -355,11 +375,12 @@ struct NeonScroll<Content: View>: View {
                 // realized yet — the preserved NSScrollView offset then mapped to
                 // a different visual position post-rebuild ("scroll resets, then
                 // animates back into place" — beta.10 QA). The repaint now
-                // happens per-section instead (`NeonSection.card`'s own
-                // `.id(theme.generation)`), so THIS LazyVStack — and every
-                // section's position within it — keeps its identity across a
-                // select; only each section's own internal content tears down
-                // and rebuilds.
+                // happens per-section instead (`NeonSection.card`'s interior
+                // `.id(...)`, see that type's comment for round 6's further
+                // refinement of exactly where inside the section it lives), so
+                // THIS LazyVStack — and every section's position within it —
+                // keeps its identity across a select; only each section's own
+                // internal content tears down and rebuilds.
                 LazyVStack(alignment: .leading, spacing: sz(22)) {
                     content()
                 }
@@ -389,11 +410,14 @@ struct NeonScroll<Content: View>: View {
         // scrollTo to an id SwiftUI has not seen is a no-op. Also covers #078
         // round 4: an arrow-driven theme select bumps `theme.generation` in the
         // same beat as the request, tearing down and rebuilding the containing
-        // `NeonSection`'s `.id(theme.generation)` subtree (round 5 moved this
-        // teardown from NeonScroll's whole content down to each section — see
-        // `NeonSection.card`) — this hop lands after that rebuild commits, so
-        // the row's fresh `.id()` is already registered with `proxy` by the
-        // time scrollTo runs.
+        // `NeonSection`'s interior content subtree (round 5 moved this teardown
+        // from NeonScroll's whole content down to each section; round 6 moved it
+        // again, from the section's own outer node to a node nested inside it —
+        // see `NeonSection.card`) — this hop lands after that rebuild commits,
+        // so the row's fresh `.id()` is already registered with `proxy` by the
+        // time scrollTo runs. `.id(anchor)` itself (the stable per-section
+        // identity `scrollTo`/search-jump actually target) never changes, so it
+        // was never the thing needing this hop.
         DispatchQueue.main.async {
             if reduceMotion {
                 proxy.scrollTo(anchor, anchor: scrollAnchor)
@@ -452,6 +476,18 @@ struct NeonStatTile: View {
     let value: String
     let label: String
     var icon: String?
+    // #078 round 6: this type is used directly inside `StatisticsPane`'s bare
+    // `LazyVGrid` — a separate custom View type, not written inline in an
+    // observing parent's own body, so (per `NeonSection.card`'s reasoning) it
+    // needs its own repaint trigger. Round 5 wrapped the whole grid in
+    // `StatisticsPane.body` with `.id(theme.generation)` — a bare explicit id
+    // sitting directly at the LazyVStack child boundary, which corrupted
+    // LazyVStack's content-size estimation on manual scroll (see `PaneTitle`'s
+    // comment for the mechanism; same class of bug). Self-observing HERE
+    // instead needs no id anywhere: it repaints itself directly, the same way
+    // `PaneTitle` does, and `StatisticsPane` no longer touches ThemeStore at
+    // all.
+    @ObservedObject private var theme = ThemeStore.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(6)) {

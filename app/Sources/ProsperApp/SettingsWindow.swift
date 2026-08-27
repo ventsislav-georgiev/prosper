@@ -947,7 +947,24 @@ final class SettingsHooks {
 /// it, so it needs its own repaint trigger: a plain non-observing View type
 /// embedded as a child does NOT get its own `body` re-evaluated just because
 /// an ancestor pane observes ThemeStore and re-runs (SwiftUI skips a child
-/// whose constructor params look unchanged) — #078 round 1/2 QA.
+/// whose constructor params look unchanged) — #078 round 1/2 QA. This type
+/// self-observes instead, which is enough on its own: `title`/`subtitle` are
+/// written directly in ITS OWN body (not a caller-supplied closure embedding
+/// other custom view types, the case `NeonSection.card` has to solve for), so
+/// a self-observing view's own inline content re-reads fresh `Neon.*` values
+/// every time its body re-runs — no `.id()` needed. #078 round 6: this type
+/// used to also carry `.id(theme.generation)`, making it — since it sits
+/// directly inside `NeonScroll`'s `LazyVStack` with nothing else wrapping it —
+/// a bare explicit id sitting right at the lazy-container child boundary, the
+/// same class of node LazyVStack uses to track each child's realized
+/// geometry. Two or more such direct children sharing the identical
+/// generation-only id value (e.g. this type and `ExtensionsPane`'s
+/// marketplace button block, both in the same pane) is undefined behavior in
+/// a lazy container and was corrupting LazyVStack's content-size estimation —
+/// manual scroll showed roughly double the real content, snapping back into
+/// view after scrolling fully past it (beta.11 QA). Removed; self-observation
+/// alone was always sufficient here, same as `AppearanceSettingsPane`'s own
+/// inline header, which never needed an id either.
 struct PaneTitle: View {
     let title: String
     var accent: String? = nil
@@ -963,7 +980,6 @@ struct PaneTitle: View {
                 .foregroundStyle(Neon.textSecondary)
         }
         .padding(.bottom, sz(2))
-        .id(theme.generation)
     }
 }
 
@@ -1620,10 +1636,12 @@ func bundleList(_ ids: [String], remove: @MainActor @escaping (String) -> Void) 
 // MARK: - Statistics
 
 private struct StatisticsPane: View {
-    // #078 round 5: the tile grid below sits directly inside NeonScroll, outside
-    // any NeonSection, so NeonSection's own `.id(theme.generation)` doesn't reach
-    // it — needs its own observe + id, same as PaneTitle.
-    @ObservedObject private var theme = ThemeStore.shared
+    // #078 round 5 gave this pane its own `@ObservedObject`/`.id()` to repaint
+    // the tile grid below (it sits directly inside NeonScroll, outside any
+    // NeonSection). Round 6 moved that observation onto `NeonStatTile` itself
+    // instead (see its comment) — the grid needed no explicit id, and this
+    // pane doesn't touch ThemeStore for anything else, so the property is
+    // gone too.
     @State private var total = CompletionStats.totalCompletions
     @State private var words = CompletionStats.totalWords
     @State private var chars = CompletionStats.totalChars
@@ -1662,7 +1680,6 @@ private struct StatisticsPane: View {
                 NeonStatTile(value: "\(chars)", label: "Characters", icon: "character")
                 NeonStatTile(value: rangeLabel, label: "Range", icon: "calendar")
             }
-            .id(theme.generation)
 
             NeonSection("Activity") {
                 HStack(spacing: sz(16)) {
@@ -2661,7 +2678,14 @@ private struct AboutPane: View {
     @State private var clock = Date()
     @StateObject private var supporters = SupportersLoader()
     // #078 round 5: the icon/title header below sits directly inside NeonScroll,
-    // outside any NeonSection — needs its own observe + id, same as PaneTitle.
+    // outside any NeonSection — needs its own repaint trigger. Round 6 dropped
+    // the `.id(theme.generation)` this used to carry (see `PaneTitle`'s
+    // comment for why that was a bug): `appIcon` and the `Text`s below are all
+    // written directly in this type's own body, so self-observing alone is
+    // enough — no id needed, same as `PaneTitle`. The property itself is
+    // unused elsewhere but still required: holding `@ObservedObject` is what
+    // subscribes this view to `ThemeStore.objectWillChange` and forces `body`
+    // (and thus `appIcon`'s `Neon.*` reads) to re-run on a select.
     @ObservedObject private var theme = ThemeStore.shared
     // @AppStorage so the toggle re-renders on change — a hand-rolled Binding reading
     // UserDefaults.bool directly never invalidates the body, so the switch never flips.
@@ -2717,7 +2741,6 @@ private struct AboutPane: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, sz(8))
-            .id(theme.generation)
 
             // TimelineView's periodic schedule pauses while the view is offscreen.
             // The settings window outlives close (isReleasedWhenClosed = false), so
