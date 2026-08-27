@@ -302,6 +302,35 @@ final class ThemeTests: XCTestCase {
             paneVisible: false, firstResponderIsTextInput: false, keyCode: 126))
     }
 
+    // MARK: appearance pane — arrow-select auto-scroll anchor (#078 round 4)
+
+    func testRowAnchorIsStablePerThemeID() {
+        // Must resolve identically across calls — moveSelection's request and
+        // the row's own `.id()` are built by two separate calls and have to
+        // agree, or ScrollViewReader has nothing matching to scroll to.
+        let a1 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber")
+        let a2 = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber")
+        XCTAssertEqual(a1, a2)
+    }
+
+    func testRowAnchorsAreDistinctPerThemeID() {
+        let amber = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: "t.amber")
+        let dflt = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: ThemeDescriptor.builtInID)
+        XCTAssertNotEqual(amber, dflt)
+    }
+
+    func testRowAnchorNeverCollidesWithASectionTitleAnchor() {
+        // NeonSection anchors this pane's own sections with a bare title (e.g.
+        // "Theme"). A row anchor must never equal one of those, or an
+        // arrow-driven auto-scroll would also light up SettingsFocusRouter's
+        // section-glow highlight, which no requirement asked for.
+        for title in ["Theme", "UI Size", "Transparency", "Frost"] {
+            let sectionAnchor = SettingsAnchor(pane: "appearance", section: title)
+            let rowAnchor = AppearanceSettingsPane.rowAnchor(pane: "appearance", themeID: title)
+            XCTAssertNotEqual(sectionAnchor, rowAnchor, "row id must not collide with the \"\(title)\" section anchor")
+        }
+    }
+
     // MARK: assets
 
     func testInlineDataAssetDecodes() async {

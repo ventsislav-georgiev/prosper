@@ -15,23 +15,32 @@ final class SettingsFocusRouter: ObservableObject {
     /// `.onAppear` as well as on change, so a late-mounting pane still gets it.
     @Published private(set) var pending: SettingsAnchor?
 
+    /// Alignment `NeonScroll` should pass to `scrollTo` for `pending` — `.top`
+    /// for an explicit jump-to-section request (search result click: always
+    /// land the target at the top, even if it was already visible); `nil` for
+    /// a minimal-movement request (#078 round 4: arrow-key theme navigation),
+    /// which SwiftUI only moves the viewport for when the target isn't already
+    /// fully visible.
+    private(set) var pendingScrollAnchor: UnitPoint?
+
     /// The section currently glowing. Cleared after a beat, or by the next request.
     @Published private(set) var focused: SettingsAnchor?
 
     private var clearTask: Task<Void, Never>?
 
-    func request(_ anchor: SettingsAnchor) {
+    func request(_ anchor: SettingsAnchor, scrollAnchor: UnitPoint? = .top) {
         clearTask?.cancel()
         focused = nil
+        pendingScrollAnchor = scrollAnchor
         pending = anchor
     }
 
     /// Takes the pending request if it targets `pane`. A request for a different
     /// pane stays pending — the user may still be switching to it.
-    func take(pane: String) -> SettingsAnchor? {
+    func take(pane: String) -> (anchor: SettingsAnchor, scrollAnchor: UnitPoint?)? {
         guard let pending, pending.pane == pane else { return nil }
         self.pending = nil
-        return pending
+        return (pending, pendingScrollAnchor)
     }
 
     /// Lights the anchor up, then fades it out.

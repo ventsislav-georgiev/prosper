@@ -368,14 +368,19 @@ struct NeonScroll<Content: View>: View {
     }
 
     private func consume(_ proxy: ScrollViewProxy) {
-        guard let anchor = focus.take(pane: paneID) else { return }
+        guard let (anchor, scrollAnchor) = focus.take(pane: paneID) else { return }
         // One hop: on the first appear the sections have not been laid out yet and
-        // scrollTo to an id SwiftUI has not seen is a no-op.
+        // scrollTo to an id SwiftUI has not seen is a no-op. Also covers #078
+        // round 4: an arrow-driven theme select bumps `theme.generation` in the
+        // same beat as the request, tearing down and rebuilding this content's
+        // `.id(theme.generation)` subtree (see below) — this hop lands after
+        // that rebuild commits, so the row's fresh `.id()` is already
+        // registered with `proxy` by the time scrollTo runs.
         DispatchQueue.main.async {
             if reduceMotion {
-                proxy.scrollTo(anchor, anchor: .top)
+                proxy.scrollTo(anchor, anchor: scrollAnchor)
             } else {
-                withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(anchor, anchor: .top) }
+                withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(anchor, anchor: scrollAnchor) }
             }
             focus.highlight(anchor)
         }

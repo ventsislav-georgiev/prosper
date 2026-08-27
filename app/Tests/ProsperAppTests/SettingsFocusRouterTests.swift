@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import ProsperApp
 
 final class SettingsFocusRouterTests: XCTestCase {
@@ -26,10 +27,29 @@ final class SettingsFocusRouterTests: XCTestCase {
 
         // ...and the pane mounting later still gets it. This is the first-click fix:
         // the request outlives the pane switch.
-        XCTAssertEqual(router.take(pane: "audio-mixer"), anchor)
+        XCTAssertEqual(router.take(pane: "audio-mixer")?.anchor, anchor)
         XCTAssertNil(router.pending)
         // Consumed exactly once — a second NeonScroll appearing must not re-scroll.
         XCTAssertNil(router.take(pane: "audio-mixer"))
+    }
+
+    /// #078 round 4: `request` defaults to `.top` (unchanged jump-to-section
+    /// behavior — always land at the top, even if the target was visible), but
+    /// a caller doing minimal-movement navigation (arrow-key theme select) can
+    /// override it to `nil`, and `take` hands that choice back alongside the
+    /// anchor so `NeonScroll.consume` can pass it straight to `scrollTo`.
+    @MainActor
+    func testScrollAnchorDefaultsToTopButIsOverridable() throws {
+        let router = freshRouter()
+        let anchor = SettingsAnchor(pane: "appearance", section: "theme-row:t.amber")
+
+        router.request(anchor)
+        let defaulted = try XCTUnwrap(router.take(pane: "appearance"))
+        XCTAssertEqual(defaulted.scrollAnchor, .top)
+
+        router.request(anchor, scrollAnchor: nil)
+        let overridden = try XCTUnwrap(router.take(pane: "appearance"))
+        XCTAssertNil(overridden.scrollAnchor, "minimal-movement requests must not force a `.top` alignment")
     }
 
     @MainActor

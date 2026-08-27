@@ -6,6 +6,7 @@ import SwiftUI
 /// switch is instant: tapping a row re-skins every window live.
 struct AppearanceSettingsPane: View {
     @ObservedObject private var theme = ThemeStore.shared
+    @Environment(\.settingsPaneID) private var paneID
 
     var body: some View {
         NeonScroll {
@@ -37,10 +38,16 @@ struct AppearanceSettingsPane: View {
                 // `KeyHandling` below: a window-scoped NSEvent monitor, attached
                 // outside this `.id()`'d subtree, replaces it — no focus is ever
                 // claimed, so there's nothing for AppKit to reassign.
+                //
+                // Each row also carries a `SettingsFocusRouter` anchor `.id()`
+                // (#078 round 4) so `moveSelection` can ask NeonScroll's own
+                // ScrollViewReader — which this view has no direct handle to —
+                // to scroll an off-screen arrow-selected row into view. See
+                // `moveSelection` for why a click never does this.
                 VStack(alignment: .leading, spacing: sz(14)) {
                     ForEach(Array(theme.available.enumerated()), id: \.element.id) { idx, d in
                         if idx > 0 { NeonDivider() }
-                        row(d)
+                        row(d).id(Self.rowAnchor(pane: paneID, themeID: d.id))
                     }
                 }
             }
@@ -134,14 +141,30 @@ struct AppearanceSettingsPane: View {
         return keyCode == 126 || keyCode == 125
     }
 
-    /// Arrow-key row navigation: moves off the currently active theme and
-    /// applies the new one immediately, same call as clicking a row.
+    /// A theme row's `SettingsFocusRouter`/`ScrollViewReader` scroll-target id.
+    /// Namespaced ("theme-row:") so it can never collide with a `NeonSection`
+    /// title anchor (`SettingsAnchor(pane:section:)` with `section` a plain
+    /// title like "Theme") — see `NeonSection.anchor` in SettingsTheme.swift —
+    /// so `SettingsFocusRouter.highlight`'s section-glow never lights up for it.
+    static func rowAnchor(pane: String, themeID: String) -> SettingsAnchor {
+        SettingsAnchor(pane: pane, section: "theme-row:\(themeID)")
+    }
+
+    /// Arrow-key row navigation: moves off the currently active theme, applies
+    /// the new one immediately (same call as clicking a row), then asks
+    /// NeonScroll to scroll the new row into view — minimal movement only
+    /// (`scrollAnchor: nil`; SwiftUI leaves the viewport alone when the target
+    /// is already fully visible). A CLICK never does this: the clicked row is
+    /// visible by definition, and round-1/2 QA already established that a
+    /// select must not otherwise move the scroll position.
     private func moveSelection(_ delta: Int) {
         let list = theme.available
         guard let current = list.firstIndex(where: { $0.id == theme.activeID }),
               let next = Self.nextThemeIndex(current: current, delta: delta, count: list.count)
         else { return }
-        theme.select(id: list[next].id)
+        let id = list[next].id
+        theme.select(id: id)
+        SettingsFocusRouter.shared.request(Self.rowAnchor(pane: paneID, themeID: id), scrollAnchor: nil)
     }
 
     /// Snap an arbitrary stored value to the closest preset so the segmented
