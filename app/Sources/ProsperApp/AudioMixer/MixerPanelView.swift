@@ -17,6 +17,19 @@ private enum MixerAccent {
     static var muted: Color { Neon.magenta }
 }
 
+private extension View {
+    /// Fixed layout box for a mute/unmute glyph (e.g. `speaker.slash.fill`
+    /// vs `speaker.wave.2.fill`, `mic.slash.fill` vs `mic.fill`). SF Symbol
+    /// variants swapped by state have different intrinsic sizes, so without
+    /// a reserved frame the row's height changes when the symbol swaps,
+    /// shifting everything below it — this is what made the whole popover
+    /// move a few points when toggling mute. Sized square to the existing
+    /// sz(16) width these rows already used.
+    func mixerGlyphFrame() -> some View {
+        frame(width: sz(16), height: sz(16))
+    }
+}
+
 /// The popover behind Prosper's volume menu-bar item: a replacement for the
 /// native sound control (system output volume, mute, device) with the per-app
 /// mixer macOS never shipped underneath it.
@@ -98,7 +111,7 @@ struct MixerPanelView: View {
                 Image(systemName: inputs.micMuted ? "mic.slash.fill" : "mic.fill")
                     .font(Neon.font(10.5, weight: .semibold))
                     .foregroundStyle(inputs.micMuted ? MixerAccent.muted : Neon.textSecondary)
-                    .frame(width: sz(16))
+                    .mixerGlyphFrame()
             }
             .buttonStyle(.plain)
             .disabled(inputs.inputDevices.isEmpty)
@@ -193,7 +206,7 @@ struct MixerPanelView: View {
                     Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                         .font(Neon.font(10, weight: .semibold))
                         .foregroundStyle(isMuted ? MixerAccent.muted : Neon.textSecondary)
-                        .frame(width: sz(16))
+                        .mixerGlyphFrame()
                 }
                 .buttonStyle(.plain)
                 .help(isMuted ? "Unmute system output" : "Mute system output")
@@ -480,7 +493,7 @@ private struct MixerAppRow: View {
                 Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     .font(Neon.font(10))
                     .foregroundStyle(isMuted ? MixerAccent.muted : Neon.textSecondary)
-                    .frame(width: sz(16))
+                    .mixerGlyphFrame()
             }
             .buttonStyle(.plain)
             .help(isMuted ? "Unmute" : "Mute")
