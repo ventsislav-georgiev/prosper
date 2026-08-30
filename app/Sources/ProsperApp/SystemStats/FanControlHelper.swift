@@ -114,9 +114,8 @@ enum FanControlHelper {
     /// Returns nil when registration isn't available (e.g. unsigned dev build) — the
     /// caller then leaves fans on auto.
     private static func ensureConnection() async -> NSXPCConnection? {
+        armRecoveryLifecycle()
         guard await LidSleepHelper.ensureRegistered(feature: "Manual fan control") else { return nil }
-        installSleepObservers()
-        installReclaimMonitor()
         let c = connection ?? makeConnection()
         connection = c
         return c
@@ -171,7 +170,19 @@ enum FanControlHelper {
     /// Re-apply the user's saved manual targets through the one shared lifecycle gate.
     /// Called at launch; wake and reclaim use the same path.
     static func reapplyFromPreferences() {
+        armRecoveryLifecycle()
         startReapply()
+    }
+
+    /// Kept ahead of helper registration: registration can fail transiently, but saved
+    /// manual intent still needs the persistent lifecycle retry to recover on its own.
+    private static func armRecoveryLifecycle() {
+        installSleepObservers()
+        installReclaimMonitor()
+    }
+
+    static var recoveryLifecycleArmed: Bool {
+        observersInstalled && reclaimTimer != nil
     }
 
     /// Applies targets after the lifecycle gate admitted this attempt.

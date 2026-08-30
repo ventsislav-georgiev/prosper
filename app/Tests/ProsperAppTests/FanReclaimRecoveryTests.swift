@@ -2,6 +2,16 @@ import XCTest
 @testable import ProsperApp
 
 final class FanReclaimRecoveryTests: XCTestCase {
+    @MainActor
+    func testStartupArmsRecoveryBeforeHelperRegistration() {
+        let previousManualIntent = Preferences.fanManualEnabled
+        Preferences.fanManualEnabled = false
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+
+        FanControlHelper.reapplyFromPreferences()
+        XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
+    }
+
     func testReclaimKeepsEligibleIntentAcrossFailedRetry() {
         XCTAssertEqual(FanReclaimRecovery.disposition(manualFraction: 0.19, reengaged: true), .abandonManualIntent)
         XCTAssertEqual(FanReclaimRecovery.disposition(manualFraction: 0.20, reengaged: true), .restored)
