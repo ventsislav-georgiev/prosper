@@ -20,10 +20,35 @@ struct FanReading: Identifiable, Equatable {
 enum FanReclaimRecovery {
     static let minimumManualFraction = 0.2
 
-    static func shouldReengage(manualIntent: Bool = true,
-                               manualFraction: Double,
-                               reengaged: Bool = true) -> Bool {
-        manualIntent && manualFraction.isFinite && manualFraction >= minimumManualFraction && reengaged
+    enum Disposition: Equatable {
+        case abandonManualIntent
+        case restored
+        case retry
+    }
+
+    static func disposition(manualFraction: Double, reengaged: Bool) -> Disposition {
+        guard manualFraction.isFinite, manualFraction >= minimumManualFraction else {
+            return .abandonManualIntent
+        }
+        return reengaged ? .restored : .retry
+    }
+
+    static func canStartRecovery(manualIntent: Bool, sleeping: Bool, recoveryInFlight: Bool) -> Bool {
+        manualIntent && !sleeping && !recoveryInFlight
+    }
+
+    static func reclaimDetected(_ readings: [FanReading]) -> Bool {
+        let adjustable = readings.filter { $0.max > $0.min }
+        return !adjustable.isEmpty && adjustable.allSatisfy { !$0.manual }
+    }
+
+    static func manualFraction(targets: [Int: Double], readings: [FanReading]) -> Double? {
+        let fractions = readings.compactMap { fan -> Double? in
+            guard fan.max > fan.min, let target = targets[fan.id] else { return nil }
+            return (target - fan.min) / (fan.max - fan.min)
+        }
+        guard !fractions.isEmpty else { return nil }
+        return fractions.reduce(0, +) / Double(fractions.count)
     }
 }
 
@@ -66,6 +91,12 @@ enum FanControlHelper {
     nonisolated private static let log = Logger(subsystem: "eu.illegible.prosper", category: "fanhelper")
     private static var connection: NSXPCConnection?
     private static var observersInstalled = false
+    private static var reclaimTimer: Timer?
+    private static var reclaimReadInFlight = false
+    private static var reclaimRecoveryInFlight = false
+    private static var sleeping = false
+    private static var wakeRecoveryPending = false
+    private static var reclaimGeneration = 0
 
     // MARK: - Connection
 
@@ -85,6 +116,7 @@ enum FanControlHelper {
     private static func ensureConnection() async -> NSXPCConnection? {
         guard await LidSleepHelper.ensureRegistered(feature: "Manual fan control") else { return nil }
         installSleepObservers()
+        installReclaimMonitor()
         let c = connection ?? makeConnection()
         connection = c
         return c
@@ -121,6 +153,8 @@ enum FanControlHelper {
         guard let c = connection else { return true }
         let ok = await call(c) { proxy, done in proxy.resetAllFans { done($0) } }
         if teardown {
+            reclaimTimer?.invalidate()
+            reclaimTimer = nil
             c.invalidate()
             if connection === c { connection = nil }
         }
@@ -134,10 +168,14 @@ enum FanControlHelper {
     /// first engage, launch/wake reapply).
     static let firstEngageTimeout: TimeInterval = 35
 
-    /// Re-apply the user's saved manual targets — on app launch and after wake.
-    /// No-op (and never spins up the daemon) when manual control is off.
-    @discardableResult
-    static func reapplyFromPreferences() async -> Bool {
+    /// Re-apply the user's saved manual targets through the one shared lifecycle gate.
+    /// Called at launch; wake and reclaim use the same path.
+    static func reapplyFromPreferences() {
+        startReapply()
+    }
+
+    /// Applies targets after the lifecycle gate admitted this attempt.
+    private static func applySavedTargets(reclaimGeneration: Int) async -> Bool {
         guard Preferences.fanManualEnabled else { return false }
         let targets = Preferences.fanTargets
         guard !targets.isEmpty else { return false }
@@ -147,11 +185,93 @@ enum FanControlHelper {
         var first = true
         var reengaged = true
         for (index, rpm) in targets {
+            guard !sleeping && reclaimGeneration == Self.reclaimGeneration else { return false }
             let ok = await setManual(index, rpm: rpm, timeout: first ? firstEngageTimeout : 12)
             reengaged = reengaged && ok
             first = false
         }
         return reengaged
+    }
+
+    // MARK: - Reclaim recovery
+
+    /// The popover is transient, so reclaim detection belongs beside the long-lived
+    /// fan connection. Poll only while manual intent is saved; SMC reads stay off-main.
+    private static func installReclaimMonitor() {
+        guard reclaimTimer == nil else { return }
+        reclaimTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            Task { @MainActor in
+                guard FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
+                                                           sleeping: sleeping,
+                                                           recoveryInFlight: reclaimRecoveryInFlight),
+                      !reclaimReadInFlight else { return }
+                reclaimReadInFlight = true
+                Task.detached(priority: .utility) {
+                    let readings = FanInfo.read()
+                    await MainActor.run {
+                        reclaimReadInFlight = false
+                        recoverReclaimedFans(readings)
+                    }
+                }
+            }
+        }
+    }
+
+    private static func recoverReclaimedFans(_ readings: [FanReading]) {
+        guard FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
+                                                   sleeping: sleeping,
+                                                   recoveryInFlight: reclaimRecoveryInFlight),
+              FanReclaimRecovery.reclaimDetected(readings) else { return }
+        let fraction = FanReclaimRecovery.manualFraction(targets: Preferences.fanTargets, readings: readings)
+        guard let fraction else {
+            Preferences.fanManualEnabled = false
+            Task { await resetAll(teardown: true) }
+            return
+        }
+        if case .abandonManualIntent = FanReclaimRecovery.disposition(manualFraction: fraction, reengaged: true) {
+            Preferences.fanManualEnabled = false
+            Task { await resetAll(teardown: true) }
+            return
+        }
+        startReapply(manualFraction: fraction)
+    }
+
+    private static func startReapply(manualFraction: Double? = nil) {
+        guard FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
+                                                   sleeping: sleeping,
+                                                   recoveryInFlight: reclaimRecoveryInFlight) else { return }
+        reclaimRecoveryInFlight = true
+        let generation = reclaimGeneration
+        Task {
+            let reengaged = await applySavedTargets(reclaimGeneration: generation)
+            guard generation == reclaimGeneration, !sleeping else {
+                if sleeping { await resetAll() }
+                reclaimRecoveryInFlight = false
+                startPendingWakeRecovery()
+                return
+            }
+            if let manualFraction {
+                switch FanReclaimRecovery.disposition(manualFraction: manualFraction, reengaged: reengaged) {
+                case .abandonManualIntent:
+                    Preferences.fanManualEnabled = false
+                    await resetAll(teardown: true)
+                case .retry:
+                    await resetAll()
+                case .restored:
+                    break
+                }
+            } else if !reengaged {
+                await resetAll()
+            }
+            reclaimRecoveryInFlight = false
+            startPendingWakeRecovery()
+        }
+    }
+
+    private static func startPendingWakeRecovery() {
+        guard wakeRecoveryPending, !sleeping else { return }
+        wakeRecoveryPending = false
+        startReapply()
     }
 
     // MARK: - Sleep / wake (thermal safety across the sleep transition)
@@ -172,6 +292,8 @@ enum FanControlHelper {
             // ponytail: 2s ceiling; the daemon also resets on its own cold start, so a
             // missed deadline self-heals on next launch.
             MainActor.assumeIsolated {
+                sleeping = true
+                reclaimGeneration &+= 1
                 guard Preferences.fanManualEnabled, let c = connection else { return }
                 let sem = DispatchSemaphore(value: 0)
                 let proxy = c.remoteObjectProxyWithErrorHandler { _ in sem.signal() } as? ProsperHelperProtocol
@@ -181,7 +303,11 @@ enum FanControlHelper {
             }
         }
         nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
-            Task { @MainActor in await reapplyFromPreferences() }
+            MainActor.assumeIsolated {
+                sleeping = false
+                wakeRecoveryPending = true
+                startPendingWakeRecovery()
+            }
         }
     }
 

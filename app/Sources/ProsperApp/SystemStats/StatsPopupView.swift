@@ -48,39 +48,10 @@ struct StatsPopupView: View {
             await MainActor.run {
                 fans = r
                 fanReadInFlight = false
-                detectReclaim(r)
-            }
-        }
-    }
-
-    /// Honest-UI check: the user thinks fans are manual, but the hardware says every
-    /// adjustable fan is back on auto — thermalmonitord/firmware reclaimed them (a
-    /// thermal event, or the daemon gave up re-asserting). Restore a safe saved
-    /// target once; otherwise flip to Automatic and say why.
-    /// Skipped while an engage is in flight (mode keys are mid-dance then).
-    private func detectReclaim(_ r: [FanReading]) {
-        guard fanManual, !fanBusy, !pendingManual else { return }
-        let adjustable = r.filter { $0.max > $0.min }
-        guard !adjustable.isEmpty, adjustable.allSatisfy({ !$0.manual }) else { return }
-        let fraction = fanFraction
-        guard FanReclaimRecovery.shouldReengage(manualIntent: fanManual, manualFraction: fraction) else {
-            fanManual = false
-            Preferences.fanManualEnabled = false
-            fanError = "macOS reclaimed fan control (thermal event or sleep)."
-            return
-        }
-        fanBusy = true
-        fanError = nil
-        Task {
-            let reengaged = await FanControlHelper.reapplyFromPreferences()
-            let restored = FanReclaimRecovery.shouldReengage(manualFraction: fraction,
-                                                             reengaged: reengaged)
-            if !restored { await FanControlHelper.resetAll(teardown: true) }
-            fanBusy = false
-            fanManual = restored
-            Preferences.fanManualEnabled = restored
-            if !restored {
-                fanError = "macOS reclaimed fan control and couldn’t restore the saved manual speed."
+                if !fanBusy, !pendingManual {
+                    fanManual = Preferences.fanManualEnabled
+                    fanTargets = Preferences.fanTargets
+                }
             }
         }
     }

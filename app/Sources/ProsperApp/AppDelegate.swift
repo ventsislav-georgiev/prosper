@@ -189,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LidSleepHelper.healStaleRegistrationOnLaunch()
         // Re-assert saved manual fan targets (no-op unless fan control is enabled).
         // The daemon never persists fan state, so the app re-applies on every launch.
-        Task { await FanControlHelper.reapplyFromPreferences() }
+        FanControlHelper.reapplyFromPreferences()
         // Cross-device settings sync (no-op unless signed in + enabled).
         SyncCoordinator.shared.startup()
         // After a pulled snapshot is written to disk, reconcile live subsystems
