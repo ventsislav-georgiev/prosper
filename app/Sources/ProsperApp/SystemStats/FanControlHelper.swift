@@ -17,6 +17,16 @@ struct FanReading: Identifiable, Equatable {
     let manual: Bool
 }
 
+enum FanReclaimRecovery {
+    static let minimumManualFraction = 0.2
+
+    static func shouldReengage(manualIntent: Bool = true,
+                               manualFraction: Double,
+                               reengaged: Bool = true) -> Bool {
+        manualIntent && manualFraction.isFinite && manualFraction >= minimumManualFraction && reengaged
+    }
+}
+
 /// Unprivileged fan enumeration for the UI. Opens a throwaway SMC connection,
 /// reads count + bounds + current RPM, closes. Returns [] on any board with no SMC
 /// or no readable fans (Apple Silicon laptops with no fan, VMs) → the UI hides the
@@ -126,18 +136,22 @@ enum FanControlHelper {
 
     /// Re-apply the user's saved manual targets — on app launch and after wake.
     /// No-op (and never spins up the daemon) when manual control is off.
-    static func reapplyFromPreferences() async {
-        guard Preferences.fanManualEnabled else { return }
+    @discardableResult
+    static func reapplyFromPreferences() async -> Bool {
+        guard Preferences.fanManualEnabled else { return false }
         let targets = Preferences.fanTargets
-        guard !targets.isEmpty else { return }
+        guard !targets.isEmpty else { return false }
         // Launch/wake IS a cold engage: sleep hardware-clears Ftst, so the daemon
         // re-runs the full unlock. First fan gets the cold ceiling; once it lands the
         // unlock is live and the siblings commit at the steady default.
         var first = true
+        var reengaged = true
         for (index, rpm) in targets {
-            _ = await setManual(index, rpm: rpm, timeout: first ? firstEngageTimeout : 12)
+            let ok = await setManual(index, rpm: rpm, timeout: first ? firstEngageTimeout : 12)
+            reengaged = reengaged && ok
             first = false
         }
+        return reengaged
     }
 
     // MARK: - Sleep / wake (thermal safety across the sleep transition)
