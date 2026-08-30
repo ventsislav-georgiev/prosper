@@ -10,6 +10,28 @@ import CoreGraphics
 /// the Settings list runs over every item and gets a perf budget below.
 final class MenuBarTests: XCTestCase {
 
+    @MainActor
+    func testStatusMenuOmitsGlobalAutocompleteAndRefreshesClipboardVisibility() throws {
+        let originalClipboardHistoryEnabled = Preferences.clipboardHistoryEnabled
+        defer { Preferences.clipboardHistoryEnabled = originalClipboardHistoryEnabled }
+
+        let controller = MenuBarController(
+            onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {},
+            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {})
+        let menu = controller.buildMenu()
+
+        XCTAssertFalse(menu.items.contains { $0.title == "Inline Autocomplete" })
+        let clipboard = try XCTUnwrap(menu.items.first { $0.title == "Clipboard History\u{2026}" })
+
+        Preferences.clipboardHistoryEnabled = false
+        controller.menuWillOpen(menu)
+        XCTAssertTrue(clipboard.isHidden)
+
+        Preferences.clipboardHistoryEnabled = true
+        controller.menuWillOpen(menu)
+        XCTAssertFalse(clipboard.isHidden)
+    }
+
     // MARK: - Section assignment (positional, the core of hide/reveal)
 
     // Items lay out right→left from the screen's right edge: visible band sits at

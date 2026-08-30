@@ -387,9 +387,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menuBar = MenuBarController(
             onOpenRunner: { [weak self] in self?.toggleRunnerPanel() },
             onOpenClipboard: { [weak self] in self?.toggleClipboardPanel() },
-            onToggleAutocomplete: { [weak self] in
-                self?.setAutocomplete(enabled: !Preferences.autocompleteEnabled)
-            },
             onOpenSettings: { [weak self] in self?.openSettings() },
             onCheckForUpdates: { AppUpdater.shared.checkForUpdates() },
             onRerunSetup: { [weak self] in self?.runModelSetup(force: true) },

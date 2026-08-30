@@ -12,7 +12,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let runnerItem: NSMenuItem
     private let clipboardOpenItem: NSMenuItem
     private let settingsItem: NSMenuItem
-    private let autocompleteItem: NSMenuItem
     private let focusedAppItem: NSMenuItem
     private let setupItem: NSMenuItem
     private let updateItem: NSMenuItem
@@ -26,7 +25,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private let onOpenRunner: () -> Void
     private let onOpenClipboard: () -> Void
-    private let onToggleAutocomplete: () -> Void
     private let onOpenSettings: () -> Void
     private let onCheckForUpdates: () -> Void
     private let onRerunSetup: () -> Void
@@ -36,7 +34,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     init(
         onOpenRunner: @escaping () -> Void,
         onOpenClipboard: @escaping () -> Void,
-        onToggleAutocomplete: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         onCheckForUpdates: @escaping () -> Void,
         onRerunSetup: @escaping () -> Void,
@@ -45,7 +42,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     ) {
         self.onOpenRunner = onOpenRunner
         self.onOpenClipboard = onOpenClipboard
-        self.onToggleAutocomplete = onToggleAutocomplete
         self.onOpenSettings = onOpenSettings
         self.onCheckForUpdates = onCheckForUpdates
         self.onRerunSetup = onRerunSetup
@@ -85,7 +81,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             action: nil,
             keyEquivalent: ""
         )
-        autocompleteItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         focusedAppItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         focusedAppItem.isHidden = true
         setupItem = NSMenuItem(
@@ -240,7 +235,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         Preferences.autocompleteEnabled && !ModelFiles.isModelDownloaded(Preferences.coreModel)
     }
 
-    private func buildMenu() -> NSMenu {
+    func buildMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
 
@@ -256,6 +251,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         clipboardOpenItem.action = #selector(openClipboardSelected)
         clipboardOpenItem.target = self
+        clipboardOpenItem.isHidden = !Preferences.clipboardHistoryEnabled
         menu.addItem(clipboardOpenItem)
 
         // "Coding Agent…" — hidden while the coding agent is disabled in Settings.
@@ -263,15 +259,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         agentItem.target = self
         agentItem.isHidden = !Preferences.agentEnabled
         menu.addItem(agentItem)
-
-        menu.addItem(.separator())
-
-        // Global inline-autocomplete toggle — same switch as Settings → General,
-        // routed through the same AppDelegate side-effect path (tap + model residency).
-        autocompleteItem.action = #selector(toggleAutocompleteSelected)
-        autocompleteItem.target = self
-        refreshAutocompleteItem()
-        menu.addItem(autocompleteItem)
 
         // Per-app inline-completions toggle for the focused-app override.
         focusedAppItem.action = #selector(toggleFocusedAppSelected)
@@ -360,8 +347,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             agentStatusItem.isHidden = false
         }
         agentItem.isHidden = !Preferences.agentEnabled
+        clipboardOpenItem.isHidden = !Preferences.clipboardHistoryEnabled
         syncShortcutKeyEquivalents()
-        refreshAutocompleteItem()
         refreshFocusedAppItem()
         setupItem.isHidden = !shouldShowSetup
         // Live label: a manual check in flight reads "Checking…" until Sparkle
@@ -405,22 +392,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func openCodingAgentSelected() {
         ChatWindow.shared.show()
-    }
-
-    /// Standard menu checkbox, matching the per-app "Completions in X" row:
-    /// leading checkmark when on, no mark when off.
-    private func refreshAutocompleteItem() {
-        autocompleteItem.title = "Inline Autocomplete"
-        autocompleteItem.state = Preferences.autocompleteEnabled ? .on : .off
-    }
-
-    /// Flips the GLOBAL inline-autocomplete switch (same as Settings → General).
-    /// The callback runs the full AppDelegate.setAutocomplete side-effect chain.
-    @objc private func toggleAutocompleteSelected() {
-        onToggleAutocomplete()
-        // Optimistic relabel so a quick re-open reads correctly even before the
-        // async side effects settle.
-        refreshAutocompleteItem()
     }
 
     /// Toggles inline completions for the focused app by writing an explicit
