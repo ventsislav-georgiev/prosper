@@ -7,9 +7,9 @@ import Carbon
 enum SpotlightShortcutConflict {
     private static var didPresent = false
 
-    static func shouldPresent(isDefaultRunner: Bool, isRegistered: Bool,
+    static func shouldPresent(isDefaultRunner: Bool,
                               spotlightUsesCommandSpace: Bool) -> Bool {
-        isDefaultRunner && !isRegistered && spotlightUsesCommandSpace
+        isDefaultRunner && spotlightUsesCommandSpace
     }
 
     static func spotlightUsesCommandSpace() -> Bool {

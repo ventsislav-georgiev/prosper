@@ -104,15 +104,13 @@ final class AppShortcutTests: XCTestCase {
     }
 
     @MainActor
-    func testSpotlightGuideIsOnlyForFailedDefaultCommandSpaceRunner() {
+    func testSpotlightGuideIsForDefaultCommandSpaceRunnerRegardlessOfRegistration() {
         XCTAssertTrue(SpotlightShortcutConflict.shouldPresent(
-            isDefaultRunner: true, isRegistered: false, spotlightUsesCommandSpace: true))
+            isDefaultRunner: true, spotlightUsesCommandSpace: true))
         XCTAssertFalse(SpotlightShortcutConflict.shouldPresent(
-            isDefaultRunner: false, isRegistered: false, spotlightUsesCommandSpace: true))
+            isDefaultRunner: false, spotlightUsesCommandSpace: true))
         XCTAssertFalse(SpotlightShortcutConflict.shouldPresent(
-            isDefaultRunner: true, isRegistered: true, spotlightUsesCommandSpace: true))
-        XCTAssertFalse(SpotlightShortcutConflict.shouldPresent(
-            isDefaultRunner: true, isRegistered: false, spotlightUsesCommandSpace: false))
+            isDefaultRunner: true, spotlightUsesCommandSpace: false))
 
         let shortcut: [String: Any] = [
             "64": ["enabled": true, "value": ["parameters": [65535, 49,

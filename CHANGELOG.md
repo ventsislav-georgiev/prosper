@@ -21,8 +21,8 @@ tag from the now-released section and put it on the new top draft.
 ## v2.148.0 *(unreleased)*
 
 ### Fixes
-- **Rapid runner toggles no longer leave duplicate Prosper icons in the Dock.** Dock demotion is now briefly coalesced and canceled when a window reopens, avoiding overlapping Dock registration changes while still removing the icon after the final close.
-- **Cmd+Space conflicts now point to Spotlight’s shortcut setting.** When Spotlight owns Prosper’s default launcher shortcut, Prosper can open Keyboard Shortcuts so you can rebind either app.
+- **The command runner no longer creates duplicate Prosper icons in the Dock.** The transient runner stays out of the Dock entirely; durable windows such as Settings retain their normal Dock behavior.
+- **Cmd+Space conflicts now point to Spotlight’s shortcut setting.** Prosper detects Spotlight even though macOS lets both apps receive the key, then offers to open Keyboard Shortcuts so you can rebind either app.
 
 ## v2.143.0 *(unreleased)*
 

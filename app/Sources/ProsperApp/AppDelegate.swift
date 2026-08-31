@@ -858,15 +858,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKeys = bound.map(\.key)
         let failed = bound.filter { !$0.key.isRegistered }
         let spotlightUsesCommandSpace = SpotlightShortcutConflict.spotlightUsesCommandSpace()
-        let spotlightConflict = failed.contains {
+        let spotlightConflict = bound.contains { binding in
             SpotlightShortcutConflict.shouldPresent(
-                isDefaultRunner: $0.isDefaultRunner,
-                isRegistered: $0.key.isRegistered,
+                isDefaultRunner: binding.isDefaultRunner,
                 spotlightUsesCommandSpace: spotlightUsesCommandSpace)
         }
         if spotlightConflict { SpotlightShortcutConflict.presentIfNeeded() }
         reportHotKeyConflicts(failed
-            .filter { !spotlightConflict || !$0.isDefaultRunner }
             .map(\.label))
 
         // Reserve every successfully-registered native chord so an extension key

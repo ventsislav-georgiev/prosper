@@ -215,7 +215,6 @@ final class RunnerPanel {
         // empty query.
         model.inputChanged()
         positionPanel()
-        DockPolicy.windowDidShow(panel)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         // Drive focus on the next runloop tick: on first open the SwiftUI
@@ -236,7 +235,6 @@ final class RunnerPanel {
 
     func dismiss() {
         panel.orderOut(nil)
-        DockPolicy.windowDidHide(panel)
     }
 
     /// Launches the chosen app and closes the runner.
