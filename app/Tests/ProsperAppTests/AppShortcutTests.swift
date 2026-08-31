@@ -103,6 +103,25 @@ final class AppShortcutTests: XCTestCase {
         XCTAssertEqual(Set(ids).count, ids.count)
     }
 
+    @MainActor
+    func testSpotlightGuideIsOnlyForFailedDefaultCommandSpaceRunner() {
+        XCTAssertTrue(SpotlightShortcutConflict.shouldPresent(
+            isDefaultRunner: true, isRegistered: false, spotlightUsesCommandSpace: true))
+        XCTAssertFalse(SpotlightShortcutConflict.shouldPresent(
+            isDefaultRunner: false, isRegistered: false, spotlightUsesCommandSpace: true))
+        XCTAssertFalse(SpotlightShortcutConflict.shouldPresent(
+            isDefaultRunner: true, isRegistered: true, spotlightUsesCommandSpace: true))
+        XCTAssertFalse(SpotlightShortcutConflict.shouldPresent(
+            isDefaultRunner: true, isRegistered: false, spotlightUsesCommandSpace: false))
+
+        let shortcut: [String: Any] = [
+            "64": ["enabled": true, "value": ["parameters": [65535, 49,
+                NSNumber(value: NSEvent.ModifierFlags.command.rawValue)]]]
+        ]
+        XCTAssertTrue(SpotlightShortcutConflict.spotlightUsesCommandSpace(shortcut))
+        XCTAssertFalse(SpotlightShortcutConflict.spotlightUsesCommandSpace([:]))
+    }
+
     /// The mic-mute toggle ships unbound: silencing every microphone from a key
     /// nobody chose is a surprise, and the pane toggle is the visible trigger.
     func testMicMuteShortcutHasNoDefaultCombo() {

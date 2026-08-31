@@ -726,7 +726,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // offending binding to the user. Every combo is read from the store and
         // skipped when it has no modifier (unset / cleared by the user) so a
         // disabled shortcut never registers a bare key.
-        var bound: [(key: GlobalHotKey, label: String)] = []
+        var bound: [(key: GlobalHotKey, label: String, isDefaultRunner: Bool)] = []
         func add(_ action: ShortcutAction, _ handler: @escaping () -> Void) {
             // An extension-owned shortcut (e.g. Translate's ⌥L) is skipped while its
             // extension is disabled, so a dead binding never claims the combo.
@@ -736,7 +736,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bound.append(
                 (GlobalHotKey(keyCode: combo.keyCode, modifiers: combo.carbonModifiers,
                               id: action.hotKeyId, handler: handler),
-                 "\(action.title) (\(combo.display))")
+                 "\(action.title) (\(combo.display))",
+                 action == .runner && combo.chord == action.defaultCombo.chord)
             )
         }
 
@@ -793,7 +794,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               id: GlobalHotKey.customIdBase + UInt32(i)) { [weak self] in
                     DispatchQueue.main.async { self?.openRunner(prefill: prefix) }
                 },
-                 "\(cs.label) (\(cs.combo.display))")
+                 "\(cs.label) (\(cs.combo.display))", false)
             )
         }
 
@@ -820,7 +821,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // fire while Prosper is a background app — see its doc comment.
                     DispatchQueue.main.async { AppControl.launchOrFocus(target) }
                 },
-                 "Launch \(sc.name) (\(sc.combo.display))")
+                 "Launch \(sc.name) (\(sc.combo.display))", false)
             )
         }
 
@@ -850,12 +851,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                       registry: self.extensions)
                     }
                 },
-                 reg.label)
+                 reg.label, false)
             )
         }
 
         hotKeys = bound.map(\.key)
-        reportHotKeyConflicts(bound.filter { !$0.key.isRegistered }.map(\.label))
+        let failed = bound.filter { !$0.key.isRegistered }
+        let spotlightUsesCommandSpace = SpotlightShortcutConflict.spotlightUsesCommandSpace()
+        let spotlightConflict = failed.contains {
+            SpotlightShortcutConflict.shouldPresent(
+                isDefaultRunner: $0.isDefaultRunner,
+                isRegistered: $0.key.isRegistered,
+                spotlightUsesCommandSpace: spotlightUsesCommandSpace)
+        }
+        if spotlightConflict { SpotlightShortcutConflict.presentIfNeeded() }
+        reportHotKeyConflicts(failed
+            .filter { !spotlightConflict || !$0.isDefaultRunner }
+            .map(\.label))
 
         // Reserve every successfully-registered native chord so an extension key
         // rule (hammerspoon-compat) on the same chord yields to the dedicated Carbon
