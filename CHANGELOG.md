@@ -18,11 +18,9 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.148.0 *(unreleased)*
+## v2.149.0 *(unreleased)*
 
 ### Fixes
-- **The command runner no longer creates duplicate Prosper icons in the Dock.** The transient runner stays out of the Dock entirely; durable windows such as Settings retain their normal Dock behavior.
-- **Cmd+Space conflicts now point to Spotlight’s shortcut setting.** Prosper detects Spotlight even though macOS lets both apps receive the key, then offers to open Keyboard Shortcuts so you can rebind either app.
 - **The manual fan slider no longer snaps back while you drag it.** The sensors
   popup refreshes fan readings about once a second, and that refresh was
   overwriting the speed you were still dragging with the previously saved one —
@@ -34,6 +32,12 @@ tag from the now-released section and put it on the new top draft.
   second rebuild raised “Item to be inserted into menu already is in another
   menu”. No shipping path rebuilt the menu twice, so this was a latent crash
   rather than one you could hit.
+
+## v2.148.0
+
+### Fixes
+- **The command runner no longer creates duplicate Prosper icons in the Dock.** The transient runner stays out of the Dock entirely; durable windows such as Settings retain their normal Dock behavior.
+- **Cmd+Space conflicts now point to Spotlight’s shortcut setting.** Prosper detects Spotlight even though macOS lets both apps receive the key, then offers to open Keyboard Shortcuts so you can rebind either app.
 
 ## v2.143.0
 
