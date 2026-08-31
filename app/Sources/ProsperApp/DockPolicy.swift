@@ -25,11 +25,21 @@ enum DockPolicy {
     /// and naturally ref-counts when several windows are open at once. Membership
     /// is tracked regardless of the user's preference; `apply()` decides the policy.
     private static var visible = Set<ObjectIdentifier>()
+    private static var pendingDemotion: DispatchWorkItem?
+    private static var demotionGeneration = 0
+    private static let demotionDelay: TimeInterval = 0.2
+    private static func liveSetPolicy(_ target: NSApplication.ActivationPolicy) {
+        guard NSApp.activationPolicy() != target else { return }
+        NSApp.setActivationPolicy(target)
+        if target == .regular { NSApp.activate(ignoringOtherApps: true) }
+    }
+    private static var setPolicy: @MainActor (NSApplication.ActivationPolicy) -> Void = liveSetPolicy
 
     /// Marks `window` as visible and reconciles the activation policy. Call this
     /// BEFORE activating the window so the `.regular` flip lands before activation.
     static func windowDidShow(_ window: NSWindow) {
         visible.insert(ObjectIdentifier(window))
+        cancelPendingDemotion()
         apply()
     }
 
@@ -51,10 +61,40 @@ enum DockPolicy {
     /// activates the app so the freshly-shown window rises to the top of the
     /// Cmd-Tab stack rather than being appended at the bottom.
     private static func apply() {
-        let wantRegular = Preferences.showDockIcon && !visible.isEmpty
-        let target: NSApplication.ActivationPolicy = wantRegular ? .regular : .accessory
-        guard NSApp.activationPolicy() != target else { return }
-        NSApp.setActivationPolicy(target)
-        if target == .regular { NSApp.activate(ignoringOtherApps: true) }
+        guard Preferences.showDockIcon, !visible.isEmpty else {
+            guard Preferences.showDockIcon else {
+                cancelPendingDemotion()
+                setPolicy(.accessory)
+                return
+            }
+            scheduleDemotion()
+            return
+        }
+        setPolicy(.regular)
+    }
+
+    private static func scheduleDemotion() {
+        guard pendingDemotion == nil else { return }
+        let generation = demotionGeneration
+        let task = DispatchWorkItem {
+            guard generation == demotionGeneration else { return }
+            pendingDemotion = nil
+            guard Preferences.showDockIcon, visible.isEmpty else { return }
+            setPolicy(.accessory)
+        }
+        pendingDemotion = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + demotionDelay, execute: task)
+    }
+
+    private static func cancelPendingDemotion() {
+        demotionGeneration &+= 1
+        pendingDemotion?.cancel()
+        pendingDemotion = nil
+    }
+
+    static func resetForTesting(setPolicy: (@MainActor (NSApplication.ActivationPolicy) -> Void)? = nil) {
+        cancelPendingDemotion()
+        visible.removeAll()
+        self.setPolicy = setPolicy ?? liveSetPolicy
     }
 }

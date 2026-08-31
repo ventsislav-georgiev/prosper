@@ -18,6 +18,11 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.148.0 *(unreleased)*
+
+### Fixes
+- **Rapid runner toggles no longer leave duplicate Prosper icons in the Dock.** Dock demotion is now briefly coalesced and canceled when a window reopens, avoiding overlapping Dock registration changes while still removing the icon after the final close.
+
 ## v2.143.0 *(unreleased)*
 
 - **New menu-bar defaults: the Vulcan salute at Medium size.** A fresh install (or
