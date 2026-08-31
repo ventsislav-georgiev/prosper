@@ -32,6 +32,30 @@ final class MenuBarTests: XCTestCase {
         XCTAssertFalse(clipboard.isHidden)
     }
 
+    /// #104: `buildMenu()` reuses controller-owned NSMenuItem instances
+    /// (versionItem, clipboardOpenItem, etc.) that `menuWillOpen`/actions
+    /// mutate afterwards, rather than allocating fresh ones per call. An
+    /// NSMenuItem can only live in one NSMenu at a time, so rebuilding
+    /// without detaching those items from their previous menu throws
+    /// NSInternalInconsistencyException on the second build. Repeated builds
+    /// against the same controller must not throw.
+    @MainActor
+    func testRepeatedBuildMenuDoesNotThrow() {
+        let controller = MenuBarController(
+            onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {},
+            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {})
+        // Each call detaches the reused rows from whichever menu currently
+        // holds them, so only the LAST built menu is a live, complete menu —
+        // earlier ones are expected to end up with holes where those rows
+        // used to be. The regression this guards is the throw itself.
+        _ = controller.buildMenu()
+        _ = controller.buildMenu()
+        let latest = controller.buildMenu()
+        XCTAssertTrue(latest.items.contains { $0.title == "Restart" })
+        XCTAssertTrue(latest.items.contains { $0.title == "Quit" })
+        XCTAssertTrue(latest.items.contains { $0.title.hasPrefix("Prosper v") })
+    }
+
     // MARK: - Section assignment (positional, the core of hide/reveal)
 
     // Items lay out right→left from the screen's right edge: visible band sits at

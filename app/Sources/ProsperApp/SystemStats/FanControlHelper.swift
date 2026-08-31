@@ -33,8 +33,13 @@ enum FanReclaimRecovery {
         return reengaged ? .restored : .retry
     }
 
-    static func canStartRecovery(manualIntent: Bool, sleeping: Bool, recoveryInFlight: Bool) -> Bool {
-        manualIntent && !sleeping && !recoveryInFlight
+    /// `userAdjusting` = a slider drag / quick-button commit is in flight. The saved
+    /// targets are stale for those few hundred ms (the commit is debounced), so a
+    /// recovery started now would push the PREVIOUS speed to the hardware and fight
+    /// the user. Suspended only while the gesture is live; the very next tick resumes.
+    static func canStartRecovery(manualIntent: Bool, sleeping: Bool, recoveryInFlight: Bool,
+                                 userAdjusting: Bool = false) -> Bool {
+        manualIntent && !sleeping && !recoveryInFlight && !userAdjusting
     }
 
     static func reclaimDetected(_ readings: [FanReading]) -> Bool {
@@ -49,6 +54,41 @@ enum FanReclaimRecovery {
         }
         guard !fractions.isEmpty else { return nil }
         return fractions.reduce(0, +) / Double(fractions.count)
+    }
+}
+
+/// Who owns the fan targets the popup shows: the user while an adjustment is in
+/// flight, the persisted store the rest of the time.
+///
+/// The popup re-seeds its `fanTargets` from `Preferences.fanTargets` on every fan
+/// poll tick (~1 s while manual). The slider's commit is debounced 0.4 s and the
+/// debounce keeps being cancelled while the user keeps dragging — so mid-drag the
+/// store still holds the PREVIOUS speed, and that re-seed snapped the slider back,
+/// over and over, for the whole gesture. Ownership makes the in-flight value
+/// authoritative until the commit it scheduled is actually visible in the store.
+struct FanTargetOwner: Equatable {
+    /// The user's in-flight targets; nil = the store owns the value.
+    private(set) var user: [Int: Double]?
+    /// What the store held when the user took ownership — a change to anything else
+    /// means someone else (auto-switch, reclaim recovery) wrote, and wins.
+    private var storeAtClaim: [Int: Double] = [:]
+    /// True between the slider's drag-begin and drag-end.
+    var isDragging = false
+
+    /// The user moved the slider or hit a quick button.
+    mutating func userSet(_ targets: [Int: Double], store: [Int: Double]) {
+        if user == nil { storeAtClaim = store }
+        user = targets
+    }
+
+    /// A poll tick re-read the store. Returns the targets the UI should display, and
+    /// hands ownership back once the store agrees with the user's value (the debounced
+    /// commit landed) or a third party wrote something else.
+    mutating func display(store: [Int: Double]) -> [Int: Double] {
+        guard let user else { return store }
+        if isDragging { return user }
+        if store == user || store != storeAtClaim { self.user = nil; return store }
+        return user
     }
 }
 
@@ -97,6 +137,10 @@ enum FanControlHelper {
     private static var sleeping = false
     private static var wakeRecoveryPending = false
     private static var reclaimGeneration = 0
+
+    /// Set by the popup while a slider drag / quick-button commit is in flight, so
+    /// reclaim recovery can't reapply the stale saved target on top of the gesture.
+    static var userAdjusting = false
 
     // MARK: - Connection
 
@@ -214,7 +258,8 @@ enum FanControlHelper {
             Task { @MainActor in
                 guard FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
                                                            sleeping: sleeping,
-                                                           recoveryInFlight: reclaimRecoveryInFlight),
+                                                           recoveryInFlight: reclaimRecoveryInFlight,
+                                                           userAdjusting: userAdjusting),
                       !reclaimReadInFlight else { return }
                 reclaimReadInFlight = true
                 Task.detached(priority: .utility) {
@@ -231,7 +276,8 @@ enum FanControlHelper {
     private static func recoverReclaimedFans(_ readings: [FanReading]) {
         guard FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
                                                    sleeping: sleeping,
-                                                   recoveryInFlight: reclaimRecoveryInFlight),
+                                                   recoveryInFlight: reclaimRecoveryInFlight,
+                                                   userAdjusting: userAdjusting),
               FanReclaimRecovery.reclaimDetected(readings) else { return }
         let fraction = FanReclaimRecovery.manualFraction(targets: Preferences.fanTargets, readings: readings)
         guard let fraction else {
@@ -250,7 +296,8 @@ enum FanControlHelper {
     private static func startReapply(manualFraction: Double? = nil) {
         guard FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
                                                    sleeping: sleeping,
-                                                   recoveryInFlight: reclaimRecoveryInFlight) else { return }
+                                                   recoveryInFlight: reclaimRecoveryInFlight,
+                                                   userAdjusting: userAdjusting) else { return }
         reclaimRecoveryInFlight = true
         let generation = reclaimGeneration
         Task {

@@ -23,8 +23,19 @@ tag from the now-released section and put it on the new top draft.
 ### Fixes
 - **The command runner no longer creates duplicate Prosper icons in the Dock.** The transient runner stays out of the Dock entirely; durable windows such as Settings retain their normal Dock behavior.
 - **Cmd+Space conflicts now point to Spotlight’s shortcut setting.** Prosper detects Spotlight even though macOS lets both apps receive the key, then offers to open Keyboard Shortcuts so you can rebind either app.
+- **The manual fan slider no longer snaps back while you drag it.** The sensors
+  popup refreshes fan readings about once a second, and that refresh was
+  overwriting the speed you were still dragging with the previously saved one —
+  repeatedly, for the whole gesture. Your in-flight value now holds until it is
+  actually saved. Automatic recovery of manual fan control after macOS reclaims
+  the fans is unchanged, just paused while you are adjusting.
+- **Rebuilding the menu-bar menu no longer throws.** Menu rows the app reuses are
+  now detached from their previous menu before being re-inserted; previously a
+  second rebuild raised “Item to be inserted into menu already is in another
+  menu”. No shipping path rebuilt the menu twice, so this was a latent crash
+  rather than one you could hit.
 
-## v2.143.0 *(unreleased)*
+## v2.143.0
 
 - **New menu-bar defaults: the Vulcan salute at Medium size.** A fresh install (or
   one that never picked an icon or size) now shows the Vulcan 🖖 template glyph at

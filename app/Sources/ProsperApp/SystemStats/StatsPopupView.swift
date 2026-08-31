@@ -50,7 +50,10 @@ struct StatsPopupView: View {
                 fanReadInFlight = false
                 if !fanBusy, !pendingManual {
                     fanManual = Preferences.fanManualEnabled
-                    fanTargets = Preferences.fanTargets
+                    // The user's in-flight drag owns the targets until its debounced
+                    // commit lands in the store — re-seeding here mid-drag is what
+                    // snapped the slider back to the previous speed.
+                    fanTargets = fanOwner.display(store: Preferences.fanTargets)
                 }
             }
         }
@@ -64,6 +67,7 @@ struct StatsPopupView: View {
     @State private var fanCommitWork: DispatchWorkItem?
     @State private var fanBusy = false           // engage in flight (daemon round-trip)
     @State private var fanError: String?         // last engage failure, shown inline
+    @State private var fanOwner = FanTargetOwner()   // user-vs-store ownership of fanTargets
 
     // MARK: Process-list selection (the kill affordance)
     //
@@ -778,7 +782,11 @@ struct StatsPopupView: View {
             }
             .frame(maxWidth: .infinity)
             if manual {
-                Slider(value: Binding(get: { fanFraction }, set: { applyFraction($0) }), in: 0...1)
+                Slider(value: Binding(get: { fanFraction }, set: { applyFraction($0) }), in: 0...1,
+                       onEditingChanged: { dragging in
+                           fanOwner.isDragging = dragging
+                           FanControlHelper.userAdjusting = dragging
+                       })
                     .controlSize(.mini)
                 HStack {
                     Text(StatsFormat.percent(fanFraction))
@@ -917,6 +925,7 @@ struct StatsPopupView: View {
             fanManual = true
             Preferences.fanManualEnabled = true
             Preferences.fanTargets = targets; fanTargets = targets
+            fanOwner = FanTargetOwner()
         }
     }
 
@@ -928,6 +937,8 @@ struct StatsPopupView: View {
         fanManual = false
         Preferences.fanManualEnabled = false
         Preferences.fanTargets = [:]; fanTargets = [:]
+        fanOwner = FanTargetOwner()
+        FanControlHelper.userAdjusting = false
         if Preferences.fanHoldUnlock {
             let ids = fansAdjustable.map(\.id)
             Task { for i in ids { _ = await FanControlHelper.setAuto(i) } }
@@ -943,6 +954,7 @@ struct StatsPopupView: View {
         let f = Swift.min(1, Swift.max(0, frac))
         var t = fanTargets
         for fan in fansAdjustable { t[fan.id] = fan.min + f * (fan.max - fan.min) }
+        fanOwner.userSet(t, store: Preferences.fanTargets)
         fanTargets = t
         commitAll(t)
     }
@@ -956,8 +968,12 @@ struct StatsPopupView: View {
     /// that stream — one burst on settle sets all fans and persists the final targets.
     private func commitAll(_ targets: [Int: Double]) {
         fanCommitWork?.cancel()
+        FanControlHelper.userAdjusting = true
         let work = DispatchWorkItem {
             Preferences.fanTargets = targets
+            // The gesture is settled (0.4 s since the last frame); let reclaim
+            // recovery arm again. A still-live drag re-raises it on its next frame.
+            Task { @MainActor in FanControlHelper.userAdjusting = false }
             Task { for (i, rpm) in targets { await FanControlHelper.setManual(i, rpm: rpm) } }
         }
         fanCommitWork = work

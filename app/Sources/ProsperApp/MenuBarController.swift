@@ -235,50 +235,64 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         Preferences.autocompleteEnabled && !ModelFiles.isModelDownloaded(Preferences.coreModel)
     }
 
+    /// Inserts a controller-owned, reused `NSMenuItem` into `menu`. Rows like
+    /// `versionItem`/`clipboardOpenItem`/etc. are stored properties mutated
+    /// later by `menuWillOpen`/actions (title, isHidden, state) rather than
+    /// recreated per open, so `buildMenu()` must be safe to call more than
+    /// once against the same controller (it already is, once, at init — and
+    /// tests rebuild explicitly). An `NSMenuItem` can only belong to one menu
+    /// at a time; without detaching it from whatever menu currently owns it,
+    /// a second build throws `NSInternalInconsistencyException` ("already is
+    /// in another menu") instead of reusing the row.
+    private func addReused(_ item: NSMenuItem, to menu: NSMenu) {
+        item.menu?.removeItem(item)
+        menu.addItem(item)
+    }
+
     func buildMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
 
         versionItem.title = versionTitle
-        menu.addItem(versionItem)
-        menu.addItem(secureInputItem)
-        menu.addItem(agentStatusItem)
+        addReused(versionItem, to: menu)
+        addReused(secureInputItem, to: menu)
+        addReused(agentStatusItem, to: menu)
         menu.addItem(.separator())
 
         runnerItem.action = #selector(openRunnerSelected)
         runnerItem.target = self
-        menu.addItem(runnerItem)
+        addReused(runnerItem, to: menu)
 
         clipboardOpenItem.action = #selector(openClipboardSelected)
         clipboardOpenItem.target = self
         clipboardOpenItem.isHidden = !Preferences.clipboardHistoryEnabled
-        menu.addItem(clipboardOpenItem)
+        addReused(clipboardOpenItem, to: menu)
 
         // "Coding Agent…" — hidden while the coding agent is disabled in Settings.
         agentItem.action = #selector(openCodingAgentSelected)
         agentItem.target = self
         agentItem.isHidden = !Preferences.agentEnabled
-        menu.addItem(agentItem)
+        addReused(agentItem, to: menu)
 
         // Per-app inline-completions toggle for the focused-app override.
         focusedAppItem.action = #selector(toggleFocusedAppSelected)
         focusedAppItem.target = self
-        menu.addItem(focusedAppItem)
+        addReused(focusedAppItem, to: menu)
 
         menu.addItem(.separator())
 
         settingsItem.action = #selector(openSettingsSelected)
         settingsItem.target = self
-        menu.addItem(settingsItem)
+        addReused(settingsItem, to: menu)
 
         setupItem.action = #selector(rerunSetupSelected)
         setupItem.target = self
         setupItem.isHidden = !shouldShowSetup
-        menu.addItem(setupItem)
+        addReused(setupItem, to: menu)
 
         updateItem.action = #selector(checkForUpdatesSelected)
         updateItem.target = self
-        menu.addItem(updateItem)
+        addReused(updateItem, to: menu)
 
         menu.addItem(.separator())
 
