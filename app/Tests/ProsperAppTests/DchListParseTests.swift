@@ -21,6 +21,21 @@ final class DchListParseTests: XCTestCase {
         XCTAssertEqual(rows[1].state, "idle")
     }
 
+    /// `dch -l` labels a session with its alias, else the Claude Code session name
+    /// running inside it. The phone shows the same, so an empty alias falls back to
+    /// `harness` and only then to the raw socket name.
+    func testHarnessNameFillsInForEmptyAlias() {
+        let json = """
+        [{"name":"prosper-main","alias":"","harness":"prosper","state":"working"},
+         {"name":"a","alias":"Agent A","harness":"ignored","state":"idle"},
+         {"name":"b","alias":"","harness":"","state":"idle"}]
+        """
+        let rows = DchCommand.parseListJSON(Data(json.utf8))
+        XCTAssertEqual(rows[0].alias, "prosper")
+        XCTAssertEqual(rows[1].alias, "Agent A")   // explicit alias still wins
+        XCTAssertEqual(rows[2].alias, "")          // neither: the client shows the name
+    }
+
     /// An older dch prints nothing for `--ls-json` — the caller must see "no rows"
     /// and fall back to the TSV list, not a half-built row.
     func testEmptyAndGarbageJsonYieldNoRows() {

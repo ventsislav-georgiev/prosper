@@ -386,12 +386,19 @@ enum DchCommand {
         return parseListTSV(runCapturing(args: ["-lj"]))
     }
 
-    /// `[{"name","alias","activity_epoch","state"}]` — dch 1.4+ `--ls-json`.
+    /// `[{"name","alias","harness","activity_epoch","state"}]` — dch 1.4+ `--ls-json`.
+    ///
+    /// `harness` is the Claude Code session name running inside the session (dch
+    /// 1.9+). `dch -l` shows it whenever no explicit alias exists, so the phone
+    /// does the same: an empty alias falls back to it, and the raw socket name is
+    /// the last resort. Folding it into `alias` keeps the wire format unchanged.
     static func parseListJSON(_ data: Data) -> [(name: String, alias: String, activityEpoch: Int, state: String)] {
         guard let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
         return rows.compactMap { o in
             guard let name = o["name"] as? String, !name.isEmpty else { return nil }
-            return (name, o["alias"] as? String ?? "",
+            var alias = o["alias"] as? String ?? ""
+            if alias.isEmpty { alias = o["harness"] as? String ?? "" }
+            return (name, alias,
                     o["activity_epoch"] as? Int ?? 0, o["state"] as? String ?? "")
         }
     }

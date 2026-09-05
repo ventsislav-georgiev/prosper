@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.149.0 *(unreleased)*
+## v2.150.0 *(unreleased)*
+
+- **Remote Terminal: the phone's session list now shows the short session names.**
+  `dch -l` labels a session with its alias, falling back to the Claude Code session
+  name running inside it; the phone showed the raw socket name instead, so
+  "prosper" read as "prosper-main" and "hawkvibes" as
+  "hawkvibes-feat_encrypted-plane-pilot". The server now applies the same
+  precedence — alias, then harness name, then the raw name — so both lists agree.
+
+## v2.149.0
 
 ### Fixes
 - **The manual fan slider no longer snaps back while you drag it.** The sensors
