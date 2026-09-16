@@ -18,7 +18,32 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.150.0 *(unreleased)*
+## v2.151.0 *(unreleased)*
+
+- **Settings › Shortcuts is one searchable list.** Nine sections across five panes
+  collapse into a single table of actions: type a name, press the keys. Everything
+  bindable is a row — Prosper's own actions, every extension command, every launcher
+  prefix, every app — with one row design instead of seven, a Bound group on top and
+  an "Advanced" disclosure for the tap-level features (Hyper Key, Quit Guard, Finder
+  keys, Key Remapping). Nothing about your existing shortcuts changes; they just live
+  in one place now.
+- **Quick links, quick dirs and snippets can take a hotkey.** They could not before:
+  both are served natively, so the generic per-item binding machinery never saw them.
+  Each saved quick link, quick dir (with or without a prefix) and snippet is now its
+  own bindable row, and ⌘⇧K in the launcher binds the highlighted one on the spot —
+  the same gesture that used to work only on apps.
+- **Shortcut conflicts are visible everywhere.** Any two bound actions sharing a chord
+  now say so on both rows, whatever kind they are — previously only app-vs-app
+  duplicates were flagged. The ⌘Space/Spotlight warning still appears only when this
+  Mac actually uses ⌘Space for Spotlight.
+- **The shortcuts that hid in other panes came home.** The six window snaps, the
+  menu-bar reveal, the calendar toggle and the two volume-mixer shortcuts were bound
+  from four separate panes; they are rows in Shortcuts now, and each former pane links
+  there. This also fixes a real bug: a shortcut recorded in the Window, Menu Bar or
+  Calendar pane wrote straight to storage without re-registering, so it did nothing
+  until the next relaunch.
+
+## v2.150.0
 
 - **Remote Terminal: the phone's session list now shows the short session names.**
   `dch -l` labels a session with its alias, falling back to the Claude Code session
