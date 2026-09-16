@@ -495,8 +495,16 @@ struct NeonBoundedList<Content: View>: View {
 
     /// Roughly half the pane, floored so it is still a usable list in a short
     /// window. Pure so it can be tested without hosting a view.
+    ///
+    /// #127: a shrink-to-content version of this (measure the real content height,
+    /// cap it here) was built and then rejected on direct user preference — "keep
+    /// the fixed size, do not make it dynamic, it will be too poppy UX, i do not
+    /// like it" — so both terms below are a deliberate DEFINITE height, same shape
+    /// as #122 shipped, just cut 30%: `max(sz(224), paneHeight * 0.385)`. Do not
+    /// reintroduce content measurement here thinking it is an improvement; it was
+    /// tried and turned down.
     static func height(paneHeight: CGFloat) -> CGFloat {
-        max(sz(320), paneHeight * 0.55)
+        max(sz(224), paneHeight * 0.385)
     }
 
     var body: some View {

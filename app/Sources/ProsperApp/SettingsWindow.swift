@@ -1901,26 +1901,6 @@ private struct ShortcutsPane: View {
                 NeonSection("Advanced",
                             footer: "Tap-level features, not action bindings: these ride the shared event tap (per-app scope, swallowed keys, double-taps) rather than a global hotkey, so they keep their own controls.",
                             collapsed: $advancedCollapsed) {
-                    // #124: this used to be a bare `HStack` sitting between the
-                    // table and this section, belonging to no card — the report
-                    // was "it seems very out of place". Apps are the one source
-                    // with no enumerable row list (hundreds installed), so this
-                    // picker is how an app shortcut first appears.
-                    HStack {
-                        AppPickerMenu(label: "\u{FF0B} Launch an app\u{2026}",
-                                      help: "Bind a global hotkey that launches or focuses an app \u{2014} no Accessibility permission needed. For per-app scope, media keys, or swallowing the key, use Key Remapping's \u{201C}Launch App\u{201D} action instead.") { target, name in
-                            model.addAppShortcut(target: target, name: name)
-                            // The new row is unbound and lands at the bottom of
-                            // "All Actions" (several hundred rows, bounded scroll
-                            // since #122) — invisible without this. Same channel
-                            // other panes use to prefill that section's filter
-                            // (`ShortcutTable.applyPendingQuery`), reused rather
-                            // than reaching into `ShortcutTable`'s own `@State`
-                            // from outside it.
-                            focus.requestShortcutsSearch(name)
-                        }
-                        Spacer()
-                    }
                     HyperKeySection(model: model)
                     QuitGuardSection(model: model)
                     FinderSection(model: model)
@@ -2001,7 +1981,31 @@ struct ShortcutTable: View {
 
             NeonSection("All Actions",
                         footer: "Everything that can take a hotkey \u{2014} Prosper's own actions, every extension command and listed item, and every launcher prefix. Press keys on a row to bind it.") {
-                filterField("Filter all actions\u{2026}", text: $allQuery)
+                // #126: on-device, the picker sitting in Advanced read as
+                // disconnected from the list it actually populates — "put it on
+                // the same line as the filter, just to the right of it" (v2.151.0
+                // report). `filterField` takes the remaining width; the picker
+                // keeps its own intrinsic size (`.fixedSize()` already, inside
+                // `AppPickerMenu.body`).
+                HStack(spacing: sz(8)) {
+                    // Explicit `maxWidth: .infinity`, not left to the TextField's
+                    // own flex: the picker beside it is `.fixedSize()` and must
+                    // never be the one that gives up width at the pane's minimum.
+                    filterField("Filter all actions\u{2026}", text: $allQuery)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    AppPickerMenu(label: "\u{FF0B} Launch an app\u{2026}",
+                                  help: "Bind a global hotkey that launches or focuses an app \u{2014} no Accessibility permission needed. For per-app scope, media keys, or swallowing the key, use Key Remapping's \u{201C}Launch App\u{201D} action instead.") { target, name in
+                        model.addAppShortcut(target: target, name: name)
+                        // The new row is unbound and lands at the bottom of this
+                        // list (several hundred rows, bounded scroll since #122)
+                        // — invisible without this. The picker now lives INSIDE
+                        // `ShortcutTable`, so `allQuery` is set directly; no need
+                        // to bounce through `SettingsFocusRouter` for a same-view
+                        // update (that channel stays for OTHER panes deep-linking
+                        // in — see `applyPendingQuery` below).
+                        allQuery = name
+                    }
+                }
                 if rest.isEmpty {
                     Text("No matches.")
                         .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)

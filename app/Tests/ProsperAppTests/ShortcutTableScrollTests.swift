@@ -74,8 +74,55 @@ final class ShortcutTableScrollTests: XCTestCase {
         XCTAssertEqual(heights.count, 1, "pane scroll document resized while scrolling: \(heights)")
     }
 
+    // #127: numbers cut 30% on direct user preference (a shrink-to-content
+    // version was tried and rejected as "too poppy UX") — same shape as #122,
+    // `max(sz(224), paneHeight * 0.385)`.
     func testBoundedListHeightFollowsThePaneAndHasAFloor() {
-        XCTAssertEqual(NeonBoundedList<EmptyView>.height(paneHeight: 1000), max(sz(320), 550), accuracy: 0.5)
-        XCTAssertEqual(NeonBoundedList<EmptyView>.height(paneHeight: 200), sz(320), accuracy: 0.5)
+        XCTAssertEqual(NeonBoundedList<EmptyView>.height(paneHeight: 1000), max(sz(224), 385), accuracy: 0.5)
+        XCTAssertEqual(NeonBoundedList<EmptyView>.height(paneHeight: 200), sz(224), accuracy: 0.5)
+    }
+
+    private func textFields(_ v: NSView) -> [NSTextField] {
+        var out: [NSTextField] = []
+        if let f = v as? NSTextField { out.append(f) }
+        for sub in v.subviews { out += textFields(sub) }
+        return out
+    }
+
+    /// #126 — the picker moved onto the "All Actions" filter row, to the right
+    /// of the field, and is `.fixedSize()` there. That guarantees the PICKER
+    /// never shrinks; nothing guaranteed the FIELD wouldn't be squeezed to
+    /// nothing beside it. Hosts at the narrowest real width — settings window's
+    /// `contentMinSize` (820) minus the sidebar (218) minus `NeonScroll`'s own
+    /// horizontal padding (26 a side) — and checks the field is still a usable
+    /// text box, not a sliver.
+    ///
+    /// Checked directly against the FIELD's own AppKit frame rather than by also
+    /// locating the picker's button node: `.buttonStyle(.neon)` renders without a
+    /// distinct `NSButton`/`NSControl` subclass in this hosted hierarchy (dumped
+    /// the tree to confirm — only the row's own icon-only `.plain`-style buttons
+    /// show up as `NSButton`), so there is no reliable AppKit node to grab there.
+    /// The field width bound below still proves the picker isn't invisible or
+    /// zero-width: at 320.5pt (measured), the field gave up ~190pt of the
+    /// ~510pt row to its neighbor rather than claiming the whole row for itself
+    /// — the assertion's ceiling (`lessThan`) is exactly that check.
+    func testAllActionsFilterFieldStaysUsableBesidePickerAtMinWidth() throws {
+        let minContentWidth: CGFloat = 820 - 218 - 26 - 26
+        let host = NSHostingView(rootView:
+            ShortcutTable(rows: self.rows(5), paneHeight: 640, model: SettingsModel()))
+        host.frame = CGRect(x: 0, y: 0, width: minContentWidth, height: 640)
+        let win = NSWindow(contentRect: host.frame, styleMask: [.titled],
+                           backing: .buffered, defer: false)
+        win.contentView = host
+        flush(host)
+
+        let field = try XCTUnwrap(
+            textFields(host).first { $0.placeholderString == "Filter all actions\u{2026}" },
+            "couldn't find the All Actions filter field")
+
+        XCTAssertGreaterThan(field.frame.width, 150,
+                             "All Actions filter field squeezed to \(field.frame.width)pt beside the picker at min window width")
+        XCTAssertLessThan(field.frame.width, minContentWidth - 32 - 8 - 50,
+                          "field claimed the whole row (\(field.frame.width)pt) — did the picker disappear?")
     }
 }
