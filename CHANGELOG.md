@@ -21,18 +21,18 @@ tag from the now-released section and put it on the new top draft.
 ## v2.152.0 *(unreleased)*
 
 - **Menu Bar Management works on macOS 27.** macOS 27 moved every menu-bar icon into
-  a system host process: icons are no longer windows, an icon wider than the free
-  space is dropped instead of pushing its neighbours aside, and whatever does not fit
-  goes into the system's own overflow group behind a « button. Prosper's hide and
-  reveal, the Settings preview and the spacing relaunch all relied on the old model
-  and stopped working after the update. The extension now detects the new model and
-  adapts: it reads the bar through Accessibility, sizes its divider to fill the free
-  space exactly so everything left of it lands in the system overflow, re-fits when
-  the front app or the bar changes, and draws the preview from a screenshot of the
-  bar. Hide and reveal, the always-hidden band, the Settings list and preview, and
-  spacing for third-party icons work again. Apple's own icons keep the system spacing
-  on macOS 27. macOS 26 and earlier keep the previous behaviour unchanged. On macOS 27
-  the extension needs Accessibility access and asks for it once.
+  a system host process: icons are no longer windows, they never leave the part of the
+  bar right of the notch, and the host decides what happens to an icon that does not
+  fit. Prosper's hide and reveal, the Settings preview and the spacing relaunch all
+  relied on the old model and stopped working after the update. The extension now
+  detects the new model and adapts: it reads the bar through Accessibility, sizes its
+  divider so the host drops the hidden band from the bar (the band disappears the way
+  it did before, with no extra system button), and draws the preview from a screenshot
+  of the bar. Hide and reveal, the always-hidden band, the Settings list and preview,
+  and spacing for third-party icons work again. Apple's own icons keep the system
+  spacing on macOS 27; that spacing is fixed by the system. macOS 26 and earlier keep
+  the previous behaviour unchanged. On macOS 27 the extension needs Accessibility
+  access and asks for it once.
 
 ## v2.151.3
 

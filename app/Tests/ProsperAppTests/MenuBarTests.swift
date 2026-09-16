@@ -902,18 +902,11 @@ final class MenuBarTests: XCTestCase {
 
     // MARK: - Hosted (macOS 27+) fit math
 
-    func testCollapseTargetWidensOneDividerAtMost() {
-        XCTAssertEqual(MenuBarLogic.collapseTarget(revealed: false, revealedAlwaysHidden: false, hasAlwaysHidden: true), .hidden)
-        XCTAssertEqual(MenuBarLogic.collapseTarget(revealed: false, revealedAlwaysHidden: false, hasAlwaysHidden: false), .hidden)
-        XCTAssertEqual(MenuBarLogic.collapseTarget(revealed: true, revealedAlwaysHidden: false, hasAlwaysHidden: true), .alwaysHidden)
-        XCTAssertNil(MenuBarLogic.collapseTarget(revealed: true, revealedAlwaysHidden: true, hasAlwaysHidden: true))
-        XCTAssertNil(MenuBarLogic.collapseTarget(revealed: true, revealedAlwaysHidden: false, hasAlwaysHidden: false))
-    }
-
-    func testFillLengthLeavesSlackAndBacksOff() {
-        XCTAssertEqual(MenuBarLogic.fillLength(dividerRight: 1000, regionLeft: 400, slack: 100), 500)
-        XCTAssertEqual(MenuBarLogic.fillLength(dividerRight: 450, regionLeft: 400, slack: 100), 0, "never negative")
-        XCTAssertGreaterThanOrEqual(MenuBarLogic.fillSlack(attempt: 0), 37, "must clear the « button (17pt) plus the host's ~20pt edge margin")
-        XCTAssertGreaterThan(MenuBarLogic.fillSlack(attempt: 1), MenuBarLogic.fillSlack(attempt: 0))
+    func testDropLengthStaysInsideTheRoomButAboveAppleItems() {
+        let room: CGFloat = 771.5   // 16" notched display, measured on macOS 27.0
+        let len = MenuBarLogic.dropLength(room: room)
+        XCTAssertLessThan(len, room, "wider than the room drops the divider alone and leaves the band visible")
+        XCTAssertGreaterThan(len, room - 136, "narrower than room minus Apple's items parks the band behind the OS « button")
+        XCTAssertEqual(MenuBarLogic.dropLength(room: 10), 0, "never negative")
     }
 }

@@ -140,31 +140,16 @@ enum MenuBarLogic {
 
     // MARK: Hosted menu bar (macOS 27+)
 
-    /// Which divider does the hiding on a hosted menu bar. Only ONE divider is ever
-    /// widened there: widening the hidden divider already sweeps the always-hidden
-    /// band (it sits further left) into the OS overflow, so the always-hidden divider
-    /// only takes over while the hidden band is revealed. nil = everything shown.
-    static func collapseTarget(revealed: Bool, revealedAlwaysHidden: Bool,
-                               hasAlwaysHidden: Bool) -> MenuBarSection? {
-        if !revealed { return .hidden }
-        if hasAlwaysHidden && !revealedAlwaysHidden { return .alwaysHidden }
-        return nil
-    }
-
-    /// Width that makes a divider fill the bar from the left edge of the status-item
-    /// room (`regionLeft`, see `MenuBarAX.regionLeft`) to its own right edge, so the OS
-    /// moves everything left of it into the overflow group. `slack` keeps the fill short
-    /// of the exact room for the « button and the host's margin; `fillSlack` widens it
-    /// on each attempt the host refused.
-    static func fillLength(dividerRight: CGFloat, regionLeft: CGFloat, slack: CGFloat) -> CGFloat {
-        max(0, dividerRight - regionLeft - slack)
-    }
-
-    /// Measured on macOS 27.0 (notched 16" display): the host keeps the standard 16pt
-    /// spacing between the room's edge and its leftmost item, and that item is the OS «
-    /// button (17pt) with an 8pt gap to the filled divider: a fill within 41pt of the
-    /// edge goes to the overflow group itself (40 failed, 60 stayed). Back off per attempt.
-    static func fillSlack(attempt: Int) -> CGFloat { 50 + 20 * CGFloat(attempt) }
+    /// Expanded divider width on a hosted bar. Measured on macOS 27.0, the host handles
+    /// an item that doesn't fit by its width relative to the room it lays items out in:
+    ///   - narrower than the room minus Apple's own (never-overflowing) items: it and
+    ///     everything left of it go to the OS overflow group behind a « button;
+    ///   - from there up to the room's width: it and everything left of it are dropped
+    ///     from the bar outright, no « button (650–760 in a 771.5pt room);
+    ///   - wider than the room: only the item itself is dropped, its neighbours stay.
+    /// The middle regime is the pre-27 behaviour (the band simply disappears and
+    /// Prosper's chevron brings it back), so the divider is sized just under the room.
+    static func dropLength(room: CGFloat) -> CGFloat { max(0, room - 20) }
 
     /// The integer to write to `NSStatusItemSpacing` / `NSStatusItemSelectionPadding`
     /// for a desired absolute spacing. Returns nil when spacing equals the macOS

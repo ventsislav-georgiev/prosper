@@ -8,11 +8,11 @@ import ApplicationServices
 ///   left of it off-screen — that is how hiding works there.
 /// - `.hosted` (≥ macOS 27): `MenuBarAgent` hosts every item as a remote scene. Items
 ///   are no longer windows (CGS sees one "Menubar" window) and never leave the room
-///   right of the notch (or of the app's menus): what doesn't fit moves, leftmost
-///   first, into an OS overflow group behind a « button, and an item wider than the
-///   whole room is dropped outright. Hiding therefore sizes the divider to the free
-///   room (see `MenuBarManager.fit`) so the OS overflows everything left of it, and
-///   enumeration goes through Accessibility (`MenuBarAX`).
+///   right of the notch (or of the app's menus); what doesn't fit either moves into an
+///   OS overflow group behind a « button or is dropped from the bar, depending on the
+///   item's width (`MenuBarLogic.dropLength`). Hiding therefore sizes the divider so the
+///   host drops it and everything left of it, and enumeration goes through
+///   Accessibility (`MenuBarAX`).
 enum MenuBarHost {
     static let isHosted = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
 }
@@ -31,7 +31,6 @@ enum MenuBarAX {
     struct Laid {
         var frame: CGRect
         var pid: pid_t
-        var identifier: String?
     }
 
     static var trusted: Bool { AXIsProcessTrusted() }
@@ -54,8 +53,7 @@ enum MenuBarAX {
             if let f = frame(of: e), f.minY < 2, (20...48).contains(f.height), f.width < screenW / 2 {
                 let child = children(of: e).first
                 let ownerPID = child.map(pid) ?? agent
-                found.append(Laid(frame: f, pid: ownerPID == 0 ? agent : ownerPID,
-                                  identifier: child.flatMap(identifier(of:))))
+                found.append(Laid(frame: f, pid: ownerPID == 0 ? agent : ownerPID))
                 return
             }
             for c in children(of: e) { visit(c, depth: depth + 1) }
@@ -67,14 +65,6 @@ enum MenuBarAX {
             !found.contains { b in a.frame != b.frame && a.frame.contains(b.frame) }
         }
         return items.sorted { $0.frame.minX < $1.frame.minX }
-    }
-
-    /// True host frame of one of our own chrome items (chevron / divider), or nil when
-    /// the host didn't lay it out (overflowed or dropped).
-    static func laidFrame(identifier id: String, nearMinX x: CGFloat? = nil) -> CGRect? {
-        let mine = layout().filter { $0.pid == getpid() }
-        return mine.first { $0.identifier == id }?.frame
-            ?? x.flatMap { x in mine.first { abs($0.frame.minX - x) < 3 }?.frame }
     }
 
     /// Right edge of the frontmost app's menu titles — the status-item region can't
@@ -91,15 +81,18 @@ enum MenuBarAX {
         return right.map { $0 > 0 ? $0 : nil } ?? nil
     }
 
-    /// Left edge of the room the host may fill with status items on `screen`. A notch
-    /// splits the bar: items never cross it, so the room starts at the notch's right
-    /// edge (`auxiliaryTopRightArea`) no matter how narrow the app's menus are. Without
-    /// a notch the frontmost app's menu titles bound it.
-    static func regionLeft(on screen: NSScreen?) -> CGFloat? {
-        if let notch = (screen ?? NSScreen.main)?.auxiliaryTopRightArea { return notch.minX }
-        // ponytail: the pad past the menu titles is unmeasured (no notch-less display at
-        // hand); raise it if fills there end up in the overflow group.
-        return appMenuRight().map { $0 + 40 }
+    /// Width of the room the host lays status items out in on `screen`. A notch splits
+    /// the bar and items never cross it, so the room is the part right of the notch
+    /// (`auxiliaryTopRightArea`) however narrow the app's menus are. Without a notch the
+    /// frontmost app's menu titles bound it on the left.
+    static func roomWidth(on screen: NSScreen?) -> CGFloat {
+        let screen = screen ?? NSScreen.main
+        if let notch = screen?.auxiliaryTopRightArea { return notch.width }
+        // ponytail: unmeasured on notch-less displays (none at hand). Guessing too high
+        // drops the divider alone (band stays visible), too low parks it behind the OS «
+        // button; the band is reachable either way.
+        let width = screen?.frame.width ?? 2000
+        return width - (appMenuRight() ?? 400)
     }
 
     // MARK: - Items
