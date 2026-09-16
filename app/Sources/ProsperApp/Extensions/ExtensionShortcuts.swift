@@ -358,14 +358,14 @@ enum ExtensionShortcuts {
                 guard combo.carbonModifiers != 0 else { continue }
                 out.append(Registration(
                     commandID: kb.command, item: "", combo: combo,
-                    label: "\(record.manifest.extension.title) \u{00B7} \(combo.display)"))
+                    label: "\(record.manifest.extension.title) \u{00B7} \(combo.label)"))
             }
         }
         let live = Set(registry.records.filter(\.isLive)
             .flatMap { $0.manifest.contributes?.allCommands.map(\.id) ?? [] })
         for sc in userShortcuts where sc.combo.carbonModifiers != 0 && live.contains(sc.commandID) {
             out.append(Registration(commandID: sc.commandID, item: sc.item, combo: sc.combo,
-                                    label: "\(sc.label) (\(sc.combo.display))"))
+                                    label: "\(sc.label) (\(sc.combo.label))"))
         }
         return out
     }

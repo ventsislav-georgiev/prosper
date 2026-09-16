@@ -289,7 +289,9 @@ final class ShortcutCatalogTests: XCTestCase {
                                               combo: combo(kVK_ANSI_D, cmdKey | shiftKey, "\u{2318}\u{21E7}D"),
                                               name: "DBeaver")])
         XCTAssertEqual(ShortcutCatalog.filter(rows, query: "dbeaver").count, 1)
-        XCTAssertEqual(ShortcutCatalog.filter(rows, query: "\u{2318}\u{21E7}D").count, 1)
+        // Search matches the rendered label (macOS modifier order ⌃⌥⇧⌘), not the
+        // combo's stored `display` string — see `BindableAction.searchText`.
+        XCTAssertEqual(ShortcutCatalog.filter(rows, query: "\u{21E7}\u{2318}D").count, 1)
         XCTAssertTrue(ShortcutCatalog.filter(rows, query: "clipboard").contains { $0.key == "clipboard" })
         // Case- and accent-folded, same as the settings search field.
         XCTAssertEqual(ShortcutCatalog.filter(rows, query: "DBEAVER").count, 1)

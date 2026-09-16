@@ -97,6 +97,47 @@ extension AppShortcut {
 }
 
 extension KeyCombo {
+    /// The user-visible label for this combo, derived from `keyCode` +
+    /// `carbonModifiers` at render time rather than trusted from the stored
+    /// `display` string — see `display`'s doc comment: that field disagrees
+    /// depending on who built the combo (glyphs from the recorder/defaults, raw
+    /// manifest source text like "cmd+alt+ctrl+k" from `parse`). Modifiers render
+    /// in macOS order — ⌃⌥⇧⌘ — followed by the key's glyph or name. "Unset" for
+    /// the sentinel unset combo, or any other bare no-modifier/no-key combo.
+    var label: String {
+        guard carbonModifiers != 0 || keyCode != 0 else { return "Unset" }
+        var s = ""
+        if carbonModifiers & UInt32(controlKey) != 0 { s += "⌃" }
+        if carbonModifiers & UInt32(optionKey) != 0 { s += "⌥" }
+        if carbonModifiers & UInt32(shiftKey) != 0 { s += "⇧" }
+        if carbonModifiers & UInt32(cmdKey) != 0 { s += "⌘" }
+        s += KeyCombo.keyGlyph(Int(keyCode))
+        return s
+    }
+
+    /// Glyph/name for a bare key code, layout-independent — no NSEvent chars
+    /// needed, unlike the old `RecorderView.keyName`. Special keys get their
+    /// macOS glyph; everything else falls back to `codeToName` (already covers
+    /// letters, digits, F1–F20, and punctuation), uppercased.
+    private static func keyGlyph(_ code: Int) -> String {
+        if let glyph = keyGlyphs[code] { return glyph }
+        if let name = codeToName[code] { return name.uppercased() }
+        return "Key\(code)"
+    }
+
+    private static let keyGlyphs: [Int: String] = [
+        kVK_Space: "Space",
+        kVK_Return: "↩",
+        kVK_Tab: "⇥",
+        kVK_Delete: "⌫",
+        kVK_ForwardDelete: "⌦",
+        kVK_Escape: "⎋",
+        kVK_LeftArrow: "←",
+        kVK_RightArrow: "→",
+        kVK_UpArrow: "↑",
+        kVK_DownArrow: "↓",
+    ]
+
     /// The combo stripped to what macOS actually arbitrates on. `display` is a label
     /// ("⌘⇧D") that two identical chords can disagree about — recorded on a different
     /// keyboard layout, or synced from a Mac with another one — so equality/hashing

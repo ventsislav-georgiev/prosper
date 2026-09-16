@@ -88,7 +88,7 @@ struct BindableAction: Identifiable, Hashable, Sendable {
         self.defaultCombo = defaultCombo
         self.recordID = recordID
         self.conflictNote = conflictNote
-        self.searchText = SettingsSearch.fold("\(title) \(category) \(combo.display)")
+        self.searchText = SettingsSearch.fold("\(title) \(category) \(combo.label)")
     }
 
     /// Same row with a freshly computed conflict hint. `ShortcutCatalog.build`'s

@@ -42,6 +42,16 @@ tag from the now-released section and put it on the new top draft.
   there. This also fixes a real bug: a shortcut recorded in the Window, Menu Bar or
   Calendar pane wrote straight to storage without re-registering, so it did nothing
   until the next relaunch.
+- **The new list scrolls smoothly, lines up, and reads at a glance.** Each of "Bound"
+  and "All Actions" now has its own filter field and its own scroll area, so the long
+  list no longer stretched the pane's scroll document across dozens of screens and
+  re-measured it mid-scroll — that was the stutter and tearing. Every column is a fixed
+  width, so titles, categories and key fields line up on every row whatever kind it is,
+  and the reset button keeps its slot instead of sliding the row around. Key combos are
+  now rendered one way everywhere — macOS glyphs in macOS order (⌃⌥⇧⌘), derived from the
+  keys themselves rather than whatever text happened to be stored — so a manifest-declared
+  default no longer shows as `cmd+alt+ctrl+k` and a long chord fits its field. "Advanced"
+  starts expanded and visually contains the four tap-level sections that belong to it.
 
 ## v2.150.0
 

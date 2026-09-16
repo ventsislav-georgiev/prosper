@@ -740,7 +740,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bound.append(
                 (GlobalHotKey(keyCode: combo.keyCode, modifiers: combo.carbonModifiers,
                               id: action.hotKeyId, handler: handler),
-                 "\(action.title) (\(combo.display))",
+                 "\(action.title) (\(combo.label))",
                  action == .runner && combo.chord == action.defaultCombo.chord)
             )
         }
@@ -798,7 +798,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               id: GlobalHotKey.customIdBase + UInt32(i)) { [weak self] in
                     DispatchQueue.main.async { self?.openRunner(prefill: prefix) }
                 },
-                 "\(cs.label) (\(cs.combo.display))", false)
+                 "\(cs.label) (\(cs.combo.label))", false)
             )
         }
 
@@ -815,7 +815,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // binding it. (Settings still shows the row; only the binding is held back.)
             guard AppControl.resolvedBundleURL(target) != nil else {
                 NSLog("prosper: app shortcut '%@' (%@) not registered — no app for '%@' on this Mac",
-                      sc.name, sc.combo.display, target)
+                      sc.name, sc.combo.label, target)
                 continue
             }
             bound.append(
@@ -825,7 +825,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // fire while Prosper is a background app — see its doc comment.
                     DispatchQueue.main.async { AppControl.launchOrFocus(target) }
                 },
-                 "Launch \(sc.name) (\(sc.combo.display))", false)
+                 "Launch \(sc.name) (\(sc.combo.label))", false)
             )
         }
 

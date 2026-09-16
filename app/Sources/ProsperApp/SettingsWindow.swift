@@ -1847,7 +1847,9 @@ private struct ShortcutsPane: View {
     /// the pane-switch render path, so first paint shows the cheap sources and these
     /// merge in when they land.
     @State private var extensionActions: [BindableExtensionAction] = []
-    @AppStorage("settings.shortcuts.advancedCollapsed") private var advancedCollapsed = true
+    /// #122: expanded by DEFAULT (it is a container, not a teaser). A user who
+    /// collapses it still keeps that — the stored `true` wins over this default.
+    @AppStorage("settings.shortcuts.advancedCollapsed") private var advancedCollapsed = false
 
     /// Section titles that live inside the Advanced disclosure, so a settings-search
     /// deep link into one of them can open it.
@@ -1878,37 +1880,42 @@ private struct ShortcutsPane: View {
     }
 
     var body: some View {
-        NeonScroll {
-            PaneTitle(title: "Shortcuts",
-                      subtitle: "Trigger Prosper features, jump to commands, and remap keys")
+        // #122: the ONLY place the pane's real height is knowable — inside
+        // `NeonScroll` every height proposal is infinite. `ShortcutTable` needs a
+        // finite number to bound its lists with (see `NeonBoundedList` for what
+        // the unbounded version actually did to the pane's scroll view).
+        GeometryReader { geo in
+            NeonScroll {
+                PaneTitle(title: "Shortcuts",
+                          subtitle: "Trigger Prosper features, jump to commands, and remap keys")
 
-            // The search field and the filtered table own their own state INSIDE
-            // `ShortcutTable`, so a keystroke re-runs only that subtree — this
-            // pane's body (and with it the registry walks behind `catalog`) does
-            // not run again until the stores actually change.
-            ShortcutTable(rows: catalog, model: model)
+                // The filter fields and the filtered table own their own state
+                // INSIDE `ShortcutTable`, so a keystroke re-runs only that subtree
+                // — this pane's body (and with it the registry walks behind
+                // `catalog`) does not run again until the stores actually change.
+                ShortcutTable(rows: catalog, paneHeight: geo.size.height, model: model)
 
-            HStack {
-                // Apps are the one source with no enumerable row list (hundreds
-                // installed), so this picker is how an app shortcut first appears.
-                AppPickerMenu(label: "\u{FF0B} Launch an app\u{2026}",
-                              help: "Bind a hotkey that launches or focuses an app.") { target, name in
-                    model.addAppShortcut(target: target, name: name)
+                HStack {
+                    // Apps are the one source with no enumerable row list (hundreds
+                    // installed), so this picker is how an app shortcut first appears.
+                    AppPickerMenu(label: "\u{FF0B} Launch an app\u{2026}",
+                                  help: "Bind a hotkey that launches or focuses an app.") { target, name in
+                        model.addAppShortcut(target: target, name: name)
+                    }
+                    Spacer()
                 }
-                Spacer()
-            }
 
-            NeonSection("Advanced",
-                        footer: "Tap-level features, not action bindings: these ride the shared event tap (per-app scope, swallowed keys, double-taps) rather than a global hotkey, so they keep their own controls.",
-                        collapsed: $advancedCollapsed) {
-                Text("Hyper Key, Quit Guard, Finder keys and Key Remapping.")
-                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-            }
-            if !advancedCollapsed {
-                HyperKeySection(model: model)
-                QuitGuardSection(model: model)
-                FinderSection(model: model)
-                KeyRemappingSection(model: model)
+                // #122: the four sections live INSIDE this one now. They used to be
+                // siblings rendered after it, so "Advanced" read as a button with
+                // unrelated cards below rather than as the group that holds them.
+                NeonSection("Advanced",
+                            footer: "Tap-level features, not action bindings: these ride the shared event tap (per-app scope, swallowed keys, double-taps) rather than a global hotkey, so they keep their own controls.",
+                            collapsed: $advancedCollapsed) {
+                    HyperKeySection(model: model)
+                    QuitGuardSection(model: model)
+                    FinderSection(model: model)
+                    KeyRemappingSection(model: model)
+                }
             }
         }
         .task {
@@ -1931,42 +1938,59 @@ private struct ShortcutsPane: View {
 
 }
 
-/// The searchable half of the pane: a filter field, a "Bound only" switch, and the
-/// two lists. It owns `query`/`boundOnly` so typing re-renders THIS view only —
-/// building the catalog walks the extension registry, and doing that per keystroke
-/// is exactly the stall this pane must not have.
-private struct ShortcutTable: View {
+/// The searchable half of the pane: two sections, each with its OWN filter field
+/// and its own bounded scroll. It owns both queries so typing re-renders THIS view
+/// only — building the catalog walks the extension registry, and doing that per
+/// keystroke is exactly the stall this pane must not have.
+///
+/// #122 dropped the shared search bar (it filtered both lists at once, which is
+/// why neither section could be searched on its own) and the "Bound only" switch
+/// along with it: hiding "All Actions" was a workaround for the unbounded list,
+/// and the "Bound" section — always on screen, now searchable on its own — is
+/// what that switch was for.
+/// Internal, not `private`, for exactly one reason: `ShortcutTableScrollTests`
+/// hosts it to prove the bound actually holds (#122's whole point was that the
+/// previous perf claim was measured in the model, never in the view).
+struct ShortcutTable: View {
     let rows: [BindableAction]
+    /// Height of the settings pane, from the caller's `GeometryReader`. Bounds the
+    /// lists so the pane's own scroll document stays one screen tall and stops
+    /// resizing mid-scroll — see `NeonBoundedList`.
+    let paneHeight: CGFloat
     @ObservedObject var model: SettingsModel
     @ObservedObject private var focus = SettingsFocusRouter.shared
-    @State private var query = ""
-    @State private var boundOnly = false
+    @State private var boundQuery = ""
+    @State private var allQuery = ""
 
     var body: some View {
-        let shown = ShortcutCatalog.filter(rows, query: query, boundOnly: boundOnly)
-        let bound = shown.filter(\.isBound)
-        let rest = shown.filter { !$0.isBound }
+        let bound = ShortcutCatalog.filter(rows, query: boundQuery, boundOnly: true)
+        let rest = ShortcutCatalog.filter(rows, query: allQuery).filter { !$0.isBound }
 
         Group {
-            searchBar
-
             NeonSection("Bound",
                         footer: "Click a key field to rebind, \u{21A9} to reset to the default, \u{2715} to turn it off or remove it.") {
+                filterField("Filter bound\u{2026}", text: $boundQuery)
                 if bound.isEmpty {
-                    Text(query.isEmpty ? "Nothing is bound yet." : "No bound action matches.")
+                    Text(boundQuery.isEmpty ? "Nothing is bound yet." : "No bound action matches.")
                         .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 } else {
-                    list(bound)
+                    // Stays inline while it is short; only a long bound list earns
+                    // a scrollbar of its own.
+                    NeonBoundedList(rowCount: bound.count, paneHeight: paneHeight) { list(bound) }
                 }
             }
 
-            if !boundOnly {
-                NeonSection("All Actions",
-                            footer: "Everything that can take a hotkey \u{2014} Prosper's own actions, every extension command and listed item, and every launcher prefix. Press keys on a row to bind it.") {
-                    if rest.isEmpty {
-                        Text("No matches.")
-                            .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-                    } else {
+            NeonSection("All Actions",
+                        footer: "Everything that can take a hotkey \u{2014} Prosper's own actions, every extension command and listed item, and every launcher prefix. Press keys on a row to bind it.") {
+                filterField("Filter all actions\u{2026}", text: $allQuery)
+                if rest.isEmpty {
+                    Text("No matches.")
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                } else {
+                    // ALWAYS bounded (threshold 0): this is the hundreds-of-rows
+                    // list whose height was driving the pane's scroll document to
+                    // 44 screens and re-estimating it mid-scroll.
+                    NeonBoundedList(rowCount: rest.count, threshold: 0, paneHeight: paneHeight) {
                         list(rest)
                     }
                 }
@@ -1975,45 +1999,43 @@ private struct ShortcutTable: View {
         // #119: a pane whose recorder moved into this catalog (Window/Menu
         // Bar/Calendar/Volume Mixer) can arrive here with a search prefilled.
         // Consumed once and cleared, so it never re-fires on an unrelated change.
+        // It prefills "All Actions" — an unbound recorder that just moved here is
+        // by definition not in "Bound".
         .onAppear { applyPendingQuery() }
         .onChange(of: focus.pendingShortcutsQuery) { _, _ in applyPendingQuery() }
     }
 
     private func applyPendingQuery() {
         guard let q = focus.pendingShortcutsQuery else { return }
-        query = q
+        allQuery = q
         focus.pendingShortcutsQuery = nil
     }
 
-    private var searchBar: some View {
-        HStack(spacing: sz(10)) {
-            HStack(spacing: sz(7)) {
-                Image(systemName: "magnifyingglass")
-                    .font(Neon.font(11)).foregroundStyle(Neon.blue)
-                TextField("Search actions\u{2026}", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(Neon.font(13))
-                    .foregroundStyle(Neon.textPrimary)
-                if !query.isEmpty {
-                    Button { query = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
-                    }
-                    .buttonStyle(.plain)
+    private func filterField(_ prompt: String, text: Binding<String>) -> some View {
+        HStack(spacing: sz(7)) {
+            Image(systemName: "magnifyingglass")
+                .font(Neon.font(11)).foregroundStyle(Neon.blue)
+            TextField(prompt, text: text)
+                .textFieldStyle(.plain)
+                .font(Neon.font(13))
+                .foregroundStyle(Neon.textPrimary)
+            if !text.wrappedValue.isEmpty {
+                Button { text.wrappedValue = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
                 }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
-            .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Neon.card)
-                .overlay(RoundedRectangle(cornerRadius: sz(9), style: .continuous)
-                    .strokeBorder(Neon.blue.opacity(0.2), lineWidth: 1)))
-
-            Toggle("Bound only", isOn: $boundOnly).toggleStyle(.button)
         }
+        .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
+        .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Neon.card)
+            .overlay(RoundedRectangle(cornerRadius: sz(9), style: .continuous)
+                .strokeBorder(Neon.blue.opacity(0.2), lineWidth: 1)))
     }
 
     /// LAZY: "All Actions" is every command of every live extension expanded to its
     /// items — hundreds of rows. A plain VStack would build and lay out all of them
-    /// on every keystroke.
+    /// on every keystroke. Only lazy for real once bounded — see `NeonBoundedList`.
     @ViewBuilder
     private func list(_ rows: [BindableAction]) -> some View {
         LazyVStack(alignment: .leading, spacing: sz(14)) {
@@ -2049,6 +2071,11 @@ private struct ShortcutCatalogRow: View {
     /// App rows only: re-pick which app the hotkey launches.
     var onRetarget: ((_ target: String, _ name: String) -> Void)?
 
+    /// Fixed column widths (#122). Static so every row agrees by construction.
+    private static var categoryWidth: CGFloat { sz(96) }
+    private static var recorderWidth: CGFloat { sz(142) }
+    private static var buttonWidth: CGFloat { sz(22) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: sz(4)) {
             HStack(spacing: sz(10)) {
@@ -2056,34 +2083,48 @@ private struct ShortcutCatalogRow: View {
                     .foregroundStyle(Neon.textSecondary)
                     .frame(width: sz(18))
 
-                if let onRetarget {
-                    // The title is the name captured at bind time, so an app that
-                    // isn't installed on this machine (synced shortcut, external
-                    // drive unmounted) still renders with a readable label.
-                    AppPickerMenu(selected: action.target.isEmpty ? [] : [action.target],
-                                  label: action.title, onPick: onRetarget)
-                } else {
-                    Text(action.title)
-                        .foregroundStyle(Neon.textPrimary)
-                        .lineLimit(1).truncationMode(.middle)
+                // #122: every column below has a FIXED width, and the title takes
+                // whatever is left. Previously the category was intrinsically sized
+                // with a `Spacer` in front of it, so a long category shoved the
+                // recorder left and rows never lined up; the reset button was
+                // simply absent on rows with no default, which slid the trash
+                // column around too.
+                Group {
+                    if let onRetarget {
+                        // The title is the name captured at bind time, so an app that
+                        // isn't installed on this machine (synced shortcut, external
+                        // drive unmounted) still renders with a readable label.
+                        AppPickerMenu(selected: action.target.isEmpty ? [] : [action.target],
+                                      label: action.title, onPick: onRetarget)
+                    } else {
+                        Text(action.title)
+                            .foregroundStyle(Neon.textPrimary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
                 }
-
-                Spacer(minLength: sz(8))
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Text(action.category)
                     .font(Neon.font(.caption))
                     .foregroundStyle(Neon.textSecondary)
-                    .lineLimit(1)
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(width: Self.categoryWidth, alignment: .trailing)
 
+                // Wide enough for a five-modifier chord in #123's compact glyph
+                // form (⌃⌥⇧⌘⇪ + key) and NOT `fixedSize()` — the recorder must be
+                // the same width on every row whatever it is showing.
                 ShortcutRecorder(combo: action.combo, onChange: onRecord)
-                    .frame(width: sz(110), height: sz(24))
-                    .fixedSize()
+                    .frame(width: Self.recorderWidth, height: sz(24))
 
-                if action.defaultCombo != nil {
-                    Button(action: onReset) { Image(systemName: "arrow.uturn.backward") }
-                        .buttonStyle(.borderless)
-                        .help("Reset to default")
+                // Same slot whether or not this kind of row offers a reset.
+                ZStack {
+                    if action.defaultCombo != nil {
+                        Button(action: onReset) { Image(systemName: "arrow.uturn.backward") }
+                            .buttonStyle(.borderless)
+                            .help("Reset to default")
+                    }
                 }
+                .frame(width: Self.buttonWidth)
 
                 Button(action: onClear) {
                     Image(systemName: action.isUserCreated ? "trash" : "xmark.circle")
@@ -2092,6 +2133,7 @@ private struct ShortcutCatalogRow: View {
                 .help(action.isUserCreated ? "Remove this shortcut" : "Disable this shortcut")
                 // An offered-but-unbound row has no record to remove yet.
                 .disabled(action.isUserCreated && action.recordID == nil)
+                .frame(width: Self.buttonWidth)
             }
 
             if let note = action.conflictNote {

@@ -61,7 +61,7 @@ final class RecorderView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     func refreshTitle() {
-        label.stringValue = recording ? "Press keys…" : combo.display
+        label.stringValue = recording ? "Press keys…" : combo.label
         label.textColor = recording ? .secondaryLabelColor : .labelColor
         layer?.borderColor = (recording ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
@@ -100,9 +100,7 @@ final class RecorderView: NSView {
                     NSSound.beep()
                     return nil
                 }
-                let display = Self.display(keyCode: event.keyCode, modifiers: event.modifierFlags,
-                                           chars: event.charactersIgnoringModifiers)
-                let newCombo = KeyCombo(keyCode: UInt32(event.keyCode), carbonModifiers: carbon, display: display)
+                let newCombo = KeyCombo(keyCode: UInt32(event.keyCode), carbonModifiers: carbon, display: "")
                 self.combo = newCombo
                 self.stopRecording()
                 self.onChange?(newCombo)
@@ -145,39 +143,4 @@ final class RecorderView: NSView {
         if flags.contains(.shift) { m |= UInt32(shiftKey) }
         return m
     }
-
-    /// Human-readable combo string, e.g. "⇧⌥A", "⌃Space".
-    static func display(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, chars: String?) -> String {
-        var s = ""
-        if modifiers.contains(.control) { s += "⌃" }
-        if modifiers.contains(.option) { s += "⌥" }
-        if modifiers.contains(.shift) { s += "⇧" }
-        if modifiers.contains(.command) { s += "⌘" }
-        s += keyName(keyCode: keyCode, chars: chars)
-        return s
-    }
-
-    private static func keyName(keyCode: UInt16, chars: String?) -> String {
-        if let special = specialKeys[Int(keyCode)] { return special }
-        if let chars, let first = chars.first, !first.isWhitespace {
-            return String(first).uppercased()
-        }
-        return "Key\(keyCode)"
-    }
-
-    private static let specialKeys: [Int: String] = [
-        kVK_Space: "Space",
-        kVK_Return: "↩",
-        kVK_Tab: "⇥",
-        kVK_Delete: "⌫",
-        kVK_Escape: "⎋",
-        kVK_LeftArrow: "←",
-        kVK_RightArrow: "→",
-        kVK_UpArrow: "↑",
-        kVK_DownArrow: "↓",
-        kVK_ANSI_Period: ".",
-        kVK_ANSI_Comma: ",",
-        kVK_ANSI_Slash: "/",
-        kVK_ANSI_Backslash: "\\",
-    ]
 }

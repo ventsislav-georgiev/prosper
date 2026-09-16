@@ -355,6 +355,11 @@ struct NeonSection<Content: View>: View {
                 .tracking(sz(1.4))
                 .foregroundStyle(Neon.textSecondary)
             if collapsible {
+                // #122: trailing, not tucked against the title. Beside the text it
+                // read as "this title IS a button"; at the far right it reads as a
+                // disclosure affordance and the title keeps the same weight and
+                // left alignment as every non-collapsible section heading.
+                Spacer(minLength: sz(8))
                 Image(systemName: "chevron.right")
                     .font(Neon.font(9, weight: .bold))
                     .foregroundStyle(Neon.textSecondary)
@@ -362,6 +367,7 @@ struct NeonSection<Content: View>: View {
             }
         }
         .padding(.leading, sz(2))
+        .frame(maxWidth: .infinity, alignment: .leading)
 
         if let collapsed {
             Button { withAnimation(.easeInOut(duration: 0.15)) { collapsed.wrappedValue.toggle() } } label: {
@@ -458,6 +464,47 @@ struct NeonScroll<Content: View>: View {
                 withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(anchor, anchor: scrollAnchor) }
             }
             focus.highlight(anchor)
+        }
+    }
+}
+
+/// A long list that scrolls INSIDE its section instead of growing the pane.
+///
+/// #122, measured in the VIEW (`ShortcutTableScrollTests`), not in the model:
+/// the nested `LazyVStack` does stay lazy — it realizes ~8 rows, not 500. What
+/// actually tore was the size it reports UP. A lazy stack sitting directly in
+/// `NeonScroll` gave the pane's scroll view a 28,309 pt document for 500 rows
+/// (44 screens), and AppKit re-estimated that height as rows realized: it drifted
+/// to 28,487 pt over one full scroll pass. A document that resizes underneath the
+/// scroller is the stutter and the tearing.
+///
+/// A definite height fixes it at the source: the outer document collapses to one
+/// screen and stops moving (682 pt, identical at every scroll offset), and the
+/// row churn moves inside, where a full pass touches 7 row bodies instead of 104.
+///
+/// Short lists stay inline — three items should not grow a scrollbar of their
+/// own inside the pane's scrollbar.
+struct NeonBoundedList<Content: View>: View {
+    let rowCount: Int
+    /// Row count above which the list starts scrolling on its own. `0` = always.
+    var threshold: Int = 8
+    /// The settings pane's own height, measured by the caller's `GeometryReader`
+    /// OUTSIDE `NeonScroll` (inside it, height is infinite and useless).
+    let paneHeight: CGFloat
+    @ViewBuilder var content: () -> Content
+
+    /// Roughly half the pane, floored so it is still a usable list in a short
+    /// window. Pure so it can be tested without hosting a view.
+    static func height(paneHeight: CGFloat) -> CGFloat {
+        max(sz(320), paneHeight * 0.55)
+    }
+
+    var body: some View {
+        if rowCount > threshold {
+            ScrollView { content() }
+                .frame(height: Self.height(paneHeight: paneHeight))
+        } else {
+            content()
         }
     }
 }
