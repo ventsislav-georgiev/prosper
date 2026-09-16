@@ -509,10 +509,87 @@ struct NeonBoundedList<Content: View>: View {
 
     var body: some View {
         if rowCount > threshold {
-            ScrollView { content() }
+            // #128: the installer rides INSIDE the scroll view's content — that is
+            // the only handle SwiftUI gives onto its own `NSScrollView`.
+            ScrollView { content().background(ScrollChainGateInstaller()) }
                 .frame(height: Self.height(paneHeight: paneHeight))
         } else {
             content()
+        }
+    }
+}
+
+/// #128: kills AppKit scroll chaining for one inner scroll view.
+///
+/// An `NSScrollView` that cannot use a wheel event hands it to its `nextResponder`
+/// — for a list nested in `NeonScroll` that is the pane's own scroll view, so
+/// reaching either end of "All Actions" yanked the whole pane (v2.151.0 on-device
+/// report). This responder is spliced in between the inner scroll view and its
+/// superview and swallows that forward. Per instance, by wiring only: no swizzle,
+/// nothing global, and `NSScrollView` itself is untouched, so the inner list keeps
+/// its own scrolling, elasticity and scroller exactly as before.
+final class ScrollChainGate: NSResponder {
+    weak var scrollView: NSScrollView?
+
+    override func scrollWheel(with event: NSEvent) {
+        // Scrollability is read AT EVENT TIME, never captured at layout time: the
+        // content height changes as the user filters, and a stale answer would
+        // strand the cursor over a now-short list that refuses to move the pane.
+        // This also covers trackpad momentum without special-casing `phase` —
+        // momentum events the list cannot use arrive here like any other and are
+        // swallowed the same way, so a fling ending inside the list never resumes
+        // the pane.
+        if let sv = scrollView, let doc = sv.documentView,
+           doc.frame.height > sv.contentView.bounds.height + 0.5 { return }
+        // Not scrollable: behave exactly as before and let the pane have it.
+        // `NSResponder`'s default hands the event on to `nextResponder`.
+        super.scrollWheel(with: event)
+    }
+}
+
+/// Zero-size probe that finds the enclosing `NSScrollView` and gates it.
+private struct ScrollChainGateInstaller: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { GateProbe() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class GateProbe: NSView {
+        private let gate = ScrollChainGate()
+        /// The scroll view this probe actually spliced, kept because teardown has
+        /// to undo the splice AFTER `enclosingScrollView` has already gone nil.
+        /// Weak: the scroll view owns this probe's subtree, never the reverse.
+        private weak var spliced: NSScrollView?
+
+        // A background view must never eat a click meant for a row.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // AppKit does NOT retain `nextResponder`. A scroll view outliving this
+            // probe would be left pointing at a freed gate — a use-after-free on
+            // the next wheel event — so the splice is undone the moment the probe
+            // leaves the window. Splicing only ever happens with a window attached
+            // (below), so every path to dealloc runs through this branch first and
+            // no unsplice can be skipped.
+            if window == nil { return unsplice() }
+            // Re-splices if SwiftUI ever re-parents the scroll view, which resets
+            // `nextResponder` back to the superview.
+            guard let sv = enclosingScrollView, sv.nextResponder !== gate else { return }
+            unsplice()  // moved between scroll views: never leave two gates behind
+            gate.scrollView = sv
+            gate.nextResponder = sv.nextResponder
+            sv.nextResponder = gate
+            spliced = sv
+        }
+
+        private func unsplice() {
+            guard let sv = spliced else { return }
+            spliced = nil
+            // Only if this gate is still the one in the chain — another gate may
+            // have spliced in since, and pulling it out would break that list.
+            guard sv.nextResponder === gate else { return }
+            sv.nextResponder = gate.nextResponder
+            gate.nextResponder = nil
+            gate.scrollView = nil
         }
     }
 }

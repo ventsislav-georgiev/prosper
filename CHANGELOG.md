@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.151.0 *(unreleased)*
+## v2.151.1 *(unreleased)*
+
+- **The Shortcuts lists stay put while you scroll them.** Reaching the top or bottom
+  of "Bound" or "All Actions" no longer grabs the whole pane and scrolls that instead.
+- **The "＋ Launch an app…" picker sits on the All Actions filter line**, next to the
+  list it adds to rather than off in Advanced.
+- **Shorter list cards.** Both lists are 30% shorter, so more of the pane is visible
+  without scrolling.
+
+## v2.151.0
 
 - **Settings › Shortcuts is one searchable list.** Nine sections across five panes
   collapse into a single table of actions: type a name, press the keys. Everything
