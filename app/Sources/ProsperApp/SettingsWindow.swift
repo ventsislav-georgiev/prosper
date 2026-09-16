@@ -3656,7 +3656,11 @@ private struct MenuBarPane: View {
             spacingNote = "The new spacing is saved, but this version of macOS hides which apps own each menu-bar icon, so Prosper can’t relaunch them for you. Log out and back in (or quit and reopen your menu-bar apps) to apply it now."
             return
         }
-        spacingNote = nil
+        // macOS 27+ hosts Apple's own icons itself and lays them out at the system
+        // spacing regardless of the override; only third-party icons follow it.
+        spacingNote = MenuBarHost.isHosted
+            ? "Third-party icons pick up the new spacing as their apps relaunch. Apple’s own icons keep the system spacing on this version of macOS."
+            : nil
         relaunching = true
         skipped = []
         MenuBarSpacing.relaunchOwners(apps) { skippedNames in
@@ -3750,7 +3754,9 @@ private struct MenuBarPreviewStrip: View {
                 // CGS enumeration can't see windows that provably exist — a newer
                 // macOS shifted menu-bar semantics. Hide/reveal + spacing still work;
                 // only this preview can't be drawn. (See MenuBarLogic.previewHealthy.)
-                Text("Live preview isn’t available on this version of macOS. Your icons are still hidden, revealed, and spaced correctly — only this preview needs a macOS update.")
+                Text(MenuBarHost.isHosted
+                     ? "Prosper needs Accessibility access to see the menu bar on this version of macOS. Grant it in System Settings › Privacy & Security › Accessibility, then refresh."
+                     : "Live preview isn’t available on this version of macOS. Your icons are still hidden, revealed, and spaced correctly — only this preview needs a macOS update.")
                     .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             } else if elements.isEmpty {
                 Text("No menu-bar items detected (or the feature is off).")

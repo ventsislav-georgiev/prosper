@@ -88,12 +88,12 @@ final class MenuBarManager: NSObject {
         // so the chevron (created first) stays right of the expanders and is never
         // pushed off-screen when they grow.
         chevron = makeChevron()
-        hiddenSeparator = makeSeparator(autosave: "ProsperMenuBarHiddenSeparator")
+        hiddenSeparator = makeSeparator(autosave: "ProsperMenuBarHiddenSeparator", id: "hidden")
         // Always-hidden band: created (leftmost) only when the user has marked at least
         // one icon always-hidden in Settings. The arranger moves those icons left of it
         // (the move engine) and it stays expanded, so they never show — even on reveal.
         if !Preferences.menuBarOrderStore.alwaysHidden.isEmpty {
-            alwaysHiddenSeparator = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator")
+            alwaysHiddenSeparator = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator", id: "alwaysHidden")
         }
         for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
             ProsperStatusItems.register(item)
@@ -104,10 +104,14 @@ final class MenuBarManager: NSObject {
         // the OS reflows the menu bar automatically — no persistent off-screen push.
         revealed = false
         revealedAlwaysHidden = false
+        // Hosted bars are measured through Accessibility (no CGS windows to read), so
+        // hiding itself needs the grant there — ask once when the feature comes up.
+        if MenuBarHost.isHosted { PermissionsManager.ensureAccessibilityTrust(prompt: true) }
         applyDividerLengths()
         publishOwnWindowIDs()
         observeTermination()
         observeScreenChanges()
+        observeActivation()
     }
 
     private func teardown() {
@@ -127,6 +131,12 @@ final class MenuBarManager: NSObject {
         if let o = screenObserver {
             NotificationCenter.default.removeObserver(o); screenObserver = nil
         }
+        if let o = activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(o); activationObserver = nil
+        }
+        fitTask?.cancel(); fitTask = nil
+        fitTimer?.invalidate(); fitTimer = nil
+        fitRight = [:]; fitBound = [:]; fitAttempt = [:]; naturalX = [:]
     }
 
     /// The always-visible clickable control. Left-click toggles the hidden section;
@@ -135,6 +145,7 @@ final class MenuBarManager: NSObject {
         let item = NSStatusBar.system.statusItem(withLength: Lengths.standard)
         item.autosaveName = "ProsperMenuBarChevron"
         if let button = item.button {
+            button.setAccessibilityIdentifier(MenuBarAX.identifierPrefix + "chevron")
             button.image = Self.chevronImage(Preferences.menuBarStore.chevronStyle.collapsedSymbol)
             button.target = self
             button.action = #selector(chevronClicked)
@@ -167,10 +178,11 @@ final class MenuBarManager: NSObject {
     /// An empty, near-invisible expander. Shows a faint hairline boundary while
     /// REVEALED (so the user can see where to ⌘-drag icons), and rides off-screen
     /// when expanded to hide. It is never the click target — the chevron is.
-    private func makeSeparator(autosave: String) -> NSStatusItem {
+    private func makeSeparator(autosave: String, id: String) -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: Lengths.standard)
         item.autosaveName = autosave
         if let button = item.button {
+            button.setAccessibilityIdentifier(MenuBarAX.identifierPrefix + id)   // how the hosted fit finds it
             button.attributedTitle = NSAttributedString(
                 string: "￨", attributes: [.foregroundColor: NSColor.tertiaryLabelColor])
             // Not interactive: clicks fall through to do nothing rather than toggle.
@@ -203,15 +215,156 @@ final class MenuBarManager: NSObject {
     /// through here (derived from `revealed` + `revealedAlwaysHidden`) so the two
     /// dividers can never disagree — no inline `length =` pokes elsewhere.
     private func applyDividerLengths() {
-        let l = MenuBarLogic.dividerLengths(revealed: revealed,
-                                            revealedAlwaysHidden: revealedAlwaysHidden,
-                                            standard: Lengths.standard, expanded: expandedLength)
-        hiddenSeparator?.length = l.hidden
-        alwaysHiddenSeparator?.length = l.alwaysHidden
-        updateChevron()
+        defer { updateChevron() }
+        guard MenuBarHost.isHosted else {
+            let l = MenuBarLogic.dividerLengths(revealed: revealed,
+                                                revealedAlwaysHidden: revealedAlwaysHidden,
+                                                standard: Lengths.standard, expanded: expandedLength)
+            hiddenSeparator?.length = l.hidden
+            alwaysHiddenSeparator?.length = l.alwaysHidden
+            return
+        }
+        // Hosted: only the collapse target is ever widened; the other divider collapses
+        // instantly, the target is fitted asynchronously (needs the host's layout).
+        let target = collapseTarget
+        for s in [MenuBarSection.hidden, .alwaysHidden] where s != target { divider(s).map { setLength($0, Lengths.standard) } }
+        fitGiveUp = []   // a user toggle is a fresh start
+        refit()
     }
 
     private var revealedAlwaysHidden = false
+
+    // MARK: - Hosted fit (macOS 27+)
+
+    /// A hosted bar drops an item wider than the free room instead of pushing its
+    /// neighbours off-screen, so the collapsing divider is sized to FILL that room:
+    /// everything left of it then lands in the OS overflow group (behind the system's
+    /// « button). The room depends on the frontmost app's menu width, so the fill is
+    /// re-measured on app switch and re-verified on a slow tick against the host's
+    /// real layout (`MenuBarAX.layout`), which is the only truth about what's on screen.
+    private var fitTask: Task<Void, Never>?
+    private var fitGeneration = 0
+    private var fitTimer: Timer?
+    /// Dividers whose every fill the host dropped. Retrying on the tick would show and
+    /// hide the band every few seconds; wait for an app switch or a toggle instead.
+    private var fitGiveUp: Set<MenuBarSection> = []
+    /// Right edge of each divider as the host last laid it out — stable while the items
+    /// right of it don't change, so a refit needn't re-measure at natural width.
+    private var fitRight: [MenuBarSection: CGFloat] = [:]
+    /// Left edge of the room (`MenuBarAX.regionLeft`) the current fill was computed against.
+    private var fitBound: [MenuBarSection: CGFloat] = [:]
+    /// Slack attempt that last stuck. A refit starts there: re-trying a tighter fill
+    /// first would flash the divider into the overflow group on every tick.
+    private var fitAttempt: [MenuBarSection: Int] = [:]
+    /// Divider minX at natural width. `sectionedItems` compares item x against this: the
+    /// filled divider's own minX is the far-left fill edge, not the section boundary.
+    private var naturalX: [MenuBarSection: CGFloat] = [:]
+
+    private var collapseTarget: MenuBarSection? {
+        MenuBarLogic.collapseTarget(revealed: revealed, revealedAlwaysHidden: revealedAlwaysHidden,
+                                    hasAlwaysHidden: alwaysHiddenSeparator != nil)
+    }
+
+    private func divider(_ s: MenuBarSection) -> NSStatusItem? {
+        s == .hidden ? hiddenSeparator : alwaysHiddenSeparator
+    }
+
+    /// The host's frame for a divider, nil when it's in the overflow group or dropped.
+    /// The host re-lays out late: right after a resize its wrapper still has the OLD
+    /// width, which must not pass for a laid-out fill.
+    private func laid(_ s: MenuBarSection) -> CGRect? {
+        guard let item = divider(s),
+              let f = MenuBarAX.laidFrame(identifier: MenuBarAX.identifierPrefix + (s == .hidden ? "hidden" : "alwaysHidden"),
+                                          nearMinX: item.button?.window?.frame.minX),
+              item.length < 0 || f.width >= item.length - 4 else { return nil }
+        return f
+    }
+
+    /// A filled divider is a blank band; its glyph would float mid-band, so it only
+    /// shows at natural width (on the windows model the fill puts it off-screen anyway).
+    private func setLength(_ item: NSStatusItem, _ length: CGFloat) {
+        item.length = length
+        item.button?.alphaValue = length > 0 ? 0 : 1
+    }
+
+    private func refit() {
+        fitTask?.cancel()
+        guard let target = collapseTarget else { return }
+        fitGeneration &+= 1
+        let gen = fitGeneration
+        fitTask = Task { [weak self] in
+            await self?.fit(target)
+            if let self, self.fitGeneration == gen { self.fitTask = nil }
+        }
+    }
+
+    /// True once the host shows the divider, polling briefly: the host lays a resized
+    /// item out with a short delay/animation, and reading too early looks like a drop.
+    private func laidOut(_ target: MenuBarSection) async -> Bool {
+        for _ in 0..<4 {
+            try? await Task.sleep(for: .milliseconds(300))
+            if Task.isCancelled { return false }
+            if let f = laid(target) { fitRight[target] = f.maxX; return true }
+        }
+        return false
+    }
+
+    private func fit(_ target: MenuBarSection) async {
+        guard let item = divider(target) else { return }
+        for attempt in (fitAttempt[target] ?? 0)..<3 {
+            if fitRight[target] == nil {                      // (re)measure at natural width
+                setLength(item, Lengths.standard)
+                try? await Task.sleep(for: .milliseconds(600))
+                // Not laid out even at natural width: the bar is full anyway, leave it.
+                guard !Task.isCancelled, let f = laid(target) else { return }
+                fitRight[target] = f.maxX
+                naturalX[target] = f.minX
+            }
+            // The room's edge is fixed on a notched display; elsewhere it follows the
+            // frontmost app's menus, and with no regular app frontmost (Spotlight, a
+            // menu-bar app, our own Settings) the previous app's menus stay up, so the last
+            // measurement still holds. Nothing measured yet (no Accessibility): leave it.
+            guard let right = fitRight[target],
+                  let bound = MenuBarAX.regionLeft(on: item.button?.window?.screen) ?? fitBound[target] else { return }
+            fitBound[target] = bound
+            let len = MenuBarLogic.fillLength(dividerRight: right, regionLeft: bound,
+                                              slack: MenuBarLogic.fillSlack(attempt: attempt))
+            guard len > 30 else { setLength(item, Lengths.standard); return }   // no free room to push anything into
+            if abs(item.length - len) < 1, laid(target) != nil { return }    // already fitted
+            setLength(item, len)
+            if await laidOut(target) { fitAttempt[target] = attempt; return }
+            if Task.isCancelled { return }
+            // Dropped: the next pass widens the slack.
+        }
+        // Every fill was dropped: a visible band beats a lost divider. Re-measure on the
+        // next app switch or toggle rather than every tick.
+        setLength(item, Lengths.standard)
+        fitRight[target] = nil; fitAttempt[target] = nil
+        fitGiveUp.insert(target)
+    }
+
+    /// Refit on app switch (the menu width changed; `force`) and on a slow tick for what
+    /// no notification covers (an item appearing right of the divider, an app swapping
+    /// its menus). Never interrupts a fit in flight or retries a given-up divider.
+    private func verifyFit(force: Bool) {
+        guard !isPlacing, chevron != nil, let target = collapseTarget else { return }
+        if force { fitGiveUp.remove(target) } else if fitTask != nil || fitGiveUp.contains(target) { return }
+        refit()
+    }
+
+    private func observeActivation() {
+        guard MenuBarHost.isHosted, activationObserver == nil else { return }
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
+            // Accessory apps (Spotlight, menu-bar apps) leave the menus as they were.
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard app?.activationPolicy == .regular else { return }
+            MainActor.assumeIsolated { MenuBarManager.shared.verifyFit(force: true) }
+        }
+        fitTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+            MainActor.assumeIsolated { MenuBarManager.shared.verifyFit(force: false) }
+        }
+    }
 
     /// Chevron click handler. Plain click toggles the hidden section; ⌥-click toggles
     /// the always-hidden band (when enabled).
@@ -338,7 +491,10 @@ final class MenuBarManager: NSObject {
     func previewHealthy() -> Bool { MenuBarBridge.enumHealthy() }
 
     private func dividerFrameX(_ item: NSStatusItem?) -> CGFloat? {
-        guard let n = item?.button?.window?.frame.minX else { return nil }
+        guard let item, let n = item.button?.window?.frame.minX else { return nil }
+        if MenuBarHost.isHosted, item.length > 0 {   // filled: the boundary is where it sits at natural width
+            return naturalX[item === hiddenSeparator ? .hidden : .alwaysHidden] ?? n
+        }
         return n
     }
 
@@ -378,7 +534,7 @@ final class MenuBarManager: NSObject {
     func ensureAlwaysHiddenBand(_ needed: Bool) {
         guard menubarExtLive && MenuBarBridge.available, chevron != nil else { return }
         if needed, alwaysHiddenSeparator == nil {
-            let s = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator")
+            let s = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator", id: "alwaysHidden")
             ProsperStatusItems.register(s)
             alwaysHiddenSeparator = s
             applyDividerLengths()
@@ -434,8 +590,8 @@ final class MenuBarManager: NSObject {
     /// valid (on-screen) drop point to move an icon into/out of the always-hidden
     /// band. No rehide timer or monitors; the caller pairs this with `endPlacement()`.
     func beginPlacement() {
-        hiddenSeparator?.length = Lengths.standard
-        alwaysHiddenSeparator?.length = Lengths.standard
+        fitTask?.cancel()
+        for item in [hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) { setLength(item, Lengths.standard) }
     }
 
     /// Restore the steady hidden state (both separators expanded) after a placement.
@@ -467,6 +623,7 @@ final class MenuBarManager: NSObject {
 
     private var terminationObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
 
     /// Re-apply divider widths when the display layout changes (resolution change,
     /// display attach/detach, sleep/wake). `expandedLength` is display-relative, so
@@ -475,7 +632,10 @@ final class MenuBarManager: NSObject {
         guard screenObserver == nil else { return }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { MenuBarManager.shared.applyDividerLengths() }
+            MainActor.assumeIsolated {
+                MenuBarManager.shared.fitRight = [:]; MenuBarManager.shared.fitAttempt = [:]   // display geometry changed: re-measure
+                MenuBarManager.shared.applyDividerLengths()
+            }
         }
     }
 

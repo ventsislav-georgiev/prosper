@@ -46,7 +46,7 @@ enum MenuBarSpacing {
     /// out / relaunch apps themselves instead of silently doing nothing.
     static func owningApps() -> [NSRunningApplication] {
         let selfPID = getpid()
-        let skip: Set<String> = ["com.apple.controlcenter", "com.apple.Spotlight"]
+        let skip: Set<String> = ["com.apple.controlcenter", "com.apple.Spotlight", "com.apple.MenuBarAgent"]
         let pids = Set(MenuBarBridge.items(onDisplay: CGMainDisplayID()).map(\.pid))
         return pids.filter { $0 != 0 && $0 != selfPID }
             .compactMap { NSRunningApplication(processIdentifier: $0) }
@@ -60,7 +60,7 @@ enum MenuBarSpacing {
     /// so the user can quit it themselves. Control Center / Spotlight self-relaunch.
     static func relaunchOwners(_ apps: [NSRunningApplication],
                                onSkipped: @escaping ([String]) -> Void) {
-        let skipManaged: Set<String> = ["com.apple.controlcenter", "com.apple.Spotlight"]
+        let skipManaged: Set<String> = ["com.apple.controlcenter", "com.apple.Spotlight", "com.apple.MenuBarAgent"]
         var skipped: [String] = []
         let group = DispatchGroup()
 

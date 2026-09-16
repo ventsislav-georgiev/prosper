@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import CoreGraphics
 @preconcurrency import ScreenCaptureKit
@@ -29,6 +30,11 @@ enum MenuBarItemIndexer {
     static func hashes(for items: [MenuBarItem]) async -> [CGWindowID: UInt64] {
         guard !items.isEmpty, hasPermission() else { return [:] }
         guard #available(macOS 14.0, *) else { return [:] }
+        if MenuBarHost.isHosted {
+            return await hostedImages(for: items).compactMapValues {
+                grayscale9x8(from: $0).map(MenuBarPerceptualHash.dHash(gray9x8:))
+            }
+        }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true) else { return [:] }
 
@@ -54,6 +60,7 @@ enum MenuBarItemIndexer {
     static func images(for items: [MenuBarItem]) async -> [CGWindowID: CGImage] {
         guard !items.isEmpty, hasPermission() else { return [:] }
         guard #available(macOS 14.0, *) else { return [:] }
+        if MenuBarHost.isHosted { return await hostedImages(for: items) }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true) else { return [:] }
 
@@ -65,6 +72,39 @@ enum MenuBarItemIndexer {
             guard let win = windowByID[item.windowID],
                   let cg = await screenshot(of: win) else { continue }
             out[item.windowID] = cg
+        }
+        return out
+    }
+
+    /// Hosted bars (macOS 27+) have no per-item windows to capture: grab each display's
+    /// menu-bar strip once and crop every laid-out item's frame out of it. Overflowed
+    /// items (`isLaidOut == false`) have no pixels on screen and drop out.
+    @available(macOS 14.0, *)
+    private static func hostedImages(for items: [MenuBarItem]) async -> [CGWindowID: CGImage] {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true) else { return [:] }
+        var out: [CGWindowID: CGImage] = [:]
+        for display in content.displays {
+            let wanted = items.filter { $0.isLaidOut && $0.displayID == display.displayID }
+            guard let barBottom = wanted.map(\.frame.maxY).max() else { continue }
+            let scale = NSScreen.screens.first {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
+            }?.backingScaleFactor ?? 2
+            let strip = CGRect(x: 0, y: 0, width: display.frame.width, height: barBottom - display.frame.minY)
+            let cfg = SCStreamConfiguration()
+            cfg.sourceRect = strip
+            cfg.width = Int(strip.width * scale)
+            cfg.height = Int(strip.height * scale)
+            cfg.showsCursor = false
+            guard let img = try? await SCScreenshotManager.captureImage(
+                contentFilter: SCContentFilter(display: display, excludingWindows: []),
+                configuration: cfg) else { continue }
+            for item in wanted {
+                let r = CGRect(x: (item.frame.minX - display.frame.minX) * scale,
+                               y: (item.frame.minY - display.frame.minY) * scale,
+                               width: item.frame.width * scale, height: item.frame.height * scale)
+                if let c = img.cropping(to: r.integral) { out[item.windowID] = c }
+            }
         }
         return out
     }

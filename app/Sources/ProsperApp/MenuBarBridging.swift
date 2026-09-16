@@ -117,6 +117,9 @@ struct MenuBarItem: Equatable, Sendable {
     /// of Tahoe's "controlcenter / Item-0" masking — and preview from a direct button
     /// snapshot rather than Screen Recording.
     var isOwn: Bool = false
+    /// Hosted bars (macOS 27+): false while the host keeps this item in its overflow
+    /// group, so `frame` is the app's stale last-laid-out position, not a live one.
+    var isLaidOut: Bool = true
 }
 
 /// Reads the live menu bar via the private CGS list. Fail-open: any CGS error or
@@ -148,6 +151,7 @@ enum MenuBarBridge {
     /// keeps only items whose frame falls on the requested display.
     static func items(onDisplay display: CGDirectDisplayID) -> [MenuBarItem] {
         guard available else { return [] }
+        if MenuBarHost.isHosted { return MenuBarAX.items(onDisplay: display) }   // no per-item windows there
         let cid = CGSMainConnectionID()
 
         // 1. CGS menu-bar window-id list (all processes).
@@ -207,7 +211,7 @@ enum MenuBarBridge {
     /// is unusable on Tahoe (windowNumber moved into a separate +2³² namespace
     /// unrelated to CGWindowID). nil if no window matches within tolerance.
     static func windowID(forItemMinX x: CGFloat, tolerance: CGFloat = 2) -> CGWindowID? {
-        guard available else { return nil }
+        guard available, !MenuBarHost.isHosted else { return nil }
         let cid = CGSMainConnectionID()
         var ids = [UInt32](repeating: 0, count: 256)
         var n: Int32 = 0
@@ -238,7 +242,7 @@ enum MenuBarBridge {
     /// HOT PATH: this is the ONLY thing the steady-state live loop should call per
     /// tick. Keep it free of `CGWindowListCopyWindowInfo` and heap-heavy work.
     static func menuBarWindowOrder(onDisplay display: CGDirectDisplayID) -> [CGWindowID] {
-        guard available else { return [] }
+        guard available, !MenuBarHost.isHosted else { return [] }
         let cid = CGSMainConnectionID()
         var ids = [UInt32](repeating: 0, count: 256)
         var n: Int32 = 0
@@ -267,6 +271,7 @@ enum MenuBarBridge {
     /// the preview depends on this — hide/show + spacing are unaffected.
     static func enumHealthy() -> Bool {
         guard available else { return false }
+        if MenuBarHost.isHosted { return MenuBarAX.trusted }   // the preview reads the bar via Accessibility there
         guard !dividerWindowIDs.isEmpty else { return true }   // nothing to probe against yet
         let cid = CGSMainConnectionID()
         var ids = [UInt32](repeating: 0, count: 256)
@@ -293,7 +298,7 @@ enum MenuBarBridge {
     /// Live screen frame for one window id (the ordering engine reads this between
     /// moves to confirm an item actually shifted). nil on any CGS error.
     static func frame(for windowID: CGWindowID) -> CGRect? {
-        guard available else { return nil }
+        guard available, !MenuBarHost.isHosted else { return nil }
         var rect = CGRect.zero
         guard CGSGetScreenRectForWindow(CGSMainConnectionID(), UInt32(windowID), &rect) == .success,
               rect.width > 0, rect.height > 0 else { return nil }
