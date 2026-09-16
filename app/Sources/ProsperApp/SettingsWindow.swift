@@ -503,6 +503,16 @@ final class SettingsModel: ObservableObject {
                 if self.appShortcuts != stored { self.appShortcuts = stored }
             }
         }
+        // Same story for a quicklink/quickdir/snippet bound via the runner's own
+        // ⌘⇧K (RunnerPanel.presentAssignShortcut) while this window is open.
+        NotificationCenter.default.addObserver(
+            forName: .extensionShortcutsChangedExternally, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let stored = ShortcutStore.extensionShortcuts()
+                if self.extensionShortcuts != stored { self.extensionShortcuts = stored }
+            }
+        }
     }
 
     private func persistCustomShortcuts() {
@@ -510,25 +520,18 @@ final class SettingsModel: ObservableObject {
         onShortcutsChanged?()
     }
 
-    /// Adds a new custom shortcut bound to the first built-in target, with no
-    /// combo yet (the user records one via the recorder row).
-    func addCustomShortcut() {
-        let target = ActivationTarget.builtins.first!
-        let empty = KeyCombo(keyCode: 0, carbonModifiers: 0, display: "Unset")
-        customShortcuts.append(CustomShortcut(combo: empty, prefix: target.prefix, label: target.label))
+    /// Adds a custom shortcut for a target. Defaults to the first built-in with no
+    /// combo yet; the catalog passes both, since there the row (and therefore the
+    /// target) already exists and the recorder is what creates the record.
+    func addCustomShortcut(target: ActivationTarget = ActivationTarget.builtins[0],
+                           combo: KeyCombo = unsetKeyCombo) {
+        customShortcuts.append(CustomShortcut(combo: combo, prefix: target.prefix, label: target.label))
         persistCustomShortcuts()
     }
 
     func updateCustomShortcutCombo(id: UUID, combo: KeyCombo) {
         guard let i = customShortcuts.firstIndex(where: { $0.id == id }) else { return }
         customShortcuts[i].combo = combo
-        persistCustomShortcuts()
-    }
-
-    func updateCustomShortcutTarget(id: UUID, target: ActivationTarget) {
-        guard let i = customShortcuts.firstIndex(where: { $0.id == id }) else { return }
-        customShortcuts[i].prefix = target.prefix
-        customShortcuts[i].label = target.label
         persistCustomShortcuts()
     }
 
@@ -544,10 +547,11 @@ final class SettingsModel: ObservableObject {
         onShortcutsChanged?()  // → AppDelegate.registerHotKeys()
     }
 
-    /// Adds an empty app-shortcut row: no app and no combo yet, so it registers
-    /// nothing until the user picks both.
-    func addAppShortcut() {
-        appShortcuts.append(AppShortcut(target: "", combo: unsetKeyCombo, name: ""))
+    /// Adds an app-shortcut row. With no arguments it is empty — no app and no
+    /// combo — so it registers nothing until the user picks both; the catalog's
+    /// footer picker passes the app it just chose.
+    func addAppShortcut(target: String = "", name: String = "") {
+        appShortcuts.append(AppShortcut(target: target, combo: unsetKeyCombo, name: name))
         persistAppShortcuts()
     }
 
@@ -576,19 +580,13 @@ final class SettingsModel: ObservableObject {
         onShortcutsChanged?()  // → AppDelegate.registerHotKeys()
     }
 
-    /// Adds an empty extension-shortcut row: no action and no combo yet, so it
-    /// registers nothing until the user picks both.
-    func addExtensionShortcut() {
+    /// Adds an extension-shortcut record. With no arguments it is empty — no action
+    /// and no combo — so it registers nothing; the catalog passes the action it is
+    /// binding, because there the action already has a row and only the combo is new.
+    func addExtensionShortcut(commandID: String = "", item: String = "",
+                              label: String = "", combo: KeyCombo = unsetKeyCombo) {
         extensionShortcuts.append(
-            ExtensionShortcut(commandID: "", combo: unsetKeyCombo, label: ""))
-        persistExtensionShortcuts()
-    }
-
-    func updateExtensionShortcutAction(id: UUID, action: BindableExtensionAction) {
-        guard let i = extensionShortcuts.firstIndex(where: { $0.id == id }) else { return }
-        extensionShortcuts[i].commandID = action.commandID
-        extensionShortcuts[i].item = action.item
-        extensionShortcuts[i].label = action.label
+            ExtensionShortcut(commandID: commandID, item: item, combo: combo, label: label))
         persistExtensionShortcuts()
     }
 
@@ -924,6 +922,11 @@ final class SettingsHooks {
     /// Opens the Settings window. Lets surfaces outside AppDelegate (the runner's
     /// Actions menu / `:settings`) reach it without exposing the window itself.
     var onOpenSettings: (() -> Void)?
+    /// Opens the command runner pre-seeded with a prefill string (same resolution
+    /// `AppDelegate.openRunner(prefill:)` gives a Command Shortcut). Lets a bound
+    /// quickdir shortcut fired from `ExtensionShortcuts.fire` reach the runner
+    /// without exposing AppDelegate's panel to that layer.
+    var onOpenRunner: ((String) -> Void)?
     var onMenuBarIconChanged: ((Bool) -> Void)?
     var onDockIconChanged: ((Bool) -> Void)?
     var onDragSnapChanged: ((Bool) -> Void)?
@@ -1822,425 +1825,354 @@ private struct PersonalizationPane: View {
 
 // MARK: - Shortcuts
 
+/// Settings › Shortcuts: ONE searchable table of actions.
+///
+/// Every bindable thing is a row — fixed Prosper actions (window snapping
+/// included, which used to be reachable only from the Window extension pane),
+/// extension-declared keybindings, every extension command and listed item, every
+/// runner activation prefix, every app shortcut. You find an action by typing its
+/// name and press keys on it; there is no "Add" button and no target dropdown,
+/// because a row that already exists needs no picker.
+///
+/// The four tap-level features (Hyper Key, Quit Guard, Finder keys, Key Remapping)
+/// are NOT action bindings — they ride the shared CGEvent tap, with per-app scope
+/// and swallow semantics a Carbon hotkey cannot express — so they keep their own
+/// sections under a collapsed "Advanced" disclosure rather than pretending to be
+/// rows in this table.
 private struct ShortcutsPane: View {
     @ObservedObject var model: SettingsModel
+    @ObservedObject private var focus = SettingsFocusRouter.shared
+    /// Filled in `.task`. Expanding an extension's bindable items means ASKING each
+    /// listing command for its rows, which spins up a Lua VM — that must not be on
+    /// the pane-switch render path, so first paint shows the cheap sources and these
+    /// merge in when they land.
+    @State private var extensionActions: [BindableExtensionAction] = []
+    @AppStorage("settings.shortcuts.advancedCollapsed") private var advancedCollapsed = true
+
+    /// Section titles that live inside the Advanced disclosure, so a settings-search
+    /// deep link into one of them can open it.
+    private static let advancedSections: Set<String> =
+        ["Hyper Key", "Quit Guard", "Finder", "Key Remapping"]
+
+    private var catalog: [BindableAction] {
+        let registry = SettingsHooks.shared.extensionRegistry
+        return ShortcutCatalog.build(
+            prosperActions: ShortcutAction.allCases.filter { $0.isAvailable(registry: registry) },
+            combos: model.shortcutCombos,
+            manifestKeybindings: registry.map {
+                ExtensionShortcuts.manifestKeybindings(registry: $0)
+            } ?? [],
+            keybindingOverrides: model.extensionKeybindings,
+            extensionActions: extensionActions,
+            extensionShortcuts: model.extensionShortcuts,
+            activationTargets: ActivationTarget.allTargets(registry: registry),
+            customShortcuts: model.customShortcuts,
+            appShortcuts: model.appShortcuts,
+            // #111's own check only ever vouches for ⌘Space — it reads the "Show
+            // Spotlight search" symbolic hotkey and nothing about ⌥Space — so that's
+            // the only chord this can respond with. Read once per catalog build,
+            // not per row, and empty (no hint anywhere) whenever Spotlight has been
+            // moved off ⌘Space.
+            spotlightChords: SpotlightShortcutConflict.spotlightUsesCommandSpace()
+                ? [ShortcutAction.runner.defaultCombo.chord] : [])
+    }
 
     var body: some View {
         NeonScroll {
-            PaneTitle(title: "Shortcuts", subtitle: "Trigger Prosper features, jump to commands, and remap keys")
+            PaneTitle(title: "Shortcuts",
+                      subtitle: "Trigger Prosper features, jump to commands, and remap keys")
 
-            NeonSection("Prosper Shortcuts (click to rebind)",
-                        footer: "Global hotkeys for Prosper's own features. Click to rebind, ↩ to reset to default, ✕ to disable.") {
-                let actions = ShortcutAction.allCases.filter {
-                    !$0.isWindowManagement && $0.isAvailable(registry: SettingsHooks.shared.extensionRegistry)
-                }
-                ForEach(Array(actions.enumerated()), id: \.element) { idx, action in
-                    if idx > 0 { NeonDivider() }
-                    GlobalShortcutRow(model: model, action: action)
-                }
-            }
+            // The search field and the filtered table own their own state INSIDE
+            // `ShortcutTable`, so a keystroke re-runs only that subtree — this
+            // pane's body (and with it the registry walks behind `catalog`) does
+            // not run again until the stores actually change.
+            ShortcutTable(rows: catalog, model: model)
 
-            NeonSection("Command Shortcuts",
-                        footer: "Each shortcut opens the command runner already scoped to the chosen command \u{2014} including any quickdir, so you can jump straight to its directory listing without typing a prefix.") {
-                ForEach(Array(model.customShortcuts.enumerated()), id: \.element.id) { idx, cs in
-                    if idx > 0 { NeonDivider() }
-                    CustomShortcutRow(model: model, shortcut: cs)
-                }
-                if !model.customShortcuts.isEmpty { NeonDivider() }
-                HStack {
-                    Button {
-                        model.addCustomShortcut()
-                    } label: { Label("Add Shortcut", systemImage: "plus") }
-                        .buttonStyle(.neon)
-                    Spacer()
-                }
-            }
-
-            ExtensionShortcutsSection(model: model)
-
-            NeonSection("App Shortcuts",
-                        footer: "Bind a hotkey that launches an app \u{2014} or brings it to the front when it's already running (\u{2318}\u{21E7}D \u{2192} DBeaver). Works without Accessibility permission. You can also bind one straight from the launcher with \u{2318}\u{21E7}K on an app result.") {
-                let duplicates = AppShortcut.duplicateComboIDs(model.appShortcuts)
-                ForEach(Array(model.appShortcuts.enumerated()), id: \.element.id) { idx, sc in
-                    if idx > 0 { NeonDivider() }
-                    AppShortcutRow(model: model, shortcut: sc,
-                                   isDuplicate: duplicates.contains(sc.id))
-                }
-                if !model.appShortcuts.isEmpty { NeonDivider() }
-                HStack {
-                    Button {
-                        model.addAppShortcut()
-                    } label: { Label("Add App Shortcut", systemImage: "plus") }
-                        .buttonStyle(.neon)
-                        // Past the cap `AppShortcut.registrations` stops handing out
-                        // hotkey ids, so a further row would look bound and never
-                        // fire. Refuse to add it rather than explain that later.
-                        .disabled(model.appShortcuts.count >= AppShortcut.maxRegistered)
-                        .help(model.appShortcuts.count >= AppShortcut.maxRegistered
-                              ? "Limit of \(AppShortcut.maxRegistered) app shortcuts reached."
-                              : "")
-                    Spacer()
-                }
-            }
-
-            NeonSection("Hyper Key",
-                        footer: "Remaps Caps Lock (via \u{201C}hidutil\u{201D}) so holding it presses the modifiers below \u{2014} \(HyperMods.glyphs(model.hyperKeyModifiers))H reaches the frontmost app as an ordinary \(HyperMods.glyphs(model.hyperKeyModifiers))H chord you can bind anywhere. Nothing locks: Caps Lock stops toggling capitals, so the tap action is how you get it back. The remap is removed when you turn this off or quit Prosper. Requires Accessibility permission.") {
-                Toggle("Hold Caps Lock as a hyper key", isOn: $model.hyperKeyEnabled)
-                if let conflict = model.hyperKeyConflict {
-                    Text("Caps Lock is already remapped to \(conflict) by another tool \u{2014} Prosper will not overwrite it. Remove that mapping first.")
-                        .font(Neon.font(.caption))
-                        .foregroundStyle(Neon.textSecondary)
-                }
-                NeonDivider()
-                HStack(spacing: sz(10)) {
-                    Text("Modifiers").foregroundStyle(Neon.textPrimary)
-                    Spacer()
-                    ForEach(SettingsModel.hyperModifierChoices, id: \.1) { label, bit in
-                        Toggle(label, isOn: Binding(
-                            get: { model.hyperKeyModifiers & bit != 0 },
-                            set: { _ in model.hyperKeyModifiers = HyperMods.toggled(model.hyperKeyModifiers, bit: bit) }
-                        ))
-                        .toggleStyle(.button)
-                    }
-                }
-                NeonDivider()
-                VStack(alignment: .leading, spacing: sz(8)) {
-                    Text("Tapping Caps Lock alone").foregroundStyle(Neon.textPrimary)
-                    Picker("", selection: $model.hyperKeySoloAction) {
-                        ForEach(HyperSoloAction.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-            }
-
-            NeonSection("Quit Guard",
-                        footer: "The first \u{2318}Q is swallowed; press it again within half a second to really quit. Prevents losing a window to a stray \u{2318}Q. Requires Accessibility permission.") {
-                Toggle("Require a double-tap of \u{2318}Q to quit", isOn: $model.doubleTapQuitEnabled)
-            }
-
-            NeonSection("Finder",
-                        footer: "The Windows habits, without leaving the home row. F2 sends Return to Finder, which is what Finder already uses to rename. \u{2318}X marks the selection and \u{2318}V moves it into the front window \u{2014} Finder itself keeps the progress window and the \u{2318}Z undo. A copied image pasted with \u{2318}V lands as Pasted_Image_<date>.png in the front window; copied FILES always paste as Finder would. All three only fire with Finder frontmost and no filename being edited. Needs Accessibility permission; the move also needs Automation permission for Finder, which macOS asks for the first time you use it.") {
-                Toggle("Press F2 to rename the selected file", isOn: $model.finderF2RenameEnabled)
-                NeonDivider()
-                Toggle("Press \u{2318}X then \u{2318}V to move files", isOn: $model.finderCutPasteEnabled)
-                NeonDivider()
-                Toggle("Press \u{2318}V to save a copied image as a PNG file", isOn: $model.finderPasteImageEnabled)
-            }
-
-            NeonSection("Key Remapping",
-                        footer: "Bind any key or media key to launch an app, remap to another key, send a media key, or disable it \u{2014} for every app or just one. No defaults; add what you want.") {
-                ForEach(Array(model.keyMappings.enumerated()), id: \.element.id) { idx, rule in
-                    if idx > 0 { NeonDivider() }
-                    KeyMappingRow(model: model, rule: rule)
-                }
-                if !model.keyMappings.isEmpty { NeonDivider() }
-                HStack {
-                    Button {
-                        model.addKeyMapping()
-                    } label: { Label("Add Mapping", systemImage: "plus") }
-                        .buttonStyle(.neon)
-                    Spacer()
-                }
-            }
-
-            // Read-only guide: launcher prefixes contributed by enabled extensions,
-            // GROUPED per extension. Sourced live from modeTriggers() (already
-            // filtered to enabled+trusted). arg == nil drops dynamic per-item
-            // triggers (e.g. each quickdir dir), keeping just the manifest
-            // activators like "sn ", "bm ", "ql ". Beyond these prefixes, every
-            // command is also reachable by typing its extension's name or any of
-            // its keywords (see UnifiedSearch command discovery) — the footer says so.
-            let activatorGroups = Self.activatorGroups(
-                SettingsHooks.shared.extensionRegistry?.modeTriggers() ?? [])
-            if !activatorGroups.isEmpty {
-                NeonSection("Extension Activators",
-                            footer: "Type a prefix to jump straight to a command \u{2014} or just type the extension's name or a keyword to see its commands in the launcher. Read-only; updates as you enable or disable extensions.") {
-                    ForEach(Array(activatorGroups.enumerated()), id: \.element.title) { gi, group in
-                        if gi > 0 { NeonDivider() }
-                        Text(group.title)
-                            .font(Neon.font(.callout, weight: .semibold))
-                            .foregroundStyle(Neon.textSecondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        ForEach(Array(group.triggers.enumerated()), id: \.offset) { _, t in
-                            ExtensionActivatorRow(trigger: t)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Groups manifest activators per contributing extension for the read-only
-    /// guide: drops dynamic per-item triggers (arg != nil), buckets by extension
-    /// title, sorts groups alphabetically and triggers within each by prefix.
-    static func activatorGroups(_ specs: [ExtensionRegistry.ModeTriggerSpec])
-        -> [(title: String, triggers: [ExtensionRegistry.ModeTriggerSpec])] {
-        var buckets: [String: [ExtensionRegistry.ModeTriggerSpec]] = [:]
-        for s in specs where s.arg == nil {
-            let key = s.extensionTitle.isEmpty ? "Other" : s.extensionTitle
-            buckets[key, default: []].append(s)
-        }
-        return buckets
-            .map { (title: $0.key,
-                    triggers: $0.value.sorted {
-                        $0.prefix.localizedCaseInsensitiveCompare($1.prefix) == .orderedAscending
-                    }) }
-            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-    }
-}
-
-/// One read-only row: launcher prefix badge + command title + contributing
-/// extension. Pure guide; no interaction.
-private struct ExtensionActivatorRow: View {
-    let trigger: ExtensionRegistry.ModeTriggerSpec
-
-    var body: some View {
-        HStack(spacing: sz(10)) {
-            Image(systemName: trigger.icon)
-                .foregroundStyle(Neon.textSecondary)
-                .frame(width: sz(18))
-            Text(trigger.prefix)
-                .font(Neon.font(.body, design: .monospaced))
-                .foregroundStyle(Neon.textPrimary)
-                .padding(.horizontal, sz(8)).padding(.vertical, sz(2))
-                .neonCard()
-            Text(trigger.title).foregroundStyle(Neon.textPrimary)
-            Spacer()
-            if !trigger.extensionTitle.isEmpty {
-                Text(trigger.extensionTitle).foregroundStyle(Neon.textSecondary)
-            }
-        }
-    }
-}
-
-/// Settings › Shortcuts › Extension Commands: bind a global hotkey that RUNS an
-/// extension command outright, with no launcher and nothing to type.
-///
-/// Two kinds of row share the section. First the default shortcuts extensions
-/// declare in their manifests (`[[contributes.keybindings]]`) — until now those
-/// registered invisibly and could not be seen, rebound, or turned off. Then the
-/// bindings the user makes themselves, over every action the live extensions
-/// offer: a parameterless command, one specific System Settings pane, one Quick
-/// Toggle, one saved script.
-///
-/// The action list is built in `.task` because half of it comes from ASKING each
-/// listing extension for its rows, which spins up a Lua VM — that belongs off the
-/// pane-switch render path.
-private struct ExtensionShortcutsSection: View {
-    @ObservedObject var model: SettingsModel
-    @State private var actions: [BindableExtensionAction] = []
-
-    var body: some View {
-        let registry = SettingsHooks.shared.extensionRegistry
-        let declared = registry.map { ExtensionShortcuts.manifestKeybindings(registry: $0) } ?? []
-        NeonSection("Extension Commands",
-                    footer: "Run an extension command straight from a hotkey \u{2014} no launcher, nothing to type. Extensions that list a fixed set of targets are expanded here, so you can bind one specific System Settings pane, one Quick Toggle, or one saved script. Shortcuts an extension ships with are listed first: click to rebind, \u{21A9} to restore the extension's default, \u{2715} to turn it off. Menu commands are the exception \u{2014} they belong to whichever app is frontmost, so there is no fixed list to choose from; bind a Command Shortcut to Menu Commands instead and search them in the launcher.") {
-            ForEach(Array(declared.enumerated()), id: \.element.id) { idx, kb in
-                if idx > 0 { NeonDivider() }
-                ManifestKeybindingRow(model: model, keybinding: kb)
-            }
-            if !declared.isEmpty { NeonDivider() }
-            ForEach(Array(model.extensionShortcuts.enumerated()), id: \.element.id) { idx, sc in
-                if idx > 0 { NeonDivider() }
-                ExtensionShortcutRow(model: model, shortcut: sc, actions: actions)
-            }
-            if !model.extensionShortcuts.isEmpty { NeonDivider() }
             HStack {
-                Button {
-                    model.addExtensionShortcut()
-                } label: { Label("Add Extension Shortcut", systemImage: "plus") }
-                    .buttonStyle(.neon)
-                    // Nothing to pick means every extension is off (or still
-                    // loading); an empty row would be a dead end.
-                    .disabled(actions.isEmpty)
+                // Apps are the one source with no enumerable row list (hundreds
+                // installed), so this picker is how an app shortcut first appears.
+                AppPickerMenu(label: "\u{FF0B} Launch an app\u{2026}",
+                              help: "Bind a hotkey that launches or focuses an app.") { target, name in
+                    model.addAppShortcut(target: target, name: name)
+                }
                 Spacer()
+            }
+
+            NeonSection("Advanced",
+                        footer: "Tap-level features, not action bindings: these ride the shared event tap (per-app scope, swallowed keys, double-taps) rather than a global hotkey, so they keep their own controls.",
+                        collapsed: $advancedCollapsed) {
+                Text("Hyper Key, Quit Guard, Finder keys and Key Remapping.")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            }
+            if !advancedCollapsed {
+                HyperKeySection(model: model)
+                QuitGuardSection(model: model)
+                FinderSection(model: model)
+                KeyRemappingSection(model: model)
             }
         }
         .task {
-            guard let registry else { return }
-            actions = await ExtensionShortcuts.bindableActions(registry: registry)
+            guard let registry = SettingsHooks.shared.extensionRegistry else { return }
+            extensionActions = await ExtensionShortcuts.bindableActions(registry: registry)
         }
+        // A settings-search result pointing at an Advanced section has to open it
+        // first, or the click lands on a pane with nothing visible. Both hooks are
+        // needed for the same reason `NeonScroll` needs both: the request can arrive
+        // before this pane mounts.
+        .onAppear { expandIfAdvancedTargeted() }
+        .onChange(of: focus.pending) { _, _ in expandIfAdvancedTargeted() }
     }
+
+    private func expandIfAdvancedTargeted() {
+        guard let pending = focus.pending, pending.pane == "shortcuts",
+              Self.advancedSections.contains(pending.section) else { return }
+        advancedCollapsed = false
+    }
+
 }
 
-/// One extension-declared default shortcut: name + recorder + restore/disable.
-/// The recorder shows the user's override when there is one, the manifest key
-/// otherwise, so what the row displays is always what actually registers.
-private struct ManifestKeybindingRow: View {
+/// The searchable half of the pane: a filter field, a "Bound only" switch, and the
+/// two lists. It owns `query`/`boundOnly` so typing re-renders THIS view only —
+/// building the catalog walks the extension registry, and doing that per keystroke
+/// is exactly the stall this pane must not have.
+private struct ShortcutTable: View {
+    let rows: [BindableAction]
     @ObservedObject var model: SettingsModel
-    let keybinding: ExtensionShortcuts.ManifestKeybinding
+    @State private var query = ""
+    @State private var boundOnly = false
 
     var body: some View {
-        HStack {
-            Text(keybinding.label).foregroundStyle(Neon.textPrimary)
-            Spacer()
-            ShortcutRecorder(
-                combo: model.extensionKeybindings[keybinding.commandID] ?? keybinding.defaultCombo
-            ) { combo in
-                model.setExtensionKeybinding(combo, for: keybinding.commandID)
+        let shown = ShortcutCatalog.filter(rows, query: query, boundOnly: boundOnly)
+        let bound = shown.filter(\.isBound)
+        let rest = shown.filter { !$0.isBound }
+
+        searchBar
+
+        NeonSection("Bound",
+                    footer: "Click a key field to rebind, \u{21A9} to reset to the default, \u{2715} to turn it off or remove it.") {
+            if bound.isEmpty {
+                Text(query.isEmpty ? "Nothing is bound yet." : "No bound action matches.")
+                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            } else {
+                list(bound)
             }
-            .frame(width: sz(110), height: sz(24))
-            .fixedSize()
-            Button {
-                model.setExtensionKeybinding(nil, for: keybinding.commandID)
-            } label: { Image(systemName: "arrow.uturn.backward") }
-                .buttonStyle(.borderless)
-                .help("Restore the extension's default")
-            Button {
-                // Stored as an explicit unset rather than removed: removing the
-                // override is what RESTORES the manifest default, so "off" has to
-                // be a value of its own to survive a relaunch.
-                model.setExtensionKeybinding(unsetKeyCombo, for: keybinding.commandID)
-            } label: { Image(systemName: "xmark.circle") }
-                .buttonStyle(.borderless)
-                .help("Disable this shortcut")
         }
-    }
-}
 
-/// One user-bound extension shortcut: action picker + recorder + delete.
-private struct ExtensionShortcutRow: View {
-    @ObservedObject var model: SettingsModel
-    let shortcut: ExtensionShortcut
-    let actions: [BindableExtensionAction]
-
-    private static let unpicked = BindableExtensionAction(
-        saved: ExtensionShortcut(commandID: "", combo: unsetKeyCombo,
-                                 label: "Choose an action\u{2026}"))
-
-    /// The live actions, plus whatever this row is already bound to. A saved
-    /// binding whose extension is now disabled has to stay in the list — dropping
-    /// it would leave the picker showing a neighbour's action and overwrite the
-    /// binding on the next edit.
-    private var choices: [BindableExtensionAction] {
-        if shortcut.commandID.isEmpty { return [Self.unpicked] + actions }
-        let saved = BindableExtensionAction(saved: shortcut)
-        return actions.contains { $0.id == saved.id } ? actions : actions + [saved]
-    }
-
-    private var selection: Binding<BindableExtensionAction> {
-        Binding(
-            get: {
-                let list = choices
-                return list.first { $0.commandID == shortcut.commandID && $0.item == shortcut.item }
-                    ?? list[0]
-            },
-            set: { action in
-                guard !action.commandID.isEmpty else { return }
-                model.updateExtensionShortcutAction(id: shortcut.id, action: action)
-            }
-        )
-    }
-
-    var body: some View {
-        HStack {
-            Picker("", selection: selection) {
-                ForEach(choices) { action in
-                    Text(action.label).tag(action)
+        if !boundOnly {
+            NeonSection("All Actions",
+                        footer: "Everything that can take a hotkey \u{2014} Prosper's own actions, every extension command and listed item, and every launcher prefix. Press keys on a row to bind it.") {
+                if rest.isEmpty {
+                    Text("No matches.")
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                } else {
+                    list(rest)
                 }
             }
-            .labelsHidden()
-            .fixedSize()
-
-            Spacer()
-
-            ShortcutRecorder(combo: shortcut.combo) { combo in
-                model.updateExtensionShortcutCombo(id: shortcut.id, combo: combo)
-            }
-            .frame(width: sz(110), height: sz(24))
-            .fixedSize()
-
-            Button {
-                model.removeExtensionShortcut(id: shortcut.id)
-            } label: { Image(systemName: "trash") }
-                .buttonStyle(.borderless)
-                .help("Remove this shortcut")
         }
     }
-}
 
-/// One rebindable global-shortcut row: title + recorder + reset/clear. Shared by
-/// the Shortcuts pane and the Window Management pane.
-private struct GlobalShortcutRow: View {
-    @ObservedObject var model: SettingsModel
-    let action: ShortcutAction
-
-    var body: some View {
-        HStack {
-            Text(action.title).foregroundStyle(Neon.textPrimary)
-            Spacer()
-            ShortcutRecorder(combo: model.shortcutCombos[action] ?? action.defaultCombo) { combo in
-                model.setShortcut(combo, for: action)
-            }
-            .frame(width: sz(110), height: sz(24))
-            .fixedSize()
-            Button {
-                model.resetShortcut(action)
-            } label: { Image(systemName: "arrow.uturn.backward") }
-                .buttonStyle(.borderless)
-                .help("Reset to default")
-            Button {
-                model.clearShortcut(action)
-            } label: { Image(systemName: "xmark.circle") }
-                .buttonStyle(.borderless)
-                .help("Disable this shortcut")
-        }
-    }
-}
-
-/// One editable custom-shortcut row: command picker + recorder + delete.
-/// Factored out of `ShortcutsPane` to keep the SwiftUI type-checker fast.
-private struct CustomShortcutRow: View {
-    @ObservedObject var model: SettingsModel
-    let shortcut: CustomShortcut
-
-    /// Built-in targets plus the live quickdir targets. If the saved prefix no
-    /// longer matches any target (e.g. a quickdir was renamed/removed), keep its
-    /// stored label/prefix in the list so the picker still shows the selection.
-    private var targets: [ActivationTarget] {
-        let base = ActivationTarget.allTargets(registry: SettingsHooks.shared.extensionRegistry)
-        if base.contains(where: { $0.prefix == shortcut.prefix }) { return base }
-        return base + [ActivationTarget(label: shortcut.label, prefix: shortcut.prefix)]
-    }
-
-    private var selectedTarget: Binding<ActivationTarget> {
-        Binding(
-            get: {
-                targets.first { $0.prefix == shortcut.prefix } ?? targets[0]
-            },
-            set: { model.updateCustomShortcutTarget(id: shortcut.id, target: $0) }
-        )
-    }
-
-    var body: some View {
-        HStack {
-            Picker("", selection: selectedTarget) {
-                ForEach(targets) { t in
-                    Text(t.label).tag(t)
+    private var searchBar: some View {
+        HStack(spacing: sz(10)) {
+            HStack(spacing: sz(7)) {
+                Image(systemName: "magnifyingglass")
+                    .font(Neon.font(11)).foregroundStyle(Neon.blue)
+                TextField("Search actions\u{2026}", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(Neon.font(13))
+                    .foregroundStyle(Neon.textPrimary)
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .labelsHidden()
-            // Hug the menu button to its label so it sits flush-left in the row
-            // (text left-aligned). A fixed width centered the label in the spare
-            // space, leaving the dropdowns looking indented + mis-aligned.
-            .fixedSize()
+            .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
+            .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Neon.card)
+                .overlay(RoundedRectangle(cornerRadius: sz(9), style: .continuous)
+                    .strokeBorder(Neon.blue.opacity(0.2), lineWidth: 1)))
 
-            Spacer()
+            Toggle("Bound only", isOn: $boundOnly).toggleStyle(.button)
+        }
+    }
 
-            ShortcutRecorder(combo: shortcut.combo) { combo in
-                model.updateCustomShortcutCombo(id: shortcut.id, combo: combo)
+    /// LAZY: "All Actions" is every command of every live extension expanded to its
+    /// items — hundreds of rows. A plain VStack would build and lay out all of them
+    /// on every keystroke.
+    @ViewBuilder
+    private func list(_ rows: [BindableAction]) -> some View {
+        LazyVStack(alignment: .leading, spacing: sz(14)) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
+                if idx > 0 { NeonDivider() }
+                ShortcutCatalogRow(
+                    action: row,
+                    onRecord: { model.bind($0, to: row) },
+                    onReset: { model.resetBinding(row) },
+                    onClear: { model.clearBinding(row) },
+                    onRetarget: row.kind == .app ? { target, name in
+                        guard let id = row.recordID else { return }
+                        model.updateAppShortcutTarget(id: id, target: target, name: name)
+                    } : nil)
             }
-            .frame(width: sz(110), height: sz(24))
-            .fixedSize()
+        }
+    }
+}
 
-            Button {
-                model.removeCustomShortcut(id: shortcut.id)
-            } label: {
-                Image(systemName: "trash")
+/// The one row the whole table is made of, replacing `GlobalShortcutRow`,
+/// `CustomShortcutRow`, `ManifestKeybindingRow`, `ExtensionShortcutRow` and
+/// `AppShortcutRow`: `icon · title · kind · recorder · reset · clear`, plus a
+/// conflict sub-line when something else already claims the chord.
+///
+/// Deliberately dumb — a value and four closures, no `@ObservedObject` — so one
+/// keystroke in the search field cannot fan a store change out into a repaint of
+/// every row in the table.
+private struct ShortcutCatalogRow: View {
+    let action: BindableAction
+    let onRecord: (KeyCombo) -> Void
+    let onReset: () -> Void
+    let onClear: () -> Void
+    /// App rows only: re-pick which app the hotkey launches.
+    var onRetarget: ((_ target: String, _ name: String) -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(4)) {
+            HStack(spacing: sz(10)) {
+                Image(systemName: action.icon)
+                    .foregroundStyle(Neon.textSecondary)
+                    .frame(width: sz(18))
+
+                if let onRetarget {
+                    // The title is the name captured at bind time, so an app that
+                    // isn't installed on this machine (synced shortcut, external
+                    // drive unmounted) still renders with a readable label.
+                    AppPickerMenu(selected: action.target.isEmpty ? [] : [action.target],
+                                  label: action.title, onPick: onRetarget)
+                } else {
+                    Text(action.title)
+                        .foregroundStyle(Neon.textPrimary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+
+                Spacer(minLength: sz(8))
+
+                Text(action.category)
+                    .font(Neon.font(.caption))
+                    .foregroundStyle(Neon.textSecondary)
+                    .lineLimit(1)
+
+                ShortcutRecorder(combo: action.combo, onChange: onRecord)
+                    .frame(width: sz(110), height: sz(24))
+                    .fixedSize()
+
+                if action.defaultCombo != nil {
+                    Button(action: onReset) { Image(systemName: "arrow.uturn.backward") }
+                        .buttonStyle(.borderless)
+                        .help("Reset to default")
+                }
+
+                Button(action: onClear) {
+                    Image(systemName: action.isUserCreated ? "trash" : "xmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .help(action.isUserCreated ? "Remove this shortcut" : "Disable this shortcut")
+                // An offered-but-unbound row has no record to remove yet.
+                .disabled(action.isUserCreated && action.recordID == nil)
             }
-            .buttonStyle(.borderless)
-            .help("Remove this shortcut")
+
+            if let note = action.conflictNote {
+                Text("\u{26A0}\u{FE0F} \(note)")
+                    .font(Neon.font(.caption))
+                    .foregroundStyle(.orange)
+                    .padding(.leading, sz(28))
+            }
+        }
+    }
+}
+
+/// Hold Caps Lock as a hyper key. Moved verbatim under the Advanced disclosure —
+/// the hidutil remap and the solo-tap action are unchanged.
+private struct HyperKeySection: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        NeonSection("Hyper Key",
+                    footer: "Remaps Caps Lock (via \u{201C}hidutil\u{201D}) so holding it presses the modifiers below \u{2014} \(HyperMods.glyphs(model.hyperKeyModifiers))H reaches the frontmost app as an ordinary \(HyperMods.glyphs(model.hyperKeyModifiers))H chord you can bind anywhere. Nothing locks: Caps Lock stops toggling capitals, so the tap action is how you get it back. The remap is removed when you turn this off or quit Prosper. Requires Accessibility permission.") {
+            Toggle("Hold Caps Lock as a hyper key", isOn: $model.hyperKeyEnabled)
+            if let conflict = model.hyperKeyConflict {
+                Text("Caps Lock is already remapped to \(conflict) by another tool \u{2014} Prosper will not overwrite it. Remove that mapping first.")
+                    .font(Neon.font(.caption))
+                    .foregroundStyle(Neon.textSecondary)
+            }
+            NeonDivider()
+            HStack(spacing: sz(10)) {
+                Text("Modifiers").foregroundStyle(Neon.textPrimary)
+                Spacer()
+                ForEach(SettingsModel.hyperModifierChoices, id: \.1) { label, bit in
+                    Toggle(label, isOn: Binding(
+                        get: { model.hyperKeyModifiers & bit != 0 },
+                        set: { _ in model.hyperKeyModifiers = HyperMods.toggled(model.hyperKeyModifiers, bit: bit) }
+                    ))
+                    .toggleStyle(.button)
+                }
+            }
+            NeonDivider()
+            VStack(alignment: .leading, spacing: sz(8)) {
+                Text("Tapping Caps Lock alone").foregroundStyle(Neon.textPrimary)
+                Picker("", selection: $model.hyperKeySoloAction) {
+                    ForEach(HyperSoloAction.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+        }
+    }
+}
+
+private struct QuitGuardSection: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        NeonSection("Quit Guard",
+                    footer: "The first \u{2318}Q is swallowed; press it again within half a second to really quit. Prevents losing a window to a stray \u{2318}Q. Requires Accessibility permission.") {
+            Toggle("Require a double-tap of \u{2318}Q to quit", isOn: $model.doubleTapQuitEnabled)
+        }
+    }
+}
+
+private struct FinderSection: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        NeonSection("Finder",
+                    footer: "The Windows habits, without leaving the home row. F2 sends Return to Finder, which is what Finder already uses to rename. \u{2318}X marks the selection and \u{2318}V moves it into the front window \u{2014} Finder itself keeps the progress window and the \u{2318}Z undo. A copied image pasted with \u{2318}V lands as Pasted_Image_<date>.png in the front window; copied FILES always paste as Finder would. All three only fire with Finder frontmost and no filename being edited. Needs Accessibility permission; the move also needs Automation permission for Finder, which macOS asks for the first time you use it.") {
+            Toggle("Press F2 to rename the selected file", isOn: $model.finderF2RenameEnabled)
+            NeonDivider()
+            Toggle("Press \u{2318}X then \u{2318}V to move files", isOn: $model.finderCutPasteEnabled)
+            NeonDivider()
+            Toggle("Press \u{2318}V to save a copied image as a PNG file", isOn: $model.finderPasteImageEnabled)
+        }
+    }
+}
+
+private struct KeyRemappingSection: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        NeonSection("Key Remapping",
+                    footer: "Bind any key or media key to launch an app, remap to another key, send a media key, or disable it \u{2014} for every app or just one. No defaults; add what you want.") {
+            ForEach(Array(model.keyMappings.enumerated()), id: \.element.id) { idx, rule in
+                if idx > 0 { NeonDivider() }
+                KeyMappingRow(model: model, rule: rule)
+            }
+            if !model.keyMappings.isEmpty { NeonDivider() }
+            HStack {
+                Button {
+                    model.addKeyMapping()
+                } label: { Label("Add Mapping", systemImage: "plus") }
+                    .buttonStyle(.neon)
+                Spacer()
+            }
         }
     }
 }
@@ -2381,61 +2313,6 @@ struct AppPickerMenu: View {
             return app.name
         }
         return target
-    }
-}
-
-/// One app-shortcut row: app picker + recorder + delete. The hotkey launches (or
-/// focuses) that app directly — no runner. Sibling of `CustomShortcutRow`, which
-/// binds a runner prefix instead of an app.
-private struct AppShortcutRow: View {
-    @ObservedObject var model: SettingsModel
-    let shortcut: AppShortcut
-    /// Another row already claims this combo, so macOS would give the hotkey to
-    /// whichever registered first and this one would silently never fire.
-    let isDuplicate: Bool
-
-    /// Installed app's current name, else whatever we stored when it was picked,
-    /// else the raw target — never an empty button.
-    private var label: String {
-        if shortcut.target.isEmpty { return "Choose App\u{2026}" }
-        let resolved = AppPickerMenu.displayName(for: shortcut.target)
-        if resolved != shortcut.target { return resolved }
-        return shortcut.name.isEmpty ? resolved : shortcut.name
-    }
-
-    var body: some View {
-        HStack(spacing: sz(8)) {
-            AppPickerMenu(
-                selected: shortcut.target.isEmpty ? [] : [shortcut.target],
-                // The stored name keeps the row readable when the app isn't installed
-                // on this machine (synced shortcut, external drive unmounted).
-                label: label
-            ) { target, name in
-                model.updateAppShortcutTarget(id: shortcut.id, target: target, name: name)
-            }
-
-            Spacer()
-
-            if isDuplicate {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .help("Another app shortcut already uses this key \u{2014} only one of them will fire.")
-            }
-
-            ShortcutRecorder(combo: shortcut.combo) { combo in
-                model.updateAppShortcutCombo(id: shortcut.id, combo: combo)
-            }
-            .frame(width: sz(110), height: sz(24))
-            .fixedSize()
-
-            Button {
-                model.removeAppShortcut(id: shortcut.id)
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .help("Remove this shortcut")
-        }
     }
 }
 

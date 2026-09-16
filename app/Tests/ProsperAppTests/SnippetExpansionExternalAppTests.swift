@@ -23,7 +23,10 @@ final class SnippetExpansionExternalAppTests: XCTestCase {
     // nonisolated so the nonisolated tearDown override can stop them.
     nonisolated(unsafe) private var runner: ProsperAppRunner?
     nonisolated(unsafe) private var host: E2EHost?
-    private var savedClipboard: String?
+    // Swift 6.4 counts the `savedClipboard` read inside the nonisolated tearDown's
+    // `assumeIsolated` closure as SENDING self. Same treatment as runner/host above:
+    // the property is only ever touched on the main thread anyway.
+    nonisolated(unsafe) private var savedClipboard: String?
 
     override func setUpWithError() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["PROSPER_E2E"] == "1",
@@ -47,9 +50,10 @@ final class SnippetExpansionExternalAppTests: XCTestCase {
     override func tearDownWithError() throws {
         host?.stop()
         runner?.stop()
+        let clipboard = savedClipboard
         MainActor.assumeIsolated {
             NSPasteboard.general.clearContents()
-            if let savedClipboard { NSPasteboard.general.setString(savedClipboard, forType: .string) }
+            if let clipboard { NSPasteboard.general.setString(clipboard, forType: .string) }
         }
     }
 

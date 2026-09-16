@@ -12,6 +12,15 @@ enum SpotlightShortcutConflict {
         isDefaultRunner && spotlightUsesCommandSpace
     }
 
+    /// Same "only one will fire" framing as the duplicate-chord note below, so the
+    /// two read as one family when a row shows both. The catalog only attaches this
+    /// to a row when the CALLER has confirmed, via `spotlightUsesCommandSpace()`,
+    /// that Spotlight is actually sitting on the chord right now — a permanent ⚠ on
+    /// every default install (regardless of what the user rebound Spotlight to)
+    /// would train people to ignore it.
+    nonisolated static let catalogHint =
+        "May also be Spotlight\u{2019}s shortcut \u{2014} only one will fire."
+
     static func spotlightUsesCommandSpace() -> Bool {
         // Read-only: this is macOS's only available record of the user's Spotlight
         // shortcut. Never write the undocumented AppleSymbolicHotKeys preference.

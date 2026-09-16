@@ -111,6 +111,13 @@ extension Notification.Name {
     /// runner's Assign Shortcut…). The Settings window and its model are cached for
     /// the app's lifetime, so without this its list would keep showing a stale copy.
     static let appShortcutsChangedExternally = Notification.Name("appShortcutsChangedExternally")
+    /// Same shape as `appShortcutsChangedExternally`, for `ShortcutStore.extensionShortcuts()`
+    /// — posted when the runner's ⌘⇧K binds a quicklink/quickdir/snippet row
+    /// directly. An open Settings window needs a sibling observer next to its
+    /// existing `appShortcutsChangedExternally` one (re-reading
+    /// `ShortcutStore.extensionShortcuts()` into `extensionShortcuts`) to pick
+    /// this up live — see RunnerPanel.presentAssignShortcut.
+    static let extensionShortcutsChangedExternally = Notification.Name("extensionShortcutsChangedExternally")
 }
 
 /// A pickable target the user can bind a custom shortcut to. The `prefix` is the

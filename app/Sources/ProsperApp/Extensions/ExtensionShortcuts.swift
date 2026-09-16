@@ -75,6 +75,53 @@ struct BindableExtensionAction: Identifiable, Hashable, Sendable {
 /// over the registry — registration itself stays in `AppDelegate.registerHotKeys`.
 enum ExtensionShortcuts {
 
+    // MARK: - Native bindable sources (quicklinks / quickdirs / snippets)
+
+    /// Quicklinks, quickdirs and snippets are intercepted NATIVELY before their
+    /// Lua handler ever runs (`CommandRouter`) — `quicklinks_run`/quickdirs'
+    /// browsing return a plain string or nothing, never a `host.ui.list` — so
+    /// `itemTitles`/`fire`'s generic Lua listing walk sees nothing for them. These
+    /// three command ids get their bindable rows from the native stores instead,
+    /// with no manifest `bindable_items` flag and no change to those stores.
+    private static let nativeCommandIDs: Set<String> =
+        ["quicklinks.run", "quickdirs.run", "snippets.run"]
+
+    /// The bare item names a native command offers to bind, or nil for anything
+    /// else (falls through to the manifest `bindable_items` / Lua listing path).
+    /// Quickdirs are bound by config name, not browsed — enumerating a quickdir's
+    /// subdirectories here would be a filesystem hit on every Settings open.
+    @MainActor
+    private static func nativeItemTitles(commandID: String) -> [String]? {
+        switch commandID {
+        case "quicklinks.run": return QuicklinkStore.all().map(\.name)
+        case "quickdirs.run": return QuickdirStore.all().map(\.name)
+        case "snippets.run": return SnippetStore.all().map(\.name)
+        default: return nil
+        }
+    }
+
+    /// The extension title `bindableActions` shows for a native command —
+    /// hardcoded to the three manifests' own titles (not read from the registry),
+    /// so a shortcut can be bound straight from a highlighted runner row with no
+    /// registry round-trip. Nil for anything else.
+    private static func nativeExtensionTitle(commandID: String) -> String? {
+        switch commandID {
+        case "quicklinks.run": return "Quicklinks"
+        case "quickdirs.run": return "Quickdirs"
+        case "snippets.run": return "Snippets"
+        default: return nil
+        }
+    }
+
+    /// The exact label `bindableActions` would build for a native command + item
+    /// — e.g. "Quicklinks \u{203A} gh" — so a shortcut bound directly from the
+    /// runner (⌘⇧K on a highlighted row) merges onto the same Settings record
+    /// instead of creating a duplicate. Nil for a non-native command id.
+    static func nativeItemLabel(commandID: String, item: String) -> String? {
+        guard let title = nativeExtensionTitle(commandID: commandID) else { return nil }
+        return extensionCommandLabel(title, item)
+    }
+
     // MARK: - What can be bound
 
     /// Every extension action bindable right now, sorted by label.
@@ -84,6 +131,9 @@ enum ExtensionShortcuts {
     /// the same call the runner makes when its mode opens — so the 43 System
     /// Settings panes and every saved script become individually bindable with no
     /// per-extension host code and no second manifest table to keep in sync.
+    /// Quicklinks, quickdirs and snippets opt into the same `listing` expansion
+    /// without the manifest flag, reading `nativeItemTitles` instead of invoking
+    /// Lua (see above).
     ///
     /// Disabled or untrusted extensions contribute nothing: `isLive` gates the
     /// whole walk, which is what makes a binding disappear from Settings the
@@ -103,14 +153,22 @@ enum ExtensionShortcuts {
                         commandTitle: command.title,
                         icon: command.icon ?? "puzzlepiece.extension"))
                 }
-                if command.bindableItems { listing.append((command, ext)) }
+                if command.bindableItems || nativeCommandIDs.contains(command.id) {
+                    listing.append((command, ext))
+                }
             }
         }
 
         for entry in listing {
-            let prefix = entry.command.allPrefixes.first ?? ""
-            for title in await itemTitles(commandID: entry.command.id, prefix: prefix,
-                                          registry: registry) {
+            let titles: [String]
+            if let native = nativeItemTitles(commandID: entry.command.id) {
+                titles = native
+            } else {
+                let prefix = entry.command.allPrefixes.first ?? ""
+                titles = await itemTitles(commandID: entry.command.id, prefix: prefix,
+                                          registry: registry)
+            }
+            for title in titles {
                 out.append(BindableExtensionAction(
                     commandID: entry.command.id, item: title, extensionTitle: entry.ext,
                     commandTitle: entry.command.title,
@@ -181,6 +239,44 @@ enum ExtensionShortcuts {
         return (registry.command(id: commandID)?.command.allPrefixes.first ?? "") + item
     }
 
+    /// What firing a native (quicklink/quickdir/snippet) binding should do,
+    /// decided with no side effects — no `NSWorkspace`, no runner window, no
+    /// pasteboard — so it is unit-testable on its own. `fire` performs the
+    /// effect; this just looks the item up and decides.
+    enum NativeFireAction: Equatable {
+        /// Open this URL (already resolved — the same one `QuicklinkStore.resolve`
+        /// plus `RunnerPanel.quicklinkURL` give the runner's own opener).
+        case openURL(URL)
+        /// Open the command runner pre-seeded with this text (a quickdir browsed
+        /// through the generic `qd <name>` route, which needs no configured
+        /// per-quickdir prefix).
+        case openRunnerPrefill(String)
+        /// Insert this saved snippet by name.
+        case insertSnippet(name: String)
+    }
+
+    /// Pure lookup + decision for the three natively-intercepted commands (see
+    /// `nativeCommandIDs`). Returns nil for anything else, which sends `fire` down
+    /// the existing Lua-invoke path unchanged.
+    @MainActor
+    static func nativeFireAction(commandID: String, item: String) -> NativeFireAction? {
+        switch commandID {
+        case "quicklinks.run":
+            guard let hit = QuicklinkStore.all().first(where: { $0.name == item }) else { return nil }
+            let resolved = QuicklinkStore.resolve(target: hit.target, query: "")
+            guard let url = RunnerPanel.quicklinkURL(resolved) else { return nil }
+            return .openURL(url)
+        case "quickdirs.run":
+            guard QuickdirStore.all().contains(where: { $0.name == item }) else { return nil }
+            return .openRunnerPrefill("qd " + item)
+        case "snippets.run":
+            guard SnippetStore.byName(item) != nil else { return nil }
+            return .insertSnippet(name: item)
+        default:
+            return nil
+        }
+    }
+
     /// Runs a bound extension action with no UI.
     ///
     /// Two shapes exist and both are handled by the same call. A command that ACTS
@@ -197,6 +293,20 @@ enum ExtensionShortcuts {
     /// nothing rather than one that does something unexpected.
     @MainActor
     static func fire(commandID: String, item: String, registry: ExtensionRegistry) async {
+        // Native branch, ahead of the Lua invoke — see `NativeFireAction`.
+        if let action = nativeFireAction(commandID: commandID, item: item) {
+            switch action {
+            case .openURL(let url):
+                NSWorkspace.shared.open(url)
+            case .openRunnerPrefill(let prefill):
+                SettingsHooks.shared.onOpenRunner?(prefill)
+            case .insertSnippet(let name):
+                let bundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                SnippetExpander.shared.insertByName(name, bundleId: bundleId)
+            }
+            return
+        }
+
         let query = query(commandID: commandID, item: item, registry: registry)
         guard let json = await registry.invokeAsync(commandID: commandID, query: query),
               let node = try? ExtensionViewNode.decode(json: json),

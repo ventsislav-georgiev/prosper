@@ -454,6 +454,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // always-present surface, since ⌥\ is rebindable and the menu-bar icon
         // can be hidden.
         SettingsHooks.shared.onOpenSettings = { [weak self] in self?.openSettings() }
+        // Lets a bound quickdir shortcut (`ExtensionShortcuts.fire`) open the
+        // runner the same way a Command Shortcut does, without exposing this
+        // private method outside AppDelegate.
+        SettingsHooks.shared.onOpenRunner = { [weak self] prefill in self?.openRunner(prefill: prefill) }
         SettingsHooks.shared.onMenuBarIconChanged = { [weak self] visible in
             self?.menuBar?.setIconVisible(visible)
         }

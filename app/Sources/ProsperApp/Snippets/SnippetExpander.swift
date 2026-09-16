@@ -214,6 +214,28 @@ final class SnippetExpander {
         cachedToken = SnippetStore.changeToken
     }
 
+    // MARK: - Direct insertion (bound hotkey, no typed keyword)
+
+    /// Inserts a snippet by name with no buffer to backspace — used by a bound
+    /// Shortcuts hotkey (`ExtensionShortcuts.fire`) rather than typed keyword
+    /// auto-expansion. Mirrors `handle`'s plain/rich split minus the backspace
+    /// step. Silently declines a snippet with a required `{argument}`: there is
+    /// no typed field to prompt the value into (same limit `.needsArguments`
+    /// documents for the inline path).
+    func insertByName(_ name: String, bundleId: String?) {
+        guard let hit = SnippetStore.byName(name) else { return }
+        if hit.richText {
+            executeRich(name: name, backspaces: 0, bundleId: bundleId)
+            return
+        }
+        let context = liveContext(template: hit.text)
+        let needsArg = PlaceholderEngine.arguments(in: hit.text).contains {
+            $0.required && context.arguments[$0.name] == nil
+        }
+        guard !needsArg else { return }
+        insert(PlaceholderEngine.render(hit.text, context).text, bundleId: bundleId)
+    }
+
     // MARK: - Rich (RTF) execution
 
     private func executeRich(name: String, backspaces: Int, bundleId: String?) {

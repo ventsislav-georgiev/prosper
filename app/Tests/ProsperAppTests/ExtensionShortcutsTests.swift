@@ -65,10 +65,26 @@ final class ExtensionShortcutsTests: XCTestCase {
             XCTAssertFalse(command.allPrefixes.isEmpty,
                            "a bound item is fired as prefix + title — \(name) needs a prefix")
         }
-        for name in ["killproc", "bookmarks", "snippets"] {
+        // killproc/bookmarks list rows that are not stable binding targets (a live
+        // process, an arbitrary bookmark) — no manifest opt-in, no other source either.
+        for name in ["killproc", "bookmarks"] {
             XCTAssertFalse(
                 try loadManifest(name).contributes?.allCommands.contains { $0.bindableItems } == true,
                 "\(name) lists rows that are not stable binding targets")
+        }
+        // quicklinks/quickdirs/snippets also skip the manifest flag — enumerating
+        // them through the generic Lua-listing path would mean firing a live query
+        // (and, for quickdirs, walking the filesystem) just to recover names
+        // ExtensionShortcuts already has from QuicklinkStore/QuickdirStore/
+        // SnippetStore directly. They opt in instead through ExtensionShortcuts'
+        // native source (see ExtensionShortcutsNativeSourceTests below) — so unlike
+        // killproc/bookmarks, which stay fully excluded, snippets (and quicklinks/
+        // quickdirs) move from "excluded" to "bound by name via the store", not to
+        // "still excluded".
+        for name in ["quicklinks", "quickdirs", "snippets"] {
+            XCTAssertFalse(
+                try loadManifest(name).contributes?.allCommands.contains { $0.bindableItems } == true,
+                "\(name) is bound natively (store-backed), not via manifest bindable_items")
         }
     }
 
@@ -249,5 +265,228 @@ final class ExtensionShortcutsTests: XCTestCase {
 
         let declared = ExtensionShortcuts.manifestKeybindings(registry: registry)
         XCTAssertTrue(declared.isEmpty, "pasteplain must not ship a default keybinding")
+    }
+
+    // MARK: - Native bindable sources (quicklinks / quickdirs / snippets)
+
+    // Key formulas mirror each store's own private UserDefaults key (see the doc
+    // comments on QuicklinkStore/QuickdirStore/SnippetStore) — duplicated here
+    // rather than exposed, so a test can seed/restore them directly.
+    private let quicklinksLinksKey = "ext.com.prosper.quicklinks.links"
+    private let quickdirsKey = "ext.com.prosper.quickdirs.dirs"
+    private let snippetsItemsKey = "ext.com.prosper.snippets.items"
+
+    /// Backs up + restores the raw `UserDefaults.standard` entries the three
+    /// native stores read, and seeds them directly with the given maps/arrays.
+    /// Deliberately bypasses `.save`/`.replaceAll` on those stores: those also
+    /// mirror to `~/.config/prosper/*.json` on the real machine, which a test
+    /// must never touch.
+    @MainActor
+    private func withCleanNativeStores(
+        quicklinks: [String: String] = [:],
+        quickdirs: [QuickdirConfig] = [],
+        snippets: [SnippetStore.Entry] = [],
+        _ body: () async throws -> Void
+    ) async rethrows {
+        let keys = [quicklinksLinksKey, quickdirsKey, snippetsItemsKey]
+        let saved = keys.map { UserDefaults.standard.string(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value { UserDefaults.standard.set(value, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
+        func json<T: Encodable>(_ value: T) -> String {
+            String(data: (try? JSONEncoder().encode(value)) ?? Data(), encoding: .utf8) ?? "{}"
+        }
+        UserDefaults.standard.set(json(quicklinks), forKey: quicklinksLinksKey)
+        UserDefaults.standard.set(json(quickdirs), forKey: quickdirsKey)
+        UserDefaults.standard.set(json(snippets), forKey: snippetsItemsKey)
+        try await body()
+    }
+
+    @MainActor
+    func testBindableActionsIncludeOneRowPerQuicklinkQuickdirAndSnippet() async throws {
+        let (registry, root) = try makeRegistry(
+            ["toggles", "sysprefs", "quicklinks", "quickdirs", "snippets"])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        await withCleanNativeStores(
+            quicklinks: ["gh": "https://github.com/{query}", "docs": "https://docs.example.com"],
+            quickdirs: [
+                QuickdirConfig(name: "projects", path: "~/projects", prefix: "p",
+                               action: "open {path}", actionLabel: "Open"),
+                // No prefix, and a path that doesn't exist — proves the row is bound
+                // to the CONFIG NAME, not derived by listing its subdirectories.
+                QuickdirConfig(name: "scratch", path: "~/__prosper_native_source_test__",
+                               prefix: "", action: "open {path}", actionLabel: "Open"),
+            ],
+            snippets: [SnippetStore.Entry(name: "Sig", keyword: ";;sig", text: "Best regards",
+                                          collection: nil, description: nil,
+                                          autoExpand: nil, richText: nil)]
+        ) {
+            let actions = await ExtensionShortcuts.bindableActions(registry: registry)
+            let labels = Set(actions.map(\.label))
+
+            // Still there: every quick toggle and every sysprefs pane.
+            XCTAssertEqual(actions.filter { $0.commandID.hasPrefix("toggles.") }.count, 8)
+            XCTAssertGreaterThan(actions.filter { $0.commandID == "sysprefs.open" }.count, 30)
+
+            // One row per saved quicklink.
+            let quicklinkRows = actions.filter { $0.commandID == "quicklinks.run" }
+            XCTAssertEqual(quicklinkRows.count, 2)
+            XCTAssertTrue(labels.contains("Quicklinks \u{203A} gh"), "\(labels)")
+            XCTAssertTrue(labels.contains("Quicklinks \u{203A} docs"), "\(labels)")
+
+            // One row per saved quickdir, prefix or no prefix.
+            let quickdirRows = actions.filter { $0.commandID == "quickdirs.run" }
+            XCTAssertEqual(quickdirRows.count, 2)
+            XCTAssertTrue(labels.contains("Quickdirs \u{203A} projects"), "\(labels)")
+            XCTAssertTrue(labels.contains("Quickdirs \u{203A} scratch"), "\(labels)")
+
+            // One row per saved snippet, bound by name.
+            let snippetRows = actions.filter { $0.commandID == "snippets.run" }
+            XCTAssertEqual(snippetRows.count, 1)
+            XCTAssertTrue(labels.contains("Snippets \u{203A} Sig"), "\(labels)")
+        }
+    }
+
+    @MainActor
+    func testNativeQuicklinkShortcutRegistersOnceAndDropsWhenDisabled() async throws {
+        let (registry, root) = try makeRegistry(["toggles", "quicklinks"])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try await withCleanNativeStores(quicklinks: ["gh": "https://github.com/{query}"]) {
+            let bound = [ExtensionShortcut(commandID: "quicklinks.run", item: "gh",
+                                           combo: KeyCombo.parse("cmd+alt+ctrl+g")!,
+                                           label: "Quicklinks \u{203A} gh")]
+
+            // Exactly one registration — the id AppDelegate assigns it starts at
+            // `GlobalHotKey.extensionIdBase` (300); `registrations` only needs to
+            // hand back the one row for AppDelegate to place there.
+            let registered = ExtensionShortcuts.registrations(
+                registry: registry, overrides: [:], userShortcuts: bound)
+            XCTAssertEqual(registered.filter { $0.commandID == "quicklinks.run" && $0.item == "gh" }.count, 1)
+
+            try registry.setEnabled(false, id: "com.prosper.quicklinks")
+
+            XCTAssertTrue(ExtensionShortcuts.registrations(
+                registry: registry, overrides: [:], userShortcuts: bound).isEmpty,
+                "a disabled extension must claim no hotkey for a bound quicklink")
+            let actions = await ExtensionShortcuts.bindableActions(registry: registry)
+            XCTAssertTrue(actions.filter { $0.commandID == "quicklinks.run" }.isEmpty,
+                          "a disabled extension must not offer its quicklinks as bindable")
+        }
+    }
+
+    @MainActor
+    func testNativeFireActionForQuicklinkQuickdirAndSnippet() async throws {
+        await withCleanNativeStores(
+            quicklinks: ["gh": "https://github.com/{query}"],
+            quickdirs: [QuickdirConfig(name: "projects", path: "~/projects", prefix: "",
+                                       action: "open {path}", actionLabel: "Open")],
+            snippets: [SnippetStore.Entry(name: "Sig", keyword: ";;sig", text: "Best regards",
+                                          collection: nil, description: nil,
+                                          autoExpand: nil, richText: nil)]
+        ) {
+            // Quicklink: resolves through the exact same two calls the runner's own
+            // `openQuicklink` makes (`QuicklinkStore.resolve` + `RunnerPanel.quicklinkURL`)
+            // — asserted directly on the pure function, no NSWorkspace involved.
+            guard case .openURL(let url)? =
+                ExtensionShortcuts.nativeFireAction(commandID: "quicklinks.run", item: "gh")
+            else { return XCTFail("expected an openURL action") }
+            let expected = RunnerPanel.quicklinkURL(
+                QuicklinkStore.resolve(target: "https://github.com/{query}", query: ""))
+            XCTAssertEqual(url, expected)
+
+            // Quickdir: opens the runner pre-filled with the GENERIC "qd " prefix +
+            // the config's own name — works even though this config has no prefix
+            // of its own (CommandRouter resolves "qd <name>" by exact name/prefix
+            // match regardless).
+            XCTAssertEqual(
+                ExtensionShortcuts.nativeFireAction(commandID: "quickdirs.run", item: "projects"),
+                .openRunnerPrefill("qd projects"))
+
+            // Snippet: bound by name, body inserted (not a manifest listing).
+            XCTAssertEqual(
+                ExtensionShortcuts.nativeFireAction(commandID: "snippets.run", item: "Sig"),
+                .insertSnippet(name: "Sig"))
+
+            // Unknown item name for any of the three → no action (nothing to fire).
+            XCTAssertNil(ExtensionShortcuts.nativeFireAction(commandID: "quicklinks.run", item: "nope"))
+            XCTAssertNil(ExtensionShortcuts.nativeFireAction(commandID: "quickdirs.run", item: "nope"))
+            XCTAssertNil(ExtensionShortcuts.nativeFireAction(commandID: "snippets.run", item: "nope"))
+        }
+    }
+
+    // MARK: - AssignableRunnerTarget (⌘⇧K row → store write, #117)
+
+    /// A blank `ResultRow` fixture — only the fields a test sets are non-default.
+    private func row(appURL: URL? = nil, quicklink: QuicklinkHit? = nil,
+                      quickdirMenu: QuickdirConfig? = nil, secondary: String = "") -> ResultRow {
+        ResultRow(id: 0, icon: "star", primary: "x", secondary: secondary, category: "",
+                  copyValue: "", isMeta: false, appURL: appURL, quicklink: quicklink,
+                  quickdirMenu: quickdirMenu)
+    }
+
+    @MainActor
+    func testAssignableRunnerTargetFromRow() {
+        let appURL = URL(fileURLWithPath: "/Applications/Safari.app")
+        XCTAssertEqual(AssignableRunnerTarget.from(row: row(appURL: appURL), mode: .universal),
+                        .app(appURL))
+
+        let link = QuicklinkHit(name: "gh", target: "https://github.com/{query}", description: "")
+        XCTAssertEqual(AssignableRunnerTarget.from(row: row(quicklink: link), mode: .universal),
+                        .quicklink(name: "gh"))
+
+        // Binds by the CONFIG (quickdirMenu), not a browsed hit (no `quickdir` field
+        // set here) — matches how ExtensionShortcuts.nativeItemTitles binds quickdirs.
+        let cfg = QuickdirConfig(name: "projects", path: "~/projects", prefix: "",
+                                  action: "open {path}", actionLabel: "Open")
+        XCTAssertEqual(AssignableRunnerTarget.from(row: row(quickdirMenu: cfg), mode: .universal),
+                        .quickdir(name: "projects"))
+
+        // Snippet: no dedicated ResultRow field — recovered from the subtitle, and
+        // only while the runner is locked into the snippets.run extension mode.
+        let snippetMode = RunnerMode.ext(id: "snippets.run", title: "Snippets", icon: "text.quote")
+        XCTAssertEqual(
+            AssignableRunnerTarget.from(row: row(secondary: "Sig  \u{00B7}  ;;sig"), mode: snippetMode),
+            .snippet(name: "Sig"))
+        XCTAssertEqual(
+            AssignableRunnerTarget.from(row: row(secondary: "Sig"), mode: snippetMode),
+            .snippet(name: "Sig"))
+
+        // Same subtitle shape, but not in snippets mode → no target (a plain
+        // universal-mode row never offers to bind, even if it happens to have text
+        // in `secondary`).
+        XCTAssertNil(AssignableRunnerTarget.from(row: row(secondary: "Sig"), mode: .universal))
+
+        // Nothing distinguishing at all → no target.
+        XCTAssertNil(AssignableRunnerTarget.from(row: row(), mode: .universal))
+    }
+
+    @MainActor
+    func testAssignableRunnerTargetShortcutWrite() {
+        let appURL = URL(fileURLWithPath: "/Applications/Safari.app")
+        XCTAssertEqual(AssignableRunnerTarget.app(appURL).shortcutWrite, .app)
+
+        XCTAssertEqual(
+            AssignableRunnerTarget.quicklink(name: "gh").shortcutWrite,
+            .extensionShortcut(commandID: "quicklinks.run", item: "gh",
+                               label: "Quicklinks \u{203A} gh"))
+        XCTAssertEqual(
+            AssignableRunnerTarget.quickdir(name: "projects").shortcutWrite,
+            .extensionShortcut(commandID: "quickdirs.run", item: "projects",
+                               label: "Quickdirs \u{203A} projects"))
+        XCTAssertEqual(
+            AssignableRunnerTarget.snippet(name: "Sig").shortcutWrite,
+            .extensionShortcut(commandID: "snippets.run", item: "Sig",
+                               label: "Snippets \u{203A} Sig"))
+    }
+
+    func testSnippetNameFromSubtitle() {
+        XCTAssertEqual(snippetName(fromSubtitle: "Sig  \u{00B7}  ;;sig"), "Sig")
+        XCTAssertEqual(snippetName(fromSubtitle: "Sig"), "Sig")
+        XCTAssertEqual(snippetName(fromSubtitle: ""), "")
     }
 }

@@ -80,7 +80,7 @@ final class RunnerPanel {
             onRunQuickdir: { [weak self] hit, query in self?.runQuickdir(hit, query: query) },
             onLaunchExtension: { [weak self] id, query in self?.launchExtension(commandID: id, query: query) },
             onFileAction: { [weak self] id, path in self?.performFileAction(id: id, path: path) },
-            onAssignShortcut: { [weak self] url in self?.presentAssignShortcut(for: url) }
+            onAssignShortcut: { [weak self] target in self?.presentAssignShortcut(for: target) }
         )
         let hosting = NSHostingView(rootView: Themed { root })
         hosting.frame = panel.contentView?.bounds ?? .zero
@@ -367,38 +367,107 @@ final class RunnerPanel {
         return true
     }
 
-    /// Binds a global hotkey to `appURL` right from the launcher (⌘⇧K / Actions →
-    /// Assign Shortcut…), so you don't have to go find the app again in Settings.
-    /// The recorded combo is stored as an `AppShortcut` and registered immediately.
+    /// Binds a global hotkey to `target` right from the launcher (⌘⇧K / Actions →
+    /// Assign Shortcut…), so you don't have to go find the app/quicklink/quickdir/
+    /// snippet again in Settings. The recorded combo lands in `ShortcutStore`'s
+    /// app store (an app row, unchanged from before this generalized to other row
+    /// kinds) or its extension-shortcut store (a quicklink/quickdir/snippet row) —
+    /// one alert, one recorder, routed by `AssignableRunnerTarget.shortcutWrite`.
     ///
     /// Follows `presentCreateQuicklink`'s modal recipe — a plain `NSAlert` with an
     /// accessory view, laid out then re-centred on the runner's screen, because
     /// NSAlert otherwise anchors itself to the floating panel.
-    private func presentAssignShortcut(for appURL: URL) {
-        let name = FileManager.default.displayName(atPath: appURL.path)
-            .replacingOccurrences(of: ".app", with: "")
-        // Bundle id is the stable target; path is the fallback for an app without one.
-        let target = Bundle(url: appURL)?.bundleIdentifier ?? appURL.path
+    private func presentAssignShortcut(for target: AssignableRunnerTarget) {
+        // What the dialog needs before it opens (display name + whatever combo is
+        // already bound) and what it does with the user's choice — the only bits
+        // that differ between an app binding and an extension-shortcut binding.
+        struct Binding {
+            let name: String
+            let existingCombo: KeyCombo?
+            let save: (KeyCombo) -> Void
+            let remove: () -> Void
+        }
 
-        // An existing binding turns this into a change/remove dialog, so the place
-        // you bound a shortcut is also where you can unbind it.
-        let existing = ShortcutStore.appShortcuts().first { $0.target == target }
+        let binding: Binding
+        switch target {
+        case .app(let appURL):
+            let name = FileManager.default.displayName(atPath: appURL.path)
+                .replacingOccurrences(of: ".app", with: "")
+            // Bundle id is the stable target; path is the fallback for an app without one.
+            let appTarget = Bundle(url: appURL)?.bundleIdentifier ?? appURL.path
+            // An existing binding turns this into a change/remove dialog, so the
+            // place you bound a shortcut is also where you can unbind it.
+            let existing = ShortcutStore.appShortcuts().first { $0.target == appTarget }
+            binding = Binding(
+                name: name,
+                existingCombo: existing?.combo,
+                save: { combo in
+                    var list = ShortcutStore.appShortcuts()
+                    // The chord the user just pressed has to win. Only the first entry
+                    // that claims a chord ever fires, so leaving it on another app would
+                    // make this dialog silently do nothing — the one outcome worse than
+                    // taking the shortcut away from an app the user is, right now,
+                    // rebinding it off.
+                    list.removeAll { $0.target != appTarget && $0.combo.chord == combo.chord }
+                    // Rebinding an app already in the list replaces its combo rather
+                    // than stacking a second entry for the same target.
+                    if let i = list.firstIndex(where: { $0.target == appTarget }) {
+                        list[i].combo = combo
+                        list[i].name = name
+                    } else {
+                        list.append(AppShortcut(target: appTarget, combo: combo, name: name))
+                    }
+                    ShortcutStore.setAppShortcuts(list)
+                },
+                remove: {
+                    var list = ShortcutStore.appShortcuts()
+                    list.removeAll { $0.target == appTarget }
+                    ShortcutStore.setAppShortcuts(list)
+                })
+        case .quicklink, .quickdir, .snippet:
+            guard case .extensionShortcut(let commandID, let item, let label) = target.shortcutWrite
+            else { return }
+            let existing = ShortcutStore.extensionShortcuts()
+                .first { $0.commandID == commandID && $0.item == item }
+            binding = Binding(
+                name: label,
+                existingCombo: existing?.combo,
+                save: { combo in
+                    var list = ShortcutStore.extensionShortcuts()
+                    list.removeAll {
+                        !($0.commandID == commandID && $0.item == item) && $0.combo.chord == combo.chord
+                    }
+                    if let i = list.firstIndex(where: { $0.commandID == commandID && $0.item == item }) {
+                        list[i].combo = combo
+                        list[i].label = label
+                    } else {
+                        list.append(ExtensionShortcut(commandID: commandID, item: item,
+                                                      combo: combo, label: label))
+                    }
+                    ShortcutStore.setExtensionShortcuts(list)
+                },
+                remove: {
+                    var list = ShortcutStore.extensionShortcuts()
+                    list.removeAll { $0.commandID == commandID && $0.item == item }
+                    ShortcutStore.setExtensionShortcuts(list)
+                })
+        }
 
         let alert = NSAlert()
-        alert.messageText = existing == nil ? "Assign Shortcut" : "Change Shortcut"
-        alert.informativeText = existing == nil
-            ? "Press the keys that should launch \u{201C}\(name)\u{201D}. Needs at least one modifier."
-            : "Click the shortcut to record a new one for \u{201C}\(name)\u{201D}, or remove it."
+        alert.messageText = binding.existingCombo == nil ? "Assign Shortcut" : "Change Shortcut"
+        alert.informativeText = binding.existingCombo == nil
+            ? "Press the keys that should launch \u{201C}\(binding.name)\u{201D}. Needs at least one modifier."
+            : "Click the shortcut to record a new one for \u{201C}\(binding.name)\u{201D}, or remove it."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
-        if existing != nil { alert.addButton(withTitle: "Remove Shortcut") }
+        if binding.existingCombo != nil { alert.addButton(withTitle: "Remove Shortcut") }
 
         // Reuse the Settings recorder verbatim: it already enforces >=1 non-shift
         // modifier, renders the glyphs, and cancels on Esc. Seeded with the current
         // binding so the dialog SHOWS what's already assigned (and so cancelling a
         // re-record falls back to it rather than to "Unset").
         let recorder = RecorderView(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
-        recorder.combo = existing?.combo ?? unsetKeyCombo
+        recorder.combo = binding.existingCombo ?? unsetKeyCombo
         var recorded: KeyCombo?
         recorder.onChange = { combo in recorded = combo }
         recorder.refreshTitle()
@@ -420,39 +489,31 @@ final class RunnerPanel {
         // initialFirstResponder, so becoming key doesn't resign it mid-capture).
         // With a binding already set, stay idle instead — arming would replace the
         // visible "⌘⇧D" with "Press keys…" and hide the very thing we're showing.
-        if existing == nil { recorder.beginRecording() }
+        if binding.existingCombo == nil { recorder.beginRecording() }
 
         let choice = alert.runModal()
-        var list = ShortcutStore.appShortcuts()
 
         switch choice {
-        case .alertThirdButtonReturn where existing != nil:
-            list.removeAll { $0.target == target }
+        case .alertThirdButtonReturn where binding.existingCombo != nil:
+            binding.remove()
         case .alertFirstButtonReturn:
             // Save without recording anything is a no-op: it keeps the existing
             // binding (shown in the field) rather than clearing it.
             guard let combo = recorded else { return }
-            // The chord the user just pressed has to win. Only the first entry that
-            // claims a chord ever fires, so leaving it on another app would make this
-            // dialog silently do nothing — the one outcome worse than taking the
-            // shortcut away from an app the user is, right now, rebinding it off.
-            list.removeAll { $0.target != target && $0.combo.chord == combo.chord }
-            // Rebinding an app already in the list replaces its combo rather than
-            // stacking a second entry for the same target.
-            if let i = list.firstIndex(where: { $0.target == target }) {
-                list[i].combo = combo
-                list[i].name = name
-            } else {
-                list.append(AppShortcut(target: target, combo: combo, name: name))
-            }
+            binding.save(combo)
         default:
             return  // Cancel
         }
-        ShortcutStore.setAppShortcuts(list)
+
         // Re-register so the new hotkey is live without reopening Settings, and tell
         // the (app-lifetime) Settings model to reload so its list isn't stale.
         SettingsHooks.shared.onShortcutsChanged?()
-        NotificationCenter.default.post(name: .appShortcutsChangedExternally, object: nil)
+        switch target {
+        case .app:
+            NotificationCenter.default.post(name: .appShortcutsChangedExternally, object: nil)
+        case .quicklink, .quickdir, .snippet:
+            NotificationCenter.default.post(name: .extensionShortcutsChangedExternally, object: nil)
+        }
         dismiss()
     }
 
@@ -512,8 +573,10 @@ final class RunnerPanel {
     }
 
     /// Builds an openable URL from a resolved quicklink target: a real URL when it
-    /// has a scheme, otherwise a file URL (expanding a leading `~`).
-    private static func quicklinkURL(_ target: String) -> URL? {
+    /// has a scheme, otherwise a file URL (expanding a leading `~`). Internal (not
+    /// private) so `ExtensionShortcuts.fire`'s native quicklink branch resolves the
+    /// exact same URL this panel would open, instead of duplicating the logic.
+    static func quicklinkURL(_ target: String) -> URL? {
         let t = target.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return nil }
         if t.contains("://"), let url = URL(string: t) { return url }
@@ -896,6 +959,87 @@ struct ResultRow: Identifiable {
     var metaCommand: MetaCommand? = nil
 }
 
+// MARK: - Assignable shortcut targets
+
+/// A highlighted runner row that ⌘⇧K (Actions → Assign Shortcut…) can bind a
+/// global hotkey to. Mirrors the row kinds `ResultRow` already carries — no new
+/// control kind, no second source of truth: the write always lands in either
+/// `ShortcutStore.appShortcuts` (app) or `.extensionShortcuts` (the other three,
+/// which fire natively through `ExtensionShortcuts.nativeFireAction`).
+enum AssignableRunnerTarget: Equatable {
+    case app(URL)
+    case quicklink(name: String)
+    case quickdir(name: String)
+    case snippet(name: String)
+}
+
+/// What binding a shortcut to a target should write — which store, which record
+/// — decided with no side effects (no UserDefaults read/write, no alert).
+/// `presentAssignShortcut` performs the actual write; this just routes it, so
+/// the "row kind → store write" mapping is unit-testable on its own.
+enum AssignableShortcutWrite: Equatable {
+    /// An app binding — `presentAssignShortcut` derives the bundle id/path/name
+    /// straight from the `URL` inside `target`, exactly as before this row kind
+    /// was generalized.
+    case app
+    /// An extension-shortcut binding, with the (commandID, item, label) triple
+    /// `ExtensionShortcuts.bindableActions` would build for the same row — so the
+    /// write merges onto that Settings record instead of duplicating it.
+    case extensionShortcut(commandID: String, item: String, label: String)
+}
+
+extension AssignableRunnerTarget {
+    @MainActor
+    var shortcutWrite: AssignableShortcutWrite {
+        switch self {
+        case .app:
+            return .app
+        case .quicklink(let name):
+            return .extensionShortcut(commandID: "quicklinks.run", item: name,
+                                      label: ExtensionShortcuts.nativeItemLabel(
+                                          commandID: "quicklinks.run", item: name) ?? name)
+        case .quickdir(let name):
+            return .extensionShortcut(commandID: "quickdirs.run", item: name,
+                                      label: ExtensionShortcuts.nativeItemLabel(
+                                          commandID: "quickdirs.run", item: name) ?? name)
+        case .snippet(let name):
+            return .extensionShortcut(commandID: "snippets.run", item: name,
+                                      label: ExtensionShortcuts.nativeItemLabel(
+                                          commandID: "snippets.run", item: name) ?? name)
+        }
+    }
+
+    /// Which target (if any) a highlighted result row offers to bind — nil for
+    /// every other row kind, which leaves "Assign Shortcut…" hidden exactly as
+    /// before this row kind was generalized.
+    ///
+    /// App/quicklink/quickdir rows carry their own dedicated `ResultRow` field
+    /// (quickdir binds by CONFIG name — the `quickdirMenu` picker row — not by
+    /// browsed subdirectory, matching `ExtensionShortcuts.nativeItemTitles`).
+    /// Snippet rows come back from the generic Lua listing with no dedicated
+    /// field, so the name is recovered from the row's own subtitle instead (see
+    /// `snippetName(fromSubtitle:)`).
+    static func from(row: ResultRow, mode: RunnerMode) -> AssignableRunnerTarget? {
+        if let url = row.appURL { return .app(url) }
+        if let hit = row.quicklink { return .quicklink(name: hit.name) }
+        if let cfg = row.quickdirMenu { return .quickdir(name: cfg.name) }
+        if case .ext(let id, _, _, _) = mode, id == "snippets.run", !row.secondary.isEmpty {
+            return .snippet(name: snippetName(fromSubtitle: row.secondary))
+        }
+        return nil
+    }
+}
+
+/// Recovers a snippet's stable name from its row subtitle. `snippets_run`
+/// (snippets/init.lua) renders each row's `primary` as the RESOLVED body text —
+/// not a stable id — and encodes "name" or "name  ·  keyword" as the subtitle,
+/// so the name is whatever precedes that separator (the whole string when no
+/// keyword is set).
+func snippetName(fromSubtitle subtitle: String) -> String {
+    guard let range = subtitle.range(of: "  \u{00B7}  ") else { return subtitle }
+    return String(subtitle[..<range.lowerBound])
+}
+
 // MARK: - Row builder
 
 /// Rows for window-launching extension commands ("Add Quicklink", "Base64", …).
@@ -1206,8 +1350,9 @@ private struct RunnerView: View {
     /// Runs a built-in file action (`file.*` id) against a path — open / reveal /
     /// quick look / copy / trash. Routed to `FileActions` in the controller.
     let onFileAction: (String, String) -> Void
-    /// Binds a global hotkey to the selected app row (⌘⇧K / the Actions menu).
-    let onAssignShortcut: (URL) -> Void
+    /// Binds a global hotkey to the selected row (⌘⇧K / the Actions menu) — an
+    /// app, or a quicklink/quickdir/snippet row (see `AssignableRunnerTarget`).
+    let onAssignShortcut: (AssignableRunnerTarget) -> Void
 
     @FocusState private var inputFocused: Bool
 
@@ -1644,7 +1789,7 @@ private struct RunnerView: View {
                     if let row = selectedRow { performRowAction(action, on: row) }
                 },
                 quicklink: selectedRow?.quicklink,
-                appURL: selectedRow?.appURL,
+                assignTarget: selectedRow.flatMap { AssignableRunnerTarget.from(row: $0, mode: model.mode) },
                 onCopy: {
                     if let row = selectedRow {
                         let pb = NSPasteboard.general
@@ -1654,7 +1799,7 @@ private struct RunnerView: View {
                 },
                 onEdit: { hit in onEditQuicklink(hit) },
                 onDelete: { hit in onDeleteQuicklink(hit) },
-                onAssignShortcut: { url in onAssignShortcut(url) }
+                onAssignShortcut: { target in onAssignShortcut(target) }
             )
         }
         .padding(.horizontal, sz(14))
@@ -2428,12 +2573,13 @@ private struct ActionMenuButton: View {
     var fileActions: [RowAction] = []
     var runFileAction: (RowAction) -> Void = { _ in }
     let quicklink: QuicklinkHit?
-    /// Set when the selected row is an app result — enables "Assign Shortcut…".
-    let appURL: URL?
+    /// Set when the selected row offers a shortcut binding (app, quicklink,
+    /// quickdir, snippet) — enables "Assign Shortcut…".
+    let assignTarget: AssignableRunnerTarget?
     let onCopy: () -> Void
     let onEdit: (QuicklinkHit) -> Void
     let onDelete: (QuicklinkHit) -> Void
-    let onAssignShortcut: (URL) -> Void
+    let onAssignShortcut: (AssignableRunnerTarget) -> Void
 
     var body: some View {
         Menu {
@@ -2454,9 +2600,9 @@ private struct ActionMenuButton: View {
             // runner — verified, not assumed.
             Button("Copy") { onCopy() }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
-            if let url = appURL {
+            if let target = assignTarget {
                 Divider()
-                Button("Assign Shortcut\u{2026}") { onAssignShortcut(url) }
+                Button("Assign Shortcut\u{2026}") { onAssignShortcut(target) }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
             }
             if let hit = quicklink {
@@ -2479,7 +2625,7 @@ private struct ActionMenuButton: View {
         .keyboardShortcut("k", modifiers: .command)
         // The real accelerators, one per advertised menu item, so each works without
         // opening the menu first: ⌘⇧C copies, ⌘E edits the selected quicklink
-        // (Raycast parity), ⌘⇧K binds a global hotkey to the selected app, ⌘⌫ deletes.
+        // (Raycast parity), ⌘⇧K binds a global hotkey to the selected row, ⌘⌫ deletes.
         // Each guards on the same state its menu item is gated by, so a shortcut for
         // an item that isn't showing does nothing.
         .background(
@@ -2494,7 +2640,7 @@ private struct ActionMenuButton: View {
                     .keyboardShortcut("c", modifiers: [.command, .option])
                 Button("") { if let hit = quicklink { onEdit(hit) } }
                     .keyboardShortcut("e", modifiers: .command)
-                Button("") { if let url = appURL { onAssignShortcut(url) } }
+                Button("") { if let target = assignTarget { onAssignShortcut(target) } }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
                 Button("") { if let hit = quicklink { onDelete(hit) } }
                     .keyboardShortcut(.delete, modifiers: .command)
