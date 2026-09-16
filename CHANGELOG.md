@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.152.0 *(unreleased)*
+## v2.152.0
 
 - **Menu Bar Management works on macOS 27.** macOS 27 moved every menu-bar icon into
   a system host process: icons are no longer windows, they never leave the part of the
