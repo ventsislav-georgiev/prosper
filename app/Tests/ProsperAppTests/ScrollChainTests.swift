@@ -160,4 +160,58 @@ final class ScrollChainTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         XCTAssertFalse(ScrollChainCapture.isMonitoring)
     }
+
+    // MARK: - #130: delivery
+
+    /// A wheel event with precise (trackpad-style) deltas. Unlike #128/#129, this
+    /// event never reaches `NSScrollView`'s own event handling — `scroll(_:by:)`
+    /// touches the clip view directly — so a synthetic event is honest here where
+    /// it was useless before.
+    private func wheel(deltaY: Int32) throws -> NSEvent {
+        let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                       wheelCount: 1, wheel1: deltaY, wheel2: 0, wheel3: 0))
+        cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        let e = try XCTUnwrap(NSEvent(cgEvent: cg))
+        XCTAssertTrue(e.hasPreciseScrollingDeltas, "precondition: precise-delta event")
+        XCTAssertEqual(e.scrollingDeltaY, CGFloat(deltaY), accuracy: 0.01)
+        return e
+    }
+
+    /// The #130 fix, as measured in the harness: the list moves and the pane does
+    /// not. Delivering the event to the scroll view instead (#129) is what moved
+    /// the pane, so this asserts both halves.
+    func testScrollingAListMovesItAndLeavesThePaneWhereItWas() throws {
+        let (_, _, outer, inner) = try host(rowCount: 200)
+        let paneBefore = outer.contentView.bounds.origin
+        let listBefore = inner.contentView.bounds.origin.y
+
+        ScrollChainCapture.scroll(inner, by: try wheel(deltaY: -120))
+
+        XCTAssertEqual(inner.contentView.bounds.origin.y, listBefore + 120, accuracy: 0.01,
+                       "the list did not take the scroll")
+        XCTAssertEqual(outer.contentView.bounds.origin, paneBefore,
+                       "the pane moved — this is exactly the #129 failure")
+    }
+
+    /// The user's rule at the ends: scrolling past the bottom of the list must
+    /// still leave the pane alone. Clamped, so there is no overshoot to bounce back.
+    func testScrollIsClampedAtBothEndsWithoutMovingThePane() throws {
+        let (_, _, outer, inner) = try host(rowCount: 200)
+        let doc = try XCTUnwrap(inner.documentView)
+        let maxY = doc.frame.height - inner.contentView.bounds.height
+        XCTAssertGreaterThan(maxY, 0, "precondition: scrollable")
+        let paneBefore = outer.contentView.bounds.origin
+
+        ScrollChainCapture.scroll(inner, by: try wheel(deltaY: -100_000))
+        XCTAssertEqual(inner.contentView.bounds.origin.y, maxY, accuracy: 0.01,
+                       "overshot the bottom of the list")
+        XCTAssertEqual(outer.contentView.bounds.origin, paneBefore,
+                       "the pane moved once the list hit its end — the reported bug")
+
+        ScrollChainCapture.scroll(inner, by: try wheel(deltaY: 100_000))
+        XCTAssertEqual(inner.contentView.bounds.origin.y, 0, accuracy: 0.01,
+                       "overshot the top of the list")
+        XCTAssertEqual(outer.contentView.bounds.origin, paneBefore,
+                       "the pane moved once the list hit its top")
+    }
 }

@@ -529,6 +529,11 @@ struct NeonBoundedList<Content: View>: View {
 /// `.scrollWheel` monitor runs ahead of the responder chain, hands the event
 /// straight to the list under the cursor and returns nil so nothing else sees it.
 ///
+/// #130 replaced the DELIVERY step after the harness measurement above: the
+/// monitor stays, but a captured event now scrolls the list's clip view directly
+/// (see `scroll(_:by:)`) instead of being handed to the scroll view, which was
+/// what forwarded it to the pane.
+///
 /// The user's rule is absolute (#129 clarification): while the cursor is over a
 /// SCROLLABLE list the pane must not move at all — not at the ends, not mid-list,
 /// not on a momentum tail — so every wheel event at that location is captured
@@ -602,8 +607,50 @@ enum ScrollChainCapture {
         let point = event.locationInWindow
         guard let target = live.first(where: { $0.window === win && shouldCapture(at: point, in: $0) })
         else { return false }
-        target.scrollWheel(with: event)
+        scroll(target, by: event)
         return true
+    }
+
+    /// #130 — THE fix, and the one part of this file backed by a direct observation
+    /// rather than an argument. Scroll the clip view ourselves; never call
+    /// `target.scrollWheel(with:)`.
+    ///
+    /// #129 shipped `target.scrollWheel(with: event)` here and changed nothing on
+    /// device. A throwaway SwiftUI harness reproducing this exact structure (outer
+    /// `ScrollView` + inner `ScrollView` with a definite `.frame(height:)`), driven
+    /// by a REAL trackpad and instrumented to sample the outer clip view's
+    /// `bounds.origin`, measured both variants back to back over 20 s of scrolling:
+    ///
+    ///   capture + `sv.scrollWheel(with: e)` : captured 1508/1803 events,
+    ///       PANE-DRIFT-WHILE-OVER-LIST = 780.0 pt
+    ///   capture + this direct clip scroll   : captured 1806/1908 events,
+    ///       PANE-DRIFT-WHILE-OVER-LIST = 0.0 pt over 0 ticks, list moved 40719 pt
+    ///
+    /// So the monitor was never the broken part — it saw the events and swallowed
+    /// them all along. Handing the event on to SwiftUI's own `HostingScrollView` is
+    /// ITSELF the chaining path: it forwards to the pane internally, and not
+    /// synchronously (the harness's before/after read around the call never caught
+    /// it — `CHAINED-ON-DELIVERY=0x` — the pane moved a frame later), which is why
+    /// two rounds of reasoning about the responder chain missed it. Touching only
+    /// the clip view keeps the event away from that code entirely.
+    ///
+    /// Side effect of not going through `NSScrollView`: no rubber-band at the ends.
+    /// That is the user's rule ("the outer scroll should not move at all"), not a
+    /// regression to fix by re-introducing elasticity.
+    /// Internal, not private: this is now the one step that a synthetic `NSEvent`
+    /// CAN exercise, because it never goes near `NSScrollView`'s event handling.
+    static func scroll(_ sv: NSScrollView, by event: NSEvent) {
+        guard let doc = sv.documentView else { return }
+        let clip = sv.contentView
+        // Trackpad/Magic Mouse deltas are already in points. A notched wheel reports
+        // lines, so it is scaled by AppKit's own per-line amount — that branch is
+        // reasoned, not observed; the harness ran on precise deltas.
+        let step = event.hasPreciseScrollingDeltas ? 1 : sv.verticalLineScroll
+        var origin = clip.bounds.origin
+        origin.y -= event.scrollingDeltaY * step
+        origin.y = min(max(0, origin.y), max(0, doc.frame.height - clip.bounds.height))
+        clip.scroll(to: origin)
+        sv.reflectScrolledClipView(clip)
     }
 }
 

@@ -18,7 +18,17 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.151.2 *(unreleased)*
+## v2.151.3 *(unreleased)*
+
+- **The Shortcuts lists stay put — measured this time.** Two previous attempts at
+  this changed nothing, and both were wrong about why. The scroll event was being
+  caught correctly all along; what put the pane back in motion was handing that
+  event on to the list, which forwarded it to the pane internally, a frame later.
+  The list is now scrolled directly and the event never reaches that path. While the
+  cursor is over a list that can scroll, the pane does not move at all. One visible
+  consequence: the lists no longer rubber-band at their ends.
+
+## v2.151.2
 
 - **The Shortcuts lists really do stay put now.** v2.151.1 claimed this and did not
   deliver it: the fix relied on AppKit handing an unused scroll event up the responder
