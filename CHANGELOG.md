@@ -52,6 +52,15 @@ tag from the now-released section and put it on the new top draft.
   keys themselves rather than whatever text happened to be stored — so a manifest-declared
   default no longer shows as `cmd+alt+ctrl+k` and a long chord fits its field. "Advanced"
   starts expanded and visually contains the four tap-level sections that belong to it.
+- **"All Actions" is all actions, and the app picker is where you'd look for it.**
+  Binding a shortcut no longer makes the row vanish from the list you were looking at:
+  "All Actions" is the whole catalog always, and "Bound" is a pinned view of whatever
+  currently has a chord. The "＋ Launch an app…" picker moved into Advanced, and picking
+  an app now filters the list down to that app's new row instead of appending it,
+  unseen, to the bottom of several hundred. Advanced also spells out which of the two
+  ways to launch an app you want: the picker binds a plain global hotkey and needs no
+  Accessibility permission, while Key Remapping's "Launch App" needs it and buys per-app
+  scope, media-key triggers and key swallowing.
 
 ## v2.150.0
 

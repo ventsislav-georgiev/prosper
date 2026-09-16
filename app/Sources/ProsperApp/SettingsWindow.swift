@@ -1895,22 +1895,32 @@ private struct ShortcutsPane: View {
                 // `catalog`) does not run again until the stores actually change.
                 ShortcutTable(rows: catalog, paneHeight: geo.size.height, model: model)
 
-                HStack {
-                    // Apps are the one source with no enumerable row list (hundreds
-                    // installed), so this picker is how an app shortcut first appears.
-                    AppPickerMenu(label: "\u{FF0B} Launch an app\u{2026}",
-                                  help: "Bind a hotkey that launches or focuses an app.") { target, name in
-                        model.addAppShortcut(target: target, name: name)
-                    }
-                    Spacer()
-                }
-
                 // #122: the four sections live INSIDE this one now. They used to be
                 // siblings rendered after it, so "Advanced" read as a button with
                 // unrelated cards below rather than as the group that holds them.
                 NeonSection("Advanced",
                             footer: "Tap-level features, not action bindings: these ride the shared event tap (per-app scope, swallowed keys, double-taps) rather than a global hotkey, so they keep their own controls.",
                             collapsed: $advancedCollapsed) {
+                    // #124: this used to be a bare `HStack` sitting between the
+                    // table and this section, belonging to no card — the report
+                    // was "it seems very out of place". Apps are the one source
+                    // with no enumerable row list (hundreds installed), so this
+                    // picker is how an app shortcut first appears.
+                    HStack {
+                        AppPickerMenu(label: "\u{FF0B} Launch an app\u{2026}",
+                                      help: "Bind a global hotkey that launches or focuses an app \u{2014} no Accessibility permission needed. For per-app scope, media keys, or swallowing the key, use Key Remapping's \u{201C}Launch App\u{201D} action instead.") { target, name in
+                            model.addAppShortcut(target: target, name: name)
+                            // The new row is unbound and lands at the bottom of
+                            // "All Actions" (several hundred rows, bounded scroll
+                            // since #122) — invisible without this. Same channel
+                            // other panes use to prefill that section's filter
+                            // (`ShortcutTable.applyPendingQuery`), reused rather
+                            // than reaching into `ShortcutTable`'s own `@State`
+                            // from outside it.
+                            focus.requestShortcutsSearch(name)
+                        }
+                        Spacer()
+                    }
                     HyperKeySection(model: model)
                     QuitGuardSection(model: model)
                     FinderSection(model: model)
@@ -1964,7 +1974,16 @@ struct ShortcutTable: View {
 
     var body: some View {
         let bound = ShortcutCatalog.filter(rows, query: boundQuery, boundOnly: true)
-        let rest = ShortcutCatalog.filter(rows, query: allQuery).filter { !$0.isBound }
+        // #125: "All Actions" is the complete catalog, always — "Bound" is a
+        // PINNED VIEW of the subset that has a chord, not a partition. Binding a
+        // row used to make it vanish from here and reappear above, moving out
+        // from under the cursor at the exact moment of the bind (report: "it
+        // disappears, which is unexpected"). A bound row now legitimately shows
+        // in both sections; `ShortcutCatalogRow`/`ShortcutRecorder` carry no
+        // shared state across the two instances (no `@FocusState`, no static —
+        // `RecorderView`'s `recording` flag lives on the AppKit view itself), so
+        // recording into one copy cannot reach the other.
+        let rest = ShortcutCatalog.filter(rows, query: allQuery)
 
         Group {
             NeonSection("Bound",
@@ -2216,7 +2235,7 @@ private struct KeyRemappingSection: View {
 
     var body: some View {
         NeonSection("Key Remapping",
-                    footer: "Bind any key or media key to launch an app, remap to another key, send a media key, or disable it \u{2014} for every app or just one. No defaults; add what you want.") {
+                    footer: "Bind any key or media key to launch an app, remap to another key, send a media key, or disable it \u{2014} for every app or just one. No defaults; add what you want. This needs Accessibility permission; the plain \u{201C}Launch an app\u{2026}\u{201D} picker above does not.") {
             ForEach(Array(model.keyMappings.enumerated()), id: \.element.id) { idx, rule in
                 if idx > 0 { NeonDivider() }
                 KeyMappingRow(model: model, rule: rule)
@@ -2285,7 +2304,15 @@ struct AppPickerMenu: View {
         .onChange(of: showing) { _, open in if open { query = "" } }
     }
 
-    private var popoverBody: some View {
+    // Internal, not `private`: `AppPickerMenuTests` hosts this directly to prove
+    // the popover's CONTENT actually builds (walks `AppIndex`, lays out real app
+    // rows) — #124 was reported as "this button does not work". Pre-seeding
+    // `showing` and hosting the whole menu in a bare `NSHostingView`/`NSWindow`
+    // does NOT make AppKit actually present the `NSPopover` (verified: no child
+    // window, no attached sheet appear even after activating the app and pumping
+    // the run loop for a full second) — that is an AppKit/WindowServer mechanic
+    // this harness cannot drive, not a sign anything here is broken.
+    var popoverBody: some View {
         VStack(spacing: 0) {
             HStack(spacing: sz(8)) {
                 Image(systemName: "magnifyingglass")

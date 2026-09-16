@@ -307,6 +307,21 @@ final class ShortcutCatalogTests: XCTestCase {
         XCTAssertFalse(bound.contains { $0.kind == .runnerPrefix })
     }
 
+    /// #125 — "All Actions" is the complete catalog, always; it must not exclude
+    /// bound rows (that used to be an extra `.filter { !$0.isBound }` applied only
+    /// in `ShortcutTable.body`, on top of this exact call — a bound row would
+    /// vanish from the list the user was looking at the instant they bound it).
+    /// This mirrors `ShortcutTable`'s own "All Actions" computation with no
+    /// `boundOnly` and no further filtering of its own.
+    func testAllActionsKeepsBoundRows() {
+        let rows = catalog()
+        let bound = try? XCTUnwrap(rows.first(where: \.isBound))
+        XCTAssertNotNil(bound, "need at least one naturally-bound default action")
+        let allActions = ShortcutCatalog.filter(rows, query: "")
+        XCTAssertTrue(allActions.contains { $0.id == bound?.id },
+                     "a bound row must still show in All Actions")
+    }
+
     // MARK: - Write-back identifiers (zero migration)
 
     /// `SettingsModel.bind` is a switch that hands a row's `key` / `recordID` to the
