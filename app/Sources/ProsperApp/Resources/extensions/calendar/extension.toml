@@ -26,10 +26,11 @@ api_level   = 1
 [extension.entry]
 main = "init.lua"
 
-# Declarative (Tier-A) settings header: Permissions group + the rebindable
-# toggle shortcut. The rich controls (icon style, grid options, calendar
-# checklist) render natively as the footer pane (CalendarPane), same merge
-# pattern as Window Management / Menu Bar Management.
+# Declarative (Tier-A) settings header: just the Permissions group. The rich
+# controls (icon style, grid options, calendar checklist, and a link to the
+# toggle shortcut's row in Settings › Shortcuts, #119) render natively as the
+# footer pane (CalendarPane), same merge pattern as Window Management / Menu
+# Bar Management.
 [[contributes.settings_sections]]
 id        = "calendar"
 title     = "Calendar"
@@ -44,12 +45,3 @@ title = "Permissions"
 [[contributes.settings_sections.controls]]
 kind = "permission"
 name = "calendar"
-
-[[contributes.settings_sections.controls]]
-kind   = "group"
-title  = "Toggle shortcut (click to rebind)"
-footer = "Opens or closes the calendar popup, same as clicking the menu-bar icon."
-
-[[contributes.settings_sections.controls]]
-kind = "shortcut"
-name = "calendarTogglePopup"

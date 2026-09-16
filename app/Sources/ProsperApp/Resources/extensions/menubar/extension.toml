@@ -24,22 +24,13 @@ api_level   = 1
 [extension.entry]
 main = "init.lua"
 
-# Declarative (Tier-A) settings header: a Permissions-style intro group + the
-# rebindable "toggle hidden section" shortcut. The rich controls (spacing slider,
-# section list, reorder + relaunch buttons) render natively as the footer pane
-# (MenuBarPane), same merge pattern as Window Management.
+# This section has no declarative controls of its own — the rich controls
+# (spacing slider, section list, reorder + relaunch buttons, and a link to the
+# reveal shortcut's row in Settings › Shortcuts, #119) render natively as the
+# footer pane (MenuBarPane), same merge pattern as Window Management.
 [[contributes.settings_sections]]
 id        = "menubar"
 title     = "Menu Bar Management"
 icon      = "menubar.rectangle"
 accent    = "Menu Bar"
 subtitle  = "Hide, reveal, space, and reorder your menu-bar icons"
-
-[[contributes.settings_sections.controls]]
-kind   = "group"
-title  = "Reveal shortcut (click to rebind)"
-footer = "Drag an icon to the LEFT of the chevron to hide it; click the chevron or press this shortcut to reveal the hidden icons."
-
-[[contributes.settings_sections.controls]]
-kind = "shortcut"
-name = "menuBarToggleHidden"

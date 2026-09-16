@@ -1938,6 +1938,7 @@ private struct ShortcutsPane: View {
 private struct ShortcutTable: View {
     let rows: [BindableAction]
     @ObservedObject var model: SettingsModel
+    @ObservedObject private var focus = SettingsFocusRouter.shared
     @State private var query = ""
     @State private var boundOnly = false
 
@@ -1946,29 +1947,42 @@ private struct ShortcutTable: View {
         let bound = shown.filter(\.isBound)
         let rest = shown.filter { !$0.isBound }
 
-        searchBar
+        Group {
+            searchBar
 
-        NeonSection("Bound",
-                    footer: "Click a key field to rebind, \u{21A9} to reset to the default, \u{2715} to turn it off or remove it.") {
-            if bound.isEmpty {
-                Text(query.isEmpty ? "Nothing is bound yet." : "No bound action matches.")
-                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-            } else {
-                list(bound)
-            }
-        }
-
-        if !boundOnly {
-            NeonSection("All Actions",
-                        footer: "Everything that can take a hotkey \u{2014} Prosper's own actions, every extension command and listed item, and every launcher prefix. Press keys on a row to bind it.") {
-                if rest.isEmpty {
-                    Text("No matches.")
+            NeonSection("Bound",
+                        footer: "Click a key field to rebind, \u{21A9} to reset to the default, \u{2715} to turn it off or remove it.") {
+                if bound.isEmpty {
+                    Text(query.isEmpty ? "Nothing is bound yet." : "No bound action matches.")
                         .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 } else {
-                    list(rest)
+                    list(bound)
+                }
+            }
+
+            if !boundOnly {
+                NeonSection("All Actions",
+                            footer: "Everything that can take a hotkey \u{2014} Prosper's own actions, every extension command and listed item, and every launcher prefix. Press keys on a row to bind it.") {
+                    if rest.isEmpty {
+                        Text("No matches.")
+                            .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                    } else {
+                        list(rest)
+                    }
                 }
             }
         }
+        // #119: a pane whose recorder moved into this catalog (Window/Menu
+        // Bar/Calendar/Volume Mixer) can arrive here with a search prefilled.
+        // Consumed once and cleared, so it never re-fires on an unrelated change.
+        .onAppear { applyPendingQuery() }
+        .onChange(of: focus.pendingShortcutsQuery) { _, _ in applyPendingQuery() }
+    }
+
+    private func applyPendingQuery() {
+        guard let q = focus.pendingShortcutsQuery else { return }
+        query = q
+        focus.pendingShortcutsQuery = nil
     }
 
     private var searchBar: some View {
@@ -2886,6 +2900,7 @@ private struct WindowManagementPane: View {
     // NeonScroll), so no own scroll/title — the page header already names it.
     var body: some View {
         VStack(alignment: .leading, spacing: sz(16)) {
+            ShortcutsElsewhereLink(query: "window")
             NeonSection("Drag to Snap",
                         footer: "Drag a window so the pointer reaches a screen edge or corner; a live preview shows where it will land, and it snaps there when you let go. Left/right/bottom edges give halves, the top edge maximizes, and corners give quarters.") {
                 Toggle("Enable drag-to-snap", isOn: Binding(
@@ -3044,6 +3059,7 @@ private struct MenuBarPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(16)) {
+            ShortcutsElsewhereLink(query: "menu bar")
             NeonSection("Icon spacing",
                         footer: "Spacing (in points) between every menu-bar icon. macOS default is 16. New value applies as apps next launch — use “Apply now” to relaunch running menu-bar apps.") {
                 NeonRow("Spacing", subtitle: "\(store.clampedSpacing) px") {

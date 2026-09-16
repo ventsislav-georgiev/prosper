@@ -280,9 +280,11 @@ enum SettingsControlKind: String, Codable, Sendable {
     case group, toggle, text, secret, number, stepper
     case enumeration = "enum"
     case path, info, permission, button, link
-    /// A global-shortcut recorder bound to a host `ShortcutAction` (the `name`
-    /// field carries the action's rawValue). Renders the same recorder/reset/clear
-    /// row as the native Shortcuts pane; persists via ShortcutStore.
+    /// Deprecated and ignored since #119: the shortcut recorder moved to
+    /// Settings › Shortcuts for good, so this kind renders nothing. Kept in the
+    /// enum only so a manifest still declaring it (user copies of the bundled
+    /// window/menubar/calendar manifests predate #119; third-party manifests may
+    /// too) keeps parsing instead of throwing at decode.
     case shortcut
 }
 

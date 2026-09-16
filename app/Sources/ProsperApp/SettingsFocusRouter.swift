@@ -26,6 +26,14 @@ final class SettingsFocusRouter: ObservableObject {
     /// The section currently glowing. Cleared after a beat, or by the next request.
     @Published private(set) var focused: SettingsAnchor?
 
+    /// A search string for the Shortcuts pane to prefill on arrival (#119: the
+    /// Window/Menu Bar/Calendar/Volume Mixer panes link into the catalog instead
+    /// of hosting their own recorders). Deliberately separate from `pending` —
+    /// that slot is consumed by `NeonScroll.take(pane:)` for scroll+highlight,
+    /// and racing the two would drop this whenever both land in the same beat.
+    /// `ShortcutTable` reads and clears it itself; nobody else touches it.
+    @Published var pendingShortcutsQuery: String?
+
     private var clearTask: Task<Void, Never>?
 
     func request(_ anchor: SettingsAnchor, scrollAnchor: UnitPoint? = .top) {
@@ -33,6 +41,12 @@ final class SettingsFocusRouter: ObservableObject {
         focused = nil
         pendingScrollAnchor = scrollAnchor
         pending = anchor
+    }
+
+    /// Switches to the Shortcuts pane with `query` prefilled in its search field.
+    func requestShortcutsSearch(_ query: String) {
+        UserDefaults.standard.set("shortcuts", forKey: "settingsSelectedPane")
+        pendingShortcutsQuery = query
     }
 
     /// Takes the pending request if it targets `pane`. A request for a different
@@ -51,6 +65,23 @@ final class SettingsFocusRouter: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.focused = nil
+        }
+    }
+}
+
+/// One-line pointer for a pane whose shortcut recorder(s) moved into the
+/// Settings › Shortcuts catalog (#119: Window, Menu Bar, Calendar, Volume
+/// Mixer). `query` is prefilled into the catalog's search field on arrival.
+struct ShortcutsElsewhereLink: View {
+    let query: String
+    var body: some View {
+        HStack(spacing: sz(6)) {
+            Text("Shortcuts are in")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            Button("Settings \u{203A} Shortcuts") {
+                SettingsFocusRouter.shared.requestShortcutsSearch(query)
+            }
+            .buttonStyle(.neon).font(Neon.font(.caption))
         }
     }
 }

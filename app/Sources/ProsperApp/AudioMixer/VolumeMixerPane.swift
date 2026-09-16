@@ -10,14 +10,13 @@ struct VolumeMixerPane: View {
     @ObservedObject private var inputs = AudioInputDeviceManager.shared
     @State private var enabled = Preferences.mixerEnabled
     @State private var iconEnabled = Preferences.mixerIconEnabled
-    @State private var cycleCombo = ShortcutStore.combo(for: .mixerCycleOutput)
-    @State private var micMuteCombo = ShortcutStore.combo(for: .mixerToggleMicMute)
     @AppStorage(MixerDefaultsKey.hideInactiveApps) private var hideInactiveApps = true
 
     var body: some View {
         NeonScroll {
             PaneTitle(title: "Volume Mixer", accent: "Mixer",
                       subtitle: "Per-app volume, boost and output routing, from your menu bar")
+            ShortcutsElsewhereLink(query: "mixer")
 
             NeonSection("Volume Mixer",
                         footer: "Off means nothing runs \u{2014} no audio taps, no device listeners, no menu-bar item.") {
@@ -116,16 +115,6 @@ struct VolumeMixerPane: View {
                     NeonDivider()
                     NeonRow("Mute every microphone",
                             subtitle: micMuteSubtitle) {
-                        ShortcutRecorder(combo: micMuteCombo) { combo in
-                            setMicMuteCombo(combo)
-                        }
-                        .frame(width: sz(110), height: sz(24))
-                        .fixedSize()
-                        Button {
-                            setMicMuteCombo(unsetKeyCombo)
-                        } label: { Image(systemName: "xmark.circle") }
-                            .buttonStyle(.borderless)
-                            .help("Disable this shortcut")
                         Toggle("", isOn: Binding(get: { inputs.micMuted },
                                                  set: { inputs.setMicMuted($0) }))
                             .labelsHidden()
@@ -135,18 +124,7 @@ struct VolumeMixerPane: View {
 
                 NeonSection("Sound Output Switcher",
                             footer: "The shortcut steps through the ticked outputs in the order listed. Untick everything to switch it off; while nothing is ticked or unticked, every output takes part.") {
-                    NeonRow("Next sound output", subtitle: cycleSubtitle) {
-                        ShortcutRecorder(combo: cycleCombo) { combo in
-                            setCycleCombo(combo)
-                        }
-                        .frame(width: sz(110), height: sz(24))
-                        .fixedSize()
-                        Button {
-                            setCycleCombo(unsetKeyCombo)
-                        } label: { Image(systemName: "xmark.circle") }
-                            .buttonStyle(.borderless)
-                            .help("Disable this shortcut")
-                    }
+                    NeonRow("Next sound output", subtitle: cycleSubtitle) { EmptyView() }
                     ForEach(cyclableOutputs) { device in
                         NeonDivider()
                         NeonRow(device.name) {
@@ -201,28 +179,12 @@ struct VolumeMixerPane: View {
     }
 
     private var cycleSubtitle: String {
-        if cycleCombo == unsetKeyCombo { return "No shortcut yet — click to record one" }
         if mixer.participatingOutputUIDs.count < 2 { return "Tick at least two outputs to cycle between" }
         return "Switches the system output to the next ticked device"
     }
 
     private var micMuteSubtitle: String {
-        if micMuteCombo == unsetKeyCombo {
-            return "Silences all inputs at the device, whichever app is listening"
-        }
-        return "Silences all inputs at the device \u{2014} the shortcut toggles it too"
-    }
-
-    private func setMicMuteCombo(_ combo: KeyCombo) {
-        micMuteCombo = combo
-        ShortcutStore.setCombo(combo, for: .mixerToggleMicMute)
-        SettingsHooks.shared.onShortcutsChanged?()
-    }
-
-    private func setCycleCombo(_ combo: KeyCombo) {
-        cycleCombo = combo
-        ShortcutStore.setCombo(combo, for: .mixerCycleOutput)
-        SettingsHooks.shared.onShortcutsChanged?()
+        "Silences all inputs at the device, whichever app is listening"
     }
 
     /// Ticking a box for the first time freezes today's outputs into an explicit

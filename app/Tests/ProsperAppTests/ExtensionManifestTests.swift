@@ -108,6 +108,65 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertEqual(controls[1].values, ["auto", "manual"])
     }
 
+    /// #119 round 2: `kind = "shortcut"` used to be a real recorder row; the
+    /// recorder is gone, but the enum case stays so a manifest that still
+    /// declares it (user copies of the bundled window/menubar/calendar
+    /// manifests predate #119, and it was a documented public control kind)
+    /// keeps loading instead of a single bad control killing the WHOLE
+    /// manifest — `ExtensionLoader.load` decodes it in one `TOMLDecoder` call,
+    /// so one throwing control fails every command, keybinding and settings
+    /// section that extension contributes, not just its own row.
+    func testDeprecatedShortcutKindStillParses() throws {
+        let toml = """
+        [extension]
+        id          = "com.prosper.legacy"
+        name        = "legacy"
+        title       = "Legacy"
+        description = "Test fixture for a manifest predating #119"
+        version     = "1.0.0"
+        author      = "prosper"
+        system      = true
+
+        [extension.host]
+        min_version = "2.0.0"
+        api_level   = 1
+
+        [extension.entry]
+        main = "init.lua"
+
+        [[contributes.settings_sections]]
+        id    = "legacy"
+        title = "Legacy"
+
+        [[contributes.settings_sections.controls]]
+        kind = "shortcut"
+        name = "menuBarToggleHidden"
+        """
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        _ = try writeExtension(in: dir, dirName: "legacy", toml: toml)
+
+        let loaded = try ExtensionLoader.load(
+            directory: dir.appendingPathComponent("legacy"),
+            isSystem: true,
+            hostVersion: "2.0.0")
+
+        let section = loaded.manifest.contributes?.allSettingsSections.first
+        let control = section?.allControls.first
+        XCTAssertEqual(control?.kind, .shortcut)
+
+        // The row reaches the model layer (SettingsUI.fromManifest never
+        // crashes on it)...
+        let ui = SettingsUI.fromManifest(section!, prefs: { _ in nil })
+        let row = ui.sections.first?.rows.first
+        XCTAssertEqual(row?.kind, "shortcut")
+        // ...but `SettingsRowView`'s switch has an explicit
+        // `case "shortcut": EmptyView()` (ExtensionSettingsPane.swift) instead
+        // of falling to the `default: InfoRow(...)` branch, so it renders no
+        // title, no control, nothing — there is no SwiftUI snapshot harness in
+        // this target to assert that directly.
+    }
+
     // MARK: - Semver + validation
 
     func testSemanticVersionOrdering() {

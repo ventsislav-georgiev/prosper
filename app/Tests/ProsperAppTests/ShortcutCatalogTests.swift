@@ -62,6 +62,22 @@ final class ShortcutCatalogTests: XCTestCase {
         }
     }
 
+    /// #119: the ten actions that used to have their own bespoke recorders (six
+    /// window snaps in the Window pane, the menu-bar reveal row, the calendar
+    /// toggle row, and two Volume Mixer recorders) are ordinary catalog rows now
+    /// that those panes just link into Settings › Shortcuts instead.
+    func testFormerlyStrayShortcutsAppearInTheCatalog() {
+        let strays: [ShortcutAction] = [
+            .windowLeftHalf, .windowRightHalf, .windowTopHalf, .windowBottomHalf,
+            .windowMaximize, .windowCenter, .menuBarToggleHidden, .calendarTogglePopup,
+            .mixerCycleOutput, .mixerToggleMicMute,
+        ]
+        let keys = Set(catalog().filter { $0.kind == .prosper }.map(\.key))
+        for action in strays {
+            XCTAssertTrue(keys.contains(action.rawValue), "\(action.rawValue) missing from the catalog")
+        }
+    }
+
     /// Ids are what `ForEach` tracks. Two rows sharing one would make the table
     /// flicker and hand a recorder's output to the wrong action.
     func testRowIDsAreUniqueAcrossKinds() {

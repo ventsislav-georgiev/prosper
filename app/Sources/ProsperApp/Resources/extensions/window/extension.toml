@@ -33,10 +33,10 @@ keywords    = ["win", "window", "snap", "resize", "move", "maximize", "tile"]
 match       = "^win(dow)?( |$)"
 
 # Declarative (Tier-A) settings: the full Window Management page, rendered
-# natively from this manifest — no Lua. `shortcut` controls bind 1:1 to the host
-# ShortcutActions (the `name` is the action's rawValue); the recorder writes
-# ShortcutStore and pokes onShortcutsChanged, which re-registers the Carbon
-# hotkeys. A Permissions group at the top surfaces the Accessibility grant inline.
+# natively from this manifest — no Lua. A Permissions group at the top surfaces
+# the Accessibility grant inline. The six window-snap actions are bindable rows
+# in the Settings › Shortcuts catalog (#119) — the native footer pane
+# (WindowManagementPane) links there instead of hosting its own recorders.
 [[contributes.settings_sections]]
 id        = "window"
 title     = "Window Management"
@@ -51,32 +51,3 @@ title = "Permissions"
 [[contributes.settings_sections.controls]]
 kind = "permission"
 name = "accessibility"
-
-[[contributes.settings_sections.controls]]
-kind   = "group"
-title  = "Shortcuts (click to rebind)"
-footer = "Snapping uses Accessibility — the same grant as autocomplete."
-
-[[contributes.settings_sections.controls]]
-kind = "shortcut"
-name = "windowLeftHalf"
-
-[[contributes.settings_sections.controls]]
-kind = "shortcut"
-name = "windowRightHalf"
-
-[[contributes.settings_sections.controls]]
-kind = "shortcut"
-name = "windowTopHalf"
-
-[[contributes.settings_sections.controls]]
-kind = "shortcut"
-name = "windowBottomHalf"
-
-[[contributes.settings_sections.controls]]
-kind = "shortcut"
-name = "windowMaximize"
-
-[[contributes.settings_sections.controls]]
-kind = "shortcut"
-name = "windowCenter"

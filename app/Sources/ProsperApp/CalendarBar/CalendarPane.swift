@@ -16,6 +16,7 @@ struct CalendarPane: View {
 
     var body: some View {
         Group {
+            ShortcutsElsewhereLink(query: "calendar")
             menuBarSection
             calendarSection
             calendarsSection

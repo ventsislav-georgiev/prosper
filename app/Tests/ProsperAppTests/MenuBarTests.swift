@@ -758,14 +758,17 @@ final class MenuBarTests: XCTestCase {
         XCTAssertTrue(p.canApply(now: 16, onBattery: false))
     }
 
-    // MARK: - Manifest wiring (the declarative section + reveal shortcut)
+    // MARK: - Manifest wiring (the declarative section)
 
     /// Load the shipped extension.toml exactly as the host does. Proves the
     /// manifest parses, identifies as a system extension, and contributes the
-    /// "menubar" section with the rebindable reveal shortcut — the part of the
-    /// wiring PROSPER_VERIFY can only check inside a packaged .app (where the
-    /// bundled-resources dir classifies the folder as system).
-    func testManifestParsesWithSectionAndShortcut() throws {
+    /// "menubar" section — the part of the wiring PROSPER_VERIFY can only check
+    /// inside a packaged .app (where the bundled-resources dir classifies the
+    /// folder as system). #119: the reveal shortcut is no longer a manifest
+    /// control — it only lives in Settings › Shortcuts — so this section has no
+    /// declarative controls of its own; the rich UI is the native MenuBarPane
+    /// footer merged in by SettingsRootView.
+    func testManifestParsesWithSection() throws {
         let dir = URL(fileURLWithPath: #filePath)        // .../Tests/ProsperAppTests/MenuBarTests.swift
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/ProsperApp/Resources/extensions/menubar")
@@ -777,14 +780,13 @@ final class MenuBarTests: XCTestCase {
         let section = sections.first { $0.id == "menubar" }
         XCTAssertNotNil(section, "menubar settings section missing")
         XCTAssertEqual(section?.accent, "Menu Bar")
-
-        let shortcut = section?.allControls.first { $0.kind == .shortcut }
-        XCTAssertEqual(shortcut?.name, "menuBarToggleHidden",
-                       "reveal shortcut must bind to the menuBarToggleHidden action")
+        XCTAssertEqual(section?.allControls ?? [], [],
+                       "reveal shortcut must stay out of the manifest (#119)")
     }
 
-    /// The manifest's shortcut `name` must resolve to a real ShortcutAction owned
-    /// by this extension — otherwise the recorder renders but binds nothing.
+    /// The reveal shortcut's action name must still resolve to a real
+    /// ShortcutAction owned by this extension, even with no manifest control
+    /// naming it — otherwise the Shortcuts catalog row binds nothing.
     func testRevealShortcutActionBinding() {
         let action = ShortcutAction(rawValue: "menuBarToggleHidden")
         XCTAssertNotNil(action, "menuBarToggleHidden is not a ShortcutAction rawValue")
