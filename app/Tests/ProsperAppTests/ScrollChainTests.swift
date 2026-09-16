@@ -3,17 +3,15 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #128: an inner list that can scroll must swallow the wheel events it cannot
-/// use instead of handing them to the pane's own scroll view.
+/// #129: while the cursor is over a SCROLLABLE inner list the pane must not move
+/// at all; a list too short to scroll must leave the pane exactly as it was.
+///
+/// #128 gated the responder chain and could not test the decision, because the
+/// decision depended on AppKit's private routing. The capture decision is a pure
+/// function of (event location, scroll-view geometry), so it is tested directly
+/// against the real hosted hierarchy.
 @MainActor
 final class ScrollChainTests: XCTestCase {
-    /// Counts the events that made it PAST the gate — i.e. the ones that would
-    /// have chained on to the pane.
-    private final class WheelSpy: NSResponder {
-        var count = 0
-        override func scrollWheel(with event: NSEvent) { count += 1 }
-    }
-
     private func rows(_ n: Int) -> [BindableAction] {
         (0..<n).map { i in
             BindableAction(kind: .extensionItem, key: "chain.\(i)", title: "Chain probe \(i)",
@@ -30,25 +28,6 @@ final class ScrollChainTests: XCTestCase {
         return out
     }
 
-    private func wheel(_ dy: Int32) -> NSEvent {
-        let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
-                         wheelCount: 1, wheel1: dy, wheel2: 0, wheel3: 0)!
-        return NSEvent(cgEvent: cg)!
-    }
-
-    /// Every `ScrollChainGate` reachable from a scroll view's responder chain.
-    private func gates(from sv: NSScrollView) -> [ScrollChainGate] {
-        var out: [ScrollChainGate] = []
-        var next = sv.nextResponder
-        var hops = 0
-        while let cur = next, hops < 40 {
-            if let g = cur as? ScrollChainGate { out.append(g) }
-            next = cur.nextResponder
-            hops += 1
-        }
-        return out
-    }
-
     /// Hosts the real pane and hands back (window, hosting view, outer scroll, inner list scroll).
     private func host(rowCount: Int) throws -> (NSWindow, NSView, NSScrollView, NSScrollView) {
         let side = CGSize(width: 660, height: 640)
@@ -59,6 +38,10 @@ final class ScrollChainTests: XCTestCase {
         let win = NSWindow(contentRect: host.frame, styleMask: [.titled],
                            backing: .buffered, defer: false)
         win.contentView = host
+        // Detach deterministically at the end of the test rather than leaving it to
+        // dealloc order: the monitor-lifetime assertions below are about a clean
+        // registry, and must not depend on which test ran first.
+        addTeardownBlock { MainActor.assumeIsolated { win.contentView = NSView() } }
         host.layoutSubtreeIfNeeded()
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         host.layoutSubtreeIfNeeded()
@@ -67,87 +50,114 @@ final class ScrollChainTests: XCTestCase {
             "no inner list scroll view — did NeonBoundedList stop bounding?"))
     }
 
-    func testGateIsSplicedIntoTheListScrollViewAndNotThePane() throws {
-        let (_, _, outer, inner) = try host(rowCount: 200)
-        XCTAssertTrue(inner.nextResponder is ScrollChainGate,
-                      "inner list scroll view is not gated: \(String(describing: inner.nextResponder))")
-        XCTAssertFalse(outer.nextResponder is ScrollChainGate,
-                       "the pane's own scroll view got gated — it must keep chaining normally")
+    /// A point well inside the list, in the window coordinate space a local monitor
+    /// would hand us.
+    private func windowPointInside(_ sv: NSScrollView) -> NSPoint {
+        sv.convert(NSPoint(x: sv.bounds.midX, y: sv.bounds.midY), to: nil)
     }
 
-    /// The reported bug: at the end of a scrollable list the wheel event must stop
-    /// here, not travel on to the pane.
-    func testScrollableListSwallowsWhatItCannotUse() throws {
-        let (_, _, _, inner) = try host(rowCount: 200)
-        let gate = try XCTUnwrap(inner.nextResponder as? ScrollChainGate)
-        let spy = WheelSpy()
-        gate.nextResponder = spy
+    // MARK: - The decision
 
+    func testCapturesAPointInsideAScrollableList() throws {
+        let (_, _, _, inner) = try host(rowCount: 200)
         XCTAssertGreaterThan(inner.documentView?.frame.height ?? 0, inner.contentView.bounds.height,
                              "precondition: this list must actually be scrollable")
-        gate.scrollWheel(with: wheel(-40))
-        gate.scrollWheel(with: wheel(40))
-        XCTAssertEqual(spy.count, 0, "a scrollable list let \(spy.count) wheel events chain to the pane")
+        XCTAssertTrue(ScrollChainCapture.shouldCapture(at: windowPointInside(inner), in: inner),
+                      "a scrollable list under the cursor let the event through to the pane")
     }
 
-    /// The other half: a list too short to scroll must keep letting the pane move.
-    func testUnscrollableListStillLetsThePaneScroll() throws {
-        // "All Actions" is bounded at threshold 0, so 3 rows still get a scroll
-        // view — one whose content is shorter than its frame.
+    /// The other half of the boundary: "All Actions" is bounded at threshold 0, so
+    /// 3 rows still get a scroll view — one whose content is shorter than its frame.
+    func testDoesNotCaptureInsideAListTooShortToScroll() throws {
         let (_, _, _, inner) = try host(rowCount: 3)
-        let gate = try XCTUnwrap(inner.nextResponder as? ScrollChainGate)
-        let spy = WheelSpy()
-        gate.nextResponder = spy
-
         XCTAssertLessThan(inner.documentView?.frame.height ?? 0, inner.contentView.bounds.height,
                           "precondition: this list must NOT be scrollable")
-        gate.scrollWheel(with: wheel(-40))
-        XCTAssertEqual(spy.count, 1, "a short list swallowed the event — the pane can no longer scroll over it")
+        XCTAssertFalse(ScrollChainCapture.shouldCapture(at: windowPointInside(inner), in: inner),
+                       "a short list swallowed the event — the pane can no longer scroll over it")
     }
 
-    /// Scrollability is read at event time, not captured at layout time: filtering
-    /// shrinks the list under the cursor and the gate must notice.
-    func testGateFollowsContentHeightChanges() throws {
+    func testDoesNotCaptureAPointOutsideTheList() throws {
+        let (_, hosted, _, inner) = try host(rowCount: 200)
+        // Top-left of the window: inside the pane, well clear of the bounded list.
+        let outside = NSPoint(x: 8, y: hosted.bounds.maxY - 8)
+        XCTAssertFalse(inner.visibleRect.contains(inner.convert(outside, from: nil)),
+                       "precondition: this point must be outside the list")
+        XCTAssertFalse(ScrollChainCapture.shouldCapture(at: outside, in: inner),
+                       "an event outside the list was captured — the pane would stop scrolling")
+    }
+
+    /// The document is far taller than the list and scrolls under it. Testing the
+    /// point against `documentView.frame` instead of the visible rect would claim
+    /// the whole window; this pins that mistake down.
+    func testDoesNotCaptureAPointInTheScrolledAwayPartOfTheDocument() throws {
         let (_, _, _, inner) = try host(rowCount: 200)
-        let gate = try XCTUnwrap(inner.nextResponder as? ScrollChainGate)
-        let spy = WheelSpy()
-        gate.nextResponder = spy
-        gate.scrollWheel(with: wheel(-40))
-        XCTAssertEqual(spy.count, 0)
+        let doc = try XCTUnwrap(inner.documentView)
+        // A point far down the document, i.e. below the list on screen.
+        let deep = doc.convert(NSPoint(x: doc.bounds.midX, y: doc.bounds.midY), to: nil)
+        XCTAssertFalse(ScrollChainCapture.shouldCapture(at: deep, in: inner),
+                       "a point in the scrolled-away part of the document was treated as a hit")
+    }
 
-        // Same gate, same scroll view, content shrunk to below the frame.
+    /// Scrollability is read at event time: filtering shrinks the list under the
+    /// cursor and capture must stop immediately.
+    func testDecisionFollowsContentHeightChanges() throws {
+        let (_, _, _, inner) = try host(rowCount: 200)
+        let point = windowPointInside(inner)
+        XCTAssertTrue(ScrollChainCapture.shouldCapture(at: point, in: inner))
+
         inner.documentView?.setFrameSize(NSSize(width: inner.contentView.bounds.width, height: 10))
-        gate.scrollWheel(with: wheel(-40))
-        XCTAssertEqual(spy.count, 1, "gate kept swallowing after the list stopped being scrollable")
+        XCTAssertFalse(ScrollChainCapture.shouldCapture(at: point, in: inner),
+                       "kept capturing after the list stopped being scrollable")
     }
 
-    /// AppKit does not retain `nextResponder`: a scroll view outliving its probe
-    /// must not be left pointing at a freed gate.
-    func testGateIsUnsplicedWhenTheListLeavesTheWindow() throws {
+    func testDoesNotCaptureForAListThatHasLeftTheWindow() throws {
         let (win, _, _, inner) = try host(rowCount: 200)
-        XCTAssertEqual(gates(from: inner).count, 1, "precondition: gate spliced")
+        let point = windowPointInside(inner)
+        XCTAssertTrue(ScrollChainCapture.shouldCapture(at: point, in: inner))
 
         win.contentView = NSView()
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-
-        XCTAssertEqual(gates(from: inner).count, 0,
-                       "the gate stayed spliced after teardown — the next wheel event over this list is a use-after-free")
+        XCTAssertFalse(ScrollChainCapture.shouldCapture(at: point, in: inner),
+                       "an off-screen list still claimed events")
     }
 
-    /// Leaving and returning must end with exactly one gate, not two and not zero.
-    func testGateIsResplicedExactlyOnceOnReturn() throws {
-        let (win, hosted, _, inner) = try host(rowCount: 200)
+    // MARK: - Monitor lifetime
+
+    /// A monitor outliving the settings window would eat wheel events across the
+    /// whole app — strictly worse than the bug it fixes.
+    func testMonitorIsInstalledWithTheListsAndRemovedWithTheLast() throws {
+        XCTAssertEqual(ScrollChainCapture.registeredCount, 0, "a previous test leaked a registration")
+        XCTAssertFalse(ScrollChainCapture.isMonitoring, "a previous test leaked the monitor")
+
+        let (win, _, _, _) = try host(rowCount: 200)
+        XCTAssertGreaterThan(ScrollChainCapture.registeredCount, 0, "no list registered for capture")
+        XCTAssertTrue(ScrollChainCapture.isMonitoring, "lists registered but no monitor installed")
+
         win.contentView = NSView()
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        XCTAssertEqual(gates(from: inner).count, 0)
+        XCTAssertEqual(ScrollChainCapture.registeredCount, 0, "a torn-down list stayed registered")
+        XCTAssertFalse(ScrollChainCapture.isMonitoring,
+                       "the monitor outlived the last list — it now eats wheel events app-wide")
+    }
+
+    /// Leaving and returning must end with exactly one registration, not two.
+    func testRegistrationIsIdempotentAcrossLeaveAndReturn() throws {
+        let (win, hosted, _, _) = try host(rowCount: 200)
+        let first = ScrollChainCapture.registeredCount
+
+        win.contentView = NSView()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(ScrollChainCapture.registeredCount, 0)
 
         win.contentView = hosted
         hosted.layoutSubtreeIfNeeded()
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         hosted.layoutSubtreeIfNeeded()
+        XCTAssertEqual(ScrollChainCapture.registeredCount, first,
+                       "returning to a window changed the registration count")
 
-        let live = try XCTUnwrap(scrollViews(hosted).dropFirst().first)
-        XCTAssertEqual(gates(from: live).count, 1,
-                       "expected exactly one gate after returning to a window, found \(gates(from: live).count)")
+        win.contentView = NSView()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertFalse(ScrollChainCapture.isMonitoring)
     }
 }

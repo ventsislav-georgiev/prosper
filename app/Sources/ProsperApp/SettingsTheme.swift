@@ -509,9 +509,9 @@ struct NeonBoundedList<Content: View>: View {
 
     var body: some View {
         if rowCount > threshold {
-            // #128: the installer rides INSIDE the scroll view's content — that is
-            // the only handle SwiftUI gives onto its own `NSScrollView`.
-            ScrollView { content().background(ScrollChainGateInstaller()) }
+            // #128/#129: the installer rides INSIDE the scroll view's content —
+            // that is the only handle SwiftUI gives onto its own `NSScrollView`.
+            ScrollView { content().background(ScrollChainCaptureInstaller()) }
                 .frame(height: Self.height(paneHeight: paneHeight))
         } else {
             content()
@@ -519,77 +519,115 @@ struct NeonBoundedList<Content: View>: View {
     }
 }
 
-/// #128: kills AppKit scroll chaining for one inner scroll view.
+/// #129: keeps the pane still while the cursor is over a scrollable inner list.
 ///
-/// An `NSScrollView` that cannot use a wheel event hands it to its `nextResponder`
-/// — for a list nested in `NeonScroll` that is the pane's own scroll view, so
-/// reaching either end of "All Actions" yanked the whole pane (v2.151.0 on-device
-/// report). This responder is spliced in between the inner scroll view and its
-/// superview and swallows that forward. Per instance, by wiring only: no swizzle,
-/// nothing global, and `NSScrollView` itself is untouched, so the inner list keeps
-/// its own scrolling, elasticity and scroller exactly as before.
-final class ScrollChainGate: NSResponder {
-    weak var scrollView: NSScrollView?
+/// #128 tried this by splicing an `NSResponder` in as the inner scroll view's
+/// `nextResponder`, on the assumption that an unconsumed wheel event chains that
+/// way. v2.151.1 disproved it on device — the pane still moved — so SwiftUI's
+/// `HostingScrollView` reaches the pane by some other route. This intercepts the
+/// event BEFORE dispatch instead, which makes the route irrelevant: a local
+/// `.scrollWheel` monitor runs ahead of the responder chain, hands the event
+/// straight to the list under the cursor and returns nil so nothing else sees it.
+///
+/// The user's rule is absolute (#129 clarification): while the cursor is over a
+/// SCROLLABLE list the pane must not move at all — not at the ends, not mid-list,
+/// not on a momentum tail — so every wheel event at that location is captured
+/// whether or not the list can still move in that direction. A list too short to
+/// scroll captures nothing and the pane behaves exactly as it always has.
+@MainActor
+enum ScrollChainCapture {
+    /// Weak by construction: a list that goes away must not keep itself alive here,
+    /// and must never be scrolled after it does.
+    private static let lists = NSHashTable<NSScrollView>.weakObjects()
+    private static var monitor: Any?
 
-    override func scrollWheel(with event: NSEvent) {
-        // Scrollability is read AT EVENT TIME, never captured at layout time: the
-        // content height changes as the user filters, and a stale answer would
-        // strand the cursor over a now-short list that refuses to move the pane.
-        // This also covers trackpad momentum without special-casing `phase` —
-        // momentum events the list cannot use arrive here like any other and are
-        // swallowed the same way, so a fling ending inside the list never resumes
-        // the pane.
-        if let sv = scrollView, let doc = sv.documentView,
-           doc.frame.height > sv.contentView.bounds.height + 0.5 { return }
-        // Not scrollable: behave exactly as before and let the pane have it.
-        // `NSResponder`'s default hands the event on to `nextResponder`.
-        super.scrollWheel(with: event)
+    static var registeredCount: Int { lists.allObjects.count }
+    static var isMonitoring: Bool { monitor != nil }
+
+    /// The whole decision, as a pure function of the event location and the scroll
+    /// view's live geometry — which is the part #128's approach could never reach,
+    /// because there the decision depended on AppKit's private routing.
+    ///
+    /// `point` is in the scroll view's own WINDOW coordinate space; the caller has
+    /// already established that the event belongs to that window.
+    static func shouldCapture(at point: NSPoint, in sv: NSScrollView) -> Bool {
+        // Off screen, hidden, or detached: never capture. `visibleRect` is empty in
+        // all of those cases, but say it out loud — an event must never be eaten on
+        // behalf of a list nobody can see.
+        guard sv.window != nil, !sv.isHiddenOrHasHiddenAncestor else { return false }
+        // Scrollability read AT EVENT TIME, never captured at layout time: filtering
+        // changes the content height under the cursor, and a stale answer would
+        // strand the user over a now-short list that refuses to move the pane.
+        guard let doc = sv.documentView,
+              doc.frame.height > sv.contentView.bounds.height + 0.5 else { return false }
+        // `visibleRect`, not `documentView.frame`: the document is taller than the
+        // list and scrolls under it, so testing against it would claim every point
+        // in the scrolled-away part. `visibleRect` is also already clipped by the
+        // pane's own scroll view, so a list scrolled half out of the pane only
+        // captures over the half actually on screen.
+        return sv.visibleRect.contains(sv.convert(point, from: nil))
+    }
+
+    static func register(_ sv: NSScrollView) {
+        lists.add(sv)
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            // Documented to run on the main thread, like all AppKit event delivery.
+            // A `Bool` crosses back out, not the event: `NSEvent` is not `Sendable`.
+            MainActor.assumeIsolated { capture(event) } ? nil : event
+        }
+    }
+
+    static func unregister(_ sv: NSScrollView) {
+        lists.remove(sv)
+        // A monitor outliving the settings window would eat wheel events elsewhere
+        // in the app — strictly worse than the bug it fixes.
+        if lists.allObjects.isEmpty { removeMonitor() }
+    }
+
+    private static func removeMonitor() {
+        guard let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+    }
+
+    /// Returns true when the event was consumed on a list's behalf.
+    private static func capture(_ event: NSEvent) -> Bool {
+        let live = lists.allObjects
+        // Self-heal: weak entries drop out on their own, so a probe that died
+        // without unregistering would otherwise leave the monitor installed.
+        if live.isEmpty { removeMonitor(); return false }
+        // The event's coordinates only mean anything in its own window.
+        guard let win = event.window else { return false }
+        let point = event.locationInWindow
+        guard let target = live.first(where: { $0.window === win && shouldCapture(at: point, in: $0) })
+        else { return false }
+        target.scrollWheel(with: event)
+        return true
     }
 }
 
-/// Zero-size probe that finds the enclosing `NSScrollView` and gates it.
-private struct ScrollChainGateInstaller: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { GateProbe() }
+/// Zero-size probe that registers the `NSScrollView` enclosing it for capture.
+private struct ScrollChainCaptureInstaller: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { CaptureProbe() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 
-    final class GateProbe: NSView {
-        private let gate = ScrollChainGate()
-        /// The scroll view this probe actually spliced, kept because teardown has
-        /// to undo the splice AFTER `enclosingScrollView` has already gone nil.
-        /// Weak: the scroll view owns this probe's subtree, never the reverse.
-        private weak var spliced: NSScrollView?
+    final class CaptureProbe: NSView {
+        private weak var registered: NSScrollView?
 
         // A background view must never eat a click meant for a row.
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            // AppKit does NOT retain `nextResponder`. A scroll view outliving this
-            // probe would be left pointing at a freed gate — a use-after-free on
-            // the next wheel event — so the splice is undone the moment the probe
-            // leaves the window. Splicing only ever happens with a window attached
-            // (below), so every path to dealloc runs through this branch first and
-            // no unsplice can be skipped.
-            if window == nil { return unsplice() }
-            // Re-splices if SwiftUI ever re-parents the scroll view, which resets
-            // `nextResponder` back to the superview.
-            guard let sv = enclosingScrollView, sv.nextResponder !== gate else { return }
-            unsplice()  // moved between scroll views: never leave two gates behind
-            gate.scrollView = sv
-            gate.nextResponder = sv.nextResponder
-            sv.nextResponder = gate
-            spliced = sv
-        }
-
-        private func unsplice() {
-            guard let sv = spliced else { return }
-            spliced = nil
-            // Only if this gate is still the one in the chain — another gate may
-            // have spliced in since, and pulling it out would break that list.
-            guard sv.nextResponder === gate else { return }
-            sv.nextResponder = gate.nextResponder
-            gate.nextResponder = nil
-            gate.scrollView = nil
+            // Leaving the window unregisters, which is what tears the monitor down
+            // once the last list is gone. Registration only ever happens WITH a
+            // window, so every path to dealloc passes through here first.
+            let sv = window == nil ? nil : enclosingScrollView
+            guard sv !== registered else { return }
+            if let old = registered { ScrollChainCapture.unregister(old) }
+            registered = sv
+            if let sv { ScrollChainCapture.register(sv) }
         }
     }
 }

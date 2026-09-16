@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.151.1 *(unreleased)*
+## v2.151.2 *(unreleased)*
+
+- **The Shortcuts lists really do stay put now.** v2.151.1 claimed this and did not
+  deliver it: the fix relied on AppKit handing an unused scroll event up the responder
+  chain, which is not the route SwiftUI's scroll view takes, so the pane still moved.
+  The scroll event is now intercepted before it is dispatched at all — while the
+  cursor is over a list that can scroll, the pane does not move, at the ends or
+  anywhere else. A list too short to scroll passes the event through as before.
+
+## v2.151.1
 
 - **The Shortcuts lists stay put while you scroll them.** Reaching the top or bottom
   of "Bound" or "All Actions" no longer grabs the whole pane and scrolls that instead.
