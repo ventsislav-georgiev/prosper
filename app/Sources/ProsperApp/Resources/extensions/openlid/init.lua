@@ -304,7 +304,7 @@ end
 -- the countdown; call sites are one-shot moments (activate/launch/wake/network
 -- event), so that only ever grants a fresh grace period, never starves it.
 local function sync_netoff(s, c)
-    if s.active and c.networkAutoOffSeconds and not host.network.reachable() then
+    if s.active and c.networkAutoOffSeconds and not host.network.is_reachable() then
         host.timer.schedule { id = "netoff", after = c.networkAutoOffSeconds, handler = "on_netoff" }
     else
         host.timer.cancel("netoff")
@@ -468,7 +468,7 @@ function on_tick(payload) render(load_state()) end
 -- Re-verify at fire time: a cancel event missed across a sleep/wake must not
 -- become a forced sleep under a user whose network is actually fine.
 function on_netoff(payload)
-    if host.network.reachable() then return end
+    if host.network.is_reachable() then return end
     deactivate("no network (in transit)")
 end
 function on_caffeine_expiry(payload) caffeine_off("timer expired") end

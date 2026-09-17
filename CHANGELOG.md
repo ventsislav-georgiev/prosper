@@ -18,6 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.152.1
+
+- **Keep awake with the lid closed works again.** Turning on "Mac awake (lid closed)",
+  from Settings or the shortcut, silently did nothing since v2.141.0: the checkbox stayed
+  off and the lid still put the Mac to sleep. The openlid extension asked the host for
+  the network state through a function name the host does not provide, so every
+  activation stopped halfway. The extension now uses the host's real name, and the
+  extension test harness exposes the same API as the app so this mismatch cannot hide
+  again. Not related to macOS 27.
+
 ## v2.152.0
 
 - **Menu Bar Management works on macOS 27.** macOS 27 moved every menu-bar icon into

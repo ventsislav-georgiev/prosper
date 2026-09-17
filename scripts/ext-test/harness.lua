@@ -360,7 +360,7 @@ function M.makeHost(opts)
         },
         network = {
             addresses = function() return opts.addresses or {} end,
-            reachable = function() return env.reachable ~= false end,
+            is_reachable = function() return env.reachable ~= false end,
         },
 
         -- Declarative UI surface: constructors tag-and-return the node; render
