@@ -18,6 +18,19 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.152.2 *(unreleased)*
+
+- **Quick chat answers again, and no longer stalls translate.** Firing quick chat
+  (`c …` or `ask …`) showed nothing for a long time, and translate typed afterwards
+  waited behind it, until the model was loaded by hand from AI Models. Quick chat and
+  translate run on the same gemma model, but the runner first waited for a second,
+  ~4 GB model that neither of them uses. Both now start straight away on the model
+  that is already there, and that second model stays out of memory. Latent since
+  v2.127.0; not caused by macOS 27.
+- **Fan speed slider has clickable 5 % marks.** Thin bars under the manual fan slider
+  mark every 5 % (taller at 10 %). Click one to set all fans to that speed; hover shows
+  the percent.
+
 ## v2.152.1
 
 - **Keep awake with the lid closed works again.** Turning on "Mac awake (lid closed)",

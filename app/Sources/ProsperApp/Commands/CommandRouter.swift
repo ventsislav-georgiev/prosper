@@ -479,7 +479,7 @@ enum CommandRouter {
         }
 
         // 3.5 Generic extension commands (matched by their `match` regex).
-        let modelReady = await MLXEngine.shared.isLoaded
+        let modelReady = await modelReady()
         if let e = await extensionResult(trimmed, modelReady: modelReady) {
             return .ext(kind: e.kind, value: e.value, detail: e.detail)
         }
@@ -788,20 +788,27 @@ enum CommandRouter {
         return .quickdirsMenu(menu.isEmpty ? QuickdirStore.all() : menu, launchers: [])
     }
 
+    /// Readiness for `requires = ["model"]` commands. CoreBridge serves chat and
+    /// translate on the llama GGUF, which the staged pipeline loads itself behind
+    /// a "Loading model…" milestone, so a downloaded llama model counts as ready.
+    /// Gating on MLX alone made quick chat wait for the whole ~4 GB MLX load
+    /// (queueing translate behind it in the single-flight runner) and then left
+    /// both models resident.
+    /// ponytail: host.llm.complete still runs on MLX; a command pairing it with
+    /// `requires = ["model"]` needs its own preload here.
+    private static func modelReady() async -> Bool {
+        if LlamaInlineEngine.isEnabled && LlamaInlineEngine.modelIsDownloaded { return true }
+        return await MLXEngine.shared.isLoaded
+    }
+
     /// Routes the whole `query` to a specific extension command id (locked mode).
     private static func runExtension(id: String, title: String, query: String) async -> RunnerOutcome {
-        let modelReady = await MLXEngine.shared.isLoaded
+        let modelReady = await modelReady()
         let info: (requiresModel: Bool, prefix: String?) = await MainActor.run {
             let c = registry?.command(id: id)?.command
             return (c?.requiresModel ?? false, c?.prefix)
         }
-        // Translate on the llama engine loads its own GGUF inside the staged
-        // pipeline (with an honest "Loading model…" milestone) — preloading MLX
-        // here would block the first render AND waste ~4 GB on a model translate
-        // never touches.
-        let llamaServesTranslate = id == "translate.run"
-            && LlamaInlineEngine.isEnabled && LlamaInlineEngine.modelIsDownloaded
-        if info.requiresModel && !modelReady && !llamaServesTranslate {
+        if info.requiresModel && !modelReady {
             // The model is loaded lazily (it is NOT preloaded just because a
             // model-requiring extension like Translate is enabled — that would
             // cost ~4 GB at idle). The user has explicitly entered this locked

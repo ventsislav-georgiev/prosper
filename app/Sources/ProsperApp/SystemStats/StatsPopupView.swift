@@ -788,6 +788,7 @@ struct StatsPopupView: View {
                            FanControlHelper.userAdjusting = dragging
                        })
                     .controlSize(.mini)
+                fanTicks
                 HStack {
                     Text(StatsFormat.percent(fanFraction))
                         .font(Neon.font(10).monospacedDigit()).foregroundStyle(Neon.textSecondary)
@@ -829,6 +830,28 @@ struct StatsPopupView: View {
         if let err = fanError {
             Text(err).font(Neon.font(10)).foregroundStyle(.red).padding(.top, sz(2))
         }
+    }
+
+    /// Thin bars under the fan slider at every 5 % (taller at 10 %), each a click
+    /// target that jumps all fans to that speed. Placed by the mini knob's radius
+    /// so they line up with the knob's travel rather than the track ends.
+    private var fanTicks: some View {
+        let inset: CGFloat = 5.5   // mini slider knob radius
+        return GeometryReader { g in
+            let cell = (g.size.width - 2 * inset) / 20
+            ForEach(0...20, id: \.self) { i in
+                let major = i % 2 == 0
+                Rectangle()
+                    .fill(Neon.textSecondary.opacity(major ? 0.7 : 0.35))
+                    .frame(width: 1, height: major ? 6 : 3)
+                    .frame(width: cell, height: 10, alignment: .top)
+                    .contentShape(Rectangle())
+                    .position(x: inset + CGFloat(i) * cell, y: 5)
+                    .onTapGesture { applyFraction(Double(i) / 20) }
+                    .help("\(i * 5)%")
+            }
+        }
+        .frame(height: 10)
     }
 
     /// Live per-fan bar — ALWAYS the real measured RPM (`F{i}Ac`), never the slider
