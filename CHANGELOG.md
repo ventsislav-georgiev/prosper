@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.152.2 *(unreleased)*
+## v2.153.0 *(unreleased)*
+
+- **Prosper server moved to a new address.** The account server now lives at
+  `prosper.ventsislav-georgiev.com` and sign-in emails come from
+  `login@mail.ventsislav-georgiev.com`; the old `illegible.eu` address no longer
+  exists. On older builds, sign-in, supporter sync, the extension market and remote
+  wake fail until this update. Nothing to redo after updating: remote wake re-arms
+  itself with the new address on first launch.
+
+## v2.152.2
 
 - **Quick chat answers again, and no longer stalls translate.** Firing quick chat
   (`c …` or `ask …`) showed nothing for a long time, and translate typed afterwards
