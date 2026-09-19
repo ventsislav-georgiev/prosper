@@ -6,7 +6,7 @@ import Foundation
 /// after the first `wrangler deploy`. For local development against
 /// `wrangler dev`, export `PROSPER_SERVER_URL=http://127.0.0.1:8787`.
 enum ProsperServer {
-    private static let productionURL = "https://prosper.illegible.eu"
+    private static let productionURL = "https://prosper.ventsislav-georgiev.com"
 
     static var baseURL: URL {
         if let override = ProcessInfo.processInfo.environment["PROSPER_SERVER_URL"],

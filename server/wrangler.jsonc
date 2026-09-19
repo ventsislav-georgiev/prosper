@@ -3,12 +3,15 @@
 	"name": "prosper-server",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-06-01",
+	"routes": [
+		{ "pattern": "prosper.ventsislav-georgiev.com", "custom_domain": true }
+	],
 	"observability": {
 		"enabled": true
 	},
 	"vars": {
-		"EMAIL_FROM": "Prosper <login@mail.illegible.eu>",
-		"APP_BASE_URL": "https://prosper.illegible.eu",
+		"EMAIL_FROM": "Prosper <login@mail.ventsislav-georgiev.com>",
+		"APP_BASE_URL": "https://prosper.ventsislav-georgiev.com",
 		"MAGIC_LINK_TTL_SECONDS": "900",
 		"SUPPORTER_TOKEN_TTL_DAYS": "30",
 		"SESSION_TTL_DAYS": "365",

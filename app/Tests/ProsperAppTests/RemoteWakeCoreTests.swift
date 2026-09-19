@@ -29,7 +29,7 @@ final class RemoteWakeCoreTests: XCTestCase {
     }
 
     private func cfg(enabled: Bool = true, ac: Double = 30, batt: Double = 300,
-                     floor: Int = 20, url: String = "https://prosper.illegible.eu/wake/abc") -> RemoteWakeConfig {
+                     floor: Int = 20, url: String = "https://prosper.ventsislav-georgiev.com/wake/abc") -> RemoteWakeConfig {
         RemoteWakeConfig(enabled: enabled, pollURL: url, intervalAC: ac, intervalBatt: batt, batteryFloor: floor)
     }
 
@@ -213,7 +213,7 @@ final class RemoteWakeCoreTests: XCTestCase {
     }
 
     func testSanitizeRejectsNonHTTPS() {
-        XCTAssertFalse(cfg(url: "http://prosper.illegible.eu/wake/abc").sanitized().enabled)
+        XCTAssertFalse(cfg(url: "http://prosper.ventsislav-georgiev.com/wake/abc").sanitized().enabled)
     }
 
     func testSanitizeAllowsLocalhostDev() {
@@ -288,7 +288,7 @@ final class RemoteWakeCorePerfTests: XCTestCase {
             schedule: { _ in }, cancelAll: {}, poll: { "11111111-1111-4111-8111-111111111111" }, promote: {},
             now: { fixed }, debounce: 0)
         _ = core.applyConfig(
-            RemoteWakeConfig(enabled: true, pollURL: "https://prosper.illegible.eu/wake/abc",
+            RemoteWakeConfig(enabled: true, pollURL: "https://prosper.ventsislav-georgiev.com/wake/abc",
                              intervalAC: 30, intervalBatt: 300, batteryFloor: 20),
             onAC: false)
 

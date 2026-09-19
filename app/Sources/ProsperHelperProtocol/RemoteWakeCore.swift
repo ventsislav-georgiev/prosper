@@ -46,7 +46,7 @@ public struct RemoteWakeConfig: Codable, Equatable, Sendable {
     /// Hosts the root daemon will poll. Defense-in-depth: even though the config
     /// arrives from the code-sign-pinned app, a tampered file can't redirect the
     /// root GET anywhere else. 127.0.0.1/localhost cover `PROSPER_SERVER_URL` dev.
-    public static let allowedHosts: Set<String> = ["prosper.illegible.eu", "127.0.0.1", "localhost"]
+    public static let allowedHosts: Set<String> = ["prosper.ventsislav-georgiev.com", "127.0.0.1", "localhost"]
     private static let minInterval = 5.0
     private static let maxInterval = 86400.0  // 1 day — the longest battery cadence the UI offers
 
