@@ -928,10 +928,7 @@ struct SettingsSidebar: View {
 
     private var header: some View {
         HStack(spacing: sz(9)) {
-            Image(systemName: "bolt.horizontal.fill")
-                .font(Neon.font(14, weight: .bold))
-                .foregroundStyle(Neon.blue)
-                .shadow(color: Neon.blue.opacity(0.8), radius: sz(6))
+            appMark
             Text("PROSPER")
                 .font(Neon.font(13, weight: .heavy))
                 .tracking(sz(3))
@@ -939,6 +936,28 @@ struct SettingsSidebar: View {
         }
         .padding(.leading, sz(10))
         .padding(.bottom, sz(4))
+    }
+
+    /// The real app icon (the neon Vulcan hand) rather than a stand-in SF Symbol,
+    /// so the sidebar wordmark matches the Dock/bundle icon. Falls back to the
+    /// bundled AppIcon, then a symbol, when the running app has no icon image
+    /// (unbundled debug run) — same ladder as the About pane's `appIcon`.
+    @ViewBuilder
+    private var appMark: some View {
+        if let icon = NSApp.applicationIconImage
+            ?? Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
+                .flatMap({ NSImage(contentsOf: $0) }) {
+            Image(nsImage: icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: sz(18), height: sz(18))
+                .shadow(color: Neon.blue.opacity(0.8), radius: sz(6))
+        } else {
+            Image(systemName: "bolt.horizontal.fill")
+                .font(Neon.font(14, weight: .bold))
+                .foregroundStyle(Neon.blue)
+                .shadow(color: Neon.blue.opacity(0.8), radius: sz(6))
+        }
     }
 
     private var searchField: some View {

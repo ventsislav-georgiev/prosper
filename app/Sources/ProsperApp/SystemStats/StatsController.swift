@@ -1,6 +1,6 @@
 // Owns the System Stats menu-bar presence end to end: one NSStatusItem per
 // enabled module (each with its own autosave name so macOS persists its menu-bar
-// position independently — the Tahoe MenuBarOrdering caveat), the StatsPoller
+// position independently — the Tahoe menu-bar identity caveat), the StatsPoller
 // that feeds them, and the shared popover. Disabled by default; `reload()` brings
 // the whole feature up or tears it fully down off a single pref + style read.
 

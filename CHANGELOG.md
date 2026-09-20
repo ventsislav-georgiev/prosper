@@ -18,7 +18,26 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.153.0 *(unreleased)*
+## v2.154.0 *(unreleased)*
+
+- **Settings pages are laid out the way you read them.** General now opens with one
+  **Essentials** card — launch at login, menu-bar icon, Dock icon and panel placement,
+  the four things everyone touches — and the heavier opt-in features sit at the bottom:
+  **Remote Terminal**, now with a direct link to the free
+  [Prosper Remote](https://apps.apple.com/app/prosper-remote/id6782528095) iPhone/iPad
+  app it serves sessions to, and **Local AI**, which merges the inline-autocomplete and
+  coding-agent switches into one card. In the sidebar, **AI Models** moved below your
+  installed extensions, and the header now carries the real Prosper icon.
+- **Menu Bar Management dropped the item-ordering engine and the preview strip.** The
+  opt-in "enforce a saved menu-bar order" feature drove icons around with synthetic
+  ⌘-drags; it was unreliable across macOS versions and is gone, along with the
+  always-hidden band it fed and the live preview of your bar. Hiding, revealing, icon
+  spacing and the chevron style are untouched. Arranging icons — including choosing
+  what hides — is the native macOS gesture: hold ⌘ and drag an icon in the real menu
+  bar; drag it left of Prosper's chevron to hide it. If you had a saved order, nothing
+  is applied to your bar any more; macOS keeps whatever arrangement it last had.
+
+## v2.153.0
 
 - **Prosper server moved to a new address.** The account server now lives at
   `prosper.ventsislav-georgiev.com` and sign-in emails come from

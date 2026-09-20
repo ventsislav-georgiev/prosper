@@ -335,9 +335,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // builds/tears down the divider status items.
             MenuBarManager.shared.menubarExtLive = self.menubarExtLive
             MenuBarManager.shared.reconcile()
-            // Enabling resumes live ordering without a relaunch; disabling stops the
-            // enforcer's 2s timer so it can't keep driving a torn-down bar.
-            self.reconcileMenuBarOrdering()
             // The menu-bar calendar comes and goes with its extension: enabling
             // builds the status item (and prompts for Calendar access), disabling
             // tears everything down.
@@ -507,8 +504,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Menu Bar Management: build the divider items when its extension is live.
         MenuBarManager.shared.menubarExtLive = menubarExtLive
         MenuBarManager.shared.reconcile()
-
-        reconcileMenuBarOrdering()
 
         reconcileMouse()
 
@@ -1085,27 +1080,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// while this is true; flipping it off tears the taps back down.
     private var mouseExtLive: Bool {
         extensions.record(id: "com.prosper.mouse")?.isLive ?? false
-    }
-
-    /// Arm or disarm the menu-bar ordering enforcer to match current state. Called at
-    /// launch AND whenever the menubar extension is toggled at runtime (now the primary
-    /// path, since the extension ships opt-in/off). When live + opted-in on a supported
-    /// OS, self-probe (spawns/removes two throwaway status items, so run it after the
-    /// bar is built) then arm the enforcer so live mode works without opening Settings.
-    /// Otherwise disarm it — else disabling the extension would leave the live timer
-    /// (and its synthetic drags) running against a torn-down feature.
-    private func reconcileMenuBarOrdering() {
-        let orderStore = Preferences.menuBarOrderStore
-        guard menubarExtLive, orderStore.enabled,
-              case .supported = MenuBarOrderingCapability.osSupport(
-                  major: ProcessInfo.processInfo.operatingSystemVersion.majorVersion) else {
-            MenuBarOrderEnforcer.shared.update(store: .default, probeOK: false)  // stop live loop
-            return
-        }
-        Task { @MainActor in
-            let ok = (await MenuBarItemMover.selfProbe()) == .ok
-            MenuBarOrderEnforcer.shared.update(store: orderStore, probeOK: ok)
-        }
     }
 
     /// Every mouse service owns its own CGEvent tap, created only while the

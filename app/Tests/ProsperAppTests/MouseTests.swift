@@ -4,7 +4,7 @@ import XCTest
 @testable import ProsperApp
 
 /// Mouse module, entry A: the `com.prosper.mouse` extension shell and the shared
-/// `EventTap` lifted out of MenuBarItemMover. No services yet — these cover the
+/// `EventTap` CGEvent-tap wrapper. No services yet — these cover the
 /// two things the later entries build on: the manifest the Settings page reads,
 /// and the `dispatch` return contract (the fix that makes pass/mutate possible).
 @MainActor
