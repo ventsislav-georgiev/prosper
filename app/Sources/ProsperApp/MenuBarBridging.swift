@@ -36,8 +36,8 @@ enum MenuBarItemRole {
     /// Launcher icon, chevron, dividers — Prosper's own UI. Always self-filtered out.
     case control
     /// Stats modules, extension icons — our own data icons. KEPT in the managed list
-    /// (named from this registry) rather than self-filtered: they are real items the
-    /// user hides and spaces like any other.
+    /// (named + previewed from this registry) so the user can order/preview them;
+    /// ordering multi-icon apps like Stats is the whole point of the feature.
     case content
 }
 
@@ -109,12 +109,13 @@ struct MenuBarItem: Equatable, Sendable {
     var frame: CGRect            // screen coords (top-left origin, like CGWindow)
     var bundleID: String?
     var displayID: CGDirectDisplayID
-    /// OS window name (kCGWindowName). nil or a placeholder ("Menu Item") on Tahoe,
-    /// which masks per-item identity behind Control Center.
+    /// OS window name (kCGWindowName). Per-item discriminator for the ordering
+    /// engine pre-Tahoe; nil/"Menu Item" on Tahoe (the indexer fills identity then).
     var title: String?
     /// True for Prosper's own CONTENT icons (Stats modules, extension icons). They
     /// stay in the managed set but carry a real name/bundle from the registry instead
-    /// of Tahoe's "controlcenter / Item-0" masking.
+    /// of Tahoe's "controlcenter / Item-0" masking — and preview from a direct button
+    /// snapshot rather than Screen Recording.
     var isOwn: Bool = false
     /// Hosted bars (macOS 27+): false while the host keeps this item in its overflow
     /// group, so `frame` is the app's stale last-laid-out position, not a live one.
@@ -134,6 +135,11 @@ enum MenuBarBridge {
     /// otherwise pay 40× `NSRunningApplication` lookups; the cache makes the warm
     /// path cheap. Invalidated per-pid on app termination (see `appTerminated`).
     private static var bundleIDCache: [pid_t: String] = [:]
+
+    /// Window ids of our OWN divider items — excluded from the managed set even
+    /// though they share our pid (we self-filter all of getpid()'s windows, but
+    /// this lets the manager find the dividers' own frames when it needs them).
+    static var dividerWindowIDs: Set<CGWindowID> = []
 
     /// Drop a terminated app from the bundle-id cache. Call from the manager's
     /// `NSWorkspace.didTerminateApplicationNotification` observer.
@@ -199,6 +205,85 @@ enum MenuBarBridge {
         ownX.contains { abs($0 - x) < 2 }
     }
 
+    /// CGS window id for a Prosper-owned status item, found by matching its on-screen
+    /// `minX` (passed in from `item.button.window.frame.minX`) against the live CGS
+    /// menu-bar enumeration. This REPLACES mapping via `NSWindow.windowNumber`, which
+    /// is unusable on Tahoe (windowNumber moved into a separate +2³² namespace
+    /// unrelated to CGWindowID). nil if no window matches within tolerance.
+    static func windowID(forItemMinX x: CGFloat, tolerance: CGFloat = 2) -> CGWindowID? {
+        guard available, !MenuBarHost.isHosted else { return nil }
+        let cid = CGSMainConnectionID()
+        var ids = [UInt32](repeating: 0, count: 256)
+        var n: Int32 = 0
+        let err = ids.withUnsafeMutableBufferPointer {
+            CGSGetProcessMenuBarWindowList(cid, 0, Int32($0.count), $0.baseAddress!, &n)
+        }
+        guard err == .success else { return nil }
+        var best: (id: CGWindowID, dx: CGFloat)?
+        for wid in ids.prefix(Int(max(0, n))) {
+            var rect = CGRect.zero
+            guard CGSGetScreenRectForWindow(cid, wid, &rect) == .success, rect.width > 0 else { continue }
+            let dx = abs(rect.minX - x)
+            if best == nil || dx < best!.dx { best = (CGWindowID(wid), dx) }
+        }
+        guard let best, best.dx <= tolerance else { return nil }
+        return best.id
+    }
+
+    /// Cheap left→right windowID order of FOREIGN menu-bar items on `display`,
+    /// WITHOUT the heavy `CGWindowListCopyWindowInfo(.optionAll)` system-wide window
+    /// enumeration that `items(onDisplay:)` pays for pid/name/bundle. Used by the
+    /// live enforcer as a drift PRE-GATE on its 2s main-thread tick: if this sequence
+    /// is unchanged since the last full check, the order cannot have drifted, so it
+    /// skips the expensive identity rebuild entirely. Self-filters our own windows
+    /// via the per-pid CGS list (two cheap CGS calls, no system window scan). Returns
+    /// [] on any CGS error — the caller then falls back to the full check.
+    ///
+    /// HOT PATH: this is the ONLY thing the steady-state live loop should call per
+    /// tick. Keep it free of `CGWindowListCopyWindowInfo` and heap-heavy work.
+    static func menuBarWindowOrder(onDisplay display: CGDirectDisplayID) -> [CGWindowID] {
+        guard available, !MenuBarHost.isHosted else { return [] }
+        let cid = CGSMainConnectionID()
+        var ids = [UInt32](repeating: 0, count: 256)
+        var n: Int32 = 0
+        let err = ids.withUnsafeMutableBufferPointer {
+            CGSGetProcessMenuBarWindowList(cid, 0, Int32($0.count), $0.baseAddress!, &n)
+        }
+        guard err == .success else { return [] }
+        let all = Array(ids.prefix(Int(max(0, n))))
+        guard !all.isEmpty else { return [] }
+        let controlX = ProsperStatusItems.controlMinX()   // self-filter CHROME by frame match (Tahoe-safe)
+        var pairs: [(id: CGWindowID, x: CGFloat)] = []
+        pairs.reserveCapacity(all.count)
+        for wid in all {
+            var rect = CGRect.zero
+            guard CGSGetScreenRectForWindow(cid, wid, &rect) == .success,
+                  rect.width > 0, rect.height > 0, displayID(for: rect) == display else { continue }
+            if isOwn(minX: rect.minX, controlX) { continue }
+            pairs.append((CGWindowID(wid), rect.minX))
+        }
+        return pairs.sorted { $0.x < $1.x }.map(\.id)
+    }
+
+    /// Positive sanity probe for the Settings preview strip. Healthy = the CGS
+    /// enumeration still contains windows we KNOW exist (our own dividers). See
+    /// `MenuBarLogic.previewHealthy` for why a hard error check isn't enough. Only
+    /// the preview depends on this — hide/show + spacing are unaffected.
+    static func enumHealthy() -> Bool {
+        guard available else { return false }
+        if MenuBarHost.isHosted { return MenuBarAX.trusted }   // the preview reads the bar via Accessibility there
+        guard !dividerWindowIDs.isEmpty else { return true }   // nothing to probe against yet
+        let cid = CGSMainConnectionID()
+        var ids = [UInt32](repeating: 0, count: 256)
+        var realCount: Int32 = 0
+        let err = ids.withUnsafeMutableBufferPointer { buf -> CGError in
+            CGSGetProcessMenuBarWindowList(cid, 0, Int32(buf.count), buf.baseAddress!, &realCount)
+        }
+        guard err == .success else { return false }
+        let seen = Set(ids.prefix(Int(max(0, realCount))).map { CGWindowID($0) })
+        return MenuBarLogic.previewHealthy(dividerWindowIDs: dividerWindowIDs, enumeratedWindowIDs: seen)
+    }
+
     /// The display a frame's center lands on; falls back to the main display.
     static func displayID(for frame: CGRect) -> CGDirectDisplayID {
         let center = CGPoint(x: frame.midX, y: frame.midY)
@@ -209,6 +294,16 @@ enum MenuBarBridge {
     }
 
     // MARK: - Private
+
+    /// Live screen frame for one window id (the ordering engine reads this between
+    /// moves to confirm an item actually shifted). nil on any CGS error.
+    static func frame(for windowID: CGWindowID) -> CGRect? {
+        guard available, !MenuBarHost.isHosted else { return nil }
+        var rect = CGRect.zero
+        guard CGSGetScreenRectForWindow(CGSMainConnectionID(), UInt32(windowID), &rect) == .success,
+              rect.width > 0, rect.height > 0 else { return nil }
+        return rect
+    }
 
     /// Map window ids → (owner pid, name) via one `CGWindowListCopyWindowInfo` pass.
     private static func windowMeta(for windowIDs: [UInt32]) -> [UInt32: (pid: pid_t, name: String?)] {

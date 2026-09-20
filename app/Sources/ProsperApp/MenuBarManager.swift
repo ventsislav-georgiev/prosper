@@ -10,6 +10,8 @@ import ApplicationServices
 ///
 /// Hot-path discipline:
 ///  - show/hide is a single `NSStatusItem.length` assignment (≤ 1 ms, instant).
+///  - the CGS enumeration (`currentItems`) runs only on reveal / explicit refresh,
+///    never on a per-event flood; the bundle-id cache keeps the warm path ≤ 2 ms.
 ///  - passive `NSEvent` monitors (mouse-leave / outside-click) arm ONLY while the
 ///    hidden section is revealed, so the idle cost is zero.
 @MainActor
@@ -35,7 +37,7 @@ final class MenuBarManager: NSObject {
     }
 
     /// The always-visible control item (rightmost of ours). Clicking it toggles the
-    /// hidden section. It NEVER expands —
+    /// hidden section; ⌥-clicking toggles the always-hidden band. It NEVER expands —
     /// that's the whole fix: a single divider that did double duty as chevron AND
     /// expander rode itself (and Prosper's own icon) off-screen when it expanded, so
     /// nothing was clickable. Splitting the control from the expander (the Ice /
@@ -44,6 +46,9 @@ final class MenuBarManager: NSObject {
     /// Empty expanding separator. Sits to the LEFT of the chevron; growing its
     /// `length` pushes every item left of it (the hidden section) off the screen edge.
     private var hiddenSeparator: NSStatusItem?
+    /// Second-tier expander for the always-hidden band (leftmost of ours).
+    private var alwaysHiddenSeparator: NSStatusItem?
+
     /// Transient: is the hidden section currently revealed (separators collapsed)?
     private var revealed = false
     private var rehideTimer: Timer?
@@ -57,9 +62,8 @@ final class MenuBarManager: NSObject {
     // MARK: - Lifecycle
 
     /// Idempotent. Builds the dividers when the feature is live, tears them down
-    /// otherwise. Hiding/spacing need NO Accessibility on a windowed menu bar
-    /// (CGS only); a hosted bar (macOS 27+) is measured through AX, so `setup()`
-    /// asks there.
+    /// otherwise. Enumeration/hide/spacing need NO Accessibility (CGS only); only
+    /// the opt-in reorder does, and it prompts on its own toggle.
     func reconcile() {
         if menubarExtLive && MenuBarBridge.available {
             setup()
@@ -71,6 +75,15 @@ final class MenuBarManager: NSObject {
         }
     }
 
+    /// Rebuild the dividers from scratch — used when a structural setting changes
+    /// (e.g. toggling the two-tier always-hidden section) so the second divider
+    /// appears/disappears. Cheap: two status-item teardowns + setup.
+    func reconcileDividers() {
+        guard menubarExtLive && MenuBarBridge.available else { teardown(); return }
+        teardown()
+        setup()
+    }
+
     private func setup() {
         guard chevron == nil else { return }
         // Apply persisted spacing (no relaunch — takes effect as apps launch).
@@ -78,12 +91,18 @@ final class MenuBarManager: NSObject {
 
         // Order matters: the FIRST-created status item is rightmost, later ones appear
         // to its left. We want screen order (left→right):
-        //   [hiddenSeparator] [hidden items] [chevron] [visible items]
-        // so the chevron (created first) stays right of the expander and is never
-        // pushed off-screen when it grows.
+        //   [alwaysHiddenSeparator] [always-hidden items] [hiddenSeparator] [hidden items] [chevron] [visible items]
+        // so the chevron (created first) stays right of the expanders and is never
+        // pushed off-screen when they grow.
         chevron = makeChevron()
         hiddenSeparator = makeSeparator(autosave: "ProsperMenuBarHiddenSeparator", id: "hidden")
-        for item in [chevron, hiddenSeparator].compactMap({ $0 }) {
+        // Always-hidden band: created (leftmost) only when the user has marked at least
+        // one icon always-hidden in Settings. The arranger moves those icons left of it
+        // (the move engine) and it stays expanded, so they never show — even on reveal.
+        if !Preferences.menuBarOrderStore.alwaysHidden.isEmpty {
+            alwaysHiddenSeparator = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator", id: "alwaysHidden")
+        }
+        for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
             ProsperStatusItems.register(item)
         }
 
@@ -91,22 +110,27 @@ final class MenuBarManager: NSObject {
         // third-party icons off-screen: our status items die with the process, so
         // the OS reflows the menu bar automatically — no persistent off-screen push.
         revealed = false
+        revealedAlwaysHidden = false
         // Hosted bars are measured through Accessibility (no CGS windows to read), so
         // hiding itself needs the grant there — ask once when the feature comes up.
         if MenuBarHost.isHosted { PermissionsManager.ensureAccessibilityTrust(prompt: true) }
         applyDividerLengths()
+        publishOwnWindowIDs()
         observeTermination()
         observeScreenChanges()
     }
 
     private func teardown() {
         rehideTimer?.invalidate(); rehideTimer = nil
-        for item in [chevron, hiddenSeparator].compactMap({ $0 }) {
+        for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
             NSStatusBar.system.removeStatusItem(item)
         }
         chevron = nil
         hiddenSeparator = nil
+        alwaysHiddenSeparator = nil
+        MenuBarBridge.dividerWindowIDs = []
         revealed = false
+        revealedAlwaysHidden = false
         if let o = terminationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(o); terminationObserver = nil
         }
@@ -168,21 +192,49 @@ final class MenuBarManager: NSObject {
         return item
     }
 
+    /// Publish our own control windows' CGS ids for the preview-health probe. Frame
+    /// match needs the windows laid out, so defer one runloop hop past creation
+    /// (windowNumber is unusable on Tahoe — see MenuBarBridge.windowID(forItemMinX:)).
+    private func publishOwnWindowIDs() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self, self.chevron != nil else { return }
+            var ids = Set<CGWindowID>()
+            for item in [self.chevron, self.hiddenSeparator, self.alwaysHiddenSeparator].compactMap({ $0 }) {
+                if let x = item.button?.window?.frame.minX,
+                   let id = MenuBarBridge.windowID(forItemMinX: x) { ids.insert(id) }
+            }
+            MenuBarBridge.dividerWindowIDs = ids
+        }
+    }
+
     // MARK: - Show / hide (the hot path)
 
     /// Collapse/expand dividers to match `revealed`. A single length assignment per
     /// divider — visually instant, no enumeration.
-    /// Single source of truth for the divider width. Every length change routes
-    /// through here (derived from `revealed`) — no inline `length =` pokes elsewhere.
+    /// Single source of truth for both divider widths. Every length change routes
+    /// through here (derived from `revealed` + `revealedAlwaysHidden`) so the two
+    /// dividers can never disagree — no inline `length =` pokes elsewhere.
     private func applyDividerLengths() {
         defer { updateChevron() }
-        let l = MenuBarLogic.dividerLengths(revealed: revealed, revealedAlwaysHidden: false,
+        let l = MenuBarLogic.dividerLengths(revealed: revealed,
+                                            revealedAlwaysHidden: revealedAlwaysHidden,
                                             standard: Lengths.standard, expanded: expandedLength)
         hiddenSeparator?.length = l.hidden
+        alwaysHiddenSeparator?.length = l.alwaysHidden
     }
 
-    /// Chevron click handler — toggles the hidden section.
-    @objc private func chevronClicked() { toggleHidden() }
+    private var revealedAlwaysHidden = false
+
+    /// Chevron click handler. Plain click toggles the hidden section; ⌥-click toggles
+    /// the always-hidden band (when enabled).
+    @objc private func chevronClicked() {
+        let optionDown = NSApp.currentEvent?.modifierFlags.contains(.option) ?? false
+        if optionDown && alwaysHiddenSeparator != nil {
+            toggleAlwaysHidden()
+        } else {
+            toggleHidden()
+        }
+    }
 
     @objc func toggleHidden() {
         guard chevron != nil else { return }
@@ -190,12 +242,26 @@ final class MenuBarManager: NSObject {
         setRevealed(!revealed)
     }
 
+    @objc func toggleAlwaysHidden() {
+        guard alwaysHiddenSeparator != nil else { return }
+        if isActiveSpaceFullscreen { return }
+        revealedAlwaysHidden.toggle()
+        if revealedAlwaysHidden {
+            setRevealed(true)        // revealing always-hidden implies hidden shown (applies lengths + timer)
+        } else {
+            applyDividerLengths()    // collapse just the always-hidden band; keep hidden as-is
+            scheduleRehide()
+        }
+    }
+
     func setRevealed(_ value: Bool) {
         revealed = value
         applyDividerLengths()
         if revealed {
             scheduleRehide()
+            MenuBarOrderEnforcer.shared.onReveal()   // on-demand ordering: correct order while visible
         } else {
+            revealedAlwaysHidden = false
             rehideTimer?.invalidate(); rehideTimer = nil
         }
     }
@@ -228,12 +294,166 @@ final class MenuBarManager: NSObject {
         guard Preferences.menuBarStore.autoRehideEnabled else { rehideTimer = nil; return }
         let secs = TimeInterval(Preferences.menuBarStore.clampedAutoRehide)
         rehideTimer = Timer.scheduledTimer(withTimeInterval: secs, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setRevealed(false) }
+            MainActor.assumeIsolated {
+                // Never collapse under an in-flight ordering pass — expanding the
+                // separator mid-batch shifts every frame the mover is about to use.
+                // Re-arm and try again once the bar is at rest.
+                if MenuBarArranger.isApplying { self?.scheduleRehide() }
+                else { self?.setRevealed(false) }
+            }
         }
     }
 
+    // MARK: - Enumeration / sections (cold path: reveal + Settings only)
+
+    /// Current managed items on the main display, sorted left→right. Warm path
+    /// ≤ 2 ms (bundle-id cache hot); cold first call pays the uncached lookups.
+    func currentItems() -> [MenuBarItem] {
+        MenuBarBridge.items(onDisplay: CGMainDisplayID())
+    }
+
+    /// Section assignment for the live menu bar, for the Settings list. Compares
+    /// each item's x against the divider window x-positions. Pass `precomputed`
+    /// when the caller already enumerated the bar this tick (the enforcer's adopt
+    /// path does) — saves a duplicate CGWindowListCopyWindowInfo pass.
+    func sectionedItems(_ precomputed: [MenuBarItem]? = nil) -> [(item: MenuBarItem, section: MenuBarSection)] {
+        let items = precomputed ?? currentItems()
+        guard let hiddenX = dividerFrameX(hiddenSeparator) else {
+            return items.map { ($0, .visible) }
+        }
+        let altX = dividerFrameX(alwaysHiddenSeparator)
+        return items.map { ($0, MenuBarLogic.section(forItemX: $0.frame.minX,
+                                                      hiddenDividerX: hiddenX,
+                                                      alwaysHiddenDividerX: altX)) }
+    }
+
+    /// True once the hidden separator has a laid-out window frame — only then is the
+    /// x-comparison in `sectionedItems` a real hidden/visible signal (before layout it
+    /// reports everything visible, which callers must treat as "no signal").
+    var hiddenSeparatorLaidOut: Bool { dividerFrameX(hiddenSeparator) != nil }
+
+    /// True when the chevron sits LEFT of the hidden separator — a broken layout:
+    /// the separator's expansion then sweeps the chevron (the click target that
+    /// reveals the hidden band) off-screen with everything else, so the user can't
+    /// reach their hidden icons at all. Must never persist; the enforcer polls this
+    /// (two AppKit frame reads, no CGS) and forces a reveal repair pass when true.
+    var dividersInverted: Bool {
+        guard !isPlacing,
+              let sep = dividerFrameX(hiddenSeparator),
+              let chev = dividerFrameX(chevron) else { return false }
+        return chev < sep
+    }
+
+    /// Whether the live preview can be trusted (CGS enumeration still sees our own
+    /// dividers). Hide/show + spacing don't depend on this — only the Settings
+    /// preview strip does, so it degrades to an "update macOS" note in isolation.
+    func previewHealthy() -> Bool { MenuBarBridge.enumHealthy() }
+
     private func dividerFrameX(_ item: NSStatusItem?) -> CGFloat? {
         item?.button?.window?.frame.minX
+    }
+
+    // MARK: - Always-hidden placement (used by the arranger)
+
+    /// CGS window id of the always-hidden separator — the anchor the arranger moves
+    /// marked icons to the LEFT of. nil if the band isn't active or hasn't laid out.
+    func alwaysHiddenAnchorWindowID() -> CGWindowID? {
+        guard let x = alwaysHiddenSeparator?.button?.window?.frame.minX else { return nil }
+        return MenuBarBridge.windowID(forItemMinX: x)
+    }
+
+    /// CGS window id of the (always-present) hidden separator — the anchor the
+    /// arranger moves list-marked "hidden" icons to the LEFT of so the chevron
+    /// collapses them off-screen. nil only if it hasn't laid out yet.
+    func hiddenAnchorWindowID() -> CGWindowID? {
+        guard let x = hiddenSeparator?.button?.window?.frame.minX else { return nil }
+        return MenuBarBridge.windowID(forItemMinX: x)
+    }
+
+    /// CGS window id of the chevron (the always-visible click target). The arranger
+    /// re-seats it on the VISIBLE side of the hidden separator after an order pass so
+    /// expanding the separator can never push the click target off-screen. nil only if
+    /// it hasn't laid out yet.
+    func chevronAnchorWindowID() -> CGWindowID? {
+        guard let x = chevron?.button?.window?.frame.minX else { return nil }
+        return MenuBarBridge.windowID(forItemMinX: x)
+    }
+
+    var hasAlwaysHiddenBand: Bool { alwaysHiddenSeparator != nil }
+
+    /// Create (or remove) the always-hidden separator WITHOUT tearing down the
+    /// chevron/hidden separator. `reconcileDividers()` did a full teardown+setup,
+    /// which reflowed the bar and lost the positional relationship of the regular
+    /// hidden section — so toggling an always-hidden mark made every hidden icon pop
+    /// back on-screen. This touches only the one band's status item.
+    func ensureAlwaysHiddenBand(_ needed: Bool) {
+        guard menubarExtLive && MenuBarBridge.available, chevron != nil else { return }
+        if needed, alwaysHiddenSeparator == nil {
+            let s = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator", id: "alwaysHidden")
+            ProsperStatusItems.register(s)
+            alwaysHiddenSeparator = s
+            applyDividerLengths()
+            publishOwnWindowIDs()
+        } else if !needed, let s = alwaysHiddenSeparator {
+            NSStatusBar.system.removeStatusItem(s)
+            alwaysHiddenSeparator = nil
+            applyDividerLengths()
+            publishOwnWindowIDs()
+        }
+    }
+
+    /// Reveal BOTH bands (collapse both separators) so every item — including the
+    /// always-hidden ones — is on-screen, run `body` while they have real on-screen
+    /// frames/pixels to capture or perceptually hash, then restore the steady hidden
+    /// state. Used by Save-order (distinct hashes for off-screen items) and the
+    /// preview Refresh (real icons for hidden items).
+    func withAllRevealed<T>(_ body: () async -> T) async -> T {
+        // Preserve a user-initiated reveal across the placement. A chevron-click
+        // reorder (on-demand mode) opens the hidden section *then* runs this to fix
+        // the order — collapsing back to the steady state here would yank the section
+        // shut the instant the user opened it. If the section was already revealed on
+        // entry, leave it revealed (its own auto-rehide timer, armed by the click,
+        // still governs); only force the collapse when we revealed it ourselves.
+        // NOTE: the 180ms settle is needed even when `revealed` is already true — an
+        // on-reveal correction runs synchronously from the chevron click, while the
+        // separators are still mid-reflow; reading frames early mismoves items.
+        isPlacing = true
+        defer { isPlacing = false }
+        beginPlacement()
+        try? await Task.sleep(for: .milliseconds(180))
+        let result = await body()
+        // Restore from the CURRENT `revealed` flag, not the one captured at entry:
+        // the user can click the chevron mid-pass (setRevealed updates the flag), and
+        // restoring the stale capture re-opened a section they had just collapsed —
+        // "I click to hide and it shows the hidden part again". `revealed` always
+        // holds the latest user intent, so just re-derive the divider lengths from it.
+        if revealed {
+            applyDividerLengths()
+        } else {
+            endPlacement()
+        }
+        return result
+    }
+
+    /// True while a `withAllRevealed` placement is toggling the separators. The order
+    /// self-probe waits this out: a synthetic ⌘-drag of throwaway items while the bar's
+    /// geometry is mid-collapse/restore (e.g. the Settings preview refresh, which fires
+    /// concurrently) reads stale frames and spuriously reports `.moveFailed`.
+    private(set) var isPlacing = false
+
+    /// Collapse both separators so every item is on-screen — the arranger needs a
+    /// valid (on-screen) drop point to move an icon into/out of the always-hidden
+    /// band. No rehide timer or monitors; the caller pairs this with `endPlacement()`.
+    func beginPlacement() {
+        hiddenSeparator?.length = Lengths.standard
+        alwaysHiddenSeparator?.length = Lengths.standard
+    }
+
+    /// Restore the steady hidden state (both separators expanded) after a placement.
+    func endPlacement() {
+        revealed = false
+        revealedAlwaysHidden = false
+        applyDividerLengths()
     }
 
     // MARK: - Spacing

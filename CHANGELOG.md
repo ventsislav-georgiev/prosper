@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.154.0 *(unreleased)*
+## v2.154.1 *(unreleased)*
+
+- **Fixed: menu-bar icon spacing and hiding stopped working in 2.154.0.** That release
+  removed the menu-bar item-ordering engine, and the removal took the spacing and
+  hide/reveal controls down with it. The whole Menu Bar Management implementation is
+  restored to its 2.153.0 state, so spacing, hiding, revealing and the chevron style
+  work again exactly as before. The ordering feature is back with it for now; the
+  removal will return once the breakage is understood.
+
+## v2.154.0
 
 - **Settings pages are laid out the way you read them.** General now opens with one
   **Essentials** card — launch at login, menu-bar icon, Dock icon and panel placement,
@@ -28,14 +37,8 @@ tag from the now-released section and put it on the new top draft.
   app it serves sessions to, and **Local AI**, which merges the inline-autocomplete and
   coding-agent switches into one card. In the sidebar, **AI Models** moved below your
   installed extensions, and the header now carries the real Prosper icon.
-- **Menu Bar Management dropped the item-ordering engine and the preview strip.** The
-  opt-in "enforce a saved menu-bar order" feature drove icons around with synthetic
-  ⌘-drags; it was unreliable across macOS versions and is gone, along with the
-  always-hidden band it fed and the live preview of your bar. Hiding, revealing, icon
-  spacing and the chevron style are untouched. Arranging icons — including choosing
-  what hides — is the native macOS gesture: hold ⌘ and drag an icon in the real menu
-  bar; drag it left of Prosper's chevron to hide it. If you had a saved order, nothing
-  is applied to your bar any more; macOS keeps whatever arrangement it last had.
+- **Menu Bar Management dropped the item-ordering engine and the preview strip.** This
+  broke icon spacing and hiding and was reverted in 2.154.1.
 
 ## v2.153.0
 
