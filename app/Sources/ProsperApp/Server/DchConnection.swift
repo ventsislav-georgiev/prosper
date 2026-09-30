@@ -134,6 +134,7 @@ final class DchConnection: @unchecked Sendable {
                 var o: [String: Any] = ["name": row.name]
                 if !row.alias.isEmpty { o["alias"] = row.alias }
                 if !row.state.isEmpty { o["state"] = row.state }   // working|idle|blocked|done
+                if row.agents > 0 { o["agents"] = row.agents }     // live subagents; absent from older dch
                 return o
             }
             send(DchFrame.encode(DchFrame.listResp, json: rows))
@@ -380,31 +381,33 @@ enum DchCommand {
     /// instead of guessing from output timestamps. `--ls-json` arrived in dch 1.4;
     /// against an older binary it prints nothing and we fall back to `-lj`'s
     /// `name\talias\tactivityEpoch` lines (state empty).
-    static func listSessions() -> [(name: String, alias: String, activityEpoch: Int, state: String)] {
+    static func listSessions() -> [(name: String, alias: String, activityEpoch: Int, state: String, agents: Int)] {
         let rows = parseListJSON(runCapturingData(args: ["--ls-json"]))
         if !rows.isEmpty { return rows }
         return parseListTSV(runCapturing(args: ["-lj"]))
     }
 
-    /// `[{"name","alias","harness","activity_epoch","state"}]` — dch 1.4+ `--ls-json`.
+    /// `[{"name","alias","harness","activity_epoch","state","agents"}]` — dch 1.4+
+    /// `--ls-json`; `agents` (live subagent count) only from newer dch, else 0.
     ///
     /// `harness` is the Claude Code session name running inside the session (dch
     /// 1.9+). `dch -l` shows it whenever no explicit alias exists, so the phone
     /// does the same: an empty alias falls back to it, and the raw socket name is
     /// the last resort. Folding it into `alias` keeps the wire format unchanged.
-    static func parseListJSON(_ data: Data) -> [(name: String, alias: String, activityEpoch: Int, state: String)] {
+    static func parseListJSON(_ data: Data) -> [(name: String, alias: String, activityEpoch: Int, state: String, agents: Int)] {
         guard let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
         return rows.compactMap { o in
             guard let name = o["name"] as? String, !name.isEmpty else { return nil }
             var alias = o["alias"] as? String ?? ""
             if alias.isEmpty { alias = o["harness"] as? String ?? "" }
             return (name, alias,
-                    o["activity_epoch"] as? Int ?? 0, o["state"] as? String ?? "")
+                    o["activity_epoch"] as? Int ?? 0, o["state"] as? String ?? "",
+                    o["agents"] as? Int ?? 0)
         }
     }
 
     /// `name\talias\tactivityEpoch` lines — every dch's `-lj`, state unknown.
-    static func parseListTSV(_ text: String) -> [(name: String, alias: String, activityEpoch: Int, state: String)] {
+    static func parseListTSV(_ text: String) -> [(name: String, alias: String, activityEpoch: Int, state: String, agents: Int)] {
         text
             .split(separator: "\n")
             .compactMap { line in
@@ -412,7 +415,7 @@ enum DchCommand {
                 guard let name = parts.first, !name.isEmpty else { return nil }
                 let alias = parts.count > 1 ? String(parts[1]) : ""
                 let epoch = parts.count > 2 ? Int(parts[2]) ?? 0 : 0
-                return (String(name), alias, epoch, "")
+                return (String(name), alias, epoch, "", 0)
             }
     }
 

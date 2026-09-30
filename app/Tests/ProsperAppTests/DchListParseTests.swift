@@ -36,6 +36,18 @@ final class DchListParseTests: XCTestCase {
         XCTAssertEqual(rows[2].alias, "")          // neither: the client shows the name
     }
 
+    /// Newer dch counts the live subagents on Claude Code's agent panel; older dch
+    /// omits the field, which reads as none rather than failing the row.
+    func testParsesAgentCount() {
+        let json = """
+        [{"name":"a","state":"working","agents":3},
+         {"name":"b","state":"idle"}]
+        """
+        let rows = DchCommand.parseListJSON(Data(json.utf8))
+        XCTAssertEqual(rows[0].agents, 3)
+        XCTAssertEqual(rows[1].agents, 0)
+    }
+
     /// An older dch prints nothing for `--ls-json` — the caller must see "no rows"
     /// and fall back to the TSV list, not a half-built row.
     func testEmptyAndGarbageJsonYieldNoRows() {
