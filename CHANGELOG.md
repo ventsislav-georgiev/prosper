@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.154.1 *(unreleased)*
+## v2.155.0 *(unreleased)*
+
+- **Remote Terminal reports how many subagents each session is running.** The session
+  list sent to [Prosper Remote](https://apps.apple.com/app/prosper-remote/id6782528095)
+  now carries a live subagent count per session. The bundled dch 1.19 reads it off
+  Claude Code's agent panel. The phone shows it next to the session state, as in
+  "working · 2 agents", in the session list, on the lock screen and in the Dynamic
+  Island. Older phones ignore the field.
+
+## v2.154.1
 
 - **Fixed: menu-bar icon spacing and hiding stopped working in 2.154.0.** That release
   removed the menu-bar item-ordering engine, and the removal took the spacing and
