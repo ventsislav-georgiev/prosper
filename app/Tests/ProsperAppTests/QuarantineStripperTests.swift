@@ -27,8 +27,29 @@ final class QuarantineStripperTests: XCTestCase {
     /// A hung xattr must not wedge registerLock: the run is terminated at the bound.
     func testHungProcessIsTerminatedAtTimeout() {
         let start = Date()
-        XCTAssertEqual(QuarantineStripper.run(["/bin/sleep", "30"], timeout: 0.3), .timedOut)
+        // Unique duration so pgrep matches only this test's child.
+        let marker = "30.\(Int.random(in: 100_000...999_999))"
+        XCTAssertEqual(QuarantineStripper.run(["/bin/sleep", marker], timeout: 0.3), .timedOut)
         XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        // The child must actually be gone, not orphaned still sleeping.
+        var alive = true
+        for _ in 0..<20 where alive {
+            let pg = Process()
+            pg.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+            pg.arguments = ["-f", "^/bin/sleep \(marker)$"]
+            try? pg.run()
+            pg.waitUntilExit()
+            alive = pg.terminationStatus == 0
+            if alive { usleep(100_000) }
+        }
+        XCTAssertFalse(alive, "hung child survived the timeout")
+    }
+
+    func testOnlyNotNeededAndStrippedAreClean() {
+        XCTAssertTrue(QuarantineStripper.Outcome.notNeeded.isClean)
+        XCTAssertTrue(QuarantineStripper.Outcome.stripped.isClean)
+        XCTAssertFalse(QuarantineStripper.Outcome.timedOut.isClean)
+        XCTAssertFalse(QuarantineStripper.Outcome.failed("x").isClean)
     }
 
     func testStripsQuarantineFromAScratchFile() throws {
