@@ -23,7 +23,7 @@ let package = Package(
         // GenerateParameters and the text-generation API used by MLXEngine.
         .package(
             url: "https://github.com/ml-explore/mlx-swift-lm",
-            // #169: exact until the three local patches are rebased onto 3.32.x (#156);
+            // #169: exact until the two local patches are rebased onto 3.32.x (#156);
             // `swift package update` would otherwise pull 3.32.x and break `git apply`.
             exact: "3.31.3"
         ),
