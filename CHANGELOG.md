@@ -91,6 +91,7 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed (macOS 27): the background helper (lid sleep, remote wake, fan control) could fail to
   register on the first launch of a freshly downloaded copy.** Registration now waits until
   Prosper has cleared the download quarantine from its own bundle, helper files included.
+  A strip that fails or hangs is logged and can no longer block the registration.
 - **Performance: the clipboard watcher polls once a second instead of every 0.6 s and stops
   while the display sleeps or the screen is locked**, polling once immediately on resume.
 - **The Prosper icon now has a stable identity in the menu bar** (`ProsperLauncher` instead of
