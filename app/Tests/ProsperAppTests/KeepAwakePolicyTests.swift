@@ -75,6 +75,12 @@ final class KeepAwakePolicyTests: XCTestCase {
                                              sessionsExist: true), .rehold)
     }
 
+    func testTickActivityWindowCoversLeeway() {
+        // A tick up to `tickLeewaySeconds` late must still see activity from right after the previous tick.
+        XCTAssertEqual(KeepAwakePolicy.tickActivityWindowSeconds,
+                       KeepAwakePolicy.activeWindowSeconds + KeepAwakePolicy.tickLeewaySeconds)
+    }
+
     func testWatchReholdsOnClientReconnect() {
         XCTAssertEqual(KeepAwakePolicy.watch(clientConnected: true, sessionActive: false,
                                              sessionsExist: true), .rehold)

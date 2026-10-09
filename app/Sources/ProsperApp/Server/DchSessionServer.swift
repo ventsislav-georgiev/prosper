@@ -26,6 +26,11 @@ enum KeepAwakePolicy {
     /// A detached session counts as "active" if it produced output within this many
     /// seconds (the design's "frozen >10s ⇒ not active" threshold).
     static let activeWindowSeconds = 10
+    /// Leeway granted to the keep-awake tick timer.
+    static let tickLeewaySeconds = 1
+    /// Window each tick actually scans: tick + leeway, so a tick firing up to
+    /// `tickLeewaySeconds` late still sees activity from just after the previous tick.
+    static let tickActivityWindowSeconds = activeWindowSeconds + tickLeewaySeconds
     /// Consecutive idle ticks (each `tickSeconds` ≈ this many seconds) before
     /// releasing the hold — a ~60s grace covering a brief reconnect or output lull.
     static let graceTicks = 6
@@ -215,9 +220,10 @@ final class DchSessionServer: @unchecked Sendable {
         sendKeepAwake(true)
         if holdTimer != nil { return }   // already ticking (hold or watch mode)
         let t = DispatchSource.makeTimerSource(queue: queue)
-        // 1 s leeway (10 %): a late tick only delays the hold release by that much.
+        // 1 s leeway (10 %): a late tick only delays the hold release by that much;
+        // `tickActivityWindowSeconds` widens the scan by the same amount.
         t.schedule(deadline: .now() + .seconds(Self.tickSeconds), repeating: .seconds(Self.tickSeconds),
-                   leeway: .seconds(1))
+                   leeway: .seconds(KeepAwakePolicy.tickLeewaySeconds))
         t.setEventHandler { [weak self] in self?.tick() }
         t.resume()
         holdTimer = t
@@ -233,7 +239,7 @@ final class DchSessionServer: @unchecked Sendable {
         let up = DchCommand.transportUp
         let clients = up && !connections.isEmpty
         let active = up && connections.isEmpty
-            && DchCommand.anySessionActive(within: KeepAwakePolicy.activeWindowSeconds)
+            && DchCommand.anySessionActive(within: KeepAwakePolicy.tickActivityWindowSeconds)
         guard keepAwakeActive else {
             // Watch mode: the hold was released after the idle grace, but detached
             // sessions may still exist. A resumed session (long quiet phase, then
