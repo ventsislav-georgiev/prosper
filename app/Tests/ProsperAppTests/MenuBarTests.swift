@@ -338,4 +338,46 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(MenuBarAX.room(screen: right, menuRight: 300), 2160, "an edge on another display is not ours")
         XCTAssertEqual(MenuBarAX.room(screen: left, menuRight: -2560), 2160, "no menu titles laid out")
     }
+
+    /// #202: each display's bar sits at that display's own top in the global top-left
+    /// space. Two synthetic screens: the primary, and a taller external beside it whose
+    /// top is 323 pt higher (or, second layout, one stacked below the primary).
+    func testHostedBarSlotsMatchEachDisplaysOwnTop() {
+        let primary = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let beside = CGRect(x: 1728, y: -323, width: 2560, height: 1440)
+        let below = CGRect(x: 0, y: 1117, width: 2560, height: 1440)
+        let two = [primary, beside]
+        func slot(_ x: CGFloat, _ y: CGFloat, w: CGFloat = 30, h: CGFloat = 24) -> CGRect {
+            CGRect(x: x, y: y, width: w, height: h)
+        }
+        XCTAssertTrue(MenuBarAX.isBarItem(slot(1200, 0), displays: two), "primary bar")
+        XCTAssertTrue(MenuBarAX.isBarItem(slot(3000, -323), displays: two), "external bar, its own top")
+        XCTAssertFalse(MenuBarAX.isBarItem(slot(3000, 0), displays: two), "y 0 is inside the external, not its bar")
+        XCTAssertTrue(MenuBarAX.isBarItem(slot(500, 1117), displays: [primary, below]), "bar of a display below the primary")
+        XCTAssertFalse(MenuBarAX.isBarItem(slot(500, 1117), displays: two), "no display has its top there")
+        XCTAssertFalse(MenuBarAX.isBarItem(slot(5000, -323), displays: two), "right of every display")
+        XCTAssertFalse(MenuBarAX.isBarItem(slot(1200, 0, h: 12), displays: two), "too short for a bar slot")
+        XCTAssertFalse(MenuBarAX.isBarItem(slot(1800, -323, w: 1280), displays: two), "half the external wide: a container")
+        XCTAssertTrue(MenuBarAX.isBarItem(slot(1800, -323, w: 1000), displays: two), "the width bound is the external's, not the primary's")
+    }
+
+    /// #202: an item is enumerated only for the display it is on — the host's frame
+    /// when laid out, the app's stale frame when not. Unmatched items used to skip the
+    /// check and showed up on every display.
+    func testHostedItemsStayOnTheirOwnDisplay() {
+        let primary: CGDirectDisplayID = 1, external: CGDirectDisplayID = 2
+        let displayOf: (CGRect) -> CGDirectDisplayID = { $0.midX < 1728 ? primary : external }
+        let laid = [MenuBarAX.Laid(frame: CGRect(x: 3000, y: -323, width: 30, height: 24), pid: 42)]
+        func place(_ x: CGFloat, pid: pid_t = 42, on display: CGDirectDisplayID) -> (frame: CGRect, laidOut: Bool)? {
+            MenuBarAX.place(CGRect(x: x, y: 0, width: 30, height: 24), pid: pid, laid: laid, on: display, displayOf: displayOf)
+        }
+        let hit = place(3001, on: external)
+        XCTAssertEqual(hit?.frame.minY, -323, "laid out: the host's frame")
+        XCTAssertEqual(hit?.laidOut, true)
+        XCTAssertNil(place(3001, on: primary), "laid out on the external only")
+        XCTAssertEqual(place(3001, pid: 7, on: external)?.laidOut, false, "another app's slot is not a match")
+        XCTAssertNil(place(2500, on: primary), "unmatched, stale frame on the external: not on the primary")
+        XCTAssertEqual(place(2500, on: external)?.laidOut, false, "unmatched stays on its own display, overflowed")
+        XCTAssertEqual(place(900, on: primary)?.frame.minX, 900, "unmatched on the primary: the app's frame")
+    }
 }

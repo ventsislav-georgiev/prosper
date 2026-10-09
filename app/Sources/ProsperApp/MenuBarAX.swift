@@ -56,15 +56,16 @@ enum MenuBarAX {
 
     // MARK: - Host layout
 
-    /// Every item MenuBarAgent currently lays out, left→right. Absent = overflowed/dropped.
+    /// Every item MenuBarAgent currently lays out on any display's bar, left→right.
+    /// Absent = overflowed/dropped.
     static func layout() -> [Laid] {
         guard trusted, let agent = agentPID else { return [] }
         let root = AXUIElementCreateApplication(agent)
-        let screenW = NSScreen.main?.frame.width ?? 4000
+        let displays = displayBounds()
         var found: [Laid] = []
         func visit(_ e: AXUIElement, depth: Int) {
             guard depth <= 3 else { return }
-            if let f = frame(of: e), f.minY < 2, (20...48).contains(f.height), f.width < screenW / 2 {
+            if let f = frame(of: e), isBarItem(f, displays: displays) {
                 let child = children(of: e).first
                 let ownerPID = child.map(pid) ?? agent
                 found.append(Laid(frame: f, pid: ownerPID == 0 ? agent : ownerPID))
@@ -81,6 +82,25 @@ enum MenuBarAX {
         return items.sorted { $0.frame.minX < $1.frame.minX }
     }
 
+    /// #202: is `f` an item slot on some display's menu bar? Every display has its own
+    /// bar at its own top (global top-left space: y 0 only on the primary, negative
+    /// above it, positive below it), so the slot must sit at the top of the display
+    /// its center is on — `minY < 2` matched the primary alone.
+    nonisolated static func isBarItem(_ f: CGRect, displays: [CGRect]) -> Bool {
+        guard (20...48).contains(f.height) else { return false }
+        return displays.contains { d in
+            abs(f.minY - d.minY) < 2 && f.midX >= d.minX && f.midX < d.maxX && f.width < d.width / 2
+        }
+    }
+
+    /// Active display bounds in the global top-left space AX frames use.
+    private static func displayBounds() -> [CGRect] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
+        return ids.prefix(Int(count)).map(CGDisplayBounds)
+    }
+
     /// Right edge of the frontmost app's menu titles — the status-item region can't
     /// start left of this. nil when AX can't read it (no permission) or when the
     /// frontmost app is an accessory (Spotlight, menu-bar apps, Prosper's own Settings):
@@ -89,10 +109,11 @@ enum MenuBarAX {
     static func appMenuRight() -> CGFloat? {
         guard trusted, let app = NSWorkspace.shared.frontmostApplication,
               app.activationPolicy == .regular else { return nil }
-        let ax = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(ax, 0.25)   // runs on every app switch: a hung app must not stall main for 6s
+        // Runs on every app switch: a hung app must not stall main for 6 s. The timeout
+        // is per element, so the bar and each title get it too (#224).
+        let ax = bounded(AXUIElementCreateApplication(app.processIdentifier))
         guard let bar = attribute(ax, kAXMenuBarAttribute) else { return nil }
-        return children(of: bar as! AXUIElement).compactMap { frame(of: $0)?.maxX }.max()
+        return children(of: bounded(bar as! AXUIElement)).compactMap { frame(of: bounded($0))?.maxX }.max()
     }
 
     /// Width of the room the host lays status items out in on `screen`. A notch splits
@@ -144,18 +165,29 @@ enum MenuBarAX {
                     if e.identifier?.hasPrefix(identifierPrefix) == true { continue }
                     if controlX.contains(where: { abs($0 - e.frame.minX) < 2 }) { continue }
                 }
-                let hit = laid.first { $0.pid == pid && abs($0.frame.minX - e.frame.minX) < 3 }
-                let frame = hit?.frame ?? e.frame
-                guard hit == nil || MenuBarBridge.displayID(for: frame) == display else { continue }
+                guard let (frame, laidOut) = place(e.frame, pid: pid, laid: laid, on: display,
+                                                   displayOf: { MenuBarBridge.displayID(for: $0) }) else { continue }
                 let own = pid == me
                 out.append(MenuBarItem(windowID: key(pid: pid, index: index), pid: pid, frame: frame,
                                        bundleID: own ? "com.prosper" : app.bundleIdentifier,
                                        displayID: display,
                                        title: own ? ProsperStatusItems.content(nearMinX: e.frame.minX)?.name : e.title,
-                                       isOwn: own, isLaidOut: hit != nil))
+                                       isOwn: own, isLaidOut: laidOut))
             }
         }
         return out.sorted { $0.frame.minX < $1.frame.minX }
+    }
+
+    /// #202: where an app-side extra at `extra` shows on `display`, or nil when it
+    /// belongs to another display. Laid out (same pid, same x as a host slot) → the
+    /// host's frame; overflowed/dropped → the app's stale frame. The display check
+    /// applies to both: an unmatched item is not on every display.
+    nonisolated static func place(_ extra: CGRect, pid: pid_t, laid: [Laid], on display: CGDirectDisplayID,
+                                  displayOf: (CGRect) -> CGDirectDisplayID) -> (frame: CGRect, laidOut: Bool)? {
+        let hit = laid.first { $0.pid == pid && abs($0.frame.minX - extra.minX) < 3 }
+        let frame = hit?.frame ?? extra
+        guard displayOf(frame) == display else { return nil }
+        return (frame, hit != nil)
     }
 
     /// Stable stand-in for a window id (the preview keys captures by it): an app's
@@ -173,10 +205,11 @@ enum MenuBarAX {
 
     /// `AXExtrasMenuBar` children of one app (nothing for apps without status items).
     static func extras(of pid: pid_t) -> [Extra] {
-        let ax = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(ax, 0.25)   // a hung app must not stall the whole enumeration (default 6s)
+        // A hung app must not stall the whole enumeration (default 6 s); per element.
+        let ax = bounded(AXUIElementCreateApplication(pid))
         guard let bar = attribute(ax, kAXExtrasMenuBarAttribute) else { return [] }
-        return children(of: bar as! AXUIElement).compactMap { e in
+        return children(of: bounded(bar as! AXUIElement)).compactMap { e in
+            bounded(e)
             guard let f = frame(of: e), f.width > 0 else { return nil }
             let title = (attribute(e, kAXTitleAttribute) as? String).flatMap { $0.isEmpty ? nil : $0 }
             return Extra(frame: f, role: attribute(e, kAXRoleAttribute) as? String ?? "",
@@ -185,6 +218,14 @@ enum MenuBarAX {
     }
 
     // MARK: - AX plumbing
+
+    /// 0.25 s AX messaging timeout instead of the 6 s default; it applies to this
+    /// element only, not to elements read through it.
+    @discardableResult
+    private static func bounded(_ e: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(e, 0.25)
+        return e
+    }
 
     private static func attribute(_ e: AXUIElement, _ name: String) -> AnyObject? {
         var v: AnyObject?

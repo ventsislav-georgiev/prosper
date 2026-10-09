@@ -99,6 +99,10 @@ tag from the now-released section and put it on the new top draft.
   was killed mid-turn the error was shown only for non-zero exits and the dead backend was
   kept; a clean exit mid-turn showed nothing. Any unexpected exit now shows one error, and
   the next prompt respawns codex and resumes the same thread.
+- **Fixed (macOS 27): menu bar items are now matched to the display they are on** when
+  more than one display is connected, so a second display no longer sees every item or
+  skips the display guard. Accessibility reads of a hung app time out after 0.25 s
+  throughout, so a stuck app cannot stall a hide or reveal.
 
 ## v2.155.0
 
