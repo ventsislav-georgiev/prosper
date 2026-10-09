@@ -80,9 +80,16 @@ final class AgentController {
     private var harness: CodingHarness?
     private var session: SessionID?
     private var currentTurn: TurnID?
-    /// A turn Stop settled locally because codex didn't acknowledge the interrupt;
-    /// its late `turn/completed` must not settle whatever runs next.
-    private var settledTurn: TurnID?
+    /// Turns Stop settled locally (codex didn't acknowledge the interrupt, or Stop
+    /// raced turn/start); their late `turn/completed` must not settle whatever runs next.
+    private var settledTurns: Set<TurnID> = []
+    /// Bumped per run (`startRun`). `stoppedRun` is the run Stop was pressed on: if that
+    /// run's turn/start returns after the Stop, `run()` interrupts the turn at once, and
+    /// its events can't flip the phase back to running.
+    private var runGeneration = 0
+    private var stoppedRun = -1
+    /// Stop pressed and no turn of the stopped run is live: drop that run's turn events.
+    private var stoppedBeforeTurn: Bool { stoppedRun == runGeneration && currentTurn == nil }
     private var eventPump: Task<Void, Never>?
     /// itemID → index in `items`, for in-place delta accumulation.
     private var itemIndex: [String: Int] = [:]
@@ -105,7 +112,15 @@ final class AgentController {
     private var agentConfigDirty = false
     private static let maxAutoNudges = 2
 
-    private init() {}
+    private let store: AgentSessionStore
+    /// Test seam: tests hand in a mock-codex harness; nil spawns codex on the local model.
+    private let makeHarness: (@MainActor () async throws -> CodingHarness)?
+
+    init(store: AgentSessionStore = .shared,
+         makeHarness: (@MainActor () async throws -> CodingHarness)? = nil) {
+        self.store = store
+        self.makeHarness = makeHarness
+    }
 
     // MARK: - Public API
 
@@ -126,7 +141,14 @@ final class AgentController {
         runStartedAt = Date()   // fresh working session — start the elapsed clock at 0
         autoNudges = 0   // fresh user goal — auto-continue budget resets
         append(.user(id: UUID().uuidString, text: goal))
-        Task { await run(goal: goal) }
+        startRun(goal)
+    }
+
+    /// Every run starts here, so a Stop is pinned to the run it was pressed on.
+    private func startRun(_ goal: String) {
+        runGeneration += 1
+        let generation = runGeneration
+        Task { await run(goal: goal, generation: generation) }
     }
 
     /// Stamp the elapsed working time into the transcript as a footnote and stop the
@@ -178,6 +200,7 @@ final class AgentController {
     func stop() {
         let stale = pendingApprovals
         pendingApprovals.removeAll()
+        stoppedRun = runGeneration
         guard let harness, let session else {
             ProsperLLMServer.shared.cancelActiveGenerations()
             Task { await end() }
@@ -186,7 +209,8 @@ final class AgentController {
             return
         }
         guard let turn = currentTurn else {
-            // No turn id yet (Stop raced turn/start) — nothing codex can interrupt.
+            // No turn id yet (Stop raced turn/start): settle now; `run()` interrupts the
+            // turn the moment turn/start returns its id (`stoppedRun`).
             ProsperLLMServer.shared.cancelActiveGenerations()
             handleTurnCompleted(.aborted)
             return
@@ -199,7 +223,7 @@ final class AgentController {
                 // Codex refused, is gone, or didn't answer within the abort's bound
                 // (HarnessError.timeout): settle here instead of hanging in .running.
                 if currentTurn == turn {
-                    settledTurn = turn
+                    settledTurns.insert(turn)
                     handleTurnCompleted(.aborted)
                 }
             }
@@ -262,7 +286,7 @@ final class AgentController {
 
     /// Recent persisted sessions, newest first, for the history picker.
     func recentSessions() async -> [AgentSessionStore.Summary] {
-        await AgentSessionStore.shared.recentSessions()
+        await store.recentSessions()
     }
 
     /// Restore a persisted session: load its transcript for display and arm a lazy
@@ -271,7 +295,7 @@ final class AgentController {
     func resume(_ summary: AgentSessionStore.Summary) {
         guard !isActive else { return }
         Task {
-            let restored = await AgentSessionStore.shared.loadTranscript(id: summary.id)
+            let restored = await store.loadTranscript(id: summary.id)
             items = restored
             rebuildItemIndex()
             queued = []
@@ -308,7 +332,7 @@ final class AgentController {
     /// Delete a persisted session from disk. Refuses to nuke the one on screen.
     func deleteSession(_ summary: AgentSessionStore.Summary) async {
         guard summary.id != session?.raw, summary.id != pendingResumeID else { return }
-        await AgentSessionStore.shared.deleteSession(id: summary.id)
+        await store.deleteSession(id: summary.id)
     }
 
     /// Rename the on-screen session (its history label). Trims, ignores empties, and
@@ -319,7 +343,7 @@ final class AgentController {
         guard !trimmed.isEmpty else { return }
         sessionTitle = trimmed
         guard let id = currentSessionID else { return }
-        Task { await AgentSessionStore.shared.renameSession(id: id, title: trimmed) }
+        Task { await store.renameSession(id: id, title: trimmed) }
     }
 
     private func rebuildItemIndex() {
@@ -333,7 +357,7 @@ final class AgentController {
     private func persistTranscript() {
         guard let session else { return }
         let snapshot = items
-        Task { await AgentSessionStore.shared.saveTranscript(id: session.raw, items: snapshot) }
+        Task { await store.saveTranscript(id: session.raw, items: snapshot) }
     }
 
     // MARK: - Runner entry (`g ` command)
@@ -353,16 +377,32 @@ final class AgentController {
 
     // MARK: - Run
 
-    private func run(goal: String) async {
+    private func run(goal: String, generation: Int) async {
         do {
             let harness = try await ensureHarness()
             let session = try await ensureSession(harness)
+            guard stoppedRun != generation else { return }   // Stopped before turn/start went out.
             phase = .running
-            currentTurn = try await harness.sendPrompt(session: session, input: [.text(goal)])
+            let turn = try await harness.sendPrompt(session: session, input: [.text(goal)])
+            guard stoppedRun != generation else {
+                // Stop landed while turn/start was in flight and already settled the UI:
+                // interrupt the turn now that it has an id, and ignore its late events.
+                settledTurns.insert(turn)
+                if currentTurn == turn { currentTurn = nil }
+                Task {
+                    try? await harness.abort(session: session, turn: turn)
+                    ProsperLLMServer.shared.cancelActiveGenerations()
+                }
+                return
+            }
+            currentTurn = turn
         } catch is CancellationError {
             // Stop pressed while the model was still loading — `stop()` already tore
             // everything down; don't surface it as an error.
             if case .error = phase {} else { phase = .idle }
+        } catch let error where stoppedRun == generation {
+            // Stop already settled this run; a request failing under it is not news.
+            log.info("stopped agent run ended with: \(String(describing: error), privacy: .public)")
         } catch {
             log.error("agent run failed: \(String(describing: error), privacy: .public)")
             surfaceError(Self.describe(error))
@@ -386,7 +426,15 @@ final class AgentController {
 
     private func ensureHarness() async throws -> CodingHarness {
         if let harness { return harness }
+        let harness: CodingHarness
+        if let makeHarness { harness = try await makeHarness() } else { harness = try await spawnCodexHarness() }
+        try await harness.start()
+        self.harness = harness
+        pumpEvents(harness)
+        return harness
+    }
 
+    private func spawnCodexHarness() async throws -> CodingHarness {
         // 1. Local inference endpoint.
         let (port, token) = try ProsperLLMServer.shared.start()
         let baseURL = "http://127.0.0.1:\(port)/v1"
@@ -409,14 +457,9 @@ final class AgentController {
             }
         }
 
-        // 4. Spawn the harness.
-        let codexHome = Self.codexHomeURL()
-        let harness = CodexHarness(executableURL: executable, codexHome: codexHome,
-                                   llmBaseURL: baseURL, llmToken: token)
-        try await harness.start()
-        self.harness = harness
-        pumpEvents(harness)
-        return harness
+        // 4. The harness (started by `ensureHarness`).
+        return CodexHarness(executableURL: executable, codexHome: Self.codexHomeURL(),
+                            llmBaseURL: baseURL, llmToken: token)
     }
 
     private func ensureSession(_ harness: CodingHarness) async throws -> SessionID {
@@ -468,7 +511,7 @@ final class AgentController {
         let cwd = workingDirectory
         let model = Preferences.agentModel
         let id = session.raw
-        Task { await AgentSessionStore.shared.upsertSession(id: id, cwd: cwd, model: model, title: title) }
+        Task { await store.upsertSession(id: id, cwd: cwd, model: model, title: title) }
     }
 
     // MARK: - Event pump
@@ -498,7 +541,7 @@ final class AgentController {
         eventPump = nil
         session = nil
         currentTurn = nil
-        settledTurn = nil
+        settledTurns.removeAll()
         pendingApprovals.removeAll()
         agentConfigDirty = false   // the respawn rewrites config.toml anyway
         // The harness reported the exit as `.error` already; this only catches a
@@ -539,6 +582,8 @@ final class AgentController {
             // clobber the session id history/persistence is keyed on.
             if session == nil { session = s }
         case .turnStarted(let t):
+            // A turn Stop already settled stays stopped (its id can arrive after the Stop).
+            guard !settledTurns.contains(t), !stoppedBeforeTurn else { break }
             currentTurn = t
             phase = .running
         case .textDelta, .reasoningDelta:
@@ -558,13 +603,15 @@ final class AgentController {
         case .planUpdated(_, let steps):
             upsertPlan(steps)
         case .approvalRequest(let req):
+            guard !stoppedBeforeTurn else { break }   // the stopped turn's interrupt cancels it
             pendingApprovals.append(req)
             phase = .awaitingApproval
         case .usage(let u):
             usage = u
         case .turnCompleted(let t, let outcome):
-            // Late completion of a turn Stop already settled — a no-op.
-            if t == settledTurn { settledTurn = nil; break }
+            // Late completion of a turn Stop already settled (or whose turn/start it
+            // raced) — a no-op.
+            if settledTurns.remove(t) != nil || stoppedBeforeTurn { break }
             handleTurnCompleted(outcome)
         case .error(let err):
             surfaceError(Self.describe(err))
@@ -583,8 +630,10 @@ final class AgentController {
         // approval bar can't outlive the turn.
         pendingApprovals.removeAll()
         switch outcome {
-        case .completed, .aborted:
+        case .completed:
             phase = .idle
+        case .aborted:
+            if case .error = phase {} else { phase = .idle }   // Stop must not hide an error
         case .failed(let msg):
             append(.error(id: UUID().uuidString, message: msg))
             phase = .error(msg)
@@ -599,7 +648,7 @@ final class AgentController {
             let next = queued.removeFirst()
             append(.user(id: UUID().uuidString, text: next.text))
             persistTranscript()
-            Task { await run(goal: next.text) }
+            startRun(next.text)
             return
         }
         // Truly finished — stamp the elapsed working time into the transcript.
@@ -622,7 +671,7 @@ final class AgentController {
         if case .completed = outcome, autoNudges < Self.maxAutoNudges, shouldAutoContinue() {
             autoNudges += 1
             log.info("agent auto-continue \(self.autoNudges, privacy: .public)/\(Self.maxAutoNudges, privacy: .public) — turn ended on an unperformed action")
-            Task { await run(goal: "Continue.") }
+            startRun("Continue.")
             return
         }
         if !cliQueue.isEmpty {

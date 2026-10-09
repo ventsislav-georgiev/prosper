@@ -19,7 +19,10 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// finishing. On "HANG" it starts a shell command and leaves the turn running
     /// until a well-formed `turn/interrupt` request ends it; "WEDGE" does the same but
     /// never answers the interrupt (a hung codex); "EXIT0" starts the turn and then
-    /// exits cleanly (code 0) without finishing it. Every inbound line is appended to
+    /// exits cleanly (code 0) without finishing it; "SLOWSTART" holds the turn/start
+    /// reply for 1 s (a Stop can land before the turn id is known). Turn ids count up
+    /// per process (`turn-1`, `turn-2`, …); a turn/start after a WEDGE turn announces the
+    /// new turn and then the wedged turn's late `turn/completed{interrupted}`. Every inbound line is appended to
     /// `received.jsonl` beside the script, and the pid is written to `pid`, so tests can
     /// check what was sent and kill the process.
     /// Thread and turn params are checked against the codex 0.139/0.161/0.162 schemas
@@ -33,6 +36,7 @@ final class CodexHarnessE2ETests: XCTestCase {
         f.write(str(os.getpid()))
     current_turn = None
     wedged = False
+    turn_seq = 0
 
     def send(obj):
         sys.stdout.write(json.dumps(obj) + "\n")
@@ -103,12 +107,19 @@ final class CodexHarnessE2ETests: XCTestCase {
             if problem:
                 error(mid, problem)
                 continue
-            current_turn = "turn-1"
-            send({"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
             prompt = json.dumps(params.get("input"))
+            if "SLOWSTART" in prompt:
+                time.sleep(1.0)
+            stale = current_turn if wedged else None
+            turn_seq += 1
+            current_turn = "turn-%d" % turn_seq
+            send({"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
             want_approval = "APPROVE" in prompt
             send({"jsonrpc": "2.0", "method": "turn/started",
                   "params": {"threadId": "thread-1", "turn": turn("inProgress")}})
+            if stale:
+                send({"jsonrpc": "2.0", "method": "turn/completed",
+                      "params": {"threadId": "thread-1", "turn": {"id": stale, "items": [], "status": "interrupted"}}})
             wedged = "WEDGE" in prompt
             if "EXIT0" in prompt:
                 time.sleep(0.3)
@@ -116,7 +127,7 @@ final class CodexHarnessE2ETests: XCTestCase {
             if "HANG" in prompt or wedged:
                 send({"jsonrpc": "2.0", "method": "item/started",
                       "params": {"threadId": "thread-1", "turnId": current_turn,
-                                 "item": {"id": "cmd-1", "type": "commandExecution",
+                                 "item": {"id": "cmd-" + current_turn, "type": "commandExecution",
                                           "command": "sleep 600", "status": "inProgress"}}})
                 continue
             if want_approval:
@@ -125,9 +136,9 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "command": ["rm", "-rf", "build"], "cwd": "/tmp"}})
             send({"jsonrpc": "2.0", "method": "item/agentMessage/delta",
-                  "params": {"turnId": "turn-1", "itemId": "m1", "delta": "Hello from mock"}})
+                  "params": {"turnId": current_turn, "itemId": "m1", "delta": "Hello from mock"}})
             send({"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
-                  "params": {"turnId": "turn-1", "tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}})
+                  "params": {"turnId": current_turn, "tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}})
             send({"jsonrpc": "2.0", "method": "turn/completed",
                   "params": {"threadId": "thread-1", "turn": turn("completed")}})
             current_turn = None
@@ -336,15 +347,15 @@ final class CodexHarnessE2ETests: XCTestCase {
             approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false)))
         let turn = try await harness.sendPrompt(session: session, input: [.text("WEDGE on a long command")])
 
-        let started = Date()
-        do {
-            try await harness.abort(session: session, turn: turn, timeout: 0.5)
-            XCTFail("abort should time out when codex never answers")
-        } catch HarnessError.timeout {
-            // expected
-        }
-        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "bounded wait did not fire")
+        // Our own 3 s deadline: without the abort's bound this fails instead of hanging.
+        let outcome = await Self.within(3) { try await harness.abort(session: session, turn: turn, timeout: 0.5) }
         await harness.shutdown()
+        switch outcome {
+        case nil: XCTFail("abort still pending after 3 s: the bounded wait did not fire")
+        case .success?: XCTFail("abort should time out when codex never answers")
+        case .failure(let error)?:
+            guard case HarnessError.timeout = error else { return XCTFail("expected .timeout, got \(error)") }
+        }
 
         let interrupts = try Self.received("turn/interrupt", exe: exe)
         XCTAssertEqual(interrupts.count, 1, "the interrupt must be sent once, not retried")
@@ -353,6 +364,18 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     /// Steer is a request whose turn id travels as `expectedTurnId`; the mock answers
     /// with an error (thrown here) if the field is missing or wrong.
+    /// Runs `op`, giving up after `seconds` (nil = still pending). A hung continuation
+    /// can't be cancelled, so the op is abandoned: the test fails instead of hanging.
+    private static func within<T: Sendable>(
+        _ seconds: TimeInterval, _ op: @escaping @Sendable () async throws -> T
+    ) async -> Result<T, Error>? {
+        let (results, cont) = AsyncStream.makeStream(of: Result<T, Error>?.self)
+        Task { do { cont.yield(.success(try await op())) } catch { cont.yield(.failure(error)) } }
+        Task { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); cont.yield(nil) }
+        for await first in results { return first }
+        return nil
+    }
+
     func testSteerSendsExpectedTurnIdRequest() async throws {
         let (exe, home) = try makeMock()
         let (harness, session, turn) = try await startHangingTurn(exe: exe, home: home)
@@ -510,6 +533,167 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(turns[0]["networkAccess"] as? Bool, true)
         XCTAssertEqual(turns[1] as NSDictionary, ["type": "dangerFullAccess"] as NSDictionary)
         XCTAssertEqual(turns[2] as NSDictionary, ["type": "dangerFullAccess"] as NSDictionary, "a fork keeps its parent's sandbox")
+    }
+
+    // MARK: - AgentController against the mock
+
+    /// A mock-backed `CodexHarness` whose Stop bound is 0.5 s instead of 5 s.
+    private final class ShortAbortHarness: CodingHarness {
+        let inner: CodexHarness
+        init(_ inner: CodexHarness) { self.inner = inner }
+        func start() async throws { try await inner.start() }
+        func shutdown() async { await inner.shutdown() }
+        func newSession(_ opts: SessionOptions) async throws -> SessionID { try await inner.newSession(opts) }
+        func resumeSession(_ id: SessionID, options: SessionOptions) async throws -> SessionID {
+            try await inner.resumeSession(id, options: options)
+        }
+        func forkSession(_ id: SessionID) async throws -> SessionID { try await inner.forkSession(id) }
+        func sendPrompt(session: SessionID, input: [PromptInput]) async throws -> TurnID {
+            try await inner.sendPrompt(session: session, input: input)
+        }
+        func steer(session: SessionID, turn: TurnID, input: [PromptInput]) async throws {
+            try await inner.steer(session: session, turn: turn, input: input)
+        }
+        func abort(session: SessionID, turn: TurnID?) async throws {
+            try await inner.abort(session: session, turn: turn, timeout: 0.5)
+        }
+        func respondToApproval(_ id: ApprovalID, decision: ApprovalDecision) async throws {
+            try await inner.respondToApproval(id, decision: decision)
+        }
+        var events: AsyncStream<HarnessEvent> { inner.events }
+        var capabilities: HarnessCapabilities { inner.capabilities }
+    }
+
+    /// A fresh controller on the mock, with its own session store (never the user's).
+    @MainActor
+    private func makeController(exe: URL, home: URL) -> (AgentController, AgentSessionStore) {
+        let store = AgentSessionStore(directory: exe.deletingLastPathComponent().appendingPathComponent("store"))
+        let controller = AgentController(store: store, makeHarness: {
+            ShortAbortHarness(CodexHarness(executableURL: exe, codexHome: home,
+                                           llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token"))
+        })
+        return (controller, store)
+    }
+
+    /// Polls every 10 ms until `condition` holds or `seconds` pass (never hangs);
+    /// `sample` runs on every tick, to catch a value that must never show up.
+    @MainActor
+    private static func wait(_ seconds: TimeInterval = 10, sample: () -> Void = {},
+                             until condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            sample()
+            if condition() { return true }
+            if Date() >= deadline { return false }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    private static func count(_ method: String, exe: URL) -> Int {
+        (try? received(method, exe: exe).count) ?? 0
+    }
+
+    /// QA #15: Stop while turn/start is still unanswered settles at once, interrupts the
+    /// turn as soon as its id arrives, and the phase never goes back to running.
+    @MainActor
+    func testControllerStopBeforeTurnStartReturnsInterruptsTheTurn() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home)
+        controller.submit(goal: "SLOWSTART HANG on a long command")
+        let sent = await Self.wait { Self.count("turn/start", exe: exe) == 1 }
+        XCTAssertTrue(sent, "turn/start never reached the mock")
+
+        controller.stop()   // the mock holds the turn/start reply for 1 s: no turn id yet
+        XCTAssertEqual(controller.phase, .idle)
+        var leaked: [AgentController.Phase] = []
+        let watch = { if controller.phase != .idle, leaked.last != controller.phase { leaked.append(controller.phase) } }
+        let interrupted = await Self.wait(sample: watch) { Self.count("turn/interrupt", exe: exe) == 1 }
+        XCTAssertTrue(interrupted, "the turn was not interrupted once turn/start returned its id")
+        let params = try Self.received("turn/interrupt", exe: exe).first?["params"] as? [String: Any]
+        XCTAssertEqual(params?["turnId"] as? String, "turn-1")
+        _ = await Self.wait(0.5, sample: watch) { false }   // let turn/completed{interrupted} land
+        XCTAssertEqual(leaked, [], "Stop did not stick")
+        XCTAssertEqual(controller.phase, .idle)
+        await controller.end()
+    }
+
+    /// An interrupt codex never answers settles Stop locally after the bound, and that
+    /// turn's late `turn/completed` must not settle the next turn.
+    @MainActor
+    func testControllerStopTimeoutSettlesAndIgnoresTheLateCompletion() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home)
+        controller.submit(goal: "WEDGE on a long command")
+        let started = await Self.wait { controller.items.contains { $0.id == "cmd-turn-1" } }
+        XCTAssertTrue(started, "turn-1 never started")
+
+        controller.stop()
+        XCTAssertEqual(controller.phase, .running, "Stop waits for codex to acknowledge the interrupt")
+        let settled = await Self.wait(5) { controller.phase == .idle }
+        XCTAssertTrue(settled, "an unanswered interrupt must settle Stop after the bound")
+        XCTAssertEqual(Self.count("turn/interrupt", exe: exe), 1)
+        // Every settle stamps a "Finished in" note; the turn's own duplicate .turnStarted
+        // would re-raise .running after a wrong settle, so the notes are the witness.
+        let settles = { controller.items.filter { if case .note = $0 { return true }; return false }.count }
+        XCTAssertEqual(settles(), 1)
+
+        // The mock starts turn-2, then delivers wedged turn-1's late turn/completed.
+        controller.submit(goal: "HANG next")
+        let second = await Self.wait { controller.items.contains { $0.id == "cmd-turn-2" } }
+        XCTAssertTrue(second, "turn-2 never started")
+        XCTAssertEqual(settles(), 1, "turn-1's late completion settled turn-2")
+        XCTAssertEqual(controller.phase, .running)
+
+        controller.stop()
+        let stopped = await Self.wait(5) { controller.phase == .idle }
+        XCTAssertTrue(stopped)
+        let last = try Self.received("turn/interrupt", exe: exe).last?["params"] as? [String: Any]
+        XCTAssertEqual(last?["turnId"] as? String, "turn-2")
+        await controller.end()
+    }
+
+    /// QA on #165 M4: after codex dies, the next prompt resumes the same thread with the
+    /// user's current Permissions (thread/resume mode + policy, turn/start sandboxPolicy).
+    @MainActor
+    func testControllerResumesTheThreadWithTheUsersSettings() async throws {
+        let (exe, home) = try makeMock()
+        let saved = (Preferences.agentBypassAll, Preferences.agentApprovalPolicy, Preferences.agentNetworkAccess)
+        defer {
+            Preferences.agentBypassAll = saved.0
+            Preferences.agentApprovalPolicy = saved.1
+            Preferences.agentNetworkAccess = saved.2
+        }
+        Preferences.agentBypassAll = false
+        Preferences.agentApprovalPolicy = "untrusted"
+        Preferences.agentNetworkAccess = true
+
+        let (controller, store) = makeController(exe: exe, home: home)
+        controller.submit(goal: "EXIT0 mid-turn")
+        // `harnessEnded` saves the transcript right after dropping the dead harness.
+        var resumable = false
+        let deadline = Date().addingTimeInterval(10)
+        while !resumable, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            resumable = !(await store.loadTranscript(id: "thread-1")).isEmpty
+        }
+        XCTAssertTrue(resumable, "codex exit was not handled")
+        guard case .error = controller.phase else { return XCTFail("expected an error, got \(controller.phase)") }
+
+        controller.submit(goal: "say hello")
+        let done = await Self.wait { Self.count("thread/resume", exe: exe) == 1 && controller.phase == .idle }
+        XCTAssertTrue(done, "the follow-up did not resume and finish (phase \(controller.phase), items \(controller.items))")
+        await controller.end()
+
+        XCTAssertEqual(Self.count("thread/start", exe: exe), 1, "the follow-up opened a fresh thread")
+        let resume = try XCTUnwrap(Self.received("thread/resume", exe: exe).first?["params"] as? [String: Any])
+        XCTAssertEqual(resume["threadId"] as? String, "thread-1")
+        XCTAssertEqual(resume["approvalPolicy"] as? String, "untrusted")
+        XCTAssertEqual(resume["sandbox"] as? String, "workspace-write")
+        let turn = try XCTUnwrap(Self.received("turn/start", exe: exe).last?["params"] as? [String: Any])
+        let policy = try XCTUnwrap(turn["sandboxPolicy"] as? [String: Any])
+        XCTAssertEqual(policy["type"] as? String, "workspaceWrite")
+        XCTAssertEqual(policy["networkAccess"] as? Bool, true)
+        XCTAssertEqual((policy["writableRoots"] as? [String])?.first, controller.workingDirectory)
     }
 
     /// Fake Responses endpoint for the real-codex test, plus a stand-in for the Bun plugin
