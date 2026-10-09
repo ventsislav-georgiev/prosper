@@ -75,6 +75,9 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed (macOS 26+): a drag the system cancelled** (Mission Control gesture, a modal, the lock
   screen) left the Window Snap footprint, layout overlay and palette on screen until the next
   click. The cancel event now ends the drag without snapping.
+- **Fixed: the audio mixer logged CoreAudio errors when an app's audio session ended or the
+  output device was unplugged.** It kept asking CoreAudio to remove listeners from objects that
+  no longer existed; those listeners are now forgotten instead.
 
 ## v2.155.0
 

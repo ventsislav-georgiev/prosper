@@ -342,8 +342,8 @@ final class AppVolumeMixer: ObservableObject {
         }
     }
 
-    private func removeOutputControlListeners() {
-        if let device = outputControlListenerDevice {
+    private func removeOutputControlListeners(deviceIsGone: Bool = false) {
+        if let device = outputControlListenerDevice, !deviceIsGone {
             for var address in outputControlListenerAddresses {
                 AudioObjectRemovePropertyListener(device,
                                                   &address,
@@ -392,13 +392,17 @@ final class AppVolumeMixer: ObservableObject {
         }
     }
 
-    /// Drops listeners of process objects that no longer exist. Removal on a
-    /// dead object can fail; object ids do come back, so the record goes
-    /// either way.
-    private func pruneRunningListeners(keeping current: Set<AudioObjectID>) {
+    /// Drops listeners of process objects not in `current`. When `current` is
+    /// the full process list just read, the missing objects are gone and
+    /// CoreAudio already dropped their listeners: calling remove on them only
+    /// logs "no object with given ID". Object ids do come back, so the record
+    /// goes either way.
+    private func pruneRunningListeners(keeping current: Set<AudioObjectID>, missingAreGone: Bool = false) {
         for object in runningListeners where !current.contains(object) {
-            var address = MixerRoutingSupport.processObjectListenerAddress
-            AudioObjectRemovePropertyListener(object, &address, Self.listenerCallback, listenerClient)
+            if !missingAreGone {
+                var address = MixerRoutingSupport.processObjectListenerAddress
+                AudioObjectRemovePropertyListener(object, &address, Self.listenerCallback, listenerClient)
+            }
             runningListeners.remove(object)
         }
     }
@@ -845,6 +849,12 @@ final class AppVolumeMixer: ObservableObject {
         if snapshot.outputDevices != outputDevices {
             outputDevices = snapshot.outputDevices
         }
+        // A device that left the device list took its listeners with it;
+        // removing them from the dead id only makes CoreAudio log an error.
+        if let device = outputControlListenerDevice, !snapshot.outputDevices.isEmpty,
+           !snapshot.outputDevices.contains(where: { $0.audioObjectID == device }) {
+            removeOutputControlListeners(deviceIsGone: true)
+        }
         subscribeToOutputControls(of: snapshot.defaultDeviceID)
         if systemOutputVolume != snapshot.systemOutputVolume {
             systemOutputVolume = snapshot.systemOutputVolume
@@ -861,7 +871,8 @@ final class AppVolumeMixer: ObservableObject {
         }
 
         let watchedBefore = runningListeners
-        pruneRunningListeners(keeping: Set(snapshot.processObjects))
+        pruneRunningListeners(keeping: Set(snapshot.processObjects),
+                              missingAreGone: !snapshot.processObjects.isEmpty)
         for object in snapshot.processObjects {
             // Audio starting/stopping in a process flips IsRunningOutput
             // without changing the object list — subscribe per object.
