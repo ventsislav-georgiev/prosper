@@ -33,6 +33,10 @@ final class StatsController {
         // B while A is open fires didClose(A)+didShow(B) in an unguaranteed order, so
         // a literal true/false could leave sampling off with a popover still shown.
         guard let self else { return }
+        // #217: an open popover proves the user is looking, so a pause left by a
+        // missed wake/unlock notification is stale — clear it before the popup
+        // toggle (which no-ops on a paused poller).
+        if self.popover.isShown { self.screen.apply(.popoverShown); self.applyPause() }
         self.poller?.setPopupActive(self.popover.isShown)
         self.updateOutsideClickMonitor()
         // Drop the hosting controller once truly closed so the SwiftUI view
@@ -58,9 +62,8 @@ final class StatsController {
     /// poller (tick timer + ping thread) pauses until both clear. Same lifetime
     /// rule as `configObserver`: never removed.
     private var sleepObservers: [NSObjectProtocol] = []
-    private var displayAsleep = false
-    private var screenLocked = false
-    private var screenHidden: Bool { displayAsleep || screenLocked }
+    private var screen = ScreenGate()
+    private var screenHidden: Bool { screen.hidden }
 
     private init() {
         // Block API with `queue: .main` guarantees `reload()` runs on the main
@@ -70,19 +73,13 @@ final class StatsController {
             forName: .systemStatsConfigChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reload() }
         }
-        let wc = NSWorkspace.shared.notificationCenter
-        for (name, asleep) in [(NSWorkspace.screensDidSleepNotification, true),
-                               (NSWorkspace.screensDidWakeNotification, false)] {
-            sleepObservers.append(wc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.displayAsleep = asleep; self?.applyPause() }
-            })
-        }
         // Screen lock exists only as a distributed notification (same pair
-        // ExtensionSystemServices listens to).
-        let dnc = DistributedNotificationCenter.default()
-        for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
-            sleepObservers.append(dnc.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.screenLocked = locked; self?.applyPause() }
+        // ExtensionSystemServices listens to); display sleep/wake is NSWorkspace's.
+        for (name, event) in ScreenGate.notifications {
+            let center = event == .lock || event == .unlock
+                ? DistributedNotificationCenter.default() : NSWorkspace.shared.notificationCenter
+            sleepObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.screen.apply(event); self?.applyPause() }
             })
         }
     }
@@ -270,4 +267,33 @@ private final class PopoverDelegate: NSObject, NSPopoverDelegate {
     init(_ reconcile: @escaping () -> Void) { self.reconcile = reconcile }
     func popoverDidShow(_ n: Notification) { reconcile() }
     func popoverDidClose(_ n: Notification) { reconcile() }
+}
+
+/// #186/#217: whether anyone can see the widgets. Pure, so the pause decision —
+/// including the self-heal on popover open — is testable without AppKit.
+struct ScreenGate: Equatable {
+    enum Event { case sleep, wake, lock, unlock, popoverShown }
+    /// The notifications that drive the gate (the controller observes exactly these).
+    static let notifications: [(Notification.Name, Event)] = [
+        (NSWorkspace.screensDidSleepNotification, .sleep),
+        (NSWorkspace.screensDidWakeNotification, .wake),
+        (Notification.Name("com.apple.screenIsLocked"), .lock),
+        (Notification.Name("com.apple.screenIsUnlocked"), .unlock),
+    ]
+    var displayAsleep = false
+    var screenLocked = false
+    var hidden: Bool { displayAsleep || screenLocked }
+
+    mutating func apply(_ e: Event) {
+        switch e {
+        case .sleep: displayAsleep = true
+        case .wake: displayAsleep = false
+        case .lock: screenLocked = true
+        case .unlock: screenLocked = false
+        // A missed wake/unlock (fast user switch, login-window round trip) would
+        // otherwise freeze the values until the next lock cycle; a click on our
+        // menu-bar item can only happen on a lit, unlocked screen.
+        case .popoverShown: displayAsleep = false; screenLocked = false
+        }
+    }
 }

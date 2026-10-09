@@ -1,5 +1,6 @@
 import XCTest
 
+@testable import ProsperApp
 @testable import StatsCore
 
 /// #186: while the display sleeps or the screen is locked the poller must stop
@@ -40,5 +41,41 @@ final class StatsPollerPauseTests: XCTestCase {
         lock.withLock { waiter = resumed }
         poller.setPaused(false)
         wait(for: [resumed], timeout: 0.2)   // shorter than one interval: the immediate poll
+    }
+
+    /// Replays notifications by name through the same table the controller observes,
+    /// so dropping or flipping a wake/unlock mapping fails here.
+    private func gate(after names: [String]) -> ScreenGate {
+        var g = ScreenGate()
+        for n in names {
+            guard let e = ScreenGate.notifications.first(where: { $0.0.rawValue == n })?.1 else {
+                XCTFail("controller does not observe \(n)"); return g
+            }
+            g.apply(e)
+        }
+        return g
+    }
+
+    func testUnlockAndWakeResume() {
+        XCTAssertTrue(gate(after: ["com.apple.screenIsLocked"]).hidden)
+        XCTAssertFalse(gate(after: ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"]).hidden,
+                       "unlock must resume")
+        let sleep = NSWorkspace.screensDidSleepNotification.rawValue
+        let wake = NSWorkspace.screensDidWakeNotification.rawValue
+        XCTAssertTrue(gate(after: [sleep]).hidden)
+        XCTAssertFalse(gate(after: [sleep, wake]).hidden, "wake must resume")
+        XCTAssertTrue(gate(after: [sleep, "com.apple.screenIsLocked", wake]).hidden, "still locked")
+    }
+
+    /// #217: a missed unlock/wake left the poller paused until the next lock cycle.
+    func testPopoverOpenClearsStalePauseAndNextLockStillPauses() {
+        var g = gate(after: [NSWorkspace.screensDidSleepNotification.rawValue, "com.apple.screenIsLocked"])
+        // wake + unlock never arrive
+        g.apply(.popoverShown)
+        XCTAssertFalse(g.hidden, "opening the popover must clear a stale pause")
+        g.apply(.lock)
+        XCTAssertTrue(g.hidden, "the next real lock still pauses")
+        g.apply(.unlock)
+        XCTAssertFalse(g.hidden)
     }
 }
