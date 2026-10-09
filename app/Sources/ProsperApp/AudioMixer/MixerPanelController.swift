@@ -208,6 +208,9 @@ final class MixerPanelController {
     }
 
     @objc private func itemClicked(_ sender: NSStatusBarButton) {
+        // #149: the outside-click monitor already closed us on this very click
+        // (the menu bar is WindowServer's, not ours) — don't reopen.
+        if outsideClick.dismissed(by: NSApp.currentEvent) { return }
         if popover.isShown { popover.performClose(sender); return }
         let host = panelHost()
         popover.contentViewController = host

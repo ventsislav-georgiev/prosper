@@ -196,6 +196,10 @@ final class StatsController {
 
     @objc private func itemClicked(_ sender: NSStatusBarButton) {
         guard let m = buttonModule[ObjectIdentifier(sender)] else { return }
+        // #149: the outside-click monitor already closed us on this very click
+        // (the menu bar is WindowServer's, not ours) — clicking the open module's
+        // icon means "close", so don't reopen. A different module's icon still opens.
+        if outsideClick.dismissed(by: NSApp.currentEvent), openModule == m { return }
         if popover.isShown, openModule == m { popover.performClose(sender); return }
         openModule = m
         let host = NSHostingController(rootView: StatsPopupView(module: m, store: store))

@@ -198,6 +198,10 @@ final class CalendarBarController {
     }
 
     @objc private func itemClicked(_ sender: NSStatusBarButton) {
+        // #149: the outside-click monitor already closed us on this very click
+        // (the menu bar is WindowServer's, not ours) — don't reopen. Here and not
+        // in togglePopup: the keyboard shortcut path never involves the monitor.
+        if outsideClick.dismissed(by: NSApp.currentEvent) { return }
         togglePopup()
     }
 

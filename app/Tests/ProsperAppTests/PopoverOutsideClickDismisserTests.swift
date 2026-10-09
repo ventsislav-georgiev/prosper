@@ -39,3 +39,28 @@ final class PopoverOutsideClickDismisserTests: XCTestCase {
 
     func testForeignWindowInsideFrameCloses() { XCTAssertTrue(dismiss(200, inside, frame)) }
 }
+
+// #149: recognising the status-item click the monitor already closed on.
+final class PopoverDismissSameClickTests: XCTestCase {
+    private typealias S = PopoverOutsideClickDismisser.ClickStamp
+    private func same(_ a: S?, _ b: S?) -> Bool { PopoverOutsideClickDismisser.isSameClick(a, b) }
+
+    func testEqualStampIsSame() { XCTAssertTrue(same(S(time: 10, number: 1), S(time: 10, number: 1))) }
+
+    func testNilEitherSideIsNotSame() {
+        XCTAssertFalse(same(nil, S(time: 10, number: 1)))
+        XCTAssertFalse(same(S(time: 10, number: 1), nil))
+        XCTAssertFalse(same(nil, nil))
+    }
+
+    func testWithinToleranceIsSame() { XCTAssertTrue(same(S(time: 10, number: 1), S(time: 10.004, number: 2))) }
+
+    func testFiftyMsApartDifferentNumberIsNotSame() {
+        XCTAssertFalse(same(S(time: 10, number: 1), S(time: 10.05, number: 2)))
+    }
+
+    // Mouse-up action event: later timestamp, same event number as the down.
+    func testMouseUpOfSameClickMatchesByNumber() {
+        XCTAssertTrue(same(S(time: 10, number: 7), S(time: 10.12, number: 7)))
+    }
+}

@@ -18,6 +18,29 @@ final class PopoverOutsideClickDismisser {
     /// Extra veto checked at click time (Calendar: pinned popovers stay open).
     private let canDismiss: () -> Bool
     private var monitor: Any?
+    /// #149: the click that made the monitor close the popover. On macOS 27 every
+    /// menu-bar point — our own status items included — resolves to a WindowServer
+    /// window (pid 180), so a click on the status item is FOREIGN here: the monitor
+    /// closes, then the button action sees `isShown == false` and reopens. The
+    /// toggle action asks `dismissed(by:)` to recognise that same click and stay
+    /// closed. Do not drop this as redundant with the pid rule — it exists because
+    /// of it.
+    private var lastDismissClick: ClickStamp?
+
+    /// Identity of one physical click: its time (seconds since boot) and the
+    /// mouse-event number, which a mouse-up shares with its mouse-down.
+    struct ClickStamp: Equatable {
+        let time: TimeInterval
+        let number: Int
+
+        /// nil for non-mouse events — `eventNumber` raises on those.
+        init?(_ e: NSEvent?) {
+            guard let e, [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+                          .otherMouseDown, .otherMouseUp].contains(e.type) else { return nil }
+            self.init(time: e.timestamp, number: e.eventNumber)
+        }
+        init(time: TimeInterval, number: Int) { self.time = time; self.number = number }
+    }
 
     init(popover: NSPopover, canDismiss: @escaping () -> Bool = { true }) {
         self.popover = popover
@@ -41,6 +64,7 @@ final class PopoverOutsideClickDismisser {
                     let frame = self.popover.contentViewController?.view.window?.frame
                     if Self.shouldDismiss(ownerPID: Self.ownerPID(at: p), ourPID: getpid(),
                                           click: p, popoverFrame: frame) {
+                        self.lastDismissClick = ClickStamp(event)
                         self.popover.performClose(nil)
                     }
                 }
@@ -49,6 +73,25 @@ final class PopoverOutsideClickDismisser {
             NSEvent.removeMonitor(m)
             monitor = nil
         }
+    }
+
+    /// #149: true when `event` is the click the monitor just closed the popover
+    /// on — the status item's own toggle click; the caller must then NOT reopen.
+    /// Consumes the stamp so the next genuine click opens normally.
+    func dismissed(by event: NSEvent?) -> Bool {
+        defer { lastDismissClick = nil }
+        return Self.isSameClick(lastDismissClick, ClickStamp(event))
+    }
+
+    /// Pure. Same click when the mouse-event numbers match — the status button
+    /// fires its action on mouse-UP (default NSButton mask), whose timestamp is a
+    /// human press-length after the mouse-down the monitor saw, but whose
+    /// `eventNumber` is the down's — or when the timestamps agree within
+    /// `tolerance` (the monitor's copy and the delivered event are distinct objects).
+    nonisolated static func isSameClick(_ a: ClickStamp?, _ b: ClickStamp?,
+                                        tolerance: TimeInterval = 0.005) -> Bool {
+        guard let a, let b else { return false }
+        return a.number == b.number || abs(a.time - b.time) <= tolerance
     }
 
     /// #149: pid of the topmost on-screen window at `p` (screen coords), nil when
