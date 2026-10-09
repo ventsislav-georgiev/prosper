@@ -107,6 +107,8 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed (macOS 27): Prosper's own status icons keep their names in Menu Bar Management**
   after the bar reflows; they are identified by an accessibility identifier instead of a
   stale on-screen position.
+- **Fixed: Menu Bar Management's "Apply now" for icon spacing now relaunches the apps
+  whose icons sit on any display**, not only the main one.
 - **Performance: opening Settings no longer walks the model cache or runs the privacy
   checks on the main thread.** The AI Models and Context panes seed themselves once per
   launch and refresh in the background afterwards, so later opens are quicker when large

@@ -47,10 +47,23 @@ enum MenuBarSpacing {
     static func owningApps() -> [NSRunningApplication] {
         let selfPID = getpid()
         let skip: Set<String> = ["com.apple.controlcenter", "com.apple.Spotlight", "com.apple.MenuBarAgent"]
-        let pids = Set(MenuBarBridge.items(onDisplay: CGMainDisplayID()).map(\.pid))
+        // #234: every active display, not just the main one — with the hosted bar on an
+        // external display, its items' owners would otherwise be missed.
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        if CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) != .success || count == 0 {
+            ids = [CGMainDisplayID()]; count = 1
+        }
+        let pids = union(ids.prefix(Int(count)).map { MenuBarBridge.items(onDisplay: $0).map(\.pid) })
         return pids.filter { $0 != 0 && $0 != selfPID }
             .compactMap { NSRunningApplication(processIdentifier: $0) }
             .filter { !skip.contains($0.bundleIdentifier ?? "") }
+    }
+
+    /// Owner pids across displays, first display first, de-duplicated (first sighting wins).
+    nonisolated static func union(_ perDisplay: [[pid_t]]) -> [pid_t] {
+        var seen = Set<pid_t>()
+        return perDisplay.joined().filter { seen.insert($0).inserted }
     }
 
     /// DATA-LOSS-SAFE live apply (opt-in only, explicit confirm in the UI).
