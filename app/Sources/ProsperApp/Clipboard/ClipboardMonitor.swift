@@ -12,7 +12,14 @@ final class ClipboardMonitor {
 
     private var timer: Timer?
     private var lastChangeCount: Int = NSPasteboard.general.changeCount
-    private let pollInterval: TimeInterval = 0.6
+    private let pollInterval: TimeInterval = 1.0
+
+    /// #194: display asleep or screen locked → nothing can copy, so the timer is
+    /// torn down until both clear (same pattern as `StatsController`, #186).
+    /// The monitor is a process-lifetime singleton, so the observers are never removed.
+    private var sleepObservers: [NSObjectProtocol] = []
+    private var displayAsleep = false
+    private var screenLocked = false
 
     private(set) var isRunning = false
 
@@ -61,24 +68,53 @@ final class ClipboardMonitor {
     private static let softImageBytes = 8 * 1024 * 1024        // ≤8 MB PNG → encrypt
     private static let maxImagePixels = 50_000_000             // >50 MP → metadata only (no decode)
 
+    init() {
+        let wc = NSWorkspace.shared.notificationCenter
+        for (name, asleep) in [(NSWorkspace.screensDidSleepNotification, true),
+                               (NSWorkspace.screensDidWakeNotification, false)] {
+            sleepObservers.append(wc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.displayAsleep = asleep; self?.applyPause() }
+            })
+        }
+        let dnc = DistributedNotificationCenter.default()
+        for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
+            sleepObservers.append(dnc.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.screenLocked = locked; self?.applyPause() }
+            })
+        }
+    }
+
     func start() {
         guard !isRunning else { return }
         lastChangeCount = NSPasteboard.general.changeCount
-        let timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.poll() }
-        }
-        // Capture latency is not precision-sensitive; tolerance lets macOS
-        // coalesce the wakeup with other timers and cuts idle power.
-        timer.tolerance = pollInterval / 2
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .common)
         isRunning = true
+        applyPause()
     }
 
     func stop() {
         timer?.invalidate()
         timer = nil
         isRunning = false
+    }
+
+    /// Timer runs only while started and the screen is visible. Resuming polls at
+    /// once so a copy made while hidden is picked up without waiting a tick.
+    private func applyPause() {
+        if !isRunning || displayAsleep || screenLocked {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
+        guard timer == nil else { return }
+        poll()
+        let timer = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.poll() }
+        }
+        // Capture latency is not precision-sensitive; tolerance lets macOS
+        // coalesce the wakeup with other timers and cuts idle power.
+        timer.tolerance = 0.2
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     /// Drops the `clipboard.changed` event for the next observed change. Called by
