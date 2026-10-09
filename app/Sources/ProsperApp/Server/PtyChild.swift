@@ -16,6 +16,8 @@ final class PtyChild: @unchecked Sendable {
     private var lastCols = 80
     private var lastRows = 24
     private var jiggling = false
+    /// True from redraw()'s shrink until its delayed restore has run.
+    var isJiggling: Bool { lock.withLock { jiggling } }
 
     enum PtyError: Error { case forkFailed }
 

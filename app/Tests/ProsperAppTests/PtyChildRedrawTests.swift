@@ -36,14 +36,19 @@ final class PtyChildRedrawTests: XCTestCase {
     /// handler itself — a `sh` trap running `stty | awk` forks twice, which under load
     /// takes longer than the jiggle's 120 ms restore and reports the size AFTER the
     /// restore, so the shrink it exists to observe goes missing.
+    /// Report ORDER is not size order: the handler is re-entrant, so a handler
+    /// that read the old size can be interrupted by a newer one and print after
+    /// it. Any line on stdin answers `NOW<rows>x<cols>`, the size at that moment.
     private static let reporter = """
-    import signal, fcntl, termios, struct, sys, time
-    def on_winch(*_):
+    import signal, fcntl, termios, struct, sys
+    def size():
         r, c, _, _ = struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0' * 8))
-        sys.stdout.write('R%dx%d\\n' % (r, c)); sys.stdout.flush()
+        return '%dx%d' % (r, c)
+    def on_winch(*_):
+        sys.stdout.write('R' + size() + '\\n'); sys.stdout.flush()
     signal.signal(signal.SIGWINCH, on_winch)
     print('READY', flush=True)
-    while True: time.sleep(0.1)
+    for _ in sys.stdin: print('NOW' + size(), flush=True)
     """
 
     private func spawnReporter(
@@ -59,7 +64,7 @@ final class PtyChildRedrawTests: XCTestCase {
                     // reports can arrive without a separator between them.
                     let text = String(decoding: bytes, as: UTF8.self)
                     if text.contains("READY") { onLine("READY") }
-                    for m in text.matches(of: /R[0-9]+x[0-9]+/) { onLine(String(m.output)) }
+                    for m in text.matches(of: /(?:R|NOW)[0-9]+x[0-9]+/) { onLine(String(m.output)) }
                 },
                 onExit: { _ in })
         }
@@ -113,18 +118,25 @@ final class PtyChildRedrawTests: XCTestCase {
     }
 
     /// A resize that lands mid-jiggle must win: the restore step re-reads the
-    /// latest size instead of resurrecting the pre-jiggle one.
+    /// latest size instead of resurrecting the pre-jiggle one. Judged by the
+    /// pty's actual size once the restore has run, not by the last SIGWINCH
+    /// report: under load the shrink's handler can print its stale 23x80 after
+    /// the resize's 30x100 (re-entrant handler), which failed this test with a
+    /// correct restore.
     func testResizeDuringJiggleWins() throws {
         let state = Lines()
         let gotReady = expectation(description: "inner program started")
         let gotNew = expectation(description: "new size reported after jiggle")
         gotReady.assertForOverFulfill = false
         gotNew.assertForOverFulfill = false
+        let gotNow = expectation(description: "current size answered")
+        let now = Lines()
 
         let child = try spawnReporter { line in
             _ = state.record(line)
             if line == "READY" { gotReady.fulfill() }
             if line == "R30x100" { gotNew.fulfill() }
+            if line.hasPrefix("NOW") { _ = now.record(line); gotNow.fulfill() }
         }
         child.run()
         defer { child.terminate() }
@@ -133,15 +145,14 @@ final class PtyChildRedrawTests: XCTestCase {
         child.redraw()                      // shrink to 23 rows, restore in 120 ms
         child.resize(cols: 100, rows: 30)   // real resize lands mid-jiggle
         wait(for: [gotNew], timeout: 15)
-        // Let the +120 ms restore land before judging what it restored to.
-        Thread.sleep(forTimeInterval: 0.4)
+        // Wait for the delayed restore to have run, however late load makes it.
+        let restored = expectation(for: NSPredicate { _, _ in !child.isJiggling }, evaluatedWith: nil)
+        wait(for: [restored], timeout: 15)
 
         // The restore must NOT bring back 80x24.
-        if let last = state.all.last(where: { $0.hasPrefix("R") }) {
-            XCTAssertEqual(last, "R30x100", "restore resurrected a stale size: \(state.all)")
-        } else {
-            XCTFail("no size reports: \(state.all)")
-        }
+        child.write(Array("?\n".utf8))
+        wait(for: [gotNow], timeout: 15)
+        XCTAssertEqual(now.all, ["NOW30x100"], "restore resurrected a stale size: \(state.all)")
     }
 
     /// A blocked signal mask survives fork AND exec. We fork from Swift runtime
