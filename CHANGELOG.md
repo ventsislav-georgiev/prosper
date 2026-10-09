@@ -57,6 +57,9 @@ tag from the now-released section and put it on the new top draft.
   Coding agent switches.** They became rows inside Essentials and Local AI, and search
   indexed only section titles. Row titles are now indexed as keywords of their section,
   so a hit jumps to the section that holds the row.
+- **Fixed: Settings search could not find Accessibility, Screen Recording or any toggle
+  label, and a System Stats row landed on the top of the pane.** Permission rows and
+  toggle labels are indexed too, and a System Stats hit jumps to its module's section.
 - **Fixed: Stop did not interrupt the coding agent.** Prosper sent `turn/interrupt` and
   `turn/steer` as notifications, which codex silently drops, so a running shell command
   kept going after Stop; turn ids were also read from the wrong field. Both are now proper

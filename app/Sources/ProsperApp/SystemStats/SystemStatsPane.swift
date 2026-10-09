@@ -66,7 +66,7 @@ struct SystemStatsPane: View {
     @ViewBuilder
     private func moduleSection(_ m: StatsModule) -> some View {
         let cfg = binding(m)
-        NeonSection(m.shortLabel + " — " + sectionTitle(m)) {
+        NeonSection(Self.moduleTitle(m)) {
             NeonRow("Show in menu bar") {
                 Toggle("", isOn: cfg.enabled).labelsHidden()
             }
@@ -125,11 +125,28 @@ struct SystemStatsPane: View {
             .labelsHidden()
     }
 
-    private func sectionTitle(_ m: StatsModule) -> String {
-        switch m {
+    static func moduleTitle(_ m: StatsModule) -> String {
+        let name = switch m {
         case .cpu: "Processor"; case .memory: "Memory"; case .disk: "Storage"
         case .network: "Network"
         case .gpu: "Graphics"; case .power: "Power"; case .sensors: "Temperature"; case .battery: "Battery"
+        }
+        return m.shortLabel + " — " + name
+    }
+
+    /// Search rows for the per-module sections. Their titles are computed, so
+    /// gen-settings-index.py cannot anchor them; this mirrors `moduleSection`'s
+    /// row conditions, and SettingsSearchTests pins it to the pane's NeonRow literals.
+    static var moduleSearchIndex: [SettingsIndexEntry] {
+        StatsModule.allCases.map { m in
+            var rows = ["Show in menu bar"]
+            if m.historyKey != nil { rows.append("Display") }
+            if m != .network { rows += ["Show label", "Show unit"] }
+            rows += m == .network ? ["Download colour", "Upload colour"]
+                                  : ["Low colour", "Medium colour", "High colour"]
+            if m == .sensors { rows.append("Fast manual fan re-engage") }
+            return SettingsIndexEntry(paneID: "system-stats", paneTitle: "System Stats",
+                                      section: moduleTitle(m), keywords: rows)
         }
     }
 

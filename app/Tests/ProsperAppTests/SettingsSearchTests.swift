@@ -128,6 +128,43 @@ final class SettingsSearchTests: XCTestCase {
         }
     }
 
+    /// Permission rows and Toggle labels are row titles too (#218): QA's
+    /// "accessibility" / "screen recording" used to return nothing.
+    func testPermissionRowsAndTogglesAreSearchable() {
+        for (query, pane) in [("accessibility", "general"), ("accessibility", "context"),
+                              ("screen recording", "context")] {
+            let hits = SettingsSearch.results(query, index: nativeSettingsIndex)
+            XCTAssertTrue(hits.contains { $0.paneID == pane && $0.section == "Permissions" },
+                          "'\(query)' should find \(pane) › Permissions, got \(hits.map(\.anchor))")
+        }
+        let toggle = SettingsSearch.results("verbose troubleshooting", index: nativeSettingsIndex)
+        XCTAssertTrue(toggle.contains { $0.paneID == "about" && $0.section == "Troubleshooting" },
+                      "Toggle label not indexed: \(toggle.map(\.anchor))")
+    }
+
+    /// System Stats module sections have computed titles (#218): a row hit must land
+    /// on its module's section, never the pane top, and the hand-kept row list in
+    /// `moduleSearchIndex` must match the pane's own NeonRow literals.
+    @MainActor
+    func testSystemStatsRowsLandOnTheirModuleSection() throws {
+        let index = settingsSearchIndex(registry: nil, groups: settingsSidebarGroups(registry: nil))
+        let fan = SettingsSearch.results("fan re-engage", index: index).map(\.anchor)
+        XCTAssertEqual(fan, [SettingsAnchor(pane: "system-stats", section: SystemStatsPane.moduleTitle(.sensors))])
+        let upload = SettingsSearch.results("upload colour", index: index).map(\.anchor)
+        XCTAssertEqual(upload, [SettingsAnchor(pane: "system-stats", section: SystemStatsPane.moduleTitle(.network))])
+        let label = SettingsSearch.results("show label", index: index)
+        XCTAssertFalse(label.isEmpty)
+        XCTAssertFalse(label.contains { $0.section.isEmpty }, "row landed on the pane top")
+        XCTAssertFalse(label.contains { $0.section == SystemStatsPane.moduleTitle(.network) })
+
+        let source = try String(contentsOf: appRoot.appendingPathComponent(
+            "Sources/ProsperApp/SystemStats/SystemStatsPane.swift"), encoding: .utf8)
+        let literals = Set(source.matches(of: /NeonRow\("([^"]+)"/).map { String($0.1) })
+        let menuBar = nativeSettingsIndex.first { $0.paneID == "system-stats" && $0.section == "Menu Bar" }
+        let indexed = Set(SystemStatsPane.moduleSearchIndex.flatMap(\.keywords) + (menuBar?.keywords ?? []))
+        XCTAssertEqual(indexed, literals, "moduleSearchIndex drifted from SystemStatsPane's rows")
+    }
+
     /// Sidebar group order, pinned. The two feature groups appear only while their
     /// master switch is on, so the expectation follows the live preferences.
     @MainActor

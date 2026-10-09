@@ -2,8 +2,8 @@
 """Generate Sources/ProsperApp/SettingsIndex.generated.swift from the settings source.
 
 The settings search index has one entry per pane (section: "") plus one per titled
-`NeonSection` inside that pane. Literal `NeonRow("...")` titles ride along as that
-entry's keywords, so a row is findable and lands on its section. Nobody hand-maintains it: this script scrapes it out
+`NeonSection` inside that pane. Literal `NeonRow("...")`, `Toggle("...")` and
+`PermissionStatusRow(title: "...")` titles ride along as that entry's keywords, so a row is findable and lands on its section. Nobody hand-maintains it: this script scrapes it out
 of the panes themselves, and `SettingsSearchTests.testGeneratedIndexIsCurrent` runs
 `--check` so a stale table fails the build rather than silently under-indexing.
 
@@ -18,7 +18,9 @@ What it skips, by design:
   * untitled `NeonSection`s (nothing to search for, nothing to label a result with)
   * non-literal titles, e.g. `NeonSection(sec.title, ...)` in the extension pane —
     those are manifest-driven and come from `extensionSettingsIndex(registry:)` at
-    runtime instead.
+    runtime instead. Rows under a non-literal title are dropped too (no anchor to
+    land on); System Stats indexes its per-module sections in
+    `SystemStatsPane.moduleSearchIndex`.
 Both counts are printed so they stay visible.
 
 Usage:
@@ -44,7 +46,8 @@ DECL_RE = re.compile(
 STRUCT_RE = re.compile(r"\bstruct (\w+)\s*(?:<[^>]*>)?\s*:\s*[^{]*\bView\b")
 CASE_RE = re.compile(r'\bcase "([\w:-]+)":')
 TAB_RE = re.compile(r'SettingsTab\(\s*id: "([^"]+)",\s*title: "([^"]+)"')
-SECTION_RE = re.compile(r"\bNeon(Section|Row)\(")
+SECTION_RE = re.compile(r"\b(NeonSection|NeonRow|Toggle|PermissionStatusRow)\(")
+TITLE_ARG_RE = re.compile(r'^\s*title: "((?:[^"\\]|\\.)*)"')
 LITERAL_RE = re.compile(r'^"((?:[^"\\]|\\.)*)"')
 
 
@@ -69,6 +72,7 @@ def scan_structs():
         if "NeonSection(" not in text:
             continue
         current = None
+        pending_title = False  # `PermissionStatusRow(` with `title:` on the next line
         for line in text.split("\n"):
             if DECL_RE.match(line):
                 match = STRUCT_RE.search(line)
@@ -81,20 +85,32 @@ def scan_structs():
             entry = structs[current]
             if "NeonScroll" in line:
                 entry["scroll"] = True
+            if pending_title:
+                pending_title = False
+                literal = TITLE_ARG_RE.match(line)
+                if literal:
+                    entry["events"].append(("row", literal.group(1)))
             for hit in SECTION_RE.finditer(line):
                 rest = line[hit.end():]
-                literal = LITERAL_RE.match(rest)
-                if hit.group(1) == "Row":
-                    if literal:
-                        entry["events"].append(("row", literal.group(1)))
+                literal = LITERAL_RE.match(rest) or TITLE_ARG_RE.match(rest)
+                if hit.group(1) == "PermissionStatusRow" and not rest.strip():
+                    pending_title = True
+                elif hit.group(1) != "NeonSection":
+                    if literal and literal.group(1) and "\\(" not in literal.group(1):
+                        entry["events"].append(("row", re.sub(
+                            r"\\u\{([0-9a-fA-F]+)\}",
+                            lambda u: chr(int(u.group(1), 16)), literal.group(1))))
                 elif literal:
                     entry["events"].append(("sec", literal.group(1)))
                 elif rest.startswith("nil") or re.match(r"\w+:", rest):
                     skipped["untitled"] += 1
                     entry["events"].append(("sec", ""))
                 else:
+                    # Computed title: no anchor to land on, so its rows are dropped
+                    # rather than pinned to the pane top (System Stats indexes its
+                    # module sections itself — `SystemStatsPane.moduleSearchIndex`).
                     skipped["non_literal"] += 1
-                    entry["events"].append(("sec", ""))
+                    entry["events"].append(("sec", None))
             for name in re.findall(r"\b([A-Z]\w+)\(", line):
                 if name != current:
                     entry["events"].append(("ref", name))
@@ -165,8 +181,9 @@ def build():
         for kind, value in sections_for(struct, structs, pane_structs, set()):
             if kind == "sec":
                 current = value
-                sections.setdefault(current, [])
-            elif value not in sections[current]:
+                if current is not None:
+                    sections.setdefault(current, [])
+            elif current is not None and value not in sections[current]:
                 sections[current].append(value)
         for section, keywords in sections.items():
             rows.append((pane_id, title, section, keywords))

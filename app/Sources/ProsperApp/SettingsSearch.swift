@@ -77,7 +77,8 @@ func settingsSearchIndex(registry: ExtensionRegistry?,
                          groups: [(String, [SettingsTab])]) -> [SettingsIndexEntry] {
     let visible = Set(groups.flatMap { $0.1.map(\.id) })
     let ext = registry.map { extensionSettingsIndex(registry: $0) } ?? []
-    return (nativeSettingsIndex + ext).filter { visible.contains($0.paneID) }
+    return (nativeSettingsIndex + SystemStatsPane.moduleSearchIndex + ext)
+        .filter { visible.contains($0.paneID) }
 }
 
 /// Searchable rows for every sidebar-placed extension settings section.
