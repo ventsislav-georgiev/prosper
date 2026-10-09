@@ -794,8 +794,8 @@ private struct SettingsRootView: View {
         // Window: drag-snap config rides in as the FOOTER so the manifest's
         // Permissions + window-move shortcut binds read first on the page.
         case "com.prosper.window": footer = AnyView(WindowManagementPane(model: model))
-        // Menu Bar Management: the rich native controls (spacing, section list,
-        // reorder + relaunch) ride in as the FOOTER below the manifest's reveal
+        // Menu Bar Management: the rich native controls (spacing, hiding toggles,
+        // chevron style, relaunch) ride in as the FOOTER below the manifest's reveal
         // shortcut, so there's ONE Menu Bar Management section.
         case "com.prosper.menubar": footer = AnyView(MenuBarPane())
         // Calendar: icon/grid appearance + per-calendar checklist ride in as the
