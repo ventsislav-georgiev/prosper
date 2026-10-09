@@ -158,7 +158,8 @@ protocol CodingHarness: AnyObject, Sendable {
     func shutdown() async
 
     func newSession(_ opts: SessionOptions) async throws -> SessionID
-    func resumeSession(_ id: SessionID) async throws -> SessionID
+    /// `options` re-applies the current approval policy and sandbox; cwd/model stay the thread's.
+    func resumeSession(_ id: SessionID, options: SessionOptions) async throws -> SessionID
     func forkSession(_ id: SessionID) async throws -> SessionID   // capability-gated
 
     @discardableResult

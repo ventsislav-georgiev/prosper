@@ -20,6 +20,9 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// until a well-formed `turn/interrupt` request ends it; "WEDGE" does the same but
     /// never answers the interrupt (a hung codex). Every inbound line is
     /// appended to `received.jsonl` beside the script so tests can check what was sent.
+    /// Thread and turn params are checked against the codex 0.139/0.161/0.162 schemas
+    /// (`ThreadStartParams.sandbox: SandboxMode`, no `sandboxPolicy` there;
+    /// `TurnStartParams.sandboxPolicy: SandboxPolicy`); a mismatch is a JSON-RPC error.
     private static let mockServer = #"""
     import sys, json, os
 
@@ -36,6 +39,33 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     def error(mid, message):
         send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32600, "message": message}})
+
+    MODES = ("read-only", "workspace-write", "danger-full-access")   # SandboxMode
+    POLICY_TYPES = ("readOnly", "workspaceWrite", "dangerFullAccess", "externalSandbox")
+
+    def thread_params_error(method, params):
+        if "sandboxPolicy" in params:
+            return method + " has no sandboxPolicy (codex drops it)"
+        if params.get("sandbox") not in (None,) + MODES:
+            return "bad sandbox mode " + str(params.get("sandbox"))
+        if not isinstance(params.get("config", {}), dict):
+            return "config must be an object"
+        return None
+
+    def turn_params_error(params):
+        policy = params.get("sandboxPolicy")
+        if policy is None:
+            return None
+        if "sandbox" in params:
+            return "turn/start has no sandbox mode field"
+        if policy.get("type") not in POLICY_TYPES:
+            return "bad sandboxPolicy type " + str(policy.get("type"))
+        roots = policy.get("writableRoots", [])
+        if not all(isinstance(r, str) and r.startswith("/") for r in roots):
+            return "writableRoots must be absolute paths"
+        if not isinstance(policy.get("networkAccess", False), bool):
+            return "networkAccess must be a bool"
+        return None
 
     for line in sys.stdin:
         line = line.strip()
@@ -57,12 +87,21 @@ final class CodexHarnessE2ETests: XCTestCase {
             send({"jsonrpc": "2.0", "id": mid, "result": {"capabilities": {}}})
         elif method == "initialized":
             pass
-        elif method == "thread/start":
-            send({"jsonrpc": "2.0", "id": mid, "result": {"thread": {"id": "thread-1"}}})
+        elif method in ("thread/start", "thread/resume", "thread/fork"):
+            problem = thread_params_error(method, params)
+            if problem:
+                error(mid, problem)
+                continue
+            tid = {"thread/start": "thread-1", "thread/fork": "thread-2"}.get(method, params.get("threadId"))
+            send({"jsonrpc": "2.0", "id": mid, "result": {"thread": {"id": tid}}})
         elif method == "turn/start":
+            problem = turn_params_error(params)
+            if problem:
+                error(mid, problem)
+                continue
             current_turn = "turn-1"
             send({"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
-            prompt = json.dumps(params)
+            prompt = json.dumps(params.get("input"))
             want_approval = "APPROVE" in prompt
             send({"jsonrpc": "2.0", "method": "turn/started",
                   "params": {"threadId": "thread-1", "turn": turn("inProgress")}})
@@ -321,6 +360,215 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(params?["expectedTurnId"] as? String, "turn-1")
         XCTAssertNil(params?["turnId"])
         XCTAssertEqual(params?["threadId"] as? String, "thread-1")
+    }
+
+    /// #165/#166: the user's sandbox reaches codex in the shapes its schema accepts, and
+    /// every thread start/resume/fork bypasses hook trust so configured hooks run.
+    /// `thread/*` take the `SandboxMode` string; the Permissions allowlist and network
+    /// toggle travel as `turn/start.sandboxPolicy`; Bypass-all is `danger-full-access`.
+    func testSandboxAndHookTrustReachCodex() async throws {
+        let (exe, home) = try makeMock()
+        let savedRoots = Preferences.agentWritableRoots
+        Preferences.agentWritableRoots = ["/tmp/prosper-extra-root"]
+        defer { Preferences.agentWritableRoots = savedRoots }
+
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(SessionOptions(
+            cwd: home.path, model: "test-model",
+            approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: true)))
+        try await harness.sendPrompt(session: session, input: [.text("one")])
+        // A resumed thread (app restart) gets the current Permissions, here Bypass-all.
+        let resumed = try await harness.resumeSession(session, options: SessionOptions(
+            cwd: home.path, model: "test-model", approvalPolicy: .never, sandbox: .dangerFullAccess))
+        try await harness.sendPrompt(session: resumed, input: [.text("two")])
+        let forked = try await harness.forkSession(resumed)
+        try await harness.sendPrompt(session: forked, input: [.text("three")])
+        await harness.shutdown()
+
+        func params(_ method: String) throws -> [[String: Any]] {
+            try Self.received(method, exe: exe).map { $0["params"] as? [String: Any] ?? [:] }
+        }
+        let start = try XCTUnwrap(params("thread/start").first)
+        XCTAssertEqual(start["sandbox"] as? String, "workspace-write")
+        XCTAssertNil(start["sandboxPolicy"], "thread/start has no sandboxPolicy; codex drops it")
+        let resume = try XCTUnwrap(params("thread/resume").first)
+        XCTAssertEqual(resume["sandbox"] as? String, "danger-full-access")
+        XCTAssertEqual(resume["approvalPolicy"] as? String, "never")
+        let fork = try XCTUnwrap(params("thread/fork").first)
+        for p in [start, resume, fork] {
+            XCTAssertEqual((p["config"] as? [String: Any])?["bypass_hook_trust"] as? Bool, true, "\(p)")
+        }
+
+        let turns = try params("turn/start").map { $0["sandboxPolicy"] as? [String: Any] ?? [:] }
+        XCTAssertEqual(turns.count, 3)
+        XCTAssertEqual(turns[0]["type"] as? String, "workspaceWrite")
+        XCTAssertEqual(turns[0]["writableRoots"] as? [String], [home.path, "/tmp/prosper-extra-root"])
+        XCTAssertEqual(turns[0]["networkAccess"] as? Bool, true)
+        XCTAssertEqual(turns[1] as NSDictionary, ["type": "dangerFullAccess"] as NSDictionary)
+        XCTAssertEqual(turns[2] as NSDictionary, ["type": "dangerFullAccess"] as NSDictionary, "a fork keeps its parent's sandbox")
+    }
+
+    /// Fake Responses endpoint for the real-codex test, plus a stand-in for the Bun plugin
+    /// host's unix socket. First model call answers with one shell tool call (whichever
+    /// shell tool codex offered), the follow-up with a final message. The socket writes
+    /// `bridge.marker` with the hook event it received and replies an empty decision,
+    /// like `plugin-host.js`. argv: <dir> <shell command>; writes <dir>/port once listening.
+    private static let fakeResponsesServer = #"""
+    import json, os, socket, sys, threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    DIR = sys.argv[1]
+    CMD = sys.argv[2]
+
+    def bridge():
+        path = os.path.join(DIR, "b.sock")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        srv.listen(8)
+        while True:
+            conn, _ = srv.accept()
+            data = b""
+            while True:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+                try:
+                    evt = json.loads(data)
+                    break
+                except Exception:
+                    continue
+            with open(os.path.join(DIR, "bridge.marker"), "a") as f:
+                f.write(data.decode("utf-8", "replace") + "\n")
+            conn.sendall(b"{}\n")
+            conn.close()
+
+    def sse(kind, body):
+        body["type"] = kind
+        return ("event: %s\ndata: %s\n\n" % (kind, json.dumps(body))).encode()
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            out = json.dumps({"object": "list", "data": [], "models": []}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def do_POST(self):
+            req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
+            with open(os.path.join(DIR, "requests.jsonl"), "a") as f:
+                f.write(json.dumps({"path": self.path, "tools": [t.get("name") for t in req.get("tools", [])]}) + "\n")
+            done = any(i.get("type") == "function_call_output" for i in req.get("input", []))
+            names = [t.get("name") for t in req.get("tools", [])]
+            if done:
+                item = {"type": "message", "id": "msg_2", "role": "assistant", "status": "completed",
+                        "content": [{"type": "output_text", "text": "done", "annotations": []}]}
+            else:
+                if "exec_command" in names:
+                    name, args = "exec_command", {"cmd": CMD}
+                elif "shell_command" in names:
+                    name, args = "shell_command", {"command": CMD}
+                else:
+                    name, args = "shell", {"command": ["/bin/sh", "-c", CMD]}
+                item = {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": name,
+                        "arguments": json.dumps(args), "status": "completed"}
+            rid = "resp_2" if done else "resp_1"
+            usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(sse("response.created", {"response": {"id": rid, "status": "in_progress", "output": []}}))
+            self.wfile.write(sse("response.output_item.added", {"output_index": 0, "item": item}))
+            self.wfile.write(sse("response.output_item.done", {"output_index": 0, "item": item}))
+            self.wfile.write(sse("response.completed", {"response": {"id": rid, "status": "completed",
+                                                                    "output": [item], "usage": usage}}))
+            self.wfile.flush()
+            self.close_connection = True
+
+    threading.Thread(target=bridge, daemon=True).start()
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    with open(os.path.join(DIR, "port.tmp"), "w") as f:
+        f.write(str(httpd.server_address[1]))
+    os.rename(os.path.join(DIR, "port.tmp"), os.path.join(DIR, "port"))
+    httpd.serve_forever()
+    """#
+
+    /// Opt-in (#165/#166): the real codex app-server runs a Prosper-configured `PreToolUse`
+    /// hook and a bridge-shaped hook (`exec nc -U <socket>`, what `BunHarness.bridgeCommand`
+    /// renders) on a tool call, and the sandboxed command may write to a Permissions
+    /// allowlist root outside the working directory (a root outside the temp dirs, which
+    /// codex's workspace-write sandbox allows anyway). Skipped unless
+    /// `PROSPER_REAL_CODEX_BIN` names a codex binary. No network: inference is a local
+    /// fake Responses endpoint.
+    func testRealCodexRunsPreToolUseHooks() async throws {
+        guard let bin = ProcessInfo.processInfo.environment["PROSPER_REAL_CODEX_BIN"], !bin.isEmpty else {
+            throw XCTSkip("set PROSPER_REAL_CODEX_BIN to a codex binary to run against real codex")
+        }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("prc-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let script = dir.appendingPathComponent("fake_responses.py")
+        try Self.fakeResponsesServer.write(to: script, atomically: true, encoding: .utf8)
+        let server = Process()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        let extraRoot = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask,
+                                                    appropriateFor: nil, create: true)
+            .appendingPathComponent("prosper-sandbox-test-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: extraRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: extraRoot) }
+        let written = extraRoot.appendingPathComponent("sandbox.marker")
+        server.arguments = [script.path, dir.path, "touch \(MCPServer.q(written.path))"]
+        try server.run()
+        defer { server.terminate() }
+        let portFile = dir.appendingPathComponent("port")
+        let deadline = Date().addingTimeInterval(10)
+        while !FileManager.default.fileExists(atPath: portFile.path), Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let port = try String(contentsOf: portFile, encoding: .utf8)
+
+        let marker = dir.appendingPathComponent("hook.marker")
+        let savedHooks = Preferences.hooks
+        Preferences.hooks = [
+            HookRule(event: .preToolUse, command: "touch \(MCPServer.q(marker.path))"),
+            HookRule(event: .preToolUse, command: "exec nc -U \(MCPServer.q(dir.appendingPathComponent("b.sock").path))"),
+        ]
+        defer { Preferences.hooks = savedHooks }
+        let savedRoots = Preferences.agentWritableRoots
+        Preferences.agentWritableRoots = [extraRoot.path]
+        defer { Preferences.agentWritableRoots = savedRoots }
+
+        let work = dir.appendingPathComponent("work", isDirectory: true)
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let harness = CodexHarness(executableURL: URL(fileURLWithPath: bin),
+                                   codexHome: dir.appendingPathComponent("home", isDirectory: true),
+                                   llmBaseURL: "http://127.0.0.1:\(port)/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(SessionOptions(
+            cwd: work.path, model: "test-model",
+            approvalPolicy: .never, sandbox: .workspaceWrite(networkAccess: false)))
+        async let eventsTask = Self.collect(from: harness, timeout: 60) {
+            if case .turnCompleted = $0 { return true }; return false
+        }
+        try await harness.sendPrompt(session: session, input: [.text("run echo")])
+        let events = await eventsTask
+        await harness.shutdown()
+
+        let ranTool = events.contains { if case .toolCallStarted = $0 { return true }; return false }
+        XCTAssertTrue(ranTool, "codex never called the tool; events: \(events)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path),
+                      "PreToolUse hook did not run (hook trust?); events: \(events)")
+        let bridged = (try? String(contentsOf: dir.appendingPathComponent("bridge.marker"), encoding: .utf8)) ?? ""
+        XCTAssertTrue(bridged.contains("PreToolUse"), "bridge hook did not reach the socket: \(bridged)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: written.path),
+                      "sandbox blocked a write to the allowlisted root; events: \(events)")
     }
 
     /// The local provider fails a dropped/stalled stream fast instead of codex's

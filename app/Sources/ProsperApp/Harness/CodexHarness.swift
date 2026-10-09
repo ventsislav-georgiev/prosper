@@ -47,6 +47,9 @@ actor CodexHarness: CodingHarness {
     /// is `accept`/`acceptForSession`/`decline`/`cancel`) or the legacy one
     /// (`approved`/`approved_for_session`/`denied`/`abort`).
     private var approvalReplies: [String: (rpcID: Any, modern: Bool)] = [:]
+    /// `turn/start.sandboxPolicy` per thread id. Thread start/resume only take the mode
+    /// string, so the writable roots and the network toggle ride on every turn.
+    private var sandboxPolicies: [String: [String: Any]] = [:]
 
     private let eventStream: AsyncStream<HarnessEvent>
     private let eventContinuation: AsyncStream<HarnessEvent>.Continuation
@@ -198,37 +201,49 @@ actor CodexHarness: CodingHarness {
             "cwd": opts.cwd,
             "model": opts.model,
             "approvalPolicy": opts.approvalPolicy.rawValue,
-            "sandboxPolicy": Self.sandboxJSON(opts.sandbox, cwd: opts.cwd),
+            "sandbox": Self.sandboxMode(opts.sandbox),
+            "config": Self.threadConfig,
         ]
         let result = try await sendRequest(method: Wire.threadStart, params: params)
         guard let id = Self.threadID(from: result) else {
             throw HarnessError.protocolError("thread/start returned no thread id")
         }
+        sandboxPolicies[id] = Self.sandboxJSON(opts.sandbox, cwd: opts.cwd)
         let session = SessionID(raw: id)
         eventContinuation.yield(.sessionStarted(session))
         return session
     }
 
-    func resumeSession(_ id: SessionID) async throws -> SessionID {
-        let result = try await sendRequest(method: Wire.threadResume, params: ["threadId": id.raw])
+    func resumeSession(_ id: SessionID, options opts: SessionOptions) async throws -> SessionID {
+        let result = try await sendRequest(method: Wire.threadResume, params: [
+            "threadId": id.raw,
+            "approvalPolicy": opts.approvalPolicy.rawValue,
+            "sandbox": Self.sandboxMode(opts.sandbox),
+            "config": Self.threadConfig,
+        ])
         let resumed = Self.threadID(from: result) ?? id.raw
+        sandboxPolicies[resumed] = Self.sandboxJSON(opts.sandbox, cwd: opts.cwd)
         return SessionID(raw: resumed)
     }
 
     func forkSession(_ id: SessionID) async throws -> SessionID {
-        let result = try await sendRequest(method: Wire.threadFork, params: ["threadId": id.raw])
+        let result = try await sendRequest(method: Wire.threadFork, params: [
+            "threadId": id.raw, "config": Self.threadConfig,
+        ])
         guard let forked = Self.threadID(from: result) else {
             throw HarnessError.protocolError("thread/fork returned no thread id")
         }
+        sandboxPolicies[forked] = sandboxPolicies[id.raw]
         return SessionID(raw: forked)
     }
 
     @discardableResult
     func sendPrompt(session: SessionID, input: [PromptInput]) async throws -> TurnID {
-        let params: [String: Any] = [
+        var params: [String: Any] = [
             "threadId": session.raw,
             "input": input.map(Self.inputJSON),
         ]
+        params["sandboxPolicy"] = sandboxPolicies[session.raw]
         let result = try await sendRequest(method: Wire.turnStart, params: params)
         // TurnStartResponse = { turn: Turn { id, items, status } }.
         guard let id = (result["turn"] as? [String: Any])?["id"] as? String else {
@@ -447,6 +462,24 @@ actor CodexHarness: CodingHarness {
         }
     }
 
+    /// Request overrides for thread start/resume/fork. codex registers a non-managed hook
+    /// only if `hooks.state` holds its `trusted_hash` or the session bypasses hook trust;
+    /// Prosper writes no trust state, so without this every hook (user hooks and the Bun
+    /// plugin bridge) is silently skipped. The hooks are authored in Prosper's Settings,
+    /// which makes Prosper the vetting layer.
+    private static var threadConfig: [String: Any] { ["bypass_hook_trust": true] }
+
+    /// `thread/start|resume.sandbox` is a `SandboxMode` string; the full policy (writable
+    /// roots, network) goes on `turn/start.sandboxPolicy` via `sandboxJSON`.
+    private static func sandboxMode(_ policy: SandboxPolicy) -> String {
+        switch policy {
+        case .readOnly: return "read-only"
+        case .workspaceWrite: return "workspace-write"
+        case .dangerFullAccess: return "danger-full-access"
+        }
+    }
+
+    /// `turn/start.sandboxPolicy` (codex `SandboxPolicy`, camelCase `type` tags).
     private static func sandboxJSON(_ policy: SandboxPolicy, cwd: String) -> [String: Any] {
         switch policy {
         case .readOnly:

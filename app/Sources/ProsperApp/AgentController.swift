@@ -417,19 +417,6 @@ final class AgentController {
 
     private func ensureSession(_ harness: CodingHarness) async throws -> SessionID {
         if let session { return session }
-        // Resuming a persisted session: re-attach the existing Codex thread rather
-        // than opening a fresh one. The display transcript was already restored. If the
-        // thread is gone from CODEX_HOME (evicted/cleared), fall back to a fresh session
-        // so the follow-up prompt still runs instead of erroring the turn.
-        if let resumeID = pendingResumeID {
-            pendingResumeID = nil
-            if let resumed = try? await harness.resumeSession(SessionID(raw: resumeID)) {
-                self.session = resumed
-                persistSessionMeta(resumed)
-                return resumed
-            }
-            log.warning("resume of thread \(resumeID, privacy: .public) failed; starting a fresh session")
-        }
         // Permissions (F4): bypass-all = no approvals + full filesystem; otherwise the
         // configured approval policy + a network-gated workspace-write sandbox.
         let policy: ApprovalPolicy
@@ -445,6 +432,20 @@ final class AgentController {
             cwd: workingDirectory, model: Preferences.agentModel,
             approvalPolicy: policy, sandbox: sandbox
         )
+        // Resuming a persisted session: re-attach the existing Codex thread rather
+        // than opening a fresh one. The display transcript was already restored. If the
+        // thread is gone from CODEX_HOME (evicted/cleared), fall back to a fresh session
+        // so the follow-up prompt still runs instead of erroring the turn. The resumed
+        // thread gets the current Permissions too, same as a fresh one.
+        if let resumeID = pendingResumeID {
+            pendingResumeID = nil
+            if let resumed = try? await harness.resumeSession(SessionID(raw: resumeID), options: opts) {
+                self.session = resumed
+                persistSessionMeta(resumed)
+                return resumed
+            }
+            log.warning("resume of thread \(resumeID, privacy: .public) failed; starting a fresh session")
+        }
         let session = try await harness.newSession(opts)
         self.session = session
         persistSessionMeta(session)

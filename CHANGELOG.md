@@ -78,6 +78,12 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: the audio mixer logged CoreAudio errors when an app's audio session ended or the
   output device was unplugged.** It kept asking CoreAudio to remove listeners from objects that
   no longer existed; those listeners are now forgotten instead.
+- **Fixed: the coding agent's sandbox settings were never applied by codex.** Extra writable
+  folders, network access and "Bypass all" are now sent in the form the codex app server reads,
+  for new, resumed and forked sessions alike.
+- **Fixed: coding-agent hooks and opencode plugins never ran** because codex treated them as
+  untrusted. Prosper now marks its own sessions as trusting every hook configured in Settings
+  (codex `bypass_hook_trust`), so pre-tool-use hooks and the Bun bridge run again.
 
 ## v2.155.0
 
