@@ -18,8 +18,8 @@ final class ExtensionMenuBar {
     /// the app to `ExtensionRegistry.deliverEvent`. nil before wiring (tests).
     var invoke: ((_ extensionID: String, _ handler: String, _ payloadJSON: String) -> Void)?
 
-    /// Live status items keyed by "extID\u{1}id".
-    private var items: [String: NSStatusItem] = [:]
+    /// Live status items keyed by "extID\u{1}id". Readable for tests.
+    private(set) var items: [String: NSStatusItem] = [:]
     private var hud: NSPanel?
     private var hudHide: DispatchWorkItem?
 
@@ -31,6 +31,9 @@ final class ExtensionMenuBar {
     /// handler, payload} | {separator:true} ] }. Re-rendered on every call so the
     /// extension just re-sets it whenever its state changes.
     func set(extensionID: String, id: String, json: String) {
+        // Debug guard for #199: status items and menus are AppKit state; every
+        // caller must already be on main (LiveExtensionHostServices hops there).
+        assert(Thread.isMainThread, "ExtensionMenuBar mutated off the main thread")
         guard let obj = Self.object(json) else { return }
         let k = Self.key(extensionID, id)
         let isNew = items[k] == nil
@@ -78,12 +81,14 @@ final class ExtensionMenuBar {
     }
 
     func remove(extensionID: String, id: String) {
+        assert(Thread.isMainThread, "ExtensionMenuBar mutated off the main thread")
         let k = Self.key(extensionID, id)
         if let item = items.removeValue(forKey: k) { NSStatusBar.system.removeStatusItem(item) }
     }
 
     /// Tear down every status item an extension owns (disable / reset / quit).
     func removeAll(extensionID: String) {
+        assert(Thread.isMainThread, "ExtensionMenuBar mutated off the main thread")
         let prefix = "\(extensionID)\u{1}"
         for (k, item) in items where k.hasPrefix(prefix) {
             NSStatusBar.system.removeStatusItem(item)

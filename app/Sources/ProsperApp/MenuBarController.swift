@@ -250,6 +250,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func buildMenu() -> NSMenu {
+        // Debug guard for #199: NSMenu is main-thread-only AppKit state.
+        assert(Thread.isMainThread, "status menu built off the main thread")
         let menu = NSMenu()
         menu.delegate = self
 
@@ -335,6 +337,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
+        assert(Thread.isMainThread, "status menu refreshed off the main thread")
         // Keep checkboxes in sync with persisted prefs / OS state.
         versionItem.title = versionTitle
         // Secure Input row: surfaces why completions died (a password field — or a

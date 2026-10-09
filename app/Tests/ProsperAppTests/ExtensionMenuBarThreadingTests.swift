@@ -1,0 +1,47 @@
+import XCTest
+@testable import ProsperApp
+
+/// #199: extension menubar calls arrive on the Lua runtime thread. The host
+/// services boundary must hop to main before touching NSStatusItem / NSMenu.
+/// `ExtensionMenuBar.set/remove` assert `Thread.isMainThread` in debug builds,
+/// so an item that shows up (or goes away) here was mutated on main.
+final class ExtensionMenuBarThreadingTests: XCTestCase {
+
+    @MainActor
+    func testMenubarCallsFromBackgroundThreadLandOnMain() async throws {
+        let extID = "test.threading.\(UUID().uuidString)"
+        defer { ExtensionMenuBar.shared.removeAll(extensionID: extID) }
+        let services = LiveExtensionHostServices.shared
+        let json = #"{"title":"T","menu":[{"title":"A","handler":"h"},{"separator":true}]}"#
+
+        await Task.detached {
+            XCTAssertFalse(Thread.isMainThread)
+            services.menubarSet(extensionID: extID, id: "x", json: json)
+        }.value
+        let added = await waitFor { self.ownsItem(extID) }
+        XCTAssertTrue(added, "menubarSet from a background thread never reached main")
+        let item = try XCTUnwrap(ExtensionMenuBar.shared.items.first { $0.key.hasPrefix(extID) }?.value)
+        XCTAssertEqual(item.menu?.items.count, 2)
+
+        await Task.detached {
+            XCTAssertFalse(Thread.isMainThread)
+            services.menubarRemove(extensionID: extID, id: "x")
+        }.value
+        let removed = await waitFor { !self.ownsItem(extID) }
+        XCTAssertTrue(removed, "menubarRemove from a background thread never reached main")
+    }
+
+    @MainActor
+    private func ownsItem(_ extID: String) -> Bool {
+        ExtensionMenuBar.shared.items.keys.contains { $0.hasPrefix(extID) }
+    }
+
+    @MainActor
+    private func waitFor(_ condition: @MainActor () -> Bool) async -> Bool {
+        for _ in 0..<200 {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return condition()
+    }
+}
