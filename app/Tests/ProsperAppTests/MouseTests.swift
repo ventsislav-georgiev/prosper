@@ -218,15 +218,22 @@ final class MouseTests: XCTestCase {
     /// typing-critical keystroke tap never grows a scroll/mouse type. A merge that
     /// widens this mask must fail here rather than in the user's typing latency.
     func testAutocompleteTapMaskIsUnchanged() {
-        let expected: CGEventMask = (1 << CGEventType.keyDown.rawValue)
+        let keys: CGEventMask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
-            | (1 << CGEventType.leftMouseDown.rawValue)
             | (1 << 14)
-        XCTAssertEqual(AutocompleteEngine.tapMask, expected,
+        let click: CGEventMask = 1 << CGEventType.leftMouseDown.rawValue
+        // Autocomplete off: key rules, snippets, hyper, Finder and media keys keep
+        // every key type, and clicks stay off the tap.
+        XCTAssertEqual(AutocompleteEngine.tapMask(autocomplete: false), keys,
+                       "with autocomplete off the keystroke tap must not see clicks")
+        // Autocomplete on: the same key types plus leftMouseDown (ghost dismiss on click).
+        XCTAssertEqual(AutocompleteEngine.tapMask(autocomplete: true), keys | click,
                        "the keystroke tap's mask changed — scroll/mouse types belong on the mouse module's own taps")
-        XCTAssertEqual(AutocompleteEngine.tapMask & (1 << CGEventType.scrollWheel.rawValue), 0,
-                       "scrollWheel must never be on the keystroke tap")
+        for on in [false, true] {
+            XCTAssertEqual(AutocompleteEngine.tapMask(autocomplete: on) & (1 << CGEventType.scrollWheel.rawValue), 0,
+                           "scrollWheel must never be on the keystroke tap")
+        }
     }
 
     /// Only the pure decision path is measurable headless — a real tap cannot be

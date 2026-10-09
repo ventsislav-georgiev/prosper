@@ -253,27 +253,42 @@ final class AutocompleteEngine {
     /// keyUp is here for the Caps-Lock hyper key ONLY: hold-vs-tap needs the release
     /// edge. Everything else ignores it — `handle()` returns at its `keyDown` guard
     /// before doing any work, so no existing consumer sees a keyUp.
-    static let tapMask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
-        | (1 << CGEventType.flagsChanged.rawValue)
-        | (1 << CGEventType.leftMouseDown.rawValue)
-        | (1 << 14 /* NX_SYSDEFINED / CGEventType.systemDefined */)
+    /// leftMouseDown is consumed only by inline autocomplete (hide the stale ghost and
+    /// indicator on click), so it is in the mask only while autocomplete is on — with
+    /// it off, clicks never wait on Prosper's main thread.
+    static func tapMask(autocomplete: Bool) -> CGEventMask {
+        var mask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+            | (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << 14 /* NX_SYSDEFINED / CGEventType.systemDefined */)
+        if autocomplete { mask |= 1 << CGEventType.leftMouseDown.rawValue }
+        return mask
+    }
 
     private(set) var isRunning = false
+    /// Mask the running tap was created with; a tap's mask is fixed at creation.
+    private var installedMask: CGEventMask = 0
 
     // MARK: - Lifecycle
 
     /// Starts the engine. Returns false if Accessibility is not trusted or the
     /// event tap cannot be created; degrades gracefully (no crash).
+    /// Also the live-reconcile path (`AppDelegate.reconcileKeyTap`): when the
+    /// autocomplete pref flipped while the tap runs for other consumers, the tap is
+    /// rebuilt so its mask and the scroll monitor follow the pref without a restart.
     @discardableResult
     func start() -> Bool {
-        guard !isRunning else { return true }
+        let autocompleteOn = Preferences.autocompleteEnabled
+        let mask = Self.tapMask(autocomplete: autocompleteOn)
+        if isRunning {
+            if mask == installedMask { return true }
+            stop()
+        }
 
         guard PermissionsManager.isAccessibilityTrusted() else {
             NSLog("prosper: autocomplete not started — Accessibility not trusted")
             return false
         }
 
-        let mask = Self.tapMask
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
@@ -372,6 +387,7 @@ final class AutocompleteEngine {
         }
 
         eventTap = tap
+        installedMask = mask
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
@@ -404,10 +420,14 @@ final class AutocompleteEngine {
         // over unrelated content. Dismiss on scroll like on click. A PASSIVE
         // NSEvent global monitor, never the CGEvent tap: an active tap would put
         // this process on the latency path of every scroll tick systemwide.
-        scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.suggestionWindow.isVisible || self.mirrorWindow.isVisible else { return }
-                self.dismissOverlays()
+        // Only while autocomplete is on: it is the only source of the overlays, and
+        // otherwise every scroll tick (60-120 Hz) wakes the main thread for nothing.
+        if autocompleteOn {
+            scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.suggestionWindow.isVisible || self.mirrorWindow.isVisible else { return }
+                    self.dismissOverlays()
+                }
             }
         }
 
@@ -456,6 +476,8 @@ final class AutocompleteEngine {
         }
         runLoopSource = nil
         eventTap = nil
+        installedMask = 0
+        typedShadow = ""
         if let activationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
         }

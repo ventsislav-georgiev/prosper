@@ -65,6 +65,13 @@ tag from the now-released section and put it on the new top draft.
   a chassis still above the cut-off, and the switch fired again on its next tick. The helper
   now refuses manual speeds until the hottest sensor is back under 80 °C, the app waits 30 s
   between failed re-applies, and the 2 s reclaim check only runs while manual control is on.
+- **Performance: with inline autocomplete off, mouse clicks no longer pass through Prosper**
+  and the global scroll monitor is not installed. The keystroke tap listened for every left
+  click and every scroll tick on behalf of autocomplete even when it was disabled. Toggling
+  autocomplete rebuilds the tap live.
+- **Performance: fewer idle timer wakeups.** The LoRA training scheduler only exists while
+  training is enabled, and the analytics, keep-awake and extension repeating timers now give
+  the OS leeway to coalesce their wakeups.
 
 ## v2.155.0
 
