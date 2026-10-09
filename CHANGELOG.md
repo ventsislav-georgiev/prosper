@@ -107,6 +107,10 @@ tag from the now-released section and put it on the new top draft.
   checks on the main thread.** The AI Models and Context panes seed themselves once per
   launch and refresh in the background afterwards, so later opens are quicker when large
   models are downloaded, and the first open draws in its final state with no flip.
+- **Performance: System Stats widgets no longer re-measure their menu bar width on every
+  sample.** A width probe now runs only when something that can move the width changes:
+  the style or theme scale, a value wider than the reserved sample (power at 100 W or
+  more), or the network rates.
 
 ## v2.155.0
 

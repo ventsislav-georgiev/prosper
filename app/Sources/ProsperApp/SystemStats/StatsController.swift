@@ -179,37 +179,23 @@ final class StatsController {
             button.action = #selector(itemClicked(_:))
             buttonModule[ObjectIdentifier(button)] = m
             items[m] = (item, host)
+            widthGate.forget(m)   // fresh item (re-enable after teardown): measure once
         }
         resizeItems()
     }
 
-    /// Width-probe memo: item width only moves when its width-driving TEXT moves
-    /// (non-network widgets reserve a fixed hidden width-sample; network's two rate
-    /// strings vary), or when the style/theme scale changes. Without this, every
-    /// status item paid a forced `layoutSubtreeIfNeeded` every tick forever.
-    private var lastWidthKeys: [StatsModule: String] = [:]
-    private var lastWidthStyle: StatsWidgetStyle?
-    private var lastWidthScale: CGFloat = 0
+    /// Width-probe memo (#189: keyed on what moves the width, not on the value).
+    /// Without it every status item paid a forced `layoutSubtreeIfNeeded` +
+    /// `fittingSize` every tick forever.
+    private var widthGate = StatsWidthGate()
 
     /// Sync each item's width to its content. Only writes when it actually changed
     /// — every length write relayouts the whole menu bar.
     private func resizeItems() {
-        if lastWidthStyle != store.style || lastWidthScale != ThemeRuntime.scale {
-            lastWidthKeys = [:]                    // style/scale change → re-probe all once
-            lastWidthStyle = store.style
-            lastWidthScale = ThemeRuntime.scale
-        }
         for (m, pair) in items {
-            let key: String
-            if m == .network {
-                let n = store.snapshot.network
-                key = StatsFormat.rateMenu(n?.uploadBytesPerSec ?? 0)
-                    + StatsFormat.rateMenu(n?.downloadBytesPerSec ?? 0)
-            } else {
-                key = m.primaryText(store.snapshot, showUnit: store.style.config(m).showUnit)
-            }
-            guard lastWidthKeys[m] != key else { continue }
-            lastWidthKeys[m] = key
+            let key = StatsWidthGate.key(m, store.snapshot, showUnit: store.style.config(m).showUnit)
+            guard widthGate.needsResize(m, key: key, style: store.style, scale: ThemeRuntime.scale)
+            else { continue }
             // Resolve any pending SwiftUI invalidation so fittingSize reflects the
             // string just published (else the item lags a tick when a digit-count
             // boundary changes the width). The cost that matters — the `length`
@@ -296,4 +282,40 @@ struct ScreenGate: Equatable {
         case .popoverShown: displayAsleep = false; screenLocked = false
         }
     }
+}
+
+/// #189: decides which stats status items need a width re-measure on a tick.
+struct StatsWidthGate {
+    private var keys: [StatsModule: String] = [:]
+    private var style: StatsWidgetStyle?
+    private var scale: CGFloat = 0
+
+    /// What a widget's width depends on besides style/scale. Non-network widgets
+    /// reserve `primaryWidthSample()` (monospaced digits), so a value no longer than
+    /// the sample cannot move the width; only one that overflows it (power ≥ 100 W)
+    /// keys on its text. Network has no sample: its width follows the rate strings.
+    static func key(_ m: StatsModule, _ snap: StatsSnapshot, showUnit: Bool) -> String {
+        if m == .network {
+            let n = snap.network
+            return StatsFormat.rateMenu(n?.uploadBytesPerSec ?? 0)
+                + StatsFormat.rateMenu(n?.downloadBytesPerSec ?? 0)
+        }
+        let text = m.primaryText(snap, showUnit: showUnit)
+        return text.count > m.primaryWidthSample().count ? text : ""
+    }
+
+    /// True when `m` must be measured: its key moved, it is new/forgotten, or the
+    /// style or theme scale changed (which re-probes every module once).
+    mutating func needsResize(_ m: StatsModule, key: String, style: StatsWidgetStyle, scale: CGFloat) -> Bool {
+        if style != self.style || scale != self.scale {
+            keys = [:]
+            self.style = style
+            self.scale = scale
+        }
+        guard keys[m] != key else { return false }
+        keys[m] = key
+        return true
+    }
+
+    mutating func forget(_ m: StatsModule) { keys[m] = nil }
 }
