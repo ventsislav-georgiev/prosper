@@ -321,5 +321,21 @@ final class MenuBarTests: XCTestCase {
         XCTAssertFalse(decide(own: true), "Prosper's own activation is ignored")
         XCTAssertFalse(decide(new: 900), "same room (notched display, same-width menus): no-op")
         XCTAssertFalse(decide(new: 900.4), "sub-point jitter is not a change")
+        XCTAssertTrue(decide(new: 901), "exactly one point is a change")
+    }
+
+    /// #198 QA F1: the menu edge is a global x, so the room is measured from the
+    /// screen's maxX; displays beside the primary have origin.x != 0.
+    func testHostedRoomUsesTheScreensGlobalRightEdge() {
+        let primary = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let right = CGRect(x: 1728, y: 0, width: 2560, height: 1440)
+        let left = CGRect(x: -2560, y: 0, width: 2560, height: 1440)
+        XCTAssertEqual(MenuBarAX.room(screen: primary, menuRight: 500), 1228)
+        XCTAssertEqual(MenuBarAX.room(screen: right, menuRight: 1728 + 500), 2060, "right of the primary")
+        XCTAssertEqual(MenuBarAX.room(screen: left, menuRight: -2560 + 500), 2060, "left of the primary")
+        // The 400 pt guess only when there is no usable measurement for this screen.
+        XCTAssertEqual(MenuBarAX.room(screen: right, menuRight: nil), 2160)
+        XCTAssertEqual(MenuBarAX.room(screen: right, menuRight: 300), 2160, "an edge on another display is not ours")
+        XCTAssertEqual(MenuBarAX.room(screen: left, menuRight: -2560), 2160, "no menu titles laid out")
     }
 }

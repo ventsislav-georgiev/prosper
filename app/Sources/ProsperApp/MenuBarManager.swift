@@ -374,7 +374,11 @@ final class MenuBarManager: NSObject {
     private func reapplyAfterActivation() {
         activationWork = nil
         guard chevron != nil else { return }
+        // Prosper owns no menu bar only while it is an accessory; DockPolicy makes it
+        // `.regular` (own menus, own room) while a window is open, so count that like
+        // any other app (#198 QA F3).
         let ownFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid()
+            && NSApp.activationPolicy() != .regular
         let anyExpanded = !revealed || (alwaysHiddenSeparator != nil && !revealedAlwaysHidden)
         // One AX read of the frontmost app's menu bar per settled switch (none on a
         // notched display); it also keeps `roomWidth`'s last-measurement cache current.

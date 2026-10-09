@@ -20,8 +20,9 @@ enum MenuBarHost {
     /// notch-less display the room depends on the frontmost app's menu width, so a
     /// divider sized for the previous app is either wider than the room (hidden icons
     /// come back) or too narrow (they spill into the « overflow). Only matters while a
-    /// divider is expanded, never for Prosper's own activation (it owns no menu bar the
-    /// room is measured against), and only when the room actually moved.
+    /// divider is expanded, never for Prosper's own activation while it is an accessory
+    /// (no menu bar of its own; the caller passes false once DockPolicy has made it
+    /// `.regular`), and only when the room actually moved.
     static func shouldReapplyDivider(hosted: Bool, anyDividerExpanded: Bool, activatedOwnApp: Bool,
                                      lastRoom: CGFloat?, newRoom: CGFloat) -> Bool {
         guard hosted, anyDividerExpanded, !activatedOwnApp else { return false }
@@ -89,9 +90,9 @@ enum MenuBarAX {
         guard trusted, let app = NSWorkspace.shared.frontmostApplication,
               app.activationPolicy == .regular else { return nil }
         let ax = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(ax, 0.25)   // runs on every app switch: a hung app must not stall main for 6s
         guard let bar = attribute(ax, kAXMenuBarAttribute) else { return nil }
-        let right = children(of: bar as! AXUIElement).compactMap { frame(of: $0)?.maxX }.max()
-        return right.map { $0 > 0 ? $0 : nil } ?? nil
+        return children(of: bar as! AXUIElement).compactMap { frame(of: $0)?.maxX }.max()
     }
 
     /// Width of the room the host lays status items out in on `screen`. A notch splits
@@ -104,13 +105,23 @@ enum MenuBarAX {
         // ponytail: unmeasured on notch-less displays (none at hand). Guessing too high
         // drops the divider alone (band stays visible), too low parks it behind the OS «
         // button; the band is reachable either way.
-        let width = screen?.frame.width ?? 2000
+        let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 2000, height: 0)
         // An accessory frontmost app leaves the previous app's menus up: keep the last
-        // measurement (as `appMenuRight` promises) instead of guessing 400 again.
-        if let right = appMenuRight() { lastMenuRight = right }
-        return width - (lastMenuRight ?? 400)
+        // measurement (as `appMenuRight` promises) instead of guessing 400 again. Keyed
+        // by the screen frame: the edge is a global x, meaningless on another display.
+        if let right = appMenuRight() { lastMenuRight = (frame, right) }
+        return room(screen: frame, menuRight: lastMenuRight?.screen == frame ? lastMenuRight?.right : nil)
     }
-    private static var lastMenuRight: CGFloat?
+    private static var lastMenuRight: (screen: CGRect, right: CGFloat)?
+
+    /// Room right of the app menus. `menuRight` is a global x (AX and Cocoa share the x
+    /// axis, only y flips), so it is measured from the screen's maxX, not its width:
+    /// displays left or right of the primary have origin.x != 0 (#198 QA F1). An edge
+    /// missing or outside this screen falls back to a 400 pt menu guess.
+    nonisolated static func room(screen frame: CGRect, menuRight: CGFloat?) -> CGFloat {
+        guard let right = menuRight, right > frame.minX, right <= frame.maxX else { return frame.width - 400 }
+        return frame.maxX - right
+    }
 
     // MARK: - Items
 
