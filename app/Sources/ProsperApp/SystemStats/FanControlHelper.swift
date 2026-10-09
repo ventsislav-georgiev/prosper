@@ -20,6 +20,12 @@ struct FanReading: Identifiable, Equatable {
 enum FanReclaimRecovery {
     static let minimumManualFraction = 0.2
 
+    /// Pause after a reclaim re-apply failed before the timer tries again. The helper
+    /// refuses manual engages while its kill-switch is latched (chassis still above the
+    /// re-arm temperature), and every failed attempt costs a resetAllFans; one attempt
+    /// per helper supervision tick (30 s) is enough to notice the re-arm.
+    static let retryCooldown: TimeInterval = 30
+
     enum Disposition: Equatable {
         case abandonManualIntent
         case restored
@@ -137,6 +143,7 @@ enum FanControlHelper {
     private static var sleeping = false
     private static var wakeRecoveryPending = false
     private static var reclaimGeneration = 0
+    private static var reclaimRetryNotBefore = Date.distantPast
 
     /// Set by the popup while a slider drag / quick-button commit is in flight, so
     /// reclaim recovery can't reapply the stale saved target on top of the gesture.
@@ -158,7 +165,6 @@ enum FanControlHelper {
     /// Returns nil when registration isn't available (e.g. unsigned dev build) — the
     /// caller then leaves fans on auto.
     private static func ensureConnection() async -> NSXPCConnection? {
-        armRecoveryLifecycle()
         guard await LidSleepHelper.ensureRegistered(feature: "Manual fan control") else { return nil }
         let c = connection ?? makeConnection()
         connection = c
@@ -172,6 +178,9 @@ enum FanControlHelper {
     @discardableResult
     static func setManual(_ index: Int, rpm: Double, timeout: TimeInterval = 12) async -> Bool {
         guard let c = await ensureConnection() else { return false }
+        // A manual write is manual intent, even before the popup saves the pref (it
+        // saves it only after the first engage lands), so this arms unconditionally.
+        armRecoveryLifecycle()
         return await call(c, timeout: timeout) { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }
     }
 
@@ -185,6 +194,7 @@ enum FanControlHelper {
         else if let opened = await ensureConnection() { c = opened }
         else { return false }
         let hold = Preferences.fanHoldUnlock
+        if !Preferences.fanManualEnabled { removeReclaimMonitor() }   // hold-unlock "Automatic" keeps the connection
         return await call(c) { proxy, done in proxy.setFanAuto(index, holdUnlock: hold) { done($0) } }
     }
 
@@ -192,12 +202,11 @@ enum FanControlHelper {
     /// (`teardown: true`) the connection is torn down so the daemon idle-exits.
     @discardableResult
     static func resetAll(teardown: Bool = false) async -> Bool {
+        if teardown { removeReclaimMonitor() }
         // No connection → nothing to reset (daemon not running, fans already on auto).
         guard let c = connection else { return true }
         let ok = await call(c) { proxy, done in proxy.resetAllFans { done($0) } }
         if teardown {
-            reclaimTimer?.invalidate()
-            reclaimTimer = nil
             c.invalidate()
             if connection === c { connection = nil }
         }
@@ -212,15 +221,18 @@ enum FanControlHelper {
     static let firstEngageTimeout: TimeInterval = 35
 
     /// Re-apply the user's saved manual targets through the one shared lifecycle gate.
-    /// Called at launch; wake and reclaim use the same path.
+    /// Called at launch; wake and reclaim use the same path. With no saved manual
+    /// intent it installs nothing: no observers, no 2 s timer (the timer used to run
+    /// for the app's whole lifetime even for users who never touched fan control).
     static func reapplyFromPreferences() {
+        guard Preferences.fanManualEnabled else { return }
         armRecoveryLifecycle()
         startReapply()
     }
 
     /// Kept ahead of helper registration: registration can fail transiently, but saved
     /// manual intent still needs the persistent lifecycle retry to recover on its own.
-    private static func armRecoveryLifecycle() {
+    static func armRecoveryLifecycle() {
         installSleepObservers()
         installReclaimMonitor()
     }
@@ -251,16 +263,17 @@ enum FanControlHelper {
     // MARK: - Reclaim recovery
 
     /// The popover is transient, so reclaim detection belongs beside the long-lived
-    /// fan connection. Poll only while manual intent is saved; SMC reads stay off-main.
+    /// fan connection. Installed by a manual engage or a launch with saved manual
+    /// intent, removed when the user goes back to Automatic; SMC reads stay off-main.
     private static func installReclaimMonitor() {
         guard reclaimTimer == nil else { return }
-        reclaimTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in
                 guard FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
                                                            sleeping: sleeping,
                                                            recoveryInFlight: reclaimRecoveryInFlight,
                                                            userAdjusting: userAdjusting),
-                      !reclaimReadInFlight else { return }
+                      !reclaimReadInFlight, Date() >= reclaimRetryNotBefore else { return }
                 reclaimReadInFlight = true
                 Task.detached(priority: .utility) {
                     let readings = FanInfo.read()
@@ -271,6 +284,13 @@ enum FanControlHelper {
                 }
             }
         }
+        timer.tolerance = 1
+        reclaimTimer = timer
+    }
+
+    private static func removeReclaimMonitor() {
+        reclaimTimer?.invalidate()
+        reclaimTimer = nil
     }
 
     private static func recoverReclaimedFans(_ readings: [FanReading]) {
@@ -314,6 +334,7 @@ enum FanControlHelper {
                     Preferences.fanManualEnabled = false
                     await resetAll(teardown: true)
                 case .retry:
+                    reclaimRetryNotBefore = Date().addingTimeInterval(FanReclaimRecovery.retryCooldown)
                     await resetAll()
                 case .restored:
                     break

@@ -60,6 +60,11 @@ tag from the now-released section and put it on the new top draft.
   kept going after Stop; turn ids were also read from the wrong field. Both are now proper
   requests, Stop waits at most 5 s for codex before settling the turn locally, and the
   local-model provider no longer retries a dropped stream for minutes.
+- **Fixed: manual fan control fought the thermal kill-switch.** When the helper reset the
+  fans to automatic at 95 °C, the app re-applied the saved speed about a second later into
+  a chassis still above the cut-off, and the switch fired again on its next tick. The helper
+  now refuses manual speeds until the hottest sensor is back under 80 °C, the app waits 30 s
+  between failed re-applies, and the 2 s reclaim check only runs while manual control is on.
 
 ## v2.155.0
 

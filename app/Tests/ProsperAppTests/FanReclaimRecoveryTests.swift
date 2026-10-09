@@ -2,14 +2,29 @@ import XCTest
 @testable import ProsperApp
 
 final class FanReclaimRecoveryTests: XCTestCase {
+    /// Launch with fan control never enabled must not install the 2 s reclaim timer
+    /// (it used to run for the whole app lifetime: ~43k wakeups/day for nothing).
     @MainActor
-    func testStartupArmsRecoveryBeforeHelperRegistration() {
+    func testStartupWithoutManualIntentInstallsNothing() {
         let previousManualIntent = Preferences.fanManualEnabled
         Preferences.fanManualEnabled = false
         defer { Preferences.fanManualEnabled = previousManualIntent }
 
         FanControlHelper.reapplyFromPreferences()
+        XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
+    }
+
+    /// Disabling fan control removes the timer, even with no helper connection open.
+    @MainActor
+    func testDisableRemovesTheReclaimTimer() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        Preferences.fanManualEnabled = false   // keeps any tick in this window a no-op
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+
+        FanControlHelper.armRecoveryLifecycle()
         XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
+        await FanControlHelper.resetAll(teardown: true)
+        XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
     }
 
     func testReclaimKeepsEligibleIntentAcrossFailedRetry() {
