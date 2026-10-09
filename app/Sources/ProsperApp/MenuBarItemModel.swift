@@ -67,7 +67,8 @@ struct MenuBarStore: Codable, Equatable, Sendable {
     var spacing: Int = 3
 
     /// Master gate for the always-hidden third section (two-tier hide). Off → a
-    /// single hidden section, one chevron.
+    /// single hidden section, one chevron. #132: replaces the removed ordering
+    /// engine's "any icon marked always-hidden" gate.
     var alwaysHiddenEnabled: Bool = false
 
     /// Master gate for auto-rehide. Off → the hidden section stays revealed until
@@ -103,11 +104,21 @@ struct MenuBarStore: Codable, Equatable, Sendable {
         autoRehideSeconds = try c.decodeIfPresent(Int.self, forKey: .autoRehideSeconds) ?? d.autoRehideSeconds
         chevronStyle = try c.decodeIfPresent(ChevronStyle.self, forKey: .chevronStyle) ?? d.chevronStyle
     }
+
+    /// #132: whether the removed ordering engine's saved store (`menuBarOrderStoreJSON`)
+    /// had any icon marked always-hidden — then that user had the band, so the
+    /// one-shot migration turns `alwaysHiddenEnabled` on. Reads only that one key, so
+    /// it survives the engine's types being deleted.
+    static func legacyHadAlwaysHidden(orderStoreJSON data: Data?) -> Bool {
+        struct Legacy: Decodable { var alwaysHidden: [String]? }
+        guard let data, let legacy = try? JSONDecoder().decode(Legacy.self, from: data) else { return false }
+        return !(legacy.alwaysHidden ?? []).isEmpty
+    }
 }
 
 /// Pure, AX-free menu-bar math. Everything here is unit-tested without touching
-/// CGS/AppKit — the load-bearing logic (section assignment, spacing key mapping,
-/// reorder destination) lives here so the manager stays a thin imperative shell.
+/// CGS/AppKit — the load-bearing logic (section assignment, divider lengths,
+/// spacing key mapping) lives here so the manager stays a thin imperative shell.
 enum MenuBarLogic {
     /// Assign each item to a section by comparing its x-origin to the divider
     /// x-positions. Items are taken as-is (caller sorts left→right by `minX`).
@@ -158,19 +169,5 @@ enum MenuBarLogic {
     static func spacingDefaultsValue(forSpacing spacing: Int) -> Int? {
         let v = min(max(spacing, MenuBarSpacing.minSpacing), MenuBarSpacing.maxSpacing)
         return v == MenuBarSpacing.defaultSpacing ? nil : v
-    }
-
-    /// Whether the Settings preview strip can be trusted (pure; the live wrapper
-    /// supplies the sets). Hide/show + spacing ride public AppKit and never depend
-    /// on this — ONLY the cosmetic preview reads item positions via the private CGS
-    /// enumeration. A future macOS can shift menu-bar window semantics (Tahoe did
-    /// exactly this to Bartender) and return `.success` while omitting windows that
-    /// provably exist — a hard CGS error wouldn't catch that. So we probe positively:
-    /// does the enumeration still contain our OWN divider windows? Empty dividers ⇒
-    /// nothing to probe against yet ⇒ trust (never false-alarm before setup runs).
-    static func previewHealthy(dividerWindowIDs: Set<CGWindowID>,
-                               enumeratedWindowIDs: Set<CGWindowID>) -> Bool {
-        guard !dividerWindowIDs.isEmpty else { return true }
-        return !dividerWindowIDs.isDisjoint(with: enumeratedWindowIDs)
     }
 }

@@ -20,6 +20,16 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.156.0 *(unreleased)*
 
+- **Menu Bar Management drops the ordering engine and the live preview.** Opening the
+  extension's settings used to flash both hidden bands open and screenshot the bar every
+  time (Screen Recording permission, visible flicker, and a slow pane). The preview strip,
+  the screen captures and the opt-in icon-ordering engine are gone; macOS owns the
+  left-to-right order (⌘-drag) and remembers it. Hiding, revealing, the reveal shortcut,
+  auto-rehide, icon spacing and the chevron style are unchanged. The always-hidden section
+  is now a plain "Always-hidden section" toggle in the pane (off by default; turned on once
+  for anyone who had icons marked always-hidden). The old saved order is deleted on first
+  launch, so a downgrade to 2.155 will not bring it back.
+
 - **Fixed: the sensors, audio mixer and calendar popovers closed when you clicked
   inside them on macOS 27.** Each popover closes itself on a click outside it. The
   check used to assume a click inside our own popover never reached that watcher;

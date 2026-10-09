@@ -30,7 +30,7 @@
 **🖥️ Power tools for your whole Mac**
 - [**System monitors**](#system-stats) — CPU, memory, GPU, network, temps, fans, battery & power, with rich live popovers in the menu bar.
 - [**Window management**](#window-management) — drag-to-edge snapping plus custom drag-into-zone layouts.
-- [**Menu-bar management**](#menu-bar-management) — hide, space, and reorder your menu-bar icons.
+- [**Menu-bar management**](#menu-bar-management) — hide and space your menu-bar icons.
 - [**Calendar**](#calendar) — an Itsycal-style menu-bar calendar with month grid, event dots, and agenda.
 - [**Browser router**](#browser-router) — make Prosper your default browser and route each link by domain.
 - [**Input switching**](#input-switcher) — auto-set your keyboard input source by the focused app.
@@ -144,7 +144,7 @@ Snap and tile windows without a separate window manager. Drag a window to a scre
 
 ## Menu Bar Management
 
-_Opt-in — turn it on in **Settings → Extensions**._ Hide menu-bar icons behind a divider you reveal on demand, add spacing between icons, and pick the chevron style — with **no Accessibility or Screen Recording permission** for the basics. A live preview strip in Settings shows your real icons in order; mark any icon "always hidden", or drag the divider to choose what's tucked away. The clickable chevron is a separate, always-on-screen item, so showing/hiding never sweeps it (or Prosper's own icon) off screen. Optional item **ordering** keeps multi-icon apps (Stats, iStat Menus) in place across relaunches. A native take on Ice / Bartender.
+_Opt-in — turn it on in **Settings → Extensions**._ Hide menu-bar icons behind a divider you reveal on demand, add spacing between icons, and pick the chevron style — with **no Accessibility or Screen Recording permission** on a windowed menu bar. Which icons are tucked away is positional: ⌘-drag an icon to the left of the chevron to hide it, and back to the right to show it again — the same native gesture macOS already uses for arranging the bar, so Prosper never fights the system over icon order. The clickable chevron is a separate, always-on-screen item, so showing/hiding never sweeps it (or Prosper's own icon) off screen. A native take on Ice / Bartender.
 
 <p align="center"><img width="688" alt="Menu Bar Management — hidden section revealed" src="https://github.com/user-attachments/assets/c928fc57-0174-41a3-bbcf-355061d9c0f4" /></p>
 

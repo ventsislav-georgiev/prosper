@@ -273,8 +273,6 @@ enum Preferences {
         static let layoutStoreBackupJSON = "layoutStoreBackupJSON"   // newer-schema blob preserved on downgrade
         static let menuBarStoreJSON = "menuBarStoreJSON"
         static let menuBarStoreBackupJSON = "menuBarStoreBackupJSON"
-        static let menuBarOrderStoreJSON = "menuBarOrderStoreJSON"
-        static let menuBarOrderStoreBackupJSON = "menuBarOrderStoreBackupJSON"
         static let uiScale = "prosper.uiScale"
         static let uiOpacity = "prosper.uiOpacity"
         static let uiFrost = "prosper.uiFrost"
@@ -730,7 +728,7 @@ enum Preferences {
         }
     }
 
-    /// Menu Bar Management settings (spacing, reveal/hide, reorder). Same
+    /// Menu Bar Management settings (spacing, reveal/hide, chevron). Same
     /// downgrade-safe JSON-in-UserDefaults pattern as `layoutStore`: a corrupt or
     /// newer-schema blob falls back to defaults rather than wiping the feature.
     static var menuBarStore: MenuBarStore {
@@ -753,31 +751,21 @@ enum Preferences {
         }
     }
 
-    /// Menu-bar ordering engine settings (opt-in, desired layout). Separate blob
-    /// from `menuBarStore` so the always-on hide/spacing store never carries the
-    /// opt-in ordering payload. Same downgrade-safe pattern.
-    static var menuBarOrderStore: MenuBarOrderStore {
-        get {
-            guard let data = defaults.data(forKey: Keys.menuBarOrderStoreJSON),
-                  var store = try? JSONDecoder().decode(MenuBarOrderStore.self, from: data),
-                  store.schemaVersion == MenuBarOrderStore.currentSchema else {
-                return .default
-            }
-            // Heal blobs written before the eye toggle re-slotted items: every
-            // consumer (arranger, enforcer, Settings) reads through here, so
-            // always-hidden items are guaranteed to lead `desiredOrder`.
-            store.normalizeAlwaysHidden()
-            return store
+    /// #132: one-shot migration off the removed menu-bar ordering engine. Its saved
+    /// order is dropped (nothing reads it any more); the one thing worth carrying over
+    /// is whether the user had the always-hidden band, which the engine switched on
+    /// whenever an icon was marked always-hidden. Deleting the blobs makes this a
+    /// no-op from the second launch on, so turning the band off later sticks.
+    static func migrateMenuBarOrderStore() {
+        let key = "menuBarOrderStoreJSON", backupKey = "menuBarOrderStoreBackupJSON"
+        guard let data = defaults.data(forKey: key) ?? defaults.data(forKey: backupKey) else { return }
+        if MenuBarStore.legacyHadAlwaysHidden(orderStoreJSON: data) {
+            var store = menuBarStore
+            store.alwaysHiddenEnabled = true
+            menuBarStore = store
         }
-        set {
-            guard let data = try? JSONEncoder().encode(newValue) else { return }
-            if let old = defaults.data(forKey: Keys.menuBarOrderStoreJSON),
-               let v = try? JSONDecoder().decode(SchemaProbe.self, from: old),
-               v.schemaVersion > MenuBarOrderStore.currentSchema {
-                defaults.set(old, forKey: Keys.menuBarOrderStoreBackupJSON)
-            }
-            defaults.set(data, forKey: Keys.menuBarOrderStoreJSON)
-        }
+        defaults.removeObject(forKey: key)
+        defaults.removeObject(forKey: backupKey)
     }
 
     /// Minimal envelope to read just `schemaVersion` from a stored blob without
