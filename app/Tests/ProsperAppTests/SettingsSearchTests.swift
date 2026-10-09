@@ -111,6 +111,34 @@ final class SettingsSearchTests: XCTestCase {
         XCTAssertEqual(all, nativeSettingsIndex.filter { SettingsSearch.matches("e", $0) })
     }
 
+    /// The General master switches are rows, not sections. With autocomplete or the
+    /// agent off, its sidebar group is hidden and search is the only way back to the
+    /// switch, so these queries must land on the section that holds it.
+    func testGeneralRowsAreSearchable() {
+        let expected = [
+            "dock": "Essentials",
+            "placement": "Essentials",
+            "autocomplete": "Local AI",
+            "coding agent": "Local AI",
+        ]
+        for (query, section) in expected {
+            let hits = SettingsSearch.results(query, index: nativeSettingsIndex)
+            XCTAssertTrue(hits.contains { $0.paneID == "general" && $0.section == section },
+                          "'\(query)' should find General › \(section), got \(hits.map(\.anchor))")
+        }
+    }
+
+    /// Sidebar group order, pinned. The two feature groups appear only while their
+    /// master switch is on, so the expectation follows the live preferences.
+    @MainActor
+    func testSidebarGroupOrder() {
+        var expected = ["General", "System Stats", "Volume Mixer", "AI Models"]
+        if Preferences.autocompleteEnabled { expected.append("Inline Autocomplete") }
+        if Preferences.agentEnabled { expected.append("Coding Agent") }
+        expected.append("More")
+        XCTAssertEqual(settingsSidebarGroups(registry: nil).map(\.0), expected)
+    }
+
     // MARK: - 5. Extension index, straight off the manifest
 
     private static let manifest = """
