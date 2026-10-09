@@ -46,13 +46,11 @@ final class StatsController {
         }
     }
     private var openModule: StatsModule?
-    /// Global left-mouse monitor that dismisses the popover on a click outside it.
-    /// `.transient` covers clicks that activate another app, but as an accessory
-    /// (LSUIElement) app we don't reliably receive the dismissing event for clicks on
-    /// the desktop / a non-activating spot — so a global monitor closes it explicitly.
-    /// Global monitors only fire for events delivered to OTHER apps, so a click INSIDE
-    /// the popover (our own window) never triggers it.
-    private var outsideClickMonitor: Any?
+    /// #149: closes the popover on a click outside its window frame — `.transient`
+    /// misses desktop / non-activating clicks for an accessory app, and on macOS 27
+    /// the global monitor also sees clicks inside our own popover, so the shared
+    /// dismisser decides by geometry, not by event routing.
+    private lazy var outsideClick = PopoverOutsideClickDismisser(popover: popover)
     /// Process-lifetime observer token. The controller is a `static let` singleton
     /// meant to live forever, so this is intentionally never removed.
     private var configObserver: NSObjectProtocol?
@@ -221,16 +219,7 @@ final class StatsController {
     /// Arm the monitor while the popover is shown, drop it when closed (no idle
     /// event tap when nothing is open).
     private func updateOutsideClickMonitor() {
-        if popover.isShown {
-            guard outsideClickMonitor == nil else { return }
-            outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
-                matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                self?.popover.performClose(nil)
-            }
-        } else if let m = outsideClickMonitor {
-            NSEvent.removeMonitor(m)
-            outsideClickMonitor = nil
-        }
+        outsideClick.setArmed(popover.isShown)
     }
 
     private func teardown() {

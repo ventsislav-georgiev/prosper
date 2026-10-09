@@ -95,7 +95,10 @@ final class CalendarBarController {
             }
         }
     }
-    private var outsideClickMonitor: Any?
+    /// #149: shared geometric outside-click dismisser; a pinned popover never closes.
+    private lazy var outsideClick = PopoverOutsideClickDismisser(popover: popover) { [weak self] in
+        !(self?.store.pinned ?? false)
+    }
     private var minuteTimer: DispatchSourceTimer?
     /// Process-lifetime observers; the controller is a singleton, never removed.
     private var configObserver: NSObjectProtocol?
@@ -241,22 +244,12 @@ final class CalendarBarController {
         refetch()   // more rows = wider visible range
     }
 
-    /// Global outside-click monitor: as an LSUIElement accessory app the
-    /// transient popover doesn't reliably see dismissing clicks on the desktop,
-    /// so close explicitly. Global monitors never fire for our own windows, so
-    /// clicks inside the popover are unaffected. Skipped while pinned.
+    /// Outside-click dismisser: as an LSUIElement accessory app the transient
+    /// popover doesn't reliably see dismissing clicks on the desktop, so close
+    /// explicitly. #149: clicks inside the popover are filtered by its frame —
+    /// macOS 27 delivers them to the global monitor too. Skipped while pinned.
     private func updateOutsideClickMonitor() {
-        if popover.isShown, !store.pinned {
-            guard outsideClickMonitor == nil else { return }
-            outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
-                matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                guard let self, !self.store.pinned else { return }
-                self.popover.performClose(nil)
-            }
-        } else if let m = outsideClickMonitor {
-            NSEvent.removeMonitor(m)
-            outsideClickMonitor = nil
-        }
+        outsideClick.setArmed(popover.isShown && !store.pinned)
     }
 
     // MARK: - Timers

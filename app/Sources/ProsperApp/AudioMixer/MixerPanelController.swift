@@ -14,7 +14,9 @@ final class MixerPanelController {
     private let mixer = AppVolumeMixer.shared
     private var item: NSStatusItem?
     private var glyphObservers: Set<AnyCancellable> = []
-    private var outsideClickMonitor: Any?
+
+    /// #149: shared geometric outside-click dismisser (see its file for why).
+    private lazy var outsideClick = PopoverOutsideClickDismisser(popover: popover)
 
     private lazy var popover: NSPopover = {
         let p = NSPopover()
@@ -220,16 +222,7 @@ final class MixerPanelController {
     /// Arm the monitor while the popover is shown, drop it when closed (no
     /// idle event tap when nothing is open).
     private func updateOutsideClickMonitor() {
-        if popover.isShown {
-            guard outsideClickMonitor == nil else { return }
-            outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
-                matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                self?.popover.performClose(nil)
-            }
-        } else if let m = outsideClickMonitor {
-            NSEvent.removeMonitor(m)
-            outsideClickMonitor = nil
-        }
+        outsideClick.setArmed(popover.isShown)
     }
 
     private func teardown() {

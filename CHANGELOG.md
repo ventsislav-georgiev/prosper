@@ -18,7 +18,17 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.155.0 *(unreleased)*
+## v2.156.0 *(unreleased)*
+
+- **Fixed: the sensors, audio mixer and calendar popovers closed when you clicked
+  inside them on macOS 27.** Each popover closes itself on a click outside it. The
+  check used to assume a click inside our own popover never reached that watcher;
+  on macOS 27 it does, so a click on a fan-speed slider or a mixer control dismissed
+  the popover instead. The three popovers now share one dismisser that compares the
+  click's screen position with the popover's frame and only closes on a click that
+  really lands outside.
+
+## v2.155.0
 
 - **Remote Terminal reports how many subagents each session is running.** The session
   list sent to [Prosper Remote](https://apps.apple.com/app/prosper-remote/id6782528095)
