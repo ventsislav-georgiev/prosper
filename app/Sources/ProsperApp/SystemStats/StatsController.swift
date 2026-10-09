@@ -159,7 +159,7 @@ final class StatsController {
             items[m] = nil
         }
         // Add items for newly shown modules.
-        for m in modules where items[m] == nil {
+        for m in widthGate.admit(modules, live: items.keys) {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             item.autosaveName = "ProsperStats-\(m.rawValue)"
             // .content (not .control): Stats icons stay in the managed set so the user
@@ -179,7 +179,6 @@ final class StatsController {
             button.action = #selector(itemClicked(_:))
             buttonModule[ObjectIdentifier(button)] = m
             items[m] = (item, host)
-            widthGate.forget(m)   // fresh item (re-enable after teardown): measure once
         }
         resizeItems()
     }
@@ -298,4 +297,12 @@ struct StatsWidthGate {
     }
 
     mutating func forget(_ m: StatsModule) { keys[m] = nil }
+
+    /// Modules in `wanted` with no live item, i.e. the items to (re-)create. Each is
+    /// forgotten so a fresh item (re-enable after teardown) is measured once.
+    mutating func admit(_ wanted: [StatsModule], live: some Collection<StatsModule>) -> [StatsModule] {
+        let fresh = wanted.filter { !live.contains($0) }
+        for m in fresh { forget(m) }
+        return fresh
+    }
 }

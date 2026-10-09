@@ -57,4 +57,17 @@ final class StatsWidthGateTests: XCTestCase {
         gate.forget(.cpu)
         XCTAssertTrue(gate.needsResize(.cpu, key: "", style: other, scale: 2), "re-created item measures once")
     }
+
+    /// #240: syncItems creates items via admit(); a module measured, torn down and
+    /// re-created must be measured again (teardown leaves the gate untouched).
+    func testReCreatedItemMeasuresAgain() {
+        var gate = StatsWidthGate()
+        XCTAssertEqual(gate.admit([.cpu, .memory], live: []), [.cpu, .memory])
+        XCTAssertTrue(gate.needsResize(.cpu, key: "", style: style, scale: 1))
+        XCTAssertFalse(gate.needsResize(.cpu, key: "", style: style, scale: 1))
+        XCTAssertEqual(gate.admit([.cpu, .memory], live: [.cpu, .memory]), [], "live items are not re-created")
+        XCTAssertFalse(gate.needsResize(.cpu, key: "", style: style, scale: 1), "live item keeps its memo")
+        XCTAssertEqual(gate.admit([.cpu], live: []), [.cpu], "after teardown the item is re-created")
+        XCTAssertTrue(gate.needsResize(.cpu, key: "", style: style, scale: 1), "re-created item measures once")
+    }
 }
