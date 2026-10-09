@@ -95,7 +95,9 @@ final class TimerScheduler: @unchecked Sendable {
         let src = DispatchSource.makeTimerSource(queue: queue)
         let delay = max(entry.fireAt - now(), 0)
         if entry.every {
-            src.schedule(deadline: .now() + delay, repeating: entry.interval)
+            // 10 % leeway, capped at 1 s so a short UI-refresh interval stays steady.
+            let leeway = DispatchTimeInterval.milliseconds(Int(min(entry.interval * 100, 1000)))
+            src.schedule(deadline: .now() + delay, repeating: entry.interval, leeway: leeway)
         } else {
             src.schedule(deadline: .now() + delay)
         }

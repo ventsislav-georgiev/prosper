@@ -134,19 +134,44 @@ actor LoRATrainer {
 
     // MARK: - Scheduler
 
-    /// Installs a repeating off-peak check on the main run loop. Fires every
-    /// `intervalSeconds` (default 20 min); each fire runs `runIfOffPeak()` on the actor.
-    /// Idempotent guards live in `train()`/`isOffPeakNow` — a fire while ineligible is a
-    /// cheap no-op. Call once from app launch.
+    /// Installs the off-peak training check on the main run loop, but only while
+    /// `Preferences.loraEnabled` is on: the timer is created when training is on and
+    /// invalidated when it is turned off at runtime (any in-process defaults write,
+    /// including a settings sync, re-evaluates the gate). Fires every `intervalSeconds`
+    /// (default 20 min); each fire runs `runIfOffPeak()` on the actor. Call once from
+    /// app launch.
     @MainActor
     static func startScheduler(intervalSeconds: TimeInterval = 1200) {
-        guard scheduler == nil else { return }
-        scheduler = Timer.scheduledTimer(withTimeInterval: intervalSeconds, repeats: true) { _ in
-            Task { await LoRATrainer.shared.runIfOffPeak() }
+        syncScheduler(intervalSeconds: intervalSeconds)
+        guard prefsObserver == nil else { return }
+        prefsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { syncScheduler(intervalSeconds: intervalSeconds) }
         }
     }
 
+    /// Starts or stops the scheduler timer to match `Preferences.loraEnabled`.
+    @MainActor
+    static func syncScheduler(intervalSeconds: TimeInterval = 1200) {
+        guard Preferences.loraEnabled else {
+            scheduler?.invalidate()
+            scheduler = nil
+            return
+        }
+        guard scheduler == nil else { return }
+        let t = Timer.scheduledTimer(withTimeInterval: intervalSeconds, repeats: true) { _ in
+            Task { await LoRATrainer.shared.runIfOffPeak() }
+        }
+        // 10 %: an off-peak check has no deadline, so let the OS coalesce wakeups.
+        t.tolerance = intervalSeconds * 0.1
+        scheduler = t
+    }
+
+    @MainActor static var isSchedulerRunning: Bool { scheduler?.isValid ?? false }
+
     @MainActor private static var scheduler: Timer?
+    @MainActor private static var prefsObserver: NSObjectProtocol?
 
     // MARK: - Dataset split
 

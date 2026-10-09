@@ -326,4 +326,29 @@ final class LoRAWS6Tests: XCTestCase {
         Preferences.loraBaselineShown = 0
         Preferences.loraBaselineAccepted = 0
     }
+
+    // MARK: - Scheduler gate
+
+    /// The 20-min scheduler timer exists only while `loraEnabled` is on, and a runtime
+    /// flip (a defaults write) starts or invalidates it through the observer.
+    @MainActor
+    func testSchedulerRunsOnlyWhileLoRAEnabled() {
+        let saved = Preferences.loraEnabled
+        defer {
+            Preferences.loraEnabled = saved
+            LoRATrainer.syncScheduler()
+        }
+
+        Preferences.loraEnabled = false
+        LoRATrainer.startScheduler()
+        XCTAssertFalse(LoRATrainer.isSchedulerRunning, "off: no timer")
+
+        Preferences.loraEnabled = true
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(LoRATrainer.isSchedulerRunning, "on: timer")
+
+        Preferences.loraEnabled = false
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertFalse(LoRATrainer.isSchedulerRunning, "off again: invalidated")
+    }
 }

@@ -41,6 +41,7 @@ final class AnalyticsService {
         let t = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
             Task { @MainActor in self.maybeSend() }
         }
+        t.tolerance = 360   // 10 %: an hourly poll for a 24 h send has no deadline
         timer = t
         // First check shortly after launch so a fresh install reports day one.
         Task { @MainActor in

@@ -215,7 +215,9 @@ final class DchSessionServer: @unchecked Sendable {
         sendKeepAwake(true)
         if holdTimer != nil { return }   // already ticking (hold or watch mode)
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + .seconds(Self.tickSeconds), repeating: .seconds(Self.tickSeconds))
+        // 1 s leeway (10 %): a late tick only delays the hold release by that much.
+        t.schedule(deadline: .now() + .seconds(Self.tickSeconds), repeating: .seconds(Self.tickSeconds),
+                   leeway: .seconds(1))
         t.setEventHandler { [weak self] in self?.tick() }
         t.resume()
         holdTimer = t
