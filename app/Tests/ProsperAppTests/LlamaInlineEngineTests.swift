@@ -67,6 +67,28 @@ final class LlamaInlineEngineTests: XCTestCase {
         XCTAssertEqual(LlamaInlineEngine.selectedModelId, alt.id)
     }
 
+    /// Pins the inline catalog: file, size, and a commit-sha (not `main`)
+    /// download URL, so an upstream re-upload can't change what users get.
+    func testCatalogPinsRevisionAndBytes() {
+        let expected: [(String, String, Int64, String)] = [
+            ("e2b-q4", "gemma-4-E2B_q4_0-it.gguf", 3_349_516_256,
+             "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/675cff42a74c774d6cb76f76d8eacb49b48c9b93/gemma-4-E2B_q4_0-it.gguf"),
+            ("e2b-q8", "gemma-4-E2B-it-Q8_0.gguf", 4_967_497_152,
+             "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/b4243c156154b6dca9324415f8c7ccc098b4aed1/gemma-4-E2B-it-Q8_0.gguf"),
+            ("e4b-q4", "gemma-4-E4B_q4_0-it.gguf", 5_154_941_280,
+             "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/4b4a2c1d584be7264f87aac328a1bc739ce81b6c/gemma-4-E4B_q4_0-it.gguf"),
+            ("e4b-q8", "gemma-4-E4B-it-Q8_0.gguf", 8_031_242_688,
+             "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/b8093469224f83f5c38f691eb906c380e9e63114/gemma-4-E4B-it-Q8_0.gguf"),
+        ]
+        XCTAssertEqual(LlamaInlineEngine.catalog.map(\.id), expected.map(\.0))
+        for (m, e) in zip(LlamaInlineEngine.catalog, expected) {
+            XCTAssertEqual(m.fileName, e.1)
+            XCTAssertEqual(m.bytes, e.2)
+            XCTAssertEqual(m.downloadURL.absoluteString, e.3)
+            XCTAssertFalse(m.downloadURL.path.contains("/resolve/main/"))
+        }
+    }
+
     func testTunedParamsDefaults() {
         // Defaults are the recovered reference thresholds; env overrides are
         // covered by bench usage (setenv in-process is unreliable under XCTest).

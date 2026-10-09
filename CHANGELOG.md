@@ -123,6 +123,9 @@ tag from the now-released section and put it on the new top draft.
   sticks.** The turn is interrupted as soon as codex acknowledges it, and the chat no
   longer flips back to Working. A Stop no longer hides an error the backend already
   reported.
+- **Fixed: Inline autocomplete model downloads are pinned to a fixed upstream revision,**
+  so a model republished on Hugging Face can no longer make a fresh download look
+  truncated or corrupt.
 
 ## v2.155.0
 

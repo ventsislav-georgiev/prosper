@@ -469,11 +469,12 @@ enum Preferences {
     /// the **exact same tokenizer**, or `SpeculativeTokenIterator` decode throws /
     /// produces garbage — the verifier maps the draft's token ids onto its own logits,
     /// so the id↔piece mapping must be identical. We default the draft to the uniform
-    /// **4-bit** sibling of the default 6-bit main model (`gemma-4-e2b-it-4bit` vs
-    /// `gemma-4-e2b-it-6bit`): same Gemma 4 E2B checkpoint, same `tokenizer.model`,
-    /// just a lighter/faster quant — so it is guaranteed tokenizer-compatible and is
-    /// the smallest published Gemma-4-family MLX checkpoint (cross-family choices like
-    /// Gemma 3 do NOT share Gemma 4's tokenizer and would break). If the user changes
+    /// **4-bit** Gemma 4 E2B (`gemma-4-e2b-it-4bit`, the smallest published
+    /// Gemma-4-family MLX checkpoint). Its `tokenizer.json` is byte-identical (same
+    /// LFS oid `cc8d3a0c…`, checked 2026-10) to the recommended main
+    /// (`recommendedModelId`, E4B QAT 8-bit) and the other E2B/E4B QAT rows, so the
+    /// pairing is tokenizer-compatible (cross-family choices like Gemma 3 do NOT
+    /// share Gemma 4's tokenizer and would break). If the user changes
     /// `coreModel`, they must pick a draft from the **same model family/tokenizer**.
     static let defaultDraftModelId = "mlx-community/gemma-4-e2b-it-4bit"
 
