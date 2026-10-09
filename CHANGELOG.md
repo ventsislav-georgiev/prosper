@@ -47,6 +47,14 @@ tag from the now-released section and put it on the new top draft.
   sized against the frontmost app's menu width; it is now re-sized after each app
   switch, and toggling while a menu-bar-only app (Spotlight) is frontmost keeps the
   last real measurement instead of guessing.
+- **System Stats pauses while the display sleeps or the screen is locked.** The 3 s
+  sampling tick and the network ping used to run all night (the openlid extension keeps
+  the Mac awake lid-closed); they now stop while nobody can see the widgets and refresh
+  immediately on wake. Charts show a gap for that period rather than filled-in samples.
+- **Fixed: Settings search lost the Dock icon, Panel placement, Inline autocomplete and
+  Coding agent switches.** They became rows inside Essentials and Local AI, and search
+  indexed only section titles. Row titles are now indexed as keywords of their section,
+  so a hit jumps to the section that holds the row.
 
 ## v2.155.0
 

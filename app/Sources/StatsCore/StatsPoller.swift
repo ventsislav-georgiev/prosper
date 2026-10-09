@@ -162,7 +162,8 @@ public final class StatsPoller {
 
     public func start() {
         queue.async { [self] in
-            guard timer == nil else { return }
+            guard !started else { return }
+            started = true
             instantiateReaders()
             let t = DispatchSource.makeTimerSource(queue: queue)
             currentInterval = config.baseInterval
@@ -173,10 +174,40 @@ public final class StatsPoller {
         }
     }
 
+    /// Display asleep / screen locked: cancel the tick timer and the ping thread but
+    /// keep readers and histories, so resuming is cheap and the charts just show a
+    /// gap. Resume polls immediately so the widgets are fresh on wake. Pausing a
+    /// poller that never started (or was stopped) is a no-op; resuming one that is
+    /// running is a no-op too.
+    public func setPaused(_ paused: Bool) {
+        queue.async { [self] in
+            guard started, paused == (timer != nil) else { return }
+            if paused {
+                timer?.cancel(); timer = nil
+                ping?.stop()
+                return
+            }
+            let on = procFlag.get()
+            let target = on ? Swift.min(config.activeInterval, config.baseInterval) : config.baseInterval
+            currentInterval = target
+            ping?.setInterval(target)
+            ping?.start()
+            let t = DispatchSource.makeTimerSource(queue: queue)
+            t.schedule(deadline: .now(), repeating: target, leeway: .milliseconds(100))
+            t.setEventHandler { [weak self] in self?.poll() }
+            timer = t
+            t.resume()
+        }
+    }
+
+    /// Between start() and stop(); a paused poller is still started. Touched on `queue`.
+    private var started = false
+
     public func stop() {
         stopPowerSourceNotifications()   // callback holds an unowned self — kill it first
         queue.async { [self] in
             timer?.cancel(); timer = nil
+            started = false
             procs = nil   // drop the pid cpu-time map
             topProc = nil
             ping?.stop(); ping = nil

@@ -54,6 +54,13 @@ final class StatsController {
     /// Process-lifetime observer token. The controller is a `static let` singleton
     /// meant to live forever, so this is intentionally never removed.
     private var configObserver: NSObjectProtocol?
+    /// #186: display asleep or screen locked → nobody can see the widgets, so the
+    /// poller (tick timer + ping thread) pauses until both clear. Same lifetime
+    /// rule as `configObserver`: never removed.
+    private var sleepObservers: [NSObjectProtocol] = []
+    private var displayAsleep = false
+    private var screenLocked = false
+    private var screenHidden: Bool { displayAsleep || screenLocked }
 
     private init() {
         // Block API with `queue: .main` guarantees `reload()` runs on the main
@@ -63,6 +70,27 @@ final class StatsController {
             forName: .systemStatsConfigChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reload() }
         }
+        let wc = NSWorkspace.shared.notificationCenter
+        for (name, asleep) in [(NSWorkspace.screensDidSleepNotification, true),
+                               (NSWorkspace.screensDidWakeNotification, false)] {
+            sleepObservers.append(wc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.displayAsleep = asleep; self?.applyPause() }
+            })
+        }
+        // Screen lock exists only as a distributed notification (same pair
+        // ExtensionSystemServices listens to).
+        let dnc = DistributedNotificationCenter.default()
+        for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
+            sleepObservers.append(dnc.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.screenLocked = locked; self?.applyPause() }
+            })
+        }
+    }
+
+    /// Pause while the screen is hidden; resuming polls at once so the widgets are
+    /// fresh on wake (histories keep a gap for the hidden period).
+    private func applyPause() {
+        poller?.setPaused(screenHidden)
     }
 
     /// Bring the feature to match current prefs/style. Idempotent — safe to call
@@ -110,6 +138,7 @@ final class StatsController {
             }
         }
         p.start()
+        p.setPaused(screenHidden)   // config change while the screen is off
         poller = p
     }
 
