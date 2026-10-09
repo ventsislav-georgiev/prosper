@@ -186,6 +186,13 @@ final class HarnessProtocolTests: XCTestCase {
         XCTAssertTrue(CodexHarness.mapNotification(method: "turn/started", params: ["turnId": "t1"]).isEmpty)
     }
 
+    func testImageInputEncodesAsLocalImage() {
+        // codex 0.161 UserInput: local files are {"type":"localImage","path"}; `image` needs url.
+        let j = CodexHarness.inputJSON(.image(path: "/tmp/a.png"))
+        XCTAssertEqual(j["type"] as? String, "localImage")
+        XCTAssertEqual(j["path"] as? String, "/tmp/a.png")
+    }
+
     func testMapTurnCompleted() {
         let e = CodexHarness.mapNotification(
             method: "turn/completed", params: ["turn": ["id": "t1", "status": "completed"]])

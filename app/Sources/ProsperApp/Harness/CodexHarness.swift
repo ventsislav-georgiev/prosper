@@ -461,10 +461,10 @@ actor CodexHarness: CodingHarness {
             ?? (result["id"] as? String)
     }
 
-    private static func inputJSON(_ input: PromptInput) -> [String: Any] {
+    static func inputJSON(_ input: PromptInput) -> [String: Any] {
         switch input {
         case .text(let t): return ["type": "text", "text": t]
-        case .image(let path): return ["type": "image", "path": path]
+        case .image(let path): return ["type": "localImage", "path": path] // codex `image` takes url/fileId; local files are `localImage`
         }
     }
 
@@ -473,6 +473,10 @@ actor CodexHarness: CodingHarness {
     /// Prosper writes no trust state, so without this every hook (user hooks and the Bun
     /// plugin bridge) is silently skipped. The hooks are authored in Prosper's Settings,
     /// which makes Prosper the vetting layer.
+    /// Invariant: this trusts every hook in the ENABLED config layers. A hostile repo's `.codex`
+    /// hooks still do not load only because codex 0.161.0 disables an untrusted project layer
+    /// (loader_mod.rs:1090-1135) and hook discovery skips disabled layers, so Prosper must never
+    /// mark a project layer trusted.
     private static var threadConfig: [String: Any] { ["bypass_hook_trust": true] }
 
     /// `thread/start|resume.sandbox` is a `SandboxMode` string; the full policy (writable
