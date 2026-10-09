@@ -42,6 +42,11 @@ tag from the now-released section and put it on the new top draft.
   database, which macOS 27 no longer exposes, so on accounts without a Safari bookmarks
   file the extension permission rows stayed on "Grant" with access already given. It now
   lists `~/Library/Mail` and `~/Library/Safari` instead.
+- **Fixed (macOS 27): hidden menu-bar icons reappeared, or slid behind the « overflow
+  button, after switching apps on a display without a notch.** The hidden section is
+  sized against the frontmost app's menu width; it is now re-sized after each app
+  switch, and toggling while a menu-bar-only app (Spotlight) is frontmost keeps the
+  last real measurement instead of guessing.
 
 ## v2.155.0
 

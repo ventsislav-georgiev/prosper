@@ -15,6 +15,19 @@ import ApplicationServices
 ///   Accessibility (`MenuBarAX`).
 enum MenuBarHost {
     static let isHosted = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
+
+    /// #198: should an app activation re-apply the expanded divider length? On a
+    /// notch-less display the room depends on the frontmost app's menu width, so a
+    /// divider sized for the previous app is either wider than the room (hidden icons
+    /// come back) or too narrow (they spill into the « overflow). Only matters while a
+    /// divider is expanded, never for Prosper's own activation (it owns no menu bar the
+    /// room is measured against), and only when the room actually moved.
+    static func shouldReapplyDivider(hosted: Bool, anyDividerExpanded: Bool, activatedOwnApp: Bool,
+                                     lastRoom: CGFloat?, newRoom: CGFloat) -> Bool {
+        guard hosted, anyDividerExpanded, !activatedOwnApp else { return false }
+        guard let lastRoom else { return true }
+        return abs(newRoom - lastRoom) >= 1
+    }
 }
 
 /// Accessibility view of the hosted (macOS 27+) menu bar. Two sources:
@@ -92,8 +105,12 @@ enum MenuBarAX {
         // drops the divider alone (band stays visible), too low parks it behind the OS «
         // button; the band is reachable either way.
         let width = screen?.frame.width ?? 2000
-        return width - (appMenuRight() ?? 400)
+        // An accessory frontmost app leaves the previous app's menus up: keep the last
+        // measurement (as `appMenuRight` promises) instead of guessing 400 again.
+        if let right = appMenuRight() { lastMenuRight = right }
+        return width - (lastMenuRight ?? 400)
     }
+    private static var lastMenuRight: CGFloat?
 
     // MARK: - Items
 

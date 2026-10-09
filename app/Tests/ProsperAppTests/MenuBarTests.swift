@@ -306,4 +306,20 @@ final class MenuBarTests: XCTestCase {
         XCTAssertGreaterThan(len, room - 136, "narrower than room minus Apple's items parks the band behind the OS « button")
         XCTAssertEqual(MenuBarLogic.dropLength(room: 10), 0, "never negative")
     }
+
+    /// #198: an app switch re-sizes the expanded divider only when it can matter.
+    func testActivationReappliesDividerOnlyWhenTheHostedRoomMoved() {
+        func decide(hosted: Bool = true, expanded: Bool = true, own: Bool = false,
+                    last: CGFloat? = 900, new: CGFloat = 1100) -> Bool {
+            MenuBarHost.shouldReapplyDivider(hosted: hosted, anyDividerExpanded: expanded,
+                                             activatedOwnApp: own, lastRoom: last, newRoom: new)
+        }
+        XCTAssertTrue(decide(), "narrower menus, wider room: re-size")
+        XCTAssertTrue(decide(last: nil), "never sized yet: size it")
+        XCTAssertFalse(decide(hosted: false), "windowed bar (macOS 26 and older) is not room-bound")
+        XCTAssertFalse(decide(expanded: false), "everything revealed: nothing to re-size")
+        XCTAssertFalse(decide(own: true), "Prosper's own activation is ignored")
+        XCTAssertFalse(decide(new: 900), "same room (notched display, same-width menus): no-op")
+        XCTAssertFalse(decide(new: 900.4), "sub-point jitter is not a change")
+    }
 }

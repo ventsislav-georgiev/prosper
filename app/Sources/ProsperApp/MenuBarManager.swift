@@ -29,12 +29,18 @@ final class MenuBarManager: NSObject {
     /// width (not a fixed 10 000) so it stays correct on ultrawide / Retina-scaled
     /// displays. Hosted model (macOS 27+): just under the room the host lays items out
     /// in, which makes it drop the divider and everything left of it (`MenuBarLogic.dropLength`).
-    private var expandedLength: CGFloat {
+    /// The screen is `NSScreen.main` rather than the divider's `button.window.screen`:
+    /// on macOS 27 the button window is a scene token with no reliable screen, and
+    /// `main` is the display whose bar shows the frontmost app's menus — the same one
+    /// `appMenuRight` measures and `MenuBarAX.layout` reads.
+    private func expandedLength(room: CGFloat?) -> CGFloat {
         if MenuBarHost.isHosted {
-            return MenuBarLogic.dropLength(room: MenuBarAX.roomWidth(on: hiddenSeparator?.button?.window?.screen))
+            return MenuBarLogic.dropLength(room: room ?? MenuBarAX.roomWidth(on: NSScreen.main))
         }
         return (NSScreen.main?.frame.width ?? 2000) + 200
     }
+    /// Hosted room the expanded dividers were last sized for (#198).
+    private var appliedRoom: CGFloat?
 
     /// The always-visible control item (rightmost of ours). Clicking it toggles the
     /// hidden section; ⌥-clicking toggles the always-hidden band. It NEVER expands —
@@ -111,6 +117,7 @@ final class MenuBarManager: NSObject {
         applyDividerLengths()
         observeTermination()
         observeScreenChanges()
+        observeActivation()
     }
 
     private func teardown() {
@@ -129,6 +136,11 @@ final class MenuBarManager: NSObject {
         if let o = screenObserver {
             NotificationCenter.default.removeObserver(o); screenObserver = nil
         }
+        if let o = activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(o); activationObserver = nil
+        }
+        activationWork?.cancel(); activationWork = nil
+        appliedRoom = nil
     }
 
     /// The always-visible clickable control. Left-click toggles the hidden section;
@@ -193,11 +205,12 @@ final class MenuBarManager: NSObject {
     /// dividers can never disagree — no inline `length =` pokes elsewhere.
     /// #132: keep `revealedAlwaysHidden` flowing in here (2.154.0 hard-coded `false`);
     /// with the always-hidden band on, a constant would pin that band shut forever.
-    private func applyDividerLengths() {
+    private func applyDividerLengths(room: CGFloat? = nil) {
         defer { updateChevron() }
+        if MenuBarHost.isHosted { appliedRoom = room ?? MenuBarAX.roomWidth(on: NSScreen.main) }
         let l = MenuBarLogic.dividerLengths(revealed: revealed,
                                             revealedAlwaysHidden: revealedAlwaysHidden,
-                                            standard: Lengths.standard, expanded: expandedLength)
+                                            standard: Lengths.standard, expanded: expandedLength(room: appliedRoom))
         hiddenSeparator?.length = l.hidden
         alwaysHiddenSeparator?.length = l.alwaysHidden
     }
@@ -331,6 +344,45 @@ final class MenuBarManager: NSObject {
                 MenuBarManager.shared.applyDividerLengths()
             }
         }
+    }
+
+    private var activationObserver: NSObjectProtocol?
+    private var activationWork: DispatchWorkItem?
+
+    /// #198: on a notch-less hosted bar the room depends on the frontmost app's menu
+    /// width, so re-size the expanded dividers after an app switch. Debounced (⌘-Tab
+    /// bursts, and the new app's menus need a beat to lay out); the decision is
+    /// `MenuBarHost.shouldReapplyDivider`, so notched displays (fixed room) and
+    /// windowed bars never get past it.
+    private func observeActivation() {
+        guard MenuBarHost.isHosted, activationObserver == nil else { return }
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { MenuBarManager.shared.scheduleActivationReapply() }
+        }
+    }
+
+    private func scheduleActivationReapply() {
+        activationWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.reapplyAfterActivation() }
+        }
+        activationWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    private func reapplyAfterActivation() {
+        activationWork = nil
+        guard chevron != nil else { return }
+        let ownFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid()
+        let anyExpanded = !revealed || (alwaysHiddenSeparator != nil && !revealedAlwaysHidden)
+        // One AX read of the frontmost app's menu bar per settled switch (none on a
+        // notched display); it also keeps `roomWidth`'s last-measurement cache current.
+        let room = MenuBarAX.roomWidth(on: NSScreen.main)
+        guard MenuBarHost.shouldReapplyDivider(hosted: MenuBarHost.isHosted, anyDividerExpanded: anyExpanded,
+                                               activatedOwnApp: ownFront,
+                                               lastRoom: appliedRoom, newRoom: room) else { return }
+        applyDividerLengths(room: room)
     }
 
     private func observeTermination() {
