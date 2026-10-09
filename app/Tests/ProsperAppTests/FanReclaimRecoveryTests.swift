@@ -96,3 +96,22 @@ final class FanReclaimRecoveryTests: XCTestCase {
                                                           recoveryInFlight: false, userAdjusting: false))
     }
 }
+
+/// #215: a live helper's `false` (kill-switch latch) must not read as a missing helper,
+/// and any failed commit must revert the slider (errorText non-nil ⇔ revert).
+final class FanManualReplyTests: XCTestCase {
+    func testRefusalReadsAsLatchNotMissingHelper() throws {
+        let latched = try XCTUnwrap(FanManualReply.refused.errorText)
+        XCTAssertTrue(latched.contains("held automatic until the Mac cools down"))
+        XCTAssertFalse(latched.contains("helper"))
+        let missing = try XCTUnwrap(FanManualReply.unavailable.errorText)
+        XCTAssertTrue(missing.contains("isn’t running or wasn’t approved"))
+        XCTAssertNil(FanManualReply.engaged.errorText)
+    }
+
+    func testCombineRefusalWinsThenUnavailable() {
+        XCTAssertEqual(FanManualReply.combine([.engaged, .refused, .unavailable]), .refused)
+        XCTAssertEqual(FanManualReply.combine([.engaged, .unavailable]), .unavailable)
+        XCTAssertEqual(FanManualReply.combine([.engaged, .engaged]), .engaged)
+    }
+}

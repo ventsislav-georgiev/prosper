@@ -899,11 +899,11 @@ struct StatsPopupView: View {
     /// Run an engage with a hard wall-clock ceiling. If it exceeds `seconds` (e.g. a
     /// wedged SMAppService registration), return false so the UI resolves; the orphaned
     /// work harmlessly completes later (the daemon resets fans on its own cold start).
-    private func withFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> Bool) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
+    private func withFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply) async -> FanManualReply {
+        await withTaskGroup(of: FanManualReply.self) { group in
             group.addTask { await op() }
-            group.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); return false }
-            let result = await group.next() ?? false
+            group.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); return .unavailable }
+            let result = await group.next() ?? .unavailable
             group.cancelAll()
             return result
         }
@@ -932,15 +932,14 @@ struct StatsPopupView: View {
             // hang there — which is exactly a stuck "Enabling…" with no daemon log,
             // since the call never reaches the daemon. Race the whole engage so the
             // button always resolves and surfaces the actionable error.
-            let ok = await withFanTimeout(45) {
-                await FanControlHelper.setManual(first.key, rpm: first.value,
-                                                 timeout: FanControlHelper.firstEngageTimeout)
+            // A live helper replying false is its overheat latch (#209), not a missing helper.
+            let reply = await withFanTimeout(45) {
+                await FanControlHelper.setManualReply(first.key, rpm: first.value,
+                                                      timeout: FanControlHelper.firstEngageTimeout)
             }
-            guard ok else {
+            guard reply == .engaged else {
                 fanBusy = false
-                fanError = "Couldn’t enable manual control — the Prosper helper isn’t "
-                    + "running or wasn’t approved. Turn on “Prosper” under System Settings ▸ "
-                    + "General ▸ Login Items ▸ Allow in the Background, then try again."
+                fanError = reply.errorText
                 return
             }
             for (i, rpm) in targets where i != first.key { _ = await FanControlHelper.setManual(i, rpm: rpm) }
@@ -993,11 +992,25 @@ struct StatsPopupView: View {
         fanCommitWork?.cancel()
         FanControlHelper.userAdjusting = true
         let work = DispatchWorkItem {
+            let previous = Preferences.fanTargets
             Preferences.fanTargets = targets
             // The gesture is settled (0.4 s since the last frame); let reclaim
             // recovery arm again. A still-live drag re-raises it on its next frame.
             Task { @MainActor in FanControlHelper.userAdjusting = false }
-            Task { for (i, rpm) in targets { await FanControlHelper.setManual(i, rpm: rpm) } }
+            Task { @MainActor in
+                var replies: [FanManualReply] = []
+                for (i, rpm) in targets { replies.append(await FanControlHelper.setManualReply(i, rpm: rpm)) }
+                // A newer drag/commit owns the slider (and the status line) now.
+                guard fanTargets == targets, !fanOwner.isDragging else { return }
+                let reply = FanManualReply.combine(replies)
+                fanError = reply.errorText
+                // Refused: the hardware isn't running these targets — revert once to the
+                // last committed ones.
+                guard reply != .engaged else { return }
+                Preferences.fanTargets = previous
+                fanTargets = previous
+                fanOwner = FanTargetOwner()
+            }
         }
         fanCommitWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)

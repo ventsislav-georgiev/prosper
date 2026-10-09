@@ -126,6 +126,10 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: Inline autocomplete model downloads are pinned to a fixed upstream revision,**
   so a model republished on Hugging Face can no longer make a fresh download look
   truncated or corrupt.
+- **Fixed: Fan control — when the overheat cut-off is holding the fans automatic, the**
+  **popup now says so** instead of claiming the helper isn't running or wasn't approved,
+  and a speed change the helper refuses snaps the slider back to the speed the fans are
+  actually set to.
 
 ## v2.155.0
 

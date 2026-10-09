@@ -72,6 +72,38 @@ enum FanReclaimRecovery {
 /// store still holds the PREVIOUS speed, and that re-seed snapped the slider back,
 /// over and over, for the whole gesture. Ownership makes the in-flight value
 /// authoritative until the commit it scheduled is actually visible in the store.
+/// Outcome of one `setFanManualRPM`, split by WHO said no: the helper itself replying
+/// false (#209: its kill-switch latch holds after a 95 °C trip) vs. never reaching it
+/// (not registered/approved, XPC error, timeout).
+enum FanManualReply: Equatable {
+    case engaged
+    case refused       // live helper replied false
+    case unavailable   // no reply from the helper
+
+    /// Collapse one burst of per-fan replies: any refusal wins (the latch is global),
+    /// then any unreachable fan; all engaged → engaged.
+    static func combine(_ replies: [FanManualReply]) -> FanManualReply {
+        if replies.contains(.refused) { return .refused }
+        return replies.allSatisfy { $0 == .engaged } ? .engaged : .unavailable
+    }
+
+    /// The single status line the fan popup shows for a failed engage/commit.
+    // ponytail: a refusal is read as the latch; the helper also replies false when the
+    // SMC write itself throws (rare). Grow the protocol a reason enum if that needs its own text.
+    var errorText: String? {
+        switch self {
+        case .engaged: return nil
+        case .refused:
+            return "Fans are held automatic until the Mac cools down — the overheat "
+                + "cut-off tripped. Try again in a few minutes."
+        case .unavailable:
+            return "Couldn’t enable manual control — the Prosper helper isn’t "
+                + "running or wasn’t approved. Turn on “Prosper” under System Settings ▸ "
+                + "General ▸ Login Items ▸ Allow in the Background, then try again."
+        }
+    }
+}
+
 struct FanTargetOwner: Equatable {
     /// The user's in-flight targets; nil = the store owns the value.
     private(set) var user: [Int: Double]?
@@ -177,11 +209,20 @@ enum FanControlHelper {
     /// the manual pin alive; a drop (crash/disable) resets it. Returns success.
     @discardableResult
     static func setManual(_ index: Int, rpm: Double, timeout: TimeInterval = 12) async -> Bool {
-        guard let c = await ensureConnection() else { return false }
+        await setManualReply(index, rpm: rpm, timeout: timeout) == .engaged
+    }
+
+    /// `setManual` keeping the helper's refusal apart from an unreachable helper.
+    static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12) async -> FanManualReply {
+        guard let c = await ensureConnection() else { return .unavailable }
         // A manual write is manual intent, even before the popup saves the pref (it
         // saves it only after the first engage lands), so this arms unconditionally.
         armRecoveryLifecycle()
-        return await call(c, timeout: timeout) { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }
+        switch await callReply(c, timeout: timeout, { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }) {
+        case true?: return .engaged
+        case false?: return .refused
+        case nil: return .unavailable
+        }
     }
 
     /// Hand one fan back to OS thermal control (other fans unaffected). Honors the
@@ -404,13 +445,20 @@ enum FanControlHelper {
     private static func call(_ c: NSXPCConnection,
                              timeout: TimeInterval = 12,
                              _ body: @escaping (ProsperHelperProtocol, @escaping @Sendable (Bool) -> Void) -> Void) async -> Bool {
+        await callReply(c, timeout: timeout, body) ?? false
+    }
+
+    /// The helper's own reply, or nil when it never answered (XPC error / no proxy / timeout).
+    private static func callReply(_ c: NSXPCConnection,
+                                  timeout: TimeInterval = 12,
+                                  _ body: @escaping (ProsperHelperProtocol, @escaping @Sendable (Bool) -> Void) -> Void) async -> Bool? {
         await withCheckedContinuation { cont in
             let once = ResumeOnce(cont)
             let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable err in
                 Self.log.error("fan call failed: \(err.localizedDescription, privacy: .public)")
-                once.resume(false)
+                once.resume(nil)
             } as? ProsperHelperProtocol
-            guard let proxy else { once.resume(false); return }
+            guard let proxy else { once.resume(nil); return }
             once.armTimeout(timeout)
             body(proxy) { @Sendable ok in once.resume(ok) }
         }
@@ -419,14 +467,14 @@ enum FanControlHelper {
     private final class ResumeOnce: @unchecked Sendable {
         private let lock = NSLock()
         private var done = false
-        private var cont: CheckedContinuation<Bool, Never>?
-        init(_ c: CheckedContinuation<Bool, Never>) { cont = c }
-        func resume(_ v: Bool) {
+        private var cont: CheckedContinuation<Bool?, Never>?
+        init(_ c: CheckedContinuation<Bool?, Never>) { cont = c }
+        func resume(_ v: Bool?) {
             lock.lock(); let c = done ? nil : cont; done = true; cont = nil; lock.unlock()
             c?.resume(returning: v)
         }
         func armTimeout(_ seconds: TimeInterval) {
-            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [weak self] in self?.resume(false) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [weak self] in self?.resume(nil) }
         }
     }
 }
