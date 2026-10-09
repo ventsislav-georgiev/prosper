@@ -18,15 +18,19 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// server→client command-approval request and waits for the client's reply before
     /// finishing. On "HANG" it starts a shell command and leaves the turn running
     /// until a well-formed `turn/interrupt` request ends it; "WEDGE" does the same but
-    /// never answers the interrupt (a hung codex). Every inbound line is
-    /// appended to `received.jsonl` beside the script so tests can check what was sent.
+    /// never answers the interrupt (a hung codex); "EXIT0" starts the turn and then
+    /// exits cleanly (code 0) without finishing it. Every inbound line is appended to
+    /// `received.jsonl` beside the script, and the pid is written to `pid`, so tests can
+    /// check what was sent and kill the process.
     /// Thread and turn params are checked against the codex 0.139/0.161/0.162 schemas
     /// (`ThreadStartParams.sandbox: SandboxMode`, no `sandboxPolicy` there;
     /// `TurnStartParams.sandboxPolicy: SandboxPolicy`); a mismatch is a JSON-RPC error.
     private static let mockServer = #"""
-    import sys, json, os
+    import sys, json, os, time
 
     LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.jsonl")
+    with open(os.path.join(os.path.dirname(LOG), "pid"), "w") as f:
+        f.write(str(os.getpid()))
     current_turn = None
     wedged = False
 
@@ -106,6 +110,9 @@ final class CodexHarnessE2ETests: XCTestCase {
             send({"jsonrpc": "2.0", "method": "turn/started",
                   "params": {"threadId": "thread-1", "turn": turn("inProgress")}})
             wedged = "WEDGE" in prompt
+            if "EXIT0" in prompt:
+                time.sleep(0.3)
+                sys.exit(0)
             if "HANG" in prompt or wedged:
                 send({"jsonrpc": "2.0", "method": "item/started",
                       "params": {"threadId": "thread-1", "turnId": current_turn,
@@ -360,6 +367,101 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(params?["expectedTurnId"] as? String, "turn-1")
         XCTAssertNil(params?["turnId"])
         XCTAssertEqual(params?["threadId"] as? String, "thread-1")
+    }
+
+    /// Every event until the stream finishes; nil if it is still open after `timeout`.
+    private static func drain(_ harness: CodexHarness, timeout: TimeInterval) async -> [HarnessEvent]? {
+        await withTaskGroup(of: [HarnessEvent]?.self) { group in
+            group.addTask {
+                var seen: [HarnessEvent] = []
+                for await event in harness.events { seen.append(event) }
+                return seen
+            }
+            group.addTask { try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)); return nil }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    private static func errors(in events: [HarnessEvent]) -> [String] {
+        events.compactMap { if case .error(.backendError(let m)) = $0 { return m }; return nil }
+    }
+
+    /// #167: codex exiting cleanly (code 0) mid-turn sends no `turn/completed`; the
+    /// harness must still report it as an error and finish its event stream, so the
+    /// controller leaves `.running` and drops the harness instead of hanging.
+    func testCleanExitMidTurnReportsErrorAndEndsStream() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(SessionOptions(
+            cwd: home.path, model: "test-model",
+            approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false)))
+        async let eventsTask = Self.drain(harness, timeout: 10)
+        try await harness.sendPrompt(session: session, input: [.text("EXIT0 mid-turn")])
+
+        let drained = await eventsTask
+        let events = try XCTUnwrap(drained, "event stream still open after codex exited")
+        XCTAssertEqual(Self.errors(in: events), ["codex app-server exited with code 0"], "\(events)")
+        do {
+            try await harness.sendPrompt(session: session, input: [.text("again")])
+            XCTFail("a dead harness must refuse requests")
+        } catch HarnessError.notStarted {}
+        await harness.shutdown()
+    }
+
+    /// #167: codex killed mid-turn fails the in-flight request with the same error the
+    /// stream reports once (the controller shows it once), finishes the stream, and a
+    /// fresh harness resumes the thread — what `AgentController` does on the next prompt.
+    func testKilledMidTurnReportsOneErrorAndRespawnResumesThread() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let opts = SessionOptions(cwd: home.path, model: "test-model",
+                                  approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false))
+        let session = try await harness.newSession(opts)
+        let turn = try await harness.sendPrompt(session: session, input: [.text("WEDGE on a long command")])
+        async let eventsTask = Self.drain(harness, timeout: 10)
+
+        // An interrupt codex never answers is in flight when it dies.
+        let abort = Task { try await harness.abort(session: session, turn: turn, timeout: 10) }
+        let deadline = Date().addingTimeInterval(5)
+        while (try? Self.received("turn/interrupt", exe: exe))?.isEmpty != false, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let pid = try String(contentsOf: exe.deletingLastPathComponent().appendingPathComponent("pid"), encoding: .utf8)
+        XCTAssertEqual(kill(try XCTUnwrap(pid_t(pid)), SIGKILL), 0)
+
+        let drained = await eventsTask
+        let events = try XCTUnwrap(drained, "event stream still open after codex was killed")
+        XCTAssertEqual(Self.errors(in: events), ["codex app-server was killed by signal 9"], "\(events)")
+        do {
+            try await abort.value
+            XCTFail("the in-flight interrupt must fail when codex dies")
+        } catch HarnessError.backendError(let message) {
+            XCTAssertEqual(message, "codex app-server was killed by signal 9")
+        }
+        await harness.shutdown()
+
+        let respawned = CodexHarness(executableURL: exe, codexHome: home,
+                                     llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await respawned.start()
+        let resumed = try await respawned.resumeSession(session, options: opts)
+        XCTAssertEqual(resumed, session)
+        async let nextTurn = Self.collect(from: respawned, timeout: 10) {
+            if case .turnCompleted = $0 { return true }; return false
+        }
+        try await respawned.sendPrompt(session: resumed, input: [.text("continue")])
+        let completed = await nextTurn.contains {
+            if case .turnCompleted(_, let outcome) = $0 { return outcome == .completed }; return false
+        }
+        await respawned.shutdown()
+        XCTAssertTrue(completed, "the resumed thread should run a turn")
+        let resumes = try Self.received("thread/resume", exe: exe)
+        XCTAssertEqual((resumes.first?["params"] as? [String: Any])?["threadId"] as? String, "thread-1")
     }
 
     /// #165/#166: the user's sandbox reaches codex in the shapes its schema accepts, and

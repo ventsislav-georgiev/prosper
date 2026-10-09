@@ -126,7 +126,8 @@ actor CodexHarness: CodingHarness {
         }
         proc.terminationHandler = { [weak self] p in
             guard let self else { return }
-            Task { await self.handleTermination(code: p.terminationStatus) }
+            let signaled = p.terminationReason == .uncaughtSignal
+            Task { await self.handleTermination(code: p.terminationStatus, signaled: signaled) }
         }
 
         do {
@@ -373,15 +374,20 @@ actor CodexHarness: CodingHarness {
         log.debug("[codex] \(s, privacy: .public)")
     }
 
-    private func handleTermination(code: Int32) {
+    /// An exit we didn't ask for (`shutdown` clears the handler first), so it is an
+    /// error whatever the code: a clean exit mid-turn sends no `turn/completed` either.
+    /// In-flight requests and the event stream carry the same error, which lets the
+    /// controller show it once; the stream then finishes so it can drop this harness.
+    private func handleTermination(code: Int32, signaled: Bool) {
         guard !terminated else { return }
         terminated = true
         process = nil
-        for (_, cont) in pending { cont.resume(throwing: HarnessError.backendError("codex exited (\(code))")) }
+        let error = HarnessError.backendError(signaled
+            ? "codex app-server was killed by signal \(code)"
+            : "codex app-server exited with code \(code)")
+        for (_, cont) in pending { cont.resume(throwing: error) }
         pending.removeAll()
-        if code != 0 {
-            eventContinuation.yield(.error(.backendError("codex app-server exited with code \(code)")))
-        }
+        eventContinuation.yield(.error(error))
         cleanupIO()
     }
 

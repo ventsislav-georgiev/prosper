@@ -95,6 +95,10 @@ tag from the now-released section and put it on the new top draft.
   while the display sleeps or the screen is locked**, polling once immediately on resume.
 - **The Prosper icon now has a stable identity in the menu bar** (`ProsperLauncher` instead of
   the generic `Item-N`), so macOS keeps its position reliably. The position you had carries over.
+- **Fixed: a coding-agent crash left the chat on "running" forever.** When codex died or
+  was killed mid-turn the error was shown only for non-zero exits and the dead backend was
+  kept; a clean exit mid-turn showed nothing. Any unexpected exit now shows one error, and
+  the next prompt respawns codex and resumes the same thread.
 
 ## v2.155.0
 

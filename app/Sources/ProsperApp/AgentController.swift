@@ -365,17 +365,21 @@ final class AgentController {
             if case .error = phase {} else { phase = .idle }
         } catch {
             log.error("agent run failed: \(String(describing: error), privacy: .public)")
-            append(.error(id: UUID().uuidString, message: Self.describe(error)))
-            phase = .error(Self.describe(error))
-            // Capture the failure transcript before tearing down. A setup failure
-            // (harness spawn / model load) has no session yet — mint one so the
-            // failed run still lands in history instead of vanishing.
-            if session == nil {
+            surfaceError(Self.describe(error))
+            // Capture the failure transcript before tearing down. A live thread stays
+            // resumable: the next prompt respawns codex and re-attaches it (codex death
+            // during a request lands here). A setup failure (harness spawn / model load)
+            // has no session yet — mint one so the failed run still lands in history
+            // instead of vanishing, unless a resume is already armed for this transcript.
+            if let session {
+                persistTranscript()
+                pendingResumeID = session.raw
+            } else if pendingResumeID == nil {
                 let failed = SessionID(raw: "failed-" + UUID().uuidString)
                 session = failed
                 persistSessionMeta(failed)
+                persistTranscript()
             }
-            persistTranscript()
             await end()
         }
     }
@@ -475,7 +479,42 @@ final class AgentController {
                 guard let self else { return }
                 await self.apply(event)
             }
+            // The stream finished on its own: the backend exited (crash, kill, or a
+            // clean exit). Our own teardowns (`end`, config respawn) cancel this task first.
+            guard !Task.isCancelled else { return }
+            await self?.harnessEnded(harness)
         }
+    }
+
+    /// The harness died under us. Drop it so the next prompt spawns a fresh one, and
+    /// arm `pendingResumeID` so that prompt re-attaches the same thread (`ensureSession`
+    /// falls back to a fresh thread if codex lost it). The model stays resident.
+    private func harnessEnded(_ dead: CodingHarness) {
+        guard harness === dead else { return }
+        flushTextDeltas()
+        persistTranscript()
+        if let session { pendingResumeID = session.raw }
+        harness = nil
+        eventPump = nil
+        session = nil
+        currentTurn = nil
+        settledTurn = nil
+        pendingApprovals.removeAll()
+        agentConfigDirty = false   // the respawn rewrites config.toml anyway
+        // The harness reported the exit as `.error` already; this only catches a
+        // backend that ended its stream silently, which would otherwise hang `.running`.
+        if isActive { surfaceError("Agent backend exited.") }
+        if !ChatWindow.shared.isOpen {
+            Task { await ModelResidencyCoordinator.shared.releaseAgent() }
+        }
+    }
+
+    /// Show a failure once: codex death reaches us both as the `.error` event and as
+    /// the error of whatever request was in flight, with the same message.
+    private func surfaceError(_ message: String) {
+        guard phase != .error(message) else { return }
+        append(.error(id: UUID().uuidString, message: message))
+        phase = .error(message)
     }
 
     private func apply(_ event: HarnessEvent) {
@@ -528,8 +567,7 @@ final class AgentController {
             if t == settledTurn { settledTurn = nil; break }
             handleTurnCompleted(outcome)
         case .error(let err):
-            append(.error(id: UUID().uuidString, message: Self.describe(err)))
-            phase = .error(Self.describe(err))
+            surfaceError(Self.describe(err))
             // Process death never reaches handleTurnCompleted — halt the CLI queue
             // here so stopped/failed runs don't resurrect later jobs on the next kick.
             if !cliQueue.isEmpty {
