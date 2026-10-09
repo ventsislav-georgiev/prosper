@@ -67,8 +67,8 @@ tag from the now-released section and put it on the new top draft.
   a chassis still above the cut-off, and the switch fired again on its next tick. The helper
   now refuses manual speeds until the hottest sensor is back under 80 °C, the app waits 30 s
   between failed re-applies, and the 2 s reclaim check only runs while manual control is on.
-  The latch is helper-wide, so an app relaunch or reconnect cannot re-pin the fans into a
-  hot chassis either.
+  The latch is helper-wide, so a reconnect or an app relaunch while the helper is still
+  running cannot re-pin the fans into a hot chassis either.
 - **Performance: with inline autocomplete off, mouse clicks no longer pass through Prosper**
   and the global scroll monitor is not installed. The keystroke tap listened for every left
   click and every scroll tick on behalf of autocomplete even when it was disabled. Toggling
