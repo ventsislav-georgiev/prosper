@@ -64,3 +64,36 @@ final class PopoverDismissSameClickTests: XCTestCase {
         XCTAssertTrue(same(S(time: 10, number: 7), S(time: 10.12, number: 7)))
     }
 }
+
+// #213: the stamp lifecycle and the Stats per-module reopen skip.
+@MainActor
+final class PopoverDismissStampTests: XCTestCase {
+    // Far off every screen: no window there, popover not shown → the monitor closes.
+    private let far = NSPoint(x: -100_000, y: -100_000)
+
+    private func click(_ n: Int) -> NSEvent {
+        NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 10,
+                           windowNumber: 0, context: nil, eventNumber: n, clickCount: 1, pressure: 1)!
+    }
+
+    func testStampIsConsumedOnce() {
+        let d = PopoverOutsideClickDismisser(popover: NSPopover())
+        let e = click(5)
+        d.handleClick(e, at: far)
+        XCTAssertTrue(d.dismissed(by: e))
+        XCTAssertFalse(d.dismissed(by: e), "second toggle click must reopen")
+    }
+
+    func testPinnedVetoLeavesNoStamp() {
+        let d = PopoverOutsideClickDismisser(popover: NSPopover()) { false }
+        let e = click(6)
+        d.handleClick(e, at: far)
+        XCTAssertFalse(d.dismissed(by: e))
+    }
+
+    func testStatsSkipsReopenOnlyForTheDismissedModule() {
+        XCTAssertTrue(StatsController.skipsReopen(dismissedByClick: true, open: .cpu, clicked: .cpu))
+        XCTAssertFalse(StatsController.skipsReopen(dismissedByClick: true, open: .cpu, clicked: .memory))
+        XCTAssertFalse(StatsController.skipsReopen(dismissedByClick: false, open: .cpu, clicked: .cpu))
+    }
+}

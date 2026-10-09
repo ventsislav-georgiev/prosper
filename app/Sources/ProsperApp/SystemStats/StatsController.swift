@@ -211,7 +211,8 @@ final class StatsController {
         // #149: the outside-click monitor already closed us on this very click
         // (the menu bar is WindowServer's, not ours) — clicking the open module's
         // icon means "close", so don't reopen. A different module's icon still opens.
-        if outsideClick.dismissed(by: NSApp.currentEvent), openModule == m { return }
+        if Self.skipsReopen(dismissedByClick: outsideClick.dismissed(by: NSApp.currentEvent),
+                            open: openModule, clicked: m) { return }
         if popover.isShown, openModule == m { popover.performClose(sender); return }
         openModule = m
         let host = NSHostingController(rootView: StatsPopupView(module: m, store: store))
@@ -230,6 +231,14 @@ final class StatsController {
         // silently swallows one and the second click (now key) succeeds. Same
         // fix as CalendarBarController's day-picker popover: make it key on open.
         host.view.window?.makeKey()
+    }
+
+    /// Pure: skip the reopen only when the monitor closed on this click AND it was
+    /// the open module's own icon. Takes the Bool so `dismissed(by:)` always runs
+    /// (it consumes the stamp).
+    nonisolated static func skipsReopen(dismissedByClick: Bool, open: StatsModule?,
+                                        clicked: StatsModule) -> Bool {
+        dismissedByClick && open == clicked
     }
 
     /// Arm the monitor while the popover is shown, drop it when closed (no idle

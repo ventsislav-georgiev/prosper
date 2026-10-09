@@ -59,19 +59,22 @@ final class PopoverOutsideClickDismisser {
                 // with a window it is window-relative and needs converting.
                 let p = event.window?.convertPoint(toScreen: event.locationInWindow)
                     ?? event.locationInWindow
-                MainActor.assumeIsolated {
-                    guard let self, self.canDismiss() else { return }
-                    let frame = self.popover.contentViewController?.view.window?.frame
-                    if Self.shouldDismiss(ownerPID: Self.ownerPID(at: p), ourPID: getpid(),
-                                          click: p, popoverFrame: frame) {
-                        self.lastDismissClick = ClickStamp(event)
-                        self.popover.performClose(nil)
-                    }
-                }
+                MainActor.assumeIsolated { self?.handleClick(event, at: p) }
             }
         } else if let m = monitor {
             NSEvent.removeMonitor(m)
             monitor = nil
+        }
+    }
+
+    /// The monitor's body; internal so tests can drive a click without an event tap.
+    func handleClick(_ event: NSEvent, at p: NSPoint) {
+        guard canDismiss() else { return }
+        let frame = popover.contentViewController?.view.window?.frame
+        if Self.shouldDismiss(ownerPID: Self.ownerPID(at: p), ourPID: getpid(),
+                              click: p, popoverFrame: frame) {
+            lastDismissClick = ClickStamp(event)
+            popover.performClose(nil)
         }
     }
 
