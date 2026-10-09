@@ -51,13 +51,16 @@ enum MenuBarSpacing {
         // external display, its items' owners would otherwise be missed.
         var ids = [CGDirectDisplayID](repeating: 0, count: 16)
         var count: UInt32 = 0
-        if CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) != .success || count == 0 {
-            ids = [CGMainDisplayID()]; count = 1
-        }
-        let pids = union(ids.prefix(Int(count)).map { MenuBarBridge.items(onDisplay: $0).map(\.pid) })
+        if CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) != .success { count = 0 }
+        let pids = union(displays(ids, count: count, main: CGMainDisplayID()).map { MenuBarBridge.items(onDisplay: $0).map(\.pid) })
         return pids.filter { $0 != 0 && $0 != selfPID }
             .compactMap { NSRunningApplication(processIdentifier: $0) }
             .filter { !skip.contains($0.bundleIdentifier ?? "") }
+    }
+
+    /// Displays to visit: every active one, or the main display when enumeration found none/failed.
+    nonisolated static func displays(_ ids: [CGDirectDisplayID], count: UInt32, main: CGDirectDisplayID) -> [CGDirectDisplayID] {
+        count == 0 ? [main] : Array(ids.prefix(Int(count)))
     }
 
     /// Owner pids across displays, first display first, de-duplicated (first sighting wins).

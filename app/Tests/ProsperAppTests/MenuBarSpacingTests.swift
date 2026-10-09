@@ -11,4 +11,12 @@ final class MenuBarSpacingTests: XCTestCase {
         XCTAssertEqual(MenuBarSpacing.union([[5, 7]]), [5, 7])
         XCTAssertEqual(MenuBarSpacing.union([]), [])
     }
+
+    func testDisplaysVisitsEveryActiveDisplay() {
+        XCTAssertEqual(MenuBarSpacing.displays([4, 9, 2, 0], count: 3, main: 1), [4, 9, 2])
+    }
+
+    func testDisplaysFallsBackToMainWhenNoneEnumerated() {
+        XCTAssertEqual(MenuBarSpacing.displays([0, 0], count: 0, main: 1), [1])
+    }
 }
