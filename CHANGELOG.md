@@ -72,6 +72,9 @@ tag from the now-released section and put it on the new top draft.
 - **Performance: fewer idle timer wakeups.** The LoRA training scheduler only exists while
   training is enabled, and the analytics, keep-awake and extension repeating timers now give
   the OS leeway to coalesce their wakeups.
+- **Fixed (macOS 26+): a drag the system cancelled** (Mission Control gesture, a modal, the lock
+  screen) left the Window Snap footprint, layout overlay and palette on screen until the next
+  click. The cancel event now ends the drag without snapping.
 
 ## v2.155.0
 

@@ -170,7 +170,9 @@ final class DragSnapController {
 
     private func start() {
         guard globalMonitor == nil else { return }
-        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        var mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        // The system took the mouse mid-drag (Mission Control, a modal, screen lock).
+        if #available(macOS 26, *) { mask.insert(.mouseCancelled) }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { ev in
             MainActor.assumeIsolated { DragSnapController.shared.handle(ev) }
         }
@@ -197,6 +199,9 @@ final class DragSnapController {
         case .leftMouseDown: beginPending()
         case .leftMouseDragged: updateDrag(ev)
         case .leftMouseUp: endDrag()
+        // .mouseCancelled (raw 40, macOS 26+; the case is unavailable below our
+        // macOS 14 target). Abort so endDrag clears every overlay without snapping.
+        case let t where t.rawValue == 40: aborted = true; endDrag()
         default: break
         }
     }
