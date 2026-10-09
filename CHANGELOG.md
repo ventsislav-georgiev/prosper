@@ -34,9 +34,10 @@ tag from the now-released section and put it on the new top draft.
   inside them on macOS 27.** Each popover closes itself on a click outside it. The
   check used to assume a click inside our own popover never reached that watcher;
   on macOS 27 it does, so a click on a fan-speed slider or a mixer control dismissed
-  the popover instead. The three popovers now share one dismisser that compares the
-  click's screen position with the popover's frame and only closes on a click that
-  really lands outside.
+  the popover instead. The three popovers now share one dismisser that asks which
+  process owns the window under the click: a click on anything of Prosper's — the
+  popover, a menu or picker opened from it — keeps it open; a click on another app or
+  the desktop closes it.
 
 ## v2.155.0
 
