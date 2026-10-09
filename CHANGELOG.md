@@ -38,6 +38,10 @@ tag from the now-released section and put it on the new top draft.
   process owns the window under the click: a click on anything of Prosper's — the
   popover, a menu or picker opened from it — keeps it open; a click on another app or
   the desktop closes it.
+- **Fixed: Full Disk Access detection on macOS 27.** The check read the user TCC
+  database, which macOS 27 no longer exposes, so on accounts without a Safari bookmarks
+  file the extension permission rows stayed on "Grant" with access already given. It now
+  lists `~/Library/Mail` and `~/Library/Safari` instead.
 
 ## v2.155.0
 

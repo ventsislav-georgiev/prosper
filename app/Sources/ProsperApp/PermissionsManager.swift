@@ -13,26 +13,31 @@ enum PermissionsManager {
     }
 
     /// Whether the app currently holds Full Disk Access. There is no preflight API
-    /// for FDA, so we probe a known TCC-protected path. `isReadableFile`/`access()`
-    /// only sees POSIX permission bits — it does NOT reflect TCC, so it lies (a
-    /// 0644 user file reads "readable" with no grant). The only reliable signal is
-    /// ATTEMPTING THE READ: TCC blocks `open()` with EPERM until FDA is granted, so
-    /// a handle we can actually read a byte from means the grant is live. The user
-    /// TCC.db exists on every real account; Safari's bookmarks file is the fallback.
-    /// Read-only and cheap; safe on any thread.
+    /// for FDA, so we attempt a TCC-protected read: TCC fails it with EPERM until
+    /// FDA is granted (`access()`/`isReadableFile` only see POSIX bits and lie).
+    /// macOS 27 no longer exposes the user TCC.db, so we list `~/Library/Mail` and
+    /// `~/Library/Safari` instead. Read-only and cheap; safe on any thread.
     static func hasFullDiskAccess() -> Bool {
-        let fm = FileManager.default
         let home = NSHomeDirectory() as NSString
-        let probes = [
-            home.appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db"),
-            home.appendingPathComponent("Library/Safari/Bookmarks.plist"),
-        ]
-        for path in probes where fm.fileExists(atPath: path) {
-            guard let fh = FileHandle(forReadingAtPath: path) else { continue } // EPERM → no FDA
-            defer { try? fh.close() }
-            if (try? fh.read(upToCount: 1)) != nil { return true }
+        let probes = ["Library/Mail", "Library/Safari"].map { path -> FDAProbeResult in
+            do {
+                _ = try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(path))
+                return .readable
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+                return .missing
+            } catch {
+                return .denied
+            }
         }
-        return false
+        return fullDiskAccessDecision(probes)
+    }
+
+    enum FDAProbeResult { case readable, denied, missing }
+
+    /// A missing directory says nothing about the grant, so try the next probe;
+    /// the first probe that exists decides. All probes missing reads as no FDA.
+    static func fullDiskAccessDecision(_ probes: [FDAProbeResult]) -> Bool {
+        probes.first { $0 != .missing } == .readable
     }
 
     /// Opens the Full Disk Access privacy pane in System Settings.
