@@ -94,8 +94,7 @@ tag from the now-released section and put it on the new top draft.
 - **Performance: the clipboard watcher polls once a second instead of every 0.6 s and stops
   while the display sleeps or the screen is locked**, polling once immediately on resume.
 - **The Prosper icon now has a stable identity in the menu bar** (`ProsperLauncher` instead of
-  the generic `Item-N`), so macOS keeps its position reliably. It may appear once in the default
-  spot after this update; drag it back and it stays.
+  the generic `Item-N`), so macOS keeps its position reliably. The position you had carries over.
 
 ## v2.155.0
 
