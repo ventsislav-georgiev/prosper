@@ -84,6 +84,9 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: coding-agent hooks and opencode plugins never ran** because codex treated them as
   untrusted. Prosper now marks its own sessions as trusting every hook configured in Settings
   (codex `bypass_hook_trust`), so pre-tool-use hooks and the Bun bridge run again.
+- **Fixed (macOS 27): the background helper (lid sleep, remote wake, fan control) could fail to
+  register on the first launch of a freshly downloaded copy.** Registration now waits until
+  Prosper has cleared the download quarantine from its own bundle, helper files included.
 
 ## v2.155.0
 

@@ -166,6 +166,7 @@ enum LidSleepHelper {
     nonisolated private static func registerIfNeeded() -> RegisterOutcome {
         registerLock.lock()
         defer { registerLock.unlock() }
+        QuarantineStripper.waitForStrip()   // launchd refuses a quarantined daemon plist
         let svc = service
         // Stale-registration self-heal: enabled but registered under a different app
         // version means a Sparkle in-place update swapped the daemon binary out from

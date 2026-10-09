@@ -1,4 +1,5 @@
 import AppKit
+import ProsperHelperProtocol
 
 /// Removes the `com.apple.quarantine` extended attribute from the app's own
 /// bundle at launch.
@@ -23,30 +24,44 @@ enum QuarantineStripper {
     /// Strip the quarantine xattr from this app bundle, recursively, off the
     /// main thread. Safe to call unconditionally on every launch.
     static func stripSelf() {
+        DispatchQueue.global(qos: .utility).async { _ = stripped }
+    }
+
+    /// Blocks until the strip has finished, running it now if launch hasn't yet.
+    /// OFF-MAIN ONLY. Every SMAppService.daemon register calls this first: launchd
+    /// on macOS 27 refuses to load a daemon plist that carries the quarantine
+    /// xattr, and the async launch strip could otherwise still be running.
+    static func waitForStrip() { _ = stripped }
+
+    /// Runs once per process. A Swift static let is initialized under swift_once,
+    /// so a concurrent caller blocks until the first one finishes. A full recursive
+    /// xattr read of the ~400-file bundle takes about 0.1 s.
+    private static let stripped: Void = {
         let bundlePath = Bundle.main.bundlePath
         // Only meaningful for an installed `.app`; skip the dev binary path.
-        guard bundlePath.hasSuffix(".app") else { return }
+        guard bundlePath.hasSuffix(".app"),
+              pathsToCheck(bundlePath: bundlePath).contains(where: hasQuarantine) else { return }
+        run(["/usr/bin/xattr", "-dr", attribute, bundlePath])
+    }()
 
-        DispatchQueue.global(qos: .utility).async {
-            guard hasQuarantine(at: bundlePath) else { return }
-            run(["/usr/bin/xattr", "-dr", attribute, bundlePath])
-        }
+    /// The bundle root plus what launchd loads for the helper daemon. A copy can
+    /// leave the root clean while nested files keep the xattr, so the root alone
+    /// is not a sufficient probe.
+    static func pathsToCheck(bundlePath: String) -> [String] {
+        [bundlePath,
+         "\(bundlePath)/Contents/Library/LaunchDaemons/\(helperLabel).plist",
+         "\(bundlePath)/Contents/MacOS/ProsperHelper"]
     }
 
     private static func hasQuarantine(at path: String) -> Bool {
-        // `xattr -p` exits non-zero when the attribute is absent.
-        run(["/usr/bin/xattr", "-p", attribute, path], quiet: true) == 0
+        getxattr(path, attribute, nil, 0, 0, 0) >= 0
     }
 
     @discardableResult
-    private static func run(_ args: [String], quiet: Bool = false) -> Int32 {
+    private static func run(_ args: [String]) -> Int32 {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: args[0])
         proc.arguments = Array(args.dropFirst())
-        if quiet {
-            proc.standardOutput = FileHandle.nullDevice
-            proc.standardError = FileHandle.nullDevice
-        }
         do {
             try proc.run()
             proc.waitUntilExit()
