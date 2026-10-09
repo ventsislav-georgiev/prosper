@@ -147,6 +147,29 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(AgentModelRegistry.recommendedId, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF")
     }
 
+    /// #159: Qwen3-8B → Qwen3.5-9B and Nemotron-3-Nano-30B → Nemotron-3.5-Lightning-30B,
+    /// both pinned to a commit sha; the replaced ids are gone and the default is unchanged.
+    func testRefreshedRowsPinnedAndReplacedIdsGone() throws {
+        let rows: [(id: String, file: String, sha: String, bytes: Int64)] = [
+            ("unsloth/Qwen3.5-9B-GGUF", "Qwen3.5-9B-Q4_K_M.gguf",
+             "3885219b6810b007914f3a7950a8d1b469d598a5", 5_680_522_464),
+            ("unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+             "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+             "f2d3fe3694501008786e81e5f20360cbf715496a", 25_266_255_936),
+        ]
+        for r in rows {
+            let spec = try XCTUnwrap(AgentModelRegistry.gguf(for: r.id), r.id)
+            XCTAssertEqual(spec.fileName, r.file)
+            XCTAssertEqual(spec.bytes, r.bytes)
+            XCTAssertEqual(spec.downloadURL.absoluteString,
+                           "https://huggingface.co/\(r.id)/resolve/\(r.sha)/\(r.file)")
+            XCTAssertEqual(AgentModelRegistry.model(for: r.id).toolFormat, .qwenXML)
+        }
+        XCTAssertNil(AgentModelRegistry.gguf(for: "unsloth/Qwen3-8B-GGUF"))
+        XCTAssertNil(AgentModelRegistry.gguf(for: "unsloth/Nemotron-3-Nano-30B-A3B-GGUF"))
+        XCTAssertEqual(AgentModelRegistry.recommendedId, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF")
+    }
+
     func testGGUFRowsSurviveCatalogMerge() {
         let all = AgentModelRegistry.all()
         let ggufRows = all.filter { $0.gguf != nil }

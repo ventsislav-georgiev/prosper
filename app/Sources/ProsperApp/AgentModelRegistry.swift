@@ -101,25 +101,32 @@ enum AgentModelRegistry {
                 downloadURL: URL(string: "https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/resolve/main/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf")!,
                 bytes: 2_900_295_712)
         ),
+        // Qwen3.5 9B: GGUF chat template byte-identical to the Qwen3.5-4B row's.
+        // URL pinned to a commit sha (same policy as the inline catalog, #160).
         AgentModel(
-            id: "unsloth/Qwen3-8B-GGUF",
-            label: "Qwen3 8B (llama.cpp)",
-            approxRAMGB: 6, minRAMGB: 16, toolFormat: .qwenXML,
-            note: "GGUF Q4_K_M ~4.7 GB · llama.cpp · grammar-locked tool calls",
+            id: "unsloth/Qwen3.5-9B-GGUF",
+            label: "Qwen3.5 9B (llama.cpp)",
+            approxRAMGB: 7, minRAMGB: 16, toolFormat: .qwenXML,
+            note: "GGUF Q4_K_M ~5.7 GB · llama.cpp · grammar-locked tool calls",
             gguf: AgentGGUF(
-                fileName: "Qwen3-8B-Q4_K_M.gguf",
-                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf")!,
-                bytes: 5_027_784_512)
+                fileName: "Qwen3.5-9B-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf")!,
+                bytes: 5_680_522_464)
         ),
+        // Nemotron 3.5 Lightning: same ChatML skeleton, `<tool_response>` blocks,
+        // `<tool_call><function=…>` calls and generation prompt as the Nemotron 3
+        // Nano template it replaces (diff = Unsloth Jinja fixes + reasoning-history
+        // whitespace, neither reaches `renderChatML`). Unsloth ships only UD-Q4_K_M
+        // at this tier. URL pinned to a commit sha.
         AgentModel(
-            id: "unsloth/Nemotron-3-Nano-30B-A3B-GGUF",
-            label: "Nemotron 3 Nano 30B-A3B (llama.cpp)",
-            approxRAMGB: 26, minRAMGB: 32, toolFormat: .qwenXML,
-            note: "GGUF Q4_K_M ~23 GB · NVIDIA agentic MoE (3B active)",
+            id: "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+            label: "Nemotron 3.5 Lightning 30B-A3B (llama.cpp)",
+            approxRAMGB: 27, minRAMGB: 32, toolFormat: .qwenXML,
+            note: "GGUF UD-Q4_K_M ~25 GB · NVIDIA agentic MoE (3B active)",
             gguf: AgentGGUF(
-                fileName: "Nemotron-3-Nano-30B-A3B-Q4_K_M.gguf",
-                downloadURL: URL(string: "https://huggingface.co/unsloth/Nemotron-3-Nano-30B-A3B-GGUF/resolve/main/Nemotron-3-Nano-30B-A3B-Q4_K_M.gguf")!,
-                bytes: 24_574_373_664)
+                fileName: "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf")!,
+                bytes: 25_266_255_936)
         ),
         AgentModel(
             id: "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
