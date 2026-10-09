@@ -76,8 +76,15 @@ struct AIModelsPane: View {
     @State private var refresh = 0
     /// Memoized per-model disk state, rebuilt only when downloads finish/delete
     /// (`downloads.revision`), a custom model is added/removed (`refresh`), or on appear —
-    /// never during a render. Each entry is one `ModelFiles.diskState` walk.
-    @State private var disk: [String: ModelFiles.DiskState] = [:]
+    /// never during a render. Each entry is one `ModelFiles.diskState` walk, run off-main
+    /// (#196); the pane shows the last published map until the walk lands.
+    @State private var disk: [String: ModelFiles.DiskState] = AIModelsPane.lastDisk
+    /// Bumped per rebuild; a walk publishes only if no newer rebuild started meanwhile.
+    @State private var diskGeneration = 0
+    /// Last published disk map, so the pane never renders a wrong "Not downloaded" state
+    /// while a walk runs. Seeded by ONE synchronous walk per process, on the first open
+    /// (lazy static); every later appear/refresh walks off-main.
+    @MainActor private static var lastDisk = walk(catalogIDs())
 
     var body: some View {
         NeonScroll {
@@ -326,14 +333,29 @@ struct AIModelsPane: View {
 
     /// All catalog model ids (inline + agent, incl. custom). Source of truth for which
     /// rows exist and which disk states to memoize.
-    private func catalogIDs() -> [String] {
+    private static func catalogIDs() -> [String] {
         AIModelSection.models.map(\.0) + AgentModelRegistry.all().map(\.id)
     }
 
-    private func rebuildDisk() {
+    private nonisolated static func walk(_ ids: [String]) -> [String: ModelFiles.DiskState] {
         var m: [String: ModelFiles.DiskState] = [:]
-        for id in catalogIDs() { m[id] = ModelFiles.diskState(id) }
-        disk = m
+        for id in ids { m[id] = ModelFiles.diskState(id) }
+        return m
+    }
+
+    private func rebuildDisk() {
+        let ids = Self.catalogIDs()
+        diskGeneration += 1
+        let gen = diskGeneration
+        let state = $disk, generation = $diskGeneration
+        Task.detached(priority: .userInitiated) {
+            let m = AIModelsPane.walk(ids)
+            await MainActor.run {
+                guard generation.wrappedValue == gen else { return }
+                state.wrappedValue = m
+                AIModelsPane.lastDisk = m
+            }
+        }
     }
 
     @ViewBuilder

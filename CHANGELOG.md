@@ -103,6 +103,10 @@ tag from the now-released section and put it on the new top draft.
   more than one display is connected, so a second display no longer sees every item or
   skips the display guard. Accessibility reads of a hung app time out after 0.25 s
   throughout, so a stuck app cannot stall a hide or reveal.
+- **Performance: opening Settings no longer walks the model cache or runs the privacy
+  checks on the main thread.** The AI Models and Context panes seed themselves once per
+  launch and refresh in the background afterwards, so later opens are quicker when large
+  models are downloaded, and the first open draws in its final state with no flip.
 
 ## v2.155.0
 

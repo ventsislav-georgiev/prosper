@@ -1403,15 +1403,34 @@ private struct CompletionsPane: View {
 
 private struct ContextPane: View {
     @ObservedObject var model: SettingsModel
-    @State private var hasScreenPermission = VisionContext.hasScreenRecordingPermission()
-    @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+    // Seeded from the last check (not a fresh TCC call per view init, #196);
+    // onAppear's refreshPermissions() replaces them off-main. `lastTCC` is a lazy
+    // static: ONE synchronous preflight per process, on first open, so the first
+    // render already shows the true grant state (no not-granted → granted flip).
+    @State private var hasScreenPermission = ContextPane.lastTCC.screen
+    @State private var hasAccessibility = ContextPane.lastTCC.ax
     @State private var hasNotifications = false
+    @State private var permGeneration = 0
+    @MainActor private static var lastTCC = (screen: VisionContext.hasScreenRecordingPermission(),
+                                             ax: PermissionsManager.isAccessibilityTrusted())
 
-    /// Re-reads every privacy grant. The TCC checks are synchronous; the
+    /// Re-reads every privacy grant. The synchronous TCC preflights run on a detached
+    /// task (#196) and publish on the main actor unless a newer refresh started; the
     /// notification authorization is fetched async and applied on the main actor.
     private func refreshPermissions() {
-        hasScreenPermission = VisionContext.hasScreenRecordingPermission()
-        hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+        permGeneration += 1
+        let gen = permGeneration, generation = $permGeneration
+        let screen = $hasScreenPermission, ax = $hasAccessibility
+        Task.detached(priority: .userInitiated) {
+            let s = VisionContext.hasScreenRecordingPermission()
+            let a = PermissionsManager.isAccessibilityTrusted()
+            await MainActor.run {
+                guard generation.wrappedValue == gen else { return }
+                screen.wrappedValue = s
+                ax.wrappedValue = a
+                ContextPane.lastTCC = (s, a)
+            }
+        }
         Task { @MainActor in hasNotifications = await PermissionsManager.notificationStatus() }
     }
 
