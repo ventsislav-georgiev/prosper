@@ -49,6 +49,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.onQuit = onQuit
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Stable identity (NSStatusItem.h): otherwise the state dump and position key read "Item-N".
+        statusItem.autosaveName = "ProsperLauncher"
         // CONTENT, not chrome: the launcher is a real user-facing icon, so it belongs
         // in the order list (named + previewed) and can be arranged/hidden like any
         // other. Only the chevron + dividers (the management mechanism) are .control.
