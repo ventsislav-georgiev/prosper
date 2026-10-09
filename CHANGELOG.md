@@ -27,8 +27,8 @@ tag from the now-released section and put it on the new top draft.
   left-to-right order (⌘-drag) and remembers it. Hiding, revealing, the reveal shortcut,
   auto-rehide, icon spacing and the chevron style are unchanged. The always-hidden section
   is now a plain "Always-hidden section" toggle in the pane (off by default; turned on once
-  for anyone who had icons marked always-hidden). The old saved order is deleted on first
-  launch, so a downgrade to 2.155 will not bring it back.
+  for anyone who had icons marked always-hidden). The old saved order is deleted on the first
+  launch with Menu Bar Management enabled, so a downgrade to 2.155 will not bring it back.
 
 - **Fixed: the sensors, audio mixer and calendar popovers closed when you clicked
   inside them on macOS 27.** Each popover closes itself on a click outside it. The
@@ -46,7 +46,8 @@ tag from the now-released section and put it on the new top draft.
   button, after switching apps on a display without a notch.** The hidden section is
   sized against the frontmost app's menu width; it is now re-sized after each app
   switch, and toggling while a menu-bar-only app (Spotlight) is frontmost keeps the
-  last real measurement instead of guessing.
+  last real measurement instead of guessing. Displays placed left or right of the main one
+  are measured correctly, and a hung app no longer stalls the switch.
 - **System Stats pauses while the display sleeps or the screen is locked.** The 3 s
   sampling tick and the network ping used to run all night (the openlid extension keeps
   the Mac awake lid-closed); they now stop while nobody can see the widgets and refresh
@@ -80,7 +81,7 @@ tag from the now-released section and put it on the new top draft.
   no longer existed; those listeners are now forgotten instead.
 - **Fixed: the coding agent's sandbox settings were never applied by codex.** Extra writable
   folders, network access and "Bypass all" are now sent in the form the codex app server reads,
-  for new, resumed and forked sessions alike.
+  for new and resumed sessions alike.
 - **Fixed: coding-agent hooks and opencode plugins never ran** because codex treated them as
   untrusted. Prosper now marks its own sessions as trusting every hook configured in Settings
   (codex `bypass_hook_trust`), so pre-tool-use hooks and the Bun bridge run again.
