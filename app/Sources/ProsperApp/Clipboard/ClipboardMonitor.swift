@@ -69,7 +69,7 @@ final class ClipboardMonitor {
 
     init() {
         for (name, event) in ScreenGate.notifications {
-            let center = event == .lock || event == .unlock
+            let center = ScreenGate.center(for: event) == .distributed
                 ? DistributedNotificationCenter.default() : NSWorkspace.shared.notificationCenter
             sleepObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.screen.apply(event); self?.applyPause() }
