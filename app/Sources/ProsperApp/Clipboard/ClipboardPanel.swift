@@ -617,6 +617,15 @@ private struct ClipboardView: View {
             .overlayPreferenceValue(RowFrameKey.self) { frames in
                 slotOverlay(frames)
             }
+            // Paste-handler capture. onPreferenceChange, not onChange(of: frames):
+            // the overlay closure re-runs several times per layout pass while lazy
+            // rows materialize, and an onChange there faulted on macOS 27 ("tried to
+            // update multiple times per frame"). Fires initially too. Hops to main
+            // via Task because the closure is @Sendable (main thread not promised),
+            // so assumeIsolated could crash; a one-tick delay is harmless here.
+            .onPreferenceChange(RowFrameKey.self) { f in
+                Task { @MainActor in model.rowFrames = f }
+            }
             // Float the scroller (still .visible as a persistent hint) so a legacy
             // gutter never desyncs the selection highlight from the ⌃-digit badge
             // ladder. See OverlayScrollerStyle.
@@ -633,14 +642,12 @@ private struct ClipboardView: View {
             SlotLadderOverlay(slots: Self.visibleSlots(frames, height: geo.size.height),
                               width: geo.size.width,
                               selectedId: model.selectedId)
-            // Capture frames + viewport height for the keyboard paste handler.
-            // Non-published store, so these assignments don't trigger a view rebuild.
-            // `initial: true` is required: without it the capture only happens on a
-            // frame CHANGE (i.e. first scroll), leaving viewportHeight at 0 — which
-            // made ⌃-digit paste a silent no-op until the user scrolled.
-            Color.clear.onChange(of: frames, initial: true) { _, f in
-                model.rowFrames = f
-                model.viewportHeight = geo.size.height
+            // Capture viewport height for the keyboard paste handler (frames are
+            // captured by onPreferenceChange on the scroll view). Non-published
+            // store, so no view rebuild. `initial: true` is required, else
+            // viewportHeight stays 0 and ⌃-digit paste is a no-op until a resize.
+            Color.clear.onChange(of: geo.size.height, initial: true) { _, h in
+                model.viewportHeight = h
             }
         }
     }
