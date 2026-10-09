@@ -22,7 +22,6 @@ PATCH_DIR="$ROOT/app/patches"
 # arrays (`declare: -A: invalid option` kills the build instantly).
 PATCHES=(
   "mlx-swift-lm-qat.patch:mlx-swift-lm"
-  "llama4-arch.patch:mlx-swift-lm"
   # Expose a task-returning generateTask overload for SpeculativeTokenIterator
   # (upstream only returns the bare stream, discarding the producer Task). We
   # need that Task to cancel+join after breaking out of the stream — otherwise
