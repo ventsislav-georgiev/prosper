@@ -31,6 +31,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let onRestart: () -> Void
     private let onQuit: () -> Void
 
+    /// Copies the old autosave name's position + visibility to the new name, each only when the new key is absent.
+    nonisolated static func carryAutosave(from oldName: String, to newName: String, in d: UserDefaults = .standard) {
+        for key in ["NSStatusItem Preferred Position ", "NSStatusItem Visible "]
+        where d.object(forKey: key + newName) == nil {
+            if let v = d.object(forKey: key + oldName) { d.set(v, forKey: key + newName) }
+        }
+    }
+
     init(
         onOpenRunner: @escaping () -> Void,
         onOpenClipboard: @escaping () -> Void,
@@ -50,13 +58,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // Stable identity (NSStatusItem.h): otherwise the state dump and position key read "Item-N".
-        // Carry this launch's Item-N position over once, so the fresh name can't land in the hidden section.
-        let key = "NSStatusItem Preferred Position "
-        let oldName = statusItem.autosaveName ?? ""
-        if UserDefaults.standard.object(forKey: key + "ProsperLauncher") == nil,
-           let pos = UserDefaults.standard.object(forKey: key + oldName) {
-            UserDefaults.standard.set(pos, forKey: key + "ProsperLauncher")
-        }
+        // Carry this launch's Item-N position (and visibility) over once, so the fresh name can't land in the hidden section.
+        Self.carryAutosave(from: statusItem.autosaveName ?? "", to: "ProsperLauncher")
         statusItem.autosaveName = "ProsperLauncher"
         // CONTENT, not chrome: the launcher is a real user-facing icon, so it belongs
         // in the order list (named + previewed) and can be arranged/hidden like any

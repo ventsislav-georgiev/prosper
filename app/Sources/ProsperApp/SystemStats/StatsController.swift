@@ -36,7 +36,7 @@ final class StatsController {
         // #217: an open popover proves the user is looking, so a pause left by a
         // missed wake/unlock notification is stale — clear it before the popup
         // toggle (which no-ops on a paused poller).
-        if self.popover.isShown { self.screen.apply(.popoverShown); self.applyPause() }
+        self.screen.reconcile(popoverShown: self.popover.isShown); self.applyPause()
         self.poller?.setPopupActive(self.popover.isShown)
         self.updateOutsideClickMonitor()
         // Drop the hosting controller once truly closed so the SwiftUI view
@@ -76,7 +76,7 @@ final class StatsController {
         // Screen lock exists only as a distributed notification (same pair
         // ExtensionSystemServices listens to); display sleep/wake is NSWorkspace's.
         for (name, event) in ScreenGate.notifications {
-            let center = event == .lock || event == .unlock
+            let center = ScreenGate.center(for: event) == .distributed
                 ? DistributedNotificationCenter.default() : NSWorkspace.shared.notificationCenter
             sleepObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.screen.apply(event); self?.applyPause() }
@@ -275,9 +275,15 @@ struct ScreenGate: Equatable {
         (Notification.Name("com.apple.screenIsLocked"), .lock),
         (Notification.Name("com.apple.screenIsUnlocked"), .unlock),
     ]
+    enum Center { case workspace, distributed }
+    /// Lock/unlock exist only as distributed notifications; sleep/wake are NSWorkspace's.
+    static func center(for e: Event) -> Center { e == .lock || e == .unlock ? .distributed : .workspace }
     var displayAsleep = false
     var screenLocked = false
     var hidden: Bool { displayAsleep || screenLocked }
+
+    /// Popover delegate reconcile: only a shown popover clears a stale pause.
+    mutating func reconcile(popoverShown: Bool) { if popoverShown { apply(.popoverShown) } }
 
     mutating func apply(_ e: Event) {
         switch e {

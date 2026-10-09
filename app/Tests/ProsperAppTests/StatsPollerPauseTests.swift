@@ -79,3 +79,29 @@ final class StatsPollerPauseTests: XCTestCase {
         XCTAssertFalse(g.hidden)
     }
 }
+
+extension StatsPollerPauseTests {
+    /// #233: lock/unlock are only posted on the distributed center, sleep/wake only on NSWorkspace's.
+    func testEachNotificationObservedOnItsCenter() {
+        let expected: [String: ScreenGate.Center] = [
+            NSWorkspace.screensDidSleepNotification.rawValue: .workspace,
+            NSWorkspace.screensDidWakeNotification.rawValue: .workspace,
+            "com.apple.screenIsLocked": .distributed,
+            "com.apple.screenIsUnlocked": .distributed,
+        ]
+        XCTAssertEqual(ScreenGate.notifications.count, expected.count)
+        for (name, event) in ScreenGate.notifications {
+            XCTAssertEqual(ScreenGate.center(for: event), expected[name.rawValue], name.rawValue)
+        }
+    }
+
+    /// #233: the popover delegate reconcile — shown clears a stale pause, closed leaves it.
+    func testPopoverReconcileClearsOnlyWhenShown() {
+        var g = ScreenGate()
+        g.apply(.sleep); g.apply(.lock)
+        g.reconcile(popoverShown: false)
+        XCTAssertTrue(g.hidden, "a closed popover must not clear the pause")
+        g.reconcile(popoverShown: true)
+        XCTAssertFalse(g.hidden, "a shown popover clears a stale pause")
+    }
+}
