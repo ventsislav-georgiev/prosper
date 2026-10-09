@@ -18,8 +18,7 @@ final class ClipboardMonitor {
     /// torn down until both clear (same pattern as `StatsController`, #186).
     /// The monitor is a process-lifetime singleton, so the observers are never removed.
     private var sleepObservers: [NSObjectProtocol] = []
-    private var displayAsleep = false
-    private var screenLocked = false
+    private var screen = ScreenGate()
 
     private(set) var isRunning = false
 
@@ -69,17 +68,11 @@ final class ClipboardMonitor {
     private static let maxImagePixels = 50_000_000             // >50 MP → metadata only (no decode)
 
     init() {
-        let wc = NSWorkspace.shared.notificationCenter
-        for (name, asleep) in [(NSWorkspace.screensDidSleepNotification, true),
-                               (NSWorkspace.screensDidWakeNotification, false)] {
-            sleepObservers.append(wc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.displayAsleep = asleep; self?.applyPause() }
-            })
-        }
-        let dnc = DistributedNotificationCenter.default()
-        for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
-            sleepObservers.append(dnc.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.screenLocked = locked; self?.applyPause() }
+        for (name, event) in ScreenGate.notifications {
+            let center = event == .lock || event == .unlock
+                ? DistributedNotificationCenter.default() : NSWorkspace.shared.notificationCenter
+            sleepObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.screen.apply(event); self?.applyPause() }
             })
         }
     }
@@ -99,13 +92,24 @@ final class ClipboardMonitor {
 
     /// Timer runs only while started and the screen is visible. Resuming polls at
     /// once so a copy made while hidden is picked up without waiting a tick.
+    enum PauseAction: Equatable { case none, pause, resume }
+
+    /// #228: pure pause decision. `.resume` = poll once now, then schedule the timer;
+    /// a live timer is never doubled.
+    static func pauseAction(isRunning: Bool, hidden: Bool, timerActive: Bool) -> PauseAction {
+        if !isRunning || hidden { return .pause }
+        return timerActive ? .none : .resume
+    }
+
     private func applyPause() {
-        if !isRunning || displayAsleep || screenLocked {
+        switch Self.pauseAction(isRunning: isRunning, hidden: screen.hidden, timerActive: timer != nil) {
+        case .none: return
+        case .pause:
             timer?.invalidate()
             timer = nil
             return
+        case .resume: break
         }
-        guard timer == nil else { return }
         poll()
         let timer = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }

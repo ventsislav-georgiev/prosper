@@ -264,6 +264,15 @@ final class AutocompleteEngine {
         return mask
     }
 
+    /// #228: a running tap is reused only when its fixed mask is the wanted one;
+    /// any difference means start() must tear it down and rebuild.
+    static func keepsRunningTap(isRunning: Bool, installed: CGEventMask, wanted: CGEventMask) -> Bool {
+        isRunning && installed == wanted
+    }
+
+    /// #228: the passive scroll monitor exists only to dismiss autocomplete overlays.
+    static func wantsScrollMonitor(autocomplete: Bool) -> Bool { autocomplete }
+
     private(set) var isRunning = false
     /// Mask the running tap was created with; a tap's mask is fixed at creation.
     private var installedMask: CGEventMask = 0
@@ -279,10 +288,8 @@ final class AutocompleteEngine {
     func start() -> Bool {
         let autocompleteOn = Preferences.autocompleteEnabled
         let mask = Self.tapMask(autocomplete: autocompleteOn)
-        if isRunning {
-            if mask == installedMask { return true }
-            stop()
-        }
+        if Self.keepsRunningTap(isRunning: isRunning, installed: installedMask, wanted: mask) { return true }
+        if isRunning { stop() } // mask changed: rebuild (stop also removes the scroll monitor)
 
         guard PermissionsManager.isAccessibilityTrusted() else {
             NSLog("prosper: autocomplete not started — Accessibility not trusted")
@@ -422,7 +429,7 @@ final class AutocompleteEngine {
         // this process on the latency path of every scroll tick systemwide.
         // Only while autocomplete is on: it is the only source of the overlays, and
         // otherwise every scroll tick (60-120 Hz) wakes the main thread for nothing.
-        if autocompleteOn {
+        if Self.wantsScrollMonitor(autocomplete: autocompleteOn) {
             scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, self.suggestionWindow.isVisible || self.mirrorWindow.isVisible else { return }

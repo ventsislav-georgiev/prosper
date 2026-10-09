@@ -236,6 +236,31 @@ final class MouseTests: XCTestCase {
         }
     }
 
+    /// #228 (a): start() on a running tap reuses it only when the installed mask is
+    /// the wanted one; a pref flip changes the mask, so the tap must be rebuilt.
+    func testRunningTapIsRebuiltWhenTheMaskChanges() {
+        let off = AutocompleteEngine.tapMask(autocomplete: false)
+        let on = AutocompleteEngine.tapMask(autocomplete: true)
+        XCTAssertTrue(AutocompleteEngine.keepsRunningTap(isRunning: true, installed: on, wanted: on))
+        XCTAssertFalse(AutocompleteEngine.keepsRunningTap(isRunning: true, installed: off, wanted: on),
+                       "autocomplete turned on: the running tap lacks leftMouseDown and must be rebuilt")
+        XCTAssertFalse(AutocompleteEngine.keepsRunningTap(isRunning: true, installed: on, wanted: off),
+                       "autocomplete turned off: the running tap must be rebuilt without clicks")
+        XCTAssertFalse(AutocompleteEngine.keepsRunningTap(isRunning: false, installed: 0, wanted: off))
+    }
+
+    /// #228 (b): the scroll monitor is installed only with autocomplete on, and an
+    /// on→off flip goes through the rebuild (stop() removes the monitor).
+    func testScrollMonitorFollowsAutocomplete() {
+        XCTAssertTrue(AutocompleteEngine.wantsScrollMonitor(autocomplete: true))
+        XCTAssertFalse(AutocompleteEngine.wantsScrollMonitor(autocomplete: false),
+                       "with autocomplete off every scroll tick would wake the main thread for nothing")
+        XCTAssertFalse(AutocompleteEngine.keepsRunningTap(
+            isRunning: true, installed: AutocompleteEngine.tapMask(autocomplete: true),
+            wanted: AutocompleteEngine.tapMask(autocomplete: false)),
+            "on→off must rebuild, or the old scroll monitor survives")
+    }
+
     /// Only the pure decision path is measurable headless — a real tap cannot be
     /// created in a test process, so this bounds classification + negation, not the
     /// CGEvent field reads around them. Ceiling is the plan's 50µs; a pure-Swift
