@@ -597,7 +597,7 @@ enum ScrollChainCapture {
     }
 
     /// Returns true when the event was consumed on a list's behalf.
-    private static func capture(_ event: NSEvent) -> Bool {
+    static func capture(_ event: NSEvent) -> Bool {
         let live = lists.allObjects
         // Self-heal: weak entries drop out on their own, so a probe that died
         // without unregistering would otherwise leave the monitor installed.

@@ -193,6 +193,40 @@ final class ScrollChainTests: XCTestCase {
                        "the pane moved — this is exactly the #129 failure")
     }
 
+    /// #155: the monitor's own entry point, not just the helper. `scroll(_:by:)` is
+    /// pinned above, but nothing pinned that `capture(_:)` routes to it — reverting
+    /// the call to `target.scrollWheel(with: event)` kept every other test green.
+    /// The event carries the window number, so `capture` resolves the window and
+    /// hit-tests exactly as it does for a live event.
+    func testCaptureEntryPointScrollsTheListDirectlyAndLeavesThePane() throws {
+        let (win, _, outer, inner) = try host(rowCount: 200)
+        let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                       wheelCount: 1, wheel1: -120, wheel2: 0, wheel3: 0))
+        cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        // Field 51 is the window number NSEvent(cgEvent:) resolves `window` from, and
+        // CGEventSetWindowLocation the point it reports as `locationInWindow` (both
+        // private; the public location/91/92 fields are ignored for an unordered window).
+        cg.setIntegerValueField(try XCTUnwrap(CGEventField(rawValue: 51)), value: Int64(win.windowNumber))
+        typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
+        let sym = try XCTUnwrap(dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGEventSetWindowLocation"))
+        let target = windowPointInside(inner)
+        unsafeBitCast(sym, to: SetWindowLocation.self)(cg, CGPoint(x: target.x, y: win.frame.height - target.y))
+        let event = try XCTUnwrap(NSEvent(cgEvent: cg))
+        XCTAssertTrue(event.window === win, "precondition: the event must resolve to the test window")
+        XCTAssertTrue(ScrollChainCapture.shouldCapture(at: event.locationInWindow, in: inner),
+                      "precondition: the event must land on the list")
+        let paneBefore = outer.contentView.bounds.origin
+        let listBefore = inner.contentView.bounds.origin.y
+
+        XCTAssertTrue(ScrollChainCapture.capture(event), "an event over a scrollable list was not consumed")
+        XCTAssertEqual(inner.contentView.bounds.origin.y, listBefore + 120, accuracy: 0.01,
+                       "capture did not scroll the list's clip view directly")
+        // The #129 path chains to the pane a frame later, not synchronously.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(outer.contentView.bounds.origin, paneBefore,
+                       "the pane moved — capture handed the event to NSScrollView (#129)")
+    }
+
     /// The user's rule at the ends: scrolling past the bottom of the list must
     /// still leave the pane alone. Clamped, so there is no overshoot to bounce back.
     func testScrollIsClampedAtBothEndsWithoutMovingThePane() throws {
