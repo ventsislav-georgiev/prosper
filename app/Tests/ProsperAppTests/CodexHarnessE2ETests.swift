@@ -24,7 +24,9 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// per process (`turn-1`, `turn-2`, …); a turn/start after a WEDGE turn announces the
     /// new turn and then the wedged turn's late `turn/completed{interrupted}`. Every inbound line is appended to
     /// `received.jsonl` beside the script, and the pid is written to `pid`, so tests can
-    /// check what was sent and kill the process.
+    /// check what was sent and kill the process. EXITON: a file `exit-on` beside the script
+    /// naming a method makes the mock delete the file and exit cleanly (code 0) on that
+    /// request, before replying (`thread/resume`: codex dies during a resume).
     /// Thread and turn params are checked against the codex 0.139/0.161/0.162 schemas
     /// (`ThreadStartParams.sandbox: SandboxMode`, no `sandboxPolicy` there;
     /// `TurnStartParams.sandboxPolicy: SandboxPolicy`); a mismatch is a JSON-RPC error.
@@ -32,6 +34,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     import sys, json, os, time
 
     LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.jsonl")
+    EXIT_ON = os.path.join(os.path.dirname(LOG), "exit-on")
     with open(os.path.join(os.path.dirname(LOG), "pid"), "w") as f:
         f.write(str(os.getpid()))
     current_turn = None
@@ -88,6 +91,9 @@ final class CodexHarnessE2ETests: XCTestCase {
         method = msg.get("method")
         mid = msg.get("id")
         params = msg.get("params", {})
+        if method and os.path.exists(EXIT_ON) and open(EXIT_ON).read().strip() == method:
+            os.remove(EXIT_ON)
+            sys.exit(0)
         # A client reply to our approval server-request (has result, no method).
         if method is None and "result" in msg:
             continue
@@ -694,6 +700,99 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(policy["type"] as? String, "workspaceWrite")
         XCTAssertEqual(policy["networkAccess"] as? Bool, true)
         XCTAssertEqual((policy["writableRoots"] as? [String])?.first, controller.workingDirectory)
+    }
+
+    /// Arms the mock's EXITON mode: it exits (code 0) on the next `method` request, unanswered.
+    private static func exitOn(_ method: String, exe: URL) throws {
+        try method.write(to: exe.deletingLastPathComponent().appendingPathComponent("exit-on"),
+                         atomically: true, encoding: .utf8)
+    }
+
+    @MainActor
+    private static func errorRows(_ controller: AgentController) -> [String] {
+        controller.items.compactMap { if case .error(_, let m) = $0 { return m }; return nil }
+    }
+
+    /// `harnessEnded` ran: it saves the transcript right after dropping the dead harness.
+    private static func harnessEnded(_ store: AgentSessionStore) async -> Bool {
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if !(await store.loadTranscript(id: "thread-1")).isEmpty { return true }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return false
+    }
+
+    private static let died = "Agent error: codex app-server exited with code 0"
+
+    /// A turn ran to completion ("Finished in" note). Not `phase == .idle`: CodexHarness's
+    /// own `.turnStarted` can land after a fast turn's `turn/completed` and re-raise `.running`.
+    @MainActor
+    private static func finishedTurn(_ controller: AgentController) -> Bool {
+        controller.items.contains { if case .note = $0 { return true }; return false }
+    }
+
+    /// QA A/B on #167: codex dying while it handles thread/resume shows one error row (not
+    /// a second "not running" one) and keeps the thread armed: the next prompt resumes
+    /// thread-1 instead of opening a fresh thread.
+    @MainActor
+    func testControllerCodexDeathDuringResumeKeepsTheThread() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, store) = makeController(exe: exe, home: home)
+        controller.submit(goal: "EXIT0 mid-turn")
+        let ended = await Self.harnessEnded(store)
+        XCTAssertTrue(ended, "codex exit was not handled")
+        XCTAssertEqual(Self.errorRows(controller), [Self.died])
+
+        try Self.exitOn("thread/resume", exe: exe)
+        controller.submit(goal: "say hello")
+        let failed = await Self.wait { Self.count("thread/resume", exe: exe) == 1 && controller.phase == .error(Self.died) }
+        XCTAssertTrue(failed, "the death during thread/resume was not surfaced (phase \(controller.phase))")
+        _ = await Self.wait(0.5) { false }   // let the failed request's error land too
+        XCTAssertEqual(Self.errorRows(controller), [Self.died, Self.died], "one row per death")
+
+        controller.submit(goal: "say hello again")
+        let done = await Self.wait { Self.finishedTurn(controller) }
+        XCTAssertTrue(done, "the follow-up did not finish (phase \(controller.phase), items \(controller.items))")
+        await controller.end()
+        XCTAssertEqual(Self.count("thread/start", exe: exe), 1, "the thread was lost: the follow-up opened a fresh one")
+        let resumed = try Self.received("thread/resume", exe: exe).map { ($0["params"] as? [String: Any])?["threadId"] as? String }
+        XCTAssertEqual(resumed, ["thread-1", "thread-1"])
+        XCTAssertEqual(Self.errorRows(controller), [Self.died, Self.died])
+    }
+
+    /// QA M3 on #167: when codex exits on its own, `harnessEnded` drops the dead harness,
+    /// so the next prompt spawns a fresh codex instead of failing on the dead one.
+    @MainActor
+    func testHarnessEndedDropsTheHarness() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, store) = makeController(exe: exe, home: home)
+        controller.submit(goal: "EXIT0 mid-turn")
+        let ended = await Self.harnessEnded(store)
+        XCTAssertTrue(ended, "codex exit was not handled")
+        XCTAssertEqual(Self.count("initialize", exe: exe), 1)
+
+        controller.submit(goal: "say hello")
+        let done = await Self.wait { Self.finishedTurn(controller) }
+        XCTAssertTrue(done, "the follow-up did not run (phase \(controller.phase), items \(controller.items))")
+        await controller.end()
+        XCTAssertEqual(Self.count("initialize", exe: exe), 2, "the follow-up did not spawn a fresh codex")
+        XCTAssertEqual(Self.errorRows(controller), [Self.died])
+    }
+
+    /// QA M4 on #167: codex dying with turn/start in flight reaches the controller twice,
+    /// as the `.error` event and as the request's error, with the same text: one row.
+    @MainActor
+    func testSurfaceErrorDedupes() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home)
+        try Self.exitOn("turn/start", exe: exe)
+        controller.submit(goal: "say hello")
+        let failed = await Self.wait { controller.phase == .error(Self.died) }
+        XCTAssertTrue(failed, "the death during turn/start was not surfaced (phase \(controller.phase))")
+        _ = await Self.wait(0.5) { false }   // both reports of the death have landed
+        XCTAssertEqual(Self.errorRows(controller), [Self.died])
+        await controller.end()
     }
 
     /// Fake Responses endpoint for the real-codex test, plus a stand-in for the Bun plugin

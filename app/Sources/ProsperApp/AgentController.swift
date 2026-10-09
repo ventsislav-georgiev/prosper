@@ -405,7 +405,12 @@ final class AgentController {
             log.info("stopped agent run ended with: \(String(describing: error), privacy: .public)")
         } catch {
             log.error("agent run failed: \(String(describing: error), privacy: .public)")
-            surfaceError(Self.describe(error))
+            // `notStarted` under an error already on screen: codex died before this
+            // request went out, and its `.error` event (the informative row, with the exit
+            // code) is that death. "Agent backend is not running." would be a second row.
+            if case .error = phase, case .notStarted? = error as? HarnessError {} else {
+                surfaceError(Self.describe(error))
+            }
             // Capture the failure transcript before tearing down. A live thread stays
             // resumable: the next prompt respawns codex and re-attaches it (codex death
             // during a request lands here). A setup failure (harness spawn / model load)
@@ -484,16 +489,21 @@ final class AgentController {
         // thread is gone from CODEX_HOME (evicted/cleared), fall back to a fresh session
         // so the follow-up prompt still runs instead of erroring the turn. The resumed
         // thread gets the current Permissions too, same as a fresh one.
+        // The armed id is cleared only once a thread is attached: if codex died during
+        // the resume, the fallback fails too and the next prompt resumes the same thread.
         if let resumeID = pendingResumeID {
-            pendingResumeID = nil
-            if let resumed = try? await harness.resumeSession(SessionID(raw: resumeID), options: opts) {
+            do {
+                let resumed = try await harness.resumeSession(SessionID(raw: resumeID), options: opts)
+                pendingResumeID = nil
                 self.session = resumed
                 persistSessionMeta(resumed)
                 return resumed
+            } catch {
+                log.warning("resume of thread \(resumeID, privacy: .public) failed (\(String(describing: error), privacy: .public)); starting a fresh session")
             }
-            log.warning("resume of thread \(resumeID, privacy: .public) failed; starting a fresh session")
         }
         let session = try await harness.newSession(opts)
+        pendingResumeID = nil
         self.session = session
         persistSessionMeta(session)
         return session

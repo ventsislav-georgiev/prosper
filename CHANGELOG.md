@@ -99,7 +99,9 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: a coding-agent crash left the chat on "running" forever.** When codex died or
   was killed mid-turn the error was shown only for non-zero exits and the dead backend was
   kept; a clean exit mid-turn showed nothing. Any unexpected exit now shows one error, and
-  the next prompt respawns codex and resumes the same thread.
+  the next prompt respawns codex and resumes the same thread. A death while that resume
+  is in flight keeps the thread armed too, so the prompt after it still resumes the same
+  conversation instead of opening a fresh one, and shows one error row, not two.
 - **Fixed (macOS 27): menu bar items are now matched to the display they are on** when
   more than one display is connected, so a second display no longer sees every item or
   skips the display guard. Accessibility reads of a hung app time out after 0.25 s
