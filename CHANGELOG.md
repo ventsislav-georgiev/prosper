@@ -55,6 +55,11 @@ tag from the now-released section and put it on the new top draft.
   Coding agent switches.** They became rows inside Essentials and Local AI, and search
   indexed only section titles. Row titles are now indexed as keywords of their section,
   so a hit jumps to the section that holds the row.
+- **Fixed: Stop did not interrupt the coding agent.** Prosper sent `turn/interrupt` and
+  `turn/steer` as notifications, which codex silently drops, so a running shell command
+  kept going after Stop; turn ids were also read from the wrong field. Both are now proper
+  requests, Stop waits at most 5 s for codex before settling the turn locally, and the
+  local-model provider no longer retries a dropped stream for minutes.
 
 ## v2.155.0
 

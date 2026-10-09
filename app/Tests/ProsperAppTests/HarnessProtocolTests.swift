@@ -174,6 +174,18 @@ final class HarnessProtocolTests: XCTestCase {
         XCTAssertEqual(usage.outputTokens, 45)
     }
 
+    func testMapTurnStartedReadsTurnObjectID() {
+        // TurnStartedNotification = { threadId, turn: Turn } in codex 0.139 and 0.162.
+        let e = CodexHarness.mapNotification(
+            method: "turn/started",
+            params: ["threadId": "th1", "turn": ["id": "t1", "items": [], "status": "inProgress"]])
+        guard case .turnStarted(let turn) = e.first else { return XCTFail("got \(e)") }
+        XCTAssertEqual(turn.raw, "t1")
+        // A turn/started without a turn id must not emit an empty id that would
+        // overwrite the controller's current turn.
+        XCTAssertTrue(CodexHarness.mapNotification(method: "turn/started", params: ["turnId": "t1"]).isEmpty)
+    }
+
     func testMapTurnCompleted() {
         let e = CodexHarness.mapNotification(
             method: "turn/completed", params: ["turn": ["id": "t1", "status": "completed"]])

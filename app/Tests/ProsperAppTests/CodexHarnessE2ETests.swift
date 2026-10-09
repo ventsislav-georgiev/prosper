@@ -12,26 +12,44 @@ import XCTest
 final class CodexHarnessE2ETests: XCTestCase {
 
     /// The mock app-server: reads JSONL requests on stdin, replies on stdout, and
-    /// emits the notification sequence Codex would for a one-message turn. On a
-    /// turn whose prompt contains "APPROVE", it first issues a server→client
-    /// command-approval request and waits for the client's reply before finishing.
+    /// emits the notification sequence Codex would for a one-message turn, in the
+    /// shapes of the codex 0.139/0.162 schemas (`{turn: Turn}` results and
+    /// notifications). On a turn whose prompt contains "APPROVE", it first issues a
+    /// server→client command-approval request and waits for the client's reply before
+    /// finishing. On "HANG" it starts a shell command and leaves the turn running
+    /// until a well-formed `turn/interrupt` request ends it; "WEDGE" does the same but
+    /// never answers the interrupt (a hung codex). Every inbound line is
+    /// appended to `received.jsonl` beside the script so tests can check what was sent.
     private static let mockServer = #"""
-    import sys, json
+    import sys, json, os
+
+    LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.jsonl")
+    current_turn = None
+    wedged = False
 
     def send(obj):
         sys.stdout.write(json.dumps(obj) + "\n")
         sys.stdout.flush()
 
+    def turn(status):
+        return {"id": current_turn, "items": [], "status": status}
+
+    def error(mid, message):
+        send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32600, "message": message}})
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
+        with open(LOG, "a") as f:
+            f.write(line + "\n")
         try:
             msg = json.loads(line)
         except Exception:
             continue
         method = msg.get("method")
         mid = msg.get("id")
+        params = msg.get("params", {})
         # A client reply to our approval server-request (has result, no method).
         if method is None and "result" in msg:
             continue
@@ -40,11 +58,21 @@ final class CodexHarnessE2ETests: XCTestCase {
         elif method == "initialized":
             pass
         elif method == "thread/start":
-            send({"jsonrpc": "2.0", "id": mid, "result": {"threadId": "thread-1"}})
+            send({"jsonrpc": "2.0", "id": mid, "result": {"thread": {"id": "thread-1"}}})
         elif method == "turn/start":
-            send({"jsonrpc": "2.0", "id": mid, "result": {"turnId": "turn-1"}})
-            want_approval = "APPROVE" in json.dumps(msg.get("params", {}))
-            send({"jsonrpc": "2.0", "method": "turn/started", "params": {"turnId": "turn-1"}})
+            current_turn = "turn-1"
+            send({"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
+            prompt = json.dumps(params)
+            want_approval = "APPROVE" in prompt
+            send({"jsonrpc": "2.0", "method": "turn/started",
+                  "params": {"threadId": "thread-1", "turn": turn("inProgress")}})
+            wedged = "WEDGE" in prompt
+            if "HANG" in prompt or wedged:
+                send({"jsonrpc": "2.0", "method": "item/started",
+                      "params": {"threadId": "thread-1", "turnId": current_turn,
+                                 "item": {"id": "cmd-1", "type": "commandExecution",
+                                          "command": "sleep 600", "status": "inProgress"}}})
+                continue
             if want_approval:
                 # Server→client request; client must reply before we proceed.
                 send({"jsonrpc": "2.0", "id": "appr-1",
@@ -55,9 +83,24 @@ final class CodexHarnessE2ETests: XCTestCase {
             send({"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
                   "params": {"turnId": "turn-1", "tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}})
             send({"jsonrpc": "2.0", "method": "turn/completed",
-                  "params": {"threadId": "thread-1", "turn": {"id": "turn-1", "status": "completed"}}})
-        elif method == "turn/interrupt":
-            pass
+                  "params": {"threadId": "thread-1", "turn": turn("completed")}})
+            current_turn = None
+        elif method in ("turn/interrupt", "turn/steer"):
+            # Both are ClientRequests in codex: without an id real codex drops them.
+            if mid is None or (method == "turn/interrupt" and wedged):
+                continue
+            want = params.get("turnId" if method == "turn/interrupt" else "expectedTurnId")
+            if current_turn is None or want != current_turn:
+                error(mid, "no active turn " + str(want))
+            elif method == "turn/steer":
+                send({"jsonrpc": "2.0", "id": mid, "result": {"turnId": current_turn}})
+            else:
+                send({"jsonrpc": "2.0", "id": mid, "result": {}})
+                send({"jsonrpc": "2.0", "method": "turn/completed",
+                      "params": {"threadId": "thread-1", "turn": turn("interrupted")}})
+                current_turn = None
+        elif mid is not None:
+            error(mid, "unknown method " + str(method))
     """#
 
     /// Writes the mock to an executable temp file and returns its URL + the temp
@@ -183,5 +226,122 @@ final class CodexHarnessE2ETests: XCTestCase {
         let completed = events.contains { if case .turnCompleted = $0 { return true }; return false }
         XCTAssertTrue(sawApproval, "expected a command approval request; got \(events)")
         XCTAssertTrue(completed, "turn should complete after the approval reply; got \(events)")
+    }
+
+    /// Every JSON-RPC message the mock received with the given method, in order.
+    private static func received(_ method: String, exe: URL) throws -> [[String: Any]] {
+        let log = exe.deletingLastPathComponent().appendingPathComponent("received.jsonl")
+        return try String(contentsOf: log, encoding: .utf8)
+            .split(separator: "\n")
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+            .filter { $0["method"] as? String == method }
+    }
+
+    /// Starts a turn that runs a shell command and stays open until interrupted.
+    private func startHangingTurn(exe: URL, home: URL) async throws -> (CodexHarness, SessionID, TurnID) {
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(SessionOptions(
+            cwd: home.path, model: "test-model",
+            approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false)))
+        let turn = try await harness.sendPrompt(session: session, input: [.text("HANG on a long command")])
+        XCTAssertEqual(turn.raw, "turn-1", "turn id must come from the turn/start result's turn.id")
+        return (harness, session, turn)
+    }
+
+    /// Stop sends `turn/interrupt` as a request carrying the live turn id, and the turn
+    /// ends through codex's own `turn/completed{interrupted}` (mapped to `.aborted`,
+    /// which `AgentController.handleTurnCompleted` turns into `.idle`).
+    func testAbortSendsInterruptRequestAndTurnCompletesInterrupted() async throws {
+        let (exe, home) = try makeMock()
+        let (harness, session, turn) = try await startHangingTurn(exe: exe, home: home)
+
+        async let eventsTask = Self.collect(from: harness, timeout: 10) {
+            if case .turnCompleted = $0 { return true }; return false
+        }
+        try await harness.abort(session: session, turn: turn)
+        let events = await eventsTask
+        await harness.shutdown()
+
+        let interrupts = try Self.received("turn/interrupt", exe: exe)
+        XCTAssertEqual(interrupts.count, 1)
+        XCTAssertNotNil(interrupts.first?["id"], "turn/interrupt must be a request (codex drops id-less messages)")
+        let params = interrupts.first?["params"] as? [String: Any]
+        XCTAssertEqual(params?["threadId"] as? String, "thread-1")
+        XCTAssertEqual(params?["turnId"] as? String, "turn-1")
+        let aborted = events.contains {
+            if case .turnCompleted(let t, let outcome) = $0 { return t.raw == "turn-1" && outcome == .aborted }
+            return false
+        }
+        XCTAssertTrue(aborted, "expected turn/completed{interrupted} → .aborted; got \(events)")
+    }
+
+    /// A codex that never answers the interrupt must not hang Stop: the bounded abort
+    /// throws `.timeout` (AgentController.stop then settles the turn locally), and the
+    /// interrupt is sent exactly once.
+    func testAbortTimesOutWhenInterruptIsNeverAnswered() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(SessionOptions(
+            cwd: home.path, model: "test-model",
+            approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false)))
+        let turn = try await harness.sendPrompt(session: session, input: [.text("WEDGE on a long command")])
+
+        let started = Date()
+        do {
+            try await harness.abort(session: session, turn: turn, timeout: 0.5)
+            XCTFail("abort should time out when codex never answers")
+        } catch HarnessError.timeout {
+            // expected
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "bounded wait did not fire")
+        await harness.shutdown()
+
+        let interrupts = try Self.received("turn/interrupt", exe: exe)
+        XCTAssertEqual(interrupts.count, 1, "the interrupt must be sent once, not retried")
+        XCTAssertNotNil(interrupts.first?["id"])
+    }
+
+    /// Steer is a request whose turn id travels as `expectedTurnId`; the mock answers
+    /// with an error (thrown here) if the field is missing or wrong.
+    func testSteerSendsExpectedTurnIdRequest() async throws {
+        let (exe, home) = try makeMock()
+        let (harness, session, turn) = try await startHangingTurn(exe: exe, home: home)
+        try await harness.steer(session: session, turn: turn, input: [.text("also list hidden files")])
+        try await harness.abort(session: session, turn: turn)
+        await harness.shutdown()
+
+        let steers = try Self.received("turn/steer", exe: exe)
+        XCTAssertEqual(steers.count, 1)
+        XCTAssertNotNil(steers.first?["id"], "turn/steer must be a request")
+        let params = steers.first?["params"] as? [String: Any]
+        XCTAssertEqual(params?["expectedTurnId"] as? String, "turn-1")
+        XCTAssertNil(params?["turnId"])
+        XCTAssertEqual(params?["threadId"] as? String, "thread-1")
+    }
+
+    /// The local provider fails a dropped/stalled stream fast instead of codex's
+    /// default 5 reconnects and 300 s idle wait.
+    func testConfigWritesProviderStreamKnobs() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        await harness.shutdown()
+
+        let toml = try String(contentsOf: home.appendingPathComponent("config.toml"), encoding: .utf8)
+        guard let start = toml.range(of: "[model_providers.prosper]") else {
+            return XCTFail("no [model_providers.prosper] table in:\n\(toml)")
+        }
+        // The provider table runs until the next table header.
+        let rest = toml[start.upperBound...]
+        let table = rest[..<(rest.range(of: "\n[")?.lowerBound ?? rest.endIndex)]
+        let lines = table.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertTrue(lines.contains("stream_max_retries = 0"), "\(table)")
+        XCTAssertTrue(lines.contains("request_max_retries = 1"), "\(table)")
+        XCTAssertTrue(lines.contains("stream_idle_timeout_ms = 120000"), "\(table)")
     }
 }

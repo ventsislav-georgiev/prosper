@@ -230,21 +230,36 @@ actor CodexHarness: CodingHarness {
             "input": input.map(Self.inputJSON),
         ]
         let result = try await sendRequest(method: Wire.turnStart, params: params)
-        let turnID = TurnID(raw: (result["turnId"] as? String) ?? UUID().uuidString)
+        // TurnStartResponse = { turn: Turn { id, items, status } }.
+        guard let id = (result["turn"] as? [String: Any])?["id"] as? String else {
+            throw HarnessError.protocolError("turn/start returned no turn id")
+        }
+        let turnID = TurnID(raw: id)
         eventContinuation.yield(.turnStarted(turnID))
         return turnID
     }
 
+    /// `turn/steer` and `turn/interrupt` are JSON-RPC requests: codex parses an id-less
+    /// message as a ClientNotification (only `initialized`) and drops it.
     func steer(session: SessionID, turn: TurnID, input: [PromptInput]) async throws {
-        try writeLine(JSONRPC.notification(method: Wire.turnSteer, params: [
-            "threadId": session.raw, "turnId": turn.raw, "input": input.map(Self.inputJSON),
-        ]))
+        _ = try await sendRequest(method: Wire.turnSteer, params: [
+            "threadId": session.raw, "expectedTurnId": turn.raw, "input": input.map(Self.inputJSON),
+        ])
     }
 
+    /// Codex replies `{}` and then ends the turn with `turn/completed{status: interrupted}`.
+    /// `turnId` is required, so with no turn there is nothing to interrupt.
     func abort(session: SessionID, turn: TurnID?) async throws {
-        var params: [String: Any] = ["threadId": session.raw]
-        if let turn { params["turnId"] = turn.raw }
-        try writeLine(JSONRPC.notification(method: Wire.turnInterrupt, params: params))
+        try await abort(session: session, turn: turn, timeout: 5)
+    }
+
+    /// Bounded so Stop can't hang on a wedged codex: throws `HarnessError.timeout` when
+    /// the interrupt isn't answered within `timeout` seconds.
+    func abort(session: SessionID, turn: TurnID?, timeout: TimeInterval) async throws {
+        guard let turn else { return }
+        _ = try await sendRequest(method: Wire.turnInterrupt, params: [
+            "threadId": session.raw, "turnId": turn.raw,
+        ], timeout: timeout)
     }
 
     func respondToApproval(_ id: ApprovalID, decision: ApprovalDecision) async throws {
@@ -261,7 +276,10 @@ actor CodexHarness: CodingHarness {
 
     // MARK: - I/O
 
-    private func sendRequest(method: String, params: [String: Any]) async throws -> [String: Any] {
+    /// `timeout` (seconds) fails the request with `HarnessError.timeout`; a late reply
+    /// then finds no pending entry and is dropped. nil waits for the reply.
+    private func sendRequest(method: String, params: [String: Any],
+                             timeout: TimeInterval? = nil) async throws -> [String: Any] {
         guard process != nil, !terminated else { throw HarnessError.notStarted }
         let (id, line) = rpc.request(method: method, params: params)
         let result: RPCResult = try await withCheckedThrowingContinuation { cont in
@@ -271,9 +289,19 @@ actor CodexHarness: CodingHarness {
             guard !terminated else { cont.resume(throwing: HarnessError.notStarted); return }
             pending[id] = cont
             do { try writeLine(line) }
-            catch { pending[id] = nil; cont.resume(throwing: error) }
+            catch { pending[id] = nil; cont.resume(throwing: error); return }
+            if let timeout {
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    await self?.expireRequest(id)
+                }
+            }
         }
         return result.dict
+    }
+
+    private func expireRequest(_ id: Int) {
+        pending.removeValue(forKey: id)?.resume(throwing: HarnessError.timeout)
     }
 
     private func writeLine(_ data: Data) throws {
@@ -391,6 +419,11 @@ actor CodexHarness: CodingHarness {
         base_url = \(MCPServer.q(llmBaseURL))
         wire_api = "responses"
         env_key = "PROSPER_LLM_TOKEN"
+        # Local generation: a dropped or stalled stream fails the turn in seconds
+        # instead of codex's 5 reconnects / 4 request retries / 300 s idle wait.
+        stream_max_retries = 0
+        request_max_retries = 1
+        stream_idle_timeout_ms = 120000
         """ + mcp + hooks + bridge
         try config.write(to: codexHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
     }
@@ -473,7 +506,9 @@ actor CodexHarness: CodingHarness {
         let turn = TurnID(raw: (params["turnId"] as? String) ?? "")
         switch method {
         case Wire.turnStarted:
-            return [.turnStarted(TurnID(raw: (params["turnId"] as? String) ?? ""))]
+            // TurnStartedNotification = { threadId, turn: Turn { id, … } }.
+            let id = (params["turn"] as? [String: Any])?["id"] as? String
+            return id.map { [.turnStarted(TurnID(raw: $0))] } ?? []
 
         case Wire.agentMessageDelta:
             let itemID = (params["itemId"] as? String) ?? (params["id"] as? String) ?? ""

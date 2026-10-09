@@ -80,6 +80,9 @@ final class AgentController {
     private var harness: CodingHarness?
     private var session: SessionID?
     private var currentTurn: TurnID?
+    /// A turn Stop settled locally because codex didn't acknowledge the interrupt;
+    /// its late `turn/completed` must not settle whatever runs next.
+    private var settledTurn: TurnID?
     private var eventPump: Task<Void, Never>?
     /// itemID → index in `items`, for in-place delta accumulation.
     private var itemIndex: [String: Int] = [:]
@@ -164,33 +167,44 @@ final class AgentController {
     }
 
     /// Abort the in-flight turn (the model stays resident for a follow-up prompt).
-    /// Cancels the server-side generation directly for an instant GPU stop — codex's
-    /// turn-interrupt alone may leave the HTTP request streaming (keep-alive pooling).
+    /// Sends codex `turn/interrupt`; codex stops the turn (incl. a running shell
+    /// command) and answers with `turn/completed{interrupted}`, which settles phase,
+    /// clock and transcript in `handleTurnCompleted`. The server-side generation is
+    /// cancelled only after the interrupt is acknowledged — codex's interrupt may leave
+    /// the HTTP request streaming (keep-alive pooling), and cancelling first would race
+    /// it into a failed turn now that codex no longer retries a dropped stream.
     /// With no session yet (model still loading), tears the run down entirely, which
     /// cancels the in-flight load and unloads.
     func stop() {
-        ProsperLLMServer.shared.cancelActiveGenerations()
         let stale = pendingApprovals
         pendingApprovals.removeAll()
-        if let harness, let session {
-            let turn = currentTurn
-            // Reflect the stop immediately. Generation is already cancelled server-side,
-            // so nothing is working — don't wait on a codex `turn/completed`, which never
-            // arrives for an interrupted turn (the activity indicator would hang). A late
-            // completed event is idempotent; trailing stream deltas don't touch `phase`.
-            currentTurn = nil
-            if case .error = phase {} else { phase = .idle }
-            Task {
-                for req in stale { try? await harness.respondToApproval(req.id, decision: .cancel) }
-                try? await harness.abort(session: session, turn: turn)
-            }
-        } else {
+        guard let harness, let session else {
+            ProsperLLMServer.shared.cancelActiveGenerations()
             Task { await end() }
+            postElapsedNote()
+            persistTranscript()
+            return
         }
-        // An interrupted turn emits no `turn/completed`, so handleTurnCompleted won't
-        // fire — stamp the elapsed time here. No-ops if the clock already stopped.
-        postElapsedNote()
-        persistTranscript()
+        guard let turn = currentTurn else {
+            // No turn id yet (Stop raced turn/start) — nothing codex can interrupt.
+            ProsperLLMServer.shared.cancelActiveGenerations()
+            handleTurnCompleted(.aborted)
+            return
+        }
+        Task {
+            for req in stale { try? await harness.respondToApproval(req.id, decision: .cancel) }
+            do {
+                try await harness.abort(session: session, turn: turn)
+            } catch {
+                // Codex refused, is gone, or didn't answer within the abort's bound
+                // (HarnessError.timeout): settle here instead of hanging in .running.
+                if currentTurn == turn {
+                    settledTurn = turn
+                    handleTurnCompleted(.aborted)
+                }
+            }
+            ProsperLLMServer.shared.cancelActiveGenerations()
+        }
     }
 
     /// End the session entirely: shut the harness down and release the agent model so
@@ -508,7 +522,9 @@ final class AgentController {
             phase = .awaitingApproval
         case .usage(let u):
             usage = u
-        case .turnCompleted(_, let outcome):
+        case .turnCompleted(let t, let outcome):
+            // Late completion of a turn Stop already settled — a no-op.
+            if t == settledTurn { settledTurn = nil; break }
             handleTurnCompleted(outcome)
         case .error(let err):
             append(.error(id: UUID().uuidString, message: Self.describe(err)))
