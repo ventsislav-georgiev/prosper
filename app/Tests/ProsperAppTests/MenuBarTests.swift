@@ -1,5 +1,6 @@
 import XCTest
 import CoreGraphics
+import AppKit
 @testable import ProsperApp
 
 /// Menu-bar manager math. All load-bearing logic (section assignment, divider
@@ -237,6 +238,45 @@ final class MenuBarTests: XCTestCase {
         XCTAssertNil(d.object(forKey: "menuBarOrderStoreJSON"))
     }
 
+    /// #154: the backup blob is read when the primary is absent or corrupt, and both
+    /// blobs are deleted so the migration runs once.
+    func testOrderStoreMigrationReadsAndDeletesTheBackup() {
+        let d = UserDefaults.standard
+        let keys = ["menuBarStoreJSON", "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON"]
+        let saved = keys.map { d.object(forKey: $0) }
+        defer { for (k, v) in zip(keys, saved) { d.set(v, forKey: k) } }
+        let marked = Data(#"{"schemaVersion":1,"alwaysHidden":["x#A"]}"#.utf8)
+
+        for primary in [nil, Data("corrupt".utf8)] {
+            Preferences.menuBarStore = .default
+            d.set(primary, forKey: "menuBarOrderStoreJSON")
+            d.set(marked, forKey: "menuBarOrderStoreBackupJSON")
+            Preferences.migrateMenuBarOrderStore()
+            XCTAssertTrue(Preferences.menuBarStore.alwaysHiddenEnabled, "backup must count (primary \(String(describing: primary)))")
+            XCTAssertNil(d.object(forKey: "menuBarOrderStoreJSON"))
+            XCTAssertNil(d.object(forKey: "menuBarOrderStoreBackupJSON"), "backup must go too")
+        }
+    }
+
+    /// #154 / QA #5 (3): the manager feeds its own `revealedAlwaysHidden` into the length
+    /// math (2.154.0 passed a literal `false`, pinning the band shut). No status items:
+    /// a bare manager, never `reconcile()`d.
+    @MainActor
+    func testManagerPassesRevealedAlwaysHiddenToDividerLengths() {
+        let m = MenuBarManager()
+        m.revealed = true
+        m.revealedAlwaysHidden = false
+        let shut = m.dividerLengths(room: 1000)
+        m.revealedAlwaysHidden = true
+        let open = m.dividerLengths(room: 1000)
+        XCTAssertEqual(shut.hidden, open.hidden)
+        XCTAssertNotEqual(shut.alwaysHidden, open.alwaysHidden, "always-hidden band must follow its flag")
+        XCTAssertEqual(open.alwaysHidden, NSStatusItem.variableLength)
+        m.revealed = false
+        m.revealedAlwaysHidden = false
+        XCTAssertNotEqual(m.dividerLengths(room: 1000).hidden, shut.hidden, "hidden band must follow `revealed`")
+    }
+
     // MARK: - Chevron style (cosmetic glyph mapping)
 
     func testChevronSymbolsDifferPerStyle() {
@@ -337,6 +377,16 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(MenuBarAX.room(screen: right, menuRight: nil), 2160)
         XCTAssertEqual(MenuBarAX.room(screen: right, menuRight: 300), 2160, "an edge on another display is not ours")
         XCTAssertEqual(MenuBarAX.room(screen: left, menuRight: -2560), 2160, "no menu titles laid out")
+    }
+
+    /// #154 / #198 QA M6: the cached menu edge is only reused on the display it was
+    /// measured on. A display stacked above shares the x range, so `room` alone can't tell.
+    func testCachedMenuEdgeIsKeyedByScreen() {
+        let primary = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let above = CGRect(x: 0, y: 1117, width: 2560, height: 1440)
+        XCTAssertEqual(MenuBarAX.cachedEdge((primary, 500), for: primary), 500)
+        XCTAssertNil(MenuBarAX.cachedEdge((primary, 500), for: above))
+        XCTAssertNil(MenuBarAX.cachedEdge(nil, for: primary))
     }
 
     /// #202: each display's bar sits at that display's own top in the global top-left

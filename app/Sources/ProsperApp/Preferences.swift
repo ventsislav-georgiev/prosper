@@ -759,8 +759,9 @@ enum Preferences {
     /// no-op from the second launch on, so turning the band off later sticks.
     static func migrateMenuBarOrderStore() {
         let key = "menuBarOrderStoreJSON", backupKey = "menuBarOrderStoreBackupJSON"
-        guard let data = defaults.data(forKey: key) ?? defaults.data(forKey: backupKey) else { return }
-        if MenuBarStore.legacyHadAlwaysHidden(orderStoreJSON: data) {
+        // Either blob counts (#154): `??` only fell back on absent Data, so a corrupt
+        // primary hid a valid backup.
+        if [key, backupKey].contains(where: { MenuBarStore.legacyHadAlwaysHidden(orderStoreJSON: defaults.data(forKey: $0)) }) {
             var store = menuBarStore
             store.alwaysHiddenEnabled = true
             menuBarStore = store

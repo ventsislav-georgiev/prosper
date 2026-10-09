@@ -132,9 +132,13 @@ enum MenuBarAX {
         // measurement (as `appMenuRight` promises) instead of guessing 400 again. Keyed
         // by the screen frame: the edge is a global x, meaningless on another display.
         if let right = appMenuRight() { lastMenuRight = (frame, right) }
-        return room(screen: frame, menuRight: lastMenuRight?.screen == frame ? lastMenuRight?.right : nil)
+        return room(screen: frame, menuRight: cachedEdge(lastMenuRight, for: frame))
     }
     private static var lastMenuRight: (screen: CGRect, right: CGFloat)?
+    /// The cached edge, only for the display it was measured on (#154 pins this).
+    nonisolated static func cachedEdge(_ c: (screen: CGRect, right: CGFloat)?, for frame: CGRect) -> CGFloat? {
+        c?.screen == frame ? c?.right : nil
+    }
 
     /// Room right of the app menus. `menuRight` is a global x (AX and Cocoa share the x
     /// axis, only y flips), so it is measured from the screen's maxX, not its width:

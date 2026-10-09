@@ -56,7 +56,7 @@ final class MenuBarManager: NSObject {
     private var alwaysHiddenSeparator: NSStatusItem?
 
     /// Transient: is the hidden section currently revealed (separators collapsed)?
-    private var revealed = false
+    var revealed = false   // internal for tests only (#154)
     private var rehideTimer: Timer?
 
     /// Set by AppDelegate from the registry (boot + onEnabledChanged). Defaults
@@ -208,14 +208,19 @@ final class MenuBarManager: NSObject {
     private func applyDividerLengths(room: CGFloat? = nil) {
         defer { updateChevron() }
         if MenuBarHost.isHosted { appliedRoom = room ?? MenuBarAX.roomWidth(on: NSScreen.main) }
-        let l = MenuBarLogic.dividerLengths(revealed: revealed,
-                                            revealedAlwaysHidden: revealedAlwaysHidden,
-                                            standard: Lengths.standard, expanded: expandedLength(room: appliedRoom))
+        let l = dividerLengths(room: appliedRoom)
         hiddenSeparator?.length = l.hidden
         alwaysHiddenSeparator?.length = l.alwaysHidden
     }
 
-    private var revealedAlwaysHidden = false
+    /// The lengths `applyDividerLengths` sets, from the live reveal state (#154: the
+    /// test seam that pins `revealedAlwaysHidden` reaching the math).
+    func dividerLengths(room: CGFloat?) -> (hidden: CGFloat, alwaysHidden: CGFloat) {
+        MenuBarLogic.dividerLengths(revealed: revealed, revealedAlwaysHidden: revealedAlwaysHidden,
+                                    standard: Lengths.standard, expanded: expandedLength(room: room))
+    }
+
+    var revealedAlwaysHidden = false   // internal for tests only (#154)
 
     /// Chevron click handler. Plain click toggles the hidden section; ⌥-click toggles
     /// the always-hidden band (when enabled).
