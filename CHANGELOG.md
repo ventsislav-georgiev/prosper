@@ -115,6 +115,8 @@ tag from the now-released section and put it on the new top draft.
   sample.** A width probe now runs only when something that can move the width changes:
   the style or theme scale, a value wider than the reserved sample (power at 100 W or
   more), or the network rates.
+- **Agent: Qwen3.6 35B-A3B (llama.cpp, ~22 GB download, needs 32 GB RAM) is a selectable
+  model.** Qwen3-Coder 30B-A3B stays the default.
 
 ## v2.155.0
 

@@ -142,6 +142,16 @@ enum AgentModelRegistry {
                 bytes: 18_556_689_568)
         ),
         AgentModel(
+            id: "unsloth/Qwen3.6-35B-A3B-GGUF",
+            label: "Qwen3.6 35B-A3B (llama.cpp)",
+            approxRAMGB: 24, minRAMGB: 32, toolFormat: .qwenXML,
+            note: "GGUF UD-Q4_K_M ~22 GB · newest Qwen MoE (3B active), grammar-locked tool calls",
+            gguf: AgentGGUF(
+                fileName: "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")!,
+                bytes: 22_134_528_992)
+        ),
+        AgentModel(
             id: "unsloth/Qwen3-Coder-Next-GGUF",
             label: "Qwen3-Coder-Next 80B-A3B (llama.cpp)",
             approxRAMGB: 50, minRAMGB: 64, toolFormat: .qwenXML,

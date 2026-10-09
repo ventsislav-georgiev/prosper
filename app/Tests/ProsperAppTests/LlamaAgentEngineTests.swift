@@ -135,10 +135,22 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(AgentModelRegistry.model(for: AgentModelRegistry.recommendedId).toolFormat, .qwenXML)
     }
 
+    func testQwen36RowPinnedAndDefaultUnchanged() throws {
+        let id = "unsloth/Qwen3.6-35B-A3B-GGUF"
+        let spec = try XCTUnwrap(AgentModelRegistry.gguf(for: id))
+        XCTAssertEqual(spec.fileName, "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")
+        XCTAssertEqual(spec.bytes, 22_134_528_992)
+        XCTAssertEqual(spec.downloadURL.absoluteString,
+                       "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")
+        XCTAssertEqual(AgentModelRegistry.model(for: id).toolFormat, .qwenXML)
+        // Default stays Qwen3-Coder until 3.6 passes the on-device e2e + latency check.
+        XCTAssertEqual(AgentModelRegistry.recommendedId, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF")
+    }
+
     func testGGUFRowsSurviveCatalogMerge() {
         let all = AgentModelRegistry.all()
         let ggufRows = all.filter { $0.gguf != nil }
-        XCTAssertEqual(ggufRows.count, 7)
+        XCTAssertEqual(ggufRows.count, 8)
         // No duplicate ids after the custom-model merge.
         XCTAssertEqual(Set(all.map(\.id)).count, all.count)
     }
