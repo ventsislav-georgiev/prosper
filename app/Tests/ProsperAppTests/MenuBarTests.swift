@@ -380,4 +380,19 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(place(2500, on: external)?.laidOut, false, "unmatched stays on its own display, overflowed")
         XCTAssertEqual(place(900, on: primary)?.frame.minX, 900, "unmatched on the primary: the app's frame")
     }
+
+    /// #203: own content extras are named by AX identifier; the client minX (stale on
+    /// macOS 27) is the fallback only for an extra that carries none.
+    func testOwnContentPrefersIdentifierOverStaleMinX() {
+        let p = ProsperStatusItems.contentPrefix
+        let items = [(id: p + "CPU", x: CGFloat(100)), (id: p + "Volume", x: CGFloat(200))]
+        func pick(_ id: String?, _ x: CGFloat) -> String? {
+            ProsperStatusItems.pick(items, identifier: id, minX: x, id: \.id, x: \.x)?.id
+        }
+        XCTAssertEqual(pick(p + "Volume", 100), p + "Volume", "identifier wins over a stale minX")
+        XCTAssertNil(pick(p + "Gone", 100), "an unknown own identifier does not fall back to minX")
+        XCTAssertEqual(pick(nil, 101), p + "CPU", "no identifier: minX")
+        XCTAssertEqual(pick("other.id", 201), p + "Volume", "a foreign identifier is no identifier")
+        XCTAssertNil(pick(nil, 150), "no identifier, no minX match")
+    }
 }

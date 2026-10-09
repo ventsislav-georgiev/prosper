@@ -63,6 +63,9 @@ enum ProsperStatusItems {
     /// pass `.content` + a human `name` for Stats/extension icons. Held weakly so
     /// removed items drop out on the next sweep.
     static func register(_ item: NSStatusItem, role: MenuBarItemRole = .control, name: String? = nil) {
+        // #203: content items carry an AX identifier so the hosted read names them without
+        // the client minX (stale on 27). Own prefix: `MenuBarAX.identifierPrefix` means chrome.
+        if role == .content { item.button?.setAccessibilityIdentifier(contentPrefix + (name ?? "item")) }
         entries.append(Entry(provider: { [weak item] in item }, role: role, name: name))
     }
 
@@ -80,9 +83,20 @@ enum ProsperStatusItems {
     /// items stay in the managed list.
     static func controlMinX() -> [CGFloat] { live().filter { $0.role == .control }.map(\.minX) }
 
-    /// Own CONTENT item whose on-screen minX matches `x` — supplies a real name.
-    static func content(nearMinX x: CGFloat, tolerance: CGFloat = 2) -> Live? {
-        live().first { $0.role == .content && abs($0.minX - x) < tolerance }
+    nonisolated static let contentPrefix = "eu.illegible.prosper.content."
+
+    /// Own CONTENT item behind an AX extra — supplies a real name.
+    static func content(identifier: String?, minX: CGFloat) -> Live? {
+        pick(live().filter { $0.role == .content }, identifier: identifier, minX: minX,
+             id: { $0.item.button?.accessibilityIdentifier() }, x: \.minX)
+    }
+
+    /// #203: the identifier decides when the extra carries one of ours; minX (client
+    /// frame, stale on 27) only when it carries none.
+    nonisolated static func pick<T>(_ items: [T], identifier: String?, minX: CGFloat,
+                                    id: (T) -> String?, x: (T) -> CGFloat) -> T? {
+        if let identifier, identifier.hasPrefix(contentPrefix) { return items.first { id($0) == identifier } }
+        return items.first { abs(x($0) - minX) < 2 }
     }
 }
 

@@ -60,11 +60,12 @@ enum MenuBarAX {
     /// Absent = overflowed/dropped.
     static func layout() -> [Laid] {
         guard trusted, let agent = agentPID else { return [] }
-        let root = AXUIElementCreateApplication(agent)
+        let root = bounded(AXUIElementCreateApplication(agent))   // per element (#224)
         let displays = displayBounds()
         var found: [Laid] = []
         func visit(_ e: AXUIElement, depth: Int) {
             guard depth <= 3 else { return }
+            bounded(e)
             if let f = frame(of: e), isBarItem(f, displays: displays) {
                 let child = children(of: e).first
                 let ownerPID = child.map(pid) ?? agent
@@ -171,7 +172,7 @@ enum MenuBarAX {
                 out.append(MenuBarItem(windowID: key(pid: pid, index: index), pid: pid, frame: frame,
                                        bundleID: own ? "com.prosper" : app.bundleIdentifier,
                                        displayID: display,
-                                       title: own ? ProsperStatusItems.content(nearMinX: e.frame.minX)?.name : e.title,
+                                       title: own ? ProsperStatusItems.content(identifier: e.identifier, minX: e.frame.minX)?.name : e.title,
                                        isOwn: own, isLaidOut: laidOut))
             }
         }
@@ -246,7 +247,7 @@ enum MenuBarAX {
     /// one level above the button that carries our identifier).
     private static func identifier(of e: AXUIElement) -> String? {
         if let id = attribute(e, kAXIdentifierAttribute) as? String, !id.isEmpty { return id }
-        if let c = children(of: e).first, let id = attribute(c, kAXIdentifierAttribute) as? String, !id.isEmpty {
+        if let c = children(of: e).first.map(bounded), let id = attribute(c, kAXIdentifierAttribute) as? String, !id.isEmpty {
             return id
         }
         return nil
