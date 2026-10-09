@@ -32,6 +32,77 @@ public final class FanControlCore {
 
     public init(reset: @escaping () -> Void) { self.reset = reset }
 
+    /// The connection whose manual pin is held, and the RPM it pinned per fan. A drop
+    /// of any other connection leaves the pin alone; the supervision tick re-asserts
+    /// these targets when the OS reclaims a fan.
+    public private(set) var holder: ObjectIdentifier?
+    public private(set) var heldTargets: [Int: Double] = [:]
+    private var reassertBudget = 0
+
+    /// `setFanManualRPM`. False = refused by the trip latch: the daemon replies false
+    /// and writes nothing. True = recorded; the daemon arms supervision and writes.
+    /// Crash-safety, holder and target are recorded BEFORE the write on purpose: if
+    /// the write half-succeeds and its own fail-closed cleanup also fails, the fan is
+    /// left manual, and a drop must still find something to reset. Over-arming on a
+    /// clean failure is harmless (reset is idempotent); under-arming strands the fan.
+    public func manualRequest(index: Int, rpm: Double, holder: ObjectIdentifier,
+                              maxCelsius: @autoclosure () -> Double?) -> Bool {
+        guard mayEngageManual(maxCelsius: maxCelsius()) else { return false }
+        didSetManual()
+        self.holder = holder
+        heldTargets[index] = rpm
+        reassertBudget = 1
+        return true
+    }
+
+    /// `setFanAuto` succeeded on `index`. Returns true when the daemon must arm
+    /// supervision: the last pinned fan went to auto with the controller unlock kept.
+    /// `hasFtst` is only read on that path (it is an SMC read).
+    public func autoApplied(index: Int, holdUnlock: Bool, hasFtst: @autoclosure () -> Bool) -> Bool {
+        heldTargets[index] = nil
+        guard heldTargets.isEmpty, holdUnlock, hasFtst() else { return false }
+        didAutoWithHold()
+        return true
+    }
+
+    /// A connection closed. Only the holder's drop resets the fans.
+    public func connectionClosed(_ cid: ObjectIdentifier) {
+        guard holder == cid else { return }
+        lastClientGone()
+        holder = nil
+        heldTargets = [:]
+    }
+
+    /// What one 30 s supervision tick must do.
+    public enum Step: Equatable {
+        /// Nothing held: cancel the timer.
+        case stop
+        /// Kill-switch reset every fan: log, cancel the timer.
+        case fired
+        /// Nothing to do this tick.
+        case keep
+        /// The OS reclaimed these fans: write `heldTargets[i]` back to each.
+        case reassert([Int])
+        /// The reclaim on these fans survived a re-assert: the daemon resets every
+        /// fan (`didResetAll` on success) and cancels the timer.
+        case release([Int])
+    }
+
+    /// The supervision tick: kill-switch first, then reclaim detection with one
+    /// re-assert before giving the fans up to the OS.
+    public func supervise(maxCelsius: @autoclosure () -> Double?,
+                          isManualEngaged: (Int) -> Bool) -> Step {
+        guard needsSupervision else { return .stop }
+        if temperatureTick(maxCelsius: maxCelsius()) { return .fired }
+        guard manualHeld, !heldTargets.isEmpty else { return .keep }
+        let reclaimed = heldTargets.keys.filter { !isManualEngaged($0) }.sorted()
+        if reclaimed.isEmpty { reassertBudget = 1; return .keep }
+        if reassertBudget > 0 { reassertBudget -= 1; return .reassert(reclaimed) }
+        holder = nil
+        heldTargets = [:]
+        return .release(reclaimed)
+    }
+
     /// A manual write succeeded — arm the crash-safety reset. Manual supersedes a
     /// standing unlock hold (it's strictly more held).
     public func didSetManual() { manualHeld = true; unlockHeld = false }
@@ -73,6 +144,8 @@ public final class FanControlCore {
         reset()
         manualHeld = false
         unlockHeld = false
+        holder = nil
+        heldTargets = [:]
         return true
     }
 
@@ -92,7 +165,7 @@ public final class FanControlCore {
     /// nothing left wedged, so disarm. A single-fan auto does NOT call this: other
     /// fans may still be manual, and over-resetting on a later drop is harmless while
     /// under-resetting is the hazard.
-    public func didResetAll() { manualHeld = false; unlockHeld = false }
+    public func didResetAll() { manualHeld = false; unlockHeld = false; holder = nil; heldTargets = [:] }
 
     /// Last client gone (clean OR crash). Reset every fan if a manual pin OR an
     /// unlock hold was outstanding (both are latent hazards nobody supervises once

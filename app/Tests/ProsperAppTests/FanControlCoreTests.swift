@@ -227,4 +227,110 @@ final class FanControlCoreTests: XCTestCase {
         XCTAssertTrue(core.manualHeld)
         XCTAssertFalse(core.unlockHeld, "manual is strictly more held — no dual flags")
     }
+
+    // MARK: - XPC entry points (main.swift only translates and writes; QA #14 F2)
+
+    private final class Conn {}
+    private let a = Conn(), b = Conn()
+    private var idA: ObjectIdentifier { ObjectIdentifier(a) }
+    private var idB: ObjectIdentifier { ObjectIdentifier(b) }
+
+    /// setFanManualRPM must go through the trip latch and record nothing when refused.
+    func testManualRequestIsGatedByTheLatch() {
+        let (core, _) = makeCore()
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50))
+        XCTAssertEqual(core.supervise(maxCelsius: 98, isManualEngaged: { _ in true }), .fired)
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3000, holder: idB, maxCelsius: 90),
+                       "latched: a re-pin into a hot chassis is refused")
+        XCTAssertFalse(core.manualHeld, "refused engage arms nothing")
+        XCTAssertNil(core.holder)
+        XCTAssertTrue(core.heldTargets.isEmpty)
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3000, holder: idB, maxCelsius: 79))
+        XCTAssertTrue(core.manualHeld)
+        XCTAssertEqual(core.holder, idB)
+        XCTAssertEqual(core.heldTargets, [0: 3000])
+    }
+
+    /// The 30 s tick must run the kill-switch and clear the holder and targets.
+    func testSuperviseRunsTheKillSwitch() {
+        let (core, resets) = makeCore()
+        XCTAssertEqual(core.supervise(maxCelsius: 120, isManualEngaged: { _ in true }), .stop,
+                       "nothing held: stop the timer")
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        XCTAssertEqual(core.supervise(maxCelsius: 90, isManualEngaged: { _ in true }), .keep)
+        XCTAssertEqual(core.supervise(maxCelsius: 98, isManualEngaged: { _ in true }), .fired)
+        XCTAssertEqual(resets(), 1)
+        XCTAssertTrue(core.tripLatched)
+        XCTAssertNil(core.holder)
+        XCTAssertTrue(core.heldTargets.isEmpty)
+        XCTAssertEqual(core.supervise(maxCelsius: 98, isManualEngaged: { _ in true }), .stop)
+    }
+
+    func testSuperviseReassertsOnceThenReleases() {
+        let (core, _) = makeCore()
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 1, rpm: 3100, holder: idA, maxCelsius: 50)
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { $0 == 0 }), .reassert([1]))
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in true }), .keep,
+                       "healthy tick refills the budget")
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .reassert([0, 1]))
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .release([0, 1]))
+        XCTAssertNil(core.holder)
+        XCTAssertTrue(core.heldTargets.isEmpty)
+    }
+
+    /// resetAllFans goes through didResetAll: holder and targets go with it, so a
+    /// later drop or tick has nothing to act on.
+    func testResetAllClearsHolderAndTargets() {
+        let (core, resets) = makeCore()
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        core.didResetAll()
+        XCTAssertNil(core.holder)
+        XCTAssertTrue(core.heldTargets.isEmpty)
+        XCTAssertEqual(core.supervise(maxCelsius: 98, isManualEngaged: { _ in false }), .stop)
+        core.connectionClosed(idA)
+        XCTAssertEqual(resets(), 0)
+    }
+
+    /// setFanAuto: one fan back to auto keeps the pin on the others; the last one
+    /// with the hold kept arms supervision of the unlock.
+    func testAutoAppliedDropsTargetAndHoldsUnlockOnLastFan() {
+        let (core, _) = makeCore()
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 1, rpm: 3000, holder: idA, maxCelsius: 50)
+        var ftstReads = 0
+        func ftst() -> Bool { ftstReads += 1; return true }
+        XCTAssertFalse(core.autoApplied(index: 0, holdUnlock: true, hasFtst: ftst()))
+        XCTAssertEqual(core.heldTargets, [1: 3000])
+        XCTAssertTrue(core.manualHeld, "a sibling is still pinned")
+        XCTAssertEqual(ftstReads, 0, "no SMC read while a fan is still pinned")
+        XCTAssertTrue(core.autoApplied(index: 1, holdUnlock: true, hasFtst: ftst()))
+        XCTAssertTrue(core.unlockHeld)
+        XCTAssertFalse(core.manualHeld)
+        XCTAssertTrue(core.heldTargets.isEmpty)
+    }
+
+    func testAutoAppliedWithoutHoldOrFtstArmsNothing() {
+        let (core, _) = makeCore()
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        XCTAssertFalse(core.autoApplied(index: 0, holdUnlock: false, hasFtst: true))
+        XCTAssertFalse(core.unlockHeld)
+        XCTAssertTrue(core.manualHeld, "single-fan auto does not disarm the crash reset")
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        XCTAssertFalse(core.autoApplied(index: 0, holdUnlock: true, hasFtst: false))
+        XCTAssertFalse(core.unlockHeld)
+    }
+
+    /// Only the holder's drop resets; the lid connection closing is a no-op.
+    func testOnlyTheHoldersDropResets() {
+        let (core, resets) = makeCore()
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        core.connectionClosed(idB)
+        XCTAssertEqual(resets(), 0)
+        XCTAssertTrue(core.manualHeld)
+        core.connectionClosed(idA)
+        XCTAssertEqual(resets(), 1)
+        XCTAssertNil(core.holder)
+        XCTAssertTrue(core.heldTargets.isEmpty)
+    }
 }
