@@ -90,89 +90,88 @@ final class FanControlCoreTests: XCTestCase {
 
     // MARK: - Kill-switch hysteresis (trip latch / re-arm)
 
-    // Kept alive for the test's lifetime: an identifier of a freed object can be reused.
-    private let appConnection = NSObject(), otherConnection = NSObject()
-    private var app: ObjectIdentifier { ObjectIdentifier(appConnection) }
-    private var other: ObjectIdentifier { ObjectIdentifier(otherConnection) }
-
     /// The reported loop: trip at the cut-off, the app re-applies ~1 s later into a
-    /// chassis still above it, trip again. After a trip the same client stays refused
-    /// until the sensors are back below the re-arm threshold.
-    func testTripLatchesHolderUntilBelowReArm() {
+    /// chassis still above it, trip again. After a trip manual stays refused until the
+    /// sensors are back below the re-arm threshold.
+    func testTripLatchesUntilBelowReArm() {
         let (core, resets) = makeCore()
         core.didSetManual()
-        XCTAssertTrue(core.temperatureTick(maxCelsius: 98, holder: app))
+        XCTAssertTrue(core.temperatureTick(maxCelsius: 98))
         XCTAssertEqual(resets(), 1)
-        XCTAssertFalse(core.mayEngageManual(client: app, maxCelsius: 98), "still above the cut-off")
-        XCTAssertFalse(core.mayEngageManual(client: app, maxCelsius: FanControlCore.reArmCelsius),
+        XCTAssertFalse(core.mayEngageManual(maxCelsius: 98), "still above the cut-off")
+        XCTAssertFalse(core.mayEngageManual(maxCelsius: FanControlCore.reArmCelsius),
                        "inside the band: not re-armed yet")
-        XCTAssertFalse(core.mayEngageManual(client: app, maxCelsius: nil), "unreadable sensors keep the latch")
-        XCTAssertFalse(core.mayEngageManual(client: app, maxCelsius: .nan))
-        XCTAssertTrue(core.mayEngageManual(client: app, maxCelsius: FanControlCore.reArmCelsius - 0.1),
+        XCTAssertFalse(core.mayEngageManual(maxCelsius: nil), "unreadable sensors keep the latch")
+        XCTAssertFalse(core.mayEngageManual(maxCelsius: .nan))
+        XCTAssertTrue(core.mayEngageManual(maxCelsius: FanControlCore.reArmCelsius - 0.1),
                       "below re-arm: manual allowed again")
-        XCTAssertNil(core.tripLatchedClient, "re-arm clears the latch")
-        XCTAssertTrue(core.mayEngageManual(client: app, maxCelsius: 94), "re-armed: no band any more")
+        XCTAssertFalse(core.tripLatched, "re-arm clears the latch")
+        XCTAssertTrue(core.mayEngageManual(maxCelsius: 94), "re-armed: no band any more")
     }
 
     func testReArmBandSitsBelowTheCutOff() {
         XCTAssertLessThan(FanControlCore.reArmCelsius, FanControlCore.killSwitchCelsius)
     }
 
-    func testLatchOnlyHoldsTheTrippedClient() {
-        let (core, _) = makeCore()
+    /// QA #14 F1: the app relaunches (Sparkle update, crash) right after a trip and
+    /// re-applies its saved pin over a NEW connection; the old one closed. That fresh
+    /// engage must still be refused until the chassis is under re-arm.
+    func testLatchSurvivesReconnect() {
+        let (core, resets) = makeCore()
         core.didSetManual()
-        core.temperatureTick(maxCelsius: 98, holder: app)
-        XCTAssertTrue(core.mayEngageManual(client: other, maxCelsius: 98), "a new connection is a fresh user engage")
-        XCTAssertEqual(core.tripLatchedClient, app)
-    }
-
-    /// The user chose Automatic (setFanAuto) or disabled fan control (connection
-    /// closed): the next manual engage is an explicit re-enable and goes through.
-    func testClientReleaseClearsTheLatch() {
-        let (core, _) = makeCore()
-        core.didSetManual()
-        core.temperatureTick(maxCelsius: 98, holder: app)
-        core.clientReleased(other)
-        XCTAssertEqual(core.tripLatchedClient, app, "another client's release does not touch the latch")
-        core.clientReleased(app)
-        XCTAssertTrue(core.mayEngageManual(client: app, maxCelsius: 98))
+        core.temperatureTick(maxCelsius: 98)
+        core.lastClientGone()   // old connection dropped: nothing held, no second reset
+        XCTAssertEqual(resets(), 1)
+        XCTAssertFalse(core.mayEngageManual(maxCelsius: 90), "fresh connection, chassis still hot")
+        XCTAssertTrue(core.tripLatched)
+        XCTAssertTrue(core.mayEngageManual(maxCelsius: 79))
     }
 
     func testFullResetDoesNotClearTheLatch() {
         let (core, _) = makeCore()
         core.didSetManual()
-        core.temperatureTick(maxCelsius: 98, holder: app)
+        core.temperatureTick(maxCelsius: 98)
         core.didResetAll()   // the app's reclaim retry sends resetAllFans too
-        XCTAssertFalse(core.mayEngageManual(client: app, maxCelsius: 98))
+        XCTAssertFalse(core.mayEngageManual(maxCelsius: 98))
+    }
+
+    /// Choosing Automatic with the fast-re-engage hold keeps the controller unlocked
+    /// (a supervised hazard) but must not re-open manual into a hot chassis.
+    func testAutoWithHoldDoesNotClearTheLatch() {
+        let (core, _) = makeCore()
+        core.didSetManual()
+        core.temperatureTick(maxCelsius: 98)
+        core.didAutoWithHold()
+        XCTAssertFalse(core.mayEngageManual(maxCelsius: 90))
     }
 
     func testTripOnHeldUnlockLatchesNothing() {
         let (core, _) = makeCore()
         core.didAutoWithHold()
-        XCTAssertTrue(core.temperatureTick(maxCelsius: 98, holder: app))
-        XCTAssertNil(core.tripLatchedClient, "no manual speed was running, so there is nothing to hold off")
+        XCTAssertTrue(core.temperatureTick(maxCelsius: 98))
+        XCTAssertFalse(core.tripLatched, "no manual speed was running, so there is nothing to hold off")
     }
 
     func testBelowCutOffTickLatchesNothing() {
         let (core, _) = makeCore()
         core.didSetManual()
-        XCTAssertFalse(core.temperatureTick(maxCelsius: 90, holder: app))
-        XCTAssertNil(core.tripLatchedClient)
+        XCTAssertFalse(core.temperatureTick(maxCelsius: 90))
+        XCTAssertFalse(core.tripLatched)
     }
 
     func testColdStartClearsTheLatch() {
         let (core, _) = makeCore()
         core.didSetManual()
-        core.temperatureTick(maxCelsius: 98, holder: app)
+        core.temperatureTick(maxCelsius: 98)
         core.reclaimAtStartup()
-        XCTAssertNil(core.tripLatchedClient)
+        XCTAssertFalse(core.tripLatched)
     }
 
     func testUnlatchedEngageReadsNoTemperature() {
         let (core, _) = makeCore()
         var reads = 0
         func read() -> Double? { reads += 1; return 120 }
-        XCTAssertTrue(core.mayEngageManual(client: app, maxCelsius: read()))
+        XCTAssertTrue(core.mayEngageManual(maxCelsius: read()))
         XCTAssertEqual(reads, 0, "the common path must not cost an SMC temperature sweep")
     }
 

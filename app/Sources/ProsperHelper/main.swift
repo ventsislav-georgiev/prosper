@@ -112,7 +112,6 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
                 self.fanHolderID = nil
                 self.fanHeldTargets = [:]
             }
-            self.fanCore.clientReleased(cid)
         }
     }
 
@@ -191,9 +190,9 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         let cid = ObjectIdentifier(conn)
         fanQ.async {
             guard let fan = self.fan else { fanLog.error("setFanManualRPM: no SMC fan controller — inert"); reply(false); return }
-            // Kill-switch hysteresis: this client's pin was just reset at the cut-off.
-            // Refuse before any write or arming until the chassis is back below re-arm.
-            guard self.fanCore.mayEngageManual(client: cid, maxCelsius: fan.maxTemperature()) else {
+            // Kill-switch hysteresis: a pin was just reset at the cut-off. Refuse ANY
+            // client before any write or arming until the chassis is back below re-arm.
+            guard self.fanCore.mayEngageManual(maxCelsius: fan.maxTemperature()) else {
                 fanLog.notice("setFanManualRPM(\(index, privacy: .public)) refused: kill-switch latched until < \(FanControlCore.reArmCelsius, privacy: .public)°C")
                 reply(false); return
             }
@@ -244,7 +243,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             return
         }
         let mx = fan?.maxTemperature()
-        if fanCore.temperatureTick(maxCelsius: mx, holder: fanHolderID) {
+        if fanCore.temperatureTick(maxCelsius: mx) {
             fanHolderID = nil
             fanHeldTargets = [:]
             fanLog.fault("fan kill-switch FIRED: \(mx ?? .nan, privacy: .public)°C ≥ \(FanControlCore.killSwitchCelsius, privacy: .public)°C — all fans reset to auto")
@@ -288,10 +287,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // harmless while under-resetting is the hazard. With `holdUnlock` (opt-in
         // fast-re-engage pref) the controller unlock is kept once NO fan remains
         // manual — a latent hazard the core then supervises exactly like a pin.
-        // Choosing Automatic also releases this client's kill-switch latch.
-        let cid = NSXPCConnection.current().map(ObjectIdentifier.init)
         fanQ.async {
-            if let cid { self.fanCore.clientReleased(cid) }
             guard let fan = self.fan else { reply(false); return }
             do {
                 try fan.setAuto(index, holdUnlock: holdUnlock)

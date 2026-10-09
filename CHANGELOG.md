@@ -52,6 +52,7 @@ tag from the now-released section and put it on the new top draft.
   sampling tick and the network ping used to run all night (the openlid extension keeps
   the Mac awake lid-closed); they now stop while nobody can see the widgets and refresh
   immediately on wake. Charts show a gap for that period rather than filled-in samples.
+  Opening a stats popover resumes sampling if a missed unlock or wake left the widgets frozen.
 - **Fixed: Settings search lost the Dock icon, Panel placement, Inline autocomplete and
   Coding agent switches.** They became rows inside Essentials and Local AI, and search
   indexed only section titles. Row titles are now indexed as keywords of their section,
@@ -66,6 +67,8 @@ tag from the now-released section and put it on the new top draft.
   a chassis still above the cut-off, and the switch fired again on its next tick. The helper
   now refuses manual speeds until the hottest sensor is back under 80 °C, the app waits 30 s
   between failed re-applies, and the 2 s reclaim check only runs while manual control is on.
+  The latch is helper-wide, so an app relaunch or reconnect cannot re-pin the fans into a
+  hot chassis either.
 - **Performance: with inline autocomplete off, mouse clicks no longer pass through Prosper**
   and the global scroll monitor is not installed. The keystroke tap listened for every left
   click and every scroll tick on behalf of autocomplete even when it was disabled. Toggling

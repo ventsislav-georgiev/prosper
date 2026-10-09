@@ -46,50 +46,46 @@ public final class FanControlCore {
     /// territory — the switch fires before the SoC is forced into hard throttle.
     public static let killSwitchCelsius: Double = 95
 
-    /// Hysteresis for the kill-switch. Once it has reset a client's manual pin, that
-    /// client's manual engages are refused until the hottest sensor is back below this.
+    /// Hysteresis for the kill-switch. Once it has reset a manual pin, EVERY client's
+    /// manual engages are refused until the hottest sensor is back below this.
+    /// Helper-wide, not per connection: an app relaunch (Sparkle update, crash)
+    /// re-applies its saved pin over a fresh connection with no temperature check.
     /// Without the band the app re-applied the pin ~1 s after every trip, straight back
     /// into a chassis still above the cut-off, and the switch fired again at its next
     /// tick (563 trips in 3 days on an M4 Pro).
     public static let reArmCelsius: Double = 80
 
-    /// The client whose manual pin the kill-switch reset; nil when nothing is latched.
-    public private(set) var tripLatchedClient: ObjectIdentifier?
+    /// The kill-switch reset a manual pin and the chassis has not re-armed yet.
+    public private(set) var tripLatched = false
 
     /// Periodic temperature check while a manual pin is held. `maxCelsius` is the
     /// hottest sensor the daemon could read (nil = unreadable → no decision; the
     /// 200 RPM floor + the SoC's own throttle remain the backstop). Fires the full
     /// reset and disarms when the threshold is crossed; returns whether it fired so
-    /// the daemon can clear its holder and log. A fire on a manual pin latches
-    /// `holder` (see `mayEngageManual`); a fire on a held unlock alone latches nothing,
-    /// since no manual speed was running.
+    /// the daemon can clear its holder and log. A fire on a manual pin latches (see
+    /// `mayEngageManual`); a fire on a held unlock alone latches nothing, since no
+    /// manual speed was running.
     @discardableResult
-    public func temperatureTick(maxCelsius: Double?, holder: ObjectIdentifier? = nil) -> Bool {
+    public func temperatureTick(maxCelsius: Double?) -> Bool {
         guard needsSupervision, let t = maxCelsius, t.isFinite,
               t >= Self.killSwitchCelsius else { return false }
-        if manualHeld { tripLatchedClient = holder }
+        if manualHeld { tripLatched = true }
         reset()
         manualHeld = false
         unlockHeld = false
         return true
     }
 
-    /// Gate for a manual engage from `client` after a trip. Refused while `client` is
-    /// latched and the hottest sensor is unreadable or not yet below `reArmCelsius`;
-    /// the first engage below it clears the latch. `maxCelsius` is only read while
-    /// latched, so the common path costs no SMC reads.
-    public func mayEngageManual(client: ObjectIdentifier, maxCelsius: @autoclosure () -> Double?) -> Bool {
-        guard tripLatchedClient == client else { return true }
+    /// Gate for a manual engage from any client after a trip. Refused while latched
+    /// and the hottest sensor is unreadable or not yet below `reArmCelsius`; the first
+    /// engage below it clears the latch. Nothing else but a daemon cold start clears
+    /// it — not a reconnect, not choosing Automatic, not `resetAllFans`. `maxCelsius`
+    /// is only read while latched, so the common path costs no SMC reads.
+    public func mayEngageManual(maxCelsius: @autoclosure () -> Double?) -> Bool {
+        guard tripLatched else { return true }
         guard let t = maxCelsius(), t.isFinite, t < Self.reArmCelsius else { return false }
-        tripLatchedClient = nil
+        tripLatched = false
         return true
-    }
-
-    /// The latched client handed the fans back itself (chose Automatic, or its
-    /// connection closed). Its next manual engage is the user's explicit re-enable.
-    /// Not called for `resetAllFans`: the app's own reclaim retry sends that too.
-    public func clientReleased(_ client: ObjectIdentifier) {
-        if tripLatchedClient == client { tripLatchedClient = nil }
     }
 
     /// An explicit full reset (app disabled fan control / pre-sleep) succeeded —
@@ -116,6 +112,6 @@ public final class FanControlCore {
         reset()
         manualHeld = false
         unlockHeld = false
-        tripLatchedClient = nil
+        tripLatched = false
     }
 }
