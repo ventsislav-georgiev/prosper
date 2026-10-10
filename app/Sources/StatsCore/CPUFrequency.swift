@@ -163,7 +163,7 @@ public final class CPUFrequency {
             defer { IOObjectRelease(e); e = IOIteratorNext(iter) }
             var name = [CChar](repeating: 0, count: 128)
             IORegistryEntryGetName(e, &name)
-            guard String(cString: name) == "pmgr" else { continue }
+            guard String(decoding: name.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self) == "pmgr" else { continue }
             let eTbl = blob(e, "voltage-states1-sram").map(decode) ?? []
             let pTbl = blob(e, "voltage-states5-sram").map(decode) ?? []
             return (eTbl, pTbl)

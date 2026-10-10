@@ -127,7 +127,7 @@ public final class PowerSensorReader {
         var buf = [CChar](repeating: 0, count: size)
         guard sysctlbyname("machdep.cpu.brand_string", &buf, &size, nil, 0) == 0
         else { return nil }
-        return chipGeneration(brand: String(cString: buf))
+        return chipGeneration(brand: String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self))
     }()
 
     // A rail resolved as present on THIS machine: which key to read, its label,

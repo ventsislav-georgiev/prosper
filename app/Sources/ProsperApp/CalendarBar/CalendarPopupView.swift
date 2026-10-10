@@ -322,7 +322,7 @@ struct CalendarPopupView: View {
         }
         .frame(maxHeight: (detailEvent == nil ? sz(240) : sz(380)) * f)
         // Back to the list when the user picks another day.
-        .onChange(of: store.selectedDay) { _ in detailEvent = nil }
+        .onChange(of: store.selectedDay) { detailEvent = nil }
     }
 
     private var accessHint: some View {

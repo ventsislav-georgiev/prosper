@@ -845,7 +845,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
                     var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                     if getnameinfo(sa, socklen_t(sa.pointee.sa_len), &buf, socklen_t(buf.count),
                                    nil, 0, NI_NUMERICHOST) == 0 {
-                        let ip = String(cString: buf)
+                        let ip = String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
                         let o = ip.split(separator: ".")
                         let isTS = o.count == 4 && o[0] == "100" && (Int(o[1]).map { $0 >= 64 && $0 <= 127 } ?? false)
                         if isTS { ts.append(ip) }

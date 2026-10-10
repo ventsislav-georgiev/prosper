@@ -42,8 +42,8 @@ enum FSReads {
 }
 
 /// Live registry of extension path watchers. A watch fires the named handler with
-/// payload `{ paths = [changed…] }`. MainActor-bound; streams scheduled on the main
-/// run loop. The `invoke` hook is wired by the app to `ExtensionRegistry.deliverEvent`.
+/// payload `{ paths = [changed…] }`. MainActor-bound; streams delivered on the main
+/// queue. The `invoke` hook is wired by the app to `ExtensionRegistry.deliverEvent`.
 @MainActor
 final class ExtensionFSWatch {
     static let shared = ExtensionFSWatch()
@@ -90,7 +90,7 @@ final class ExtensionFSWatch {
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5,
             FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
         ) else { return }
-        FSEventStreamScheduleWithRunLoop(stream, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+        FSEventStreamSetDispatchQueue(stream, .main)
         FSEventStreamStart(stream)
         entry.stream = stream
         entries[k] = entry

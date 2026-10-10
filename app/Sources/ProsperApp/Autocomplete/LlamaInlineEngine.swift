@@ -807,7 +807,7 @@ actor LlamaInlineEngine {
         // scratch — reusing it as the mutable copy — so reload it from logits.
         var best: [(Int, Float)] = []
         scratch.withUnsafeMutableBufferPointer { s in
-            cblas_scopy(Int32(nVocab), logits, 1, s.baseAddress!, 1)
+            s.baseAddress!.update(from: logits, count: nVocab)
             for _ in 0..<k {
                 var v: Float = 0
                 var idx: vDSP_Length = 0

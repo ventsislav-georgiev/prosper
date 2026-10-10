@@ -315,7 +315,9 @@ enum AppControl {
     static func launchOrFocus(_ nameOrBundleID: String) {
         let ws = NSWorkspace.shared
         guard let url = resolvedBundleURL(nameOrBundleID) else {
-            _ = ws.launchApplication(nameOrBundleID) // last resort: resolve by name
+            // Last resort: LaunchServices by display name. `open -a` is the
+            // non-deprecated stand-in for launchApplication(_:) (no URL API takes a name).
+            _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-a", nameOrBundleID])
             return
         }
         let cfg = NSWorkspace.OpenConfiguration()
