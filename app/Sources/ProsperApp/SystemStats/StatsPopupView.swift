@@ -977,18 +977,21 @@ struct StatsPopupView: View {
             // since the call never reaches the daemon. Race the whole engage so the
             // button always resolves and surfaces the actionable error.
             // A live helper replying false is its overheat latch (#209), not a missing helper.
+            // One generation for the whole flow, captured before the first engage: a sleep
+            // anywhere after this abandons the engage and leaves the pref unsaved (#345).
+            let generation = FanControlHelper.reclaimGeneration
             let reply = await Self.withFanTimeout(45) {
                 await FanControlHelper.setManualReply(first.key, rpm: first.value,
                                                       timeout: FanControlHelper.firstEngageTimeout)
             }
-            guard FanControlHelper.firstEngageLanded(reply) else {
+            guard FanControlHelper.firstEngageLanded(reply, since: generation) else {
                 fanBusy = false
-                fanError = reply.errorText
+                fanError = reply.errorText   // nil for an engage abandoned after a sleep: silently back on auto
                 return
             }
             // Each later engage checks for a sleep since the loop began: its pins are released
             // and the pref stays unsaved (#306, #343). No await between the last check and the save.
-            guard await FanControlHelper.engageRest(targets, skipping: first.key) else { fanBusy = false; return }
+            guard await FanControlHelper.engageRest(targets, skipping: first.key, since: generation) else { fanBusy = false; return }
             fanBusy = false
             fanManual = true
             Preferences.fanManualEnabled = true

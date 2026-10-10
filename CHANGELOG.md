@@ -210,7 +210,8 @@ tag from the now-released section and put it on the new top draft.
   the fans it was holding. Fans no longer stay pinned through sleep when manual control was
   being switched on just as the Mac went to sleep, or when the Mac went to sleep while the
   remaining fans were still being switched on: the fans are reset and the manual setting is
-  not saved.
+  not saved. The same holds when the first fan's engage only replies after the Mac slept and
+  woke: the fans stay on automatic and the setting is not saved.
 - **Performance: with inline autocomplete off, mouse clicks no longer pass through Prosper**
   and the global scroll monitor is not installed. The keystroke tap listened for every left
   click and every scroll tick on behalf of autocomplete even when it was disabled. Toggling

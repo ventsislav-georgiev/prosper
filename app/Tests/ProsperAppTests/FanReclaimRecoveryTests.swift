@@ -59,14 +59,14 @@ final class FanReclaimRecoveryTests: XCTestCase {
         defer { Preferences.fanManualEnabled = previousManualIntent }
         Preferences.fanManualEnabled = false
         FanControlHelper.armRecoveryLifecycle()
-        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged))
+        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, since: FanControlHelper.reclaimGeneration))
         XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed, "a landed engage keeps its timer")
-        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable))   // #259 eW1: the popup's path
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable, since: FanControlHelper.reclaimGeneration))   // #259 eW1: the popup's path
         XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
 
         Preferences.fanManualEnabled = true
         FanControlHelper.armRecoveryLifecycle()
-        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused))
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, since: FanControlHelper.reclaimGeneration))
         XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
         Preferences.fanManualEnabled = false
         await FanControlHelper.resetAll(teardown: true)
@@ -81,14 +81,14 @@ final class FanReclaimRecoveryTests: XCTestCase {
         defer { Preferences.fanManualEnabled = previousManualIntent }
         Preferences.fanManualEnabled = false
         let released = expectation(description: "failed engage releases")
-        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable, release: { released.fulfill() }))
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable, since: FanControlHelper.reclaimGeneration, release: { released.fulfill() }))
         await fulfillment(of: [released], timeout: 1)
 
         let kept = expectation(description: "no release")
         kept.isInverted = true
-        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, release: { kept.fulfill() }))
+        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, since: FanControlHelper.reclaimGeneration, release: { kept.fulfill() }))
         Preferences.fanManualEnabled = true
-        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, release: { kept.fulfill() }))
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, since: FanControlHelper.reclaimGeneration, release: { kept.fulfill() }))
         await fulfillment(of: [kept], timeout: 0.3)
     }
 
@@ -307,19 +307,21 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertFalse(FanControlHelper.sleepResetNeeded(manualEnabled: false, inFlight: 0))
     }
 
-    /// #287 (b): the popup's first engage landing on time while asleep is released and
-    /// reported false, so the popup does not save the pref. Awake, it stands.
+    /// #287 (b), #345: the popup's first engage landing after a willSleep since the popup
+    /// captured the generation (asleep, or after the wake) is released and reported
+    /// false, so the popup does not save the pref. No sleep since, it stands.
     @MainActor
-    func testFirstEngageLandingAsleepIsReleased() async {
+    func testFirstEngageLandingAfterASleepIsReleased() async {
         let previousManualIntent = Preferences.fanManualEnabled
         defer { Preferences.fanManualEnabled = previousManualIntent }
         Preferences.fanManualEnabled = false
-        let released = expectation(description: "released while asleep")
-        XCTAssertFalse(FanControlHelper.firstEngageLanded(.engaged, sleeping: true, release: { released.fulfill() }))
+        let released = expectation(description: "released after a willSleep")
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.engaged, since: 4, current: 5, release: { released.fulfill() }))
         await fulfillment(of: [released], timeout: 1)
-        let kept = expectation(description: "no release awake")
+        XCTAssertFalse(Preferences.fanManualEnabled)
+        let kept = expectation(description: "no release without a sleep")
         kept.isInverted = true
-        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, sleeping: false, release: { kept.fulfill() }))
+        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, since: 5, current: 5, release: { kept.fulfill() }))
         await fulfillment(of: [kept], timeout: 0.3)
     }
 
@@ -371,6 +373,61 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertTrue(FanControlHelper.connection == nil, "the loop's release did not tear down")
     }
 
+    /// #345: the popup's FIRST engage waits in registration when willSleep fires; willSleep
+    /// resets (the engage is in flight), the wake follows, then the engage replies. The flow
+    /// (as in StatsPopupView.confirmManualAll, generation captured before the first engage)
+    /// releases, never engages another fan and does not save the pref. Fakes only.
+    @MainActor
+    func testSleepWhileTheFirstEngageWaitsForRegistrationAbandons() async {
+        let previousManualIntent = Preferences.fanManualEnabled, savedRegistration = LidSleepHelper.registration
+        let fake = FakeHelperConnection()
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent; LidSleepHelper.registration = savedRegistration
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
+        }
+        Preferences.fanManualEnabled = false
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        let parked = expectation(description: "the first engage waits in registration")
+        let gate = DispatchSemaphore(value: 0)
+        LidSleepHelper.registration = { parked.fulfill(); gate.wait(); return .enabled }
+        var restEngaged: [Int] = []
+        let flow = Task { () -> Bool in
+            let generation = FanControlHelper.reclaimGeneration
+            let reply = await FanControlHelper.setManualReply(0, rpm: 2000)
+            XCTAssertEqual(reply, .engaged)
+            guard FanControlHelper.firstEngageLanded(reply, since: generation) else { return false }
+            return await FanControlHelper.engageRest([0: 2000, 1: 3000], skipping: 0, since: generation,
+                                                     engage: { i, _ in restEngaged.append(i); return true })
+        }
+        await fulfillment(of: [parked], timeout: 2)
+        FanControlHelper.willSleep()
+        XCTAssertEqual(fake.proxy.resets, 1, "willSleep reset with the first engage in flight")
+        FanControlHelper.inject(sleeping: false)   // the wake
+        gate.signal()
+        let saved = await flow.value
+        XCTAssertFalse(saved, "the first engage stood after a whole sleep+wake")
+        XCTAssertEqual(restEngaged, [], "the flow went on to engage the other fans")
+        XCTAssertFalse(Preferences.fanManualEnabled)
+        await waitForTeardown()
+        XCTAssertEqual(fake.proxy.resets, 2, "the abandoned engage was released")
+        XCTAssertTrue(FanControlHelper.connection == nil, "the release did not tear down")
+    }
+
+    /// #345: the popup engage flow reads any reclaimGeneration bump as a sleep, so the bump
+    /// lives in exactly one place, willSleep in FanControlHelper.swift.
+    func testReclaimGenerationIsBumpedOnlyByWillSleep() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+        var hits: [String] = []
+        for case let url as URL in files where url.pathExtension == "swift" {
+            for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") where line.contains("reclaimGeneration &+= 1") {
+                hits.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        XCTAssertEqual(hits, ["FanControlHelper.swift: reclaimGeneration &+= 1"])
+    }
+
     /// #343 (2), the route QA #123 left open: a later engage reporting stop ends the loop,
     /// no fan after it is engaged, and the first fan is never re-engaged.
     @MainActor
@@ -415,10 +472,12 @@ final class FanReclaimRecoveryTests: XCTestCase {
             FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
         }
         Preferences.fanManualEnabled = false
-        // firstEngageLanded: `sleeping` and `release` defaults.
+        // firstEngageLanded: `current` and `release` defaults.
         FanControlHelper.inject(connection: FakeHelperConnection(), engagesInFlight: 0)
-        FanControlHelper.inject(sleeping: true)
-        XCTAssertFalse(FanControlHelper.firstEngageLanded(.engaged), "firstEngageLanded ignored Self.sleeping")
+        let firstGeneration = FanControlHelper.reclaimGeneration
+        FanControlHelper.willSleep()   // nothing manual: bumps the generation, no reset
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.engaged, since: firstGeneration),
+                       "firstEngageLanded missed the willSleep")
         await waitForTeardown()
         XCTAssertTrue(FanControlHelper.connection == nil, "firstEngageLanded's default release did not release")
         // lateEngageLanded: `sleeping` default (manual on, so only sleep releases).

@@ -181,6 +181,9 @@ enum FanControlHelper {
     private static var reclaimRecoveryInFlight = false
     private static var sleeping = false
     private static var wakeRecoveryPending = false
+    /// Bumped ONLY by willSleep. The popup engage flow (firstEngageLanded/engageRest) treats
+    /// any bump as "a sleep happened" and abandons, so a new bump site would turn Manual
+    /// clicks into silent no-ops (#345; pinned by a source scan in FanReclaimRecoveryTests).
     private(set) static var reclaimGeneration = 0
     private static var reclaimRetryNotBefore = Date.distantPast
 
@@ -242,14 +245,17 @@ enum FanControlHelper {
     /// engage armed, and `release` everything: an older engage that landed late while
     /// this one was in flight was held for it (#263). Fire-and-forget so the button
     /// resolves now; a retry racing it is covered by the teardown guard in `resetAll`.
-    /// An engage that lands while asleep is released and reported false, so the popup
-    /// does not save manual intent for a pin that rides through sleep (#287).
-    static func firstEngageLanded(_ reply: FanManualReply,
-                                  sleeping: Bool = Self.sleeping,
+    /// An engage that lands after a willSleep since `generation` (captured before the
+    /// engage) is released and reported false: asleep, the pin would ride through sleep
+    /// (#287); after a whole sleep+wake, willSleep already reset the fan, so saving the
+    /// pref would claim a pin that is gone (#345). willSleep sets `sleeping` and bumps the
+    /// generation in one main-actor step, so the generation check covers `sleeping` too.
+    static func firstEngageLanded(_ reply: FanManualReply, since generation: Int,
+                                  current: Int = Self.reclaimGeneration,
                                   release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) -> Bool {
         guard reply != .engaged else {
-            if sleeping { Task { await release() } }
-            return !sleeping
+            guard current == generation else { Task { await release() }; return false }
+            return true
         }
         if !Preferences.fanManualEnabled { removeReclaimMonitor(); Task { await release() } }
         return false
@@ -269,11 +275,11 @@ enum FanControlHelper {
     }
 
     /// The popup's engage of every fan after the first; false = stop, do not save the pref.
+    /// `generation` is the popup's, captured before its first engage (#345).
     /// `engage`/`landed` are the test seams.
-    static func engageRest(_ targets: [Int: Double], skipping first: Int,
+    static func engageRest(_ targets: [Int: Double], skipping first: Int, since generation: Int = Self.reclaimGeneration,
                            engage: (Int, Double) async -> Bool = { await setManual($0, rpm: $1) },
                            landed: (Int) -> Bool = { laterEngageLanded(since: $0) }) async -> Bool {
-        let generation = reclaimGeneration
         for (i, rpm) in targets where i != first {
             _ = await engage(i, rpm)
             guard landed(generation) else { return false }
