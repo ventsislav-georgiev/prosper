@@ -131,7 +131,7 @@ enum LidSleepHelper {
 
     // MARK: - Registration (off-main)
 
-    private enum RegisterOutcome {
+    enum RegisterOutcome: Sendable {
         case enabled, needsApproval, failed
         var migrationResult: HelperMigration.RegisterResult {
             switch self {
@@ -216,6 +216,29 @@ enum LidSleepHelper {
         }
     }
 
+    // Single-flight for the async callers: N concurrent ensureRegistered calls share
+    // ONE detached registration, so a wedged smd pins one pool thread, not one per
+    // retry. Its own lock (never held across IPC) — registerLock is held for the
+    // whole smd round-trip. The sync entry points (migration, heal) still call
+    // registerIfNeeded() directly and serialize on registerLock as before.
+    nonisolated private static let inFlightLock = NSLock()
+    nonisolated(unsafe) private static var inFlight: Task<RegisterOutcome, Never>?
+    /// Test seam: the blocking registration the shared task runs.
+    nonisolated(unsafe) static var registration: @Sendable () -> RegisterOutcome = { registerIfNeeded() }
+
+    nonisolated static func sharedRegistration() -> Task<RegisterOutcome, Never> {
+        inFlightLock.withLock {
+            if let t = inFlight { return t }
+            let t = Task.detached(priority: .userInitiated) {
+                let outcome = registration()
+                inFlightLock.withLock { inFlight = nil }
+                return outcome
+            }
+            inFlight = t
+            return t
+        }
+    }
+
     /// Register the daemon if needed, running the blocking SMAppService work on a
     /// background task so a slow `smd` cannot freeze the app. Returns true once
     /// enabled. When macOS needs the user to OK the background item, presents the
@@ -225,7 +248,7 @@ enum LidSleepHelper {
     /// permission row's Open button — always on explicit action or launch re-apply.
     @discardableResult
     static func ensureRegistered(feature: String = "This feature", presentModal: Bool = true) async -> Bool {
-        let outcome = await Task.detached(priority: .userInitiated) { registerIfNeeded() }.value
+        let outcome = await sharedRegistration().value
         switch outcome {
         case .enabled:
             storeCache(true)
