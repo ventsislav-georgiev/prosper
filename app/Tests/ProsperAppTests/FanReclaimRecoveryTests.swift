@@ -157,9 +157,13 @@ final class FanReclaimRecoveryTests: XCTestCase {
         }
         Preferences.fanManualEnabled = true
         let t = Date()
-        await FanControlHelper.settleReclaim(.retry, now: t)
+        var resets: [Bool] = []
+        await FanControlHelper.settleReclaim(.retry, now: t) { resets.append($0); return true }
         XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(1)))
         XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(FanReclaimRecovery.retryCooldown)))
+        await FanControlHelper.settleReclaim(.restored, now: t) { resets.append($0); return true }
+        await FanControlHelper.settleReclaim(.abandonManualIntent, now: t) { resets.append($0); return true }
+        XCTAssertEqual(resets, [false, true], "retry resets once, restored never, abandon tears down once")
     }
 
     func testReclaimKeepsEligibleIntentAcrossFailedRetry() {

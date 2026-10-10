@@ -279,9 +279,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // leave `manualHeld` armed so a later last-client-drop retries instead of
         // believing the fans were already handed back.
         fanQ.async {
-            guard let fan = self.fan else { reply(false); return }
-            let ok = fan.resetAll()
-            if ok { self.fanCore.didResetAll() }
+            let ok = self.fanCore.releaseAll()  // reset closure is false when `fan` is nil
             fanLog.notice("resetAllFans ok=\(ok, privacy: .public)")
             reply(ok)
         }

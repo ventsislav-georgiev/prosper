@@ -418,14 +418,15 @@ enum FanControlHelper {
 
     /// Act on a reclaim re-apply's outcome. `.retry` holds the next attempt for the
     /// cooldown, so a latched helper is asked once per 30 s, not every 2 s tick.
-    static func settleReclaim(_ disposition: FanReclaimRecovery.Disposition, now: Date = Date()) async {
+    static func settleReclaim(_ disposition: FanReclaimRecovery.Disposition, now: Date = Date(),
+                              reset: (Bool) async -> Bool = { await resetAll(teardown: $0) }) async {
         switch disposition {
         case .abandonManualIntent:
             Preferences.fanManualEnabled = false
-            await resetAll(teardown: true)
+            _ = await reset(true)
         case .retry:
             deferReclaimRetry(now: now)
-            await resetAll()
+            _ = await reset(false)
         case .restored:
             break
         }
