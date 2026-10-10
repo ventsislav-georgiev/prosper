@@ -84,7 +84,9 @@ tag from the now-released section and put it on the new top draft.
   click. The cancel event now ends the drag without snapping.
 - **Fixed: the audio mixer logged CoreAudio errors when an app's audio session ended or the
   output device was unplugged.** It kept asking CoreAudio to remove listeners from objects that
-  no longer existed; those listeners are now forgotten instead.
+  no longer existed; those listeners are now forgotten instead. "Gone" is judged against the
+  full device list, so a Bluetooth, AirPlay or aggregate output that drops out of the mixer
+  rows for a moment keeps one volume listener instead of ending up with two.
 - **Fixed: the coding agent's sandbox settings were never applied by codex.** Extra writable
   folders, network access and "Bypass all" are now sent in the form the codex app server reads,
   for new and resumed sessions alike.

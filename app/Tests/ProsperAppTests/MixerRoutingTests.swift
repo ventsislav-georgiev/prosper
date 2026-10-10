@@ -375,6 +375,15 @@ final class MixerRoutingTests: XCTestCase {
         XCTAssertTrue(zoom[0].isBypassed)
     }
 
+    /// #227: a device filtered out of the rows for one pass is still in the
+    /// HAL's device list and must keep its listener record.
+    func testListenerDeviceIsGoneOnlyWhenAbsentFromTheDeviceList() {
+        XCTAssertFalse(AppVolumeMixer.listenerDeviceIsGone(42, deviceList: [7, 42]))
+        XCTAssertTrue(AppVolumeMixer.listenerDeviceIsGone(42, deviceList: [7]))
+        // A failed read is not evidence of anything.
+        XCTAssertFalse(AppVolumeMixer.listenerDeviceIsGone(42, deviceList: []))
+    }
+
     // MARK: - Sound-output cycling
 
     private func next(_ current: String?, _ selected: [String], _ available: [String]) -> String? {

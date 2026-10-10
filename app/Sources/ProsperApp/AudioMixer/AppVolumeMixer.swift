@@ -89,6 +89,10 @@ private struct RefreshSnapshot {
     let defaultUID: String?
     let systemSoundUID: String?
     let outputDevices: [MixerOutputDevice]
+    /// The unfiltered kAudioHardwarePropertyDevices list `outputDevices` was
+    /// built from: whether a listened-to device still exists is judged here,
+    /// not against the filtered rows.
+    let deviceIDs: [AudioObjectID]
     let defaultDeviceID: AudioObjectID?
     let systemOutputVolume: Double?
     let systemOutputMuted: Bool?
@@ -851,8 +855,11 @@ final class AppVolumeMixer: ObservableObject {
         }
         // A device that left the device list took its listeners with it;
         // removing them from the dead id only makes CoreAudio log an error.
-        if let device = outputControlListenerDevice, !snapshot.outputDevices.isEmpty,
-           !snapshot.outputDevices.contains(where: { $0.audioObjectID == device }) {
+        // One merely filtered out of the rows for a pass (an aggregate,
+        // AirPlay or Bluetooth device mid-reconfiguration) is still alive and
+        // keeps its record, so the normal path below removes its listeners.
+        if let device = outputControlListenerDevice,
+           Self.listenerDeviceIsGone(device, deviceList: snapshot.deviceIDs) {
             removeOutputControlListeners(deviceIsGone: true)
         }
         subscribeToOutputControls(of: snapshot.defaultDeviceID)
@@ -901,7 +908,8 @@ final class AppVolumeMixer: ObservableObject {
         let defaultUID = defaultOutputDeviceUID(selector: kAudioHardwarePropertyDefaultOutputDevice)
         let systemSoundUID = defaultOutputDeviceUID(
             selector: kAudioHardwarePropertyDefaultSystemOutputDevice)
-        let nextOutputDevices = outputDevices(defaultUID: defaultUID)
+        let deviceIDs = allDeviceIDs()
+        let nextOutputDevices = outputDevices(among: deviceIDs, defaultUID: defaultUID)
         let defaultDevice = nextOutputDevices.first { $0.uid == defaultUID }
         let availableUIDs = Set(nextOutputDevices.map(\.uid))
         let systemOutputVolume = defaultDevice.flatMap { device in
@@ -915,6 +923,7 @@ final class AppVolumeMixer: ObservableObject {
             return RefreshSnapshot(defaultUID: defaultUID,
                                    systemSoundUID: systemSoundUID,
                                    outputDevices: nextOutputDevices,
+                                   deviceIDs: deviceIDs,
                                    defaultDeviceID: defaultDevice?.audioObjectID,
                                    systemOutputVolume: systemOutputVolume,
                                    systemOutputMuted: systemOutputMuted,
@@ -1008,6 +1017,7 @@ final class AppVolumeMixer: ObservableObject {
         return RefreshSnapshot(defaultUID: defaultUID,
                                systemSoundUID: systemSoundUID,
                                outputDevices: nextOutputDevices,
+                               deviceIDs: deviceIDs,
                                defaultDeviceID: defaultDevice?.audioObjectID,
                                systemOutputVolume: systemOutputVolume,
                                systemOutputMuted: systemOutputMuted,
@@ -1387,7 +1397,15 @@ final class AppVolumeMixer: ObservableObject {
         return false
     }
 
-    private nonisolated static func outputDevices(defaultUID: String?) -> [MixerOutputDevice] {
+    /// True when `device` is absent from a successfully read device list. An
+    /// empty list is a failed read, which proves nothing.
+    nonisolated static func listenerDeviceIsGone(_ device: AudioObjectID,
+                                                 deviceList: [AudioObjectID]) -> Bool {
+        !deviceList.isEmpty && !deviceList.contains(device)
+    }
+
+    /// Every device object the HAL lists, unfiltered; empty on a failed read.
+    private nonisolated static func allDeviceIDs() -> [AudioObjectID] {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
                                                  mScope: kAudioObjectPropertyScopeGlobal,
                                                  mElement: kAudioObjectPropertyElementMain)
@@ -1397,7 +1415,11 @@ final class AppVolumeMixer: ObservableObject {
         var deviceIDs = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
                                          &address, 0, nil, &size, &deviceIDs) == noErr else { return [] }
+        return deviceIDs
+    }
 
+    private nonisolated static func outputDevices(among deviceIDs: [AudioObjectID],
+                                                  defaultUID: String?) -> [MixerOutputDevice] {
         var devices: [MixerOutputDevice] = []
         for deviceID in deviceIDs {
             guard hasOutputStreams(deviceID) else { continue }
