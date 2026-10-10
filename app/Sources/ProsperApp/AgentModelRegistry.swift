@@ -194,6 +194,38 @@ enum AgentModelRegistry {
     static let replacements: [String: String] = [
         "unsloth/Qwen3-8B-GGUF": "unsloth/Qwen3.5-9B-GGUF",
         "unsloth/Nemotron-3-Nano-30B-A3B-GGUF": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+        // MLX ladder retired in 2756432 (#248): same RAM tier, same family where
+        // one exists, else the tier's first row; a tier with no GGUF row drops to
+        // the largest one below it, never up.
+        // 16 GB
+        "mlx-community/Qwen3.5-4B-MLX-4bit": "unsloth/Qwen3.5-4B-GGUF",
+        "mlx-community/NVIDIA-Nemotron-3-Nano-4B-4bit": "unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF",
+        "mlx-community/Qwen3-8B-4bit-DWQ": "unsloth/Qwen3.5-9B-GGUF",
+        "mlx-community/phi-4-4bit": "unsloth/Qwen3.5-4B-GGUF",
+        "mlx-community/gpt-oss-20b-MXFP4-Q4": "unsloth/Qwen3.5-4B-GGUF",
+        // 24 GB — no GGUF row at 24, so the largest 16 GB row.
+        "mlx-community/Devstral-Small-2507-4bit-DWQ": "unsloth/Qwen3.5-9B-GGUF",
+        "mlx-community/Devstral-Small-2-24B-Instruct-2512-6bit": "unsloth/Qwen3.5-9B-GGUF",
+        "mlx-community/GLM-4.7-Flash-4bit": "unsloth/Qwen3.5-9B-GGUF",
+        // 32 GB (Ornith is a Qwen fine-tune, qwenXML tool format)
+        "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+        "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-6bit": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+        "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ": "unsloth/Qwen3.6-35B-A3B-GGUF",
+        "mlx-community/NVIDIA-Nemotron-3-Nano-30B-A3B-4bit": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+        "leonsarmiento/Ornith-1.0-35B-5bit-mlx": "unsloth/Qwen3.6-35B-A3B-GGUF",
+        "airagrp/ornith-1.0-9B-mlx-BF16": "unsloth/Qwen3.6-35B-A3B-GGUF",
+        // 64 GB and above — 64 GB is the largest GGUF tier.
+        "mlx-community/Qwen3-Coder-Next-4bit": "unsloth/Qwen3-Coder-Next-GGUF",
+        "mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+        "mlx-community/gpt-oss-120b-MXFP4-Q4": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+        "mlx-community/GLM-4.5-Air-4bit": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+        "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+        "lmstudio-community/MiniMax-M2.5-MLX-4bit": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+        "inferencerlabs/MiMo-V2.5-Pro-MLX-4.3bit-INF": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+        "mlx-community/GLM-4.6-4bit": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+        "mlx-community/Nemotron-3-Ultra-550B-A55B-4bit": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+        "mlx-community/GLM-5-4bit": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
+        "pipenetwork/Kimi-K2.7-Code-MLX-4bit-hiprec": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
     ]
 
     /// The one self-heal for a saved agent id: known (built-in or custom) → itself,

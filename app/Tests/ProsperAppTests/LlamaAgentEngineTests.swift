@@ -237,6 +237,40 @@ final class LlamaAgentEngineTests: XCTestCase {
         }
     }
 
+    /// #248: every MLX id retired in 2756432 heals to a GGUF row in the same or a smaller
+    /// RAM tier, and only a 32 GB pick (the recommended row's tier) may land on recommendedId.
+    func testRetiredMLXIdsResolveWithinTheirRAMTier() {
+        let retired: [Int: [String]] = [
+            16: ["mlx-community/Qwen3.5-4B-MLX-4bit", "mlx-community/NVIDIA-Nemotron-3-Nano-4B-4bit",
+                 "mlx-community/Qwen3-8B-4bit-DWQ", "mlx-community/phi-4-4bit", "mlx-community/gpt-oss-20b-MXFP4-Q4"],
+            24: ["mlx-community/Devstral-Small-2507-4bit-DWQ", "mlx-community/Devstral-Small-2-24B-Instruct-2512-6bit",
+                 "mlx-community/GLM-4.7-Flash-4bit"],
+            32: ["mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2", "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-6bit",
+                 "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ", "mlx-community/NVIDIA-Nemotron-3-Nano-30B-A3B-4bit",
+                 "leonsarmiento/Ornith-1.0-35B-5bit-mlx", "airagrp/ornith-1.0-9B-mlx-BF16"],
+            64: ["mlx-community/Qwen3-Coder-Next-4bit", "mlx-community/gpt-oss-120b-MXFP4-Q4",
+                 "mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit", "mlx-community/GLM-4.5-Air-4bit",
+                 "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit"],
+            128: ["lmstudio-community/MiniMax-M2.5-MLX-4bit"],
+            192: ["inferencerlabs/MiMo-V2.5-Pro-MLX-4.3bit-INF"],
+            256: ["mlx-community/GLM-4.6-4bit"],
+            512: ["mlx-community/Nemotron-3-Ultra-550B-A55B-4bit", "mlx-community/GLM-5-4bit",
+                  "pipenetwork/Kimi-K2.7-Code-MLX-4bit-hiprec"],
+        ]
+        XCTAssertEqual(retired.values.joined().count, 25)
+        let catalog = Dictionary(uniqueKeysWithValues: AgentModelRegistry.models.map { ($0.id, $0) })
+        for (tier, ids) in retired {
+            for old in ids {
+                let healed = AgentModelRegistry.canonicalId(old)
+                guard let row = catalog[healed] else { XCTFail("\(old) → \(healed) not a catalog row"); continue }
+                XCTAssertLessThanOrEqual(row.minRAMGB, tier, "\(old) (\(tier) GB) → \(healed) (\(row.minRAMGB) GB) went up a tier")
+                if tier != 32 {
+                    XCTAssertNotEqual(healed, AgentModelRegistry.recommendedId, "\(old) (\(tier) GB) fell through to recommendedId")
+                }
+            }
+        }
+    }
+
     /// #247: a custom (HF-imported) id is canonical as-is, and the getter leaves it in UserDefaults.
     /// Both stores read UserDefaults.standard only, so save/restore the two keys.
     func testCustomIdIsCanonicalAndNotRewritten() {
