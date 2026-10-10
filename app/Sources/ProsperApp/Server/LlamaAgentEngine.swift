@@ -1,6 +1,7 @@
 import Foundation
 import MLXLMCommon
 import llama
+import os
 
 // MARK: - Engine abstraction
 
@@ -198,6 +199,8 @@ actor LlamaAgentEngine: AgentChatEngine {
     }
 
     private func load(path: String) throws {
+        let signpost = Perf.signposter.beginInterval("model.load", id: Perf.signposter.makeSignpostID(), "agent")
+        defer { Perf.signposter.endInterval("model.load", signpost) }
         guard FileManager.default.fileExists(atPath: path) else {
             throw EngineError.modelMissing(path)
         }
@@ -412,6 +415,10 @@ actor LlamaAgentEngine: AgentChatEngine {
         guard let ctx, var batch, let vocab else {
             throw EngineError.loadFailed("agent model not loaded")
         }
+        // #195: request → first sampled token; ended at the first sample or on any exit.
+        var ttft: OSSignpostIntervalState? = Perf.signposter.beginInterval(
+            "model.ttft", id: Perf.signposter.makeSignpostID(), "agent")
+        defer { if let ttft { Perf.signposter.endInterval("model.ttft", ttft) } }
         let mem = llama_get_memory(ctx)
         let nCtx = Int(llama_n_ctx(ctx))
 
@@ -505,6 +512,7 @@ actor LlamaAgentEngine: AgentChatEngine {
         decode: while generated < budget {
             if Task.isCancelled { break }
             let token = llama_sampler_sample(chain, ctx, -1)
+            if let s = ttft { Perf.signposter.endInterval("model.ttft", s); ttft = nil }
             if llama_vocab_is_eog(vocab, token) { break }
 
             batchClear()

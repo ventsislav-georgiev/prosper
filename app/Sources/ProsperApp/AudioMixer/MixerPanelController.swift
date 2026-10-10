@@ -232,6 +232,9 @@ final class MixerPanelController {
     /// The click's toggle — target/action below 27, the session's didBegin on 27.
     private func toggle(_ sender: NSStatusBarButton) {
         if popover.isShown { popover.performClose(sender); return }
+        // #195: click → popover transaction committed.
+        let signpost = Perf.signposter.beginInterval("popover.show", id: Perf.signposter.makeSignpostID(), "mixer")
+        CATransaction.setCompletionBlock { Perf.signposter.endInterval("popover.show", signpost) }
         let host = panelHost()
         popover.contentViewController = host
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)

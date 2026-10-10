@@ -37,6 +37,9 @@ final class SettingsWindow {
     }
 
     func show() {
+        // #195: show → this transaction committed (pane laid out and handed to the render server).
+        let signpost = Perf.signposter.beginInterval("settings.show")
+        CATransaction.setCompletionBlock { Perf.signposter.endInterval("settings.show", signpost) }
         if let window {
             DockPolicy.windowDidShow(window)
             NSApp.activate(ignoringOtherApps: true)

@@ -237,6 +237,9 @@ final class StatsController {
     private func toggle(_ sender: NSStatusBarButton) {
         guard let m = buttonModule[ObjectIdentifier(sender)] else { return }
         if popover.isShown, openModule == m { popover.performClose(sender); return }
+        // #195: click → popover transaction committed.
+        let signpost = Perf.signposter.beginInterval("popover.show", id: Perf.signposter.makeSignpostID(), "stats")
+        CATransaction.setCompletionBlock { Perf.signposter.endInterval("popover.show", signpost) }
         openModule = m
         let host = NSHostingController(rootView: StatsPopupView(module: m, store: store))
         // Let the popover learn the view's real size BEFORE it positions itself.

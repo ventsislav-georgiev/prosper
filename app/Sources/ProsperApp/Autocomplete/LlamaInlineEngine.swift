@@ -292,6 +292,8 @@ actor LlamaInlineEngine {
 
     func ensureLoaded(params: Params = Params()) throws {
         if ctx != nil { return }
+        let signpost = Perf.signposter.beginInterval("model.load", id: Perf.signposter.makeSignpostID(), "inline")
+        defer { Perf.signposter.endInterval("model.load", signpost) }
         let path = Self.modelFileURL.path
         guard FileManager.default.fileExists(atPath: path) else {
             throw EngineError.modelMissing(path)
@@ -634,6 +636,9 @@ actor LlamaInlineEngine {
     /// few new tail tokens. Leaves `batch` holding the decoded tail with
     /// logits requested on the LAST row.
     private func prefillPrompt(_ promptTokens: [llama_token], batch: inout llama_batch) throws {
+        // #195: prefill ends with the first token's logits ready = time to first token.
+        let signpost = Perf.signposter.beginInterval("model.ttft", id: Perf.signposter.makeSignpostID(), "inline")
+        defer { Perf.signposter.endInterval("model.ttft", signpost) }
         guard let ctx else { throw EngineError.loadFailed("no context") }
         let mem = llama_get_memory(ctx)
         var lcp = 0

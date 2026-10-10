@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import os
 
 /// Orchestrates inline autocomplete: a CGEventTap watches keystrokes, debounces,
 /// reads caret context via AX, requests a completion, and renders a ghost
@@ -76,6 +77,8 @@ final class AutocompleteEngine {
     // keystroke so a superseded generation stops prefill/decode immediately
     // instead of running to completion on the serialized MLX actor.
     private var completionTask: Task<Void, Never>?
+    /// #195: the LLM request's `autocomplete.request` interval, ended by its completion or when superseded.
+    private var requestSignpost: OSSignpostIntervalState?
     // Pipelined single-flight (see requestSuggestion): the `before` text of the
     // request currently in flight, and whether a fresh request should fire as
     // soon as it lands. Replaces the old cancel-on-every-fire, which meant that
@@ -304,6 +307,8 @@ final class AutocompleteEngine {
             options: .defaultTap,
             eventsOfInterest: CGEventMask(mask),
             callback: { _, type, event, userInfo -> Unmanaged<CGEvent>? in
+                let signpost = Perf.signposter.beginInterval("tap.callback")
+                defer { Perf.signposter.endInterval("tap.callback", signpost) }
                 guard let userInfo else { return Unmanaged.passUnretained(event) }
                 // Skip events we synthesized ourselves (accept insertion / backspaces)
                 // so they don't clear the live suggestion or trigger a fresh request.
@@ -999,6 +1004,11 @@ final class AutocompleteEngine {
     }
 
     private func requestSuggestion(burst: Bool = false) {
+        // #195: one interval per request; ends here on every synchronous exit, or is
+        // handed to `requestSignpost` when an LLM completion is launched below.
+        let signpost = Perf.signposter.beginInterval("autocomplete.request", id: Perf.signposter.makeSignpostID())
+        var signpostHandedOff = false
+        defer { if !signpostHandedOff { Perf.signposter.endInterval("autocomplete.request", signpost) } }
         // Never autocomplete inside Prosper's own UI (command runner, translate
         // panel, settings). The indicator/ghost must not appear over our own
         // windows, so bail when we are the frontmost app.
@@ -1419,6 +1429,9 @@ final class AutocompleteEngine {
         inFlightAnchor = before
         inFlightSince = requestStart
         pendingRefire = false
+        endRequestSignpost()
+        requestSignpost = signpost
+        signpostHandedOff = true
         completionTask = CoreBridge.complete(
             before: before, after: context.textAfter,
             bundleId: bundleId, caretScreenRect: caretRect,
@@ -1447,6 +1460,8 @@ final class AutocompleteEngine {
                     self.requestSuggestion(burst: stillTyping)
                 }
             }
+            // Declared after the refire defer so it runs FIRST (before a refire begins a new one).
+            defer { self.endRequestSignpost() }
             guard let suggestion, !suggestion.isEmpty else {
                 // Model produced nothing even after CoreBridge's retry/reprompt
                 // ladder. Distinguish the causes (P2.2): when the agent owns the
@@ -1695,7 +1710,14 @@ final class AutocompleteEngine {
     /// else the inline caret-anchored ghost. Centralizes the choice so every
     /// suggestion source (emoji, completion) routes the same way; the inline ghost
     /// remains the default whenever a caret is available or mirroring is off.
+    private func endRequestSignpost() {
+        guard let requestSignpost else { return }
+        Perf.signposter.endInterval("autocomplete.request", requestSignpost)
+        self.requestSignpost = nil
+    }
+
     private func renderSuggestion(text: String, caret: CGRect?, field: CGRect?, useMirror: Bool) {
+        Perf.signposter.emitEvent("autocomplete.ghost")
         if useMirror, let field {
             mirrorWindow.show(text: text, fieldRect: field)
         } else if let caret {
@@ -1719,6 +1741,7 @@ final class AutocompleteEngine {
     private func clearSuggestion() {
         requestToken &+= 1 // invalidate any in-flight request
         completionTask?.cancel() // stop a superseded generation mid-flight
+        endRequestSignpost()     // cancelled tasks never call back
         completionTask = nil
         inFlightAnchor = nil     // cancelled tasks never call back; unblock the next fire
         pendingRefire = false

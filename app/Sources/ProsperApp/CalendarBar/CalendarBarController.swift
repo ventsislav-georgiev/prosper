@@ -226,6 +226,9 @@ final class CalendarBarController {
     func togglePopup() {
         if popover.isShown { popover.performClose(nil); return }
         guard let button = item?.button else { return }
+        // #195: click → popover transaction committed.
+        let signpost = Perf.signposter.beginInterval("popover.show", id: Perf.signposter.makeSignpostID(), "calendar")
+        CATransaction.setCompletionBlock { Perf.signposter.endInterval("popover.show", signpost) }
         // Reset navigation to today on open (Itsycal behaviour).
         store.today = store.calendar.startOfDay(for: Date())
         store.monthAnchor = store.today

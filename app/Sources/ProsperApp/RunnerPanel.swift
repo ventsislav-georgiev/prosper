@@ -204,6 +204,9 @@ final class RunnerPanel {
     /// user types without a prefix and a mode chip is shown. `prefill` pre-seeds
     /// the input (already prefix-stripped by the caller).
     func present(mode: RunnerMode = .universal, prefill: String = "") {
+        // #195: present → this transaction committed (first frame handed to the render server).
+        let signpost = Perf.signposter.beginInterval("palette.present")
+        CATransaction.setCompletionBlock { Perf.signposter.endInterval("palette.present", signpost) }
         previousApp = NSWorkspace.shared.frontmostApplication
         model.reset()
         model.mode = mode

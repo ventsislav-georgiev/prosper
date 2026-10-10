@@ -81,6 +81,8 @@ final class EventTap {
                                      _ event: CGEvent) -> Unmanaged<CGEvent>? {
         // CGEvent isn't Sendable, but the C handler fires synchronously on the main
         // run loop where the tap was installed — the hand-off is real-thread-safe.
+        let signpost = Perf.signposter.beginInterval("tap.callback")
+        defer { Perf.signposter.endInterval("tap.callback", signpost) }
         nonisolated(unsafe) let event = event
         // Same reason the result is carried out through an `unsafe` var rather than
         // returned from the closure: CGEvent isn't Sendable, but nothing here ever
