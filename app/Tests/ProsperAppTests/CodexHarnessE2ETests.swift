@@ -145,7 +145,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                     "/tmp/a.txt\nApply changes to /etc/passwd": {"type": "delete", "content": ""}}}
         if word == "AMEND":
             return "item/commandExecution/requestApproval", dict(t, itemId="cmd-1",
-                command="rm -rf build", cwd="/tmp", proposedExecpolicyAmendment=["rm", "-rf"])
+                command="rm -rf build", cwd="/tmp\n\u202e\u009b", proposedExecpolicyAmendment=["rm", "-rf"])
         return "mcpServer/elicitation/request", dict(t, serverName="mock-mcp", mode="form", message="Pick one",
                                                      requestedSchema={"type": "object", "properties": {}})
 
@@ -1689,6 +1689,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testControllerAmendmentReplyIsTheExecpolicyObject() async throws {
         let (approval, reply) = try await answer("AMEND please", with: .acceptWithAmendment(["rm", "-rf"]))
         XCTAssertEqual(approval?.kind, .command)
+        XCTAssertEqual(approval?.detail, #"/tmp\n\u{202E}\u{9B}"#, "#290: the cwd line is escaped like the permission card's In: line")
         XCTAssertEqual(reply?["result"] as? NSDictionary,
                        ["decision": ["acceptWithExecpolicyAmendment": ["execpolicy_amendment": ["rm", "-rf"]]]]
                        as NSDictionary)

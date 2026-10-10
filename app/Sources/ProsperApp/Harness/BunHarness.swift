@@ -93,7 +93,8 @@ final class BunHarness {
         }
         // Clear `process` on exit so a later `start()` can relaunch a crashed host
         // (otherwise the `guard process == nil` wedges plugins off until app restart).
-        proc.terminationHandler = { [weak self] _ in
+        proc.terminationHandler = { [weak self] p in
+            CodexHarness.killGroup(p.processIdentifier)   // the host is gone; its children are not
             Task { @MainActor in if self?.process == proc { self?.cleanupProcess() } }
         }
         do { try proc.run() } catch {
@@ -142,7 +143,9 @@ final class BunHarness {
         eventsWatcher?.stop()
         eventsWatcher = nil
         process?.terminationHandler = nil   // this teardown owns the exit
-        process?.terminate()
+        // The host leads its own process group (Foundation spawns it so): signal the group,
+        // so plugin-spawned shells and MCP servers go with it, SIGKILL after 3 s.
+        if let pid = process?.processIdentifier { CodexHarness.killGroup(pid) }
         cleanupProcess()
         try? FileManager.default.removeItem(at: Self.socketURL)
     }

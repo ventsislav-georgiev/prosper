@@ -128,7 +128,8 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: stopping or ending a coding-agent session left codex's helper processes
   running.** The MCP servers and tools codex starts share its process group; Stop and End
   now shut down that whole group, and a codex that crashes takes its helpers with it, so
-  nothing lingers in the background.
+  nothing lingers in the background. The same now holds for opencode's plugin host: the
+  shells and MCP servers it starts go down with Stop and End, and with the host itself.
 - **Fixed: the coding agent's permission card now shows what "Always" grants.** The read,
   write and deny roots, network access and the working directory codex asks for are listed
   in the card before you approve, with special locations named plainly (the whole disk, the

@@ -181,7 +181,7 @@ actor CodexHarness: CodingHarness {
     /// is still in the group after 3 s, off the actor so a slow exit can't block it.
     /// ponytail: a child that moves to its own group or session (`setsid` for a PTY)
     /// is out of reach; codex itself has to end those on SIGTERM.
-    private nonisolated static func killGroup(_ pgid: pid_t) {
+    nonisolated static func killGroup(_ pgid: pid_t) {   // also BunHarness's (#290)
         // kill(-0)/kill(-1) would hit us / everything; and a codex that somehow isn't its
         // own group leader would hand us our own pgid: leak its group, don't signal ours.
         guard pgid > 1, pgid != getpgrp() else { return }
@@ -626,7 +626,7 @@ actor CodexHarness: CodingHarness {
     private static func approvalDetail(kind: ApprovalRequest.Kind, params: [String: Any],
                                        changes: [[String: Any]]) -> String? {
         switch kind {
-        case .command: return params["cwd"] as? String
+        case .command: return (params["cwd"] as? String).map(oneLine)
         case .fileChange:
             let diffs = changes.map { "\(oneLine(($0["path"] as? String) ?? ""))\n\(($0["diff"] as? String) ?? "")" }
             return diffs.isEmpty ? nil : diffs.joined(separator: "\n")
@@ -664,11 +664,11 @@ actor CodexHarness: CodingHarness {
     }
 
     /// Wire text on one card line: an embedded newline must not forge extra card lines, and
-    /// a C0/DEL control or a format scalar (bidi override, zero-width) shows as `\u{…}`
+    /// a control (Cc: C0, DEL, C1) or a format scalar (bidi override, zero-width) shows as `\u{…}`
     /// rather than reordering or hiding what is granted.
     private static func oneLine(_ s: String) -> String {
         s.components(separatedBy: .newlines).joined(separator: "\\n").unicodeScalars.map { u in
-            u.value < 0x20 || u.value == 0x7F || u.properties.generalCategory == .format
+            [.control, .format].contains(u.properties.generalCategory)
                 ? "\\u{\(String(u.value, radix: 16, uppercase: true))}" : String(u)
         }.joined()
     }
