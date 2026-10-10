@@ -122,6 +122,7 @@ tag from the now-released section and put it on the new top draft.
   whitespace padding is shown as a count (`␠×400`) instead of blank space.
 - **Fixed: the Window extension no longer shrinks a window to nothing when macOS reports an
 - **Fixed: in the System Settings extension, "Screen Saver" and "Passwords" opened nothing on macOS 27.** Screen Saver now opens the Wallpaper pane, where macOS moved it, and Passwords opens the Passwords app.
+- **Fixed: an extension's menu bar icon now keeps its position across launches.** Each extension status item is saved under its own name instead of a creation-order slot. The icon moves once to its default spot on the first launch after this update.
   invalid frame for it.** The action now stops as if no window were focused.
 - **Fixed: extension timers restored from a corrupted saved schedule no longer crash Prosper at
   launch or fire in a tight loop.** Bad intervals are clamped to the normal 50 ms minimum.

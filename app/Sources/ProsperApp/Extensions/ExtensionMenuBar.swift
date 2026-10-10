@@ -25,6 +25,17 @@ final class ExtensionMenuBar {
 
     private static func key(_ extID: String, _ id: String) -> String { "\(extID)\u{1}\(id)" }
 
+    /// Stable status-item autosave name per (extension, item), restricted to [A-Za-z0-9._-].
+    nonisolated static func autosaveName(extensionID: String, id: String) -> String {
+        func clean(_ s: String) -> String {
+            String(s.unicodeScalars.map { c in
+                (c.isASCII && (CharacterSet.alphanumerics.contains(c) || "._-".unicodeScalars.contains(c)))
+                    ? Character(c) : "_"
+            })
+        }
+        return "ProsperExt.\(clean(extensionID)).\(clean(id))"
+    }
+
     // MARK: - Menubar (§M)
 
     /// Upsert a status item. `json` = { title, icon (SF symbol name), menu:[ {title,
@@ -42,6 +53,9 @@ final class ExtensionMenuBar {
         // .content: extension icons are user-facing data icons — keep them orderable/
         // previewable, named by the extension's title (else the extension id).
         if isNew {
+            // #333: a named slot keeps the icon's position across launches; unnamed
+            // items persist under "Item-N", which drifts with creation order.
+            item.autosaveName = Self.autosaveName(extensionID: extensionID, id: id)
             let name = (obj["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? extensionID
             ProsperStatusItems.register(item, role: .content, name: name)
         }
