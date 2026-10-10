@@ -347,6 +347,8 @@ actor CodexHarness: CodingHarness {
             case .notification(let method, let params):
                 // A turn ending orphans any approval it left unanswered (codex won't
                 // re-request); drop the mappings so they can't accumulate across turns.
+                // fileChanges is unbounded within a turn and cleared by ANY thread's
+                // turn end (accepted: one turn's patches are small, approvals are rare).
                 if method == Wire.turnCompleted { approvalReplies.removeAll(); fileChanges.removeAll() }
                 if method == Wire.itemStarted, let item = params["item"] as? [String: Any],
                    item["type"] as? String == "fileChange", let id = item["id"] as? String {
@@ -372,8 +374,13 @@ actor CodexHarness: CodingHarness {
         approvalReplies[approvalID.raw] = (rpcID: id, method: method,
                                            requested: params["permissions"] as? [String: Any] ?? [:])
         let session = SessionID(raw: (params["threadId"] as? String) ?? "")
-        let changes = method == Wire.fileChangeApproval
-            ? (params["itemId"] as? String).flatMap { fileChanges[$0] } ?? [] : []
+        // Modern requests carry only `itemId` (diff comes from the item); legacy
+        // `applyPatchApproval` carries `fileChanges` keyed by path: show its paths.
+        let changes: [[String: Any]] = method == Wire.fileChangeApproval
+            ? (params["itemId"] as? String).flatMap { fileChanges[$0] } ?? []
+            : method == Wire.legacyPatchApproval
+            ? ((params["fileChanges"] as? [String: Any])?.keys.sorted() ?? []).map { ["path": $0] }
+            : []
         let request = ApprovalRequest(
             id: approvalID, kind: kind, session: session,
             summary: Self.approvalSummary(kind: kind, params: params, changes: changes),
@@ -581,7 +588,7 @@ actor CodexHarness: CodingHarness {
         case .fileChange:
             let diffs = changes.map { "\(($0["path"] as? String) ?? "")\n\(($0["diff"] as? String) ?? "")" }
             return diffs.isEmpty ? nil : diffs.joined(separator: "\n")
-        case .permission: return params["detail"] as? String
+        case .permission: return params["cwd"] as? String   // codex sends no `detail`
         }
     }
 

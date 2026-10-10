@@ -1127,6 +1127,9 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(granted.approval?.kind, .permission)
         XCTAssertEqual(granted.reply?["result"] as? NSDictionary,
                        ["permissions": ["network": ["enabled": true]], "scope": "session"] as NSDictionary)
+        let once = try await answer("PERMS please", with: .accept)
+        XCTAssertEqual(once.reply?["result"] as? NSDictionary,
+                       ["permissions": ["network": ["enabled": true]], "scope": "turn"] as NSDictionary)
         let denied = try await answer("PERMS please", with: .decline)
         XCTAssertEqual(denied.reply?["result"] as? NSDictionary,
                        ["permissions": [String: Any](), "scope": "turn"] as NSDictionary)
@@ -1151,6 +1154,13 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(reply?["result"] as? NSDictionary,
                        ["decision": ["acceptWithExecpolicyAmendment": ["execpolicy_amendment": ["rm", "-rf"]]]]
                        as NSDictionary)
+    }
+
+    /// An empty amendment prefix must fall through to a plain accept, never an empty amendment.
+    @MainActor
+    func testControllerEmptyAmendmentIsPlainAccept() async throws {
+        let (_, reply) = try await answer("AMEND please", with: .acceptWithAmendment([]))
+        XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "accept"] as NSDictionary)
     }
 
     /// W8: a server request the client doesn't serve (MCP elicitation) gets a JSON-RPC
