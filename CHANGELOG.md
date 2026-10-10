@@ -125,7 +125,8 @@ tag from the now-released section and put it on the new top draft.
   pinning the fan behind a card that says it failed, unless a newer engage is still in
   flight and owns the fans. A newer engage that then fails releases everything, and turning
   fan control off no longer tears down the helper connection under an engage that just
-  picked it up.
+  picked it up. Turning it off while saved fan speeds were still being re-applied after a
+  reclaim no longer pins the remaining fans again.
 - **Performance: with inline autocomplete off, mouse clicks no longer pass through Prosper**
   and the global scroll monitor is not installed. The keystroke tap listened for every left
   click and every scroll tick on behalf of autocomplete even when it was disabled. Toggling

@@ -176,7 +176,7 @@ enum FanControlHelper {
     private static var reclaimRecoveryInFlight = false
     private static var sleeping = false
     private static var wakeRecoveryPending = false
-    private static var reclaimGeneration = 0
+    private(set) static var reclaimGeneration = 0
     private static var reclaimRetryNotBefore = Date.distantPast
 
     /// Set by the popup while a slider drag / quick-button commit is in flight, so
@@ -302,8 +302,9 @@ enum FanControlHelper {
         observersInstalled && reclaimTimer != nil
     }
 
-    /// Applies targets after the lifecycle gate admitted this attempt.
-    private static func applySavedTargets(reclaimGeneration: Int) async -> Bool {
+    /// Applies targets after the lifecycle gate admitted this attempt. `engage` is the test seam.
+    static func applySavedTargets(reclaimGeneration: Int,
+                                  engage: (Int, Double, TimeInterval) async -> Bool = { await setManual($0, rpm: $1, timeout: $2) }) async -> Bool {
         guard Preferences.fanManualEnabled else { return false }
         let targets = Preferences.fanTargets
         guard !targets.isEmpty else { return false }
@@ -313,8 +314,8 @@ enum FanControlHelper {
         var first = true
         var reengaged = true
         for (index, rpm) in targets {
-            guard !sleeping && reclaimGeneration == Self.reclaimGeneration else { return false }
-            let ok = await setManual(index, rpm: rpm, timeout: first ? firstEngageTimeout : 12)
+            guard !sleeping && reclaimGeneration == Self.reclaimGeneration && Preferences.fanManualEnabled else { return false }
+            let ok = await engage(index, rpm, first ? firstEngageTimeout : 12)
             reengaged = reengaged && ok
             first = false
         }

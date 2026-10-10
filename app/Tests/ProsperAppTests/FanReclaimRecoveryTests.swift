@@ -87,6 +87,24 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertNil(FanControlHelper.connection)
     }
 
+    /// #267: Automatic landing while a re-apply is between fans stops the loop; the
+    /// later fans are not pinned again. `engage` is a fake: no helper, no SMC.
+    @MainActor
+    func testDisableMidReapplyStopsTheRemainingFans() async {
+        let previousManualIntent = Preferences.fanManualEnabled, previousTargets = Preferences.fanTargets
+        defer { Preferences.fanManualEnabled = previousManualIntent; Preferences.fanTargets = previousTargets }
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = [0: 2000, 1: 3000]
+        var engaged: [Int] = []
+        let reengaged = await FanControlHelper.applySavedTargets(reclaimGeneration: FanControlHelper.reclaimGeneration) { index, _, _ in
+            engaged.append(index)
+            Preferences.fanManualEnabled = false   // the popup's Automatic, between fan 0 and fan 1
+            return true
+        }
+        XCTAssertEqual(engaged.count, 1, "a fan after the disable was engaged: \(engaged)")
+        XCTAssertFalse(reengaged)
+    }
+
     /// #221 (3): a failed reclaim re-apply holds the next attempt for 30 s.
     @MainActor
     func testFailedReapplyCoolsDownForThirtySeconds() {
