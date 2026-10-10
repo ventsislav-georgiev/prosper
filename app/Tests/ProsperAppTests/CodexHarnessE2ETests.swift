@@ -1868,6 +1868,9 @@ final class CodexHarnessE2ETests: XCTestCase {
         for f in [WireText.multiLine, WireText.oneLine, WireText.toolOutput] {
             XCTAssertEqual(f(f(raw)), f(raw))
         }
+        // #363: tool args saved multiLine-escaped before #363 load through oneLine.
+        let legacy = WireText.multiLine(raw)
+        XCTAssertEqual(WireText.oneLine(WireText.oneLine(legacy)), WireText.oneLine(legacy))
     }
 
     /// #358: tool output drops well-formed SGR colour codes; any other ESC sequence (an OSC) escapes.
@@ -1875,6 +1878,35 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(WireText.toolOutput("\u{1B}[0;31mred\u{1B}[0m"), "red")
         XCTAssertEqual(WireText.toolOutput("\u{1B}]0;title\u{7}"), #"\u{1B}]0;title\u{7}"#)
         XCTAssertEqual(WireText.multiLine("\u{1B}[0m"), #"\u{1B}[0m"#, "only tool output strips SGR")
+        // #363: a CSI with a final byte other than `m` (erase, cursor move) is escaped whole, never stripped.
+        XCTAssertEqual(WireText.toolOutput("\u{1B}[2J\u{1B}[1;31Hi"), #"\u{1B}[2J\u{1B}[1;31Hi"#)
+    }
+
+    /// #363: a plain string command with a raw LF is one escaped line on the tool card (drawn with
+    /// `.lineLimit(1)`), not cut to its first line.
+    @MainActor
+    func testControllerTranscriptToolArgsAreOneLine() async {
+        let items = await transcript(after: [
+            .toolCallStarted(ToolCall(id: "c1", name: "shell", argumentsJSON: "ls\nrm -rf ~")),
+        ])
+        let args = items.compactMap { if case .toolCall(_, _, let args, _, _) = $0 { return args }; return nil }
+        XCTAssertEqual(args.first, #"ls\nrm -rf ~"#)
+    }
+
+    /// #363: error text from the harness (an echoed path) is one escaped line: a bidi override
+    /// shows as `\u{202E}`, a newline as `\n`. One row per controller site.
+    @MainActor
+    func testControllerTranscriptHarnessErrorIsOneEscapedLine() async {
+        let items = await transcript(after: [.error(.backendError("file \u{202E}cba.txt not found\nretry"))])
+        let errors = items.compactMap { if case .error(_, let m) = $0 { return m }; return nil }
+        XCTAssertEqual(errors.first, #"Agent error: file \u{202E}cba.txt not found\nretry"#)
+    }
+
+    @MainActor
+    func testControllerTranscriptFailedTurnIsOneEscapedLine() async {
+        let items = await transcript(after: [.turnCompleted(turn: TurnID(raw: "turn-1"), .failed("file \u{202E}cba.txt not found"))])
+        let errors = items.compactMap { if case .error(_, let m) = $0 { return m }; return nil }
+        XCTAssertEqual(errors, [#"file \u{202E}cba.txt not found"#])
     }
 
     /// #266: legacy `applyPatchApproval` lists its `fileChanges` keys, sorted, each on one

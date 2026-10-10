@@ -158,11 +158,12 @@ enum CardText {
     static let detailCap = 256 * 1024
 
     /// The approval detail as the card shows it: the first `detailCap` Characters through `ltr`,
-    /// plus a final "… N more characters not shown" line when there was more.
+    /// plus a final "… N more character(s) not shown" line when there was more.
     static func detail(_ s: String) -> String {
         guard let cut = s.index(s.startIndex, offsetBy: detailCap, limitedBy: s.endIndex), cut < s.endIndex
         else { return ltr(s) }
-        return ltr(String(s[..<cut])) + "\n… \(s[cut...].count) more characters not shown"
+        let more = s[cut...].count
+        return ltr(String(s[..<cut])) + "\n… \(more) more character\(more == 1 ? "" : "s") not shown"
     }
 
     private static let neutral: Set<Unicode.GeneralCategory> = [

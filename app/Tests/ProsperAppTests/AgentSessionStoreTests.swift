@@ -67,11 +67,15 @@ final class AgentSessionStoreTests: XCTestCase {
             .toolCall(id: "t1", name: "shell", args: "{\"cmd\":\"a\u{202E}b\"}", status: .succeeded,
                       output: "\u{1B}[1mok\u{1B}[0m\u{202E}\r\n"),
             .fileDiff(id: "f1", path: "x\u{202E}.go", diff: "+user\u{202E} \u{2066}# admin\n", change: .modify),
+            .toolCall(id: "t2", name: "shell", args: "ls\nrm -rf ~", status: .succeeded, output: ""),
+            .error(id: "e1", message: "file \u{202E}cba.txt not found"),
         ]
         let escaped: [AgentItem] = [
             .toolCall(id: "t1", name: "shell", args: #"{"cmd":"a\u{202E}b"}"#, status: .succeeded,
                       output: #"ok\u{202E}"# + "\n"),
             .fileDiff(id: "f1", path: #"x\u{202E}.go"#, diff: #"+user\u{202E} \u{2066}# admin"# + "\n", change: .modify),
+            .toolCall(id: "t2", name: "shell", args: #"ls\nrm -rf ~"#, status: .succeeded, output: ""),
+            .error(id: "e1", message: #"file \u{202E}cba.txt not found"#),
         ]
         for id in ["raw", "escaped"] { await store.upsertSession(id: id, cwd: "/tmp", model: "m", title: id) }
         await store.saveTranscript(id: "raw", items: raw)

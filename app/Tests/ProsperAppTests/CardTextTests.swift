@@ -49,7 +49,7 @@ final class CardTextTests: XCTestCase {
         XCTAssertEqual(CardText.detailCap, 262_144)
         XCTAssertEqual(CardText.detail(String(repeating: "a", count: 100 * 1024)), String(repeating: "a", count: 100 * 1024))
         XCTAssertEqual(CardText.detail(atCap), atCap, "exactly 256 K is untouched")
-        XCTAssertEqual(CardText.detail(atCap + "b"), atCap + "\n… 1 more characters not shown")
+        XCTAssertEqual(CardText.detail(atCap + "b"), atCap + "\n… 1 more character not shown")
         XCTAssertEqual(CardText.detail(String(repeating: "a", count: 300 * 1024)),
                        atCap + "\n… 45056 more characters not shown")
     }

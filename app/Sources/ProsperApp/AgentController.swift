@@ -596,7 +596,11 @@ final class AgentController {
 
     /// Show a failure once: codex death reaches us both as the `.error` event and as
     /// the error of whatever request was in flight, with the same message.
-    private func surfaceError(_ message: String) {
+    /// #363: the text comes from the harness or the system (an echoed path), so it is stored as
+    /// one escaped line (`WireText.oneLine`): a bidi override shows as `\u{…}`, and a newline
+    /// reads as a literal `\n`, which is what the one-line phase indicator wants.
+    private func surfaceError(_ raw: String) {
+        let message = WireText.oneLine(raw)
         guard phase != .error(message) else { return }
         append(.error(id: UUID().uuidString, message: message))
         phase = .error(message)
@@ -682,7 +686,8 @@ final class AgentController {
             phase = .idle
         case .aborted:
             if case .error = phase {} else { phase = .idle }   // Stop must not hide an error
-        case .failed(let msg):
+        case .failed(let raw):
+            let msg = WireText.oneLine(raw)   // #363: one escaped line, as in surfaceError
             append(.error(id: UUID().uuidString, message: msg))
             phase = .error(msg)
         }
@@ -858,11 +863,14 @@ final class AgentController {
     }
 
     /// #358: args and output are escaped here, at ingress (`WireText`); the items, the store and the
-    /// cards only ever hold display text. Output escaping is per scalar, so streamed chunks escape
-    /// alone: a CRLF split across two chunks keeps its `\r` as `\u{D}` (or an SGR code split
-    /// across two shows escaped) until the completion's whole output replaces the deltas.
+    /// cards only ever hold display text. #363: args are one line (`oneLine`, like the approval
+    /// card), since the tool card draws them with `.lineLimit(1)`: an embedded newline in a plain
+    /// string command shows as `\n` instead of cutting the command to its first line. Output
+    /// escaping is per scalar, so streamed chunks escape alone: a CRLF split across two chunks
+    /// keeps its `\r` as `\u{D}` (or an SGR code split across two shows escaped) until the
+    /// completion's whole output replaces the deltas.
     private func upsertToolCall(_ call: ToolCall, output: String?) {
-        let args = WireText.multiLine(call.argumentsJSON), output = output.map(WireText.toolOutput)
+        let args = WireText.oneLine(call.argumentsJSON), output = output.map(WireText.toolOutput)
         if let idx = itemIndex[call.id], case .toolCall(_, _, _, _, let prevOut) = items[idx] {
             items[idx] = .toolCall(id: call.id, name: call.name, args: args,
                                    status: call.status, output: output ?? prevOut)

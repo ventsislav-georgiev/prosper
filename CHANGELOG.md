@@ -143,7 +143,11 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: the coding agent's transcript now shows file diffs, command arguments and command
   output with bidi controls and other invisible characters escaped, like the approval card.**
   Colour codes in command output are dropped instead of showing as raw escape sequences, and a
-  session saved before this update is shown escaped when reopened.
+  session saved before this update is shown escaped when reopened. Error lines and tool-call
+  arguments are shown as one escaped line too, so a hidden character in an echoed path can no
+  longer reorder the error text, and a two-line command on a tool card is no longer cut to its
+  first line (the newline shows as `\n`). A diff cut by exactly one character now reads "1 more
+  character not shown".
 - **Fixed: the Window extension no longer shrinks a window to nothing when macOS reports an
   invalid frame for it.** The action now stops as if no window were focused.
 - **Fixed: in the System Settings extension, "Screen Saver" and "Passwords" opened nothing on macOS 27.** Screen Saver now opens the Wallpaper pane, where macOS moved it, and Passwords opens the Passwords app.
