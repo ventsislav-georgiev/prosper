@@ -664,11 +664,12 @@ actor CodexHarness: CodingHarness {
     }
 
     /// Wire text on one card line: an embedded newline must not forge extra card lines, and
-    /// a control (Cc: C0, DEL, C1) or a format scalar (bidi override, zero-width) shows as `\u{…}`
-    /// rather than reordering or hiding what is granted.
+    /// a control (Cc: C0, DEL, C1), a format scalar (bidi override, zero-width) or another
+    /// default-ignorable one (Hangul filler, variation selector) shows as `\u{…}` rather than
+    /// reordering or hiding what is granted.
     private static func oneLine(_ s: String) -> String {
         s.components(separatedBy: .newlines).joined(separator: "\\n").unicodeScalars.map { u in
-            [.control, .format].contains(u.properties.generalCategory)
+            [.control, .format].contains(u.properties.generalCategory) || u.properties.isDefaultIgnorableCodePoint
                 ? "\\u{\(String(u.value, radix: 16, uppercase: true))}" : String(u)
         }.joined()
     }

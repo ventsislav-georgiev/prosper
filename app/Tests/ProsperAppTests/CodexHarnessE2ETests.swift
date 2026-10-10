@@ -149,6 +149,9 @@ final class CodexHarnessE2ETests: XCTestCase {
         if word == "CMDSTR":   # #318: modern `command` string with a newline tail, format and control scalars
             return "item/commandExecution/requestApproval", dict(t, itemId="cmd-2", cwd="/tmp",
                 command="ls\n\n\nrm -rf ~ \u202e\u200b\x7f\u0085\u009f")
+        if word == "FILLER":   # #319: default-ignorable fillers beside legit non-ASCII
+            return "item/commandExecution/requestApproval", dict(t, itemId="cmd-3", cwd="/tmp",
+                command="rm\u3164-rf ~ \u2764\ufe0f \u0436\u0443\u0440\u043d\u0430\u043b.txt \U0001F680 \u2800")
         if word == "ODDKEYS":   # #318: unknown keys sort; an access key's newline is escaped
             return "item/permissions/requestApproval", dict(t, itemId="perm-3", cwd="/tmp", reason=None,
                 permissions={"zz": 1, "mm": 2, "fileSystem": {"aa": 3,
@@ -319,7 +322,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "cmd-1",
                                  "startedAtMs": 0, "command": "rm -rf build", "cwd": "/tmp"}})
-            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "LEGACY", "EXEC", "CMDSTR", "AMEND", "ELICIT") if w in prompt), None)
+            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "LEGACY", "EXEC", "CMDSTR", "FILLER", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
                 frame = {"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params}
@@ -1745,6 +1748,15 @@ final class CodexHarnessE2ETests: XCTestCase {
         let (approval, _) = try await answer("CMDSTR please", with: .decline)
         XCTAssertEqual(approval?.kind, .command)
         XCTAssertEqual(approval?.summary, #"ls\n\n\nrm -rf ~ \u{202E}\u{200B}\u{7F}\n\u{9F}"#)
+    }
+
+    /// #319: a default-ignorable scalar that is neither Cc nor Cf (Hangul filler U+3164, variation
+    /// selector U+FE0F) shows as `\u{…}`, so `rm<filler>-rf` can't read as `rm -rf`; Cyrillic, a
+    /// plain emoji and U+2800 (a visible blank) pass through, so the rule is not "escape non-ASCII".
+    @MainActor
+    func testControllerCommandSummaryEscapesDefaultIgnorableFillers() async throws {
+        let (approval, _) = try await answer("FILLER please", with: .decline)
+        XCTAssertEqual(approval?.summary, #"rm\u{3164}-rf ~ ❤\u{FE0F} "# + "журнал.txt 🚀 \u{2800}")
     }
 
     /// #318: profile and fileSystem keys the card can't render list in sorted order, and an

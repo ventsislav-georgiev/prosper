@@ -116,7 +116,8 @@ tag from the now-released section and put it on the new top draft.
   the problem is logged so you can fix it.
 - **Fixed: the coding agent's approval card can no longer be fooled by a command that hides
   its tail behind newlines or bidi overrides.** The command shown for approval is now one
-  escaped line, as the file and permission summaries already were.
+  escaped line, as the file and permission summaries already were, and invisible filler
+  characters such as Hangul fillers or variation selectors are shown escaped.
 - **Fixed: the Window extension no longer shrinks a window to nothing when macOS reports an
   invalid frame for it.** The action now stops as if no window were focused.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
