@@ -45,8 +45,9 @@ final class HarnessProtocolTests: XCTestCase {
         NSPredicate(format: "subsystem == %@", "com.prosper.app")
     }
 
-    /// #338: error level, dated at or after `from`, deduped on (date, message): OSLogStore can
-    /// return one entry twice when the start position straddles the in-memory and persisted stores.
+    /// #338: error level, dated at or after `from`, deduped on (date, message). Suspected cause
+    /// of the doubles (not reproduced): OSLogStore returning one entry twice when the start
+    /// position straddles the in-memory and persisted stores.
     static func selectErrorMessages(_ entries: [(level: OSLogEntryLog.Level, date: Date, message: String)],
                                     from: Date) -> [String] {
         var seen = Set<String>()
@@ -86,6 +87,12 @@ final class HarnessProtocolTests: XCTestCase {
         let t = Date()
         XCTAssertEqual(Self.selectErrorMessages([(level: .error, date: t - 1, message: "early"),
                                                  (level: .error, date: t, message: "on")], from: t), ["on"])
+    }
+
+    func testSelectErrorMessagesKeepsSameMessageAtDifferentDates() {
+        let t = Date()
+        XCTAssertEqual(Self.selectErrorMessages([(level: .error, date: t, message: "a"),
+                                                 (level: .error, date: t + 1, message: "a")], from: t), ["a", "a"])
     }
 
     func testSelectErrorMessagesKeepsDistinctMessagesAtSameDate() {
