@@ -418,7 +418,7 @@ struct ExtensionHost {
         func finiteNumber(_ rt: LuaRuntime, _ i: Int32) -> Double? {
             guard let d = rt.numberArgument(i) else { return nil }
             if d.isFinite { return d }
-            services.log(level: "warn", message: "\(extID): non-finite number argument \(i) ignored, using the default")
+            services.log(level: "warn", message: "\(extID): non-finite number argument \(i) rejected")
             return nil
         }
         func intArgument(_ rt: LuaRuntime, _ i: Int32, in r: ClosedRange<Int>) -> Int? {
@@ -537,11 +537,11 @@ struct ExtensionHost {
         }
 
         // --- window (Accessibility; sync, main-bridged in the live impl) ---
-        // frame() returns a JSON string {x,y,w,h,screen:{x,y,w,h}} or nil;
-        // set(x,y,w,h) returns a boolean.
+        // frame() returns a JSON string {x,y,w,h,screen:{x,y,w,h}} or nil (no window,
+        // or a non-finite AX frame); set(x,y,w,h) returns a boolean.
         lua.register("__h_window_frame") { rt in
-            if let f = services.focusedWindowFrame() {
-                rt.push(Self.encodeWindowFrame(f))
+            if let f = services.focusedWindowFrame(), let json = Self.encodeWindowFrame(f) {
+                rt.push(json)
             } else {
                 rt.pushNil()
             }
@@ -1277,7 +1277,7 @@ struct ExtensionHost {
     -- Window management (Accessibility). frame() returns the focused window's
     -- rect and its screen's visible frame in a top-left global coordinate space;
     -- set(x,y,w,h) moves/resizes it. Returns nil / false when no window is
-    -- focused or Accessibility permission is missing.
+    -- focused, Accessibility permission is missing, or the frame is non-finite.
     --   host.window.frame() -> { x, y, w, h, screen = { x, y, w, h } } | nil
     --   host.window.set(x, y, w, h) -> boolean
     local raw_win_frame = __h_window_frame
@@ -1735,8 +1735,9 @@ struct ExtensionHost {
     }
 
     /// Encode a `WindowFrame` as the JSON string `host.window.frame()` decodes
-    /// into `{x, y, w, h, screen = {x, y, w, h}}`.
-    static func encodeWindowFrame(_ f: WindowFrame) -> String {
+    /// into `{x, y, w, h, screen = {x, y, w, h}}`. Nil for a non-finite (NaN/inf) AX
+    /// frame, so Lua sees "no window" instead of a zero frame it would snap to. (#322)
+    static func encodeWindowFrame(_ f: WindowFrame) -> String? {
         let obj: [String: Any] = [
             "x": f.x, "y": f.y, "w": f.w, "h": f.h,
             "screen": ["x": f.visibleX, "y": f.visibleY, "w": f.visibleW, "h": f.visibleH],
@@ -1744,7 +1745,7 @@ struct ExtensionHost {
         guard JSONSerialization.isValidJSONObject(obj),
               let data = try? JSONSerialization.data(withJSONObject: obj),
               let str = String(data: data, encoding: .utf8)
-        else { return "{\"x\":0,\"y\":0,\"w\":0,\"h\":0,\"screen\":{\"x\":0,\"y\":0,\"w\":0,\"h\":0}}" }
+        else { return nil }
         return str
     }
 

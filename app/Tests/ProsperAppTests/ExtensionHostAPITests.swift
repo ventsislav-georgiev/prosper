@@ -976,13 +976,20 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertTrue(svc.logs.contains { $0.level == "warn" && $0.message.contains("non-finite") })
     }
 
-    /// #297: a NaN/inf AX frame must hit the zero fallback, not a JSONSerialization trap.
-    func testEncodeWindowFrameNonFiniteFallsBackToZeros() throws {
-        let bad = ExtensionHost.encodeWindowFrame(WindowFrame(x: .nan, y: 0, w: .infinity, h: 1,
-                                                             visibleX: 0, visibleY: 0, visibleW: 0, visibleH: 0))
-        XCTAssertEqual(bad, "{\"x\":0,\"y\":0,\"w\":0,\"h\":0,\"screen\":{\"x\":0,\"y\":0,\"w\":0,\"h\":0}}")
-        let ok = ExtensionHost.encodeWindowFrame(WindowFrame(x: 1, y: 2, w: 3, h: 4,
-                                                            visibleX: 5, visibleY: 6, visibleW: 7, visibleH: 8))
+    /// #297/#322: a NaN/inf AX frame encodes as nil (no JSONSerialization trap, no zero
+    /// frame), and host.window.frame() hands Lua nil so the window extension stops.
+    func testEncodeWindowFrameNonFiniteIsNil() throws {
+        let bad = WindowFrame(x: .nan, y: 0, w: .infinity, h: 1,
+                              visibleX: 0, visibleY: 0, visibleW: 0, visibleH: 0)
+        XCTAssertNil(ExtensionHost.encodeWindowFrame(bad))
+        let svc = FakeServices()
+        svc.windowFrame = bad
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc, privileged: true).install(into: lua)
+        try lua.run("function go() return tostring(host.window.frame()) end")
+        XCTAssertEqual(try lua.callGlobal("go"), "nil")
+        let ok = try XCTUnwrap(ExtensionHost.encodeWindowFrame(WindowFrame(x: 1, y: 2, w: 3, h: 4,
+                                                            visibleX: 5, visibleY: 6, visibleW: 7, visibleH: 8)))
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ok.utf8)) as? [String: Any])
         XCTAssertEqual(obj["x"] as? Double, 1)
         XCTAssertEqual(obj["h"] as? Double, 4)
@@ -998,10 +1005,17 @@ final class ExtensionHostAPITests: XCTestCase {
         function go()
             if host.window.set(0/0, 0, 100, 100) ~= false then error("expected false") end
             if host.window.set(0, 0, math.huge, 100) ~= false then error("expected false") end
+            if host.window.set(0, 0/0, 100, 100) ~= false then error("expected false: NaN y") end
+            if host.window.set(0, 0, 100, -math.huge) ~= false then error("expected false: inf h") end
         end
         """)
         _ = try lua.callGlobal("go")
         XCTAssertTrue(svc.windowSets.isEmpty)
+        // Missing → 0 (documented at __h_window_set): the call goes through with 0, not refused.
+        try lua.run("function miss() return tostring(host.window.set(10, 20, 30)) end")
+        XCTAssertEqual(try lua.callGlobal("miss"), "true")
+        XCTAssertEqual(svc.windowSets.count, 1)
+        XCTAssertEqual(svc.windowSets.first.map { [$0.x, $0.y, $0.w, $0.h] }, [10, 20, 30, 0])
         XCTAssertTrue(svc.logs.contains { $0.level == "warn" && $0.message.contains("non-finite") })
     }
 
