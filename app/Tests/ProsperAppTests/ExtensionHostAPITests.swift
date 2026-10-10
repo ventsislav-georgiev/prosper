@@ -148,6 +148,8 @@ private final class FakeServices: ExtensionHostServices, @unchecked Sendable {
     }
     var killedPids: [Int32] = []
     func processKill(pid: Int32, force: Bool) -> String? { killedPids.append(pid); return nil }
+    var refusalPids: [Int32] = []
+    func processKillRefusal(pid: Int32) -> String? { refusalPids.append(pid); return pid <= 1 ? "system pid" : nil }
 }
 
 final class ExtensionHostAPITests: XCTestCase {
@@ -1020,6 +1022,47 @@ final class ExtensionHostAPITests: XCTestCase {
         """)
         XCTAssertEqual(try lua.callGlobal("go"), "a\nb\nc\nd|a\nb\nc\nd|")
         XCTAssertEqual(svc.killedPids, [0, Int32.max, Int32.min])
+    }
+
+    /// #295 (QA #109): host.process.refusal shares kill's pid clamp. A non-finite pid
+    /// falls back to 0 (refused as a system pid), an out-of-range one clamps to the
+    /// Int32 bounds instead of trapping Int32(), and a normal pid passes through.
+    func testProcessRefusalClampsNonFiniteAndOutOfRangePids() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc, privileged: true).install(into: lua)
+        try lua.run("""
+        function go()
+            local out = {}
+            for _, p in ipairs({ 0/0, math.huge, 1e300, -1e300, 501 }) do
+                out[#out + 1] = host.process.refusal(p) or "nil"
+            end
+            return table.concat(out, ",")
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "system pid,system pid,nil,system pid,nil")
+        XCTAssertEqual(svc.refusalPids, [0, 0, Int32.max, Int32.min, 501])
+    }
+
+    /// #295 (QA #109): a non-finite timer interval never reaches the scheduler (NaN
+    /// traps TimerScheduler's Int(leeway)); it falls back to 0 with a logged warning.
+    /// The timer is still armed: the host substitutes the default, it does not reject.
+    func testTimerScheduleNonFiniteSecondsFallsBackToZero() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("""
+        function go()
+            host.timer.schedule{ id='nan', after=0/0,        handler='h' }
+            host.timer.schedule{ id='inf', every=math.huge,  handler='h' }
+            host.timer.schedule{ id='neg', after=-math.huge, handler='h' }
+            host.timer.schedule{ id='big', after=1e300,      handler='h' }
+        end
+        """)
+        _ = try lua.callGlobal("go")
+        XCTAssertEqual(svc.timerSchedules.map(\.id), ["nan", "inf", "neg", "big"])
+        XCTAssertEqual(svc.timerSchedules.map(\.seconds), [0, 0, 0, 1e300])
+        XCTAssertEqual(svc.logs.filter { $0.level == "warn" && $0.message.contains("non-finite") }.count, 3)
     }
 
     /// Cross-language contract: the Swift wake acctTag MUST equal the server's
