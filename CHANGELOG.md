@@ -126,8 +126,8 @@ tag from the now-released section and put it on the new top draft.
   model.** Qwen3-Coder 30B-A3B stays the default.
 - **Agent: Qwen3 8B and Nemotron 3 Nano 30B-A3B are replaced by Qwen3.5 9B (~5.7 GB) and
   Nemotron 3.5 Lightning 30B-A3B (~25 GB, UD-Q4_K_M).** Both downloads are pinned to a
-  Hugging Face revision, like the inline models. A saved pick of a replaced model falls back
-  to the default.
+  Hugging Face revision, like the inline models, and so are the other six llama.cpp agent
+  models. A saved pick of a replaced model falls back to the default.
 - **Fixed: coding agent — Stop pressed while a prompt is still being handed to codex now
   sticks.** The turn is interrupted as soon as codex acknowledges it, and the chat no
   longer flips back to Working. A Stop no longer hides an error the backend already

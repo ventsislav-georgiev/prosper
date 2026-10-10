@@ -84,7 +84,7 @@ enum AgentModelRegistry {
             note: "GGUF Q4_K_M ~2.6 GB · llama.cpp · grammar-locked tool calls, fastest",
             gguf: AgentGGUF(
                 fileName: "Qwen3.5-4B-Q4_K_M.gguf",
-                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf")!,
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf")!,
                 bytes: 2_740_937_888)
         ),
         // Nemotron 3 Nano: template verified exact ChatML (`<|im_start|>role\n…`,
@@ -98,7 +98,7 @@ enum AgentModelRegistry {
             note: "GGUF Q4_K_M ~2.7 GB · NVIDIA agentic-tuned · fast",
             gguf: AgentGGUF(
                 fileName: "NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf",
-                downloadURL: URL(string: "https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/resolve/main/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf")!,
+                downloadURL: URL(string: "https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/resolve/8e81be55c5aa3d63bb82b6ceec62d50805d9e1bb/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf")!,
                 bytes: 2_900_295_712)
         ),
         // Qwen3.5 9B: GGUF chat template byte-identical to the Qwen3.5-4B row's.
@@ -135,7 +135,7 @@ enum AgentModelRegistry {
             note: "GGUF Q4_K_M ~45 GB · needs 64 GB · hybrid-attention flagship MoE (3B active)",
             gguf: AgentGGUF(
                 fileName: "Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
-                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF/resolve/main/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf")!,
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF/resolve/6688872b7a4e5eb8a121ceea08009530a024ba1d/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf")!,
                 bytes: 48_506_100_512)
         ),
         AgentModel(
@@ -145,7 +145,7 @@ enum AgentModelRegistry {
             note: "GGUF Q4_K_M ~17 GB · recommended · coder MoE (3B active), grammar-locked tool calls",
             gguf: AgentGGUF(
                 fileName: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
-                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf")!,
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/b17cb02dd882d5b6ab62fc777ad2995f19668350/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf")!,
                 bytes: 18_556_689_568)
         ),
         AgentModel(
@@ -155,7 +155,7 @@ enum AgentModelRegistry {
             note: "GGUF UD-Q4_K_M ~22 GB · newest Qwen MoE (3B active), grammar-locked tool calls",
             gguf: AgentGGUF(
                 fileName: "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
-                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")!,
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")!,
                 bytes: 22_134_528_992)
         ),
         AgentModel(
@@ -165,7 +165,7 @@ enum AgentModelRegistry {
             note: "GGUF Q4_K_M ~45 GB · needs 64 GB · near-frontier agentic coding",
             gguf: AgentGGUF(
                 fileName: "Qwen3-Coder-Next-Q4_K_M.gguf",
-                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF/resolve/main/Qwen3-Coder-Next-Q4_K_M.gguf")!,
+                downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF/resolve/ce09c67b53bc8739eef83fe67b2f5d293c270632/Qwen3-Coder-Next-Q4_K_M.gguf")!,
                 bytes: 48_528_320_544)
         ),
     ]
