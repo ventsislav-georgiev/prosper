@@ -49,4 +49,46 @@ final class PreferencesScratchStoreTests: XCTestCase {
         defer { Preferences.defaults.removeObject(forKey: key) }
         XCTAssertNil(UserDefaults.standard.object(forKey: key))
     }
+
+    /// #342 (#305 M1): `Preferences.defaults` is the suite at `scratchSuitePath`, not just
+    /// "something other than .standard" — a probe key lands in that plist file.
+    func testPreferencesStorePersistsToTheScratchSuitePlist() throws {
+        let key = "prosper.scratchPlistProbe.\(UUID().uuidString)"
+        Preferences.defaults.set("probe", forKey: key)
+        defer { Preferences.defaults.removeObject(forKey: key); Preferences.defaults.synchronize() }
+        Preferences.defaults.synchronize()
+        let data = try Data(contentsOf: URL(fileURLWithPath: Preferences.scratchSuitePath + ".plist"))
+        let plist = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        XCTAssertEqual(plist[key] as? String, "probe", "Preferences.defaults must write the plist at scratchSuitePath")
+    }
+
+    /// #342 (#305 M4): no ProsperApp source other than Preferences.swift opens its own defaults
+    /// store, so every settings reader (CompletionStats, AnalyticsStore, ...) goes through
+    /// `Preferences.defaults` and inherits the XCTest scratch suite. Exact-line allowlist.
+    func testOnlyPreferencesOpensAnAppDefaultsStore() throws {
+        let allowed: [String: String] = [
+            // Migrates the legacy bundle-id domain into the real one; runs only in a bundled launch.
+            "DefaultsMigration.swift: let defaults = UserDefaults.standard": "legacy-domain migration",
+            // Reads the system hotkey domain, never writes.
+            "SpotlightShortcutConflict.swift: guard let keys = UserDefaults(suiteName: \"com.apple.symbolichotkeys\")?": "system-domain read",
+            // Reads Safari's domain for search-engine import, never writes.
+            "BrowserSearchImporter.swift: let suite = UserDefaults(suiteName: \"com.apple.Safari\")": "system-domain read",
+            // e2e-only throwaway suite (PROSPER_HOME set); otherwise Preferences.defaults.
+            "SnippetStore.swift: if E2EConfig.isolated, let suite = UserDefaults(suiteName: suiteName) {": "e2e isolation suite",
+        ]
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+        var hits: [String] = []
+        for case let url as URL in files where url.pathExtension == "swift" && url.lastPathComponent != "Preferences.swift" {
+            for raw in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                guard !line.hasPrefix("//"),
+                      line.contains("UserDefaults.standard") || line.contains("UserDefaults(suiteName")
+                        || line.contains("UserDefaults()") else { continue }
+                hits.append("\(url.lastPathComponent): \(line)")
+            }
+        }
+        XCTAssertEqual(Set(hits), Set(allowed.keys), "a source outside Preferences.swift opens its own UserDefaults store")
+    }
 }

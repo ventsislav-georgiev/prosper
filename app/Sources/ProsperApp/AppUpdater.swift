@@ -24,7 +24,12 @@ final class AppUpdater: NSObject {
     /// stored property so Sparkle's weak `delegate` reference stays alive.
     private let channelDelegate = UpdaterChannelDelegate()
 
-    private let updater: SPUUpdater
+    /// Nil under XCTest: Sparkle's `SUHost` writes `SU*` keys into `Bundle.main`'s
+    /// standard defaults (the real `com.apple.dt.xctest.tool` domain) as soon as the
+    /// updater is configured, breaking the #305 promise that tests never write a real
+    /// defaults domain. Every use below is optional-chained, so the menu and About pane
+    /// still render; checks are no-ops in tests.
+    private let updater: SPUUpdater?
 
     /// Background appcast poll interval. Sparkle's own scheduler clamps small
     /// `updateCheckInterval` values to ~1h, so we drive a silent background check
@@ -65,13 +70,14 @@ final class AppUpdater: NSObject {
     var onActivityChanged: ((Bool) -> Void)?
 
     override init() {
-        updater = SPUUpdater(
+        updater = NSClassFromString("XCTestCase") != nil ? nil : SPUUpdater(
             hostBundle: Bundle.main,
             applicationBundle: Bundle.main,
             userDriver: driver,
             delegate: channelDelegate
         )
         super.init()
+        guard let updater else { return }
 
         // Mirror the driver's download/extract state so the menu can show it.
         driver.onDownloadingChanged = { [weak self] downloading in
@@ -111,14 +117,14 @@ final class AppUpdater: NSObject {
     func checkForUpdates() {
         driver.userInitiated = true
         isCheckingForUpdates = true
-        updater.checkForUpdates()
+        updater?.checkForUpdates()
         if automaticChecks { restartPolling() }
     }
 
     var automaticChecks: Bool {
-        get { updater.automaticallyChecksForUpdates }
+        get { updater?.automaticallyChecksForUpdates ?? Preferences.automaticUpdateChecks }
         set {
-            updater.automaticallyChecksForUpdates = newValue
+            updater?.automaticallyChecksForUpdates = newValue
             Preferences.automaticUpdateChecks = newValue
             if newValue { startPolling() } else { stopPolling() }
         }
@@ -134,7 +140,7 @@ final class AppUpdater: NSObject {
             Preferences.allowBetaUpdates = newValue
             if newValue {
                 driver.userInitiated = false
-                updater.checkForUpdatesInBackground()
+                updater?.checkForUpdatesInBackground()
             }
         }
     }
@@ -146,7 +152,7 @@ final class AppUpdater: NSObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.driver.userInitiated = false
-                self.updater.checkForUpdatesInBackground()
+                self.updater?.checkForUpdatesInBackground()
                 self.nextCheckDate = Date().addingTimeInterval(Self.pollInterval)
             }
         }

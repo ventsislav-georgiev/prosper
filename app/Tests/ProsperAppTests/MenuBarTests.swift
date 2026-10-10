@@ -55,6 +55,22 @@ final class MenuBarTests: XCTestCase {
         XCTAssertTrue(latest.items.contains { $0.title.hasPrefix("Prosper v") })
     }
 
+    /// #342: Sparkle's SUHost writes SU* keys into Bundle.main's standard defaults, which
+    /// under XCTest is the real `com.apple.dt.xctest.tool` domain. Building the status menu
+    /// reaches `AppUpdater.shared`; a fresh `AppUpdater()` makes the check order-independent.
+    /// SU* keys left in that xctest.tool domain (not a user domain) by older runs are removed first.
+    @MainActor
+    func testStatusMenuLeavesNoSparkleKeysInTheXCTestDomain() {
+        let suKeys = { UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.hasPrefix("SU") } }
+        suKeys().forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        let controller = MenuBarController(
+            onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {},
+            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {})
+        _ = controller.buildMenu()
+        _ = AppUpdater()
+        XCTAssertEqual(suKeys().sorted(), [], "Sparkle wrote the xctest defaults domain")
+    }
+
     // MARK: - Divider length state machine (the show/hide hot path's source of truth)
 
     // Sentinel widths so the mapping is unambiguous (real code passes
