@@ -241,9 +241,13 @@ final class LlamaAgentEngineTests: XCTestCase {
         AgentModelRegistry.defaultId(physicalMemoryGB: AgentModelRegistry.physicalMemoryGB)
     }
 
-    /// #332: the default follows physical RAM — 9B below the 32 GB floor, the 30B coder at or above it.
+    /// #332/#340: the default follows physical RAM — the smallest row (4B) below every floor,
+    /// 9B from the 16 GB floor, the 30B coder at or above 32 GB.
     func testDefaultIdFollowsPhysicalMemory() {
-        for gb in [8, 16, 24] {
+        for gb in [4, 8] {
+            XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: gb), "unsloth/Qwen3.5-4B-GGUF", "\(gb) GB")
+        }
+        for gb in [16, 24] {
             XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: gb), "unsloth/Qwen3.5-9B-GGUF", "\(gb) GB")
         }
         for gb in [32, 48, 64, 128] {
@@ -264,6 +268,24 @@ final class LlamaAgentEngineTests: XCTestCase {
         d.removeObject(forKey: key)
         XCTAssertEqual(Preferences.agentModel, thisMacDefault)
         XCTAssertNil(d.object(forKey: key))
+    }
+
+    /// #340: healAgentModelMirror re-reads the healed id without writing it, and the
+    /// persist guard is released afterwards so a later user pick still persists.
+    @MainActor
+    func testHealAgentModelMirrorDoesNotPersistAndReleasesGuard() {
+        let d = Preferences.defaults, key = "agentModel"
+        let saved = d.object(forKey: key)
+        defer { d.set(saved, forKey: key) }
+        d.set("unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF", forKey: key)
+        let model = SettingsModel()
+        XCTAssertEqual(model.agentModel, "unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF")
+        d.set("gone/unknown", forKey: key)
+        model.healAgentModelMirror()
+        XCTAssertEqual(model.agentModel, thisMacDefault)
+        XCTAssertEqual(d.string(forKey: key), "gone/unknown")   // heal never writes
+        model.agentModel = "unsloth/Qwen3.5-9B-GGUF"
+        XCTAssertEqual(d.string(forKey: key), "unsloth/Qwen3.5-9B-GGUF")   // guard not stuck
     }
 
     /// #247: every replacement target is a live catalog id (else canonicalId falls to recommended).

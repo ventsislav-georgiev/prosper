@@ -179,12 +179,13 @@ enum AgentModelRegistry {
     static var physicalMemoryGB: Int { Int(ProcessInfo.processInfo.physicalMemory / 1_000_000_000) }
 
     /// Default agent model for a Mac with `gb` of RAM (#332): `recommendedId` once its
-    /// floor fits, else the largest built-in row whose floor fits. Below the smallest
-    /// floor, that floor's tier. Never persisted: agentModel syncs between Macs (#256).
+    /// floor fits, else the largest built-in row whose floor fits. Below every floor,
+    /// the smallest built-in row (catalog order breaks a RAM tie, so the first wins).
+    /// Never persisted: agentModel syncs between Macs (#256).
     static func defaultId(physicalMemoryGB gb: Int) -> String {
         if let rec = models.first(where: { $0.id == recommendedId }), rec.minRAMGB <= gb { return recommendedId }
-        let gb = max(gb, models.map(\.minRAMGB).min() ?? gb)
-        return models.filter { $0.minRAMGB <= gb }.max { $0.approxRAMGB < $1.approxRAMGB }?.id ?? recommendedId
+        if let fit = models.filter({ $0.minRAMGB <= gb }).max(by: { $0.approxRAMGB < $1.approxRAMGB }) { return fit.id }
+        return models.min { $0.approxRAMGB < $1.approxRAMGB }?.id ?? recommendedId
     }
 
     /// Built-in catalog plus any user-added (HF-imported) custom models. The single
