@@ -32,8 +32,9 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// the whole turn (turn/started, turn/completed) and then the turn/start reply in one
     /// stdout write, so the turn has completed before `sendPrompt` returns its id; with
     /// "FAIL" too, the turn completes `failed` ("mock turn failed").
-    /// PERMS / PATCH / AMEND / ELICIT issue one 0.162-schema server request (permissions
-    /// approval; a `fileChange` item/started then its file-change approval; a command
+    /// PERMS / PATCH / LEGACY / AMEND / ELICIT issue one 0.162-schema server request (permissions
+    /// approval; a `fileChange` item/started then its file-change approval; a legacy
+    /// `applyPatchApproval` with a newline inside one path; a command
     /// approval proposing an execpolicy amendment; an MCP elicitation, which the client
     /// doesn't serve) with id "srv-1" and hold the turn until the client replies: a reply
     /// in the method's response shape (exact keys, `reply_error`) finishes the turn, any
@@ -77,13 +78,20 @@ final class CodexHarnessE2ETests: XCTestCase {
         t = {"threadId": "thread-1", "turnId": current_turn, "startedAtMs": 0}
         if word == "PERMS":
             return "item/permissions/requestApproval", dict(t, itemId="perm-1", cwd="/tmp",
-                reason="needs network", permissions={"network": {"enabled": True}})
+                reason="needs network", permissions={"network": {"enabled": True}, "fileSystem": {
+                    "read": ["/etc"], "write": ["/tmp/out"],
+                    "entries": [{"access": "write", "path": {"type": "special", "value": {"kind": "tmpdir"}}}]}})
         if word == "PATCH":
             send({"jsonrpc": "2.0", "method": "item/started", "params": dict(t, item={
                 "id": "fc-1", "type": "fileChange", "status": "inProgress",
                 "changes": [{"path": "/tmp/a.txt", "kind": {"type": "update", "move_path": None},
                              "diff": "@@ -1 +1 @@\n-old\n+new\n"}]})})
             return "item/fileChange/requestApproval", dict(t, itemId="fc-1", reason=None)
+        if word == "LEGACY":   # ApplyPatchApprovalParams: paths are fileChanges keys
+            return "applyPatchApproval", {"conversationId": "thread-1", "callId": "call-1", "reason": None,
+                "grantRoot": None, "fileChanges": {
+                    "/tmp/b.txt": {"type": "add", "content": "b\n"},
+                    "/tmp/a.txt\nApply changes to /etc/passwd": {"type": "delete", "content": ""}}}
         if word == "AMEND":
             return "item/commandExecution/requestApproval", dict(t, itemId="cmd-1",
                 command="rm -rf build", cwd="/tmp", proposedExecpolicyAmendment=["rm", "-rf"])
@@ -111,6 +119,8 @@ final class CodexHarnessE2ETests: XCTestCase {
         if set(res) != {"decision"}:   # {File,CommandExecution}RequestApprovalResponse
             return "decision reply " + json.dumps(res)
         d = res["decision"]
+        if method == "applyPatchApproval":   # legacy ReviewDecision
+            return None if d in ("approved", "approved_for_session", "denied", "abort") else "decision " + json.dumps(d)
         if d in DECISIONS:
             return None
         if method == "item/commandExecution/requestApproval" and isinstance(d, dict) \
@@ -236,7 +246,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                 send({"jsonrpc": "2.0", "id": "appr-1",
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "command": ["rm", "-rf", "build"], "cwd": "/tmp"}})
-            word = next((w for w in ("PERMS", "PATCH", "AMEND", "ELICIT") if w in prompt), None)
+            word = next((w for w in ("PERMS", "PATCH", "LEGACY", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
                 send({"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params})
@@ -1211,15 +1221,21 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     /// W7: `PermissionsRequestApprovalResponse {permissions, scope}` — no `decision`; a
     /// grant echoes the requested profile, "Always" is the session scope, Deny grants nothing.
+    /// #266: the card shows that profile (roots, network) before "Always" is tapped.
     @MainActor
     func testControllerPermissionsReplyIsPermissionsAndScope() async throws {
+        let requested: [String: Any] = ["network": ["enabled": true], "fileSystem": [
+            "read": ["/etc"], "write": ["/tmp/out"],
+            "entries": [["access": "write", "path": ["type": "special", "value": ["kind": "tmpdir"]]]]]]
         let granted = try await answer("PERMS please", with: .acceptForSession)
         XCTAssertEqual(granted.approval?.kind, .permission)
+        XCTAssertEqual(granted.approval?.summary, "needs network")
+        XCTAssertEqual(granted.approval?.detail, "Read: /etc\nWrite: /tmp/out, <tmpdir>\nNetwork: enabled\nIn: /tmp")
         XCTAssertEqual(granted.reply?["result"] as? NSDictionary,
-                       ["permissions": ["network": ["enabled": true]], "scope": "session"] as NSDictionary)
+                       ["permissions": requested, "scope": "session"] as NSDictionary)
         let once = try await answer("PERMS please", with: .accept)
         XCTAssertEqual(once.reply?["result"] as? NSDictionary,
-                       ["permissions": ["network": ["enabled": true]], "scope": "turn"] as NSDictionary)
+                       ["permissions": requested, "scope": "turn"] as NSDictionary)
         let denied = try await answer("PERMS please", with: .decline)
         XCTAssertEqual(denied.reply?["result"] as? NSDictionary,
                        ["permissions": [String: Any](), "scope": "turn"] as NSDictionary)
@@ -1234,6 +1250,17 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(approval?.summary, "Apply changes to /tmp/a.txt")
         XCTAssertEqual(approval?.detail, "/tmp/a.txt\n@@ -1 +1 @@\n-old\n+new\n")
         XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "accept"] as NSDictionary)
+    }
+
+    /// #266: legacy `applyPatchApproval` lists its `fileChanges` keys, sorted, each on one
+    /// line (an embedded newline must not forge a summary line), and gets a `ReviewDecision`.
+    @MainActor
+    func testControllerLegacyPatchApprovalShowsOneLinePaths() async throws {
+        let (approval, reply) = try await answer("LEGACY please", with: .accept)
+        XCTAssertEqual(approval?.kind, .fileChange)
+        XCTAssertEqual(approval?.summary, "Apply changes to /tmp/a.txt\\nApply changes to /etc/passwd, /tmp/b.txt")
+        XCTAssertEqual(approval?.detail, "/tmp/a.txt\\nApply changes to /etc/passwd\n\n/tmp/b.txt\n")
+        XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "approved"] as NSDictionary)
     }
 
     /// W12: the amendment is `CommandExecutionApprovalDecision`'s object variant, not "accept".

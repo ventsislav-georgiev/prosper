@@ -576,7 +576,7 @@ actor CodexHarness: CodingHarness {
             if let cmd = params["command"] as? [String] { return cmd.joined(separator: " ") }
             return (params["command"] as? String) ?? "Run a command"
         case .fileChange:
-            let paths = changes.compactMap { $0["path"] as? String }
+            let paths = changes.compactMap { $0["path"] as? String }.map(oneLine)
             return "Apply changes to \(paths.isEmpty ? "files" : paths.joined(separator: ", "))"
         case .permission:
             return (params["reason"] as? String) ?? "Grant a permission"
@@ -588,10 +588,34 @@ actor CodexHarness: CodingHarness {
         switch kind {
         case .command: return params["cwd"] as? String
         case .fileChange:
-            let diffs = changes.map { "\(($0["path"] as? String) ?? "")\n\(($0["diff"] as? String) ?? "")" }
+            let diffs = changes.map { "\(oneLine(($0["path"] as? String) ?? ""))\n\(($0["diff"] as? String) ?? "")" }
             return diffs.isEmpty ? nil : diffs.joined(separator: "\n")
-        case .permission: return params["cwd"] as? String   // codex sends no `detail`
+        case .permission:
+            // codex sends no `detail`; "Always" grants this whole `RequestPermissionProfile`,
+            // so show its roots (legacy read/write lists plus `entries` by access) and network.
+            let profile = params["permissions"] as? [String: Any] ?? [:]
+            let fs = profile["fileSystem"] as? [String: Any] ?? [:]
+            var roots = ["read": fs["read"] as? [String] ?? [], "write": fs["write"] as? [String] ?? []]
+            for entry in fs["entries"] as? [[String: Any]] ?? [] {
+                let path = entry["path"] as? [String: Any] ?? [:]
+                let special = path["value"] as? [String: Any]
+                let name = path["path"] as? String ?? path["pattern"] as? String
+                    ?? "<\((special?["kind"] as? String) ?? "?")>\((special?["subpath"] as? String).map { "/" + $0 } ?? "")"
+                roots[(entry["access"] as? String) ?? "?", default: []].append(name)
+            }
+            var lines = roots.sorted { $0.key < $1.key }.filter { !$0.value.isEmpty }
+                .map { "\($0.key.capitalized): \($0.value.map(oneLine).joined(separator: ", "))" }
+            if let on = (profile["network"] as? [String: Any])?["enabled"] as? Bool {
+                lines.append("Network: \(on ? "enabled" : "disabled")")
+            }
+            if let cwd = params["cwd"] as? String { lines.append("In: \(oneLine(cwd))") }
+            return lines.isEmpty ? nil : lines.joined(separator: "\n")
         }
+    }
+
+    /// Wire path text on one line: an embedded newline must not forge extra card lines.
+    private static func oneLine(_ s: String) -> String {
+        s.components(separatedBy: .newlines).joined(separator: "\\n")
     }
 
     /// Notification → zero or more `HarnessEvent`s. Empty for notifications we don't

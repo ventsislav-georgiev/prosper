@@ -458,7 +458,7 @@ struct ChatRootView: View {
             Text("Approve \(approvalNoun(req.kind))?").font(Neon.font(.subheadline).bold())
             Text(req.summary).font(Neon.font(.caption, design: .monospaced))
                 .foregroundStyle(Neon.textSecondary).lineLimit(3)
-            if req.kind == .fileChange, let diff = req.detail {
+            if req.kind != .command, let diff = req.detail {   // file diffs; requested permission profile
                 ScrollView {
                     Text(diff).font(Neon.font(.caption2, design: .monospaced))
                         .textSelection(.enabled)
