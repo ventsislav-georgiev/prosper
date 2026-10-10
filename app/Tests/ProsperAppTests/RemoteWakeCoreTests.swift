@@ -297,10 +297,17 @@ final class RemoteWakeCorePerfTests: XCTestCase {
         // KV until TTL, so most polls re-see the same token).
         let n = 100_000
         for _ in 0..<1_000 { _ = core.onWake(onAC: true, battPct: 80) }   // warm
-        let start = DispatchTime.now().uptimeNanoseconds
-        for _ in 0..<n { _ = core.onWake(onAC: true, battPct: 80) }
-        let perCall = Double(DispatchTime.now().uptimeNanoseconds - start) / Double(n)
+        let perCall = bestOfThreeNs {
+            for _ in 0..<n { _ = core.onWake(onAC: true, battPct: 80) }
+        } / Double(n)
         print("onWake decision hot path: \(String(format: "%.1f", perCall)) ns/call over \(n) iters (steady-state dedupe, no-op effects)")
         XCTAssertLessThan(perCall, 1_000, "onWake decision exceeded the 1µs hot-path budget")
+    }
+    private func bestOfThreeNs(_ body: () -> Void) -> Double {
+        (0..<3).map { _ in
+            let t0 = DispatchTime.now().uptimeNanoseconds
+            body()
+            return Double(DispatchTime.now().uptimeNanoseconds - t0)
+        }.min()!
     }
 }

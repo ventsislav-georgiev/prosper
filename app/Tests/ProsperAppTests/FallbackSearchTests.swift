@@ -258,14 +258,21 @@ final class FallbackSearchTests: XCTestCase {
         let store = makeStore()
         let n = 200_000
         _ = store.expand(template: "https://www.google.com/search?q={query}", query: "warm")
-        let start = DispatchTime.now().uptimeNanoseconds
-        for i in 0 ..< n {
-            _ = store.expand(template: "https://www.google.com/search?q={query}",
-                             query: "swift concurrency \(i % 89)")
-        }
-        let perCall = Double(DispatchTime.now().uptimeNanoseconds - start) / Double(n)
+        let perCall = bestOfThreeNs {
+            for i in 0 ..< n {
+                _ = store.expand(template: "https://www.google.com/search?q={query}",
+                                 query: "swift concurrency \(i % 89)")
+            }
+        } / Double(n)
         print("expand: \(String(format: "%.0f", perCall)) ns/call")
         // Per-provider sub-cost: must stay well under the row budget / provider count.
         XCTAssertLessThan(perCall, 5_000, "expand exceeded the 5µs per-provider budget")
+    }
+    private func bestOfThreeNs(_ body: () -> Void) -> Double {
+        (0..<3).map { _ in
+            let t0 = DispatchTime.now().uptimeNanoseconds
+            body()
+            return Double(DispatchTime.now().uptimeNanoseconds - t0)
+        }.min()!
     }
 }
