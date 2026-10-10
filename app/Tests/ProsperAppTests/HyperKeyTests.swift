@@ -265,9 +265,24 @@ final class HyperKeyTests: XCTestCase {
 /// #362: the hidutil runner's wait is bounded. The seam points at /bin/sleep and
 /// /bin/echo — the real hidutil never runs here.
 final class HyperKeyHidutilRunnerTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        HyperKey.hidutilBackoffUntil = nil
+    }
+
     override func tearDown() {
         HyperKey.hidutilURL = URL(fileURLWithPath: "/usr/bin/hidutil")
+        HyperKey.lastHidutilPID = 0
+        HyperKey.hidutilBackoffUntil = nil   // every timeout row arms it
         super.tearDown()
+    }
+
+    private func sh(_ script: String, timeout: TimeInterval) -> (out: String?, pid: pid_t, elapsed: TimeInterval) {
+        HyperKey.hidutilURL = URL(fileURLWithPath: "/bin/sh")
+        HyperKey.lastHidutilPID = 0
+        let start = Date()
+        let out = HyperKey.hidutil(["-c", script], timeout: timeout)
+        return (out, HyperKey.lastHidutilPID, Date().timeIntervalSince(start))
     }
 
     func testHungChildIsKilledAndRunnerReturnsNilWithinDeadline() {
@@ -294,5 +309,71 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
     func testHappyPathReturnsStdout() {
         HyperKey.hidutilURL = URL(fileURLWithPath: "/bin/echo")
         XCTAssertEqual(HyperKey.hidutil(["ok"]), "ok\n")
+    }
+
+    /// #369 D: a TERM-ignoring child and its TERM-ignoring grandchild are both SIGKILLed
+    /// through the process group and reaped before the runner returns.
+    func testTermIgnoringGroupIsKilledAndReaped() {
+        let r = sh(#"trap "" TERM; /bin/sleep 612 & exec /bin/sleep 612"#, timeout: 0.3)
+        XCTAssertGreaterThan(r.pid, 1)
+        defer { if r.pid > 1 { killpg(r.pid, SIGKILL) } }   // only our own group, if an assert fails
+        XCTAssertNil(r.out)
+        XCTAssertLessThan(r.elapsed, 2.3)
+        let rc = kill(r.pid, 0), err = errno
+        XCTAssertEqual(rc, -1, "child must be killed and reaped")
+        XCTAssertEqual(err, ESRCH)
+        let grc = killpg(r.pid, 0), gerr = errno
+        XCTAssertEqual(grc, -1, "no member of the child's group may survive")
+        XCTAssertEqual(gerr, ESRCH)
+    }
+
+    /// #369 D: SIGTERM goes first — a cooperative child gets to run its TERM trap.
+    func testTermIsSentBeforeKill() {
+        let marker = tempDir().appendingPathComponent("term")
+        let r = sh("trap \"echo T > '\(marker.path)'; exit 0\" TERM; while :; do /bin/sleep 0.05; done", timeout: 0.3)
+        defer { if r.pid > 1 { killpg(r.pid, SIGKILL) } }
+        XCTAssertNil(r.out)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path), "the child never saw SIGTERM")
+    }
+
+    /// #369 B: after a timeout the runner answers nil without launching until the backoff ends.
+    func testTimeoutArmsBackoffThatSkipsLaunches() {
+        HyperKey.hidutilURL = URL(fileURLWithPath: "/bin/sleep")
+        var pids: [pid_t] = []
+        defer { for p in pids where p > 1 && kill(p, 0) == 0 { kill(p, SIGKILL) } }
+        XCTAssertNil(HyperKey.hidutil(["613"], timeout: 0.3))
+        let first = HyperKey.lastHidutilPID
+        pids.append(first)
+        XCTAssertGreaterThan(first, 1)
+        XCTAssertNotNil(HyperKey.hidutilBackoffUntil)
+        let start = Date()
+        XCTAssertNil(HyperKey.hidutil(["613"], timeout: 0.3))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.05)
+        XCTAssertEqual(HyperKey.lastHidutilPID, first, "nothing may launch during the backoff")
+        HyperKey.hidutilBackoffUntil = nil
+        XCTAssertNil(HyperKey.hidutil(["613"], timeout: 0.3))
+        pids.append(HyperKey.lastHidutilPID)
+        XCTAssertNotEqual(HyperKey.lastHidutilPID, first, "a cleared backoff launches again")
+    }
+
+    /// #369 A — a SOURCE SCAN, not behaviour: activate/deactivate/wake/tap repair run on
+    /// the main actor against Preferences and the live tap, so no pure seam reaches them.
+    /// A nil --get must not become an empty table: every read goes through currentTable().
+    func testEveryGetSiteSkipsTheSetOnNil() throws {
+        let src = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Extensions/HyperKey.swift"), encoding: .utf8)
+        XCTAssertNil(src.range(of: #""--get"[^\n]*\?\? """#, options: .regularExpression),
+                     "a nil --get must not fall back to an empty table")
+        XCTAssertEqual(src.components(separatedBy: "\"--get\"").count - 1, 1, "--get only inside currentTable()")
+        XCTAssertEqual(src.components(separatedBy: "guard let table = Self.currentTable() else").count - 1, 4,
+                       "activate, wake, deactivate and tap repair each guard on currentTable()")
+    }
+
+    /// #369 C: once the child exits, a grandchild holding stdout costs 0.5 s, not the timeout.
+    func testExitedChildWithStdoutHeldReturnsPromptly() {
+        let r = sh("/bin/sleep 2 & exit 0", timeout: 5)
+        XCTAssertNil(r.out)
+        XCTAssertLessThan(r.elapsed, 1.5)
     }
 }

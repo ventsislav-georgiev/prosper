@@ -361,7 +361,12 @@ final class HyperKey {
         // eventtaps), and re-reading the table each time would spawn a `hidutil` per
         // unrelated settings change.
         guard !isActive, conflict == nil else { return }
-        let table = HyperKeyMapping.parse(Self.hidutil(["property", "--get", "UserKeyMapping"]) ?? "")
+        // #369: an unreadable table is not an empty one — setting ours over it would
+        // skip the foreign check and drop another tool's entries. Transient, so no
+        // `conflict`: the next reconcile retries, and the runner's backoff bounds its cost.
+        guard let table = Self.currentTable() else {
+            NSLog("prosper: hyper key — hidutil --get failed, mapping left untouched"); return
+        }
         if let foreign = HyperKeyMapping.foreignCapsLockDestination(table) {
             let described = String(format: "0x%llX", foreign)
             conflict = described
@@ -379,8 +384,10 @@ final class HyperKey {
             MainActor.assumeIsolated {
                 guard let self, self.isActive else { return }
                 self.state.reset()
-                self.applyMapping(HyperKeyMapping.merged(
-                    into: HyperKeyMapping.parse(Self.hidutil(["property", "--get", "UserKeyMapping"]) ?? "")))
+                guard let table = Self.currentTable() else {
+                    NSLog("prosper: hyper key — hidutil --get failed, mapping left untouched"); return
+                }
+                self.applyMapping(HyperKeyMapping.merged(into: table))
             }
         }
         NSLog("prosper: hyper key active (Caps Lock → F18, mods=%@)",
@@ -396,9 +403,17 @@ final class HyperKey {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
             self.wakeObserver = nil
         }
-        let table = HyperKeyMapping.parse(Self.hidutil(["property", "--get", "UserKeyMapping"]) ?? "")
+        // On a failed --get the marker stays: it is what makes the next launch recover the mapping.
+        guard let table = Self.currentTable() else {
+            NSLog("prosper: hyper key — hidutil --get failed, mapping left untouched"); return
+        }
         _ = Self.hidutil(["property", "--set", HyperKeyMapping.setJSON(HyperKeyMapping.removed(from: table))])
         Preferences.defaults.removeObject(forKey: Self.markerKey)
+    }
+
+    /// The live UserKeyMapping table, or nil when hidutil could not be read.
+    nonisolated private static func currentTable() -> [HyperKeyMapping.Entry]? {
+        hidutil(["property", "--get", "UserKeyMapping"]).map(HyperKeyMapping.parse)
     }
 
     /// Terminate path — `applicationWillTerminate`. Same as a disable; the marker
@@ -453,8 +468,10 @@ final class HyperKey {
             // session tap could see it — un-flip it, then re-assert the mapping so
             // the newly-attached keyboard joins the party.
             Self.setCapsLock(false)
-            applyMapping(HyperKeyMapping.merged(
-                into: HyperKeyMapping.parse(Self.hidutil(["property", "--get", "UserKeyMapping"]) ?? "")))
+            guard let table = Self.currentTable() else {
+                NSLog("prosper: hyper key — hidutil --get failed, mapping left untouched"); return .swallow
+            }
+            applyMapping(HyperKeyMapping.merged(into: table))
             return .swallow
         case let other:
             return other
@@ -495,12 +512,24 @@ final class HyperKey {
     nonisolated(unsafe) static var hidutilURL = URL(fileURLWithPath: "/usr/bin/hidutil")
     /// Test seam: pid of the last child launched, so a test can prove it is gone.
     nonisolated(unsafe) static var lastHidutilPID: pid_t = 0
+    /// Set for 60 s after a timeout: until then `hidutil()` answers nil without
+    /// launching, so a hung hidutil costs one bounded stall a minute, not one per
+    /// Caps Lock press. Test seam — tests reset it to nil.
+    nonisolated(unsafe) static var hidutilBackoffUntil: Date?
 
     /// Runs on the main thread (launch reconcile, quit, wake, tap repair), so the
     /// wait is bounded: hidutil answers in milliseconds, and one that hangs is
-    /// terminated, then SIGKILLed, and reported as nil rather than freezing quit.
+    /// terminated, then SIGKILLed with its whole process group, and reported as nil
+    /// rather than freezing quit.
     @discardableResult
     nonisolated static func hidutil(_ args: [String], timeout: TimeInterval = 5) -> String? {
+        if let until = hidutilBackoffUntil {
+            guard Date() >= until else {
+                NSLog("prosper: hidutil backing off after a timeout (%@) — skipped", args.joined(separator: " "))
+                return nil
+            }
+            hidutilBackoffUntil = nil
+        }
         let process = Process()
         process.executableURL = hidutilURL
         process.arguments = args
@@ -523,16 +552,21 @@ final class HyperKey {
         while process.isRunning && Date() < deadline { usleep(10_000) }
         guard !process.isRunning else {
             NSLog("prosper: hidutil timed out after %.1fs (%@) — killed", timeout, args.joined(separator: " "))
-            process.terminate()
+            hidutilBackoffUntil = Date().addingTimeInterval(60)
+            // The child leads its own process group (Foundation spawns it that way), so
+            // signalling the group also reaches a grandchild that would hold the pipe open.
+            let pid = process.processIdentifier
+            if pid > 1 { killpg(pid, SIGTERM) }
             let grace = Date().addingTimeInterval(0.5)
             while process.isRunning && Date() < grace { usleep(10_000) }
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            if pid > 1 { killpg(pid, SIGKILL) }   // ESRCH when the group is already gone
             // Foundation reaps asynchronously; wait briefly so no zombie is left behind.
             let reap = Date().addingTimeInterval(1)
             while process.isRunning && Date() < reap { usleep(10_000) }
             return nil
         }
-        guard read.wait(timeout: .now() + max(deadline.timeIntervalSinceNow, 0.5)) == .success else { return nil }
+        // Exited: stdout closes with it unless a grandchild still holds it — don't wait that out.
+        guard read.wait(timeout: .now() + 0.5) == .success else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
