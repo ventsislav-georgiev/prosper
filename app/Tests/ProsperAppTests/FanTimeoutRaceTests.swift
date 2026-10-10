@@ -62,6 +62,22 @@ final class FanTimeoutRaceTests: XCTestCase {
         XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 3, lastFailed: 2, manualOn: false))
     }
 
+    /// #263 / QA #83: drives the real generation bookkeeping. N times out, N+1 is refused
+    /// (recorded as the last failed engage), then N lands late: N+1 owns nothing, so N is
+    /// released. Fails if a non-engaged reply stops recording `failedEngageGeneration`.
+    @MainActor
+    func testWithFanTimeoutReleasesLateEngageAfterNewerEngageFailed() async {
+        let released = expectation(description: "late engage released")
+        let older = await StatsPopupView.withFanTimeout(0.1, {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return .engaged
+        }, manualOn: { false }, release: { released.fulfill() })
+        XCTAssertEqual(older, .unavailable)
+        let newer = await StatsPopupView.withFanTimeout(5, { .refused }, manualOn: { false }, release: {})
+        XCTAssertEqual(newer, .refused)
+        await fulfillment(of: [released], timeout: 2)
+    }
+
     /// A late failure has nothing engaged to release.
     func testLateFailureAfterCeilingIsNotReleased() async {
         let released = expectation(description: "no release")

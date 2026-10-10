@@ -105,12 +105,11 @@ final class FanReclaimRecoveryTests: XCTestCase {
         let fake = NSXPCConnection(machServiceName: "eu.illegible.prosper.tests.no-such-helper")
         fake.remoteObjectInterface = NSXPCInterface(with: ProsperHelperProtocol.self)
         fake.resume()
-        defer { fake.invalidate(); FanControlHelper.connection = nil; FanControlHelper.engagesInFlight = 0 }
-        FanControlHelper.connection = fake
-        FanControlHelper.engagesInFlight = 1
+        defer { fake.invalidate(); FanControlHelper.inject(connection: nil, engagesInFlight: 0) }
+        FanControlHelper.inject(connection: fake, engagesInFlight: 1)
         await FanControlHelper.resetAll(teardown: true)
         XCTAssertTrue(FanControlHelper.connection === fake, "an engage in flight keeps its connection")
-        FanControlHelper.engagesInFlight = 0
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
         await FanControlHelper.resetAll(teardown: true)
         XCTAssertNil(FanControlHelper.connection)
     }

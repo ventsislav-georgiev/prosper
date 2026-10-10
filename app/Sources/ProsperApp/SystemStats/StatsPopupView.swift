@@ -904,15 +904,17 @@ struct StatsPopupView: View {
     /// `.engaged` is released through the same reset as "Automatic" (#255), unless a
     /// newer engage is still in flight (it shares the registration and owns the fans)
     /// or manual is on. A newer engage that already failed owns nothing (#263); one
-    /// that fails later releases through `firstEngageLanded`.
-    private func withFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply) async -> FanManualReply {
+    /// that fails later releases through `firstEngageLanded`. `manualOn`/`release` are test seams.
+    @MainActor static func withFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply,
+                                          manualOn: @escaping @MainActor @Sendable () -> Bool = { Preferences.fanManualEnabled },
+                                          release: @escaping @MainActor @Sendable () async -> Void = { await FanControlHelper.resetAll(teardown: true) }) async -> FanManualReply {
         Self.engageGeneration += 1
         let gen = Self.engageGeneration
         let reply = await Self.raceFanTimeout(seconds, op) { @MainActor in
             guard Self.shouldReleaseLateEngage(generation: gen, current: Self.engageGeneration,
                                                lastFailed: Self.failedEngageGeneration,
-                                               manualOn: Preferences.fanManualEnabled) else { return }
-            await FanControlHelper.resetAll(teardown: true)
+                                               manualOn: manualOn()) else { return }
+            await release()
         }
         if reply != .engaged { Self.failedEngageGeneration = gen }
         return reply
@@ -975,7 +977,7 @@ struct StatsPopupView: View {
             // since the call never reaches the daemon. Race the whole engage so the
             // button always resolves and surfaces the actionable error.
             // A live helper replying false is its overheat latch (#209), not a missing helper.
-            let reply = await withFanTimeout(45) {
+            let reply = await Self.withFanTimeout(45) {
                 await FanControlHelper.setManualReply(first.key, rpm: first.value,
                                                       timeout: FanControlHelper.firstEngageTimeout)
             }

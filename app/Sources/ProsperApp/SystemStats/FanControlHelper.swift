@@ -167,9 +167,11 @@ enum FanInfo {
 @MainActor
 enum FanControlHelper {
     nonisolated private static let log = Logger(subsystem: "eu.illegible.prosper", category: "fanhelper")
-    static var connection: NSXPCConnection?   // internal: the teardown-guard test injects one
+    private(set) static var connection: NSXPCConnection?
     /// Engages holding `connection` right now; a teardown waits for them (#263).
-    static var engagesInFlight = 0
+    private(set) static var engagesInFlight = 0
+    /// Test seam: the teardown-guard test injects a fake connection and in-flight count.
+    static func inject(connection c: NSXPCConnection?, engagesInFlight n: Int) { connection = c; engagesInFlight = n }
     private static var observersInstalled = false
     private static var reclaimTimer: Timer?
     private static var reclaimReadInFlight = false
