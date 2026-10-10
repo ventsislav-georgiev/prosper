@@ -39,6 +39,10 @@ final class StatsController {
         self.screen.reconcile(popoverShown: self.popover.isShown); self.applyPause()
         self.poller?.setPopupActive(self.popover.isShown)
         self.updateOutsideClickMonitor()
+        // #197: we closed → end the open item's session (not B's, mid A → B switch).
+        if !self.popover.isShown, let m = self.openModule, let item = self.items[m]?.item {
+            self.expanded.cancelSessions(only: item)
+        }
         // Drop the hosting controller once truly closed so the SwiftUI view
         // deallocs — otherwise its per-tick subscriptions (charts, the sensor
         // fan read) keep firing against a hidden popover. Deferred + re-guarded
@@ -54,7 +58,20 @@ final class StatsController {
     /// misses desktop / non-activating clicks for an accessory app, and on macOS 27
     /// the global monitor also sees clicks inside our own popover, so the shared
     /// dismisser decides by geometry, not by event routing.
-    private lazy var outsideClick = PopoverOutsideClickDismisser(popover: popover)
+    private lazy var outsideClick = PopoverOutsideClickDismisser(
+        popover: popover, systemOwnedFrames: { [weak self] in self?.expanded.itemFrames ?? [] })
+    /// #197: macOS 27 opens/closes through each item's session. Switching A → B
+    /// may begin B before ending A, so didEnd only hides A's own popover.
+    private lazy var expanded = ExpandedInterfaceBridge(
+        begin: { [weak self] item in if let b = item.button { self?.toggle(b) } },
+        end: { [weak self] item in
+            guard let self, let b = item.button,
+                  ExpandedInterfacePolicy.hidesOnEnd(
+                    pinned: false,
+                    showingThisItem: popover.isShown && openModule == buttonModule[ObjectIdentifier(b)])
+            else { return }
+            popover.performClose(nil)
+        })
     /// Process-lifetime observer token. The controller is a `static let` singleton
     /// meant to live forever, so this is intentionally never removed.
     private var configObserver: NSObjectProtocol?
@@ -175,8 +192,10 @@ final class StatsController {
                 host.topAnchor.constraint(equalTo: button.topAnchor),
                 host.bottomAnchor.constraint(equalTo: button.bottomAnchor),
             ])
-            button.target = self
-            button.action = #selector(itemClicked(_:))
+            if !expanded.install(on: item) {
+                button.target = self
+                button.action = #selector(itemClicked(_:))
+            }
             buttonModule[ObjectIdentifier(button)] = m
             items[m] = (item, host)
         }
@@ -212,6 +231,12 @@ final class StatsController {
         // icon means "close", so don't reopen. A different module's icon still opens.
         if Self.skipsReopen(dismissedByClick: outsideClick.dismissed(by: NSApp.currentEvent),
                             open: openModule, clicked: m) { return }
+        toggle(sender)
+    }
+
+    /// The click's toggle — target/action below 27, the session's didBegin on 27.
+    private func toggle(_ sender: NSStatusBarButton) {
+        guard let m = buttonModule[ObjectIdentifier(sender)] else { return }
         if popover.isShown, openModule == m { popover.performClose(sender); return }
         openModule = m
         let host = NSHostingController(rootView: StatsPopupView(module: m, store: store))

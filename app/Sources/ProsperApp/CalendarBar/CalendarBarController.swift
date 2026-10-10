@@ -86,6 +86,7 @@ final class CalendarBarController {
     private lazy var popoverDelegate = CalendarPopoverDelegate { [weak self] in
         guard let self else { return }
         self.updateOutsideClickMonitor()
+        if !self.popover.isShown { self.expanded.cancelSessions() }   // #197: we closed → end the session
         // Drop the hosting controller once truly closed so the SwiftUI view
         // deallocs (idle-CPU teardown rule — a closed-but-alive hosting view
         // keeps rendering). Deferred + re-guarded to survive reshow races.
@@ -96,9 +97,22 @@ final class CalendarBarController {
         }
     }
     /// #149: shared geometric outside-click dismisser; a pinned popover never closes.
-    private lazy var outsideClick = PopoverOutsideClickDismisser(popover: popover) { [weak self] in
-        !(self?.store.pinned ?? false)
-    }
+    private lazy var outsideClick = PopoverOutsideClickDismisser(
+        popover: popover, canDismiss: { [weak self] in !(self?.store.pinned ?? false) },
+        systemOwnedFrames: { [weak self] in self?.expanded.itemFrames ?? [] })
+    /// #197: macOS 27 opens/closes through the status item's session. Pinned =
+    /// outside any session: pinning (or opening pinned) cancels it, and the
+    /// didEnd that follows — or one from another status menu opening — keeps
+    /// the window. A click on the icon then begins a new session on a shown
+    /// popover, which `togglePopup` reads as close, exactly as below 27.
+    private lazy var expanded = ExpandedInterfaceBridge(
+        begin: { [weak self] _ in self?.togglePopup() },
+        end: { [weak self] _ in
+            guard let self, ExpandedInterfacePolicy.hidesOnEnd(pinned: store.pinned,
+                                                                showingThisItem: popover.isShown)
+            else { return }
+            popover.performClose(nil)
+        })
     private var minuteTimer: DispatchSourceTimer?
     /// Process-lifetime observers; the controller is a singleton, never removed.
     private var configObserver: NSObjectProtocol?
@@ -174,8 +188,10 @@ final class CalendarBarController {
                     host.topAnchor.constraint(equalTo: button.topAnchor),
                     host.bottomAnchor.constraint(equalTo: button.bottomAnchor),
                 ])
-                button.target = self
-                button.action = #selector(itemClicked(_:))
+                if !expanded.install(on: item) {
+                    button.target = self
+                    button.action = #selector(itemClicked(_:))
+                }
                 self.host = host
             }
             self.item = item
@@ -220,6 +236,7 @@ final class CalendarBarController {
             onMonthChanged: { [weak self] in self?.refetch() },
             onPinChanged: { [weak self] pinned in
                 self?.popover.behavior = pinned ? .applicationDefined : .transient
+                if pinned { self?.expanded.cancelSessions() }   // #197
             },
             onOpenSettings: { [weak self] in
                 self?.popover.performClose(nil)
@@ -237,6 +254,7 @@ final class CalendarBarController {
         // activates the window and SwiftUI never sees it ("first click on
         // another day does nothing"). Make it key on open.
         host.view.window?.makeKey()
+        if store.pinned { expanded.cancelSessions() }   // #197: pinned lives outside a session
     }
 
     /// Persist a grid-row resize (drag handle) without routing through the pane.

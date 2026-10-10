@@ -38,6 +38,15 @@ tag from the now-released section and put it on the new top draft.
   process owns the window under the click: a click on anything of Prosper's — the
   popover, a menu or picker opened from it — keeps it open; a click on another app or
   the desktop closes it.
+- **macOS 27: the System Stats, audio mixer and calendar popovers open and close through
+  the system menu bar.** macOS 27 gives a status item a session the menu bar drives:
+  it begins on the icon click or on keyboard navigation and ends when the icon is
+  clicked again, another menu-bar item opens, or the user navigates away. The three
+  popovers now follow that session instead of toggling on the button themselves, so
+  keyboard menu-bar navigation reaches them, opening another menu-bar item closes
+  them, and clicking their own icon no longer flashes the popover closed and open
+  again. A pinned calendar lives outside the session and still closes with one click
+  on its icon. Older macOS keeps the previous behaviour.
 - **Fixed: Full Disk Access detection on macOS 27.** The check read the user TCC
   database, which macOS 27 no longer exposes, so on accounts without a Safari bookmarks
   file the extension permission rows stayed on "Grant" with access already given. It now

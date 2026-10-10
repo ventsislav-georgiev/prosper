@@ -42,9 +42,15 @@ final class PopoverOutsideClickDismisser {
         init(time: TimeInterval, number: Int) { self.time = time; self.number = number }
     }
 
-    init(popover: NSPopover, canDismiss: @escaping () -> Bool = { true }) {
+    /// #197: screen frames of our status items whose clicks the macOS 27 session
+    /// owns (empty below 27 — nothing changes there).
+    private let systemOwnedFrames: () -> [NSRect]
+
+    init(popover: NSPopover, canDismiss: @escaping () -> Bool = { true },
+         systemOwnedFrames: @escaping () -> [NSRect] = { [] }) {
         self.popover = popover
         self.canDismiss = canDismiss
+        self.systemOwnedFrames = systemOwnedFrames
     }
 
     /// Arm while shown, drop when closed (no idle event tap when nothing is open).
@@ -69,7 +75,9 @@ final class PopoverOutsideClickDismisser {
 
     /// The monitor's body; internal so tests can drive a click without an event tap.
     func handleClick(_ event: NSEvent, at p: NSPoint) {
-        guard canDismiss() else { return }
+        guard canDismiss(),
+              !ExpandedInterfacePolicy.systemOwnsClick(p, itemFrames: systemOwnedFrames())
+        else { return }
         let frame = popover.contentViewController?.view.window?.frame
         if Self.shouldDismiss(ownerPID: Self.ownerPID(at: p), ourPID: getpid(),
                               click: p, popoverFrame: frame) {
@@ -123,5 +131,75 @@ final class PopoverOutsideClickDismisser {
         guard let f = popoverFrame else { return true }
         let inside = (f.minX...f.maxX).contains(click.x) && (f.minY...f.maxY).contains(click.y)
         return !inside
+    }
+}
+
+// #197: macOS 27 drives status-item popovers through an expanded-interface
+// session (NSStatusItem.h:27-37): the system calls didBegin on the item's click
+// or keyboard navigation and didEnd when it closes it (our item clicked again,
+// another status menu opening, navigation away). That replaces target/action
+// toggling and with it the ClickStamp reopen race. Below 27 nothing is installed
+// and the #149 path above runs unchanged.
+
+/// Pure decisions of the 27 path, testable without a status item.
+enum ExpandedInterfacePolicy {
+    /// didEnd: hide only the popover that belongs to the ending item (Stats: the
+    /// system may begin B before ending A), and never a pinned one (Calendar).
+    static func hidesOnEnd(pinned: Bool, showingThisItem: Bool) -> Bool {
+        showingThisItem && !pinned
+    }
+
+    /// A click on one of our own status items belongs to the session — closing
+    /// on it here would end the session and let the same click begin a new one.
+    /// Closed rect, like `shouldDismiss`'s frame rule.
+    static func systemOwnsClick(_ p: NSPoint, itemFrames: [NSRect]) -> Bool {
+        itemFrames.contains { ($0.minX...$0.maxX).contains(p.x) && ($0.minY...$0.maxY).contains(p.y) }
+    }
+}
+
+/// Routes an item's session to `begin`/`end`. Holds itself as the weak
+/// `expandedInterfaceDelegate` of every item it is installed on — the owner
+/// must keep it alive.
+@MainActor
+final class ExpandedInterfaceBridge: NSObject {
+    private let begin: (NSStatusItem) -> Void
+    private let end: (NSStatusItem) -> Void
+    private let items = NSHashTable<NSStatusItem>.weakObjects()
+
+    init(begin: @escaping (NSStatusItem) -> Void, end: @escaping (NSStatusItem) -> Void) {
+        self.begin = begin
+        self.end = end
+    }
+
+    /// true on macOS 27: the system now opens/closes, so the caller must NOT also
+    /// wire button target/action. false below 27: wire target/action as before.
+    func install(on item: NSStatusItem) -> Bool {
+        guard #available(macOS 27, *) else { return false }
+        item.expandedInterfaceDelegate = self
+        items.add(item)
+        return true
+    }
+
+    /// We closed (Escape, transient, outside click, an action in the popover) or
+    /// pinned: tell the menu bar. It answers with didEnd, so `end` must be
+    /// idempotent. `only`: just that item's session (Stats — another item's may
+    /// be about to begin). No-op below 27 or with no live session.
+    func cancelSessions(only item: NSStatusItem? = nil) {
+        guard #available(macOS 27, *) else { return }
+        for i in item.map({ [$0] }) ?? items.allObjects { i.expandedInterfaceSession?.cancel() }
+    }
+
+    /// Our items' frames, for the dismisser to leave their clicks to the system.
+    var itemFrames: [NSRect] { items.allObjects.compactMap { $0.button?.window?.frame } }
+}
+
+@available(macOS 27, *)
+extension ExpandedInterfaceBridge: @MainActor NSStatusItemExpandedInterfaceDelegate {
+    func statusItem(_ statusItem: NSStatusItem, didBegin _: NSStatusItemExpandedInterfaceSession) {
+        begin(statusItem)
+    }
+
+    func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated _: Bool) {
+        end(statusItem)
     }
 }

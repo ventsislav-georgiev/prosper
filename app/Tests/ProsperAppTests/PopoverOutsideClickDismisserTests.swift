@@ -97,3 +97,55 @@ final class PopoverDismissStampTests: XCTestCase {
         XCTAssertFalse(StatsController.skipsReopen(dismissedByClick: false, open: .cpu, clicked: .cpu))
     }
 }
+
+// #197: the macOS 27 expanded-interface session decisions.
+@MainActor
+final class ExpandedInterfacePolicyTests: XCTestCase {
+    private typealias P = ExpandedInterfacePolicy
+    private let item = NSRect(x: 1000, y: 1100, width: 40, height: 24)
+
+    func testEndHidesOnlyTheShownUnpinnedItem() {
+        XCTAssertTrue(P.hidesOnEnd(pinned: false, showingThisItem: true))
+        XCTAssertFalse(P.hidesOnEnd(pinned: false, showingThisItem: false), "Stats: B already began, A's end keeps B")
+    }
+
+    func testPinnedSurvivesEnd() {
+        XCTAssertFalse(P.hidesOnEnd(pinned: true, showingThisItem: true))
+    }
+
+    func testClickOnOwnItemBelongsToTheSystem() {
+        XCTAssertTrue(P.systemOwnsClick(NSPoint(x: 1020, y: 1110), itemFrames: [item]))
+        XCTAssertTrue(P.systemOwnsClick(NSPoint(x: 1040, y: 1124), itemFrames: [.zero, item]), "edge is inside")
+    }
+
+    func testOtherClicksStayWithTheDismisser() {
+        XCTAssertFalse(P.systemOwnsClick(NSPoint(x: 999, y: 1110), itemFrames: [item]))
+        XCTAssertFalse(P.systemOwnsClick(NSPoint(x: 1020, y: 1110), itemFrames: []), "< 27: no frames")
+    }
+
+    // The dismisser consults the frames: a click on our item neither closes nor stamps.
+    func testDismisserLeavesOwnItemClickAlone() {
+        let p = NSPoint(x: -100_000, y: -100_000)   // off-screen → would close
+        let e = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 10,
+                                   windowNumber: 0, context: nil, eventNumber: 9, clickCount: 1, pressure: 1)!
+        let d = PopoverOutsideClickDismisser(popover: NSPopover(),
+                                             systemOwnedFrames: { [NSRect(origin: p, size: NSSize(width: 1, height: 1))] })
+        d.handleClick(e, at: p)
+        XCTAssertFalse(d.dismissed(by: e))
+    }
+
+    // Below 27 the bridge installs nothing; on 27 it owns the item's delegate.
+    func testInstallMatchesTheOS() {
+        let item = NSStatusBar.system.statusItem(withLength: 10)
+        defer { NSStatusBar.system.removeStatusItem(item) }
+        let bridge = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in })
+        if #available(macOS 27, *) {
+            XCTAssertTrue(bridge.install(on: item))
+            XCTAssertTrue(item.expandedInterfaceDelegate === bridge)
+            XCTAssertNil(item.expandedInterfaceSession)
+            bridge.cancelSessions()   // no live session: a no-op, must not trap
+        } else {
+            XCTAssertFalse(bridge.install(on: item))
+        }
+    }
+}

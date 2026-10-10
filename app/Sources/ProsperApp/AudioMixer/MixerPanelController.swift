@@ -16,7 +16,18 @@ final class MixerPanelController {
     private var glyphObservers: Set<AnyCancellable> = []
 
     /// #149: shared geometric outside-click dismisser (see its file for why).
-    private lazy var outsideClick = PopoverOutsideClickDismisser(popover: popover)
+    private lazy var outsideClick = PopoverOutsideClickDismisser(
+        popover: popover, systemOwnedFrames: { [weak self] in self?.expanded.itemFrames ?? [] })
+
+    /// #197: macOS 27 opens/closes through the status item's session; below 27
+    /// the button's target/action does (see ExpandedInterfaceBridge).
+    private lazy var expanded = ExpandedInterfaceBridge(
+        begin: { [weak self] item in if let b = item.button { self?.toggle(b) } },
+        end: { [weak self] _ in
+            guard let self, ExpandedInterfacePolicy.hidesOnEnd(pinned: false, showingThisItem: popover.isShown)
+            else { return }
+            popover.performClose(nil)
+        })
 
     private lazy var popover: NSPopover = {
         let p = NSPopover()
@@ -27,7 +38,9 @@ final class MixerPanelController {
     }()
 
     private lazy var popoverDelegate = MixerPopoverDelegate { [weak self] in
-        self?.updateOutsideClickMonitor()
+        guard let self else { return }
+        updateOutsideClickMonitor()
+        if !popover.isShown { expanded.cancelSessions() }   // #197: we closed → end the session
     }
 
     /// Built once and reused for every open. Rebuilding the panel per click —
@@ -85,8 +98,10 @@ final class MixerPanelController {
         item.autosaveName = "ProsperVolumeMixer"
         // .content: stays in the menubar-management ordering/preview set.
         ProsperStatusItems.register(item, role: .content, name: "Volume")
-        item.button?.target = self
-        item.button?.action = #selector(itemClicked(_:))
+        if !expanded.install(on: item) {
+            item.button?.target = self
+            item.button?.action = #selector(itemClicked(_:))
+        }
         item.button?.toolTip = "Volume mixer"
         self.item = item
         updateGlyph()
@@ -211,6 +226,11 @@ final class MixerPanelController {
         // #149: the outside-click monitor already closed us on this very click
         // (the menu bar is WindowServer's, not ours) — don't reopen.
         if outsideClick.dismissed(by: NSApp.currentEvent) { return }
+        toggle(sender)
+    }
+
+    /// The click's toggle — target/action below 27, the session's didBegin on 27.
+    private func toggle(_ sender: NSStatusBarButton) {
         if popover.isShown { popover.performClose(sender); return }
         let host = panelHost()
         popover.contentViewController = host
