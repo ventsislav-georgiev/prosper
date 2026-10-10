@@ -13,6 +13,15 @@ final class LidSleepHelperRegistrationTests: XCTestCase {
         var value: Int { lock.withLock { n } }
     }
 
+    // ensureRegistered writes prosper.lidHelper.enabled to UserDefaults.standard
+    // (the xctest tool's domain); put back whatever was there.
+    private var savedEnabled: Any?
+    override func setUp() async throws { savedEnabled = UserDefaults.standard.object(forKey: "prosper.lidHelper.enabled") }
+    override func tearDown() async throws {
+        if let v = savedEnabled { UserDefaults.standard.set(v, forKey: "prosper.lidHelper.enabled") }
+        else { UserDefaults.standard.removeObject(forKey: "prosper.lidHelper.enabled") }
+    }
+
     func testConcurrentEnsureRegisteredSharesOneRegistration() async throws {
         let saved = LidSleepHelper.registration
         defer { LidSleepHelper.registration = saved }
@@ -36,5 +45,34 @@ final class LidSleepHelperRegistrationTests: XCTestCase {
         gate.leave()
         for t in tasks { _ = await t.value }
         XCTAssertEqual(calls.value, 1, "\(n) concurrent callers must resolve from ONE registration")
+    }
+
+    /// inFlight is cleared when a registration finishes, so a failed one is retried.
+    func testFailedRegistrationIsRetriedByLaterCaller() async {
+        let saved = LidSleepHelper.registration
+        defer { LidSleepHelper.registration = saved }
+        let calls = Counter()
+        LidSleepHelper.registration = { calls.bump(); return .failed }
+        let first = await LidSleepHelper.ensureRegistered(presentModal: false)
+        XCTAssertFalse(first)
+        let second = await LidSleepHelper.ensureRegistered(presentModal: false)
+        XCTAssertFalse(second)
+        XCTAssertEqual(calls.value, 2, "a failed registration must not be reused; the next caller starts a fresh one")
+    }
+
+    /// The check-and-set of inFlight runs under inFlightLock: while it is held, no caller starts a registration.
+    func testSharedRegistrationSerializesOnInFlightLock() async {
+        let saved = LidSleepHelper.registration
+        defer { LidSleepHelper.registration = saved }
+        let calls = Counter()
+        LidSleepHelper.registration = { calls.bump(); return .failed }
+        let caller: Task<LidSleepHelper.RegisterOutcome, Never> = LidSleepHelper.inFlightLock.withLock {
+            let t = Task.detached { await LidSleepHelper.sharedRegistration().value }
+            Thread.sleep(forTimeInterval: 0.3)
+            XCTAssertEqual(calls.value, 0, "sharedRegistration must wait for inFlightLock")
+            return t
+        }
+        _ = await caller.value
+        XCTAssertEqual(calls.value, 1)
     }
 }

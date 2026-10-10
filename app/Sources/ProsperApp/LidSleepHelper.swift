@@ -221,7 +221,8 @@ enum LidSleepHelper {
     // retry. Its own lock (never held across IPC) — registerLock is held for the
     // whole smd round-trip. The sync entry points (migration, heal) still call
     // registerIfNeeded() directly and serialize on registerLock as before.
-    nonisolated private static let inFlightLock = NSLock()
+    /// internal (not private) only so the test can hold it and prove callers serialize on it.
+    nonisolated static let inFlightLock = NSLock()
     nonisolated(unsafe) private static var inFlight: Task<RegisterOutcome, Never>?
     /// Test seam: the blocking registration the shared task runs.
     nonisolated(unsafe) static var registration: @Sendable () -> RegisterOutcome = { registerIfNeeded() }
