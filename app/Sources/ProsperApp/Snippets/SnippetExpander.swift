@@ -183,7 +183,7 @@ final class SnippetExpander {
     /// resulting context's closures stay pure — safe to call from the `nonisolated`
     /// planner without touching actor state.
     private func liveContext(template: String) -> PlaceholderContext {
-        let clip = NSPasteboard.general.string(forType: .string)
+        let clip = Pasteboard.general.string(forType: .string)
         let history: [String] = ClipboardStore.shared.items
             .filter { $0.kind.isTextual }
             .compactMap { ClipboardStore.shared.text(for: $0) ?? $0.preview }
@@ -309,7 +309,7 @@ final class SnippetExpander {
     }
 
     private func pasteString(_ string: String) {
-        let pb = NSPasteboard.general
+        let pb = Pasteboard.general
         let previous = pb.string(forType: .string)
         pb.clearContents()
         pb.setString(string, forType: .string)
@@ -318,7 +318,7 @@ final class SnippetExpander {
     }
 
     private func pasteRich(rtf: Data, plain: String) {
-        let pb = NSPasteboard.general
+        let pb = Pasteboard.general
         let previousString = pb.string(forType: .string)
         let previousRTF = pb.data(forType: .rtf)
         pb.clearContents()
@@ -345,7 +345,7 @@ final class SnippetExpander {
     private func restoreClipboard(previousString: String?, previousRTF: Data?) {
         guard Preferences.snippetsRestoreClipboard else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            let pb = NSPasteboard.general
+            let pb = Pasteboard.general
             pb.clearContents()
             if let previousRTF { pb.setData(previousRTF, forType: .rtf) }
             if let previousString { pb.setString(previousString, forType: .string) }

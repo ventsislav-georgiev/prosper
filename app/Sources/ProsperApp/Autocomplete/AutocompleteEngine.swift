@@ -2563,7 +2563,7 @@ final class AutocompleteEngine {
     /// clipboard afterward. Honors the A2 `pasteAndMatchStyle`/`backspaceAfterPaste`
     /// knobs and stamps a self-marker onto the pasteboard write.
     private func pasteString(_ string: String, knobs: AppOverrideResolver.InsertionKnobs = .init()) {
-        let pb = NSPasteboard.general
+        let pb = Pasteboard.general
         let previous = pb.string(forType: .string)
         pb.clearContents()
         pb.setString(string, forType: .string)

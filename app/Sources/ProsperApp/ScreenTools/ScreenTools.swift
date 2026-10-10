@@ -87,8 +87,8 @@ enum ScreenTools {
     }
 
     private static func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        Pasteboard.general.clearContents()
+        Pasteboard.general.setString(text, forType: .string)
     }
 
     private static func hud(_ text: String) {

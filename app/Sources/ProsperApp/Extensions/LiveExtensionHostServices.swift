@@ -32,12 +32,12 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     // MARK: Clipboard (live system pasteboard + native history store)
 
     func clipboardRead() -> String? {
-        mainSync { NSPasteboard.general.string(forType: .string) }
+        mainSync { Pasteboard.general.string(forType: .string) }
     }
 
     func clipboardWrite(_ text: String) {
         mainSync {
-            let pb = NSPasteboard.general
+            let pb = Pasteboard.general
             // A host-originated write must not re-fire `clipboard.changed` — that is
             // the write-back loop a handler which edits the clipboard would spin
             // forever (clean-URL, paste-as-plain-text, …).
@@ -345,7 +345,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         // palette inserts plain text); for plain snippets, the body is the template.
         let template = isRich ? RichSnippet.plainText(rtf: hit.text) : hit.text
         return mainSync {
-            let clip = NSPasteboard.general.string(forType: .string)
+            let clip = Pasteboard.general.string(forType: .string)
             let history: [String] = ClipboardStore.shared.items
                 .filter { $0.kind.isTextual }
                 .compactMap { ClipboardStore.shared.text(for: $0) ?? $0.preview }

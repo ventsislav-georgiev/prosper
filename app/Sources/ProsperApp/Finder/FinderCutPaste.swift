@@ -61,7 +61,7 @@ final class FinderCutPaste {
             return true
         case .paste:
             guard !pasting else { return false }
-            let pasteboard = NSPasteboard.general
+            let pasteboard = Pasteboard.general
             // Decided here, synchronously, with a cheap local read — this is why
             // there is no synthetic re-post to undo a wrong guess. Marks that no
             // longer match the pasteboard belong to a copy the user made since, so
@@ -91,8 +91,8 @@ final class FinderCutPaste {
 
     private func resetMarks(clearOwnedPasteboard: Bool) {
         guard !marked.isEmpty else { return }
-        if clearOwnedPasteboard, NSPasteboard.general.changeCount == markedChangeCount {
-            NSPasteboard.general.clearContents()
+        if clearOwnedPasteboard, Pasteboard.general.changeCount == markedChangeCount {
+            Pasteboard.general.clearContents()
         }
         marked = []
         markedChangeCount = 0
@@ -110,7 +110,7 @@ final class FinderCutPaste {
                     // Stale reply, no consent, or nothing selected: the keystroke was
                     // swallowed and nothing else happened, which is the safe outcome.
                     guard generation == me.generation, !urls.isEmpty else { return }
-                    let pasteboard = NSPasteboard.general
+                    let pasteboard = Pasteboard.general
                     pasteboard.clearContents()
                     pasteboard.writeObjects(urls as [NSURL])
                     me.marked = urls
@@ -221,7 +221,7 @@ private enum FinderBridge {
     /// Re-encodes the pasteboard image as PNG and writes it where a Finder paste
     /// would have landed. Returns the file name written.
     static func writeImage(type: String, changeCount: Int) -> String? {
-        let pasteboard = NSPasteboard.general
+        let pasteboard = Pasteboard.general
         // The user may have copied something else in the time it took to get here.
         guard pasteboard.changeCount == changeCount,
               let data = pasteboard.data(forType: NSPasteboard.PasteboardType(type)),

@@ -10,7 +10,7 @@ import AppKit
 /// scoping (the denylist) can apply there too, not just in Safari/Chrome.
 ///
 /// ## Strictly non-destructive
-/// Everything here only *reads* `NSPasteboard.general`. It never calls
+/// Everything here only *reads* `Pasteboard.general`. It never calls
 /// `clearContents()` / `setString` / `declareTypes`, never triggers a synthetic
 /// ⌘C, and never mutates the user's clipboard. The system pasteboard is shared
 /// global state; clobbering it to fish for context would be hostile.
@@ -33,13 +33,13 @@ enum ChromiumPasteboard {
     /// Whether the general pasteboard currently carries Chromium private flavors
     /// (i.e. the last copy came from a Chromium/Electron surface).
     static func hasChromiumFlavors() -> Bool {
-        NSPasteboard.general.types?.contains(sourceURLType) ?? false
+        Pasteboard.general.types?.contains(sourceURLType) ?? false
     }
 
     /// Host of `org.chromium.source-url` on the general pasteboard, or nil when the
     /// flavor is absent or unparseable. Read-only; does not mutate the pasteboard.
     static func sourceHost() -> String? {
-        guard let raw = NSPasteboard.general.string(forType: sourceURLType),
+        guard let raw = Pasteboard.general.string(forType: sourceURLType),
               !raw.isEmpty else { return nil }
         return URL(string: raw)?.host
     }

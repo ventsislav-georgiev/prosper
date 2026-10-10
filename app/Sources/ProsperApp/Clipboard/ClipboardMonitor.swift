@@ -11,7 +11,7 @@ final class ClipboardMonitor {
     static let shared = ClipboardMonitor()
 
     private var timer: Timer?
-    private var lastChangeCount: Int = NSPasteboard.general.changeCount
+    private var lastChangeCount: Int = Pasteboard.general.changeCount
     private let pollInterval: TimeInterval = 1.0
 
     /// #194: display asleep or screen locked → nothing can copy, so the timer is
@@ -79,7 +79,7 @@ final class ClipboardMonitor {
 
     func start() {
         guard !isRunning else { return }
-        lastChangeCount = NSPasteboard.general.changeCount
+        lastChangeCount = Pasteboard.general.changeCount
         isRunning = true
         applyPause()
     }
@@ -129,7 +129,7 @@ final class ClipboardMonitor {
 
     /// Internal, and takes the pasteboard, so a test can drive one poll against its
     /// own named pasteboard instead of the user's.
-    func poll(_ pb: NSPasteboard = .general) {
+    func poll(_ pb: NSPasteboard = Pasteboard.general) {
         guard pb.changeCount != lastChangeCount else { return }
         lastChangeCount = pb.changeCount
         let suppressed = suppressNext

@@ -593,7 +593,7 @@ final class RunnerPanel {
     private func commit(_ text: String) {
         guard !text.isEmpty else { return }
 
-        let pasteboard = NSPasteboard.general
+        let pasteboard = Pasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
@@ -1803,7 +1803,7 @@ private struct RunnerView: View {
                 assignTarget: selectedRow.flatMap { AssignableRunnerTarget.from(row: $0, mode: model.mode) },
                 onCopy: {
                     if let row = selectedRow {
-                        let pb = NSPasteboard.general
+                        let pb = Pasteboard.general
                         pb.clearContents()
                         pb.setString(row.copyValue, forType: .string)
                     }

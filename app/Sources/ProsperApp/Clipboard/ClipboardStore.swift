@@ -103,7 +103,7 @@ final class ClipboardStore: ObservableObject {
 
     /// Writes the entry back onto the general pasteboard.
     func copyToPasteboard(_ item: ClipboardItem) {
-        let pb = NSPasteboard.general
+        let pb = Pasteboard.general
         pb.clearContents()
         switch item.kind {
         case .text, .link, .email, .color:

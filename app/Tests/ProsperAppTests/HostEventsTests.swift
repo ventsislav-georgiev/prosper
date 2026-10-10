@@ -122,12 +122,9 @@ final class HostEventsTests: XCTestCase {
     /// the pasteboard, which pastes as nothing but still reads back as a string.
     @MainActor
     func testClipboardWriteEmptyStringClearsPasteboard() {
-        let pb = NSPasteboard.general
-        let saved = pb.string(forType: .string)
-        defer {
-            pb.clearContents()
-            if let saved { pb.setString(saved, forType: .string) }
-        }
+        // Under XCTest the seam is a private per-process pasteboard, never the user's clipboard (#316).
+        let pb = Pasteboard.general
+        defer { pb.clearContents() }
 
         let services = LiveExtensionHostServices.shared
         services.clipboardWrite("hello")

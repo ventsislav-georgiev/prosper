@@ -199,7 +199,7 @@ final class DchConnection: @unchecked Sendable {
             ? data
             : image.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0) }?
                 .representation(using: .png, properties: [:])
-        let pb = NSPasteboard.general
+        let pb = Pasteboard.general
         pb.clearContents()
         if let png { pb.setData(png, forType: .png) }
         if let tiff = image.tiffRepresentation { pb.setData(tiff, forType: .tiff) }

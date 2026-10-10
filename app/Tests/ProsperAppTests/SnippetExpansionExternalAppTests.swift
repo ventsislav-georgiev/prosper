@@ -50,6 +50,10 @@ final class SnippetExpansionExternalAppTests: XCTestCase {
     override func tearDownWithError() throws {
         host?.stop()
         runner?.stop()
+        // #316: tearDown also runs after setUp's XCTSkip; without this guard every normal
+        // (non-e2e) suite run cleared the user's real clipboard. `runner` is only set once
+        // setUp got past the skips and saved the clipboard.
+        guard runner != nil else { return }
         let clipboard = savedClipboard
         MainActor.assumeIsolated {
             NSPasteboard.general.clearContents()

@@ -2843,8 +2843,8 @@ private struct AboutPane: View {
                         .lineLimit(1).truncationMode(.middle)
                     Spacer()
                     Button("Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(Self.traceLogCommand, forType: .string)
+                        Pasteboard.general.clearContents()
+                        Pasteboard.general.setString(Self.traceLogCommand, forType: .string)
                     }.buttonStyle(.neon)
                 }
             }

@@ -2945,7 +2945,7 @@ enum CoreBridge {
 
     /// Reads a capped snippet of the current clipboard text for completion context.
     private static func clipboardContextSnippet(limit: Int = 500) -> String? {
-        guard let text = NSPasteboard.general.string(forType: .string) else { return nil }
+        guard let text = Pasteboard.general.string(forType: .string) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if trimmed.count <= limit { return trimmed }

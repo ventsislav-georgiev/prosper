@@ -71,11 +71,11 @@ enum FileActions {
         case ID.quickLook:
             QuickLook.preview(path)
         case ID.copyPath:
-            let pb = NSPasteboard.general
+            let pb = Pasteboard.general
             pb.clearContents()
             pb.setString(path, forType: .string)
         case ID.copyFile:
-            let pb = NSPasteboard.general
+            let pb = Pasteboard.general
             pb.clearContents()
             pb.writeObjects([url as NSURL])
         case ID.openWith:
