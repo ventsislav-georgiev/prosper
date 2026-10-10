@@ -7,9 +7,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="${1:-release}"
 
 echo "==> Building Swift app ($PROFILE)"
-# Re-apply local dependency patches (e.g. mlx-swift-lm QAT 4-bit support) against
-# the SwiftPM checkouts before compiling. Idempotent — safe on warm caches.
-"$ROOT/scripts/apply-patches.sh"
 cd "$ROOT/app"
 # The linked SDK version (LC_BUILD_VERSION sdk, checked below) reaches the
 # linker only through SDKROOT: swift-driver passes --sysroot, which clang does
@@ -85,15 +82,11 @@ else
   # file ... was built" (Sparkle 2.9.3 → 2.10.0 failed the v2.156.0-beta.1 run).
   # Start the build tree clean; the resolved checkouts in SourcePackages stay.
   rm -rf "$DD/Build"
-  # xcodebuild compiles from its OWN SourcePackages tree — resolve it first,
-  # then re-apply the mlx-swift-lm patches there (apply-patches.sh covers the
-  # xcode tree only once it exists). Skipping this fails the build with
-  # unpatched-checkout type errors ('SpeculativeTokenIterator').
+  # xcodebuild compiles from its OWN SourcePackages tree — resolve it first.
   xcodebuild -resolvePackageDependencies \
     -scheme ProsperApp \
     -destination 'platform=macOS' \
     -derivedDataPath "$DD"
-  "$ROOT/scripts/apply-patches.sh"
   xcodebuild build \
     -scheme ProsperApp \
     -configuration Release \

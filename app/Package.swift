@@ -23,10 +23,11 @@ let package = Package(
         // GenerateParameters and the text-generation API used by MLXEngine.
         .package(
             url: "https://github.com/ml-explore/mlx-swift-lm",
-            // #169: exact until the two local patches are rebased onto 3.32.x (#156).
-            // The QAT patch already fails on 3.31.4 and both fail on 3.32.3 (QA), so
-            // even a patch-level `from:` range would let `swift package update` break `git apply`.
-            exact: "3.31.3"
+            // #156: 3.32.3 carries the former local QAT and generateTask patches
+            // upstream. Exact: it transitively pins mlx-swift (the Metal kernels we
+            // ship); mlx-swift 0.32.2 crashes at launch on macOS < 26.4, so bump
+            // deliberately, never via `swift package update`.
+            exact: "3.32.3"
         ),
         // HuggingFace Hub client + Tokenizers backing the #hubDownloader() /
         // #huggingFaceTokenizerLoader() macros MLXEngine uses to fetch + load the
