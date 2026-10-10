@@ -20,14 +20,25 @@ final class ApprovalBoxSourceTests: XCTestCase {
                                     "the summary box and the detail box are both capped at 160 pt")
         let cmd = try XCTUnwrap(bar.range(of: "if req.kind == .command {"))
         let other = try XCTUnwrap(bar.range(of: "} else {", range: cmd.upperBound..<bar.endIndex))
-        XCTAssertFalse(bar[cmd.upperBound..<other.lowerBound].contains(".lineLimit("),
-                       "the command summary scrolls whole: a lineLimit hides its tail (#323)")
-        XCTAssertGreaterThanOrEqual(bar.components(separatedBy: ".onGeometryChange(").count - 1, 2,
-                                    "the cue is driven by the laid-out height of both boxes")
+        let command = String(bar[cmd.upperBound..<other.lowerBound])
+        XCTAssertNil(command.range(of: #"\.lineLimit\s*\("#, options: .regularExpression),
+                     "the command summary scrolls whole: a lineLimit hides its tail (#323)")
+        // #368: the cue compares the text with its box's own laid-out height (the box is shorter
+        // than 160 pt near the window's minimum height); unmeasured box (0) = no cue.
+        let summaryCue = "if approvalSummaryBoxHeight > 0 && approvalSummaryHeight > approvalSummaryBoxHeight + 0.5 { scrollCue }"
+        let detailCue = "if approvalDetailBoxHeight > 0 && approvalDetailHeight > approvalDetailBoxHeight + 0.5 { scrollCue }"
+        XCTAssertEqual(command.components(separatedBy: summaryCue).count - 1, 1, "summary cue, in the command branch")
+        XCTAssertEqual(bar[other.upperBound...].components(separatedBy: detailCue).count - 1, 1,
+                       "detail cue, after the command branch, reading only the detail heights")
+        XCTAssertEqual(bar.components(separatedBy: "{ scrollCue }").count - 1, 2, "exactly the two pinned cues")
+        XCTAssertEqual(bar.components(separatedBy: "$0.size.height").count - 1, 4,
+                       "text and box height measured for both boxes")
+        XCTAssertFalse(bar.contains("$0.size.width"), "the cue is about height")
         XCTAssertFalse(bar.contains("CardText."), "text is display-ready at construction, not per render")
     }
 
     func testOverflowCharCountGuessIsGone() throws {
         XCTAssertFalse(try source("Sources/ProsperApp/Harness/CodingHarness.swift").contains("summary.count > 300"))
+        XCTAssertFalse(try source("Sources/ProsperApp/ChatWindow.swift").contains("count > 300"))
     }
 }

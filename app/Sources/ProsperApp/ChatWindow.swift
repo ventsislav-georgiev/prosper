@@ -239,9 +239,13 @@ struct ChatRootView: View {
     private let controller = AgentController.shared
     @State private var atBottom = true
     /// #359: the approval card's laid-out summary/detail text heights; the scroll cue shows only
-    /// when the text actually runs past its 160 pt box (any script, any card width).
+    /// when the text actually runs past its box (any script, any card width).
     @State private var approvalSummaryHeight: CGFloat = 0
     @State private var approvalDetailHeight: CGFloat = 0
+    /// #368: the boxes' own laid-out heights. `.frame(maxHeight:)` only caps them, so near the
+    /// window's minimum height a box is shorter than 160 pt; 0 = not measured yet (no cue).
+    @State private var approvalSummaryBoxHeight: CGFloat = 0
+    @State private var approvalDetailBoxHeight: CGFloat = 0
     // Slash-command suggestions live here (not in the composer) so the popup can float
     // as a root-level overlay ABOVE the composer's AppKit field — over the persona row
     // and chat transcript (both AppKit-backed: SwiftUI ScrollView == NSScrollView), which
@@ -469,7 +473,8 @@ struct ChatRootView: View {
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approvalSummaryHeight = $0 }
                 }
                 .frame(maxHeight: sz(160))
-                if approvalSummaryHeight > sz(160) { scrollCue }
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approvalSummaryBoxHeight = $0 }
+                if approvalSummaryBoxHeight > 0 && approvalSummaryHeight > approvalSummaryBoxHeight + 0.5 { scrollCue }
             } else {
                 Text(req.summary).font(Neon.font(.caption, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary).lineLimit(3)
@@ -482,7 +487,8 @@ struct ChatRootView: View {
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approvalDetailHeight = $0 }
                 }
                 .frame(maxHeight: sz(160))
-                if approvalDetailHeight > sz(160) { scrollCue }
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approvalDetailBoxHeight = $0 }
+                if approvalDetailBoxHeight > 0 && approvalDetailHeight > approvalDetailBoxHeight + 0.5 { scrollCue }
             }
             HStack {
                 Button("Approve") { controller.respond(to: req, decision: .accept) }
