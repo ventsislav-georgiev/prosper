@@ -126,6 +126,12 @@ final class CodexHarnessE2ETests: XCTestCase {
                 reason="needs network", permissions={"network": {"enabled": True}, "fileSystem": {
                     "read": ["/etc"], "write": ["/tmp/out"],
                     "entries": [{"access": "write", "path": {"type": "special", "value": {"kind": "tmpdir"}}}, {"access": "write", "path": {"type": "special", "value": {"kind": "root"}}}, {"access": "write", "path": {"type": "special", "value": {"kind": "unknown", "path": "/odd", "subpath": "x"}}}]}})
+        if word == "GRANTS":   # #283: every key the profile grants reaches the card, one line each
+            return "item/permissions/requestApproval", dict(t, itemId="perm-2", cwd="/tmp\x1b[2J\t",
+                reason="why\u202egnp.exe", permissions={"network": None, "extra": {"b": 1, "a": [True]}, "fileSystem": {
+                    "read": ["/r\nWrite: /", "/\u202etxt.cod", 7], "globScanMaxDepth": 3,
+                    "entries": [{"access": "write", "path": {"type": "glob_pattern", "pattern": "/src/**/*.swift"}},
+                                {"access": "deny", "path": {"type": "path", "path": "/secret"}}, "bogus"]}})
         if word == "PATCH":
             send({"jsonrpc": "2.0", "method": "item/started", "params": dict(t, item={
                 "id": "fc-1", "type": "fileChange", "status": "inProgress",
@@ -303,10 +309,16 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "cmd-1",
                                  "startedAtMs": 0, "command": "rm -rf build", "cwd": "/tmp"}})
-            word = next((w for w in ("PERMS", "PATCH", "LEGACY", "AMEND", "ELICIT") if w in prompt), None)
+            word = next((w for w in ("PERMS", "GRANTS", "PATCH", "LEGACY", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
-                send({"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params})
+                frame = {"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params}
+                if word == "GRANTS":   # off-schema on purpose (unknown key, wrong-typed elements): the
+                    log("in", dict(frame, params=dict(req_params, permissions={})))   # schema log gets an empty profile
+                    sys.stdout.write(json.dumps(frame) + "\n")
+                    sys.stdout.flush()
+                else:
+                    send(frame)
                 continue
             finish_turn()
         elif method in ("turn/interrupt", "turn/steer"):
@@ -1614,6 +1626,40 @@ final class CodexHarnessE2ETests: XCTestCase {
         let denied = try await answer("PERMS please", with: .decline)
         XCTAssertEqual(denied.reply?["result"] as? NSDictionary,
                        ["permissions": [String: Any](), "scope": "turn"] as NSDictionary)
+    }
+
+    /// #283: the card shows every key the reply would grant — glob and deny entries, an
+    /// unknown key and `globScanMaxDepth` as JSON, a wrong-typed element as "?" in place —
+    /// with newlines, controls and bidi/format scalars escaped; `network: null` grants nothing.
+    @MainActor
+    func testControllerPermissionsCardShowsEveryGrantedKeyOnOneLineEach() async throws {
+        let (approval, reply) = try await answer("GRANTS please", with: .decline)
+        XCTAssertEqual(approval?.kind, .permission)
+        XCTAssertEqual(approval?.summary, #"why\u{202E}gnp.exe"#)
+        XCTAssertEqual(approval?.detail, [
+            "?: <?>",
+            "Deny: /secret",
+            #"Read: /r\nWrite: /, /\u{202E}txt.cod, ?"#,
+            "Write: /src/**/*.swift",
+            #"extra: {"a":[true],"b":1}"#,
+            "globScanMaxDepth: 3",
+            #"In: /tmp\u{1B}[2J\u{9}"#,
+        ].joined(separator: "\n"))
+        XCTAssertEqual(reply?["result"] as? NSDictionary,
+                       ["permissions": [String: Any](), "scope": "turn"] as NSDictionary)
+    }
+
+    /// QA #102: a non-string `command` (number, null, array, a non-JSON inf) renders instead
+    /// of raising the uncatchable ObjC exception `JSONSerialization` throws on a top-level scalar.
+    func testCommandItemWithNonStringCommandRenders() {
+        for (command, want) in [(5, "5"), (NSNull(), "null"), ([1, "a"], #"[1,"a"]"#), ([Double.infinity], "[inf]")]
+            as [(Any, String)] {
+            let events = CodexHarness.mapNotification(method: "item/started", params: [
+                "threadId": "thread-1", "turnId": "turn-1",
+                "item": ["id": "cmd-1", "type": "commandExecution", "command": command]])
+            guard case .toolCallStarted(let call)? = events.first else { return XCTFail("no start for \(want)") }
+            XCTAssertEqual(call.argumentsJSON, want)
+        }
     }
 
     /// W10: file-change approval params carry only `itemId`; the card's paths and diff come

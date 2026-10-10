@@ -619,7 +619,7 @@ actor CodexHarness: CodingHarness {
             let paths = changes.compactMap { $0["path"] as? String }.map(oneLine)
             return "Apply changes to \(paths.isEmpty ? "files" : paths.joined(separator: ", "))"
         case .permission:
-            return (params["reason"] as? String) ?? "Grant a permission"
+            return (params["reason"] as? String).map(oneLine) ?? "Grant a permission"
         }
     }
 
@@ -635,8 +635,10 @@ actor CodexHarness: CodingHarness {
             // so show its roots (legacy read/write lists plus `entries` by access) and network.
             let profile = params["permissions"] as? [String: Any] ?? [:]
             let fs = profile["fileSystem"] as? [String: Any] ?? [:]
-            var roots = ["read": fs["read"] as? [String] ?? [], "write": fs["write"] as? [String] ?? []]
-            for entry in fs["entries"] as? [[String: Any]] ?? [] {
+            // A wrong-typed element shows as "?" in place: it must not hide the rest of its list.
+            let strings = { (v: Any?) in (v as? [Any] ?? []).map { $0 as? String ?? "?" } }
+            var roots = ["read": strings(fs["read"]), "write": strings(fs["write"])]
+            for entry in (fs["entries"] as? [Any] ?? []).map({ $0 as? [String: Any] ?? [:] }) {
                 let path = entry["path"] as? [String: Any] ?? [:]
                 let special = path["value"] as? [String: Any]
                 let kind = special?["kind"] as? String ?? "?"
@@ -648,18 +650,27 @@ actor CodexHarness: CodingHarness {
                 roots[(entry["access"] as? String) ?? "?", default: []].append(name)
             }
             var lines = roots.sorted { $0.key < $1.key }.filter { !$0.value.isEmpty }
-                .map { "\($0.key.capitalized): \($0.value.map(oneLine).joined(separator: ", "))" }
+                .map { "\(oneLine($0.key.capitalized)): \($0.value.map(oneLine).joined(separator: ", "))" }
+            var other = profile.filter { $0.key != "fileSystem" && $0.key != "network" }.map { ($0.key, $0.value) }
+                + fs.filter { !["read", "write", "entries"].contains($0.key) }.map { ($0.key, $0.value) }
             if let on = (profile["network"] as? [String: Any])?["enabled"] as? Bool {
                 lines.append("Network: \(on ? "enabled" : "disabled")")
-            }
+            } else if let net = profile["network"], !(net is NSNull) { other.append(("network", net)) }
+            // The reply echoes the whole profile: a key the card can't render still shows, as JSON.
+            lines += other.sorted { $0.0 < $1.0 }.map { oneLine("\($0.0): \(jsonString($0.1))") }
             if let cwd = params["cwd"] as? String { lines.append("In: \(oneLine(cwd))") }
             return lines.isEmpty ? nil : lines.joined(separator: "\n")
         }
     }
 
-    /// Wire path text on one line: an embedded newline must not forge extra card lines.
+    /// Wire text on one card line: an embedded newline must not forge extra card lines, and
+    /// a C0/DEL control or a format scalar (bidi override, zero-width) shows as `\u{…}`
+    /// rather than reordering or hiding what is granted.
     private static func oneLine(_ s: String) -> String {
-        s.components(separatedBy: .newlines).joined(separator: "\\n")
+        s.components(separatedBy: .newlines).joined(separator: "\\n").unicodeScalars.map { u in
+            u.value < 0x20 || u.value == 0x7F || u.properties.generalCategory == .format
+                ? "\\u{\(String(u.value, radix: 16, uppercase: true))}" : String(u)
+        }.joined()
     }
 
     /// Notification → zero or more `HarnessEvent`s. Empty for notifications we don't
@@ -816,7 +827,10 @@ actor CodexHarness: CodingHarness {
     }
     private static func jsonString(_ any: Any) -> String {
         if let s = any as? String { return s }
-        return (try? JSONSerialization.data(withJSONObject: any)).flatMap { String(data: $0, encoding: .utf8) } ?? "\(any)"
+        // A scalar/null top level or a non-JSON value (inf) raises an ObjC exception `try?` can't catch.
+        guard JSONSerialization.isValidJSONObject([any]) else { return "\(any)" }
+        return (try? JSONSerialization.data(withJSONObject: any, options: [.fragmentsAllowed, .sortedKeys]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "\(any)"
     }
 }
 

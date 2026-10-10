@@ -121,7 +121,8 @@ tag from the now-released section and put it on the new top draft.
   Prosper.** `math.huge` or `0/0` in a remote-wake interval, a battery floor, a clipboard
   history limit, a process id or a timer interval now falls back to the default or is
   clamped, with a warning in the extension log, and a menu bar item payload that is a
-  plain string or number is encoded instead of raising.
+  plain string or number is encoded instead of raising. A window frame or a
+  `host.window.set` coordinate that is not a finite number is refused the same way.
 - **Fixed: stopping or ending a coding-agent session left codex's helper processes
   running.** The MCP servers and tools codex starts share its process group; Stop and End
   now shut down that whole group, and a codex that crashes takes its helpers with it, so
@@ -129,7 +130,11 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: the coding agent's permission card now shows what "Always" grants.** The read,
   write and deny roots, network access and the working directory codex asks for are listed
   in the card before you approve, with special locations named plainly (the whole disk, the
-  temp dir); legacy patch approvals show each path on one line.
+  temp dir); legacy patch approvals show each path on one line. Every key the reply would
+  grant is shown, including ones the card does not know (as JSON); control and
+  bidirectional-override characters in a path or reason are escaped so a crafted name cannot
+  forge or hide a card line, and a command item whose command is not text no longer
+  crashes Prosper.
 - **Fixed: coding agent approvals answered codex in the wrong shape.** A file-change
   approval now shows the paths and the diff being approved (codex only sends the item id;
   the card looked for fields that do not exist and always read "Apply changes to files").
