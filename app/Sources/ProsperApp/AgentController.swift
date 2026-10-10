@@ -92,6 +92,8 @@ final class AgentController {
     /// The in-flight codex download, shared process-wide by every run awaiting it
     /// (`ensureHarness`): two installs racing remove-then-move into one cached path fail.
     private static var codexDownload: Task<URL, Error>?
+    /// Tests: drop a previous test's in-flight fake download so it can't hand its URL on.
+    static func resetCodexDownloadForTesting() { codexDownload = nil }
     /// The run is no longer the one to boot codex: Stop was pressed on it, or a newer
     /// run started (which also means it was stopped; `stoppedRun` keeps only the last).
     private func abandoned(_ generation: Int) -> Bool { stoppedRun == generation || generation != runGeneration }
@@ -393,7 +395,7 @@ final class AgentController {
         do {
             let harness = try await ensureHarness(generation)
             let session = try await ensureSession(harness)
-            guard stoppedRun != generation else {
+            guard !abandoned(generation) else {
                 // Stopped before turn/start went out. A Stop that landed after the spawn began
                 // can leave .loadingModel up: settle it, unless a newer run owns the phase by now.
                 if generation == runGeneration, case .loadingModel = phase { phase = .idle }

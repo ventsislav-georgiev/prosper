@@ -11,6 +11,12 @@ import XCTest
 /// the binary so the Swift harness wiring is verified deterministically.
 final class CodexHarnessE2ETests: XCTestCase {
 
+    /// The codex download is process-wide: a test ending mid-download must not hand
+    /// its fake URL to the next test's controller.
+    override func setUp() async throws {
+        await MainActor.run { AgentController.resetCodexDownloadForTesting() }
+    }
+
     /// The mock app-server: reads JSONL requests on stdin, replies on stdout, and
     /// emits the notification sequence Codex would for a one-message turn, in the
     /// shapes of the codex 0.139/0.162 schemas (`{turn: Turn}` results and
@@ -652,12 +658,20 @@ final class CodexHarnessE2ETests: XCTestCase {
     private final class ShortAbortHarness: CodingHarness {
         let inner: CodexHarness
         let promptReturnDelay: UInt64
-        init(_ inner: CodexHarness, promptReturnDelay: UInt64 = 0) {
+        let startDelay: UInt64
+        let onShutdown: @MainActor () -> Void
+        init(_ inner: CodexHarness, promptReturnDelay: UInt64 = 0, startDelay: UInt64 = 0,
+             onShutdown: @escaping @MainActor () -> Void = {}) {
             self.inner = inner
             self.promptReturnDelay = promptReturnDelay
+            self.startDelay = startDelay
+            self.onShutdown = onShutdown
         }
-        func start() async throws { try await inner.start() }
-        func shutdown() async { await inner.shutdown() }
+        func start() async throws {
+            try await inner.start()
+            try await Task.sleep(nanoseconds: startDelay)
+        }
+        func shutdown() async { await onShutdown(); await inner.shutdown() }
         func newSession(_ opts: SessionOptions) async throws -> SessionID { try await inner.newSession(opts) }
         func resumeSession(_ id: SessionID, options: SessionOptions) async throws -> SessionID {
             try await inner.resumeSession(id, options: options)
@@ -683,21 +697,25 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     /// A fresh controller on the mock, with its own session store (never the user's).
     /// `downloadDelay` stands in for the first-use codex download (never the real one),
-    /// `onDownload` sees every download started; `spawnDelay` stands in for the model load.
+    /// `onDownload` sees every download started; `spawnDelay` stands in for the model load,
+    /// `onSpawn` sees every load started; `startDelay` holds start() after the handshake.
     @MainActor
     private func makeController(exe: URL, home: URL, promptReturnDelay: UInt64 = 0,
                                 downloadDelay: UInt64 = 0, onDownload: @escaping @MainActor () -> Void = {},
-                                spawnDelay: UInt64 = 0) -> (AgentController, AgentSessionStore) {
+                                spawnDelay: UInt64 = 0, onSpawn: @escaping @MainActor () -> Void = {},
+                                startDelay: UInt64 = 0,
+                                onShutdown: @escaping @MainActor () -> Void = {}) -> (AgentController, AgentSessionStore) {
         let store = AgentSessionStore(directory: exe.deletingLastPathComponent().appendingPathComponent("store"))
         let controller = AgentController(store: store, resolveCodex: {
             onDownload()
             try await Task.sleep(nanoseconds: downloadDelay)
             return exe
         }, makeHarness: {
+            onSpawn()
             try await Task.sleep(nanoseconds: spawnDelay)
             return ShortAbortHarness(CodexHarness(executableURL: exe, codexHome: home,
                                            llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token"),
-                              promptReturnDelay: promptReturnDelay)
+                              promptReturnDelay: promptReturnDelay, startDelay: startDelay, onShutdown: onShutdown)
         })
         return (controller, store)
     }
@@ -848,6 +866,47 @@ final class CodexHarnessE2ETests: XCTestCase {
         _ = await Self.wait(1) { false }   // the spawn lands at 300 ms
         XCTAssertEqual(Self.count("initialize", exe: exe), 0, "codex was started for a stopped run")
         XCTAssertEqual(controller.phase, .idle)
+    }
+
+    /// QA #83: a stopped run whose download lands after a re-submit never sets the
+    /// "Loading" phase nor starts its own model load; only the re-submitted run does.
+    @MainActor
+    func testControllerStoppedRunsDownloadLoadsNoModel() async throws {
+        let (exe, home) = try makeMock()
+        var spawns = 0
+        let (controller, _) = makeController(exe: exe, home: home, downloadDelay: 300_000_000,
+                                             onSpawn: { spawns += 1 })
+        controller.submit(goal: "hello")
+        let downloading = await Self.wait { if case .loadingModel = controller.phase { return true } else { return false } }
+        XCTAssertTrue(downloading, "the run never reached the codex download")
+        controller.stop()
+        let settled = await Self.wait { controller.phase == .idle }
+        XCTAssertTrue(settled, "Stop did not settle the phase")
+
+        controller.submit(goal: "hello")
+        let started = await Self.wait { Self.count("initialize", exe: exe) == 1 }
+        XCTAssertTrue(started, "the re-submitted run never started codex")
+        _ = await Self.wait(0.5) { false }
+        XCTAssertEqual(spawns, 1, "the stopped run went on to load the model")
+    }
+
+    /// QA #83: Stop landing while harness.start() is in flight (the harness not stored
+    /// yet) shuts the started codex down instead of leaving it running unowned.
+    @MainActor
+    func testControllerStopDuringStartShutsTheHarnessDown() async throws {
+        let (exe, home) = try makeMock()
+        var shutdowns = 0
+        let (controller, _) = makeController(exe: exe, home: home, startDelay: 300_000_000,
+                                             onShutdown: { shutdowns += 1 })
+        controller.submit(goal: "hello")
+        let handshaken = await Self.wait { Self.count("initialize", exe: exe) == 1 }
+        XCTAssertTrue(handshaken, "the run never started codex")
+
+        controller.stop()
+        let shut = await Self.wait(2) { shutdowns == 1 }
+        XCTAssertTrue(shut, "the harness started for a stopped run was never shut down")
+        XCTAssertEqual(controller.phase, .idle)
+        XCTAssertEqual(Self.count("thread/start", exe: exe), 0, "the stopped run opened a session")
     }
 
     /// QA #15: Stop while turn/start is still unanswered settles at once, interrupts the
