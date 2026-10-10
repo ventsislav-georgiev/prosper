@@ -73,4 +73,30 @@ final class TimerSchedulerTests: XCTestCase {
         XCTAssertNotNil(waitFor("sentinel"))
         XCTAssertEqual(Set(persisted().compactMap { $0["id"] as? String }), ["r0", "r1", "r2", "sentinel"])
     }
+
+    /// QA #136: the schedule-side floor is what the PERSISTED interval carries
+    /// (armLocked re-clamps, so arming alone cannot see it).
+    func testSchedulePersistsFlooredInterval() {
+        let s = TimerScheduler(store: store)
+        s.schedule(extID: "x", id: "rep", every: true, seconds: 0, handler: "h")
+        XCTAssertEqual(waitFor("rep")?["interval"] as? Double, 0.05)
+        // No one-shot variant: seconds <= 0 fires and un-persists at once, so the row is unobservable.
+    }
+
+    /// QA #136: an absurdly negative persisted fireAt must clamp the delay to 0 and fire
+    /// promptly. -1e300 is production-reachable (JSONDecoder cannot yield inf/NaN).
+    /// Dropping the clamp at :106 is an equivalent mutant here: `.now() + (-1e300)` saturates to a
+    /// past deadline and fires the same way, so this test is a regression guard, not a pin on the
+    /// clamp; inf/NaN, which would trap, cannot come out of the JSON store.
+    func testRestoreWithAbsurdlyNegativeFireAtFiresPromptly() throws {
+        let bad: [[String: Any]] = [
+            ["extID": "x", "id": "n0", "handler": "h", "every": false, "interval": 0.0, "fireAt": -1e300],
+        ]
+        store.set(try JSONSerialization.data(withJSONObject: bad), forKey: "ext.timers.v1")
+        let s = TimerScheduler(store: store)
+        let fired = expectation(description: "fired")
+        s.deliver = { _, _, _ in fired.fulfill() }
+        s.restore()
+        wait(for: [fired], timeout: 10)
+    }
 }
