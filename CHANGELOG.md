@@ -98,6 +98,12 @@ tag from the now-released section and put it on the new top draft.
   (`defaults write eu.illegible.prosper agentAllowPathCodex -bool true`). The version that
   actually answers the wire is logged once at start. The "Ask only on failure" approval
   choice is gone (codex removed it); a saved one reads as "Ask on request".
+- **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
+  Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
+  instead of waiting forever, and a request whose parameters cannot be encoded as JSON
+  fails with an error instead of crashing Prosper. Malformed codex output (non-JSON lines,
+  frames with no usable id, `id: null` parse errors, replies to unknown requests) is logged
+  and skipped, and a line over 16 MiB is dropped instead of growing memory without bound.
 - **Fixed: the coding agent's permission card now shows what "Always" grants.** The read,
   write and deny roots, network access and the working directory codex asks for are listed
   in the card before you approve, with special locations named plainly (the whole disk, the

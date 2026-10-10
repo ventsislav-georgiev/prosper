@@ -52,6 +52,8 @@ actor CodexHarness: CodingHarness {
     /// `turn/start.sandboxPolicy` per thread id. Thread start/resume only take the mode
     /// string, so the writable roots and the network toggle ride on every turn.
     private var sandboxPolicies: [String: [String: Any]] = [:]
+    /// Seconds a request waits for its reply before failing with `HarnessError.timeout`.
+    private var replyTimeout: @Sendable (String) -> TimeInterval = { CodexHarness.defaultReplyTimeout(for: $0) }
 
     private let eventStream: AsyncStream<HarnessEvent>
     private let eventContinuation: AsyncStream<HarnessEvent>.Continuation
@@ -297,12 +299,23 @@ actor CodexHarness: CodingHarness {
 
     // MARK: - I/O
 
-    /// `timeout` (seconds) fails the request with `HarnessError.timeout`; a late reply
-    /// then finds no pending entry and is dropped. nil waits for the reply.
+    /// Default reply bound per method. Every request is answered as soon as codex has
+    /// acted on it (turn/start returns once the turn is queued, not when it ends), so
+    /// these only catch a wedged codex. Turn requests get more room: they can queue behind
+    /// a thread's in-flight work. initialize also covers a first launch's Gatekeeper scan.
+    static func defaultReplyTimeout(for method: String) -> TimeInterval {
+        method.hasPrefix("turn/") ? 120 : 60
+    }
+
+    func setReplyTimeoutForTesting(_ seconds: TimeInterval) { replyTimeout = { _ in seconds } }
+
+    /// `timeout` (seconds, default `replyTimeout` for the method) fails the request with
+    /// `HarnessError.timeout`; a late reply then finds no pending entry and is dropped.
     private func sendRequest(method: String, params: [String: Any],
                              timeout: TimeInterval? = nil) async throws -> [String: Any] {
         guard process != nil, !terminated else { throw HarnessError.notStarted }
-        let (id, line) = rpc.request(method: method, params: params)
+        let (id, line) = try rpc.request(method: method, params: params)
+        let timeout = timeout ?? replyTimeout(method)
         let result: RPCResult = try await withCheckedThrowingContinuation { cont in
             // shutdown/handleTermination drain `pending` synchronously on the actor; if
             // either ran before this closure, our continuation would be stored after the
@@ -311,11 +324,9 @@ actor CodexHarness: CodingHarness {
             pending[id] = cont
             do { try writeLine(line) }
             catch { pending[id] = nil; cont.resume(throwing: error); return }
-            if let timeout {
-                Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                    await self?.expireRequest(id)
-                }
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                await self?.expireRequest(id)
             }
         }
         return result.dict
@@ -334,10 +345,20 @@ actor CodexHarness: CodingHarness {
     private func ingest(_ data: Data) {
         guard !terminated else { return }   // late stdout after teardown — drop it
         for obj in framer.append(data) {
-            guard let frame = JSONRPCFrame(obj) else { continue }
+            guard let frame = JSONRPCFrame(obj) else {
+                // Neither id nor method, or an id we can't correlate: e.g. codex's
+                // `{"id": null, "error": …}` for a request it couldn't parse. Resolves
+                // nothing; that request fails on its reply timeout.
+                let line = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
+                log.error("dropped a codex frame with no usable id or method: \(JSONLineFramer.preview(line), privacy: .public)")
+                continue
+            }
             switch frame {
             case .response(let id, let result, let error):
-                guard let cont = pending.removeValue(forKey: id) else { continue }
+                guard let cont = pending.removeValue(forKey: id) else {
+                    log.error("dropped a codex response for unknown request id \(id) (timed out or never sent)")
+                    continue
+                }
                 if let error {
                     cont.resume(throwing: HarnessError.backendError(
                         (error["message"] as? String) ?? String(describing: error)))

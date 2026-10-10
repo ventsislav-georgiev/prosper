@@ -34,7 +34,11 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// naming a method makes the mock delete the file and exit cleanly (code 0) on that
     /// request, before replying (`thread/resume`: codex dies during a resume). ERRORON: a
     /// file `error-on` naming a method makes the mock delete it and answer that request with
-    /// a JSON-RPC error, staying alive (`thread/resume`: the thread is gone). "FAST" writes
+    /// a JSON-RPC error, staying alive (`thread/resume`: the thread is gone). LATEON: a file
+    /// `late-on` naming a method makes the mock delete it and sleep 1 s before handling that
+    /// request (a reply that lands after the client's timeout). "JUNK" makes turn/start first
+    /// print malformed stdout (a long non-JSON line, a JSON array, an object with neither id
+    /// nor method, an `id: null` parse error, a response for unknown id 9999). "FAST" writes
     /// the whole turn (turn/started, turn/completed) and then the turn/start reply in one
     /// stdout write, so the turn has completed before `sendPrompt` returns its id; with
     /// "FAIL" too, the turn completes `failed` ("mock turn failed").
@@ -54,6 +58,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.jsonl")
     EXIT_ON = os.path.join(os.path.dirname(LOG), "exit-on")
     ERROR_ON = os.path.join(os.path.dirname(LOG), "error-on")
+    LATE_ON = os.path.join(os.path.dirname(LOG), "late-on")
     with open(os.path.join(os.path.dirname(LOG), "pid"), "w") as f:
         f.write(str(os.getpid()))
     current_turn = None
@@ -190,6 +195,9 @@ final class CodexHarnessE2ETests: XCTestCase {
             os.remove(ERROR_ON)
             error(mid, "mock error on " + method)
             continue
+        if method and os.path.exists(LATE_ON) and open(LATE_ON).read().strip() == method:
+            os.remove(LATE_ON)
+            time.sleep(1.0)
         # A client reply to one of our server requests (result or error, no method).
         if method is None and ("result" in msg or "error" in msg):
             if awaiting and mid == "srv-1":
@@ -213,6 +221,11 @@ final class CodexHarnessE2ETests: XCTestCase {
                 error(mid, problem)
                 continue
             prompt = json.dumps(params.get("input"))
+            if "JUNK" in prompt:
+                sys.stdout.write("not json " + "x" * 1000 + "\n[1, 2]\n")
+                send({"jsonrpc": "2.0", "params": {}})
+                send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error: mock"}})
+                send({"jsonrpc": "2.0", "id": 9999, "result": {}})
             if "SLOWSTART" in prompt:
                 time.sleep(1.0)
             stale = current_turn if wedged else None
@@ -476,6 +489,65 @@ final class CodexHarnessE2ETests: XCTestCase {
         let interrupts = try Self.received("turn/interrupt", exe: exe)
         XCTAssertEqual(interrupts.count, 1, "the interrupt must be sent once, not retried")
         XCTAssertNotNil(interrupts.first?["id"])
+    }
+
+    /// #174: a request codex doesn't answer in time fails with `.timeout` instead of hanging
+    /// its caller, and the late reply is logged and dropped: the next request gets its own.
+    func testUnansweredRequestTimesOutAndItsLateReplyIsDropped() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        await harness.setReplyTimeoutForTesting(0.3)
+        try await harness.start()
+        try "thread/start".write(to: exe.deletingLastPathComponent().appendingPathComponent("late-on"),
+                                 atomically: true, encoding: .utf8)
+        let since = Date()
+        let opts = SessionOptions(cwd: home.path, model: "test-model",
+                                  approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false))
+
+        let outcome = await Self.within(3) { try await harness.newSession(opts) }
+        switch outcome {
+        case nil: XCTFail("thread/start still pending after 3 s: no reply timeout")
+        case .success?: XCTFail("thread/start should time out: the mock answers after 1 s")
+        case .failure(let error)?:
+            guard case HarnessError.timeout = error else { return XCTFail("expected .timeout, got \(error)") }
+        }
+
+        await harness.setReplyTimeoutForTesting(5)
+        let session = try await harness.newSession(opts)   // its reply follows the late one (id 2)
+        await harness.shutdown()
+        XCTAssertEqual(session.raw, "thread-1")
+        let logs = try HarnessProtocolTests.errorLogs(since: since)
+        XCTAssertTrue(logs.contains { $0.contains("unknown request id 2 ") }, "\(logs)")
+    }
+
+    /// #174: malformed stdout is logged at .error and skipped, and reading goes on: the
+    /// `id: null` error resolves no request (turn/start still gets its own reply).
+    func testMalformedFramesAreLoggedAndSkipped() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(SessionOptions(
+            cwd: home.path, model: "test-model",
+            approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false)))
+        let since = Date()
+        async let eventsTask = Self.collect(from: harness, timeout: 10) {
+            if case .turnCompleted = $0 { return true }; return false
+        }
+        let turn = try await harness.sendPrompt(session: session, input: [.text("JUNK then say hello")])
+        let events = await eventsTask
+        await harness.shutdown()
+
+        XCTAssertEqual(turn.raw, "turn-1")
+        XCTAssertTrue(events.contains { if case .turnCompleted(_, .completed) = $0 { return true }; return false },
+                      "\(events)")
+        let logs = try HarnessProtocolTests.errorLogs(since: since)
+        for needle in ["not a JSON object: not json xxx", "(1009 bytes)", "not a JSON object: [1, 2]",
+                       "no usable id or method: {", "Parse error: mock", "unknown request id 9999 "] {
+            XCTAssertTrue(logs.contains { $0.contains(needle) }, "no error log with \(needle): \(logs)")
+        }
+        XCTAssertEqual(logs.filter { $0.contains("no usable id or method") }.count, 2, "\(logs)")
     }
 
     /// Steer is a request whose turn id travels as `expectedTurnId`; the mock answers

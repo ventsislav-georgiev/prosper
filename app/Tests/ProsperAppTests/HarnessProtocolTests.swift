@@ -1,3 +1,4 @@
+import OSLog
 import XCTest
 @testable import ProsperApp
 
@@ -26,6 +27,56 @@ final class HarnessProtocolTests: XCTestCase {
         let objs = framer.append(Data(("not json\n" + #"{"ok":true}"# + "\n").utf8))
         XCTAssertEqual(objs.count, 1)
         XCTAssertEqual(objs[0]["ok"] as? Bool, true)
+    }
+
+    /// Error-level messages this process logged under com.prosper.app since `date`.
+    /// `position(date:)` is only a coarse start, so entries are filtered by date too, with
+    /// slack: entry dates run a few ms behind `Date()` (probed: ~16 ms).
+    static func errorLogs(since date: Date) throws -> [String] {
+        let from = date.addingTimeInterval(-0.25)
+        let store = try OSLogStore(scope: .currentProcessIdentifier)
+        return try store.getEntries(at: store.position(date: from),
+                                    matching: NSPredicate(format: "subsystem == %@", "com.prosper.app"))
+            .compactMap { ($0 as? OSLogEntryLog).flatMap { $0.level == .error && $0.date >= from ? $0.composedMessage : nil } }
+    }
+
+    /// #174: a stdout line that isn't a JSON object is logged (cut to 256 bytes) and skipped.
+    func testFramerLogsNonObjectLines() throws {
+        let since = Date()
+        var framer = JSONLineFramer()
+        let long = "not json " + String(repeating: "x", count: 1000)
+        let objs = framer.append(Data((long + "\n[1,2]\n" + #"{"ok":true}"# + "\n").utf8))
+        XCTAssertEqual(objs.count, 1)
+        let logs = try Self.errorLogs(since: since)
+        XCTAssertTrue(logs.contains {
+            $0.contains("not a JSON object: not json xxx") && $0.hasSuffix("… (1009 bytes)") && $0.count < 400
+        }, "\(logs)")
+        XCTAssertTrue(logs.contains { $0.hasSuffix("not a JSON object: [1,2]") }, "\(logs)")
+    }
+
+    /// #174: a line over `maxLineBytes` is dropped with an error log, whether it arrives in one
+    /// read or streams in; streaming, it is dropped (and the buffer freed) before its newline.
+    func testFramerDropsOverCapLineAndKeepsReading() throws {
+        let since = Date()
+        let huge = Data((#"{"a":""# + String(repeating: "x", count: JSONLineFramer.maxLineBytes + (1 << 20)) + #""}"#).utf8)
+        let next = Data(("\n" + #"{"ok":true}"# + "\n").utf8)
+        let dropped = { try Self.errorLogs(since: since).filter { $0.contains("over \(JSONLineFramer.maxLineBytes) bytes") }.count }
+
+        var framer = JSONLineFramer()
+        var objs: [[String: Any]] = []
+        for start in stride(from: 0, to: huge.count, by: 1 << 20) {
+            objs += framer.append(huge.subdata(in: start..<min(start + (1 << 20), huge.count)))
+        }
+        XCTAssertEqual(try dropped(), 1, "dropped once over the cap, before its newline arrives")
+        objs += framer.append(next)
+        XCTAssertEqual(objs.count, 1)
+        XCTAssertEqual(objs.first?["ok"] as? Bool, true)
+
+        framer = JSONLineFramer()
+        objs = framer.append(huge + next)
+        XCTAssertEqual(objs.count, 1)
+        XCTAssertEqual(objs.first?["ok"] as? Bool, true)
+        XCTAssertEqual(try dropped(), 2, "the streamed line once, the one-read line once")
     }
 
     // MARK: Frame classification
@@ -58,10 +109,10 @@ final class HarnessProtocolTests: XCTestCase {
 
     // MARK: Outgoing frames
 
-    func testRequestEncodesIDAndIncrements() {
+    func testRequestEncodesIDAndIncrements() throws {
         var rpc = JSONRPC()
-        let (id1, line1) = rpc.request(method: "initialize", params: [:])
-        let (id2, _) = rpc.request(method: "turn/start", params: ["threadId": "t"])
+        let (id1, line1) = try rpc.request(method: "initialize", params: [:])
+        let (id2, _) = try rpc.request(method: "turn/start", params: ["threadId": "t"])
         XCTAssertEqual(id1, 1)
         XCTAssertEqual(id2, 2)
         let obj = (try? JSONSerialization.jsonObject(with: line1)) as? [String: Any]
@@ -71,8 +122,29 @@ final class HarnessProtocolTests: XCTestCase {
         XCTAssertEqual(line1.last, UInt8(ascii: "\n"))
     }
 
-    func testResponseFrame() {
-        let line = JSONRPC.response(id: "req-1", result: ["decision": "approved"])
+    /// #174: a value JSON can't carry throws a named error instead of crashing (NSJSONSerialization
+    /// raises an uncatchable ObjC exception on NaN) or sending a blank line.
+    func testUnencodableParamsThrow() {
+        var rpc = JSONRPC()
+        for params: [String: Any] in [["v": Double.nan], ["v": [Double.infinity]], ["when": Date()]] {
+            XCTAssertThrowsError(try rpc.request(method: "turn/start", params: params)) {
+                guard case HarnessError.protocolError(let m) = $0 else { return XCTFail("\($0)") }
+                XCTAssertTrue(m.contains("turn/start"), m)
+            }
+        }
+        XCTAssertThrowsError(try JSONRPC.response(id: "r", result: ["v": Double.nan]))
+    }
+
+    /// #174: every request is bounded; turn requests get the longer wait.
+    func testDefaultReplyTimeouts() {
+        XCTAssertEqual(CodexHarness.defaultReplyTimeout(for: "initialize"), 60)
+        XCTAssertEqual(CodexHarness.defaultReplyTimeout(for: "thread/resume"), 60)
+        XCTAssertEqual(CodexHarness.defaultReplyTimeout(for: "turn/start"), 120)
+        XCTAssertEqual(CodexHarness.defaultReplyTimeout(for: "turn/steer"), 120)
+    }
+
+    func testResponseFrame() throws {
+        let line = try JSONRPC.response(id: "req-1", result: ["decision": "approved"])
         let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any]
         XCTAssertEqual(obj?["id"] as? String, "req-1")
         XCTAssertEqual((obj?["result"] as? [String: Any])?["decision"] as? String, "approved")
