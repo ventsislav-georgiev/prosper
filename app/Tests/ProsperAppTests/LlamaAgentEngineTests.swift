@@ -63,6 +63,16 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertTrue(out.contains("<tool_call></tool_call> XML tags"))
     }
 
+    /// #294 / #313: toolsSystemBlock encodes through ToolCallParser.jsonText; a spec
+    /// JSONSerialization can't encode is skipped instead of aborting (rc 134).
+    func testToolsSystemBlockSkipsUnencodableSpec() {
+        let bad: ToolSpec = ["type": "function", "function": ["name": "bad", "max": Double.infinity] as [String: any Sendable]]
+        let good: ToolSpec = ["type": "function", "function": ["name": "ls", "description": "list"] as [String: any Sendable]]
+        let out = LlamaAgentEngine.toolsSystemBlock([bad, good])
+        XCTAssertFalse(out.contains("bad"), out)
+        XCTAssertTrue(out.contains("<tools>\n{\"function\":{\"description\":\"list\",\"name\":\"ls\"},\"type\":\"function\"}\n</tools>"), out)
+    }
+
     func testRenderChatMLSynthesizesSystemWhenMissing() {
         let tool: ToolSpec = [
             "type": "function",

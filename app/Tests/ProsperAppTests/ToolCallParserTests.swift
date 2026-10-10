@@ -354,6 +354,17 @@ final class ToolCallParserTests: XCTestCase {
         XCTAssertTrue(s.contains(#"<parameter name="n">-inf</parameter>"#), s)
     }
 
+    /// #294 / #313: stringifyValue (via MiniMax/GLM replay) encodes non-string scalars
+    /// as JSON fragments; without `fragments: true` the "\(v)" fallback gives "1" / "<null>".
+    func testReplayStringifiesScalarArgumentsAsJSON() {
+        let call = ParsedToolCall(id: "c0", name: "f", argumentsJSON: #"{"b":true,"n":null,"i":5,"l":[1,{"k":"v"}],"s":"x"}"#)
+        let mm = ToolCallParser.serializeAssistant(content: "", toolCalls: [call], format: .minimax)
+        XCTAssertTrue(mm.contains(#"<parameter name="b">true</parameter><parameter name="i">5</parameter><parameter name="l">[1,{"k":"v"}]</parameter><parameter name="n">null</parameter><parameter name="s">x</parameter>"#), mm)
+        let glm = ToolCallParser.serializeAssistant(content: "", toolCalls: [call], format: .glm)
+        XCTAssertTrue(glm.contains("<arg_key>b</arg_key>\n<arg_value>true</arg_value>"), glm)
+        XCTAssertTrue(glm.contains("<arg_key>n</arg_key>\n<arg_value>null</arg_value>"), glm)
+    }
+
     /// History replay (the normalizedArgs route of OpenAIChat.chatTurns /
     /// ProsperLLMServer repair loop): a poisoned stored argument passes through raw.
     func testPoisonedHistoryArgumentsReplayWithoutCrash() throws {

@@ -70,6 +70,24 @@ final class ResponsesRequestTests: XCTestCase {
         XCTAssertEqual(r.chatRequest.messages.first?.toolCalls.first?.argumentsJSON, #"{"a":1}"#)
     }
 
+    /// #294 / #313: stringify routes non-string values through ToolCallParser.jsonText.
+    /// The old `try? JSONSerialization.data(withJSONObject:)` aborted (rc 134) on these.
+    func testUnencodableArgumentsAndOutputFallBackWithoutAbort() throws {
+        let json = #"""
+        {"input":[
+          {"type":"function_call","name":"f","call_id":"a","arguments":{"n":-1e999}},
+          {"type":"function_call","name":"g","call_id":"b","arguments":5},
+          {"type":"function_call","name":"h","call_id":"c","arguments":null},
+          {"type":"function_call_output","call_id":"a","output":{"n":-1e999}},
+          {"type":"function_call_output","call_id":"b","output":{"ok":true,"a":[1]}}
+        ]}
+        """#
+        let m = try XCTUnwrap(parse(json)).chatRequest.messages
+        XCTAssertEqual(m.prefix(3).map { $0.toolCalls.first?.argumentsJSON }, ["{}", "{}", "{}"])
+        XCTAssertEqual(m[3].content, "")
+        XCTAssertEqual(m[4].content, #"{"a":[1],"ok":true}"#)
+    }
+
     // MARK: - tools (flat → nested)
 
     func testFlatFunctionToolConvertedToNested() throws {
