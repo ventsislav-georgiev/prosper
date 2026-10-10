@@ -325,8 +325,12 @@ struct StatsWidthGate {
 
     /// Modules in `wanted` with no live item, i.e. the items to (re-)create. Each is
     /// forgotten so a fresh item (re-enable after teardown) is measured once.
+    /// #237: a module repeated in `wanted` (a persisted order can carry duplicates)
+    /// is admitted once — its first occurrence — else syncItems would create two
+    /// items and leak the first.
     mutating func admit(_ wanted: [StatsModule], live: some Collection<StatsModule>) -> [StatsModule] {
-        let fresh = wanted.filter { !live.contains($0) }
+        var seen = Set(live)
+        let fresh = wanted.filter { seen.insert($0).inserted }
         for m in fresh { forget(m) }
         return fresh
     }

@@ -53,6 +53,8 @@ tag from the now-released section and put it on the new top draft.
   cut-off gesture by itself. A swipe now stays with whatever it started on, like the
   rest of macOS: a page swipe keeps scrolling the page even over a list, and a swipe
   that starts on a list never moves the page.
+- **Fixed: System Stats could create a second, orphaned menu-bar item** when the saved
+  module order listed a module twice.
 - **Fixed: Full Disk Access detection on macOS 27.** The check read the user TCC
   database, which macOS 27 no longer exposes, so on accounts without a Safari bookmarks
   file the extension permission rows stayed on "Grant" with access already given. It now

@@ -70,4 +70,12 @@ final class StatsWidthGateTests: XCTestCase {
         XCTAssertEqual(gate.admit([.cpu], live: []), [.cpu], "after teardown the item is re-created")
         XCTAssertTrue(gate.needsResize(.cpu, key: "", style: style, scale: 1), "re-created item measures once")
     }
+
+    /// #237: a duplicated persisted order must create one item per module (first
+    /// occurrence wins), as the pre-admit loop did — a second item would leak.
+    func testDuplicatedOrderAdmitsOnce() {
+        var gate = StatsWidthGate()
+        XCTAssertEqual(gate.admit([.cpu, .memory, .cpu], live: []), [.cpu, .memory])
+        XCTAssertEqual(gate.admit([.memory, .gpu, .gpu], live: [.memory]), [.gpu])
+    }
 }
