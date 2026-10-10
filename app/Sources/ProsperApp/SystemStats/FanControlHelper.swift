@@ -253,6 +253,17 @@ enum FanControlHelper {
         return false
     }
 
+    /// A later popup engage (a fan after the first) replied; false = stop, do not save
+    /// the pref. Asleep, release every pin the popup made: willSleep can have skipped the
+    /// reset (an engage waiting in `ensureConnection` is not in flight, the pref is still
+    /// unsaved), so a pin here would ride through sleep (#306). The reply itself is
+    /// ignored, as before: a sibling fan failing does not undo the others.
+    static func laterEngageLanded(sleeping: Bool = Self.sleeping,
+                                  release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) -> Bool {
+        if sleeping { Task { await release() } }
+        return !sleeping
+    }
+
     /// An engage replied after `callReply` already gave up on it (timeout / XPC error):
     /// the helper pinned the fan anyway. With manual off nothing else will release it
     /// (the reclaim re-apply has no popup late-engage guard), so `release` here (#269).

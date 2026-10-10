@@ -323,6 +323,37 @@ final class FanReclaimRecoveryTests: XCTestCase {
         await fulfillment(of: [kept], timeout: 0.3)
     }
 
+    /// #306: a later popup engage landing while asleep releases and returns false, so
+    /// the loop stops and the pref stays unsaved. Awake, the loop goes on.
+    @MainActor
+    func testLaterEngageLandingAsleepIsReleased() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent; FanControlHelper.inject(sleeping: false) }
+        Preferences.fanManualEnabled = false
+        FanControlHelper.inject(sleeping: true)
+        let released = expectation(description: "released while asleep")
+        XCTAssertFalse(FanControlHelper.laterEngageLanded(release: { released.fulfill() }))
+        await fulfillment(of: [released], timeout: 1)
+        XCTAssertFalse(Preferences.fanManualEnabled)
+        FanControlHelper.inject(sleeping: false)
+        let kept = expectation(description: "no release awake")
+        kept.isInverted = true
+        XCTAssertTrue(FanControlHelper.laterEngageLanded(release: { kept.fulfill() }))
+        await fulfillment(of: [kept], timeout: 0.3)
+    }
+
+    /// QA #103 M8: the reclaim tick does not run while asleep, even with manual on.
+    @MainActor
+    func testReclaimTickNotAllowedWhileAsleep() {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent; FanControlHelper.inject(sleeping: false) }
+        Preferences.fanManualEnabled = true
+        FanControlHelper.inject(sleeping: true)
+        XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: .distantFuture))
+        FanControlHelper.inject(sleeping: false)
+        XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: .distantFuture))
+    }
+
     /// #287 item 2: a sleep release with manual on keeps the reclaim timer (wake does
     /// not re-arm it when the helper is unreachable); with manual off it tears down.
     @MainActor

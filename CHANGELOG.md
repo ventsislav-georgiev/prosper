@@ -175,7 +175,9 @@ tag from the now-released section and put it on the new top draft.
   picked it up. Turning it off while saved fan speeds were still being re-applied after a
   reclaim no longer pins the remaining fans again. A re-apply engage the app had already
   given up on that lands after fan control was turned off is released as well, and so is
-  one that completes just as the Mac goes to sleep. Switching to Automatic, or the Mac going
+  one that completes just as the Mac goes to sleep. On Macs with more than one fan, the Mac
+  going to sleep just as manual control is switched on no longer leaves the later fans pinned
+  through sleep either. Switching to Automatic, or the Mac going
   to sleep, while saved speeds were being re-applied after launch or wake no longer leaves a
   fan pinned. A late re-apply reply no longer releases the fans while the popup is still
   engaging them, and a re-apply that fails after Automatic or sleep landed still releases

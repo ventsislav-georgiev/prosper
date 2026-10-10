@@ -986,7 +986,12 @@ struct StatsPopupView: View {
                 fanError = reply.errorText
                 return
             }
-            for (i, rpm) in targets where i != first.key { _ = await FanControlHelper.setManual(i, rpm: rpm) }
+            // Each later engage checks sleep too: a pin landing after willSleep is released
+            // and the pref stays unsaved (#306). No await between the last check and the save.
+            for (i, rpm) in targets where i != first.key {
+                _ = await FanControlHelper.setManual(i, rpm: rpm)
+                guard FanControlHelper.laterEngageLanded() else { fanBusy = false; return }
+            }
             fanBusy = false
             fanManual = true
             Preferences.fanManualEnabled = true
