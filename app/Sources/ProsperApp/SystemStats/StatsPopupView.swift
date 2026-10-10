@@ -902,22 +902,29 @@ struct StatsPopupView: View {
     /// orphaned op can't be cancelled and may still engage later (the helper pins the fan
     /// and the reclaim timer re-arms) behind a card that says it failed — so a late
     /// `.engaged` is released through the same reset as "Automatic" (#255), unless a
-    /// newer engage has since started (it shares the registration and owns the fans)
-    /// or turned manual on.
+    /// newer engage is still in flight (it shares the registration and owns the fans)
+    /// or manual is on. A newer engage that already failed owns nothing (#263); one
+    /// that fails later releases through `firstEngageLanded`.
     private func withFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply) async -> FanManualReply {
         Self.engageGeneration += 1
         let gen = Self.engageGeneration
-        return await Self.raceFanTimeout(seconds, op) { @MainActor in
+        let reply = await Self.raceFanTimeout(seconds, op) { @MainActor in
             guard Self.shouldReleaseLateEngage(generation: gen, current: Self.engageGeneration,
+                                               lastFailed: Self.failedEngageGeneration,
                                                manualOn: Preferences.fanManualEnabled) else { return }
             await FanControlHelper.resetAll(teardown: true)
         }
+        if reply != .engaged { Self.failedEngageGeneration = gen }
+        return reply
     }
 
     @MainActor private static var engageGeneration = 0
+    @MainActor private static var failedEngageGeneration = 0
 
-    nonisolated static func shouldReleaseLateEngage(generation: Int, current: Int, manualOn: Bool) -> Bool {
-        generation == current && !manualOn
+    /// Release unless the current engage is still in flight or manual is on.
+    nonisolated static func shouldReleaseLateEngage(generation: Int, current: Int, lastFailed: Int,
+                                                    manualOn: Bool) -> Bool {
+        (generation == current || lastFailed == current) && !manualOn
     }
 
     /// Not a task group: a group awaits every child before returning, so a non-cancellable

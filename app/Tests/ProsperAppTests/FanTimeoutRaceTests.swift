@@ -43,9 +43,23 @@ final class FanTimeoutRaceTests: XCTestCase {
 
     /// #255: only the newest engage, with manual still off, may release.
     func testShouldReleaseLateEngage() {
-        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, manualOn: false))
-        XCTAssertTrue(StatsPopupView.shouldReleaseLateEngage(generation: 2, current: 2, manualOn: false))
-        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 2, current: 2, manualOn: true))
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 1, manualOn: false))
+        XCTAssertTrue(StatsPopupView.shouldReleaseLateEngage(generation: 2, current: 2, lastFailed: 1, manualOn: false))
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 2, current: 2, lastFailed: 1, manualOn: true))
+    }
+
+    /// #263 ordering A: N timed out, N+1 failed, then N lands late. N+1 owns nothing,
+    /// so N is released (unless manual came on since).
+    func testLateEngageAfterNewerEngageFailedIsReleased() {
+        XCTAssertTrue(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 2, manualOn: false))
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 2, manualOn: true))
+    }
+
+    /// #263 ordering B, step 1: N lands late while N+1 is still in flight — held for N+1.
+    /// Step 2 (N+1 fails → release) is FanReclaimRecoveryTests.testFailedFirstEngageReleasesTheHeldPin.
+    func testLateEngageWhileNewerEngageInFlightIsHeld() {
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 1, manualOn: false))
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 3, lastFailed: 2, manualOn: false))
     }
 
     /// A late failure has nothing engaged to release.

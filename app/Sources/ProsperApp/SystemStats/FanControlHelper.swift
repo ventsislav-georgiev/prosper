@@ -167,7 +167,9 @@ enum FanInfo {
 @MainActor
 enum FanControlHelper {
     nonisolated private static let log = Logger(subsystem: "eu.illegible.prosper", category: "fanhelper")
-    private static var connection: NSXPCConnection?
+    static var connection: NSXPCConnection?   // internal: the teardown-guard test injects one
+    /// Engages holding `connection` right now; a teardown waits for them (#263).
+    static var engagesInFlight = 0
     private static var observersInstalled = false
     private static var reclaimTimer: Timer?
     private static var reclaimReadInFlight = false
@@ -218,6 +220,8 @@ enum FanControlHelper {
         // A manual write is manual intent, even before the popup saves the pref (it
         // saves it only after the first engage lands), so this arms unconditionally.
         armRecoveryLifecycle()
+        engagesInFlight += 1
+        defer { engagesInFlight -= 1 }
         switch await callReply(c, timeout: timeout, { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }) {
         case true?: return .engaged
         case false?: return .refused
@@ -227,10 +231,13 @@ enum FanControlHelper {
 
     /// The popup's first engage replied; true = engaged. On failure with no saved
     /// manual intent nothing will ever recover, so drop the 2 s reclaim timer that
-    /// engage armed.
-    static func firstEngageLanded(_ reply: FanManualReply) -> Bool {
+    /// engage armed, and `release` everything: an older engage that landed late while
+    /// this one was in flight was held for it (#263). Fire-and-forget so the button
+    /// resolves now; a retry racing it is covered by the teardown guard in `resetAll`.
+    static func firstEngageLanded(_ reply: FanManualReply,
+                                  release: @escaping @MainActor () async -> Void = { await resetAll(teardown: true) }) -> Bool {
         guard reply != .engaged else { return true }
-        if !Preferences.fanManualEnabled { removeReclaimMonitor() }
+        if !Preferences.fanManualEnabled { removeReclaimMonitor(); Task { await release() } }
         return false
     }
 
@@ -249,14 +256,18 @@ enum FanControlHelper {
     }
 
     /// Reset every fan to auto. Used on explicit disable and before sleep. On disable
-    /// (`teardown: true`) the connection is torn down so the daemon idle-exits.
+    /// (`teardown: true`) the connection is torn down so the daemon idle-exits —
+    /// unless an engage picked it up meanwhile (#263): invalidating would fail that
+    /// engage with a false "helper isn't running". The reset already went out ahead of
+    /// it; a failed popup engage tears down through `firstEngageLanded`.
+    // ponytail: any other skipped teardown only keeps the daemon resident until the next one.
     @discardableResult
     static func resetAll(teardown: Bool = false) async -> Bool {
         if teardown { removeReclaimMonitor() }
         // No connection → nothing to reset (daemon not running, fans already on auto).
         guard let c = connection else { return true }
         let ok = await call(c) { proxy, done in proxy.resetAllFans { done($0) } }
-        if teardown {
+        if teardown, engagesInFlight == 0 {
             c.invalidate()
             if connection === c { connection = nil }
         }

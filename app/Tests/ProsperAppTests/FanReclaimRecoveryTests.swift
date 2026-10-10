@@ -1,5 +1,6 @@
 import XCTest
 @testable import ProsperApp
+import ProsperHelperProtocol
 
 final class FanReclaimRecoveryTests: XCTestCase {
     /// Launch with fan control never enabled must not install the 2 s reclaim timer
@@ -46,6 +47,44 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
         Preferences.fanManualEnabled = false
         await FanControlHelper.resetAll(teardown: true)
+    }
+
+    /// #263 ordering B, step 2: N landed late and was held for N+1; N+1 fails with
+    /// manual off → everything is released. With manual on (a later commit failing),
+    /// or on success, nothing is.
+    @MainActor
+    func testFailedFirstEngageReleasesTheHeldPin() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+        Preferences.fanManualEnabled = false
+        let released = expectation(description: "failed engage releases")
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable, release: { released.fulfill() }))
+        await fulfillment(of: [released], timeout: 1)
+
+        let kept = expectation(description: "no release")
+        kept.isInverted = true
+        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, release: { kept.fulfill() }))
+        Preferences.fanManualEnabled = true
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, release: { kept.fulfill() }))
+        await fulfillment(of: [kept], timeout: 0.3)
+    }
+
+    /// #263 (2): a teardown must not invalidate the connection an engage picked up
+    /// while the reset was in flight. The fake points at a mach name nothing serves,
+    /// so the reset errors out at once and no helper is involved.
+    @MainActor
+    func testTeardownKeepsTheConnectionAnEngageIsUsing() async {
+        let fake = NSXPCConnection(machServiceName: "eu.illegible.prosper.tests.no-such-helper")
+        fake.remoteObjectInterface = NSXPCInterface(with: ProsperHelperProtocol.self)
+        fake.resume()
+        defer { fake.invalidate(); FanControlHelper.connection = nil; FanControlHelper.engagesInFlight = 0 }
+        FanControlHelper.connection = fake
+        FanControlHelper.engagesInFlight = 1
+        await FanControlHelper.resetAll(teardown: true)
+        XCTAssertTrue(FanControlHelper.connection === fake, "an engage in flight keeps its connection")
+        FanControlHelper.engagesInFlight = 0
+        await FanControlHelper.resetAll(teardown: true)
+        XCTAssertNil(FanControlHelper.connection)
     }
 
     /// #221 (3): a failed reclaim re-apply holds the next attempt for 30 s.
