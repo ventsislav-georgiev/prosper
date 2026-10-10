@@ -225,10 +225,13 @@ enum FanControlHelper {
         }
     }
 
-    /// The popup's first engage failed: with no saved manual intent nothing will ever
-    /// recover, so drop the 2 s reclaim timer that engage armed.
-    static func firstEngageFailed() {
+    /// The popup's first engage replied; true = engaged. On failure with no saved
+    /// manual intent nothing will ever recover, so drop the 2 s reclaim timer that
+    /// engage armed.
+    static func firstEngageLanded(_ reply: FanManualReply) -> Bool {
+        guard reply != .engaged else { return true }
         if !Preferences.fanManualEnabled { removeReclaimMonitor() }
+        return false
     }
 
     /// Hand one fan back to OS thermal control (other fans unaffected). Honors the
@@ -315,20 +318,24 @@ enum FanControlHelper {
     private static func installReclaimMonitor() {
         guard reclaimTimer == nil else { return }
         let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
-            Task { @MainActor in
-                guard reclaimTickAllowed() else { return }
-                reclaimReadInFlight = true
-                Task.detached(priority: .utility) {
-                    let readings = FanInfo.read()
-                    await MainActor.run {
-                        reclaimReadInFlight = false
-                        recoverReclaimedFans(readings)
-                    }
-                }
-            }
+            Task { @MainActor in reclaimTick() }
         }
         timer.tolerance = 1
         reclaimTimer = timer
+    }
+
+    /// One 2 s reclaim tick: read the fans off-main (`read` is the test seam) and
+    /// recover, unless `reclaimTickAllowed` says not now.
+    static func reclaimTick(now: Date = Date(), read: @escaping @Sendable () -> [FanReading] = { FanInfo.read() }) {
+        guard reclaimTickAllowed(now: now) else { return }
+        reclaimReadInFlight = true
+        Task.detached(priority: .utility) {
+            let readings = read()
+            await MainActor.run {
+                reclaimReadInFlight = false
+                recoverReclaimedFans(readings)
+            }
+        }
     }
 
     /// One 2 s reclaim tick may read the fans: recovery eligible, no read in flight,
@@ -388,21 +395,27 @@ enum FanControlHelper {
                 return
             }
             if let manualFraction {
-                switch FanReclaimRecovery.disposition(manualFraction: manualFraction, reengaged: reengaged) {
-                case .abandonManualIntent:
-                    Preferences.fanManualEnabled = false
-                    await resetAll(teardown: true)
-                case .retry:
-                    deferReclaimRetry()
-                    await resetAll()
-                case .restored:
-                    break
-                }
+                await settleReclaim(FanReclaimRecovery.disposition(manualFraction: manualFraction, reengaged: reengaged))
             } else if !reengaged {
                 await resetAll()
             }
             reclaimRecoveryInFlight = false
             startPendingWakeRecovery()
+        }
+    }
+
+    /// Act on a reclaim re-apply's outcome. `.retry` holds the next attempt for the
+    /// cooldown, so a latched helper is asked once per 30 s, not every 2 s tick.
+    static func settleReclaim(_ disposition: FanReclaimRecovery.Disposition, now: Date = Date()) async {
+        switch disposition {
+        case .abandonManualIntent:
+            Preferences.fanManualEnabled = false
+            await resetAll(teardown: true)
+        case .retry:
+            deferReclaimRetry(now: now)
+            await resetAll()
+        case .restored:
+            break
         }
     }
 

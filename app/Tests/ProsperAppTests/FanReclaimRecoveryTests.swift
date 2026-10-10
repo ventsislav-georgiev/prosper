@@ -35,12 +35,14 @@ final class FanReclaimRecoveryTests: XCTestCase {
         defer { Preferences.fanManualEnabled = previousManualIntent }
         Preferences.fanManualEnabled = false
         FanControlHelper.armRecoveryLifecycle()
-        FanControlHelper.firstEngageFailed()
+        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged))
+        XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed, "a landed engage keeps its timer")
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable))   // #259 eW1: the popup's path
         XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
 
         Preferences.fanManualEnabled = true
         FanControlHelper.armRecoveryLifecycle()
-        FanControlHelper.firstEngageFailed()
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused))
         XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
         Preferences.fanManualEnabled = false
         await FanControlHelper.resetAll(teardown: true)
@@ -61,6 +63,46 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(29)))
         XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(FanReclaimRecovery.retryCooldown)))
         XCTAssertEqual(FanReclaimRecovery.retryCooldown, 30)
+    }
+
+    /// #259 (QA #74 eW2): the timer's tick honours the cooldown — no fan read inside
+    /// it, one after it. `read` is a fake: no SMC.
+    @MainActor
+    func testReclaimTickSkipsTheReadDuringTheCooldown() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent
+            FanControlHelper.deferReclaimRetry(now: .distantPast)
+        }
+        Preferences.fanManualEnabled = true
+        let t = Date()
+        FanControlHelper.deferReclaimRetry(now: t)
+        let early = expectation(description: "read inside the cooldown")
+        early.isInverted = true
+        FanControlHelper.reclaimTick(now: t.addingTimeInterval(1), read: { early.fulfill(); return [] })
+        await fulfillment(of: [early], timeout: 0.3)
+        let late = expectation(description: "read after the cooldown")
+        FanControlHelper.reclaimTick(now: t.addingTimeInterval(FanReclaimRecovery.retryCooldown), read: { late.fulfill(); return [] })
+        await fulfillment(of: [late], timeout: 2)
+        // Let the read's MainActor hop clear the in-flight flag before the next test.
+        for _ in 0..<200 where !FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(FanReclaimRecovery.retryCooldown)) {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    /// #259 (QA #74 eW3): a `.retry` outcome starts the cooldown.
+    @MainActor
+    func testRetryOutcomeStartsTheCooldown() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent
+            FanControlHelper.deferReclaimRetry(now: .distantPast)
+        }
+        Preferences.fanManualEnabled = true
+        let t = Date()
+        await FanControlHelper.settleReclaim(.retry, now: t)
+        XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(1)))
+        XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(FanReclaimRecovery.retryCooldown)))
     }
 
     func testReclaimKeepsEligibleIntentAcrossFailedRetry() {

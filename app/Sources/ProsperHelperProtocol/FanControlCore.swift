@@ -2,7 +2,8 @@ import Foundation
 
 /// Pure, dependency-free safety gate for privileged fan control. No threading, no
 /// XPC, no SMC: the daemon serializes every call on its private queue and injects
-/// `reset` (the actual `SMCFanController.resetAll()`). Pulled out of the executable
+/// `reset` (the actual `SMCFanController.resetAll()`, true = every fan reset) and
+/// `maxCelsius` (its hottest-sensor read). Pulled out of the executable
 /// target — exactly like `LidHelperCore` — so the one safety-critical invariant is
 /// unit-testable without root or hardware:
 ///
@@ -12,7 +13,8 @@ import Foundation
 ///
 /// Not thread-safe by design; the caller owns serialization.
 public final class FanControlCore {
-    private let reset: () -> Void
+    private let reset: () -> Bool
+    private let maxCelsius: () -> Double?
 
     /// Whether ANY fan has been driven to manual since the last reset. Tracked so a
     /// last-client-drop only pays the (cheap, idempotent) reset when there's actually
@@ -30,7 +32,10 @@ public final class FanControlCore {
     /// True while anything latent needs the supervision timer.
     public var needsSupervision: Bool { manualHeld || unlockHeld }
 
-    public init(reset: @escaping () -> Void) { self.reset = reset }
+    public init(reset: @escaping () -> Bool, maxCelsius: @escaping () -> Double?) {
+        self.reset = reset
+        self.maxCelsius = maxCelsius
+    }
 
     /// The connection whose manual pin is held, and the RPM it pinned per fan. A drop
     /// of any other connection leaves the pin alone; the supervision tick re-asserts
@@ -83,8 +88,8 @@ public final class FanControlCore {
         case keep
         /// The OS reclaimed these fans: write `heldTargets[i]` back to each.
         case reassert([Int])
-        /// The reclaim on these fans survived a re-assert: the daemon resets every
-        /// fan and, on success, calls `didResetAll` and cancels the timer. A failed
+        /// The reclaim on these fans survived a re-assert: the daemon calls
+        /// `releaseAll` and cancels the timer only when it returns true. A failed
         /// reset keeps holder + targets, so the next tick releases again.
         case release([Int])
     }
@@ -140,7 +145,7 @@ public final class FanControlCore {
         guard needsSupervision, let t = maxCelsius, t.isFinite,
               t >= Self.killSwitchCelsius else { return false }
         if manualHeld { tripLatched = true }
-        reset()
+        _ = reset()
         manualHeld = false
         unlockHeld = false
         holder = nil
@@ -166,12 +171,20 @@ public final class FanControlCore {
     /// under-resetting is the hazard.
     public func didResetAll() { manualHeld = false; unlockHeld = false; holder = nil; heldTargets = [:] }
 
+    /// `.release`: reset every fan, and disarm only if that worked. A failed reset
+    /// must leave everything held, or supervision stops while the fans are pinned.
+    public func releaseAll() -> Bool {
+        guard reset() else { return false }
+        didResetAll()
+        return true
+    }
+
     /// Last client gone (clean OR crash). Reset every fan if a manual pin OR an
     /// unlock hold was outstanding (both are latent hazards nobody supervises once
     /// the client is gone). Idempotent: a second call with nothing held is a no-op.
     public func lastClientGone() {
         guard needsSupervision else { return }
-        reset()
+        _ = reset()
         manualHeld = false
         unlockHeld = false
     }
@@ -183,8 +196,10 @@ public final class FanControlCore {
     /// The trip latch lives only in this process, and the daemon idle-exits 10 s after
     /// its last client: a start into a chassis at or above the cut-off latches again,
     /// so a relaunched app can't re-pin into it. Unreadable (nil) starts unlatched.
-    public func reclaimAtStartup(maxCelsius: Double?) {
-        reset()
+    public func reclaimAtStartup() { reclaimAtStartup(maxCelsius: maxCelsius()) }
+
+    func reclaimAtStartup(maxCelsius: Double?) {
+        _ = reset()
         manualHeld = false
         unlockHeld = false
         tripLatched = maxCelsius.map { $0 >= Self.killSwitchCelsius } ?? false   // NaN compares false

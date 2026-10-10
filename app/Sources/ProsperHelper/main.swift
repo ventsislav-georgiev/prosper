@@ -62,7 +62,8 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         c.onTrace = { fanLog.notice("fan-unlock: \($0, privacy: .public)") }
         return c
     }()
-    private lazy var fanCore = FanControlCore(reset: { [weak self] in _ = self?.fan?.resetAll() })
+    private lazy var fanCore = FanControlCore(reset: { [weak self] in self?.fan?.resetAll() == true },
+                                              maxCelsius: { [weak self] in self?.fan?.maxTemperature() })
     // Every fan DECISION (holder identity, held targets, reclaim budget, trip latch,
     // kill-switch) lives in `fanCore`, which is unit-tested. This file only
     // translates XPC calls into core calls and does the SMC writes the core asks for.
@@ -245,8 +246,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             fanLog.fault("fan reclaim persists on \(reclaimed, privacy: .public) — OS wants control, releasing all fans")
             // A failed reset keeps the timer: the core still holds the targets, so the
             // next tick releases (and retries the reset) again.
-            guard fan?.resetAll() == true else { fanLog.error("fan release reset FAILED — retrying next tick"); break }
-            fanCore.didResetAll()
+            guard fanCore.releaseAll() else { fanLog.error("fan release reset FAILED — retrying next tick"); break }
             fanKillTimer?.cancel(); fanKillTimer = nil
         }
     }
@@ -380,7 +380,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // thermal hazard, so cold start always hands fans back to the OS. fanCore is
         // owned by fanQ, so its reclaim runs there (also sync — done before resume).
         q.sync { core.reclaimAtStartup() }
-        fanQ.sync { fanCore.reclaimAtStartup(maxCelsius: fan?.maxTemperature()) }
+        fanQ.sync { fanCore.reclaimAtStartup() }
     }
 
     // pmset is a one-shot toggle (not a hot path); shelling it matches openlid and

@@ -972,10 +972,9 @@ struct StatsPopupView: View {
                 await FanControlHelper.setManualReply(first.key, rpm: first.value,
                                                       timeout: FanControlHelper.firstEngageTimeout)
             }
-            guard reply == .engaged else {
+            guard FanControlHelper.firstEngageLanded(reply) else {
                 fanBusy = false
                 fanError = reply.errorText
-                FanControlHelper.firstEngageFailed()
                 return
             }
             for (i, rpm) in targets where i != first.key { _ = await FanControlHelper.setManual(i, rpm: rpm) }

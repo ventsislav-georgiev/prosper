@@ -9,7 +9,7 @@ import SMCKit
 final class FanControlCoreTests: XCTestCase {
     private func makeCore() -> (FanControlCore, () -> Int) {
         var resets = 0
-        let core = FanControlCore(reset: { resets += 1 })
+        let core = FanControlCore(reset: { resets += 1; return true }, maxCelsius: { nil })
         return (core, { resets })
     }
 
@@ -293,6 +293,37 @@ final class FanControlCoreTests: XCTestCase {
         XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .release([0]),
                        "failed reset: still supervised, retried")
         XCTAssertEqual(core.holder, idA, "a holder drop still resets meanwhile")
+    }
+
+    /// #259 (QA #74 eW4): the daemon's `.release` goes through `releaseAll`. A failed
+    /// reset must not disarm (fans still pinned, nothing supervising); a later
+    /// successful one does.
+    func testReleaseAllDisarmsOnlyOnASuccessfulReset() {
+        var resetWorks = false
+        let core = FanControlCore(reset: { resetWorks }, maxCelsius: { nil })
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .reassert([0]))
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .release([0]))
+        XCTAssertFalse(core.releaseAll())
+        XCTAssertTrue(core.manualHeld, "failed reset keeps supervision armed")
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .release([0]))
+        resetWorks = true
+        XCTAssertTrue(core.releaseAll())
+        XCTAssertFalse(core.manualHeld)
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .stop)
+    }
+
+    /// #259 (QA #74 eW5): the daemon's cold start is `reclaimAtStartup()`, which reads
+    /// the injected hottest sensor itself — a hot start latches, a cool one doesn't.
+    func testColdStartReadsTheInjectedTemperature() {
+        let hot = FanControlCore(reset: { true }, maxCelsius: { 100 })
+        hot.reclaimAtStartup()
+        XCTAssertTrue(hot.tripLatched)
+        XCTAssertFalse(hot.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 90))
+        let cool = FanControlCore(reset: { true }, maxCelsius: { 60 })
+        cool.reclaimAtStartup()
+        XCTAssertFalse(cool.tripLatched)
+        XCTAssertTrue(cool.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 60))
     }
 
     /// #221 (5): setFanAuto on the last pinned fan (the per-client release #219 took
