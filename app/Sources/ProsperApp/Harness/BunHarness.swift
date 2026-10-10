@@ -91,16 +91,9 @@ final class BunHarness {
             let d = h.availableData
             if !d.isEmpty, let s = String(data: d, encoding: .utf8) { log.info("bun: \(s, privacy: .public)") }
         }
-        // Clear `process` on exit so a later `start()` can relaunch a crashed host
-        // (otherwise the `guard process == nil` wedges plugins off until app restart).
-        proc.terminationHandler = { [weak self] p in
-            CodexHarness.killGroup(p.processIdentifier)   // the host is gone; its children are not
-            Task { @MainActor in if self?.process == proc { self?.cleanupProcess() } }
-        }
-        do { try proc.run() } catch {
+        do { try launch(proc) } catch {
             log.error("failed to launch plugin host: \(String(describing: error))"); return
         }
-        process = proc
         stderrPipe = stderr
         log.info("plugin host launched")
 
@@ -118,6 +111,18 @@ final class BunHarness {
         // for the next run instead of waiting for an unrelated config change.
         await waitForEventsFile()
         if !Self.neededEvents().isEmpty { AgentController.shared.applyAgentConfigChange() }
+    }
+
+    /// Run `proc` as the host. Apart from `start` so tests can drive a /bin/sh stand-in.
+    func launch(_ proc: Process) throws {
+        // Clear `process` on exit so a later `start()` can relaunch a crashed host
+        // (otherwise the `guard process == nil` wedges plugins off until app restart).
+        proc.terminationHandler = { [weak self] p in
+            CodexHarness.killGroup(p.processIdentifier)   // the host is gone; its children are not
+            Task { @MainActor in if self?.process == proc { self?.cleanupProcess() } }
+        }
+        try proc.run()
+        process = proc
     }
 
     /// Detach the stderr handler before dropping the process — the handler fires on the
@@ -142,12 +147,18 @@ final class BunHarness {
     func shutdown() {
         eventsWatcher?.stop()
         eventsWatcher = nil
-        process?.terminationHandler = nil   // this teardown owns the exit
-        // The host leads its own process group (Foundation spawns it so): signal the group,
-        // so plugin-spawned shells and MCP servers go with it, SIGKILL after 3 s.
-        if let pid = process?.processIdentifier { CodexHarness.killGroup(pid) }
-        cleanupProcess()
+        stopHost()
         try? FileManager.default.removeItem(at: Self.socketURL)
+    }
+
+    /// The process half of `shutdown`, apart so tests don't unlink the live socket.
+    /// The host leads its own process group (Foundation spawns it so): signal the group,
+    /// so plugin-spawned shells and MCP servers go with it. Blocking, because quit runs
+    /// `atexit { _exit(0) }` right after: SIGKILL after 1 s, before we return (#327).
+    func stopHost() {
+        process?.terminationHandler = nil   // this teardown owns the exit
+        if let pid = process?.processIdentifier { CodexHarness.killGroup(pid, grace: 1, blocking: true) }
+        cleanupProcess()
     }
 
     // MARK: - Resolution

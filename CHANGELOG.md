@@ -126,6 +126,9 @@ tag from the now-released section and put it on the new top draft.
   launch or fire in a tight loop.** Bad intervals are clamped to the normal 50 ms minimum.
 - **Fixed: typing a huge number, `inf` or `nan` into an extension's number setting no longer
   crashes Prosper.** Non-numbers fall back to the field's minimum.
+- **Fixed: a stuck plugin child no longer outlives Prosper.** Quitting now waits up to a second
+  for the plugin host's processes to exit and force-kills any that ignore the polite shutdown
+  signal, so an opencode helper or MCP server cannot linger after the app is gone.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
   Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON

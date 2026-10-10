@@ -178,21 +178,33 @@ actor CodexHarness: CodingHarness {
     /// spawns with POSIX_SPAWN_SETPGROUP, so pgid == pid (the E2E tests assert it).
     /// Signal the group, not the pid, so the MCP servers and tools codex started go
     /// with it instead of being reparented to launchd. SIGTERM now; SIGKILL whatever
-    /// is still in the group after 3 s, off the actor so a slow exit can't block it.
+    /// is still in the group after `grace`. Detached by default so a slow exit can't
+    /// block the caller; `blocking` runs the same wait inline for the quit path, where
+    /// `atexit { _exit(0) }` would end us before a detached SIGKILL fires (#327). A
+    /// healthy group exits in milliseconds and the wait returns early.
     /// ponytail: a child that moves to its own group or session (`setsid` for a PTY)
     /// is out of reach; codex itself has to end those on SIGTERM.
-    nonisolated static func killGroup(_ pgid: pid_t) {   // also BunHarness's (#290)
-        // kill(-0)/kill(-1) would hit us / everything; and a codex that somehow isn't its
-        // own group leader would hand us our own pgid: leak its group, don't signal ours.
-        guard pgid > 1, pgid != getpgrp() else { return }
+    nonisolated static func killGroup(_ pgid: pid_t, grace: TimeInterval = 3, blocking: Bool = false) {
+        guard mayKillGroup(pgid) else { return }
         kill(-pgid, SIGTERM)
-        Task.detached {
-            let deadline = Date().addingTimeInterval(3)
-            while kill(-pgid, 0) == 0, Date() < deadline {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            if kill(-pgid, 0) == 0 { kill(-pgid, SIGKILL) }
-        }
+        if blocking { escalate(pgid, grace: grace) }
+        else { DispatchQueue.global(qos: .utility).async { escalate(pgid, grace: grace) } }
+    }
+
+    /// kill(-0)/kill(-1) would hit us / everything; and a codex that somehow isn't its
+    /// own group leader would hand us our own pgid: leak its group, don't signal ours.
+    /// A pure predicate so ProcessGroupKillTests pins it without sending a signal (#327).
+    nonisolated static func mayKillGroup(_ pgid: pid_t) -> Bool { pgid > 1 && pgid != getpgrp() }
+
+    /// Wait up to `grace` for the group to empty, then SIGKILL it and wait (≤1 s) for
+    /// the kill to land, so a blocking caller returns with the group gone.
+    private nonisolated static func escalate(_ pgid: pid_t, grace: TimeInterval) {
+        var deadline = Date().addingTimeInterval(grace)
+        while kill(-pgid, 0) == 0, Date() < deadline { usleep(50_000) }
+        guard kill(-pgid, 0) == 0 else { return }
+        kill(-pgid, SIGKILL)
+        deadline = Date().addingTimeInterval(1)
+        while kill(-pgid, 0) == 0, Date() < deadline { usleep(20_000) }
     }
 
     /// Shared by `shutdown` and `handleTermination`: detach pipe handlers (they
