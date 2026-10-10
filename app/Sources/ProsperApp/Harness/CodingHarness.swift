@@ -89,17 +89,21 @@ enum WireText {
     /// a control (Cc: C0, DEL, C1), a format scalar (bidi override, zero-width) or another
     /// default-ignorable one (Hangul filler, variation selector) shows as `\u{…}` rather than
     /// reordering or hiding what is granted. A run of 3 or more whitespace scalars (any Zs —
-    /// space, U+00A0, U+2003, U+3000 — or tab, mixed freely) becomes one `␠×N` marker with the
-    /// run's total scalar count, so padding can't push a command's tail out of view; a single
-    /// or double space is left alone (a lone tab still escapes as `\u{9}`).
+    /// space, U+00A0, U+2003, U+3000 — or tab, mixed freely) becomes one marker with the run's
+    /// total scalar count, so padding can't push a command's tail out of view: `␠×N` when the
+    /// run is only ASCII spaces, `⍽×N` when it holds any other whitespace (#360: three NBSPs are
+    /// one shell word, three spaces are a word break, so the marker must not merge them). A
+    /// single or double space is left alone (a lone tab still escapes as `\u{9}`). Any newline
+    /// class scalar (LF, CR, NEL, U+2028/9) shows as `\n`; a CRLF pair counts as one.
     static func oneLine(_ s: String) -> String {
         let escape = escaped
         var out = "", run: [Unicode.Scalar] = []
         func flush() {
-            out += run.count >= 3 ? "␠×\(run.count)" : run.map(escape).joined()
+            out += run.count < 3 ? run.map(escape).joined() : "\(run.allSatisfy { $0 == " " } ? "␠" : "⍽")×\(run.count)"
             run = []
         }
-        for u in s.components(separatedBy: .newlines).joined(separator: "\\n").unicodeScalars {
+        let lines = s.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: .newlines)
+        for u in lines.joined(separator: "\\n").unicodeScalars {
             if u == "\t" || u.properties.generalCategory == .spaceSeparator { run.append(u); continue }
             flush()
             out += escape(u)

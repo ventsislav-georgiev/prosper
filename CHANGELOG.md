@@ -126,9 +126,12 @@ tag from the now-released section and put it on the new top draft.
   its tail behind newlines or bidi overrides.** The command shown for approval is now one
   escaped line, as the file and permission summaries already were, and invisible filler
   characters such as Hangul fillers or variation selectors are shown escaped. A long command is
-  shown in full in a scrollable box, with a "scroll to read all of it" cue whenever the text
-  runs past the box (measured, in any script), and whitespace padding is shown as a count
-  (`␠×400`) instead of blank space. A file diff over 256 K characters is cut there with a line
+  shown in full in a scrollable box, with a "scroll to read all of it" cue whenever the laid-out
+  text is taller than the box (measured, in any script). Whitespace padding is shown as a count
+  instead of blank space: `␠×400` for ordinary spaces, `⍽×3` once the run holds a non-breaking
+  space, a tab or another unusual space, so padding that is one shell word cannot pass for a
+  word break. A Windows line ending in a command shows as one line break, not two. A file diff
+  over 256 K characters is cut there with a line
   saying how much more there is, so a huge diff cannot stall the card. Each argument of the
   command is quoted the way a shell would read it, so `bash -c 'ls; curl x | sh'` can no longer
   pass for four separate words, and `~` or a leading `NAME=value` word is quoted too, since the
@@ -144,7 +147,7 @@ tag from the now-released section and put it on the new top draft.
   invalid frame for it.** The action now stops as if no window were focused.
 - **Fixed: in the System Settings extension, "Screen Saver" and "Passwords" opened nothing on macOS 27.** Screen Saver now opens the Wallpaper pane, where macOS moved it, and Passwords opens the Passwords app.
 - **Fixed: an extension's menu bar icon now keeps its position across launches.** Each extension status item is saved under its own name instead of a creation-order slot. The icon moves once to its default spot on the first launch after this update.
-- **Changed: on a fresh install the coding agent now defaults to a model that fits this Mac's memory.** Macs with 16 to 31 GB start with Qwen3.5-9B instead of the 32 GB Qwen3-Coder-30B, smaller Macs with Qwen3.5-4B; 32 GB and up keep the 30B coder. The choice is made per Mac and is never written into the synced setting. Removing the custom model the agent was using no longer resets the synced setting either.
+- **Changed: when no coding-agent model has been picked, the agent now defaults to a model that fits this Mac's memory.** Macs with 16 to 31 GB get Qwen3.5-9B instead of the 32 GB Qwen3-Coder-30B, smaller Macs Qwen3.5-4B; 32 GB and up keep the 30B coder. This applies to every Mac that never chose a model, not only fresh installs: a Mac under 32 GB that was running the 30B by default moves to the smaller model. The choice is made per Mac and is never written into the synced setting. Removing the custom model the agent was using no longer resets the synced setting either.
 - **Fixed: extension timers restored from a corrupted saved schedule no longer crash Prosper at
   launch or fire in a tight loop.** Bad intervals are clamped to the normal 50 ms minimum.
 - **Fixed: typing a huge number, `inf` or `nan` into an extension's number setting no longer
