@@ -33,11 +33,36 @@ final class HarnessProtocolTests: XCTestCase {
     /// `position(date:)` is only a coarse start, so entries are filtered by date too, with
     /// slack: entry dates run a few ms behind `Date()` (probed: ~16 ms).
     static func errorLogs(since date: Date) throws -> [String] {
+        try errorLogEntries(since: date).map(\.composedMessage)
+    }
+
+    /// #307: the `.currentProcessIdentifier` scope alone let another xctest process's lines in
+    /// (QA #103), so the predicate pins the pid explicitly.
+    static func errorLogEntries(since date: Date) throws -> [OSLogEntryLog] {
         let from = date.addingTimeInterval(-0.25)
         let store = try OSLogStore(scope: .currentProcessIdentifier)
         return try store.getEntries(at: store.position(date: from),
-                                    matching: NSPredicate(format: "subsystem == %@", "com.prosper.app"))
-            .compactMap { ($0 as? OSLogEntryLog).flatMap { $0.level == .error && $0.date >= from ? $0.composedMessage : nil } }
+                                    matching: errorLogsPredicate(pid: ProcessInfo.processInfo.processIdentifier))
+            .compactMap { ($0 as? OSLogEntryLog).flatMap { $0.level == .error && $0.date >= from ? $0 : nil } }
+    }
+
+    static func errorLogsPredicate(pid: Int32) -> NSPredicate {
+        NSPredicate(format: "subsystem == %@ AND processIdentifier == %d", "com.prosper.app", pid)
+    }
+
+    func testErrorLogsPredicatePinsSubsystemAndPid() {
+        let f = Self.errorLogsPredicate(pid: 4242).predicateFormat
+        XCTAssertTrue(f.contains(#"subsystem == "com.prosper.app""#), f)
+        XCTAssertTrue(f.contains("processIdentifier == 4242"), f)
+    }
+
+    func testErrorLogsReturnsOnlyThisProcess() throws {
+        let since = Date()
+        let marker = "errorLogs-pid-probe-\(UUID().uuidString)"
+        Logger(subsystem: "com.prosper.app", category: "test").error("\(marker, privacy: .public)")
+        let entries = try Self.errorLogEntries(since: since)
+        XCTAssertTrue(entries.contains { $0.composedMessage == marker }, "\(entries.map(\.composedMessage))")
+        XCTAssertTrue(entries.allSatisfy { $0.processIdentifier == getpid() })
     }
 
     /// #174: a stdout line that isn't a JSON object is logged (cut to 256 bytes) and skipped.
