@@ -166,7 +166,7 @@ enum HooksConfigStore {
         }
         // codex config.toml: `[hooks]` with `[[hooks.PreToolUse]]` matcher groups.
         struct TomlDoc: Codable { var hooks: [String: [MatcherGroup]]? }
-        if let doc = try? TOMLDecoder().decode(TomlDoc.self, from: text),
+        if let doc = try? TOMLDecoder().decodeGuarded(TomlDoc.self, from: text),
            let hooks = doc.hooks, !hooks.isEmpty {
             return sorted(rules(from: hooks))
         }

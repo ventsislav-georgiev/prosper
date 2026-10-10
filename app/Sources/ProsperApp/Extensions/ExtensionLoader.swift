@@ -50,7 +50,7 @@ enum ExtensionLoader {
         }
         let manifest: ExtensionManifest
         do {
-            manifest = try TOMLDecoder().decode(ExtensionManifest.self, from: text)
+            manifest = try TOMLDecoder().decodeGuarded(ExtensionManifest.self, from: text)
         } catch {
             throw ExtensionLoadError.parse(String(describing: error))
         }

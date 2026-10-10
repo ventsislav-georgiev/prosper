@@ -100,12 +100,17 @@ tag from the now-released section and put it on the new top draft.
   choice is gone (codex removed it); a saved one reads as "Ask on request". A downloaded codex is
   now checked and signed before it is put in place, so a failed step never leaves an
   unsigned binary at the pinned path, and the 210 MB archive is deleted afterwards instead
-  of staying in Application Support. The first pinned install also removes an earlier
-  unversioned codex from that cache.
+  of staying in Application Support. The swap into place is atomic, so a crash mid-install
+  can no longer leave a missing or half-written codex at the pinned path. The first pinned
+  install also removes an earlier unversioned codex from that cache.
 - **Updated: Sparkle 2.10.0, TOMLDecoder 0.4.5, GRDB 7.11.1.** The update window now comes
   to the front for a menu-bar app with no Dock icon (Sparkle 2.9.4), delta updates no
   longer leak files or trip over macOS 27 file-system compression, and the TOML parser that
   reads your codex `config.toml` and extension manifests picks up its crash fixes.
+- **Fixed: a malformed TOML file can no longer crash Prosper.** A codex `config.toml`, an
+  imported hooks or MCP config, or an extension's `extension.toml` with extremely deep
+  nesting or over 1 MiB is now treated as malformed and skipped instead of overflowing the
+  parser.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
   Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON

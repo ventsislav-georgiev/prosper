@@ -218,7 +218,7 @@ enum MCPConfigStore {
             var enabled: Bool?
             var default_tools_approval_mode: String?
         }
-        guard let doc = try? TOMLDecoder().decode(Doc.self, from: text),
+        guard let doc = try? TOMLDecoder().decodeGuarded(Doc.self, from: text),
               let servers = doc.mcp_servers, !servers.isEmpty else { return nil }
         return servers.map { id, e in
             let isHTTP = e.command == nil && e.url != nil
