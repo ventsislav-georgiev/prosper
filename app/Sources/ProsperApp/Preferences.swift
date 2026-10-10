@@ -838,16 +838,14 @@ enum Preferences {
     static var agentModel: String {
         get {
             // Self-heal via AgentModelRegistry.canonicalId (shared with model(for:)):
-            // a retired id maps to its replacement, an unknown one to the recommended.
-            // Only a retired id is written back: an unknown one may be a custom model
-            // from another Mac (agentModel syncs, custom models don't), and rewriting
-            // it here would sync back and clobber that Mac's pick.
+            // a retired id reads as its replacement, an unknown one as the recommended.
+            // Neither is written back: agentModel syncs between Macs, custom models
+            // don't, so a write-back from a Mac lacking the custom row would clobber
+            // the other Mac's pick (#68, #256).
             guard let stored = defaults.string(forKey: Keys.agentModel) else {
                 return AgentModelRegistry.recommendedId
             }
-            let id = AgentModelRegistry.canonicalId(stored)
-            if AgentModelRegistry.replacements[stored] != nil { defaults.set(id, forKey: Keys.agentModel) }
-            return id
+            return AgentModelRegistry.canonicalId(stored)
         }
         set { defaults.set(newValue, forKey: Keys.agentModel) }
     }

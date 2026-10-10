@@ -96,6 +96,10 @@ tag from the now-released section and put it on the new top draft.
   or for the session with Always, instead of a reply codex could not read. Requests Prosper
   cannot serve, such as MCP elicitation, are refused with a JSON-RPC "method not found"
   error instead of a made-up decision.
+- **Fixed: a retired coding-agent model id is no longer rewritten in your settings.** The
+  saved pick is resolved to its replacement on read only. The pick syncs between Macs while
+  custom models do not, so a Mac without your custom model could overwrite the pick you had
+  re-added as a custom model on another one.
 - **Fixed: manual fan control fought the thermal kill-switch.** When the helper reset the
   fans to automatic at 95 °C, the app re-applied the saved speed about a second later into
   a chassis still above the cut-off, and the switch fired again on its next tick. The helper

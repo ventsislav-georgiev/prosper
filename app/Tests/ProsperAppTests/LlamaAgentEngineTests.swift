@@ -209,14 +209,14 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(AgentModelRegistry.model(for: "unsloth/Qwen3-8B-GGUF").id, "unsloth/Qwen3.5-9B-GGUF")
     }
 
-    /// #247: Preferences.agentModel heals through the same map and writes the healed id back.
-    func testPreferencesAgentModelHealsAndWritesBack() {
+    /// #247/#256: Preferences.agentModel heals on read through the same map; the stored id is never rewritten.
+    func testPreferencesAgentModelHealsOnReadWithoutWriteBack() {
         let d = UserDefaults.standard, key = "agentModel"
         let saved = d.object(forKey: key)
         defer { d.set(saved, forKey: key) }
         d.set("unsloth/Qwen3-8B-GGUF", forKey: key)
         XCTAssertEqual(Preferences.agentModel, "unsloth/Qwen3.5-9B-GGUF")
-        XCTAssertEqual(d.string(forKey: key), "unsloth/Qwen3.5-9B-GGUF")
+        XCTAssertEqual(d.string(forKey: key), "unsloth/Qwen3-8B-GGUF")
         d.set("unsloth/Nemotron-3-Nano-30B-A3B-GGUF", forKey: key)
         XCTAssertEqual(Preferences.agentModel, "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF")
         d.set("gone/unknown", forKey: key)
@@ -274,9 +274,9 @@ final class LlamaAgentEngineTests: XCTestCase {
     /// #247: a custom (HF-imported) id is canonical as-is, and the getter leaves it in UserDefaults.
     /// Both stores read UserDefaults.standard only, so save/restore the two keys.
     func testCustomIdIsCanonicalAndNotRewritten() {
-        let d = UserDefaults.standard, key = "agentModel", customKey = "customAgentModelsV1"
-        let savedPick = d.object(forKey: key), savedCustom = d.object(forKey: customKey)
-        defer { d.set(savedPick, forKey: key); d.set(savedCustom, forKey: customKey) }
+        let d = UserDefaults.standard, key = "agentModel", customKey = "customAgentModelsV1", labelsKey = "modelLabelOverridesV1"
+        let savedPick = d.object(forKey: key), savedCustom = d.object(forKey: customKey), savedLabels = d.object(forKey: labelsKey)
+        defer { d.set(savedPick, forKey: key); d.set(savedCustom, forKey: customKey); d.set(savedLabels, forKey: labelsKey) }
         let id = "test-247/Custom-Coder-GGUF"
         CustomModelStore.upsert(CustomAgentModel(id: id, label: "Custom", sizeBytes: 0, note: "", toolFormat: .qwenXML))
         XCTAssertEqual(AgentModelRegistry.canonicalId(id), id)
@@ -288,6 +288,19 @@ final class LlamaAgentEngineTests: XCTestCase {
         CustomModelStore.remove(id)
         XCTAssertEqual(Preferences.agentModel, AgentModelRegistry.recommendedId)
         XCTAssertEqual(d.string(forKey: key), id)
+    }
+
+    /// #256: a retired id re-added as a custom model is the user's pick, not stale.
+    func testRetiredIdReaddedAsCustomIsNotRewritten() throws {
+        let d = UserDefaults.standard, key = "agentModel", customKey = "customAgentModelsV1", labelsKey = "modelLabelOverridesV1"
+        let savedPick = d.object(forKey: key), savedCustom = d.object(forKey: customKey), savedLabels = d.object(forKey: labelsKey)
+        defer { d.set(savedPick, forKey: key); d.set(savedCustom, forKey: customKey); d.set(savedLabels, forKey: labelsKey) }
+        let id = try XCTUnwrap(AgentModelRegistry.replacements.keys.sorted().first)
+        CustomModelStore.upsert(CustomAgentModel(id: id, label: "Custom", sizeBytes: 0, note: "", toolFormat: .qwenXML))
+        d.set(id, forKey: key)
+        XCTAssertEqual(Preferences.agentModel, id)
+        XCTAssertEqual(d.string(forKey: key), id)
+        XCTAssertEqual(AgentModelRegistry.model(for: id).id, id)
     }
 
     func testGGUFRowsSurviveCatalogMerge() {
