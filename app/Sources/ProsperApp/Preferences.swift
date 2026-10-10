@@ -249,8 +249,11 @@ enum Preferences {
 
     /// In the small `prosper-test-defaults` dir (shared with the tests' `scratchDefaults`), not
     /// the $TMPDIR root: a path suite rewrites its plist synchronously on every `set` (temp
-    /// file + rename beside it), and in a root holding ~2M entries that took 30-100 ms per
-    /// write instead of ~0.8 ms, on every keystroke via `AnalyticsStore.bumpUsage` (#339).
+    /// file + rename beside it), on every keystroke via `AnalyticsStore.bumpUsage`. A create or
+    /// rename in the root measured 30-100 ms on 2026-10-10 with ~2.1M entries there; QA #120's
+    /// search-budget regression did not reproduce with this path reverted to the root on
+    /// 2026-10-10, so that cost is not a confirmed cause. The subdirectory keeps the suite
+    /// independent of the root's state either way (#339).
     static let scratchSuitePath: String = {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("prosper-test-defaults", isDirectory: true)
