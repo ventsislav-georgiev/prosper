@@ -118,8 +118,20 @@ final class ProcessGroupKillTests: XCTestCase {
         XCTAssertTrue(CodexHarness.livePGIDs.withLock { $0.isEmpty })
     }
 
+    /// Polls the registry until `pgid` leaves it or the timeout: escalate unregisters a
+    /// group at its end, off the caller's thread (#377).
+    private func waitUnregistered(_ pgid: pid_t, timeout: TimeInterval) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while CodexHarness.livePGIDs.withLock({ $0.contains(pgid) }) {
+            if Date() >= deadline { return false }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return true
+    }
+
     /// The registry tracks a real start/shutdown: a silent stand-in codex (never answers
-    /// `initialize`) is registered once spawned and gone from the registry after shutdown.
+    /// `initialize`) is registered once spawned and gone from the registry once shutdown's
+    /// escalate ends.
     func testStartRegistersTheCodexGroupAndShutdownUnregistersIt() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("prosper-tests/pgkill-\(UUID().uuidString)", isDirectory: true)
@@ -146,7 +158,47 @@ final class ProcessGroupKillTests: XCTestCase {
 
         await harness.shutdown()
         _ = try? await starting.value
-        XCTAssertFalse(CodexHarness.livePGIDs.withLock { $0.contains(leader) }, "shutdown left the group registered")
+        let gone = try await waitUnregistered(leader, timeout: 5)
+        XCTAssertTrue(gone, "shutdown left the group registered")
+    }
+
+    /// #377: a codex that exits on its own leaves a SIGTERM-ignoring child; the group stays
+    /// registered through handleTermination's 3 s grace (so a quit then still kills it
+    /// inline) and leaves the registry once the escalate has SIGKILLed the child.
+    func testHandleTerminationKeepsTheGroupRegisteredUntilEscalateEnds() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prosper-tests/pgkill-exit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let exe = dir.appendingPathComponent("codex")
+        let pidFile = dir.appendingPathComponent("pid"), childFile = dir.appendingPathComponent("child")
+        try """
+            #!/bin/sh
+            trap "" TERM
+            /bin/sleep 600 &
+            echo $! > '\(childFile.path)'
+            echo $$ > '\(pidFile.path)'
+            /bin/sleep 0.3
+            """.write(to: exe, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: exe.path)
+
+        let harness = CodexHarness(executableURL: exe, codexHome: dir.appendingPathComponent("home"),
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "t")
+        // The exit fails the pending initialize, so start returns once handleTermination ran.
+        do { try await harness.start(); XCTFail("start succeeded against an exiting stand-in") } catch {}
+        func readPid(_ url: URL) -> pid_t? {
+            (try? String(contentsOf: url, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        let leader = try XCTUnwrap(readPid(pidFile), "stand-in codex never started")
+        let child = try XCTUnwrap(readPid(childFile), "stand-in codex never forked its child")
+        defer { kill(child, SIGKILL) }   // by pid: the row reaps its stand-in child even when an assert throws
+
+        XCTAssertEqual(kill(child, 0), 0, "the SIGTERM-ignoring child died before the grace ended")
+        XCTAssertTrue(CodexHarness.livePGIDs.withLock { $0.contains(leader) },
+                      "handleTermination unregistered the group before its escalate ended")
+        XCTAssertTrue(waitGone(child, timeout: 8), "the SIGTERM-ignoring child \(child) outlived handleTermination")
+        let gone = try await waitUnregistered(leader, timeout: 2)
+        XCTAssertTrue(gone, "the group stayed registered after its escalate ended")
     }
 
     /// A scan by necessity: applicationWillTerminate can't run in a test (it needs a

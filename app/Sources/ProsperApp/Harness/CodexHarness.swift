@@ -170,8 +170,7 @@ actor CodexHarness: CodingHarness {
         proc?.terminationHandler = nil   // teardown owns this exit; no second entry
         cleanupIO()
         if let proc {
-            Self.livePGIDs.withLock { _ = $0.remove(proc.processIdentifier) }
-            Self.killGroup(proc.processIdentifier)
+            Self.killGroup(proc.processIdentifier)   // escalate unregisters the group (#377)
             Task.detached { proc.waitUntilExit() }   // reap off the actor
         }
     }
@@ -218,8 +217,12 @@ actor CodexHarness: CodingHarness {
     nonisolated static func mayKillGroup(_ pgid: pid_t) -> Bool { pgid > 1 && pgid != getpgrp() }
 
     /// Wait up to `grace` for the group to empty, then SIGKILL it and wait (≤1 s) for
-    /// the kill to land, so a blocking caller returns with the group gone.
+    /// the kill to land, so a blocking caller returns with the group gone. The group
+    /// leaves `livePGIDs` only here, at the end: a quit during the grace still finds it
+    /// and kills it inline instead of leaving a TERM-ignoring member behind (#377).
+    /// A no-op for groups the quit drain already took, and for BunHarness's groups.
     private nonisolated static func escalate(_ pgid: pid_t, grace: TimeInterval) {
+        defer { livePGIDs.withLock { _ = $0.remove(pgid) } }
         var deadline = Date().addingTimeInterval(grace)
         while sendSignal(-pgid, 0) == 0, Date() < deadline { usleep(50_000) }
         guard sendSignal(-pgid, 0) == 0 else { return }
@@ -475,8 +478,7 @@ actor CodexHarness: CodingHarness {
         guard !terminated else { return }
         terminated = true
         process = nil
-        Self.livePGIDs.withLock { _ = $0.remove(pgid) }
-        Self.killGroup(pgid)   // codex is gone; its children are not
+        Self.killGroup(pgid)   // codex is gone; its children are not; escalate unregisters it (#377)
         let error = HarnessError.backendError(signaled
             ? "codex app-server was killed by signal \(code)"
             : "codex app-server exited with code \(code)")

@@ -167,7 +167,8 @@ tag from the now-released section and put it on the new top draft.
   for the plugin host's processes to exit and force-kills any that ignore the polite shutdown
   signal, so an opencode helper or MCP server in the host's process group cannot linger after
   the app is gone. Quitting also stops the coding agent's codex process and the command it is
-  running, instead of leaving them behind.
+  running, instead of leaving them behind, and still does so when codex has just exited on its
+  own and Prosper is giving the command it ran its few seconds to stop.
 - **Fixed: quitting Prosper or toggling the hyper key no longer waits forever if `hidutil`
   hangs.** Prosper gives up after five seconds, stops the stuck process together with anything
   it started, logs it, and waits a minute before trying `hidutil` again. If `hidutil` fails or
