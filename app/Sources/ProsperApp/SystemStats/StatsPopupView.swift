@@ -940,6 +940,7 @@ struct StatsPopupView: View {
             guard reply == .engaged else {
                 fanBusy = false
                 fanError = reply.errorText
+                FanControlHelper.firstEngageFailed()
                 return
             }
             for (i, rpm) in targets where i != first.key { _ = await FanControlHelper.setManual(i, rpm: rpm) }

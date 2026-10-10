@@ -225,6 +225,12 @@ enum FanControlHelper {
         }
     }
 
+    /// The popup's first engage failed: with no saved manual intent nothing will ever
+    /// recover, so drop the 2 s reclaim timer that engage armed.
+    static func firstEngageFailed() {
+        if !Preferences.fanManualEnabled { removeReclaimMonitor() }
+    }
+
     /// Hand one fan back to OS thermal control (other fans unaffected). Honors the
     /// opt-in fast-re-engage pref: the daemon keeps the controller unlock held (and
     /// supervised) so the next manual engage skips the ~8 s thermalmonitord yield.
@@ -310,11 +316,7 @@ enum FanControlHelper {
         guard reclaimTimer == nil else { return }
         let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in
-                guard FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
-                                                           sleeping: sleeping,
-                                                           recoveryInFlight: reclaimRecoveryInFlight,
-                                                           userAdjusting: userAdjusting),
-                      !reclaimReadInFlight, Date() >= reclaimRetryNotBefore else { return }
+                guard reclaimTickAllowed() else { return }
                 reclaimReadInFlight = true
                 Task.detached(priority: .utility) {
                     let readings = FanInfo.read()
@@ -327,6 +329,22 @@ enum FanControlHelper {
         }
         timer.tolerance = 1
         reclaimTimer = timer
+    }
+
+    /// One 2 s reclaim tick may read the fans: recovery eligible, no read in flight,
+    /// and past the cooldown a failed re-apply set (`deferReclaimRetry`).
+    static func reclaimTickAllowed(now: Date = Date()) -> Bool {
+        FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
+                                            sleeping: sleeping,
+                                            recoveryInFlight: reclaimRecoveryInFlight,
+                                            userAdjusting: userAdjusting)
+            && !reclaimReadInFlight && now >= reclaimRetryNotBefore
+    }
+
+    /// A reclaim re-apply failed (typically the helper's trip latch): hold the next
+    /// attempt for `retryCooldown`, one helper supervision tick.
+    static func deferReclaimRetry(now: Date = Date()) {
+        reclaimRetryNotBefore = now.addingTimeInterval(FanReclaimRecovery.retryCooldown)
     }
 
     private static func removeReclaimMonitor() {
@@ -375,7 +393,7 @@ enum FanControlHelper {
                     Preferences.fanManualEnabled = false
                     await resetAll(teardown: true)
                 case .retry:
-                    reclaimRetryNotBefore = Date().addingTimeInterval(FanReclaimRecovery.retryCooldown)
+                    deferReclaimRetry()
                     await resetAll()
                 case .restored:
                     break

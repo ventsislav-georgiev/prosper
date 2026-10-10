@@ -182,7 +182,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             // The core also records holder + target and arms crash-safety BEFORE the
             // risky write (see FanControlCore.manualRequest).
             guard self.fanCore.manualRequest(index: index, rpm: rpm, holder: cid,
-                                             maxCelsius: fan.maxTemperature()) else {
+                                             maxCelsius: fan.maxTemperature(complete: true)) else {
                 fanLog.notice("setFanManualRPM(\(index, privacy: .public)) refused: kill-switch latched until < \(FanControlCore.reArmCelsius, privacy: .public)°C")
                 reply(false); return
             }
@@ -243,7 +243,10 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             }
         case .release(let reclaimed):
             fanLog.fault("fan reclaim persists on \(reclaimed, privacy: .public) — OS wants control, releasing all fans")
-            if fan?.resetAll() == true { fanCore.didResetAll() }
+            // A failed reset keeps the timer: the core still holds the targets, so the
+            // next tick releases (and retries the reset) again.
+            guard fan?.resetAll() == true else { fanLog.error("fan release reset FAILED — retrying next tick"); break }
+            fanCore.didResetAll()
             fanKillTimer?.cancel(); fanKillTimer = nil
         }
     }
@@ -377,7 +380,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // thermal hazard, so cold start always hands fans back to the OS. fanCore is
         // owned by fanQ, so its reclaim runs there (also sync — done before resume).
         q.sync { core.reclaimAtStartup() }
-        fanQ.sync { fanCore.reclaimAtStartup() }
+        fanQ.sync { fanCore.reclaimAtStartup(maxCelsius: fan?.maxTemperature()) }
     }
 
     // pmset is a one-shot toggle (not a hot path); shelling it matches openlid and

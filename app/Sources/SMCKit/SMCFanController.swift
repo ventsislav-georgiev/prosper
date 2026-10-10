@@ -221,8 +221,11 @@ public final class SMCFanController {
     /// ONCE (firmware key set is static for a boot): every `T…` key whose value
     /// decodes to a plausible die/skin temperature. Each subsequent call is a plain
     /// read of that cached list — cheap enough for a 30 s supervision tick.
+    /// `complete`: nil as soon as any probed key fails to read. The trip latch's
+    /// re-arm needs it — a max over the sensors that happened to read can sit under
+    /// the re-arm line while the hottest one is the one that failed.
     private var tempKeys: [String]?
-    public func maxTemperature() -> Double? {
+    public func maxTemperature(complete: Bool = false) -> Double? {
         if tempKeys == nil {
             tempKeys = smc.allKeys().filter { key in
                 guard key.hasPrefix("T"), let v = smc.read(key) else { return false }
@@ -234,9 +237,15 @@ public final class SMCFanController {
                 return v.type == "flt " && v.double.isFinite && v.double > 10 && v.double < 130
             }
         }
+        return Self.hottest((tempKeys ?? []).map { smc.read($0)?.double }, complete: complete)
+    }
+
+    /// The max of plausible readings (nil entries = failed reads); see `maxTemperature`.
+    public static func hottest(_ reads: [Double?], complete: Bool) -> Double? {
         var mx = -Double.infinity
-        for k in tempKeys ?? [] {
-            if let v = smc.read(k)?.double, v.isFinite, v > 10, v < 130 { mx = Swift.max(mx, v) }
+        for r in reads {
+            guard let v = r, v.isFinite else { if complete { return nil }; continue }
+            if v > 10, v < 130 { mx = Swift.max(mx, v) }
         }
         return mx > 0 ? mx : nil
     }

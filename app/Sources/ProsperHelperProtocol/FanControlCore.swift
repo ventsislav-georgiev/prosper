@@ -84,7 +84,8 @@ public final class FanControlCore {
         /// The OS reclaimed these fans: write `heldTargets[i]` back to each.
         case reassert([Int])
         /// The reclaim on these fans survived a re-assert: the daemon resets every
-        /// fan (`didResetAll` on success) and cancels the timer.
+        /// fan and, on success, calls `didResetAll` and cancels the timer. A failed
+        /// reset keeps holder + targets, so the next tick releases again.
         case release([Int])
     }
 
@@ -98,8 +99,6 @@ public final class FanControlCore {
         let reclaimed = heldTargets.keys.filter { !isManualEngaged($0) }.sorted()
         if reclaimed.isEmpty { reassertBudget = 1; return .keep }
         if reassertBudget > 0 { reassertBudget -= 1; return .reassert(reclaimed) }
-        holder = nil
-        heldTargets = [:]
         return .release(reclaimed)
     }
 
@@ -181,10 +180,13 @@ public final class FanControlCore {
     /// left by an unclean kill. Safe by invariant — a valid manual hold always keeps
     /// a live client connection (which keeps the daemon resident), so a cold start
     /// can only find stale values, and a client that still wants manual re-asserts.
-    public func reclaimAtStartup() {
+    /// The trip latch lives only in this process, and the daemon idle-exits 10 s after
+    /// its last client: a start into a chassis at or above the cut-off latches again,
+    /// so a relaunched app can't re-pin into it. Unreadable (nil) starts unlatched.
+    public func reclaimAtStartup(maxCelsius: Double?) {
         reset()
         manualHeld = false
         unlockHeld = false
-        tripLatched = false
+        tripLatched = maxCelsius.map { $0 >= Self.killSwitchCelsius } ?? false   // NaN compares false
     }
 }

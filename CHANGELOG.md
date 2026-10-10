@@ -89,6 +89,12 @@ tag from the now-released section and put it on the new top draft.
   between failed re-applies, and the 2 s reclaim check only runs while manual control is on.
   The latch is helper-wide, so a reconnect or an app relaunch while the helper is still
   running cannot re-pin the fans into a hot chassis either.
+  Three more holes are closed: a helper that starts into a chassis already at the cut-off
+  starts with the latch held (it used to clear on every helper start); a fan sensor that
+  cannot be read keeps the latch held instead of clearing it early; and when the OS takes
+  the fans back and the helper's reset fails, the helper keeps retrying instead of leaving
+  the fans unsupervised. A failed first engage from the popup also drops the 2 s reclaim
+  check it had armed.
 - **Performance: with inline autocomplete off, mouse clicks no longer pass through Prosper**
   and the global scroll monitor is not installed. The keystroke tap listened for every left
   click and every scroll tick on behalf of autocomplete even when it was disabled. Toggling

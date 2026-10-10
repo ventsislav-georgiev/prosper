@@ -1,5 +1,6 @@
 import XCTest
 @testable import ProsperHelperProtocol
+import SMCKit
 
 /// The one safety-critical invariant: a manually-pinned fan is ALWAYS returned to
 /// OS control when the last client drops (crash) or on cold start — never left
@@ -38,7 +39,7 @@ final class FanControlCoreTests: XCTestCase {
 
     func testReclaimAlwaysResetsAndDisarms() {
         let (core, resets) = makeCore()
-        core.reclaimAtStartup()
+        core.reclaimAtStartup(maxCelsius: nil)
         XCTAssertEqual(resets(), 1, "cold start always hands fans back to the OS")
         XCTAssertFalse(core.manualHeld)
     }
@@ -163,7 +164,7 @@ final class FanControlCoreTests: XCTestCase {
         let (core, _) = makeCore()
         core.didSetManual()
         core.temperatureTick(maxCelsius: 98)
-        core.reclaimAtStartup()
+        core.reclaimAtStartup(maxCelsius: nil)
         XCTAssertFalse(core.tripLatched)
     }
 
@@ -215,7 +216,7 @@ final class FanControlCoreTests: XCTestCase {
     func testColdStartClearsUnlockHold() {
         let (core, resets) = makeCore()
         core.didAutoWithHold()
-        core.reclaimAtStartup()
+        core.reclaimAtStartup(maxCelsius: nil)
         XCTAssertEqual(resets(), 1)
         XCTAssertFalse(core.unlockHeld)
     }
@@ -275,8 +276,63 @@ final class FanControlCoreTests: XCTestCase {
                        "healthy tick refills the budget")
         XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .reassert([0, 1]))
         XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .release([0, 1]))
+        core.didResetAll()   // the daemon's reset succeeded
         XCTAssertNil(core.holder)
         XCTAssertTrue(core.heldTargets.isEmpty)
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .stop)
+    }
+
+    /// #221 (6): the release reset failed (no didResetAll). The fans are still held,
+    /// so the next tick must release again instead of going quiet.
+    func testFailedReleaseResetIsRetriedNextTick() {
+        let (core, _) = makeCore()
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .reassert([0]))
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .release([0]))
+        XCTAssertTrue(core.manualHeld)
+        XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .release([0]),
+                       "failed reset: still supervised, retried")
+        XCTAssertEqual(core.holder, idA, "a holder drop still resets meanwhile")
+    }
+
+    /// #221 (5): setFanAuto on the last pinned fan (the per-client release #219 took
+    /// out) must not clear a standing trip latch.
+    func testAutoAppliedKeepsTheLatch() {
+        let (core, _) = makeCore()
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        XCTAssertEqual(core.supervise(maxCelsius: 98, isManualEngaged: { _ in true }), .fired)
+        XCTAssertTrue(core.autoApplied(index: 0, holdUnlock: true, hasFtst: true))
+        XCTAssertTrue(core.tripLatched)
+        XCTAssertFalse(core.autoApplied(index: 0, holdUnlock: false, hasFtst: true))
+        XCTAssertTrue(core.tripLatched)
+        core.connectionClosed(idA)
+        XCTAssertTrue(core.tripLatched)
+    }
+
+    /// #221 (4): the latch is helper memory only and the helper idle-exits; a cold
+    /// start into a chassis at the cut-off latches again.
+    func testColdStartIntoHotChassisLatches() {
+        let (core, resets) = makeCore()
+        core.reclaimAtStartup(maxCelsius: FanControlCore.killSwitchCelsius)
+        XCTAssertEqual(resets(), 1)
+        XCTAssertTrue(core.tripLatched)
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 90))
+        core.reclaimAtStartup(maxCelsius: FanControlCore.killSwitchCelsius - 0.1)
+        XCTAssertFalse(core.tripLatched)
+        core.reclaimAtStartup(maxCelsius: .nan)
+        XCTAssertFalse(core.tripLatched)
+    }
+
+    /// #221 (2): the re-arm read must fail as a whole when any sensor fails — a max
+    /// over the rest can sit under re-arm while the hottest one is unreadable.
+    func testHottestCompleteFailsOnAnyMissingRead() {
+        XCTAssertNil(SMCFanController.hottest([60, nil, 70], complete: true))
+        XCTAssertNil(SMCFanController.hottest([60, .nan], complete: true))
+        XCTAssertEqual(SMCFanController.hottest([60, nil, 70], complete: false), 70,
+                       "kill-switch tick still sees the readable sensors")
+        XCTAssertEqual(SMCFanController.hottest([60, 5, 140, 70], complete: true), 70,
+                       "implausible values are skipped, not failures")
+        XCTAssertNil(SMCFanController.hottest([], complete: true))
     }
 
     /// resetAllFans goes through didResetAll: holder and targets go with it, so a

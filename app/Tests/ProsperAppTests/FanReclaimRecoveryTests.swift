@@ -27,6 +27,42 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
     }
 
+    /// #221 (1): a failed popup first engage (no saved intent) drops the 2 s timer the
+    /// engage armed; with saved intent (a later commit failing) the timer stays.
+    @MainActor
+    func testFailedFirstEngageDropsTheReclaimTimer() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+        Preferences.fanManualEnabled = false
+        FanControlHelper.armRecoveryLifecycle()
+        FanControlHelper.firstEngageFailed()
+        XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
+
+        Preferences.fanManualEnabled = true
+        FanControlHelper.armRecoveryLifecycle()
+        FanControlHelper.firstEngageFailed()
+        XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
+        Preferences.fanManualEnabled = false
+        await FanControlHelper.resetAll(teardown: true)
+    }
+
+    /// #221 (3): a failed reclaim re-apply holds the next attempt for 30 s.
+    @MainActor
+    func testFailedReapplyCoolsDownForThirtySeconds() {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent
+            FanControlHelper.deferReclaimRetry(now: .distantPast)
+        }
+        Preferences.fanManualEnabled = true
+        let t = Date()
+        XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: t))
+        FanControlHelper.deferReclaimRetry(now: t)
+        XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(29)))
+        XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(FanReclaimRecovery.retryCooldown)))
+        XCTAssertEqual(FanReclaimRecovery.retryCooldown, 30)
+    }
+
     func testReclaimKeepsEligibleIntentAcrossFailedRetry() {
         XCTAssertEqual(FanReclaimRecovery.disposition(manualFraction: 0.19, reengaged: true), .abandonManualIntent)
         XCTAssertEqual(FanReclaimRecovery.disposition(manualFraction: 0.20, reengaged: true), .restored)
