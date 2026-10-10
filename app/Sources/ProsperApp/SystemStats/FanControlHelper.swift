@@ -249,10 +249,12 @@ enum FanControlHelper {
     /// the helper pinned the fan anyway. With manual off nothing else will release it
     /// (the reclaim re-apply has no popup late-engage guard), so `release` here (#269).
     /// Also release while sleeping: willSleep already reset the fans and wake re-applies (#275).
+    /// Held while another engage is in flight, like the popup late path: it owns the fans (#282).
     static func lateEngageLanded(_ engaged: Bool,
                                  sleeping: Bool = Self.sleeping,
+                                 inFlight: Int = Self.engagesInFlight,
                                  release: @escaping @MainActor () async -> Void = { await resetAll(teardown: true) }) {
-        if engaged, !Preferences.fanManualEnabled || sleeping { Task { await release() } }
+        if engaged, inFlight == 0, !Preferences.fanManualEnabled || sleeping { Task { await release() } }
     }
 
     /// Hand one fan back to OS thermal control (other fans unaffected). Honors the
@@ -511,7 +513,7 @@ enum FanControlHelper {
     }
 
     /// The helper's own reply, or nil when it never answered (XPC error / no proxy / timeout).
-    private static func callReply(_ c: NSXPCConnection,
+    static func callReply(_ c: NSXPCConnection,
                                   timeout: TimeInterval = 12,
                                   late: (@Sendable (Bool) -> Void)? = nil,
                                   _ body: @escaping (ProsperHelperProtocol, @escaping @Sendable (Bool) -> Void) -> Void) async -> Bool? {

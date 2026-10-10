@@ -97,6 +97,49 @@ final class FanReclaimRecoveryTests: XCTestCase {
         await fulfillment(of: [kept], timeout: 0.3)
     }
 
+    /// A late engage landing while the popup's first engage is in flight is held:
+    /// manual is still off then, but that engage owns the fans (#282).
+    @MainActor
+    func testLateEngageHeldWhileEngageInFlight() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+        Preferences.fanManualEnabled = false
+        let kept = expectation(description: "no release")
+        kept.isInverted = true
+        FanControlHelper.lateEngageLanded(true, sleeping: false, inFlight: 1, release: { kept.fulfill() })
+        await fulfillment(of: [kept], timeout: 0.3)
+    }
+
+    /// callReply wiring: the first reply resumes the continuation, a second
+    /// (late) one goes to `late` exactly once with its value, never the first (#282).
+    func testCallReplyRoutesLateReplyToLateHook() async {
+        final class Proxy: NSObject, ProsperHelperProtocol {
+            func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) {}
+            func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void) {}
+            func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void) {}
+            func clearRemoteSession(withReply reply: @escaping (Bool) -> Void) {}
+            func sleepNow(withReply reply: @escaping (Bool) -> Void) {}
+            func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) {}
+            func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) {}
+            func resetAllFans(withReply reply: @escaping (Bool) -> Void) {}
+        }
+        final class Conn: NSXPCConnection {
+            override func remoteObjectProxyWithErrorHandler(_ handler: @escaping (Error) -> Void) -> Any { Proxy() }
+        }
+        let late = expectation(description: "late hook once")
+        let lateValue = LockedBox()
+        let result = await FanControlHelper.callReply(Conn(), timeout: 5, late: { ok in
+            lateValue.set(ok); late.fulfill()
+        }) { _, done in
+            done(true)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { done(false) }
+        }
+        XCTAssertEqual(result, true)   // a second resume would crash the checked continuation
+        await fulfillment(of: [late], timeout: 1)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(lateValue.get(), [false])
+    }
+
     /// Asleep, a late engage is released even with manual on (#275).
     @MainActor
     func testLateEngageDuringSleepReleasesWithManualOn() async {
@@ -337,4 +380,10 @@ final class FanManualReplyTests: XCTestCase {
         XCTAssertEqual(FanManualReply.combine([.engaged, .unavailable]), .unavailable)
         XCTAssertEqual(FanManualReply.combine([.engaged, .engaged]), .engaged)
     }
+}
+
+private final class LockedBox: @unchecked Sendable {
+    private let lock = NSLock(); private var v: [Bool] = []
+    func set(_ b: Bool) { lock.lock(); v.append(b); lock.unlock() }
+    func get() -> [Bool] { lock.lock(); defer { lock.unlock() }; return v }
 }
