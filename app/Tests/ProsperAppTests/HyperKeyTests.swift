@@ -312,8 +312,13 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
     }
 
     /// #369 D: a TERM-ignoring child is SIGKILLed through its process group and reaped
-    /// before the runner returns. #382: no backgrounded grandchild — with one, the row
-    /// caught a broken kill path only 5 of 10 runs (QA #187); this shape catches it 10 of 10.
+    /// before the runner returns. The sleep is a deliberate grandchild: /bin/sh is bash, and
+    /// bash does not exec the last command while a trap is set, so sleep runs as a child of
+    /// the sh leader. That is what catches a leader-only kill: the leader is gone but the
+    /// sleep survives, so killpg(r.pid, 0) still answers 0. Do not change the script to
+    /// `exec /bin/sleep` — that removes the grandchild and a leader-only kill would pass.
+    /// The earlier shape (#369 D) had an explicitly backgrounded grandchild plus an exec'd
+    /// one and caught the broken kill path only 5 of 10 runs (QA #187); #382's shape, 10 of 10.
     func testTermIgnoringGroupIsKilledAndReaped() {
         let r = sh(#"trap "" TERM; /bin/sleep 612"#, timeout: 0.3)
         XCTAssertGreaterThan(r.pid, 1)
@@ -323,8 +328,8 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
         let rc = kill(r.pid, 0), err = errno
         XCTAssertEqual(rc, -1, "child must be killed and reaped")
         XCTAssertEqual(err, ESRCH)
-        // errno is not asserted: Darwin answers EPERM, not ESRCH, for a zombie-only group.
         XCTAssertEqual(killpg(r.pid, 0), -1, "no member of the child's group may survive")
+        // killpg probe: errno is not asserted — Darwin answers EPERM, not ESRCH, for a zombie-only group.
     }
 
     /// #369 D: SIGTERM goes first — a cooperative child gets to run its TERM trap.
