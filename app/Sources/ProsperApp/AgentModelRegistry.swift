@@ -176,7 +176,8 @@ enum AgentModelRegistry {
     static let recommendedId = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
 
     /// This Mac's RAM in GB, same decimal conversion as the settings pane's warning.
-    static var physicalMemoryGB: Int { Int(ProcessInfo.processInfo.physicalMemory / 1_000_000_000) }
+    /// Test seam (#366): settable so tests can pin the RAM tier; no production caller writes it.
+    nonisolated(unsafe) static var physicalMemoryGB: Int = Int(ProcessInfo.processInfo.physicalMemory / 1_000_000_000)
 
     /// Default agent model for a Mac with `gb` of RAM (#332): `recommendedId` once its
     /// floor fits, else the largest built-in row whose floor fits. Below every floor,

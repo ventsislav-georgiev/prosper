@@ -270,6 +270,22 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertNil(d.object(forKey: key))
     }
 
+    /// #366: the unset and unknown cases follow the RAM seam, not a fixed id.
+    func testAgentModelFollowsPhysicalMemorySeam() {
+        let d = Preferences.defaults, key = "agentModel"
+        let saved = d.object(forKey: key), savedGB = AgentModelRegistry.physicalMemoryGB
+        defer { d.set(saved, forKey: key); AgentModelRegistry.physicalMemoryGB = savedGB }
+        d.removeObject(forKey: key)
+        for (gb, want) in [(8, "unsloth/Qwen3.5-4B-GGUF"), (16, "unsloth/Qwen3.5-9B-GGUF"), (32, AgentModelRegistry.recommendedId)] {
+            AgentModelRegistry.physicalMemoryGB = gb
+            XCTAssertEqual(Preferences.agentModel, want, "\(gb) GB")
+        }
+        XCTAssertNil(d.object(forKey: key))
+        d.set("gone/unknown", forKey: key)
+        AgentModelRegistry.physicalMemoryGB = 16
+        XCTAssertEqual(Preferences.agentModel, "unsloth/Qwen3.5-9B-GGUF")
+    }
+
     /// #340: healAgentModelMirror re-reads the healed id without writing it, and the
     /// persist guard is released afterwards so a later user pick still persists.
     @MainActor
