@@ -940,7 +940,8 @@ final class AgentController {
     /// Verify → extract → strip quarantine → ad-hoc sign → move into `dest` → prune older
     /// pins. The tarball is deleted on every path. Signing happens in the temp dir and its
     /// rc is checked, so a failed sign never leaves an unsigned binary at the pinned path;
-    /// any failure leaves `dest` untouched. `sign` is a test seam returning the rc.
+    /// any failure leaves `dest` untouched, and the swap into `dest` is one rename(2).
+    /// `sign` is a test seam returning the rc.
     nonisolated static func installCodex(
         tgz: URL, sha256 expected: String?, dest: URL,
         sign: (URL) -> Int32 = { run("/usr/bin/codesign", ["--force", "--sign", "-", $0.path]) }
@@ -980,12 +981,22 @@ final class AgentController {
 
         try FileManager.default.createDirectory(
             at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.removeItem(at: dest) }
-        try FileManager.default.moveItem(at: bin, to: dest)
-        // Drop earlier pins' binaries (the unversioned `codex`, older `codex-rust-v*`).
+        // Stage next to `dest` (the temp dir may be another volume, where a move is a copy
+        // that a crash can leave half-written), then rename(2) over it: atomic on one volume,
+        // so `dest` is always either the old binary or the whole new one, never missing/partial.
         let dir = dest.deletingLastPathComponent()
+        let staged = dir.appendingPathComponent(".\(dest.lastPathComponent).\(UUID().uuidString)")
+        try FileManager.default.moveItem(at: bin, to: staged)
+        guard rename(staged.path, dest.path) == 0 else {
+            let err = errno
+            try? FileManager.default.removeItem(at: staged)
+            throw HarnessError.spawnFailed("codex install rename failed (errno \(err))")
+        }
+        // Drop earlier pins' binaries (the unversioned `codex`, older `codex-rust-v*`) and
+        // any staging file a crash left behind.
         for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        where (name == "codex" || name.hasPrefix("codex-rust-v")) && name != dest.lastPathComponent {
+        where (name == "codex" || name.hasPrefix("codex-rust-v") || name.hasPrefix(".codex-"))
+            && name != dest.lastPathComponent {
             try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
         }
         return dest

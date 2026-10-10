@@ -1054,22 +1054,24 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(Preferences.defaults.string(forKey: key), "on-failure")
     }
 
-    /// A local release-shaped tarball (`codex-<triple>` inside) plus its SHA-256, and an
-    /// install dir holding a stale pin, the unversioned `codex`, and an unrelated file.
-    private static func makeCodexTarball() throws -> (dir: URL, tgz: URL, digest: String, dest: URL) {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("codex-install-\(UUID().uuidString)")
-        let src = dir.appendingPathComponent("src"), install = dir.appendingPathComponent("install")
+    /// A local release-shaped tarball (`codex-<triple>` inside, 0644 so the installer's chmod
+    /// is what makes it executable) plus its SHA-256, and an install dir holding a stale pin,
+    /// the unversioned `codex`, and an unrelated file. Pass `dir` to build into an existing one.
+    private static func makeCodexTarball(body: String = "#!/bin/sh\necho new\n", in existing: URL? = nil)
+        throws -> (dir: URL, tgz: URL, digest: String, dest: URL) {
+        let dir = existing ?? FileManager.default.temporaryDirectory.appendingPathComponent("codex-install-\(UUID().uuidString)")
+        let src = dir.appendingPathComponent("src-\(UUID().uuidString)"), install = dir.appendingPathComponent("install")
         for d in [src, install] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
         FileManager.default.createFile(atPath: src.appendingPathComponent("codex-aarch64-apple-darwin").path,
-                                       contents: Data("#!/bin/sh\necho new\n".utf8),
-                                       attributes: [.posixPermissions: 0o755])
-        let tgz = dir.appendingPathComponent("codex.tar.gz")
+                                       contents: Data(body.utf8),
+                                       attributes: [.posixPermissions: 0o644])
+        let tgz = dir.appendingPathComponent("codex-\(UUID().uuidString).tar.gz")
         let tar = Process()
         tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
         tar.arguments = ["-czf", tgz.path, "-C", src.path, "codex-aarch64-apple-darwin"]
         try tar.run(); tar.waitUntilExit()
         XCTAssertEqual(tar.terminationStatus, 0)
-        for name in ["codex", "codex-rust-v0.139.0", "other"] {
+        for name in ["codex", "codex-rust-v0.139.0", "other"] where existing == nil {
             FileManager.default.createFile(atPath: install.appendingPathComponent(name).path, contents: Data("old".utf8))
         }
         let digest = SHA256.hash(data: try Data(contentsOf: tgz)).map { String(format: "%02x", $0) }.joined()
@@ -1086,7 +1088,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                                                    sign: { signed.append($0); return 0 })
         XCTAssertEqual(out, dest)
         XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "#!/bin/sh\necho new\n")
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: dest.path))
+        XCTAssertEqual(try Self.mode(dest), 0o755, "the 0644 tarball binary was not chmodded 0755")
         XCTAssertEqual(signed.count, 1)
         XCTAssertNotEqual(signed.first?.deletingLastPathComponent(), dest.deletingLastPathComponent(),
                           "signed at the pinned path instead of the temp dir")
@@ -1108,7 +1110,32 @@ final class CodexHarnessE2ETests: XCTestCase {
             XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: install.path).sorted(), before,
                            "\(label) touched the install dir")
             XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path), "\(label) left a binary at the pin")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: tgz.path), "\(label) left the tarball behind")
         }
+    }
+
+    /// #308: installing over an existing pin (the 0644 re-download path) replaces its bytes,
+    /// lands 0755, and prunes a staging file an earlier crash left behind.
+    func testInstallCodexOverExistingDestReplacesIt() throws {
+        let (dir, tgz, digest, dest) = try Self.makeCodexTarball()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        _ = try AgentController.installCodex(tgz: tgz, sha256: digest, dest: dest, sign: { _ in 0 })
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: dest.path)
+        // A staging file a crash between move and rename left behind.
+        FileManager.default.createFile(atPath: dest.deletingLastPathComponent()
+            .appendingPathComponent(".codex-rust-v0.162.1.crashed").path, contents: Data("partial".utf8))
+        let second = try Self.makeCodexTarball(body: "#!/bin/sh\necho newer\n", in: dir)
+        XCTAssertEqual(second.dest, dest)
+        _ = try AgentController.installCodex(tgz: second.tgz, sha256: second.digest, dest: dest, sign: { _ in 0 })
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "#!/bin/sh\necho newer\n")
+        XCTAssertEqual(try Self.mode(dest), 0o755)
+        let left = try FileManager.default.contentsOfDirectory(atPath: dest.deletingLastPathComponent().path).sorted()
+        XCTAssertEqual(left, ["codex-rust-v0.162.1", "other"], "a staging file or stale pin was left behind")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.tgz.path))
+    }
+
+    private static func mode(_ url: URL) throws -> Int {
+        (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue ?? -1
     }
 
     /// #250: Stop during the first-use codex download abandons the run once the download
