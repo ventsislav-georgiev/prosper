@@ -117,7 +117,9 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: the coding agent's approval card can no longer be fooled by a command that hides
   its tail behind newlines or bidi overrides.** The command shown for approval is now one
   escaped line, as the file and permission summaries already were, and invisible filler
-  characters such as Hangul fillers or variation selectors are shown escaped.
+  characters such as Hangul fillers or variation selectors are shown escaped. A long command is
+  shown in full in a scrollable box, with a character-count cue when it runs past the box, and
+  whitespace padding is shown as a count (`␠×400`) instead of blank space.
 - **Fixed: the Window extension no longer shrinks a window to nothing when macOS reports an
   invalid frame for it.** The action now stops as if no window were focused.
 - **Fixed: extension timers restored from a corrupted saved schedule no longer crash Prosper at

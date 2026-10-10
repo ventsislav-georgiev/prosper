@@ -75,6 +75,14 @@ struct ApprovalRequest: Sendable {
     let summary: String
     /// Backend-specific detail (e.g. the full command argv, the unified diff).
     let detail: String?
+
+    /// The card's cue under a `.command` summary that may overflow its fixed scroll box, so the
+    /// user knows there is more than the visible lines before approving.
+    // ponytail: a char-count guess (the box holds ~10 lines of ~30+ monospaced caption chars at
+    // the narrowest card); measure the laid-out text if the cue shows too early or too late.
+    var overflowNote: String? {
+        kind == .command && summary.count > 300 ? "\(summary.count) characters — scroll to read all of it" : nil
+    }
 }
 
 // MARK: - Event payloads

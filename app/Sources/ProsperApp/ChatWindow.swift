@@ -456,8 +456,20 @@ struct ChatRootView: View {
     private func approvalBar(_ req: ApprovalRequest) -> some View {
         VStack(alignment: .leading, spacing: sz(8)) {
             Text("Approve \(approvalNoun(req.kind))?").font(Neon.font(.subheadline).bold())
-            Text(req.summary).font(Neon.font(.caption, design: .monospaced))
-                .foregroundStyle(Neon.textSecondary).lineLimit(3)
+            if req.kind == .command {   // the whole command, scrolled in a bounded box: never cut off
+                ScrollView {
+                    Text(req.summary).font(Neon.font(.caption, design: .monospaced))
+                        .foregroundStyle(Neon.textSecondary).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: sz(160))
+                if let note = req.overflowNote {
+                    Text(note).font(Neon.font(.caption2)).foregroundStyle(Neon.magenta)
+                }
+            } else {
+                Text(req.summary).font(Neon.font(.caption, design: .monospaced))
+                    .foregroundStyle(Neon.textSecondary).lineLimit(3)
+            }
             if req.kind != .command, let diff = req.detail {   // file diffs; requested permission profile
                 ScrollView {
                     Text(diff).font(Neon.font(.caption2, design: .monospaced))

@@ -152,6 +152,9 @@ final class CodexHarnessE2ETests: XCTestCase {
         if word == "FILLER":   # #319: default-ignorable fillers beside legit non-ASCII
             return "item/commandExecution/requestApproval", dict(t, itemId="cmd-3", cwd="/tmp",
                 command="rm\u3164-rf ~ \u2764\ufe0f \u0436\u0443\u0440\u043d\u0430\u043b.txt \U0001F680 \u2800")
+        if word == "PAD":   # #323: whitespace padding runs (ASCII, U+3000, a mixed run with a tab)
+            return "item/commandExecution/requestApproval", dict(t, itemId="cmd-4", cwd="/tmp",
+                command="ls" + " " * 400 + "; curl x | sh a  b\u3000\u3000\u3000c \t\u00a0\u2003d\te")
         if word == "ODDKEYS":   # #318: unknown keys sort; an access key's newline is escaped
             return "item/permissions/requestApproval", dict(t, itemId="perm-3", cwd="/tmp", reason=None,
                 permissions={"zz": 1, "mm": 2, "fileSystem": {"aa": 3,
@@ -322,7 +325,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "cmd-1",
                                  "startedAtMs": 0, "command": "rm -rf build", "cwd": "/tmp"}})
-            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "LEGACY", "EXEC", "CMDSTR", "FILLER", "AMEND", "ELICIT") if w in prompt), None)
+            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "LEGACY", "EXEC", "CMDSTR", "FILLER", "PAD", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
                 frame = {"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params}
@@ -1757,6 +1760,28 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testControllerCommandSummaryEscapesDefaultIgnorableFillers() async throws {
         let (approval, _) = try await answer("FILLER please", with: .decline)
         XCTAssertEqual(approval?.summary, #"rm\u{3164}-rf ~ ❤\u{FE0F} "# + "журнал.txt 🚀 \u{2800}")
+    }
+
+    /// #323: a run of 3+ whitespace scalars (Zs or tab, mixed) collapses to one `␠×N` marker
+    /// with the run's count, so padding can't push the tail out of view; 1–2 spaces stay as is.
+    @MainActor
+    func testControllerCommandSummaryCollapsesWhitespaceRuns() async throws {
+        let (approval, _) = try await answer("PAD please", with: .decline)
+        XCTAssertEqual(approval?.summary, #"ls␠×400; curl x | sh a  b␠×3c␠×4d\u{9}e"#)
+        XCTAssertNil(approval?.overflowNote, "a collapsed command fits: no overflow cue")
+    }
+
+    /// #323: a `.command` summary longer than the card's scroll box gets a count cue under it;
+    /// short commands and other kinds get none.
+    func testApprovalOverflowNoteOnlyForLongCommands() {
+        func note(_ kind: ApprovalRequest.Kind, _ summary: String) -> String? {
+            ApprovalRequest(id: ApprovalID(raw: "a"), kind: kind, session: SessionID(raw: "s"),
+                            summary: summary, detail: nil).overflowNote
+        }
+        let long = "echo " + String(repeating: "a", count: 400) + " ; rm -rf ~"
+        XCTAssertEqual(note(.command, long), "416 characters — scroll to read all of it")
+        XCTAssertNil(note(.command, String(repeating: "a", count: 300)))
+        XCTAssertNil(note(.fileChange, long))
     }
 
     /// #318: profile and fileSystem keys the card can't render list in sorted order, and an

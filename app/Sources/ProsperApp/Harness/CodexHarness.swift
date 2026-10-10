@@ -666,12 +666,27 @@ actor CodexHarness: CodingHarness {
     /// Wire text on one card line: an embedded newline must not forge extra card lines, and
     /// a control (Cc: C0, DEL, C1), a format scalar (bidi override, zero-width) or another
     /// default-ignorable one (Hangul filler, variation selector) shows as `\u{…}` rather than
-    /// reordering or hiding what is granted.
+    /// reordering or hiding what is granted. A run of 3 or more whitespace scalars (any Zs —
+    /// space, U+00A0, U+2003, U+3000 — or tab, mixed freely) becomes one `␠×N` marker with the
+    /// run's total scalar count, so padding can't push a command's tail out of view; a single
+    /// or double space is left alone (a lone tab still escapes as `\u{9}`).
     private static func oneLine(_ s: String) -> String {
-        s.components(separatedBy: .newlines).joined(separator: "\\n").unicodeScalars.map { u in
+        let escape = { (u: Unicode.Scalar) in
             [.control, .format].contains(u.properties.generalCategory) || u.properties.isDefaultIgnorableCodePoint
                 ? "\\u{\(String(u.value, radix: 16, uppercase: true))}" : String(u)
-        }.joined()
+        }
+        var out = "", run: [Unicode.Scalar] = []
+        func flush() {
+            out += run.count >= 3 ? "␠×\(run.count)" : run.map(escape).joined()
+            run = []
+        }
+        for u in s.components(separatedBy: .newlines).joined(separator: "\\n").unicodeScalars {
+            if u == "\t" || u.properties.generalCategory == .spaceSeparator { run.append(u); continue }
+            flush()
+            out += escape(u)
+        }
+        flush()
+        return out
     }
 
     /// Notification → zero or more `HarnessEvent`s. Empty for notifications we don't
