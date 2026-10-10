@@ -248,4 +248,113 @@ final class ScrollChainTests: XCTestCase {
         XCTAssertEqual(outer.contentView.bounds.origin, paneBefore,
                        "the pane moved once the list hit its top")
     }
+
+    // MARK: - #162: one gesture, one owner
+
+    /// A trackpad-style event bound to `win` at `point` (window coordinates), with
+    /// the CG scroll phase (99: 1 began, 2 changed, 4 ended) and momentum phase
+    /// (123: 1 begin, 2 continue, 3 end) set the way a real trackpad sets them.
+    private func gestureEvent(_ win: NSWindow, at point: NSPoint, deltaY: Int32,
+                              phase: Int64 = 0, momentum: Int64 = 0) throws -> NSEvent {
+        let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                       wheelCount: 1, wheel1: deltaY, wheel2: 0, wheel3: 0))
+        cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+        cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentum)
+        cg.setIntegerValueField(try XCTUnwrap(CGEventField(rawValue: 51)), value: Int64(win.windowNumber))
+        typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
+        let sym = try XCTUnwrap(dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGEventSetWindowLocation"))
+        unsafeBitCast(sym, to: SetWindowLocation.self)(cg, CGPoint(x: point.x, y: win.frame.height - point.y))
+        let e = try XCTUnwrap(NSEvent(cgEvent: cg))
+        XCTAssertTrue(e.window === win, "precondition: the event must resolve to the test window")
+        return e
+    }
+
+    private struct Step { var at: NSPoint; var phase: Int64 = 0; var momentum: Int64 = 0 }
+
+    /// A whole trackpad sequence as the monitor sees it: `.began`, `.changed`s,
+    /// `.ended`, then a momentum tail. Returns what `capture` said for each event.
+    private func gesture(_ win: NSWindow, from start: NSPoint, to end: NSPoint, deltaY: Int32) throws -> [Bool] {
+        var steps = [Step(at: start, phase: 1), Step(at: start, phase: 2)]
+        steps += Array(repeating: Step(at: end, phase: 2), count: 5)
+        steps += [Step(at: end, phase: 4), Step(at: end, momentum: 1), Step(at: end, momentum: 2), Step(at: end, momentum: 3)]
+        return try steps.map { s in
+            ScrollChainCapture.capture(try gestureEvent(win, at: s.at, deltaY: deltaY, phase: s.phase, momentum: s.momentum))
+        }
+    }
+
+    private func panePoint(_ hosted: NSView, clearOf inner: NSScrollView) -> NSPoint {
+        let p = NSPoint(x: 8, y: hosted.bounds.maxY - 8)
+        XCTAssertFalse(ScrollChainCapture.shouldCapture(at: p, in: inner), "precondition: pane point is off the list")
+        return p
+    }
+
+    /// QA #2 r2 handoff: a pane swipe brings a list under the pointer mid-gesture.
+    /// The pane began the gesture, so it must get every event to the end of the
+    /// momentum tail — otherwise it never sees `.ended` and resumes on its own
+    /// (279.5 pt of drift over the list). Synthetic events do not drive the pane's
+    /// own NSScrollView in this host, so the pane half is asserted by routing:
+    /// `capture == false` is the monitor passing the event on to the pane.
+    func testGestureBegunOverThePaneStaysWithThePaneWhenAListArrivesUnderThePointer() throws {
+        let (win, hosted, _, inner) = try host(rowCount: 200)
+        let listBefore = inner.contentView.bounds.origin.y
+
+        let routed = try gesture(win, from: panePoint(hosted, clearOf: inner), to: windowPointInside(inner), deltaY: -40)
+
+        XCTAssertEqual(routed, Array(repeating: false, count: routed.count),
+                       "the list took over part of a gesture the pane began — the pane never sees .ended")
+        XCTAssertEqual(inner.contentView.bounds.origin.y, listBefore, accuracy: 0.01,
+                       "the list scrolled during a gesture it did not begin")
+    }
+
+    /// The mirror: a gesture begun over a list keeps scrolling that list, and never
+    /// the pane, after the pointer leaves it — the pane must not get `.changed`
+    /// without ever having seen `.began`.
+    func testGestureBegunOverAListStaysWithTheListWhenThePointerLeavesIt() throws {
+        let (win, hosted, outer, inner) = try host(rowCount: 200)
+        let paneBefore = outer.contentView.bounds.origin
+        let listBefore = inner.contentView.bounds.origin.y
+
+        let routed = try gesture(win, from: windowPointInside(inner), to: panePoint(hosted, clearOf: inner), deltaY: -40)
+
+        XCTAssertEqual(routed, Array(repeating: true, count: routed.count),
+                       "part of a list gesture leaked to the pane once the pointer left the list")
+        XCTAssertGreaterThan(inner.contentView.bounds.origin.y, listBefore + 40 * 7 - 0.01,
+                             "the list stopped taking its own gesture when the pointer left it")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(outer.contentView.bounds.origin, paneBefore, "the pane moved during a list gesture")
+    }
+
+    /// The latch is per gesture, not sticky: a notched wheel (no phase) still
+    /// decides per event, and the next gesture's `.began` decides afresh.
+    func testAfterAPaneGestureAPhaselessWheelAndANewGestureOverTheListScrollIt() throws {
+        let (win, hosted, _, inner) = try host(rowCount: 200)
+        let list = windowPointInside(inner)
+        _ = try gesture(win, from: panePoint(hosted, clearOf: inner), to: list, deltaY: -40)
+        let listBefore = inner.contentView.bounds.origin.y
+
+        XCTAssertTrue(ScrollChainCapture.capture(try gestureEvent(win, at: list, deltaY: -40)),
+                      "a phaseless wheel event over the list obeyed the previous gesture's latch")
+        XCTAssertEqual(inner.contentView.bounds.origin.y, listBefore + 40, accuracy: 0.01)
+        XCTAssertTrue(ScrollChainCapture.capture(try gestureEvent(win, at: list, deltaY: -40, phase: 1)),
+                      "a new gesture began over the list but kept the old gesture's owner")
+        XCTAssertEqual(inner.contentView.bounds.origin.y, listBefore + 80, accuracy: 0.01)
+    }
+
+    /// QA on 6114972: `capture` must only consider lists in the EVENT's window. An
+    /// event bound to a second window at the first window's list coordinates (where
+    /// the second window has only a too-short list) must leave the first list alone.
+    func testAnEventInAnotherWindowNeverScrollsThisWindowsList() throws {
+        let (_, _, _, inner) = try host(rowCount: 200)
+        let (other, _, _, otherInner) = try host(rowCount: 3)
+        let point = windowPointInside(inner)
+        XCTAssertFalse(ScrollChainCapture.shouldCapture(at: point, in: otherInner),
+                       "precondition: the other window has nothing to capture at this point")
+        let listBefore = inner.contentView.bounds.origin.y
+
+        XCTAssertFalse(ScrollChainCapture.capture(try gestureEvent(other, at: point, deltaY: -40)),
+                       "an event in another window was consumed on this window's list's behalf")
+        XCTAssertEqual(inner.contentView.bounds.origin.y, listBefore, accuracy: 0.01,
+                       "an event in another window scrolled this window's list")
+    }
 }

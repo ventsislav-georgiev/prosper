@@ -545,6 +545,12 @@ enum ScrollChainCapture {
     /// and must never be scrolled after it does.
     private static let lists = NSHashTable<NSScrollView>.weakObjects()
     private static var monitor: Any?
+    /// #162: who owns the trackpad gesture in flight — the pane, or one list (held
+    /// by identity and looked up in `lists`, so a list that went away mid-gesture is
+    /// never scrolled). Set at the gesture's `.mayBegin`/`.began`, kept through
+    /// `.changed`/`.ended` AND the momentum tail, replaced by the next gesture's start.
+    private enum Latch { case pane, list(ObjectIdentifier) }
+    private static var latch: Latch?
 
     static var registeredCount: Int { lists.allObjects.count }
     static var isMonitoring: Bool { monitor != nil }
@@ -591,6 +597,7 @@ enum ScrollChainCapture {
     }
 
     private static func removeMonitor() {
+        latch = nil
         guard let monitor else { return }
         NSEvent.removeMonitor(monitor)
         self.monitor = nil
@@ -602,11 +609,28 @@ enum ScrollChainCapture {
         // Self-heal: weak entries drop out on their own, so a probe that died
         // without unregistering would otherwise leave the monitor installed.
         if live.isEmpty { removeMonitor(); return false }
+        // #162: a trackpad gesture belongs to whatever was under the pointer when it
+        // began, like native AppKit. Deciding per event split a pane gesture the moment
+        // a list scrolled under the pointer: the pane saw `.began` but never `.ended`
+        // and later resumed the cut-off gesture on its own (QA: up to 279.5 pt of pane
+        // drift over a list). The latch spans the momentum tail too — it is the same
+        // gesture to whoever owned it. Phaseless (notched wheel) events stay per event.
+        let gesture = event.phase != [] || event.momentumPhase != []
+        if gesture, !event.phase.isDisjoint(with: [.mayBegin, .began]) { latch = nil }
+        if gesture, let latch {
+            guard case .list(let id) = latch else { return false }
+            // The owning list is gone: swallow the rest rather than hand the pane a
+            // gesture it never saw begin.
+            if let target = live.first(where: { ObjectIdentifier($0) == id }) { scroll(target, by: event) }
+            return true
+        }
         // The event's coordinates only mean anything in its own window.
-        guard let win = event.window else { return false }
         let point = event.locationInWindow
-        guard let target = live.first(where: { $0.window === win && shouldCapture(at: point, in: $0) })
-        else { return false }
+        let target = event.window.flatMap { win in
+            live.first(where: { $0.window === win && shouldCapture(at: point, in: $0) })
+        }
+        if gesture { latch = target.map { .list(ObjectIdentifier($0)) } ?? .pane }
+        guard let target else { return false }
         scroll(target, by: event)
         return true
     }

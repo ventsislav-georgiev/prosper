@@ -47,6 +47,12 @@ tag from the now-released section and put it on the new top draft.
   them, and clicking their own icon no longer flashes the popover closed and open
   again. A pinned calendar lives outside the session and still closes with one click
   on its icon. Older macOS keeps the previous behaviour.
+- **Fixed: a trackpad swipe on a Settings page jumped the page after a shortcut list
+  slid under the pointer.** Each scroll event used to be routed on its own, so a swipe
+  that started on the page handed its tail to the list and the page later resumed the
+  cut-off gesture by itself. A swipe now stays with whatever it started on, like the
+  rest of macOS: a page swipe keeps scrolling the page even over a list, and a swipe
+  that starts on a list never moves the page.
 - **Fixed: Full Disk Access detection on macOS 27.** The check read the user TCC
   database, which macOS 27 no longer exposes, so on accounts without a Safari bookmarks
   file the extension permission rows stayed on "Grant" with access already given. It now
