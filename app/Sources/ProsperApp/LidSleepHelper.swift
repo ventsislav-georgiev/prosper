@@ -159,7 +159,8 @@ enum LidSleepHelper {
     // registered" → .failed → spurious Login Items popup + cache flicker. The lock
     // makes the second caller re-read the now-healed status (version already stored)
     // and no-op. ponytail: held across the blocking smd IPC (rare, off-main).
-    nonisolated private static let registerLock = NSLock()
+    /// internal (not private) only so the test can hold it and prove sharedRegistration does not wait on it.
+    nonisolated static let registerLock = NSLock()
 
     /// The blocking SMAppService registration logic. OFF-MAIN ONLY (run via the
     /// detached task in `ensureRegistered`). Pure status/register IPC — no UI.

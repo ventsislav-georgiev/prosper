@@ -75,4 +75,20 @@ final class LidSleepHelperRegistrationTests: XCTestCase {
         _ = await caller.value
         XCTAssertEqual(calls.value, 1)
     }
+
+    /// QA #83: the in-flight wait is its own lock, not registerLock (held across the smd IPC).
+    func testSharedRegistrationDoesNotWaitOnRegisterLock() async {
+        let saved = LidSleepHelper.registration
+        defer { LidSleepHelper.registration = saved }
+        let started = DispatchSemaphore(value: 0)
+        LidSleepHelper.registration = { started.signal(); return .failed }
+        let caller: Task<LidSleepHelper.RegisterOutcome, Never> = LidSleepHelper.registerLock.withLock {
+            let t = Task.detached { await LidSleepHelper.sharedRegistration().value }
+            XCTAssertEqual(started.wait(timeout: .now() + 2), .success,
+                           "sharedRegistration must proceed while registerLock is held")
+            return t
+        }
+        let outcome = await caller.value
+        XCTAssertEqual(outcome, .failed, "the registration completes once registerLock is released")
+    }
 }
