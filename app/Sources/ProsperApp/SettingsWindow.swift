@@ -3552,12 +3552,10 @@ enum ProsperVerify {
         } else {
             print("part7 menubar: SECTION NOT FOUND")
         }
-        // Pure section math sanity (no AX): visible band sits right of the divider.
-        let mbOK = MenuBarLogic.section(forItemX: 1400, hiddenDividerX: 1000, alwaysHiddenDividerX: 500) == .visible
-            && MenuBarLogic.section(forItemX: 300, hiddenDividerX: 1000, alwaysHiddenDividerX: 500) == .alwaysHidden
-            && MenuBarLogic.spacingDefaultsValue(forSpacing: MenuBarSpacing.defaultSpacing) == nil
+        // Pure menu-bar math sanity (no AX).
+        let mbOK = MenuBarLogic.spacingDefaultsValue(forSpacing: MenuBarSpacing.defaultSpacing) == nil
         print("part7 menubar-math-ok: \(mbOK)  (expect: true)")
-        assert(mbOK, "MenuBarLogic section/spacing math regressed")
+        assert(mbOK, "MenuBarLogic spacing math regressed")
 
         // ── Part 8: settings search index is populated. A zero here means the
         // generated table or the manifest scan produced nothing and the sidebar

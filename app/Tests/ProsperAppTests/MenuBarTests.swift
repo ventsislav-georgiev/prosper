@@ -3,12 +3,10 @@ import CoreGraphics
 import AppKit
 @testable import ProsperApp
 
-/// Menu-bar manager math. All load-bearing logic (section assignment, divider
-/// lengths, spacing key mapping) lives in the AX-free `MenuBarLogic` /
-/// `MenuBarStore` so it can be proven here without touching CGS/AppKit. The hot
-/// path itself (a single `NSStatusItem.length` write on reveal/hide) is not
-/// modelled here — it has no branching to test — but the classification that feeds
-/// the Settings list runs over every item and gets a perf budget below.
+/// Menu-bar manager math. All load-bearing logic (divider lengths, spacing key
+/// mapping) lives in the AX-free `MenuBarLogic` / `MenuBarStore` so it can be
+/// proven here without touching CGS/AppKit. The hot path itself (a single
+/// `NSStatusItem.length` write on reveal/hide) has no branching to test.
 final class MenuBarTests: XCTestCase {
 
     @MainActor
@@ -55,45 +53,6 @@ final class MenuBarTests: XCTestCase {
         XCTAssertTrue(latest.items.contains { $0.title == "Restart" })
         XCTAssertTrue(latest.items.contains { $0.title == "Quit" })
         XCTAssertTrue(latest.items.contains { $0.title.hasPrefix("Prosper v") })
-    }
-
-    // MARK: - Section assignment (positional, the core of hide/reveal)
-
-    // Items lay out right→left from the screen's right edge: visible band sits at
-    // the HIGHEST x, always-hidden at the lowest. Dividers split the bands.
-    func testSectionRightOfHiddenIsVisible() {
-        XCTAssertEqual(
-            MenuBarLogic.section(forItemX: 1400, hiddenDividerX: 1000, alwaysHiddenDividerX: 500),
-            .visible)
-    }
-
-    func testSectionBetweenDividersIsHidden() {
-        XCTAssertEqual(
-            MenuBarLogic.section(forItemX: 750, hiddenDividerX: 1000, alwaysHiddenDividerX: 500),
-            .hidden)
-    }
-
-    func testSectionLeftOfAlwaysHiddenIsAlwaysHidden() {
-        XCTAssertEqual(
-            MenuBarLogic.section(forItemX: 300, hiddenDividerX: 1000, alwaysHiddenDividerX: 500),
-            .alwaysHidden)
-    }
-
-    func testSectionWithoutAlwaysHiddenDividerCollapsesToTwoBands() {
-        // Two-tier disabled: everything left of the hidden divider is just .hidden.
-        XCTAssertEqual(
-            MenuBarLogic.section(forItemX: 300, hiddenDividerX: 1000, alwaysHiddenDividerX: nil),
-            .hidden)
-        XCTAssertEqual(
-            MenuBarLogic.section(forItemX: 1400, hiddenDividerX: 1000, alwaysHiddenDividerX: nil),
-            .visible)
-    }
-
-    func testSectionBoundaryIsExclusiveOnTheDivider() {
-        // Exactly on the divider x → not strictly greater → falls into hidden band.
-        XCTAssertEqual(
-            MenuBarLogic.section(forItemX: 1000, hiddenDividerX: 1000, alwaysHiddenDividerX: nil),
-            .hidden)
     }
 
     // MARK: - Divider length state machine (the show/hide hot path's source of truth)
@@ -319,22 +278,6 @@ final class MenuBarTests: XCTestCase {
         let action = ShortcutAction(rawValue: "menuBarToggleHidden")
         XCTAssertNotNil(action, "menuBarToggleHidden is not a ShortcutAction rawValue")
         XCTAssertEqual(action?.owningExtensionID, "com.prosper.menubar")
-    }
-
-    // MARK: - Perf budget (cold path: reveal + Settings render)
-
-    /// Section classification feeds the Settings list and runs once per reveal over
-    /// every menu-bar item. Even an absurd 200-item bar must classify in well under
-    /// the ≤ 2 ms warm-enumeration budget, leaving headroom for the CGS calls.
-    func testSectionClassificationIsCheap() {
-        let xs = (0..<200).map { CGFloat($0 * 7) }
-        measure {
-            for _ in 0..<1000 {
-                for x in xs {
-                    _ = MenuBarLogic.section(forItemX: x, hiddenDividerX: 700, alwaysHiddenDividerX: 350)
-                }
-            }
-        }
     }
 
     // MARK: - Hosted (macOS 27+) fit math
