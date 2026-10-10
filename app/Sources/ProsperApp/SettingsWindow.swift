@@ -1406,29 +1406,28 @@ private struct ContextPane: View {
     // Seeded from the last check (not a fresh TCC call per view init, #196);
     // onAppear's refreshPermissions() replaces them off-main. `lastTCC` is a lazy
     // static: ONE synchronous preflight per process, on first open, so the first
-    // render already shows the true grant state (no not-granted → granted flip).
-    @State private var hasScreenPermission = ContextPane.lastTCC.screen
-    @State private var hasAccessibility = ContextPane.lastTCC.ax
+    // render already shows the true grant state (no not-granted → granted flip). Its
+    // generation is static too, so a closed pane's refresh cannot publish last (#236).
+    @State private var hasScreenPermission = ContextPane.lastTCC.value.screen
+    @State private var hasAccessibility = ContextPane.lastTCC.value.ax
     @State private var hasNotifications = false
-    @State private var permGeneration = 0
-    @MainActor private static var lastTCC = (screen: VisionContext.hasScreenRecordingPermission(),
-                                             ax: PermissionsManager.isAccessibilityTrusted())
+    @MainActor private static var lastTCC = GenerationCache(
+        (screen: VisionContext.hasScreenRecordingPermission(),
+         ax: PermissionsManager.isAccessibilityTrusted()))
 
     /// Re-reads every privacy grant. The synchronous TCC preflights run on a detached
     /// task (#196) and publish on the main actor unless a newer refresh started; the
     /// notification authorization is fetched async and applied on the main actor.
     private func refreshPermissions() {
-        permGeneration += 1
-        let gen = permGeneration, generation = $permGeneration
+        let gen = Self.lastTCC.begin()
         let screen = $hasScreenPermission, ax = $hasAccessibility
         Task.detached(priority: .userInitiated) {
             let s = VisionContext.hasScreenRecordingPermission()
             let a = PermissionsManager.isAccessibilityTrusted()
             await MainActor.run {
-                guard generation.wrappedValue == gen else { return }
+                guard ContextPane.lastTCC.publish((s, a), from: gen) else { return }
                 screen.wrappedValue = s
                 ax.wrappedValue = a
-                ContextPane.lastTCC = (s, a)
             }
         }
         Task { @MainActor in hasNotifications = await PermissionsManager.notificationStatus() }
@@ -1460,7 +1459,7 @@ private struct ContextPane: View {
                         // granted); always open the pane so "Open" works either way.
                         _ = PermissionsManager.ensureAccessibilityTrust(prompt: !hasAccessibility)
                         PermissionsManager.openAccessibilitySettings()
-                        hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+                        refreshPermissions()
                     }
                 // Recovery for the ad-hoc-signing "toggle on, still not trusted"
                 // trap: a rebuild's new code signature no longer matches the old
@@ -1484,7 +1483,7 @@ private struct ContextPane: View {
                                 }.value
                                 PermissionsManager.ensureAccessibilityTrust(prompt: true)
                                 PermissionsManager.openAccessibilitySettings()
-                                hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+                                refreshPermissions()
                             }
                         }.buttonStyle(.neon)
                     }
@@ -1498,7 +1497,7 @@ private struct ContextPane: View {
                         // pane so "Open" works even once the grant is in place.
                         if !hasScreenPermission { _ = VisionContext.requestScreenRecordingPermission() }
                         PermissionsManager.openScreenRecordingSettings()
-                        hasScreenPermission = VisionContext.hasScreenRecordingPermission()
+                        refreshPermissions()
                     }
                 NeonDivider()
                 PermissionStatusRow(

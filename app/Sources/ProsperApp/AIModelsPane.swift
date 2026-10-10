@@ -78,13 +78,12 @@ struct AIModelsPane: View {
     /// (`downloads.revision`), a custom model is added/removed (`refresh`), or on appear —
     /// never during a render. Each entry is one `ModelFiles.diskState` walk, run off-main
     /// (#196); the pane shows the last published map until the walk lands.
-    @State private var disk: [String: ModelFiles.DiskState] = AIModelsPane.lastDisk
-    /// Bumped per rebuild; a walk publishes only if no newer rebuild started meanwhile.
-    @State private var diskGeneration = 0
+    @State private var disk: [String: ModelFiles.DiskState] = AIModelsPane.lastDisk.value
     /// Last published disk map, so the pane never renders a wrong "Not downloaded" state
     /// while a walk runs. Seeded by ONE synchronous walk per process, on the first open
-    /// (lazy static); every later appear/refresh walks off-main.
-    @MainActor private static var lastDisk = walk(catalogIDs())
+    /// (lazy static); every later appear/refresh walks off-main. Its generation is static
+    /// too, so a walk from a closed pane instance cannot publish over a newer one (#236).
+    @MainActor private static var lastDisk = GenerationCache(walk(catalogIDs()))
 
     var body: some View {
         NeonScroll {
@@ -345,15 +344,12 @@ struct AIModelsPane: View {
 
     private func rebuildDisk() {
         let ids = Self.catalogIDs()
-        diskGeneration += 1
-        let gen = diskGeneration
-        let state = $disk, generation = $diskGeneration
+        let gen = Self.lastDisk.begin()
+        let state = $disk
         Task.detached(priority: .userInitiated) {
             let m = AIModelsPane.walk(ids)
             await MainActor.run {
-                guard generation.wrappedValue == gen else { return }
-                state.wrappedValue = m
-                AIModelsPane.lastDisk = m
+                if AIModelsPane.lastDisk.publish(m, from: gen) { state.wrappedValue = m }
             }
         }
     }
