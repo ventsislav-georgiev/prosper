@@ -173,11 +173,16 @@ final class ExpandedInterfaceBridge: NSObject {
 
     /// true on macOS 27: the system now opens/closes, so the caller must NOT also
     /// wire button target/action. false below 27: wire target/action as before.
+    // #197: the session API is macOS 27 SDK only; Xcode 26 (Swift 6.2/6.3) builds get the < 27 path everywhere.
     func install(on item: NSStatusItem) -> Bool {
+        #if compiler(>=6.4)
         guard #available(macOS 27, *) else { return false }
         item.expandedInterfaceDelegate = self
         items.add(item)
         return true
+        #else
+        return false
+        #endif
     }
 
     /// We closed (Escape, transient, outside click, an action in the popover) or
@@ -185,14 +190,19 @@ final class ExpandedInterfaceBridge: NSObject {
     /// idempotent. `only`: just that item's session (Stats — another item's may
     /// be about to begin). No-op below 27 or with no live session.
     func cancelSessions(only item: NSStatusItem? = nil) {
+        #if compiler(>=6.4)
         guard #available(macOS 27, *) else { return }
         for i in item.map({ [$0] }) ?? items.allObjects { i.expandedInterfaceSession?.cancel() }
+        #else
+        _ = item
+        #endif
     }
 
     /// Our items' frames, for the dismisser to leave their clicks to the system.
     var itemFrames: [NSRect] { items.allObjects.compactMap { $0.button?.window?.frame } }
 }
 
+#if compiler(>=6.4)
 @available(macOS 27, *)
 extension ExpandedInterfaceBridge: @MainActor NSStatusItemExpandedInterfaceDelegate {
     func statusItem(_ statusItem: NSStatusItem, didBegin _: NSStatusItemExpandedInterfaceSession) {
@@ -203,3 +213,4 @@ extension ExpandedInterfaceBridge: @MainActor NSStatusItemExpandedInterfaceDeleg
         end(statusItem)
     }
 }
+#endif

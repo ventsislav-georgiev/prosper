@@ -139,13 +139,18 @@ final class ExpandedInterfacePolicyTests: XCTestCase {
         let item = NSStatusBar.system.statusItem(withLength: 10)
         defer { NSStatusBar.system.removeStatusItem(item) }
         let bridge = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in })
+        #if compiler(>=6.4)
         if #available(macOS 27, *) {
             XCTAssertTrue(bridge.install(on: item))
             XCTAssertTrue(item.expandedInterfaceDelegate === bridge)
             XCTAssertNil(item.expandedInterfaceSession)
             bridge.cancelSessions()   // no live session: a no-op, must not trap
+            XCTAssertEqual(bridge.itemFrames.count, 1, "the installed item is tracked and has a frame")
         } else {
             XCTAssertFalse(bridge.install(on: item))
         }
+        #else
+        XCTAssertFalse(bridge.install(on: item))
+        #endif
     }
 }
