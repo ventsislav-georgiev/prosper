@@ -129,7 +129,7 @@ tag from the now-released section and put it on the new top draft.
   shown in full in a scrollable box, with a "scroll to read all of it" cue whenever the laid-out
   text is taller than the box (measured, in any script, and against the box's real height, so
   the cue still appears when a small window makes the box shorter). Whitespace padding is shown as a count
-  instead of blank space: `␠×400` for ordinary spaces, `⍽×3` once the run holds a non-breaking
+  instead of blank space: `␠{400}` for ordinary spaces, `⍽{3}` once the run holds a non-breaking
   space, a tab or another unusual space, so padding that is one shell word cannot pass for a
   word break. A Windows line ending in a command shows as one line break, not two. A file diff
   over 256 K characters is cut there with a line

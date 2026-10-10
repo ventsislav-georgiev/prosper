@@ -1939,15 +1939,17 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(CodexHarness.commandSummary(["FOO=bar", "cmd", "a=b"]), "'FOO=bar' cmd a=b")
         XCTAssertEqual(CodexHarness.commandSummary(["printf", ""]), "printf ''")
         XCTAssertEqual(CodexHarness.commandSummary(["echo", "a\nb"]), #"echo 'a\nb'"#)
-        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a" + String(repeating: " ", count: 400) + "b"]), "echo 'a␠×400b'")
+        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a" + String(repeating: " ", count: 400) + "b"]), "echo 'a␠{400}b'")
     }
 
     /// #360: a run with any non-ASCII whitespace (NBSP is one shell word, ASCII spaces split
-    /// words) gets its own `⍽×N` marker; CRLF is one line break, a lone CR still one `\n`.
+    /// words) gets its own `⍽{N}` marker; CRLF is one line break, a lone CR still one `\n`.
     func testCommandSummaryMarksNonASCIIWhitespaceRunsAndCRLF() {
-        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a   b"]), "echo 'a␠×3b'")
-        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a\u{A0}\u{A0}\u{A0}b"]), "echo 'a⍽×3b'")
-        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a \u{A0} b"]), "echo 'a⍽×3b'")
+        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a   b"]), "echo 'a␠{3}b'")
+        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a\u{A0}\u{A0}\u{A0}b"]), "echo 'a⍽{3}b'")
+        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a \u{A0} b"]), "echo 'a⍽{3}b'")
+        XCTAssertEqual(WireText.oneLine("a\t\t\tb"), "a⍽{3}b")   // #372: a tab-only run is not spaces
+        XCTAssertEqual(CodexHarness.commandSummary(["kill", "-9   1"]), "kill '-9␠{3}1'")   // #372: closed marker
         XCTAssertEqual(WireText.oneLine("ls\r\nrm -rf ~"), #"ls\nrm -rf ~"#)
         XCTAssertEqual(WireText.oneLine("ls\rrm -rf ~"), #"ls\nrm -rf ~"#)
     }
@@ -1972,11 +1974,11 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     /// #323: a run of 3+ whitespace scalars (Zs or tab, mixed) collapses to one marker with the
     /// run's count, so padding can't push the tail out of view; 1–2 spaces stay as is. #360:
-    /// `␠×N` for ASCII spaces only, `⍽×N` once the run holds U+3000, NBSP, a tab or the like.
+    /// `␠{N}` for ASCII spaces only, `⍽{N}` once the run holds U+3000, NBSP, a tab or the like.
     @MainActor
     func testControllerCommandSummaryCollapsesWhitespaceRuns() async throws {
         let (approval, _) = try await answer("PAD please", with: .decline)
-        XCTAssertEqual(approval?.summary, CardText.ltr(#"ls␠×400; curl x | sh a  b⍽×3c⍽×4d\u{9}e"#))   // #359: ␠× is non-ASCII
+        XCTAssertEqual(approval?.summary, CardText.ltr(#"ls␠{400}; curl x | sh a  b⍽{3}c⍽{4}d\u{9}e"#))   // #359: ␠ is non-ASCII
     }
 
     /// #318: profile and fileSystem keys the card can't render list in sorted order, and an
