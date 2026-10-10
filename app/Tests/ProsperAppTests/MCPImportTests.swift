@@ -94,6 +94,34 @@ final class MCPImportTests: XCTestCase {
 
     // MARK: Robustness
 
+    func testMalformedTOMLNeverCrashesAndReturnsEmpty() {
+        let cases: [(String, String)] = [
+            ("unterminated string", "[mcp_servers.x]\ncommand = \"npx"),
+            ("unterminated header", "[mcp_servers.x\ncommand = \"npx\""),
+            ("duplicate key", "[mcp_servers.x]\ncommand = \"a\"\ncommand = \"b\""),
+            ("key without value", "[mcp_servers.x]\ncommand ="),
+            ("command is int", "[mcp_servers.x]\ncommand = 5"),
+            ("args is string", "[mcp_servers.x]\ncommand = \"a\"\nargs = \"x\""),
+            ("env is array", "[mcp_servers.x]\ncommand = \"a\"\nenv = [\"a\"]"),
+            ("dotted key vs table", "mcp_servers.x = 1\n[mcp_servers.x]\ncommand = \"a\""),
+            ("open inline table", "mcp_servers = { x = { command = \"x\""),
+            ("control char in string", "[mcp_servers.x]\ncommand = \"a\u{01}b\""),
+            ("1 MiB of [", String(repeating: "[", count: 1 << 20)),
+            ("1 MiB of quote", String(repeating: "\"", count: 1 << 20)),
+            // TOMLDecoder 0.4.5 fix shapes (#322 sign-only int, #323 base prefix, #324 float edge, #332 nested arrays, #331 top-level value)
+            ("sign-only int", "[mcp_servers.x]\ncommand = +"),
+            ("bare base prefix", "[mcp_servers.x]\ncommand = 0x"),
+            ("signed base prefix", "[mcp_servers.x]\ncommand = -0b1"),
+            ("float edge", "[mcp_servers.x]\ncommand = 1e"),
+            ("float trailing dot", "[mcp_servers.x]\ncommand = 1."),
+            ("nested bare array", "[mcp_servers.x]\nargs = [[1, a]]"),
+            ("top-level value", "= 1"),
+        ]
+        for (name, input) in cases {
+            XCTAssertTrue(MCPConfigStore.importServers(from: input).isEmpty, name)
+        }
+    }
+
     func testBrokenJSONReturnsEmpty() {
         XCTAssertTrue(MCPConfigStore.importServers(from: "{ not valid").isEmpty)
         XCTAssertTrue(MCPConfigStore.importServers(from: "").isEmpty)

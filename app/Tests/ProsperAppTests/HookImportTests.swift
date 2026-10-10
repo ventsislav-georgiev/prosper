@@ -65,6 +65,34 @@ final class HookImportTests: XCTestCase {
 
     // MARK: Robustness
 
+    func testMalformedTOMLNeverCrashesAndReturnsEmpty() {
+        let cases: [(String, String)] = [
+            ("unterminated string", "[hooks.PreToolUse]\ncommand = \"npx"),
+            ("unterminated header", "[hooks.PreToolUse\ncommand = \"npx\""),
+            ("duplicate key", "[hooks.PreToolUse]\ncommand = \"a\"\ncommand = \"b\""),
+            ("key without value", "[hooks.PreToolUse]\ncommand ="),
+            ("command is int", "[hooks.PreToolUse]\ncommand = 5"),
+            ("args is string", "[hooks.PreToolUse]\ncommand = \"a\"\nargs = \"x\""),
+            ("env is array", "[hooks.PreToolUse]\ncommand = \"a\"\nenv = [\"a\"]"),
+            ("dotted key vs table", "hooks.PreToolUse = 1\n[hooks.PreToolUse]\ncommand = \"a\""),
+            ("open inline table", "hooks = { PreToolUse = { command = \"x\""),
+            ("control char in string", "[hooks.PreToolUse]\ncommand = \"a\u{01}b\""),
+            ("1 MiB of [", String(repeating: "[", count: 1 << 20)),
+            ("1 MiB of quote", String(repeating: "\"", count: 1 << 20)),
+            // TOMLDecoder 0.4.5 fix shapes (#322 sign-only int, #323 base prefix, #324 float edge, #332 nested arrays, #331 top-level value)
+            ("sign-only int", "[hooks.PreToolUse]\ncommand = +"),
+            ("bare base prefix", "[hooks.PreToolUse]\ncommand = 0x"),
+            ("signed base prefix", "[hooks.PreToolUse]\ncommand = -0b1"),
+            ("float edge", "[hooks.PreToolUse]\ncommand = 1e"),
+            ("float trailing dot", "[hooks.PreToolUse]\ncommand = 1."),
+            ("nested bare array", "[hooks.PreToolUse]\nargs = [[1, a]]"),
+            ("top-level value", "= 1"),
+        ]
+        for (name, input) in cases {
+            XCTAssertTrue(HooksConfigStore.importHooks(from: input).isEmpty, name)
+        }
+    }
+
     func testBrokenInputReturnsEmpty() {
         XCTAssertTrue(HooksConfigStore.importHooks(from: "{ not valid").isEmpty)
         XCTAssertTrue(HooksConfigStore.importHooks(from: "").isEmpty)
