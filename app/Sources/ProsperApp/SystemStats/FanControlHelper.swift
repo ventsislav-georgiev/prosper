@@ -172,6 +172,7 @@ enum FanControlHelper {
     private(set) static var engagesInFlight = 0
     /// Test seam: the teardown-guard test injects a fake connection and in-flight count.
     static func inject(connection c: NSXPCConnection?, engagesInFlight n: Int) { connection = c; engagesInFlight = n }
+    static func inject(sleeping s: Bool) { sleeping = s }
     private static var observersInstalled = false
     private static var reclaimTimer: Timer?
     private static var reclaimReadInFlight = false
@@ -330,9 +331,9 @@ enum FanControlHelper {
         for (index, rpm) in targets {
             guard !sleeping && reclaimGeneration == Self.reclaimGeneration && Preferences.fanManualEnabled else { return false }
             let ok = await engage(index, rpm, first ? firstEngageTimeout : 12)
-            // Automatic landed while this engage was suspended (#277): its reset can reach
-            // the daemon ahead of the pin, so release here — the caller sees false.
-            if ok && !Preferences.fanManualEnabled { _ = await reset(true); return false }
+            // Automatic (#277) or willSleep (#278) landed while this engage was suspended: its
+            // reset can reach the daemon ahead of the pin, so release here — the caller sees false.
+            if ok && (!Preferences.fanManualEnabled || sleeping) { _ = await reset(true); return false }
             reengaged = reengaged && ok
             first = false
         }

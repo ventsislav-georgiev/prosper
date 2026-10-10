@@ -169,6 +169,23 @@ final class FanReclaimRecoveryTests: XCTestCase {
         }
     }
 
+    /// #278: willSleep landing while the engage is suspended — release the pin, report false.
+    @MainActor
+    func testSleepDuringEngageReleasesThePin() async {
+        let previousManualIntent = Preferences.fanManualEnabled, previousTargets = Preferences.fanTargets
+        defer { Preferences.fanManualEnabled = previousManualIntent; Preferences.fanTargets = previousTargets
+                FanControlHelper.inject(sleeping: false) }
+        Preferences.fanTargets = [0: 2000]
+        Preferences.fanManualEnabled = true
+        var resets: [Bool] = []
+        let reengaged = await FanControlHelper.applySavedTargets(
+            reclaimGeneration: FanControlHelper.reclaimGeneration,
+            engage: { _, _, _ in FanControlHelper.inject(sleeping: true); return true },
+            reset: { resets.append($0); return true })
+        XCTAssertEqual(resets, [true])
+        XCTAssertFalse(reengaged)
+    }
+
     /// #221 (3): a failed reclaim re-apply holds the next attempt for 30 s.
     @MainActor
     func testFailedReapplyCoolsDownForThirtySeconds() {
