@@ -4,9 +4,11 @@ import XCTest
 /// #298: a huge finite delay/interval must clamp, not trap in `DispatchTime + Double`.
 final class TimerSchedulerTests: XCTestCase {
     private final class MemoryStore: TimerStore {
-        var dict: [String: Data] = [:]
-        func data(forKey key: String) -> Data? { dict[key] }
-        func set(_ value: Any?, forKey key: String) { dict[key] = value as? Data }
+        // Locked: the scheduler queue writes while waitFor reads from the test thread (#330).
+        private let lock = NSLock()
+        private var dict: [String: Data] = [:]
+        func data(forKey key: String) -> Data? { lock.withLock { dict[key] } }
+        func set(_ value: Any?, forKey key: String) { lock.withLock { dict[key] = value as? Data } }
     }
 
     private let store = MemoryStore()
@@ -42,7 +44,7 @@ final class TimerSchedulerTests: XCTestCase {
             ["extID": "x", "id": "a", "handler": "h", "every": false, "interval": 1e300, "fireAt": 1e300],
             ["extID": "x", "id": "b", "handler": "h", "every": true, "interval": 1e300, "fireAt": 1e300],
         ]
-        store.dict["ext.timers.v1"] = try JSONSerialization.data(withJSONObject: bomb)
+        store.set(try JSONSerialization.data(withJSONObject: bomb), forKey: "ext.timers.v1")
         let s = TimerScheduler(store: store)
         s.restore()
         // Serial queue: once this lands, restore has armed both bombs.
@@ -64,7 +66,7 @@ final class TimerSchedulerTests: XCTestCase {
         let bad: [[String: Any]] = [-1.0, 0.0, -1e308].enumerated().map { i, v in
             ["extID": "x", "id": "r\(i)", "handler": "h", "every": true, "interval": v, "fireAt": 0]
         }
-        store.dict["ext.timers.v1"] = try JSONSerialization.data(withJSONObject: bad)
+        store.set(try JSONSerialization.data(withJSONObject: bad), forKey: "ext.timers.v1")
         let s = TimerScheduler(store: store)
         s.restore()
         s.schedule(extID: "x", id: "sentinel", every: false, seconds: 1, handler: "h")
