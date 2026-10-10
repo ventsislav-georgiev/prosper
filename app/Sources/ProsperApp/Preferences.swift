@@ -1211,7 +1211,8 @@ enum Preferences {
     static var fanTargets: [Int: Double] {
         get {
             let raw = defaults.dictionary(forKey: Keys.fanTargets) as? [String: Double] ?? [:]
-            return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in Int(k).map { ($0, v) } })
+            // #393: only canonical keys; "1", "01" and "+1" all parse to 1 and would trap uniqueKeysWithValues.
+            return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in Int(k).flatMap { String($0) == k ? ($0, v) : nil } })
         }
         set {
             let raw = Dictionary(uniqueKeysWithValues: newValue.map { (String($0.key), $0.value) })

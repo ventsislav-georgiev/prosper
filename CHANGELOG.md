@@ -160,6 +160,9 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: extension timers restored from a corrupted saved schedule no longer crash Prosper at
   launch or fire in a tight loop.** Bad intervals are clamped to the normal 50 ms minimum. A
   schedule that lists the same timer twice keeps the later copy instead of crashing at launch.
+- **Fixed: a hand-edited saved fan speed whose fan index is spelled unusually (`01`, `+1`) no
+  longer crashes Prosper at launch or when the stats popup opens.** Only the plain index
+  Prosper writes is read back; other spellings are ignored.
 - **Fixed: typing a huge number, `inf` or `nan` into an extension's number setting no longer
   crashes Prosper.** Non-numbers fall back to the field's minimum. An extension that declares a
   non-finite bound (`min = inf`, `max = -inf`, `nan`) no longer makes every typed value save as

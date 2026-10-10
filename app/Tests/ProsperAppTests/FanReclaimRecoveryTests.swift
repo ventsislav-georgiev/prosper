@@ -205,6 +205,14 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertNil(FanControlHelper.connection)
     }
 
+    /// #393: a hand-edited plist with "1", "01" and "+1" keys must not trap the getter.
+    func testFanTargetsDropsNonCanonicalKeysInsteadOfTrapping() {
+        let previousTargets = Preferences.fanTargets
+        defer { Preferences.fanTargets = previousTargets }
+        Preferences.defaults.set(["1": 2000.0, "01": 2500.0, "+1": 3000.0, "x": 1.0], forKey: "fanTargets")
+        XCTAssertEqual(Preferences.fanTargets, [1: 2000])
+    }
+
     /// #267: Automatic landing while a re-apply is between fans stops the loop; the
     /// later fans are not pinned again. `engage` is a fake: no helper, no SMC.
     @MainActor
