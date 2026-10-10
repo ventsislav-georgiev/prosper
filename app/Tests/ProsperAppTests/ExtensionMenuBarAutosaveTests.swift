@@ -9,8 +9,8 @@ final class ExtensionMenuBarAutosaveTests: XCTestCase {
         let a = ExtensionMenuBar.autosaveName(extensionID: "openlid", id: "main")
         let b = ExtensionMenuBar.autosaveName(extensionID: "openlid", id: "status")
         XCTAssertNotEqual(a, b)
-        XCTAssertEqual(a, "ProsperExt.openlid.main")
-        XCTAssertEqual(b, "ProsperExt.openlid.status")
+        XCTAssertEqual(a, "ProsperExt:openlid:main")
+        XCTAssertEqual(b, "ProsperExt:openlid:status")
     }
 
     func testSamePairGivesSameNameAcrossCalls() {
@@ -20,6 +20,6 @@ final class ExtensionMenuBarAutosaveTests: XCTestCase {
 
     func testSpacesSlashesAndNonASCIIAreSanitized() {
         XCTAssertEqual(ExtensionMenuBar.autosaveName(extensionID: "my ext/v2", id: "a b/é"),
-                       "ProsperExt.my_ext_v2.a_b__")
+                       "ProsperExt:my_ext_v2:a_b__")
     }
 }

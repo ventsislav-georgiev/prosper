@@ -25,7 +25,8 @@ final class ExtensionMenuBar {
 
     private static func key(_ extID: String, _ id: String) -> String { "\(extID)\u{1}\(id)" }
 
-    /// Stable status-item autosave name per (extension, item), restricted to [A-Za-z0-9._-].
+    /// Stable status-item autosave name per (extension, item), each part cleaned to [A-Za-z0-9._-]
+    /// and joined with ":" (outside that set, so "com.x"+"ext.main" and "com.x.ext"+"main" differ).
     nonisolated static func autosaveName(extensionID: String, id: String) -> String {
         func clean(_ s: String) -> String {
             String(s.unicodeScalars.map { c in
@@ -33,7 +34,7 @@ final class ExtensionMenuBar {
                     ? Character(c) : "_"
             })
         }
-        return "ProsperExt.\(clean(extensionID)).\(clean(id))"
+        return "ProsperExt:\(clean(extensionID)):\(clean(id))"
     }
 
     // MARK: - Menubar (§M)

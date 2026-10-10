@@ -22,6 +22,7 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
         XCTAssertTrue(added, "menubarSet from a background thread never reached main")
         let item = try XCTUnwrap(ExtensionMenuBar.shared.items.first { $0.key.hasPrefix(extID) }?.value)
         XCTAssertEqual(item.menu?.items.count, 2)
+        XCTAssertEqual(item.autosaveName, ExtensionMenuBar.autosaveName(extensionID: extID, id: "x"))
 
         await Task.detached {
             XCTAssertFalse(Thread.isMainThread)
@@ -29,6 +30,13 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
         }.value
         let removed = await waitFor { !self.ownsItem(extID) }
         XCTAssertTrue(removed, "menubarRemove from a background thread never reached main")
+    }
+
+    /// #364: the separator sits outside the cleaned charset, so dotted parts cannot collide.
+    func testAutosaveNameSeparatorIsUnambiguousAndCleans() {
+        XCTAssertNotEqual(ExtensionMenuBar.autosaveName(extensionID: "com.x", id: "ext.main"),
+                          ExtensionMenuBar.autosaveName(extensionID: "com.x.ext", id: "main"))
+        XCTAssertEqual(ExtensionMenuBar.autosaveName(extensionID: "com.x", id: "a b/c"), "ProsperExt:com.x:a_b_c")
     }
 
     /// #295: a scalar payload passes isValidJSONObject([value]) and must serialize as a
