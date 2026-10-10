@@ -34,7 +34,7 @@ final class TimerScheduler: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.prosper.extensions.timers")
     private var entries: [String: Entry] = [:]          // key = "extID\u{1}id"
     private var sources: [String: DispatchSourceTimer] = [:]
-    private let defaults: UserDefaults
+    private let store: TimerStore
     private let log = Logger(subsystem: "com.prosper.app", category: "ext-timers")
 
     private static let persistKey = "ext.timers.v1"
@@ -47,8 +47,8 @@ final class TimerScheduler: @unchecked Sendable {
     /// the app once the registry exists; nil → the fire is dropped (headless/test).
     var deliver: ((String, String, String) -> Void)?
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    init(store: TimerStore = UserDefaults.standard) {
+        self.store = store
     }
 
     private static func key(_ extID: String, _ id: String) -> String { "\(extID)\u{1}\(id)" }
@@ -144,12 +144,19 @@ final class TimerScheduler: @unchecked Sendable {
     private func persistLocked() {
         let list = Array(entries.values)
         guard let data = try? JSONEncoder().encode(list) else { return }
-        defaults.set(data, forKey: Self.persistKey)
+        store.set(data, forKey: Self.persistKey)
     }
 
     private func loadLocked() {
-        guard let data = defaults.data(forKey: Self.persistKey),
+        guard let data = store.data(forKey: Self.persistKey),
               let list = try? JSONDecoder().decode([Entry].self, from: data) else { return }
         entries = Dictionary(uniqueKeysWithValues: list.map { (Self.key($0.extID, $0.id), $0) })
     }
 }
+
+/// Persistence seam for `TimerScheduler`; tests pass an in-memory store (#301).
+protocol TimerStore: AnyObject {
+    func data(forKey: String) -> Data?
+    func set(_ value: Any?, forKey: String)
+}
+extension UserDefaults: TimerStore {}

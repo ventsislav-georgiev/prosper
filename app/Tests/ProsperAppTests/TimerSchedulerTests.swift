@@ -3,18 +3,16 @@ import XCTest
 
 /// #298: a huge finite delay/interval must clamp, not trap in `DispatchTime + Double`.
 final class TimerSchedulerTests: XCTestCase {
-    private var suite: String!
-    private var defaults: UserDefaults!
-
-    override func setUp() {
-        suite = "TimerSchedulerTests.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suite)!
+    private final class MemoryStore: TimerStore {
+        var dict: [String: Data] = [:]
+        func data(forKey key: String) -> Data? { dict[key] }
+        func set(_ value: Any?, forKey key: String) { dict[key] = value as? Data }
     }
 
-    override func tearDown() { defaults.removePersistentDomain(forName: suite) }
+    private let store = MemoryStore()
 
     private func persisted() -> [[String: Any]] {
-        guard let d = defaults.data(forKey: "ext.timers.v1") else { return [] }
+        guard let d = store.data(forKey: "ext.timers.v1") else { return [] }
         return (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] ?? []
     }
 
@@ -28,7 +26,7 @@ final class TimerSchedulerTests: XCTestCase {
     }
 
     func testHugeSecondsClampAndArm() {
-        let s = TimerScheduler(defaults: defaults)
+        let s = TimerScheduler(store: store)
         for (i, secs) in [1e12, 1e308].enumerated() {
             for every in [false, true] {
                 let id = "t\(i)\(every)"
@@ -44,8 +42,8 @@ final class TimerSchedulerTests: XCTestCase {
             ["extID": "x", "id": "a", "handler": "h", "every": false, "interval": 1e300, "fireAt": 1e300],
             ["extID": "x", "id": "b", "handler": "h", "every": true, "interval": 1e300, "fireAt": 1e300],
         ]
-        defaults.set(try JSONSerialization.data(withJSONObject: bomb), forKey: "ext.timers.v1")
-        let s = TimerScheduler(defaults: defaults)
+        store.dict["ext.timers.v1"] = try JSONSerialization.data(withJSONObject: bomb)
+        let s = TimerScheduler(store: store)
         s.restore()
         // Serial queue: once this lands, restore has armed both bombs.
         s.schedule(extID: "x", id: "sentinel", every: false, seconds: 1, handler: "h")

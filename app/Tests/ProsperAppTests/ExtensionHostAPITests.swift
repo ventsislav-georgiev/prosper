@@ -206,7 +206,7 @@ final class ExtensionHostAPITests: XCTestCase {
 
     func testTimerSchedulerOneShotFiresAndIsDurable() {
         let defaults = scratchDefaults("timer-test")
-        let scheduler = TimerScheduler(defaults: defaults)
+        let scheduler = TimerScheduler(store: defaults)
         let fired = expectation(description: "timer fired")
         var got: (String, String, String)?
         scheduler.deliver = { extID, handler, payload in
