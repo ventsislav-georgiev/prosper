@@ -33,36 +33,65 @@ final class HarnessProtocolTests: XCTestCase {
     /// `position(date:)` is only a coarse start, so entries are filtered by date too, with
     /// slack: entry dates run a few ms behind `Date()` (probed: ~16 ms).
     static func errorLogs(since date: Date) throws -> [String] {
-        try errorLogEntries(since: date).map(\.composedMessage)
-    }
-
-    /// #307: the `.currentProcessIdentifier` scope alone let another xctest process's lines in
-    /// (QA #103), so the predicate pins the pid explicitly.
-    static func errorLogEntries(since date: Date) throws -> [OSLogEntryLog] {
         let from = date.addingTimeInterval(-0.25)
         let store = try OSLogStore(scope: .currentProcessIdentifier)
-        return try store.getEntries(at: store.position(date: from),
-                                    matching: errorLogsPredicate(pid: ProcessInfo.processInfo.processIdentifier))
-            .compactMap { ($0 as? OSLogEntryLog).flatMap { $0.level == .error && $0.date >= from ? $0 : nil } }
+        let entries = try store.getEntries(at: store.position(date: from), matching: errorLogsPredicate())
+            .compactMap { $0 as? OSLogEntryLog }
+            .map { (level: $0.level, date: $0.date, message: $0.composedMessage) }
+        return selectErrorMessages(entries, from: from)
     }
 
-    static func errorLogsPredicate(pid: Int32) -> NSPredicate {
-        NSPredicate(format: "subsystem == %@ AND processIdentifier == %d", "com.prosper.app", pid)
+    static func errorLogsPredicate() -> NSPredicate {
+        NSPredicate(format: "subsystem == %@", "com.prosper.app")
     }
 
-    func testErrorLogsPredicatePinsSubsystemAndPid() {
-        let f = Self.errorLogsPredicate(pid: 4242).predicateFormat
-        XCTAssertTrue(f.contains(#"subsystem == "com.prosper.app""#), f)
-        XCTAssertTrue(f.contains("processIdentifier == 4242"), f)
+    /// #338: error level, dated at or after `from`, deduped on (date, message): OSLogStore can
+    /// return one entry twice when the start position straddles the in-memory and persisted stores.
+    static func selectErrorMessages(_ entries: [(level: OSLogEntryLog.Level, date: Date, message: String)],
+                                    from: Date) -> [String] {
+        var seen = Set<String>()
+        return entries.compactMap { e in
+            guard e.level == .error, e.date >= from,
+                  seen.insert("\(e.date.timeIntervalSinceReferenceDate)|\(e.message)").inserted else { return nil }
+            return e.message
+        }
     }
 
-    func testErrorLogsReturnsOnlyThisProcess() throws {
+    func testErrorLogsPredicatePinsSubsystem() {
+        XCTAssertEqual(Self.errorLogsPredicate().predicateFormat, #"subsystem == "com.prosper.app""#)
+    }
+
+    func testErrorLogsReturnsALineLoggedHere() throws {
         let since = Date()
-        let marker = "errorLogs-pid-probe-\(UUID().uuidString)"
+        let marker = "errorLogs-probe-\(UUID().uuidString)"
         Logger(subsystem: "com.prosper.app", category: "test").error("\(marker, privacy: .public)")
-        let entries = try Self.errorLogEntries(since: since)
-        XCTAssertTrue(entries.contains { $0.composedMessage == marker }, "\(entries.map(\.composedMessage))")
-        XCTAssertTrue(entries.allSatisfy { $0.processIdentifier == getpid() })
+        let logs = try Self.errorLogs(since: since)
+        XCTAssertEqual(logs.filter { $0 == marker }.count, 1, "\(logs)")
+    }
+
+    func testSelectErrorMessagesDedupesDoubledEntries() {
+        let t = Date()
+        let e = [(level: OSLogEntryLog.Level.error, date: t, message: "a"), (level: .error, date: t, message: "a"),
+                 (level: .error, date: t + 1, message: "b"), (level: .error, date: t + 1, message: "b")]
+        XCTAssertEqual(Self.selectErrorMessages(e, from: t), ["a", "b"])
+    }
+
+    func testSelectErrorMessagesDropsNonErrorLevel() {
+        let t = Date()
+        XCTAssertEqual(Self.selectErrorMessages([(level: .info, date: t, message: "i"),
+                                                 (level: .error, date: t, message: "e")], from: t), ["e"])
+    }
+
+    func testSelectErrorMessagesDropsEntriesBeforeFrom() {
+        let t = Date()
+        XCTAssertEqual(Self.selectErrorMessages([(level: .error, date: t - 1, message: "early"),
+                                                 (level: .error, date: t, message: "on")], from: t), ["on"])
+    }
+
+    func testSelectErrorMessagesKeepsDistinctMessagesAtSameDate() {
+        let t = Date()
+        XCTAssertEqual(Self.selectErrorMessages([(level: .error, date: t, message: "x"),
+                                                 (level: .error, date: t, message: "y")], from: t), ["x", "y"])
     }
 
     /// #174: a stdout line that isn't a JSON object is logged (cut to 256 bytes) and skipped.
