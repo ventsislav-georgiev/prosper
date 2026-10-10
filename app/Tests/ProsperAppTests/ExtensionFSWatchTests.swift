@@ -9,17 +9,14 @@ import XCTest
 final class ExtensionFSWatchTests: XCTestCase {
     func testWatchDeliversChangedFilePathOnMain() throws {
         let fm = FileManager.default
-        // A per-run directory in the suite's TMPDIR subdirectory (not $TMPDIR's root,
-        // which is slow enough to stretch FSEvents delivery). The test creates and removes it.
-        let dir = fm.temporaryDirectory
-            .appendingPathComponent("prosper-tests/fsw-\(UUID().uuidString)", isDirectory: true).path
-        try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        // A per-run directory under testTempRoot (not $TMPDIR's root, which is slow enough
+        // to stretch FSEvents delivery); tempDir's teardown removes it (#381).
+        let dir = tempDir("fsw").path
         let watcher = ExtensionFSWatch.shared
         let saved = watcher.invoke
         defer {
             watcher.unwatch(extensionID: "test.fsw", path: dir)
             watcher.invoke = saved
-            try? fm.removeItem(atPath: dir)
         }
 
         let fileName = "touched-\(UUID().uuidString).txt"

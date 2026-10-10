@@ -44,10 +44,32 @@ final class PreferencesScratchStoreTests: XCTestCase {
         // #339: never the $TMPDIR root, where each synchronous plist rewrite scales with its size.
         XCTAssertNotEqual(URL(fileURLWithPath: Preferences.scratchSuitePath).deletingLastPathComponent().standardizedFileURL,
                           FileManager.default.temporaryDirectory.standardizedFileURL)
+        // #381: test dirs live in a prosper-tests subdirectory, never the $TMPDIR root itself.
+        XCTAssertNotEqual(testTempRoot.standardizedFileURL, FileManager.default.temporaryDirectory.standardizedFileURL,
+                          "testTempRoot must not be the $TMPDIR root")
+        XCTAssertEqual(testTempRoot.lastPathComponent, "prosper-tests")
         let key = "prosper.scratchProbe.\(UUID().uuidString)"
         Preferences.defaults.set(true, forKey: key)
         defer { Preferences.defaults.removeObject(forKey: key) }
         XCTAssertNil(UserDefaults.standard.object(forKey: key))
+    }
+
+    /// #381 leak detector: a direct child of testTempRoot older than 10 minutes is a leftover
+    /// from a previous run (a dropped tempDir teardown or an unwaited async writer). 10 minutes
+    /// is above any single suite's length (about 2 minutes), so a concurrent or in-flight run's
+    /// live dirs are ignored, and below the gap between QA runs. A bundle-end observer is not
+    /// possible in a SwiftPM test target without a principal class, so this row is the stand-in.
+    /// It deletes nothing: it reports, the operator cleans (OQ-30). No root = pass.
+    func testTempRootHoldsNoStaleEntries() throws {
+        let staleAfter: TimeInterval = 10 * 60
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: testTempRoot.path) else { return }
+        let children = try fm.contentsOfDirectory(at: testTempRoot, includingPropertiesForKeys: [.contentModificationDateKey])
+        let stale = children.filter {
+            let mtime = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            return Date().timeIntervalSince(mtime) > staleAfter
+        }.map(\.lastPathComponent).sorted()
+        XCTAssertEqual(stale, [], "stale entries under \(testTempRoot.path) (leaked by an earlier run)")
     }
 
     /// #342 (#305 M1): `Preferences.defaults` is the suite at `scratchSuitePath`, not just
