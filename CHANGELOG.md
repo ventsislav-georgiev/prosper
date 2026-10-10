@@ -158,7 +158,8 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: an extension's menu bar icon now keeps its position across launches.** Each extension status item is saved under its own name instead of a creation-order slot. The icon moves once to its default spot on the first launch after this update.
 - **Changed: when no coding-agent model has been picked, the agent now defaults to a model that fits this Mac's memory.** Macs with 16 to 31 GB get Qwen3.5-9B instead of the 32 GB Qwen3-Coder-30B, smaller Macs Qwen3.5-4B; 32 GB and up keep the 30B coder. This applies to every Mac that never chose a model, not only fresh installs: a Mac under 32 GB that was running the 30B by default moves to the smaller model. The choice is made per Mac and is never written into the synced setting. Removing the custom model the agent was using no longer resets the synced setting either.
 - **Fixed: extension timers restored from a corrupted saved schedule no longer crash Prosper at
-  launch or fire in a tight loop.** Bad intervals are clamped to the normal 50 ms minimum.
+  launch or fire in a tight loop.** Bad intervals are clamped to the normal 50 ms minimum. A
+  schedule that lists the same timer twice keeps the later copy instead of crashing at launch.
 - **Fixed: typing a huge number, `inf` or `nan` into an extension's number setting no longer
   crashes Prosper.** Non-numbers fall back to the field's minimum. An extension that declares a
   non-finite bound (`min = inf`, `max = -inf`, `nan`) no longer makes every typed value save as

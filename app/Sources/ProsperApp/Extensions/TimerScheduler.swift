@@ -157,7 +157,11 @@ final class TimerScheduler: @unchecked Sendable {
     private func loadLocked() {
         guard let data = store.data(forKey: Self.persistKey),
               let list = try? JSONDecoder().decode([Entry].self, from: data) else { return }
-        entries = Dictionary(uniqueKeysWithValues: list.map { (Self.key($0.extID, $0.id), $0) })
+        // A hand-edited blob can repeat extID+id; the later entry wins and the next persist heals it (#392).
+        entries = Dictionary(list.map { (Self.key($0.extID, $0.id), $0) }, uniquingKeysWith: { _, b in b })
+        if list.count != entries.count {
+            NSLog("prosper: timers — dropped %d duplicate persisted timer(s)", list.count - entries.count)
+        }
     }
 }
 

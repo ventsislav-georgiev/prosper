@@ -53,6 +53,23 @@ final class TimerSchedulerTests: XCTestCase {
         XCTAssertEqual(Set(persisted().compactMap { $0["id"] as? String }), ["a", "b", "sentinel"])
     }
 
+    /// #392: a blob repeating extID+id must not trap Dictionary(uniqueKeysWithValues:) at launch;
+    /// the later entry wins and the next persist writes the duplicate out.
+    func testRestoreWithDuplicatePersistedKeyKeepsLater() throws {
+        let dup: [[String: Any]] = [
+            ["extID": "x", "id": "d", "handler": "h", "every": true, "interval": 100.0, "fireAt": 1e9],
+            ["extID": "x", "id": "d", "handler": "h", "every": true, "interval": 200.0, "fireAt": 1e9],
+        ]
+        store.set(try JSONSerialization.data(withJSONObject: dup), forKey: "ext.timers.v1")
+        let s = TimerScheduler(store: store)
+        s.restore()
+        s.schedule(extID: "x", id: "sentinel", every: false, seconds: 1, handler: "h")
+        XCTAssertNotNil(waitFor("sentinel"))
+        let ds = persisted().filter { $0["id"] as? String == "d" }
+        XCTAssertEqual(ds.count, 1)
+        XCTAssertEqual(ds.first?["interval"] as? Double, 200.0)
+    }
+
     func testClampFloorsBadValuesAndDropsNaN() {
         for v in [-1, 0, -1e308, -Double.infinity, Double.nan] {
             XCTAssertEqual(TimerScheduler.clamp(v, floor: 0.05), 0.05, "\(v)")
