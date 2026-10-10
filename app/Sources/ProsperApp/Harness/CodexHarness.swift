@@ -613,8 +613,8 @@ actor CodexHarness: CodingHarness {
                                         changes: [[String: Any]]) -> String {
         switch kind {
         case .command:
-            if let cmd = params["command"] as? [String] { return cmd.joined(separator: " ") }
-            return (params["command"] as? String) ?? "Run a command"
+            if let cmd = params["command"] as? [String] { return oneLine(cmd.joined(separator: " ")) }
+            return (params["command"] as? String).map(oneLine) ?? "Run a command"
         case .fileChange:
             let paths = changes.compactMap { $0["path"] as? String }.map(oneLine)
             return "Apply changes to \(paths.isEmpty ? "files" : paths.joined(separator: ", "))"

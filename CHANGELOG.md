@@ -114,6 +114,9 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: a hand-edited `mcp.json` or `hooks.json` that fails to parse is no longer replaced
   at launch.** The file is left as it is, the last working configuration stays active, and
   the problem is logged so you can fix it.
+- **Fixed: the coding agent's approval card can no longer be fooled by a command that hides
+  its tail behind newlines or bidi overrides.** The command shown for approval is now one
+  escaped line, as the file and permission summaries already were.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
   Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON

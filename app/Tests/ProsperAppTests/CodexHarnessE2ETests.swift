@@ -143,6 +143,16 @@ final class CodexHarnessE2ETests: XCTestCase {
                 "grantRoot": None, "fileChanges": {
                     "/tmp/b.txt": {"type": "add", "content": "b\n"},
                     "/tmp/a.txt\nApply changes to /etc/passwd": {"type": "delete", "content": ""}}}
+        if word == "EXEC":   # #318: legacy ExecCommandApprovalParams, `command` is an argv array
+            return "execCommandApproval", {"conversationId": "thread-1", "callId": "call-1", "cwd": "/tmp",
+                "parsedCmd": [], "command": ["echo", "ok", "\n\n\nrm -rf ~", "a\u202eb\u200bc"]}
+        if word == "CMDSTR":   # #318: modern `command` string with a newline tail, format and control scalars
+            return "item/commandExecution/requestApproval", dict(t, itemId="cmd-2", cwd="/tmp",
+                command="ls\n\n\nrm -rf ~ \u202e\u200b\x7f\u0085\u009f")
+        if word == "ODDKEYS":   # #318: unknown keys sort; an access key's newline is escaped
+            return "item/permissions/requestApproval", dict(t, itemId="perm-3", cwd="/tmp", reason=None,
+                permissions={"zz": 1, "mm": 2, "fileSystem": {"aa": 3,
+                    "entries": [{"access": "x\ny", "path": {"type": "path", "path": "/p"}}]}})
         if word == "AMEND":
             return "item/commandExecution/requestApproval", dict(t, itemId="cmd-1",
                 command="rm -rf build", cwd="/tmp\n\u202e\u009b", proposedExecpolicyAmendment=["rm", "-rf"])
@@ -171,7 +181,7 @@ final class CodexHarnessE2ETests: XCTestCase {
         if set(res) != {"decision"}:   # {File,CommandExecution}RequestApprovalResponse
             return "decision reply " + json.dumps(res)
         d = res["decision"]
-        if method == "applyPatchApproval":   # legacy ReviewDecision
+        if method in ("applyPatchApproval", "execCommandApproval"):   # legacy ReviewDecision
             return None if d in ("approved", "approved_for_session", "denied", "abort") else "decision " + json.dumps(d)
         if d in DECISIONS:
             return None
@@ -309,11 +319,11 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "cmd-1",
                                  "startedAtMs": 0, "command": "rm -rf build", "cwd": "/tmp"}})
-            word = next((w for w in ("PERMS", "GRANTS", "PATCH", "LEGACY", "AMEND", "ELICIT") if w in prompt), None)
+            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "LEGACY", "EXEC", "CMDSTR", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
                 frame = {"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params}
-                if word == "GRANTS":   # off-schema on purpose (unknown key, wrong-typed elements): the
+                if word in ("GRANTS", "ODDKEYS"):   # off-schema on purpose (unknown key, wrong-typed elements): the
                     log("in", dict(frame, params=dict(req_params, permissions={})))   # schema log gets an empty profile
                     sys.stdout.write(json.dumps(frame) + "\n")
                     sys.stdout.flush()
@@ -1716,6 +1726,33 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(approval?.summary, "Apply changes to /tmp/a.txt\\nApply changes to /etc/passwd, /tmp/b.txt")
         XCTAssertEqual(approval?.detail, "/tmp/a.txt\\nApply changes to /etc/passwd\n\n/tmp/b.txt\n")
         XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "approved"] as NSDictionary)
+    }
+
+    /// #318: the command summary goes through `oneLine` like every other card line: a
+    /// newline-padded argv element can't push its tail below the card's three visible lines,
+    /// and a bidi override or zero-width scalar shows as `\u{…}` instead of reordering or hiding.
+    @MainActor
+    func testControllerCommandArraySummaryIsOneEscapedLine() async throws {
+        let (approval, reply) = try await answer("EXEC please", with: .accept)
+        XCTAssertEqual(approval?.kind, .command)
+        XCTAssertEqual(approval?.summary, #"echo ok \n\n\nrm -rf ~ a\u{202E}b\u{200B}c"#)
+        XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "approved"] as NSDictionary)
+    }
+
+    /// #318: the string form takes the same path; DEL and C1 (Cc) escape as `\u{…}`, NEL as a newline.
+    @MainActor
+    func testControllerCommandStringSummaryIsOneEscapedLine() async throws {
+        let (approval, _) = try await answer("CMDSTR please", with: .decline)
+        XCTAssertEqual(approval?.kind, .command)
+        XCTAssertEqual(approval?.summary, #"ls\n\n\nrm -rf ~ \u{202E}\u{200B}\u{7F}\n\u{9F}"#)
+    }
+
+    /// #318: profile and fileSystem keys the card can't render list in sorted order, and an
+    /// access key with an embedded newline stays on its own line.
+    @MainActor
+    func testControllerPermissionsCardSortsUnknownKeysAndEscapesAccess() async throws {
+        let (approval, _) = try await answer("ODDKEYS please", with: .decline)
+        XCTAssertEqual(approval?.detail, [#"X\nY: /p"#, "aa: 3", "mm: 2", "zz: 1", "In: /tmp"].joined(separator: "\n"))
     }
 
     /// W12: the amendment is `CommandExecutionApprovalDecision`'s object variant, not "accept".
