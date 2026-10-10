@@ -221,9 +221,39 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(Preferences.agentModel, "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF")
         d.set("gone/unknown", forKey: key)
         XCTAssertEqual(Preferences.agentModel, AgentModelRegistry.recommendedId)
+        XCTAssertEqual(d.string(forKey: key), "gone/unknown")   // may be another Mac's custom pick: not rewritten
         d.removeObject(forKey: key)
         XCTAssertEqual(Preferences.agentModel, AgentModelRegistry.recommendedId)
         XCTAssertNil(d.string(forKey: key))   // default is not persisted
+    }
+
+    /// #247: every replacement target is a live catalog id (else canonicalId falls to recommended).
+    func testEveryReplacementTargetIsInCatalog() {
+        let ids = Set(AgentModelRegistry.all().map(\.id))
+        XCTAssertFalse(AgentModelRegistry.replacements.isEmpty)
+        for (old, new) in AgentModelRegistry.replacements {
+            XCTAssertTrue(ids.contains(new), "\(old) → \(new) not in catalog")
+            XCTAssertFalse(ids.contains(old), "\(old) is still a catalog id")
+        }
+    }
+
+    /// #247: a custom (HF-imported) id is canonical as-is, and the getter leaves it in UserDefaults.
+    /// Both stores read UserDefaults.standard only, so save/restore the two keys.
+    func testCustomIdIsCanonicalAndNotRewritten() {
+        let d = UserDefaults.standard, key = "agentModel", customKey = "customAgentModelsV1"
+        let savedPick = d.object(forKey: key), savedCustom = d.object(forKey: customKey)
+        defer { d.set(savedPick, forKey: key); d.set(savedCustom, forKey: customKey) }
+        let id = "test-247/Custom-Coder-GGUF"
+        CustomModelStore.upsert(CustomAgentModel(id: id, label: "Custom", sizeBytes: 0, note: "", toolFormat: .qwenXML))
+        XCTAssertEqual(AgentModelRegistry.canonicalId(id), id)
+        XCTAssertEqual(AgentModelRegistry.model(for: id).id, id)
+        d.set(id, forKey: key)
+        XCTAssertEqual(Preferences.agentModel, id)
+        XCTAssertEqual(d.string(forKey: key), id)
+        // Same id on a Mac without that custom model: resolves to recommended, stays stored.
+        CustomModelStore.remove(id)
+        XCTAssertEqual(Preferences.agentModel, AgentModelRegistry.recommendedId)
+        XCTAssertEqual(d.string(forKey: key), id)
     }
 
     func testGGUFRowsSurviveCatalogMerge() {
