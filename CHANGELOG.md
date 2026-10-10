@@ -148,6 +148,10 @@ tag from the now-released section and put it on the new top draft.
   longer reorder the error text, and a two-line command on a tool card is no longer cut to its
   first line (the newline shows as `\n`). A diff cut by exactly one character now reads "1 more
   character not shown".
+- **Fixed: an extension watching a folder with `host.fs.watch` no longer crashes Prosper on
+  the first file change.** The file-event stream was created without the flag that makes
+  macOS hand over the paths in the form Prosper reads; no bundled extension uses
+  `host.fs.watch`, which is why nothing had shown it.
 - **Fixed: the Window extension no longer shrinks a window to nothing when macOS reports an
   invalid frame for it.** The action now stops as if no window were focused.
 - **Fixed: in the System Settings extension, "Screen Saver" and "Passwords" opened nothing on macOS 27.** Screen Saver now opens the Wallpaper pane, where macOS moved it, and Passwords opens the Passwords app.

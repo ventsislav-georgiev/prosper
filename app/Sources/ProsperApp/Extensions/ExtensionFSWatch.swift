@@ -88,7 +88,7 @@ final class ExtensionFSWatch {
         guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault, callback, &ctx, [p] as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5,
-            FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
         ) else { return }
         FSEventStreamSetDispatchQueue(stream, .main)
         FSEventStreamStart(stream)
