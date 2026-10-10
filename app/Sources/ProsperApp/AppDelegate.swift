@@ -992,6 +992,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autocomplete.stop()
         hotKeys.forEach { $0.unregister() }
         BunHarness.shared.shutdown()
+        // codex app-server and the command it runs: SIGTERM, SIGKILL after 1 s, inline (#361).
+        CodexHarness.killLiveGroupsBlocking(grace: 1)
         // Release every extension's native resources (power assertions, pmset lid
         // override) so a "disable sleep" can never outlive the app.
         for record in extensions.records {

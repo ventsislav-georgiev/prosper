@@ -141,6 +141,7 @@ actor CodexHarness: CodingHarness {
             throw HarnessError.spawnFailed(String(describing: error))
         }
         self.process = proc
+        Self.livePGIDs.withLock { _ = $0.insert(proc.processIdentifier) }
 
         // Handshake: initialize → wait for result → initialized notification. On any
         // failure tear the half-spawned process down before rethrowing — otherwise the
@@ -169,24 +170,44 @@ actor CodexHarness: CodingHarness {
         proc?.terminationHandler = nil   // teardown owns this exit; no second entry
         cleanupIO()
         if let proc {
+            Self.livePGIDs.withLock { _ = $0.remove(proc.processIdentifier) }
             Self.killGroup(proc.processIdentifier)
             Task.detached { proc.waitUntilExit() }   // reap off the actor
         }
     }
+
+    /// Every codex group started and not yet torn down, readable off the actor so the
+    /// quit path can reach it synchronously (#361). Internal for ProcessGroupKillTests.
+    static let livePGIDs = OSAllocatedUnfairLock(initialState: Set<pid_t>())
+
+    /// The quit path: `applicationWillTerminate` can't await `shutdown` before its
+    /// `atexit { _exit(0) }`, so it takes every live codex group down inline here.
+    /// ponytail: groups are killed one after another, so N stuck groups cost N × (grace + 1) s;
+    /// one harness is live in practice.
+    nonisolated static func killLiveGroupsBlocking(grace: TimeInterval) {
+        let pgids = livePGIDs.withLock { set in defer { set.removeAll() }; return set }
+        for pgid in pgids { killGroup(pgid, grace: grace, blocking: true) }
+    }
+
+    /// Every signal killGroup/escalate send, liveness probes included, goes through
+    /// here so ProcessGroupKillTests can record them without signalling anything.
+    nonisolated(unsafe) static var sendSignal: @Sendable (pid_t, Int32) -> Int32 = { kill($0, $1) }
 
     /// codex runs as the leader of its own process group: Foundation's `Process`
     /// spawns with POSIX_SPAWN_SETPGROUP, so pgid == pid (the E2E tests assert it).
     /// Signal the group, not the pid, so the MCP servers and tools codex started go
     /// with it instead of being reparented to launchd. SIGTERM now; SIGKILL whatever
     /// is still in the group after `grace`. Detached by default so a slow exit can't
-    /// block the caller; `blocking` runs the same wait inline for the quit path, where
-    /// `atexit { _exit(0) }` would end us before a detached SIGKILL fires (#327). A
-    /// healthy group exits in milliseconds and the wait returns early.
+    /// block the caller; `blocking` runs the same wait inline for the two quit-path
+    /// callers, BunHarness.stopHost and `killLiveGroupsBlocking` (from
+    /// applicationWillTerminate), where `atexit { _exit(0) }` would end us before a
+    /// detached SIGKILL fires (#327, #361). A healthy group exits in milliseconds and
+    /// the wait returns early.
     /// ponytail: a child that moves to its own group or session (`setsid` for a PTY)
     /// is out of reach; codex itself has to end those on SIGTERM.
     nonisolated static func killGroup(_ pgid: pid_t, grace: TimeInterval = 3, blocking: Bool = false) {
         guard mayKillGroup(pgid) else { return }
-        kill(-pgid, SIGTERM)
+        _ = sendSignal(-pgid, SIGTERM)
         if blocking { escalate(pgid, grace: grace) }
         else { DispatchQueue.global(qos: .utility).async { escalate(pgid, grace: grace) } }
     }
@@ -200,11 +221,11 @@ actor CodexHarness: CodingHarness {
     /// the kill to land, so a blocking caller returns with the group gone.
     private nonisolated static func escalate(_ pgid: pid_t, grace: TimeInterval) {
         var deadline = Date().addingTimeInterval(grace)
-        while kill(-pgid, 0) == 0, Date() < deadline { usleep(50_000) }
-        guard kill(-pgid, 0) == 0 else { return }
-        kill(-pgid, SIGKILL)
+        while sendSignal(-pgid, 0) == 0, Date() < deadline { usleep(50_000) }
+        guard sendSignal(-pgid, 0) == 0 else { return }
+        _ = sendSignal(-pgid, SIGKILL)
         deadline = Date().addingTimeInterval(1)
-        while kill(-pgid, 0) == 0, Date() < deadline { usleep(20_000) }
+        while sendSignal(-pgid, 0) == 0, Date() < deadline { usleep(20_000) }
     }
 
     /// Shared by `shutdown` and `handleTermination`: detach pipe handlers (they
@@ -454,6 +475,7 @@ actor CodexHarness: CodingHarness {
         guard !terminated else { return }
         terminated = true
         process = nil
+        Self.livePGIDs.withLock { _ = $0.remove(pgid) }
         Self.killGroup(pgid)   // codex is gone; its children are not
         let error = HarnessError.backendError(signaled
             ? "codex app-server was killed by signal \(code)"
