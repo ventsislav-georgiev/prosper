@@ -315,9 +315,10 @@ enum FanControlHelper {
         observersInstalled && reclaimTimer != nil
     }
 
-    /// Applies targets after the lifecycle gate admitted this attempt. `engage` is the test seam.
+    /// Applies targets after the lifecycle gate admitted this attempt. `engage` and `reset` are the test seams.
     static func applySavedTargets(reclaimGeneration: Int,
-                                  engage: (Int, Double, TimeInterval) async -> Bool = { await setManual($0, rpm: $1, timeout: $2) }) async -> Bool {
+                                  engage: (Int, Double, TimeInterval) async -> Bool = { await setManual($0, rpm: $1, timeout: $2) },
+                                  reset: (Bool) async -> Bool = { await resetAll(teardown: $0) }) async -> Bool {
         guard Preferences.fanManualEnabled else { return false }
         let targets = Preferences.fanTargets
         guard !targets.isEmpty else { return false }
@@ -329,6 +330,9 @@ enum FanControlHelper {
         for (index, rpm) in targets {
             guard !sleeping && reclaimGeneration == Self.reclaimGeneration && Preferences.fanManualEnabled else { return false }
             let ok = await engage(index, rpm, first ? firstEngageTimeout : 12)
+            // Automatic landed while this engage was suspended (#277): its reset can reach
+            // the daemon ahead of the pin, so release here — the caller sees false.
+            if ok && !Preferences.fanManualEnabled { _ = await reset(true); return false }
             reengaged = reengaged && ok
             first = false
         }

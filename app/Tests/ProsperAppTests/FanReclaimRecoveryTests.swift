@@ -138,13 +138,35 @@ final class FanReclaimRecoveryTests: XCTestCase {
         Preferences.fanManualEnabled = true
         Preferences.fanTargets = [0: 2000, 1: 3000]
         var engaged: [Int] = []
-        let reengaged = await FanControlHelper.applySavedTargets(reclaimGeneration: FanControlHelper.reclaimGeneration) { index, _, _ in
+        let reengaged = await FanControlHelper.applySavedTargets(reclaimGeneration: FanControlHelper.reclaimGeneration, engage: { index, _, _ in
             engaged.append(index)
             Preferences.fanManualEnabled = false   // the popup's Automatic, between fan 0 and fan 1
             return true
-        }
+        }, reset: { _ in true })
         XCTAssertEqual(engaged.count, 1, "a fan after the disable was engaged: \(engaged)")
         XCTAssertFalse(reengaged)
+    }
+
+    /// #277: Automatic landing while the only engage is suspended (e.g. reconnecting) —
+    /// the engage still pins, so applySavedTargets must release it and report false.
+    @MainActor
+    func testDisableDuringEngageReleasesThePin() async {
+        let previousManualIntent = Preferences.fanManualEnabled, previousTargets = Preferences.fanTargets
+        defer { Preferences.fanManualEnabled = previousManualIntent; Preferences.fanTargets = previousTargets }
+        Preferences.fanTargets = [0: 2000]
+        for disable in [true, false] {
+            Preferences.fanManualEnabled = true
+            var resets: [Bool] = []
+            let reengaged = await FanControlHelper.applySavedTargets(
+                reclaimGeneration: FanControlHelper.reclaimGeneration,
+                engage: { _, _, _ in
+                    if disable { Preferences.fanManualEnabled = false }
+                    return true
+                },
+                reset: { resets.append($0); return true })
+            XCTAssertEqual(resets, disable ? [true] : [], "disable=\(disable)")
+            XCTAssertEqual(reengaged, !disable, "disable=\(disable)")
+        }
     }
 
     /// #221 (3): a failed reclaim re-apply holds the next attempt for 30 s.
@@ -204,7 +226,10 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(1)))
         XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(FanReclaimRecovery.retryCooldown)))
         await FanControlHelper.settleReclaim(.restored, now: t) { resets.append($0); return true }
-        await FanControlHelper.settleReclaim(.abandonManualIntent, now: t) { resets.append($0); return true }
+        await FanControlHelper.settleReclaim(.abandonManualIntent, now: t) {
+            XCTAssertFalse(Preferences.fanManualEnabled, "abandon must drop the pref before the reset")
+            resets.append($0); return true
+        }
         XCTAssertEqual(resets, [false, true], "retry resets once, restored never, abandon tears down once")
     }
 
