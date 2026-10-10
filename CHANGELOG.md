@@ -111,6 +111,9 @@ tag from the now-released section and put it on the new top draft.
   imported hooks or MCP config, or an extension's `extension.toml` with extremely deep
   nesting or over 1 MiB is now treated as malformed and skipped instead of overflowing the
   parser.
+- **Fixed: a hand-edited `mcp.json` or `hooks.json` that fails to parse is no longer replaced
+  at launch.** The file is left as it is, the last working configuration stays active, and
+  the problem is logged so you can fix it.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
   Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON

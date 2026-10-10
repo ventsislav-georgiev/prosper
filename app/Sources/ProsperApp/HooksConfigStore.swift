@@ -1,4 +1,5 @@
 import Foundation
+import os
 import TOMLDecoder
 
 extension Notification.Name {
@@ -20,10 +21,9 @@ extension Notification.Name {
 /// `importHooks(from:)` also parses a full Claude Code `settings.json` (top-level
 /// `hooks`) or a codex `config.toml` `[hooks]` block for the Settings importer.
 enum HooksConfigStore {
-    static var fileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/prosper/hooks.json", isDirectory: false)
-    }
+    /// Settable so tests can point bootstrap at a scratch directory.
+    nonisolated(unsafe) static var fileURL: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".config/prosper/hooks.json", isDirectory: false)
 
     private static let mirrorKey = "agentHooksDiskMirror"
 
@@ -130,10 +130,19 @@ enum HooksConfigStore {
     static func bootstrap() {
         let onDisk = readFileRaw()
         let mirror = Preferences.defaults.string(forKey: mirrorKey)
-        if let onDisk, onDisk != mirror, let hooks = decode(onDisk) {
+        if let onDisk, onDisk != mirror {
+            // A hand edit that does not parse is the user's work in progress: never
+            // overwrite it. Keep the last good config live (as the watcher does).
+            guard let hooks = decode(onDisk) else {
+                Logger(subsystem: "eu.illegible.prosper", category: "hooks")
+                    .error("\(fileURL.path, privacy: .public) failed to parse at launch; left untouched, using last good config")
+                return
+            }
             Preferences.hooks = hooks
             Preferences.defaults.set(onDisk, forKey: mirrorKey)
         } else {
+            // Absent file: forget the mirror so writeFile's no-change skip can't leave it missing.
+            if onDisk == nil { Preferences.defaults.removeObject(forKey: mirrorKey) }
             writeFile(Preferences.hooks)
         }
     }

@@ -132,6 +132,49 @@ final class MCPImportTests: XCTestCase {
         XCTAssertNil(MCPConfigStore.decode("{ \"mcpServers\":"))
     }
 
+    // MARK: Launch bootstrap (#311) — scratch directory, never the real ~/.config
+
+    /// Points the store at a scratch file with a known prefs value and a cleared mirror
+    /// (so the pre-#311 code would have rewritten the file), then restores everything.
+    private func withScratchFile(_ body: (URL) throws -> Void) rethrows {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bootstrap-\(UUID().uuidString)", isDirectory: true)
+        let savedURL = MCPConfigStore.fileURL, savedPrefs = Preferences.mcpServers
+        let savedMirror = Preferences.defaults.string(forKey: "agentMCPDiskMirror")
+        MCPConfigStore.fileURL = dir.appendingPathComponent("config.json")
+        Preferences.mcpServers = [MCPServer(id: "keep", transport: .stdio, enabled: true, command: "npx")]
+        Preferences.defaults.removeObject(forKey: "agentMCPDiskMirror")
+        defer {
+            MCPConfigStore.fileURL = savedURL
+            Preferences.mcpServers = savedPrefs
+            Preferences.defaults.set(savedMirror, forKey: "agentMCPDiskMirror")
+            try? FileManager.default.removeItem(at: dir)
+        }
+        try body(MCPConfigStore.fileURL)
+    }
+
+    func testBootstrapLeavesMalformedFileByteForByte() throws {
+        try withScratchFile { url in
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let broken = Data(#"{ "mcpServers": { "half-edited": "#.utf8)
+            try broken.write(to: url)
+            let before = Preferences.mcpServers
+            MCPConfigStore.bootstrap()
+            XCTAssertEqual(try Data(contentsOf: url), broken, "malformed user edit was overwritten")
+            XCTAssertEqual(Preferences.mcpServers, before, "last good config must stay live")
+        }
+    }
+
+    func testBootstrapCreatesAbsentFile() throws {
+        try withScratchFile { url in
+            Preferences.defaults.set(MCPConfigStore.encode(Preferences.mcpServers), forKey: "agentMCPDiskMirror")
+            MCPConfigStore.bootstrap()
+            let written = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertEqual(MCPConfigStore.decode(written), Preferences.mcpServers)
+        }
+    }
+
     // MARK: Canonical encode/decode round-trip
 
     func testRoundTrip() {

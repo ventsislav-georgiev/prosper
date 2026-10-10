@@ -1,4 +1,5 @@
 import Foundation
+import os
 import TOMLDecoder
 
 extension Notification.Name {
@@ -27,10 +28,9 @@ extension Notification.Name {
 /// must be re-added as a bearer-token env var by hand. Add a `headers` map (+ a
 /// backward-compatible `MCPServer` Codable migration) if real configs need it.
 enum MCPConfigStore {
-    static var fileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/prosper/mcp.json", isDirectory: false)
-    }
+    /// Settable so tests can point bootstrap at a scratch directory.
+    nonisolated(unsafe) static var fileURL: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".config/prosper/mcp.json", isDirectory: false)
 
     /// The last JSON we wrote, so the watcher can tell our own writes from an external
     /// edit and skip the reload our write would otherwise trigger.
@@ -137,10 +137,19 @@ enum MCPConfigStore {
     static func bootstrap() {
         let onDisk = readFileRaw()
         let mirror = Preferences.defaults.string(forKey: mirrorKey)
-        if let onDisk, onDisk != mirror, let servers = decode(onDisk) {
+        if let onDisk, onDisk != mirror {
+            // A hand edit that does not parse is the user's work in progress: never
+            // overwrite it. Keep the last good config live (as the watcher does).
+            guard let servers = decode(onDisk) else {
+                Logger(subsystem: "eu.illegible.prosper", category: "mcp")
+                    .error("\(fileURL.path, privacy: .public) failed to parse at launch; left untouched, using last good config")
+                return
+            }
             Preferences.mcpServers = servers
             Preferences.defaults.set(onDisk, forKey: mirrorKey)
         } else {
+            // Absent file: forget the mirror so writeFile's no-change skip can't leave it missing.
+            if onDisk == nil { Preferences.defaults.removeObject(forKey: mirrorKey) }
             writeFile(Preferences.mcpServers)
         }
     }

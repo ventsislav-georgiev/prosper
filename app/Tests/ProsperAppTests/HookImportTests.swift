@@ -103,6 +103,49 @@ final class HookImportTests: XCTestCase {
         XCTAssertNil(HooksConfigStore.decode("{ \"hooks\":"))
     }
 
+    // MARK: Launch bootstrap (#311) — scratch directory, never the real ~/.config
+
+    /// Points the store at a scratch file with a known prefs value and a cleared mirror
+    /// (so the pre-#311 code would have rewritten the file), then restores everything.
+    private func withScratchFile(_ body: (URL) throws -> Void) rethrows {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bootstrap-\(UUID().uuidString)", isDirectory: true)
+        let savedURL = HooksConfigStore.fileURL, savedPrefs = Preferences.hooks
+        let savedMirror = Preferences.defaults.string(forKey: "agentHooksDiskMirror")
+        HooksConfigStore.fileURL = dir.appendingPathComponent("config.json")
+        Preferences.hooks = [HookRule(event: .stop, matcher: "", command: "echo keep", timeout: nil, enabled: true)]
+        Preferences.defaults.removeObject(forKey: "agentHooksDiskMirror")
+        defer {
+            HooksConfigStore.fileURL = savedURL
+            Preferences.hooks = savedPrefs
+            Preferences.defaults.set(savedMirror, forKey: "agentHooksDiskMirror")
+            try? FileManager.default.removeItem(at: dir)
+        }
+        try body(HooksConfigStore.fileURL)
+    }
+
+    func testBootstrapLeavesMalformedFileByteForByte() throws {
+        try withScratchFile { url in
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let broken = Data(#"{ "hooks": { "PreToolUse": [ "#.utf8)
+            try broken.write(to: url)
+            let before = Preferences.hooks
+            HooksConfigStore.bootstrap()
+            XCTAssertEqual(try Data(contentsOf: url), broken, "malformed user edit was overwritten")
+            XCTAssertEqual(Preferences.hooks, before, "last good config must stay live")
+        }
+    }
+
+    func testBootstrapCreatesAbsentFile() throws {
+        try withScratchFile { url in
+            Preferences.defaults.set(HooksConfigStore.encode(Preferences.hooks), forKey: "agentHooksDiskMirror")
+            HooksConfigStore.bootstrap()
+            let written = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertEqual(HooksConfigStore.decode(written)?.map(\.command), Preferences.hooks.map(\.command))
+        }
+    }
+
     // MARK: Canonical encode/decode round-trip
 
     func testRoundTrip() {
