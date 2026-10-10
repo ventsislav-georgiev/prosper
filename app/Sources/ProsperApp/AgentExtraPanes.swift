@@ -257,7 +257,7 @@ struct PermissionsPane: View {
                       subtitle: "What the coding agent may do without asking")
 
             NeonSection("Bypass",
-                        footer: "Bypass disables ALL approvals and grants full filesystem + network access — the agent runs commands and edits files without confirmation. Use only in trusted directories.") {
+                        footer: "Bypass disables ALL approvals and grants full filesystem + network access — the agent runs commands and edits files without confirmation. Use only in trusted directories. Per device: this switch does not sync to your other Macs.") {
                 Toggle(isOn: $bypass) {
                     Text("Bypass all approvals (YOLO mode)").foregroundStyle(bypass ? Neon.magenta : Neon.textPrimary)
                 }

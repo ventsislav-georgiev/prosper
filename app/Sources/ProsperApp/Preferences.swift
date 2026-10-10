@@ -1,4 +1,5 @@
 import Foundation
+import os
 import AppKit
 
 /// Max length band for inline completions, mapped to a token budget.
@@ -343,6 +344,8 @@ enum Preferences {
         static let agentPersona = "agentPersona"
         // Permissions (F4). Bypass = codex never-approve + danger-full-access ("YOLO").
         static let agentBypassAll = "agentBypassAll"
+        // #232: set once Bypass is per device (pre-#232 builds synced it, see agentBypassAll).
+        static let agentBypassLocal = "agentBypassLocal"
         static let agentApprovalPolicy = "agentApprovalPolicy"   // ApprovalPolicy raw
         static let agentNetworkAccess = "agentNetworkAccess"
         static let agentWritableRoots = "agentWritableRoots"     // extra sandbox roots
@@ -913,9 +916,26 @@ enum Preferences {
     }
 
     /// Bypass-all ("YOLO") permission mode: no approvals + full filesystem access.
+    /// Per device: not in `SyncedKeys` (#232).
     static var agentBypassAll: Bool {
-        get { defaults.bool(forKey: Keys.agentBypassAll) }
-        set { defaults.set(newValue, forKey: Keys.agentBypassAll) }
+        get { agentBypassLocal(defaults) }
+        set {
+            defaults.set(true, forKey: Keys.agentBypassLocal)
+            defaults.set(newValue, forKey: Keys.agentBypassAll)
+        }
+    }
+
+    /// Builds before #232 synced Bypass, and a value that arrived by sync cannot be
+    /// told from one set on this Mac, so every device starts at off once.
+    static func agentBypassLocal(_ d: UserDefaults) -> Bool {
+        if d.bool(forKey: Keys.agentBypassLocal) { return d.bool(forKey: Keys.agentBypassAll) }
+        d.set(true, forKey: Keys.agentBypassLocal)
+        if d.bool(forKey: Keys.agentBypassAll) {
+            d.set(false, forKey: Keys.agentBypassAll)
+            Logger(subsystem: "com.prosper.app", category: "Preferences")
+                .notice("Bypass reset to off: it is per device from now on")
+        }
+        return false
     }
 
     /// codex approval policy when NOT bypassing. Defaults to on-request.

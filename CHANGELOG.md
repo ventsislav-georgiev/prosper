@@ -96,6 +96,13 @@ tag from the now-released section and put it on the new top draft.
   no longer existed; those listeners are now forgotten instead. "Gone" is judged against the
   full device list, so a Bluetooth, AirPlay or aggregate output that drops out of the mixer
   rows for a moment keeps one volume listener instead of ending up with two.
+- **Fixed: the coding agent's Bypass switch (no approvals, full filesystem and network
+  access) synced across your Macs,** so turning it on for one trusted folder on one Mac
+  switched the sandbox off everywhere. Bypass is per device now: it no longer leaves a
+  Mac in a sync payload and is ignored in one from an older build. Because a value that
+  arrived by sync cannot be told from one you set yourself, every Mac starts this build
+  with Bypass off once; turn it back on where you want it. Hooks and MCP servers still
+  sync, as before.
 - **Fixed: the coding agent's sandbox settings were never applied by codex.** Extra writable
   folders, network access and "Bypass all" are now sent in the form the codex app server reads,
   for new and resumed sessions alike.

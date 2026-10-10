@@ -163,11 +163,7 @@ enum SyncSnapshotBuilder {
         //     the machine-local runtime/UI keys that share the `ext.` namespace.
         var defDict: [String: Any] = [:]
         for (key, value) in defaults.dictionaryRepresentation() {
-            if SyncedKeys.excluded.contains(key) { continue }
-            if SyncedKeys.keys.contains(key)
-                || SyncedKeys.prefixes.contains(where: { key.hasPrefix($0) }) {
-                defDict[key] = value
-            }
+            if SyncedKeys.isSynced(key) { defDict[key] = value }
         }
         report.includedDefaults = defDict.count
         guard let defaultsBlob = try? PropertyListSerialization.data(
@@ -210,7 +206,9 @@ enum SyncSnapshotBuilder {
         if let defaultsBlob = root["defaults"] as? Data,
            let dict = (try? PropertyListSerialization.propertyList(
             from: defaultsBlob, options: [], format: nil)) as? [String: Any] {
-            for (key, value) in dict { defaults.set(value, forKey: key) }
+            // Same filter on the way in: a payload from an older build still carries
+            // keys that are per device now (agentBypassAll, #232).
+            for (key, value) in dict where SyncedKeys.isSynced(key) { defaults.set(value, forKey: key) }
         }
 
         if let files = root["files"] as? [String: Any] {
@@ -338,8 +336,9 @@ enum SyncSnapshotBuilder {
 enum SyncedKeys {
     /// UserDefaults keys the user changes via Settings that should sync. Excludes
     /// machine-local / transient state: migration flags, runtime
-    /// LoRA A/B counters, and machine-specific paths (agentWorkingDirectory,
-    /// agentWritableRoots) which wouldn't be valid on another Mac.
+    /// LoRA A/B counters, machine-specific paths (agentWorkingDirectory,
+    /// agentWritableRoots) which wouldn't be valid on another Mac, and agentBypassAll
+    /// (sandbox off is a per-device trust call, #232).
     static let keys: Set<String> = [
         // General / completions
         "autocompleteEnabled", "coreModel", "launchAtLogin", "completionLength",
@@ -363,7 +362,7 @@ enum SyncedKeys {
         "automaticUpdateChecks", "allowBetaUpdates", "analyticsEnabled",
         // Coding agent
         "agentModel", "agentMCPServers", "agentHooks", "agentPersona",
-        "agentBypassAll", "agentApprovalPolicy", "agentNetworkAccess",
+        "agentApprovalPolicy", "agentNetworkAccess",   // agentBypassAll is per device (#232)
         "agentTemperature", "agentTopP",
         // LoRA (user-facing toggles/params; runtime counters excluded)
         "loraEnabled", "loraRank", "loraNumLayers", "loraIterations",
@@ -385,4 +384,10 @@ enum SyncedKeys {
         "ext.collapse.system",
         "ext.collapse.market",
     ]
+
+    /// The one selection rule, used both when collecting and when applying a payload.
+    static func isSynced(_ key: String) -> Bool {
+        !excluded.contains(key)
+            && (keys.contains(key) || prefixes.contains { key.hasPrefix($0) })
+    }
 }
