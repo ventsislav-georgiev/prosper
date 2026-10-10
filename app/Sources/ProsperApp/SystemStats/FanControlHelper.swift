@@ -335,7 +335,9 @@ enum FanControlHelper {
             let ok = await engage(index, rpm, first ? firstEngageTimeout : 12)
             // Automatic (#277) or willSleep (#278) landed while this engage was suspended: its
             // reset can reach the daemon ahead of the pin, so release here — the caller sees false.
-            if ok && (!Preferences.fanManualEnabled || sleeping) { _ = await reset(true); return false }
+            // Even when this engage failed: an older engage that landed late while this one was
+            // in flight was held for it (#282) and is still pinned. Nothing pinned → no-op.
+            if !Preferences.fanManualEnabled || sleeping { _ = await reset(true); return false }
             reengaged = reengaged && ok
             first = false
         }
