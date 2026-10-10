@@ -18,6 +18,7 @@ final class AgentBypassPerDeviceTests: XCTestCase {
     func testBypassIsNotSyncedButHooksAre() {
         XCTAssertFalse(SyncedKeys.isSynced("agentBypassAll"))
         XCTAssertFalse(SyncedKeys.isSynced("agentWritableRoots"))
+        XCTAssertFalse(SyncedKeys.isSynced("agentBypassLocal"), "the reset marker is per device too")
         XCTAssertTrue(SyncedKeys.isSynced("agentHooks"))
     }
 
