@@ -175,7 +175,10 @@ tag from the now-released section and put it on the new top draft.
   hangs while reading the current key mapping, or exits with an error, or prints nothing,
   Prosper leaves the mapping untouched instead of replacing it with an empty one. Quitting
   during the minute-long pause still makes one attempt to remove the Caps Lock mapping, so
-  Caps Lock does not keep sending the hyper key after Prosper is gone.
+  Caps Lock does not keep sending the hyper key after Prosper is gone. If `hidutil` fails to
+  remove the mapping, Prosper keeps its note that the mapping is still installed and cleans it
+  up at the next launch; if `hidutil` fails to install it, the hyper key stays off instead of
+  showing as on.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
   Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON

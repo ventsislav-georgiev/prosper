@@ -373,7 +373,10 @@ final class HyperKey {
             NSLog("prosper: hyper key refused — Caps Lock already remapped to %@ by another tool", described)
             return
         }
-        applyMapping(HyperKeyMapping.merged(into: table))
+        // #384: a failed install leaves the feature off; the marker stays (one no-op removal later).
+        guard applyMapping(HyperKeyMapping.merged(into: table)) else {
+            NSLog("prosper: hyper key — hidutil --set failed, feature left off"); return
+        }
         state.reset()
         isActive = true
         // Re-assert after wake: `hidutil --set` reaches only the devices attached when
@@ -403,11 +406,13 @@ final class HyperKey {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
             self.wakeObserver = nil
         }
-        // On a failed --get the marker stays: it is what makes the next launch recover the mapping.
+        // On a failed --get or --set the marker stays: it is what makes the next launch recover the mapping.
         guard let table = Self.currentTable() else {
             NSLog("prosper: hyper key — hidutil --get failed, mapping left untouched"); return
         }
-        _ = Self.hidutil(["property", "--set", HyperKeyMapping.setJSON(HyperKeyMapping.removed(from: table))])
+        guard Self.hidutil(["property", "--set", HyperKeyMapping.setJSON(HyperKeyMapping.removed(from: table))]) != nil else {
+            NSLog("prosper: hyper key — hidutil --set removal failed, marker kept for the next launch"); return
+        }
         Preferences.defaults.removeObject(forKey: Self.markerKey)
     }
 
@@ -426,12 +431,14 @@ final class HyperKey {
         deactivate(force: Preferences.defaults.bool(forKey: Self.markerKey))
     }
 
-    private func applyMapping(_ table: [HyperKeyMapping.Entry]) {
+    /// False when the `--set` failed (nil from `hidutil()`).
+    @discardableResult
+    private func applyMapping(_ table: [HyperKeyMapping.Entry]) -> Bool {
         // Write-ahead: the marker goes down BEFORE the mapping so a crash between the
         // two can only ever over-report, never leave an orphan mapping behind.
         Preferences.defaults.set(true, forKey: Self.markerKey)
         Preferences.defaults.synchronize()
-        _ = Self.hidutil(["property", "--set", HyperKeyMapping.setJSON(table)])
+        return Self.hidutil(["property", "--set", HyperKeyMapping.setJSON(table)]) != nil
     }
 
     // MARK: Tap pre-pass

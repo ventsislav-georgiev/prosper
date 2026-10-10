@@ -422,4 +422,83 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
         XCTAssertEqual(calls.split(separator: "\n"), ["--get", "--set"], "one --get, exactly one --set")
         XCTAssertFalse(Preferences.defaults.bool(forKey: HyperKey.markerKey), "a cleared mapping drops the marker")
     }
+
+    /// #384: a recording stub — the --get answers our table, the --set exits `setExit`.
+    /// Rewritable mid-test so cleanup can always succeed.
+    private func installSetStub(setExit: Int32, in dir: URL) throws -> URL {
+        let log = dir.appendingPathComponent("calls")
+        let stub = dir.appendingPathComponent("hidutil")
+        try """
+        #!/bin/sh
+        echo "$2" >> '\(log.path)'
+        [ "$2" = --get ] && echo '\(table)' && exit 0
+        exit \(setExit)
+        """.write(to: stub, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        HyperKey.hidutilURL = stub
+        return log
+    }
+
+    /// Leaves the shared instance off and the marker cleared, whatever the row did.
+    @MainActor
+    private func resetHyperKey(_ dir: URL, enabled: Bool) {
+        _ = try? installSetStub(setExit: 0, in: dir)
+        HyperKey.shared.reconcile(tapRunning: false)
+        Preferences.hyperKeyEnabled = enabled
+        Preferences.defaults.removeObject(forKey: HyperKey.markerKey)
+    }
+
+    /// #384: a removal --set that fails keeps the marker, so the next launch recovers.
+    @MainActor
+    func testFailedRemovalSetKeepsTheMarker() throws {
+        let dir = tempDir()
+        let log = try installSetStub(setExit: 1, in: dir)
+        let enabled = Preferences.hyperKeyEnabled
+        defer { resetHyperKey(dir, enabled: enabled) }
+        Preferences.defaults.set(true, forKey: HyperKey.markerKey)
+
+        HyperKey.shared.clearMapping()
+
+        let calls = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+        XCTAssertEqual(calls.split(separator: "\n"), ["--get", "--set"])
+        XCTAssertTrue(Preferences.defaults.bool(forKey: HyperKey.markerKey), "a failed removal keeps the marker")
+        XCTAssertFalse(HyperKey.shared.isActive)
+    }
+
+    /// #384: an install --set that fails leaves the feature off, marker set.
+    @MainActor
+    func testFailedInstallSetLeavesTheFeatureOff() throws {
+        let dir = tempDir()
+        let log = try installSetStub(setExit: 1, in: dir)
+        let enabled = Preferences.hyperKeyEnabled
+        defer { resetHyperKey(dir, enabled: enabled) }
+        XCTAssertFalse(HyperKey.shared.isActive, "precondition")
+        Preferences.hyperKeyEnabled = true
+
+        HyperKey.shared.reconcile(tapRunning: true)
+
+        let calls = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+        XCTAssertEqual(calls.split(separator: "\n"), ["--get", "--set"])
+        XCTAssertFalse(HyperKey.shared.isActive, "a failed install must not report the feature on")
+        XCTAssertTrue(Preferences.defaults.bool(forKey: HyperKey.markerKey), "write-ahead marker stays")
+    }
+
+    /// #384 control: both --set calls succeed — active on install, marker cleared on removal.
+    @MainActor
+    func testSucceedingSetsActivateThenClearTheMarker() throws {
+        let dir = tempDir()
+        _ = try installSetStub(setExit: 0, in: dir)
+        let enabled = Preferences.hyperKeyEnabled
+        defer { resetHyperKey(dir, enabled: enabled) }
+        XCTAssertFalse(HyperKey.shared.isActive, "precondition")
+        Preferences.hyperKeyEnabled = true
+
+        HyperKey.shared.reconcile(tapRunning: true)
+        XCTAssertTrue(HyperKey.shared.isActive)
+        XCTAssertTrue(Preferences.defaults.bool(forKey: HyperKey.markerKey))
+
+        HyperKey.shared.reconcile(tapRunning: false)
+        XCTAssertFalse(HyperKey.shared.isActive)
+        XCTAssertFalse(Preferences.defaults.bool(forKey: HyperKey.markerKey), "a succeeded removal drops the marker")
+    }
 }
