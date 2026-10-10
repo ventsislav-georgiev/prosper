@@ -1251,11 +1251,12 @@ private struct ChatComposer: NSViewRepresentable {
 
 /// #354: approval-card text in logical order. Bidi rule N1 gives a neutral (space, `>`, `|`)
 /// between two RTL words (or Arabic-Indic digits) their direction, so `echo א > ב` would draw
-/// as `echo ב < א`; an LRM after every neutral pins it left-to-right. Applied after `oneLine`
-/// (which escapes Cf, LRM included). Swift has no bidi class, so the gate is pure ASCII, which
+/// as `echo ב < א`; an LRM after every neutral pins it left-to-right. The summary comes through
+/// `oneLine` and a file diff through `diffLines`, both of which escape Cf (LRM included), so `ltr`
+/// never sees a raw bidi control. Swift has no bidi class, so the gate is pure ASCII, which
 /// can hold no RTL or AN scalar: ASCII is returned as is and copies off the card clean;
 /// anything else (an `é` path too, over-inclusively) gets the LRMs, and a copy carries them.
-/// The LRM goes after a whole grapheme cluster whose last scalar is Zs/P*/S*, never inside one
+/// The LRM goes after a whole grapheme cluster whose first scalar is Zs/P*/S*, never inside one
 /// (combining marks, niqqud, a virama conjunct, a flag stay intact).
 enum CardText {
     private static let neutral: Set<Unicode.GeneralCategory> = [
@@ -1269,7 +1270,7 @@ enum CardText {
         var out = ""
         for c in s {
             out.append(c)
-            if let last = c.unicodeScalars.last, neutral.contains(last.properties.generalCategory) {
+            if let first = c.unicodeScalars.first, neutral.contains(first.properties.generalCategory) {
                 out.unicodeScalars.append("\u{200E}")
             }
         }

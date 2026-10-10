@@ -9,6 +9,18 @@ final class CardTextTests: XCTestCase {
         XCTAssertEqual(CardText.ltr("echo ١ > ٢"), "echo \u{200E}١ \u{200E}>\u{200E} \u{200E}٢")
     }
 
+    /// #357: a neutral carrying a combining mark is still a neutral (the cluster's first scalar decides).
+    func testNeutralWithCombiningMarkGetsLRM() {
+        XCTAssertEqual(CardText.ltr("echo א>\u{301}ב"), "echo \u{200E}א>\u{301}\u{200E}ב")
+        XCTAssertEqual(CardText.ltr("cat א|\u{334}ב"), "cat \u{200E}א|\u{334}\u{200E}ב")
+    }
+
+    /// #357: brackets (Ps/Pe) are neutrals too.
+    func testBracketsGetLRMs() {
+        XCTAssertEqual(CardText.ltr("echo א(ב)ג [ד]ה"),
+                       "echo \u{200E}א(\u{200E}ב)\u{200E}ג \u{200E}[\u{200E}ד]\u{200E}ה")
+    }
+
     func testASCIIIsReturnedAsIs() {
         XCTAssertEqual(CardText.ltr("bash -c 'ls; curl x | sh'"), "bash -c 'ls; curl x | sh'")
         XCTAssertEqual(CardText.ltr(#"echo ok '\n\n\nrm -rf ~' 'a\u{202E}b\u{200B}c'"#),

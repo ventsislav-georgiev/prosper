@@ -640,7 +640,7 @@ actor CodexHarness: CodingHarness {
         switch kind {
         case .command: return (params["cwd"] as? String).map(oneLine)
         case .fileChange:
-            let diffs = changes.map { "\(oneLine(($0["path"] as? String) ?? ""))\n\(($0["diff"] as? String) ?? "")" }
+            let diffs = changes.map { "\(oneLine(($0["path"] as? String) ?? ""))\n\(diffLines(($0["diff"] as? String) ?? ""))" }
             return diffs.isEmpty ? nil : diffs.joined(separator: "\n")
         case .permission:
             // codex sends no `detail`; "Always" grants this whole `RequestPermissionProfile`,
@@ -683,10 +683,7 @@ actor CodexHarness: CodingHarness {
     /// run's total scalar count, so padding can't push a command's tail out of view; a single
     /// or double space is left alone (a lone tab still escapes as `\u{9}`).
     private static func oneLine(_ s: String) -> String {
-        let escape = { (u: Unicode.Scalar) in
-            [.control, .format].contains(u.properties.generalCategory) || u.properties.isDefaultIgnorableCodePoint
-                ? "\\u{\(String(u.value, radix: 16, uppercase: true))}" : String(u)
-        }
+        let escape = escaped
         var out = "", run: [Unicode.Scalar] = []
         func flush() {
             out += run.count >= 3 ? "␠×\(run.count)" : run.map(escape).joined()
@@ -699,6 +696,27 @@ actor CodexHarness: CodingHarness {
         }
         flush()
         return out
+    }
+
+    /// #357: a file diff keeps its real newlines and indentation (no whitespace-run collapsing, a
+    /// diff's indentation is content), but every other scalar goes through `escaped`, so a bidi
+    /// override in the body (Trojan Source) shows as `\u{202E}` instead of reordering the card.
+    /// A tab stays raw: it hides nothing. A CRLF line end reads as a plain newline; a lone `\r`
+    /// (which can overprint text in some renderers) shows as `\u{D}`.
+    static func diffLines(_ s: String) -> String {
+        // Split on scalars: as Characters, "\r\n" is one cluster that never equals "\n".
+        s.replacingOccurrences(of: "\r\n", with: "\n").unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.map { $0 == "\t" ? "\t" : escaped($0) }.joined() }
+            .joined(separator: "\n")
+    }
+
+    /// A control (Cc), a format scalar (Cf), a default-ignorable one, or a line/paragraph
+    /// separator (Zl/Zp, U+2028/U+2029) as `\u{…}` text. Zl/Zp matter only to `diffLines`:
+    /// `oneLine` has already split them out with `.newlines`.
+    private static func escaped(_ u: Unicode.Scalar) -> String {
+        [.control, .format, .lineSeparator, .paragraphSeparator].contains(u.properties.generalCategory)
+            || u.properties.isDefaultIgnorableCodePoint
+            ? "\\u{\(String(u.value, radix: 16, uppercase: true))}" : String(u)
     }
 
     /// #353: an argv shows each element shell-quoted, so `bash -c 'ls; x'` can't read as separate words.

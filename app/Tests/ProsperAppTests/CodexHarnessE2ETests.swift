@@ -132,11 +132,12 @@ final class CodexHarnessE2ETests: XCTestCase {
                     "read": ["/r\nWrite: /", "/\u202etxt.cod", 7], "globScanMaxDepth": 3,
                     "entries": [{"access": "write", "path": {"type": "glob_pattern", "pattern": "/src/**/*.swift"}},
                                 {"access": "deny", "path": {"type": "path", "path": "/secret"}}, "bogus"]}})
-        if word == "PATCH":
+        if word in ("PATCH", "TROJAN"):   # #357: TROJAN's diff body carries bidi controls, a U+2028 and a tab
+            change = {"path": "/tmp/a.txt", "diff": "@@ -1 +1 @@\n-old\n+new\n"} if word == "PATCH" else {
+                "path": "/tmp/t.go", "diff": '@@ -1,3 +1,3 @@\n if access != "user\u202e \u2066# admin\u2069 \u2066":\n-old\u2028+new\n+\tx\n'}
             send({"jsonrpc": "2.0", "method": "item/started", "params": dict(t, item={
                 "id": "fc-1", "type": "fileChange", "status": "inProgress",
-                "changes": [{"path": "/tmp/a.txt", "kind": {"type": "update", "move_path": None},
-                             "diff": "@@ -1 +1 @@\n-old\n+new\n"}]})})
+                "changes": [dict(change, kind={"type": "update", "move_path": None})]})})
             return "item/fileChange/requestApproval", dict(t, itemId="fc-1", reason=None)
         if word == "LEGACY":   # ApplyPatchApprovalParams: paths are fileChanges keys
             return "applyPatchApproval", {"conversationId": "thread-1", "callId": "call-1", "reason": None,
@@ -325,7 +326,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "cmd-1",
                                  "startedAtMs": 0, "command": "rm -rf build", "cwd": "/tmp"}})
-            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "LEGACY", "EXEC", "CMDSTR", "FILLER", "PAD", "AMEND", "ELICIT") if w in prompt), None)
+            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "TROJAN", "LEGACY", "EXEC", "CMDSTR", "FILLER", "PAD", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
                 frame = {"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params}
@@ -1745,6 +1746,23 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(approval?.summary, "Apply changes to /tmp/a.txt")
         XCTAssertEqual(approval?.detail, "/tmp/a.txt\n@@ -1 +1 @@\n-old\n+new\n")
         XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "accept"] as NSDictionary)
+    }
+
+    /// #357: the diff body is escaped per line, so a Trojan Source line shows its bidi controls
+    /// as `\u{…}` text; a U+2028 can't split a line, real newlines and a tab indent stay raw.
+    @MainActor
+    func testControllerFileChangeApprovalEscapesTheDiffBody() async throws {
+        let (approval, _) = try await answer("TROJAN please", with: .accept)
+        XCTAssertEqual(approval?.kind, .fileChange)
+        XCTAssertEqual(approval?.detail, "/tmp/t.go\n@@ -1,3 +1,3 @@\n"
+            + #" if access != "user\u{202E} \u{2066}# admin\u{2069} \u{2066}":"# + "\n"
+            + #"-old\u{2028}+new"# + "\n+\tx\n")
+    }
+
+    /// #357: a CRLF line end reads as a plain newline; a lone `\r` can overprint, so it shows escaped.
+    func testDiffLinesNormalizesCRLFAndEscapesALoneCR() {
+        XCTAssertEqual(CodexHarness.diffLines("-a\r\n+b\r\n"), "-a\n+b\n")
+        XCTAssertEqual(CodexHarness.diffLines("+x\ry"), #"+x\u{D}y"#)
     }
 
     /// #266: legacy `applyPatchApproval` lists its `fileChanges` keys, sorted, each on one
