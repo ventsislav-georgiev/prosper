@@ -660,6 +660,15 @@ final class RunnerModel: ObservableObject {
     /// Index into the flattened row list; always 0 when outcome is non-nil.
     @Published var selectedIndex: Int = 0
 
+    /// Test seam for selectPrev/selectNext (#258): the async hop plus wrap.
+    func scheduleSelect(step: Int, count: @escaping () -> Int) {
+        DispatchQueue.main.async { [self] in
+            let n = count()
+            guard n > 0 else { return }
+            self.selectedIndex = (self.selectedIndex + step + n) % n
+        }
+    }
+
     /// Measured row y-spans + scroll-viewport height for the ⌘-digit quick-select
     /// ladder (issue: badges must stay fixed in the viewport and map to whichever
     /// rows are currently scrolled under them). NOT @Published: written from the
@@ -1379,21 +1388,8 @@ private struct RunnerView: View {
     /// "Publishing changes from within view updates is not allowed" once per
     /// arrow press (#201). Index and row count are read inside the hop, so key
     /// repeats queued before it runs still each advance by one.
-    private func selectPrev() {
-        DispatchQueue.main.async {
-            let n = rows.count
-            guard n > 0 else { return }
-            model.selectedIndex = (model.selectedIndex - 1 + n) % n
-        }
-    }
-
-    private func selectNext() {
-        DispatchQueue.main.async {
-            let n = rows.count
-            guard n > 0 else { return }
-            model.selectedIndex = (model.selectedIndex + 1) % n
-        }
-    }
+    private func selectPrev() { model.scheduleSelect(step: -1) { rows.count } }
+    private func selectNext() { model.scheduleSelect(step: 1) { rows.count } }
 
     private var selectedRow: ResultRow? {
         guard !rows.isEmpty,
