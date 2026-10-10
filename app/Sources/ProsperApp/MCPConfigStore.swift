@@ -149,7 +149,18 @@ enum MCPConfigStore {
             Preferences.defaults.set(onDisk, forKey: mirrorKey)
         } else {
             // Absent file: forget the mirror so writeFile's no-change skip can't leave it missing.
-            if onDisk == nil { Preferences.defaults.removeObject(forKey: mirrorKey) }
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                Preferences.defaults.removeObject(forKey: mirrorKey)
+                writeFile(Preferences.mcpServers)
+                return
+            }
+            // Present but unreadable (non-UTF-8, no permission, a directory): the user's
+            // file, not ours to replace. Same as a malformed hand edit.
+            if onDisk == nil {
+                Logger(subsystem: "eu.illegible.prosper", category: "mcp")
+                    .error("\(fileURL.path, privacy: .public) is not readable as UTF-8 text at launch; left untouched, using last good config")
+                return
+            }
             writeFile(Preferences.mcpServers)
         }
     }

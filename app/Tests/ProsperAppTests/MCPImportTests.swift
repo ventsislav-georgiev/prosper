@@ -174,6 +174,64 @@ final class MCPImportTests: XCTestCase {
         }
     }
 
+    // MARK: Unreadable-but-present file (#351): never replaced at launch
+
+    /// Writes a non-UTF-8 file at the store path, sets the mirror, bootstraps, and
+    /// asserts the bytes and the mirror both survive.
+    private func assertNonUTF8FileKept(mirror makeMirror: @autoclosure () -> String?, file: StaticString = #filePath, line: UInt = #line) throws {
+        try withScratchFile { url in
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let bytes = Data([0xff, 0xfe, 0x00, 0x41, 0x42, 0x43])
+            try bytes.write(to: url)
+            let mirror = makeMirror()
+            Preferences.defaults.set(mirror, forKey: "agentMCPDiskMirror")
+            MCPConfigStore.bootstrap()
+            XCTAssertEqual(try Data(contentsOf: url), bytes, "unreadable user file was replaced", file: file, line: line)
+            XCTAssertEqual(Preferences.defaults.string(forKey: "agentMCPDiskMirror"), mirror, "mirror must be left as is", file: file, line: line)
+        }
+    }
+
+    func testBootstrapKeepsNonUTF8FileWhenMirrorMatchesPrefs() throws {
+        // Non-empty prefs (set by withScratchFile) + matching mirror, evaluated inside the
+        // scratch scope: only clearing the mirror makes writeFile write.
+        try assertNonUTF8FileKept(mirror: MCPConfigStore.encode(Preferences.mcpServers))
+    }
+
+    func testBootstrapKeepsNonUTF8FileWhenMirrorIsStale() throws {
+        try assertNonUTF8FileKept(mirror: "stale")
+    }
+
+    func testBootstrapLeavesDirectoryAtPath() throws {
+        try withScratchFile { url in
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            Preferences.defaults.set("stale", forKey: "agentMCPDiskMirror")
+            MCPConfigStore.bootstrap()
+            var isDir: ObjCBool = false
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue)
+            XCTAssertEqual(Preferences.defaults.string(forKey: "agentMCPDiskMirror"), "stale", "mirror must be left as is")
+        }
+    }
+
+    func testBootstrapRecreatesAbsentFileWithStaleMirror() throws {
+        try withScratchFile { url in
+            Preferences.defaults.set("stale", forKey: "agentMCPDiskMirror")
+            MCPConfigStore.bootstrap()
+            XCTAssertNotNil(MCPConfigStore.decode(try String(contentsOf: url, encoding: .utf8)))
+        }
+    }
+
+    /// Source pin: the unreadable branch of bootstrap logs before returning.
+    func testBootstrapUnreadableBranchLogs() throws {
+        let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../../Sources/ProsperApp/MCPConfigStore.swift")
+        let text = try String(contentsOf: src, encoding: .utf8)
+        guard let start = text.range(of: "if onDisk == nil {"),
+              let end = text.range(of: "return", range: start.upperBound..<text.endIndex)
+        else { return XCTFail("unreadable branch not found in MCPConfigStore.swift") }
+        XCTAssertTrue(text[start.upperBound..<end.lowerBound].contains(".error("), "unreadable branch must log")
+    }
+
     // MARK: Canonical encode/decode round-trip
 
     func testRoundTrip() {

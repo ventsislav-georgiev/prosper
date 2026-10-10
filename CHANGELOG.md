@@ -118,7 +118,10 @@ tag from the now-released section and put it on the new top draft.
   `5` or `true` is passed on as that text instead of an empty tool result.
 - **Fixed: a hand-edited `mcp.json` or `hooks.json` that fails to parse is no longer replaced
   at launch.** The file is left as it is, the last working configuration stays active, and
-  the problem is logged so you can fix it.
+  the failure is recorded in the system log (Console.app, subsystem `eu.illegible.prosper`)
+  so you can fix it. The same holds for a file that exists but cannot be read as text (not
+  UTF-8, no read permission, or a directory in its place). A missing file is written back
+  from the saved configuration.
 - **Fixed: the coding agent's approval card can no longer be fooled by a command that hides
   its tail behind newlines or bidi overrides.** The command shown for approval is now one
   escaped line, as the file and permission summaries already were, and invisible filler
