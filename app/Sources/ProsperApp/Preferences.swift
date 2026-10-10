@@ -247,8 +247,16 @@ enum Preferences {
         return UserDefaults(suiteName: name)!
     }()
 
-    static let scratchSuitePath = FileManager.default.temporaryDirectory
-        .appendingPathComponent("prosper-xctest-defaults-\(getpid())").path
+    /// In the small `prosper-test-defaults` dir (shared with the tests' `scratchDefaults`), not
+    /// the $TMPDIR root: a path suite rewrites its plist synchronously on every `set` (temp
+    /// file + rename beside it), and in a root holding ~2M entries that took 30-100 ms per
+    /// write instead of ~0.8 ms, on every keystroke via `AnalyticsStore.bumpUsage` (#339).
+    static let scratchSuitePath: String = {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prosper-test-defaults", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("prosper-xctest-defaults-\(getpid())").path
+    }()
 
     private enum Keys {
         static let autocompleteEnabled = "autocompleteEnabled"

@@ -27,6 +27,9 @@ final class PreferencesScratchStoreTests: XCTestCase {
     func testPreferencesStoreIsAPerProcessScratchSuite() {
         XCTAssertFalse(Preferences.defaults === UserDefaults.standard)
         XCTAssertTrue(Preferences.scratchSuitePath.hasSuffix("prosper-xctest-defaults-\(getpid())"))
+        // #339: never the $TMPDIR root, where each synchronous plist rewrite scales with its size.
+        XCTAssertNotEqual(URL(fileURLWithPath: Preferences.scratchSuitePath).deletingLastPathComponent().standardizedFileURL,
+                          FileManager.default.temporaryDirectory.standardizedFileURL)
         let key = "prosper.scratchProbe.\(UUID().uuidString)"
         Preferences.defaults.set(true, forKey: key)
         defer { Preferences.defaults.removeObject(forKey: key) }
