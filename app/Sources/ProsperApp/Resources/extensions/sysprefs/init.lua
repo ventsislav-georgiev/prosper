@@ -27,7 +27,8 @@ end
 -- { title, pane id, extra keywords (lowercase, space-separated), SF Symbol,
 --   optional open target }. The pane id is the row id; the open target, when
 --   set, replaces the x-apple.systempreferences: URL (a pane that moved keeps its
---   old id so the row stays stable, and an absolute path opens an app).
+--   old id so the row stays stable). An absolute path is an app bundle and
+--   goes in `launch`/`image` instead, so the runner treats it as an app row.
 -- Ids are the macOS 13+ Settings extension bundle ids; `?Anchor` selects a
 -- sub-pane. Keywords carry the old System Preferences names and the words people
 -- actually type, since the titles alone miss most of them.
@@ -83,14 +84,18 @@ local PANES = {
 }
 
 local function row(p)
+    local app = p[5] and p[5]:sub(1, 1) == "/" and p[5] or nil
     return {
         id       = p[2],
         title    = p[1],
-        subtitle = (p[5] or ""):sub(1, 1) == "/" and "App" or "System Settings",
+        subtitle = app and "App" or "System Settings",
         icon     = p[4] or "gearshape",
-        -- The runner opens this natively on Enter and dismisses itself; an
-        -- absolute path becomes a file URL there (RunnerPanel.quicklinkURL).
-        url      = p[5] or ("x-apple.systempreferences:" .. p[2]),
+        -- The runner opens `url` natively on Enter and dismisses itself; `launch`
+        -- takes the native app-launch path ("Application" tag), `image` shows the
+        -- bundle's Finder icon.
+        url      = not app and (p[5] or ("x-apple.systempreferences:" .. p[2])) or nil,
+        launch   = app,
+        image    = app,
     }
 end
 

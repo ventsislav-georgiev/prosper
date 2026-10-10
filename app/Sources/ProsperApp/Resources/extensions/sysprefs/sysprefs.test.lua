@@ -32,8 +32,11 @@ h.eq(find(all, "Wi-Fi") ~= nil, true, "Wi-Fi present")
 -- Every row is openable and uniquely identified.
 local seen = {}
 for _, it in ipairs(all.items) do
-    if it.title ~= "Passwords" then
+    if it.id == "com.apple.Passwords-Settings.extension" then
+        h.eq(it.launch, "/System/Applications/Passwords.app", "Passwords row launches the app")
+    else
         h.eq(it.url:sub(1, 27), "x-apple.systempreferences:c", "row " .. it.title .. " carries a pane URL")
+        h.eq(it.launch, nil, "pane row " .. it.title .. " has no launch target")
     end
     h.eq(seen[it.id], nil, "duplicate pane id: " .. tostring(it.id))
     seen[it.id] = true
@@ -56,7 +59,9 @@ h.eq(saver.url, "x-apple.systempreferences:com.apple.Wallpaper-Settings.extensio
 h.eq(find(rows("ss idle"), "Screen Saver") ~= nil, true, "Screen Saver keeps its 'idle' keyword")
 
 local pw = find(rows("ss passwords"), "Passwords")
-h.eq(pw.url, "/System/Applications/Passwords.app", "Passwords opens Passwords.app")
+h.eq(pw.launch, "/System/Applications/Passwords.app", "Passwords launches Passwords.app")
+h.eq(pw.image, "/System/Applications/Passwords.app", "Passwords row shows the app icon")
+h.eq(pw.url, nil, "Passwords row is not a URL row (runner would tag it Bookmark)")
 h.eq(pw.subtitle, "App", "Passwords row is labelled as an app")
 h.eq(find(rows("ss keychain"), "Passwords") ~= nil, true, "Passwords keeps its 'keychain' keyword")
 
