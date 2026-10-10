@@ -373,9 +373,11 @@ final class HyperKey {
             NSLog("prosper: hyper key refused — Caps Lock already remapped to %@ by another tool", described)
             return
         }
-        // #384: a failed install leaves the feature off; the marker stays (one no-op removal later).
-        guard applyMapping(HyperKeyMapping.merged(into: table)) else {
-            NSLog("prosper: hyper key — hidutil --set failed, feature left off"); return
+        // #384/#389: a failed install still arms the feature (the marker stays). The repair
+        // path re-asserts the mapping on the next Caps Lock press and the wake observer on
+        // wake; a feature left off would pass presses through and never retry.
+        if !applyMapping(HyperKeyMapping.merged(into: table)) {
+            NSLog("prosper: hyper key — hidutil --set failed, the next Caps Lock press retries")
         }
         state.reset()
         isActive = true

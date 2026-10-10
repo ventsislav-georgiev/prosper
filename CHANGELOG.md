@@ -177,8 +177,8 @@ tag from the now-released section and put it on the new top draft.
   during the minute-long pause still makes one attempt to remove the Caps Lock mapping, so
   Caps Lock does not keep sending the hyper key after Prosper is gone. If `hidutil` fails to
   remove the mapping, Prosper keeps its note that the mapping is still installed and cleans it
-  up at the next launch; if `hidutil` fails to install it, the hyper key stays off instead of
-  showing as on.
+  up at the next launch. A failed install is logged and, as before, retried on the next Caps
+  Lock press.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
   Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON

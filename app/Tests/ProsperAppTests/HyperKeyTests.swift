@@ -91,6 +91,15 @@ final class HyperKeyTests: XCTestCase {
                        "the trigger key must never reach an app, press seen or not")
     }
 
+    /// #389: a real Caps Lock press is always swallowed and triggers the mapping repair at most
+    /// once per repairIntervalNanos; this is what heals a failed install.
+    func testRealCapsLockRepairsAtMostOncePerInterval() {
+        var st = HyperKeyState()
+        XCTAssertEqual(st.decide(.realCapsLock, nowNanos: 0), .repairMapping)
+        XCTAssertEqual(st.decide(.realCapsLock, nowNanos: HyperKeyState.repairIntervalNanos - 1), .swallow)
+        XCTAssertEqual(st.decide(.realCapsLock, nowNanos: HyperKeyState.repairIntervalNanos), .repairMapping)
+    }
+
     // MARK: - 2. soloEffect mapping
 
     func testSoloEffectTable() {
@@ -470,9 +479,9 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
         XCTAssertFalse(HyperKey.shared.isActive)
     }
 
-    /// #384: an install --set that fails leaves the feature off, marker set.
+    /// #389: an install --set that fails keeps the feature armed (press-driven repair), marker set.
     @MainActor
-    func testFailedInstallSetLeavesTheFeatureOff() throws {
+    func testFailedInstallKeepsTheFeatureArmed() throws {
         let dir = tempDir()
         let log = try installSetStub(setExit: 1, in: dir)
         let enabled = Preferences.hyperKeyEnabled
@@ -484,8 +493,12 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
 
         let calls = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
         XCTAssertEqual(calls.split(separator: "\n"), ["--get", "--set"])
-        XCTAssertFalse(HyperKey.shared.isActive, "a failed install must not report the feature on")
+        XCTAssertTrue(HyperKey.shared.isActive, "a failed install stays armed so a Caps Lock press repairs it")
         XCTAssertTrue(Preferences.defaults.bool(forKey: HyperKey.markerKey), "write-ahead marker stays")
+
+        HyperKey.shared.reconcile(tapRunning: true)   // already active: activate returns early
+        let again = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+        XCTAssertEqual(again.split(separator: "\n"), ["--get", "--set"], "reconcile is not the healer")
     }
 
     /// #384 control: both --set calls succeed — active on install, marker cleared on removal.
