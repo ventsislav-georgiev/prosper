@@ -247,9 +247,11 @@ enum FanControlHelper {
     /// An engage replied after `callReply` already gave up on it (timeout / XPC error):
     /// the helper pinned the fan anyway. With manual off nothing else will release it
     /// (the reclaim re-apply has no popup late-engage guard), so `release` here (#269).
+    /// Also release while sleeping: willSleep already reset the fans and wake re-applies (#275).
     static func lateEngageLanded(_ engaged: Bool,
+                                 sleeping: Bool = Self.sleeping,
                                  release: @escaping @MainActor () async -> Void = { await resetAll(teardown: true) }) {
-        if engaged, !Preferences.fanManualEnabled { Task { await release() } }
+        if engaged, !Preferences.fanManualEnabled || sleeping { Task { await release() } }
     }
 
     /// Hand one fan back to OS thermal control (other fans unaffected). Honors the

@@ -97,6 +97,21 @@ final class FanReclaimRecoveryTests: XCTestCase {
         await fulfillment(of: [kept], timeout: 0.3)
     }
 
+    /// Asleep, a late engage is released even with manual on (#275).
+    @MainActor
+    func testLateEngageDuringSleepReleasesWithManualOn() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+        Preferences.fanManualEnabled = true
+        let released = expectation(description: "released during sleep")
+        FanControlHelper.lateEngageLanded(true, sleeping: true, release: { released.fulfill() })
+        await fulfillment(of: [released], timeout: 1)
+        let kept = expectation(description: "no release awake")
+        kept.isInverted = true
+        FanControlHelper.lateEngageLanded(true, sleeping: false, release: { kept.fulfill() })
+        await fulfillment(of: [kept], timeout: 0.3)
+    }
+
     /// #263 (2): a teardown must not invalidate the connection an engage picked up
     /// while the reset was in flight. The fake points at a mach name nothing serves,
     /// so the reset errors out at once and no helper is involved.
