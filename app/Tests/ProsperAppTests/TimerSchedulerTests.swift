@@ -18,7 +18,7 @@ final class TimerSchedulerTests: XCTestCase {
 
     /// Polls until the serial queue has persisted the entry with id `id`.
     private func waitFor(_ id: String) -> [String: Any]? {
-        for _ in 0..<200 {
+        for _ in 0..<1000 {  // 10 s budget: full-suite load flaked at 2 s
             if let e = persisted().first(where: { $0["id"] as? String == id }) { return e }
             Thread.sleep(forTimeInterval: 0.01)
         }
@@ -49,5 +49,26 @@ final class TimerSchedulerTests: XCTestCase {
         s.schedule(extID: "x", id: "sentinel", every: false, seconds: 1, handler: "h")
         XCTAssertNotNil(waitFor("sentinel"))
         XCTAssertEqual(Set(persisted().compactMap { $0["id"] as? String }), ["a", "b", "sentinel"])
+    }
+
+    func testClampFloorsBadValuesAndDropsNaN() {
+        for v in [-1, 0, -1e308, -Double.infinity, Double.nan] {
+            XCTAssertEqual(TimerScheduler.clamp(v, floor: 0.05), 0.05, "\(v)")
+        }
+        XCTAssertEqual(TimerScheduler.clamp(Double.nan, floor: 0), 0)
+        XCTAssertEqual(TimerScheduler.clamp(.infinity, floor: 0.05), TimerScheduler.maxDelay)
+    }
+
+    /// #324: a corrupt repeating interval must not trap DispatchSource.schedule at launch.
+    func testRestoreWithNonPositivePersistedIntervalDoesNotTrap() throws {
+        let bad: [[String: Any]] = [-1.0, 0.0, -1e308].enumerated().map { i, v in
+            ["extID": "x", "id": "r\(i)", "handler": "h", "every": true, "interval": v, "fireAt": 0]
+        }
+        store.dict["ext.timers.v1"] = try JSONSerialization.data(withJSONObject: bad)
+        let s = TimerScheduler(store: store)
+        s.restore()
+        s.schedule(extID: "x", id: "sentinel", every: false, seconds: 1, handler: "h")
+        XCTAssertNotNil(waitFor("sentinel"))
+        XCTAssertEqual(Set(persisted().compactMap { $0["id"] as? String }), ["r0", "r1", "r2", "sentinel"])
     }
 }
