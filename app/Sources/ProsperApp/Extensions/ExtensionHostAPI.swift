@@ -413,8 +413,10 @@ struct ExtensionHost {
         let automation = privileged || trusted
         // Lua numbers are Doubles: NaN/±inf trap Int()/Int32() and make JSONSerialization
         // raise an uncatchable NSException. Every number crossing into Swift as an Int or
-        // a serialized value goes through these: non-finite → nil (the caller's default,
-        // logged), finite → clamped to `r`. (#295)
+        // a serialized value goes through these: non-finite → nil, finite → clamped to `r`.
+        // The warning says "rejected", but only window.set rejects (returns false). The other
+        // 7 callers substitute a default: clipboard history limit 50, the two pid callers 0,
+        // timer seconds 0, power AC 30 / battery 300 / floor 20. (#295)
         func finiteNumber(_ rt: LuaRuntime, _ i: Int32) -> Double? {
             guard let d = rt.numberArgument(i) else { return nil }
             if d.isFinite { return d }

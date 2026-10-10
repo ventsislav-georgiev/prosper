@@ -45,9 +45,10 @@ final class HarnessProtocolTests: XCTestCase {
         NSPredicate(format: "subsystem == %@", "com.prosper.app")
     }
 
-    /// #338: error level, dated at or after `from`, deduped on (date, message). Suspected cause
-    /// of the doubles (not reproduced): OSLogStore returning one entry twice when the start
-    /// position straddles the in-memory and persisted stores.
+    /// #338: error level, dated at or after `from`, deduped on (date, message): OSLogStore has been
+    /// seen to return a line twice (suspected: an entry present in both the in-memory and the
+    /// persisted store; not reproduced). A genuine repeat logged in the same microsecond collapses
+    /// too; no caller counts those.
     static func selectErrorMessages(_ entries: [(level: OSLogEntryLog.Level, date: Date, message: String)],
                                     from: Date) -> [String] {
         var seen = Set<String>()

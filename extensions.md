@@ -160,7 +160,7 @@ Built-in **retry + exponential backoff** on transient failures (no response / 5x
 
 ### `host.window` + `host.ui` — declarative native UI
 
-- `host.window.frame()` → `{ x, y, w, h, screen = { x, y, w, h } } | nil` — focused-window geometry via Accessibility; nil when no window is focused, Accessibility permission is missing, or macOS reports a non-finite frame · `host.window.set(x,y,w,h)` → bool (move/resize). Powers [`window`](app/Sources/ProsperApp/Resources/extensions/window/).
+- `host.window.frame()` → `{ x, y, w, h, screen = { x, y, w, h } } | nil` — focused-window geometry via Accessibility; nil when no window is focused, Accessibility permission is missing, or macOS reports a non-finite frame · `host.window.set(x,y,w,h)` → bool (move/resize). A missing argument becomes 0; a non-finite one makes it return false. Powers [`window`](app/Sources/ProsperApp/Resources/extensions/window/).
 - `host.window.open(node)` opens a standalone host-rendered window from a `host.ui.*` node; `host.window.close()` dismisses it (used by form/dialog submit handlers).
 - `host.ui.{list,detail,form,grid,converter,loading,render}` build native SwiftUI trees — **no HTML, the host owns every pixel.** Renderer: [`ExtensionViewRenderer.swift`](app/Sources/ProsperApp/Extensions/ExtensionViewRenderer.swift).
 - `host.ui.chooseApp()` → `{ bundleID=, name= }` | nil — native app picker (used by [`inputswitch`](app/Sources/ProsperApp/Resources/extensions/inputswitch/)).
