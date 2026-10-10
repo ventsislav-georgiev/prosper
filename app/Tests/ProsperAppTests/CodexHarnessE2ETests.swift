@@ -532,8 +532,10 @@ final class CodexHarnessE2ETests: XCTestCase {
         let (exe, home) = try makeMock()
         let harness = CodexHarness(executableURL: exe, codexHome: home,
                                    llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
-        await harness.setReplyTimeoutForTesting(0.3)
         try await harness.start()
+        // After start(): the timeout is read per request, and arming it before would make the
+        // initialize round trip (python mock cold start) race 0.3 s under load. #286
+        await harness.setReplyTimeoutForTesting(0.3)
         try "thread/start".write(to: exe.deletingLastPathComponent().appendingPathComponent("late-on"),
                                  atomically: true, encoding: .utf8)
         let since = Date()
