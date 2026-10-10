@@ -101,6 +101,8 @@ tag from the now-released section and put it on the new top draft.
   the fans back and the helper's reset fails, the helper keeps retrying instead of leaving
   the fans unsupervised. A failed first engage from the popup also drops the 2 s reclaim
   check it had armed.
+  The popup's 45 s engage watchdog now really fires when the helper registration hangs,
+  so the button no longer sticks on "Enabling…" until the hung call returns.
 - **Performance: with inline autocomplete off, mouse clicks no longer pass through Prosper**
   and the global scroll monitor is not installed. The keystroke tap listened for every left
   click and every scroll tick on behalf of autocomplete even when it was disabled. Toggling

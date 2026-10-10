@@ -11,6 +11,7 @@
 
 import SwiftUI
 import AppKit
+import os
 import StatsCore
 
 /// Load/cluster legend colours, matched to exelban's CPU popup.
@@ -897,16 +898,28 @@ struct StatsPopupView: View {
     /// engaged — otherwise the popover lied (helper not installed/approved). The first
     /// `setManual` is what triggers helper registration + the macOS approval prompt.
     /// Run an engage with a hard wall-clock ceiling. If it exceeds `seconds` (e.g. a
-    /// wedged SMAppService registration), return false so the UI resolves; the orphaned
-    /// work harmlessly completes later (the daemon resets fans on its own cold start).
+    /// wedged SMAppService registration), return `.unavailable` so the UI resolves; the
+    /// orphaned work harmlessly completes later (the daemon resets fans on its own cold start).
     private func withFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply) async -> FanManualReply {
-        await withTaskGroup(of: FanManualReply.self) { group in
-            group.addTask { await op() }
-            group.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); return .unavailable }
-            let result = await group.next() ?? .unavailable
-            group.cancelAll()
-            return result
+        await Self.raceFanTimeout(seconds, op)
+    }
+
+    /// Not a task group: a group awaits every child before returning, so a non-cancellable
+    /// hung op() would hold the ceiling hostage (#249). Unstructured tasks race to resume
+    /// one continuation; the loser's resume is dropped, the sleep is cancelled, op() is
+    /// left to finish on its own.
+    nonisolated static func raceFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply) async -> FanManualReply {
+        let resumed = OSAllocatedUnfairLock(initialState: false)
+        var timer: Task<Void, Never>?
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<FanManualReply, Never>) in
+            let finish: @Sendable (FanManualReply) -> Void = { reply in
+                if resumed.withLock({ let first = !$0; $0 = true; return first }) { cont.resume(returning: reply) }
+            }
+            Task { finish(await op()) }   // deliberately never cancelled or awaited: see above
+            timer = Task { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); finish(.unavailable) }
         }
+        timer?.cancel()
+        return result
     }
 
     private func confirmManualAll() {
