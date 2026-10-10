@@ -29,6 +29,7 @@ final class HostEventsTests: XCTestCase {
     @MainActor
     func testClipboardChangedEmitsOncePerChangeCount() {
         let pb = Self.scratchPasteboard()
+        defer { pb.releaseGlobally() }
         let monitor = ClipboardMonitor()
         monitor.captureHistory = false          // event-only mode: no history writes
 
@@ -56,6 +57,7 @@ final class HostEventsTests: XCTestCase {
     @MainActor
     func testSuppressNextChangeDropsExactlyOneEvent() {
         let pb = Self.scratchPasteboard()
+        defer { pb.releaseGlobally() }
         let monitor = ClipboardMonitor()
         monitor.captureHistory = false
 
@@ -83,6 +85,7 @@ final class HostEventsTests: XCTestCase {
     @MainActor
     func testClipboardChangedGateSkipsEmitWhenNothingSubscribes() {
         let pb = Self.scratchPasteboard()
+        defer { pb.releaseGlobally() }
         let monitor = ClipboardMonitor()
         monitor.captureHistory = false
         pb.clearContents()
