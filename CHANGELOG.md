@@ -113,6 +113,9 @@ tag from the now-released section and put it on the new top draft.
   Retrying while that registration is still hung no longer piles up a blocked thread per
   click: every caller now waits on the one registration already in flight, so a wedged
   background-item service cannot starve the rest of the app.
+  And an engage the watchdog gave up on that succeeds later is released again instead of
+  pinning the fan behind a card that says it failed, unless a newer engage already owns
+  the fans.
 - **Performance: with inline autocomplete off, mouse clicks no longer pass through Prosper**
   and the global scroll monitor is not installed. The keystroke tap listened for every left
   click and every scroll tick on behalf of autocomplete even when it was disabled. Toggling

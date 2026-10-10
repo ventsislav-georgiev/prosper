@@ -21,8 +21,42 @@ final class FanTimeoutRaceTests: XCTestCase {
 
     func testFastOpWinsBeforeCeiling() async {
         let start = Date()
-        let reply = await StatsPopupView.raceFanTimeout(5) { .engaged }
+        let released = expectation(description: "no late release")
+        released.isInverted = true
+        let reply = await StatsPopupView.raceFanTimeout(5, { .engaged }, lateEngaged: { released.fulfill() })
         XCTAssertEqual(reply, .engaged)
         XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        await fulfillment(of: [released], timeout: 0.3)
+    }
+
+    /// #255: the abandoned engage succeeds after the ceiling fired. The popup still gets
+    /// `.unavailable` (manual stays off) and the late engage is released.
+    func testLateEngageAfterCeilingIsReleased() async {
+        let released = expectation(description: "late engage released")
+        let reply = await StatsPopupView.raceFanTimeout(0.1, {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            return .engaged
+        }, lateEngaged: { released.fulfill() })
+        XCTAssertEqual(reply, .unavailable)
+        await fulfillment(of: [released], timeout: 2)
+    }
+
+    /// #255: only the newest engage, with manual still off, may release.
+    func testShouldReleaseLateEngage() {
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, manualOn: false))
+        XCTAssertTrue(StatsPopupView.shouldReleaseLateEngage(generation: 2, current: 2, manualOn: false))
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 2, current: 2, manualOn: true))
+    }
+
+    /// A late failure has nothing engaged to release.
+    func testLateFailureAfterCeilingIsNotReleased() async {
+        let released = expectation(description: "no release")
+        released.isInverted = true
+        let reply = await StatsPopupView.raceFanTimeout(0.1, {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            return .refused
+        }, lateEngaged: { released.fulfill() })
+        XCTAssertEqual(reply, .unavailable)
+        await fulfillment(of: [released], timeout: 0.6)
     }
 }

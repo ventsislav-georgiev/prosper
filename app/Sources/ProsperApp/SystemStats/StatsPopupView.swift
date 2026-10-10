@@ -898,25 +898,47 @@ struct StatsPopupView: View {
     /// engaged — otherwise the popover lied (helper not installed/approved). The first
     /// `setManual` is what triggers helper registration + the macOS approval prompt.
     /// Run an engage with a hard wall-clock ceiling. If it exceeds `seconds` (e.g. a
-    /// wedged SMAppService registration), return `.unavailable` so the UI resolves; the
-    /// orphaned work harmlessly completes later (the daemon resets fans on its own cold start).
+    /// wedged SMAppService registration), return `.unavailable` so the UI resolves. The
+    /// orphaned op can't be cancelled and may still engage later (the helper pins the fan
+    /// and the reclaim timer re-arms) behind a card that says it failed — so a late
+    /// `.engaged` is released through the same reset as "Automatic" (#255), unless a
+    /// newer engage has since started (it shares the registration and owns the fans)
+    /// or turned manual on.
     private func withFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply) async -> FanManualReply {
-        await Self.raceFanTimeout(seconds, op)
+        Self.engageGeneration += 1
+        let gen = Self.engageGeneration
+        return await Self.raceFanTimeout(seconds, op) { @MainActor in
+            guard Self.shouldReleaseLateEngage(generation: gen, current: Self.engageGeneration,
+                                               manualOn: Preferences.fanManualEnabled) else { return }
+            await FanControlHelper.resetAll(teardown: true)
+        }
+    }
+
+    @MainActor private static var engageGeneration = 0
+
+    nonisolated static func shouldReleaseLateEngage(generation: Int, current: Int, manualOn: Bool) -> Bool {
+        generation == current && !manualOn
     }
 
     /// Not a task group: a group awaits every child before returning, so a non-cancellable
     /// hung op() would hold the ceiling hostage (#249). Unstructured tasks race to resume
     /// one continuation; the loser's resume is dropped, the sleep is cancelled, op() is
-    /// left to finish on its own.
-    nonisolated static func raceFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply) async -> FanManualReply {
+    /// left to finish on its own; if it engages after the ceiling won, `lateEngaged` runs.
+    nonisolated static func raceFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply,
+                                           lateEngaged: @escaping @Sendable () async -> Void = {}) async -> FanManualReply {
         let resumed = OSAllocatedUnfairLock(initialState: false)
         var timer: Task<Void, Never>?
         let result = await withCheckedContinuation { (cont: CheckedContinuation<FanManualReply, Never>) in
-            let finish: @Sendable (FanManualReply) -> Void = { reply in
-                if resumed.withLock({ let first = !$0; $0 = true; return first }) { cont.resume(returning: reply) }
+            let finish: @Sendable (FanManualReply) -> Bool = { reply in
+                guard resumed.withLock({ let first = !$0; $0 = true; return first }) else { return false }
+                cont.resume(returning: reply)
+                return true
             }
-            Task { finish(await op()) }   // deliberately never cancelled or awaited: see above
-            timer = Task { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); finish(.unavailable) }
+            Task {   // deliberately never cancelled or awaited: see above
+                let reply = await op()
+                if !finish(reply), reply == .engaged { await lateEngaged() }
+            }
+            timer = Task { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); _ = finish(.unavailable) }
         }
         timer?.cancel()
         return result
