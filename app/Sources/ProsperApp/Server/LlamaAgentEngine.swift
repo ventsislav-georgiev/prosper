@@ -324,8 +324,7 @@ actor LlamaAgentEngine: AgentChatEngine {
         guard !tools.isEmpty else { return "" }
         let signatures = tools.compactMap { t -> String? in
             let dict = t.reduce(into: [String: Any]()) { $0[$1.key] = $1.value }
-            guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
-            return String(data: data, encoding: .utf8)
+            return ToolCallParser.jsonText(dict)
         }.joined(separator: "\n")
         return """
         # Tools

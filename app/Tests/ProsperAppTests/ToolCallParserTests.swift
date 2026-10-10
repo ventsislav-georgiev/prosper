@@ -318,6 +318,61 @@ final class ToolCallParserTests: XCTestCase {
 
     // MARK: Helpers
 
+    // MARK: Unencodable JSON (#294) — each case used to abort the process
+
+    func testJSONTextRejectsInsteadOfRaising() {
+        XCTAssertNil(ToolCallParser.jsonText(NSNull()))
+        XCTAssertNil(ToolCallParser.jsonText(5))
+        XCTAssertNil(ToolCallParser.jsonText(["n": -Double.infinity]))
+        XCTAssertNil(ToolCallParser.jsonText(-Double.infinity, fragments: true))
+        XCTAssertEqual(ToolCallParser.jsonText(5, fragments: true), "5")
+        XCTAssertEqual(ToolCallParser.jsonText("x", fragments: true), "\"x\"")
+        XCTAssertEqual(ToolCallParser.jsonText(["b": 1, "a": [2]], fragments: true), #"{"a":[2],"b":1}"#)
+    }
+
+    func testScalarArgumentsFallBack() {
+        for (arg, expected) in [("null", "{}"), ("5", "{}"), (#""x""#, "x")] {
+            let r = ToolCallParser.parse(#"<tool_call>{"name": "f", "arguments": \#(arg)}</tool_call>"#, format: .qwenXML)
+            XCTAssertEqual(r.toolCalls.count, 1, arg)
+            XCTAssertEqual(r.toolCalls.first?.argumentsJSON, expected, arg)
+        }
+    }
+
+    func testNonFiniteParameterValueFallsBackToEmptyObject() {
+        let cases: [(String, ToolCallFormat)] = [
+            (#"<minimax:tool_call><invoke name="f"><parameter name="n">-1e999</parameter></invoke></minimax:tool_call>"#, .minimax),
+            ("<tool_call><function=f><parameter=n>\n-1e999\n</parameter></function></tool_call>", .qwenXML),
+        ]
+        for (text, format) in cases {
+            let r = ToolCallParser.parse(text, format: format)
+            XCTAssertEqual(r.toolCalls.first?.name, "f", "\(format)")
+            XCTAssertEqual(r.toolCalls.first?.argumentsJSON, "{}", "\(format)")
+        }
+        // stringifyValue: a -inf value re-serialized for MiniMax replay falls back to "\(v)".
+        let s = ToolCallParser.serializeAssistant(
+            content: "", toolCalls: [ParsedToolCall(id: "c0", name: "f", argumentsJSON: #"{"n":-1e999}"#)], format: .minimax)
+        XCTAssertTrue(s.contains(#"<parameter name="n">-inf</parameter>"#), s)
+    }
+
+    /// History replay (the normalizedArgs route of OpenAIChat.chatTurns /
+    /// ProsperLLMServer repair loop): a poisoned stored argument passes through raw.
+    func testPoisonedHistoryArgumentsReplayWithoutCrash() throws {
+        let body = #"""
+        {"messages": [
+          {"role": "user", "content": "hi"},
+          {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "a", "type": "function", "function": {"name": "f", "arguments": "{\"n\":-1e999}"}},
+            {"id": "b", "type": "function", "function": {"name": "g", "arguments": {"n": -1e999}}}
+          ]}
+        ]}
+        """#
+        let req = try XCTUnwrap(OpenAIChatRequest(data: Data(body.utf8)))
+        XCTAssertEqual(req.messages[1].toolCalls.map(\.argumentsJSON), [#"{"n":-1e999}"#, "{}"])
+        let turns = req.chatTurns(format: .qwenXML)
+        XCTAssertTrue(turns[1].content.contains(#"{"name": "f", "arguments": {"n":-1e999}}"#), turns[1].content)
+        XCTAssertTrue(turns[1].content.contains(#"{"name": "g", "arguments": {}}"#), turns[1].content)
+    }
+
     private func json(_ s: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] ?? [:]
     }

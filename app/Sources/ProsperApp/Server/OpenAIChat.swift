@@ -113,7 +113,7 @@ struct OpenAIChatRequest: Sendable {
                 switch fn["arguments"] {
                 case let s as String: args = s
                 case let o as [String: Any]:
-                    args = (try? JSONSerialization.data(withJSONObject: o)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                    args = ToolCallParser.jsonText(o) ?? "{}"
                 default: args = "{}"
                 }
                 calls.append(OAToolCall(id: id, name: name, argumentsJSON: args))

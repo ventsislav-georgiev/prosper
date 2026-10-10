@@ -301,7 +301,7 @@ enum ToolCallParser {
             args[key] = jsonScalar(val)
             search = ve.upperBound
         }
-        let argsJSON = (try? jsonData(args)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let argsJSON = jsonText(args) ?? "{}"
         return ParsedToolCall(id: makeID(index), name: name, argumentsJSON: argsJSON)
     }
 
@@ -390,7 +390,7 @@ enum ToolCallParser {
             args[key] = jsonScalar(val)
             search = pe.upperBound
         }
-        let argsJSON = (try? jsonData(args)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let argsJSON = jsonText(args) ?? "{}"
         return ParsedToolCall(id: makeID(index), name: name, argumentsJSON: argsJSON)
     }
 
@@ -443,9 +443,7 @@ enum ToolCallParser {
     /// String values pass through raw; everything else re-serializes to JSON.
     private static func stringifyValue(_ v: Any) -> String {
         if let s = v as? String { return s }
-        if let data = try? JSONSerialization.data(withJSONObject: v, options: [.fragmentsAllowed]),
-           let str = String(data: data, encoding: .utf8) { return str }
-        return "\(v)"
+        return jsonText(v, fragments: true) ?? "\(v)"
     }
 
     // MARK: - Helpers
@@ -483,7 +481,7 @@ enum ToolCallParser {
             args[key] = jsonScalar(val)
             search = pe.upperBound
         }
-        let argsJSON = (try? jsonData(args)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let argsJSON = jsonText(args) ?? "{}"
         return ParsedToolCall(id: makeID(index), name: name, argumentsJSON: argsJSON)
     }
 
@@ -504,13 +502,13 @@ enum ToolCallParser {
         case let s as String:
             argsJSON = s.isEmpty ? "{}" : s
         case let dict as [String: Any]:
-            argsJSON = (try? jsonData(dict)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            argsJSON = jsonText(dict) ?? "{}"
         case .some(let other):
-            argsJSON = (try? jsonData(other)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            argsJSON = jsonText(other) ?? "{}"
         case .none:
             // Some models use "parameters" instead of "arguments".
             if let dict = obj["parameters"] as? [String: Any] {
-                argsJSON = (try? jsonData(dict)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                argsJSON = jsonText(dict) ?? "{}"
             } else {
                 argsJSON = "{}"
             }
@@ -527,14 +525,22 @@ enum ToolCallParser {
     /// not parse, pass it through (the model may have emitted slightly-off JSON that
     /// the downstream consumer still tolerates).
     private static func normalizedArgs(_ s: String) -> String {
-        guard let obj = parseJSONObject(s),
-              let data = try? jsonData(obj),
-              let out = String(data: data, encoding: .utf8) else { return s }
+        guard let obj = parseJSONObject(s), let out = jsonText(obj) else { return s }
         return out
     }
 
-    private static func jsonData(_ obj: Any) throws -> Data {
-        try JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])
+    /// JSON text for `v` (sorted keys), or nil when it can't be encoded.
+    /// `JSONSerialization.data` raises an uncatchable ObjC exception (not a Swift
+    /// error, `try?` won't help) on a non-array/dictionary top level or a non-finite
+    /// number anywhere (`-1e999` parses to -inf), so validate first. `fragments`
+    /// encodes a scalar by wrapping it as `[v]` and stripping the brackets.
+    static func jsonText(_ v: Any, fragments: Bool = false) -> String? {
+        let wrap = fragments && !(v is [Any] || v is [String: Any])
+        let obj: Any = wrap ? [v] : v
+        guard JSONSerialization.isValidJSONObject(obj),
+              let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+              let s = String(data: data, encoding: .utf8) else { return nil }
+        return wrap ? String(s.dropFirst().dropLast()) : s
     }
 
     private static func jsonString(_ s: String) -> String {

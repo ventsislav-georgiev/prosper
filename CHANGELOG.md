@@ -113,6 +113,10 @@ tag from the now-released section and put it on the new top draft.
   and skipped, a line over 16 MiB is dropped instead of growing memory without bound, and
   a frame holding a number that cannot be written back as JSON no longer crashes Prosper
   when it is logged.
+- **Fixed: a tool call with arguments that cannot be written as JSON no longer crashes
+  Prosper.** A model reply whose `arguments` is `null` or a bare number, a parameter
+  holding a number JSON cannot encode (such as `-1e999`), or a stored turn replaying such
+  a call now falls back to empty arguments instead of taking the app down.
 - **Fixed: stopping or ending a coding-agent session left codex's helper processes
   running.** The MCP servers and tools codex starts share its process group; Stop and End
   now shut down that whole group, and a codex that crashes takes its helpers with it, so

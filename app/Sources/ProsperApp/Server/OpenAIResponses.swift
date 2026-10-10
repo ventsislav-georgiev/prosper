@@ -119,8 +119,7 @@ struct ResponsesRequest {
         switch any {
         case let s as String: return s
         case .some(let v):
-            return (try? JSONSerialization.data(withJSONObject: v))
-                .flatMap { String(data: $0, encoding: .utf8) }
+            return ToolCallParser.jsonText(v)
         case .none: return nil
         }
     }
