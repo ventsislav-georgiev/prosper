@@ -625,7 +625,7 @@ actor CodexHarness: CodingHarness {
                                         changes: [[String: Any]]) -> String {
         switch kind {
         case .command:
-            if let cmd = params["command"] as? [String] { return oneLine(cmd.joined(separator: " ")) }
+            if let cmd = params["command"] as? [String] { return commandSummary(cmd) }
             return (params["command"] as? String).map(oneLine) ?? "Run a command"
         case .fileChange:
             let paths = changes.compactMap { $0["path"] as? String }.map(oneLine)
@@ -682,6 +682,17 @@ actor CodexHarness: CodingHarness {
     /// space, U+00A0, U+2003, U+3000 — or tab, mixed freely) becomes one `␠×N` marker with the
     /// run's total scalar count, so padding can't push a command's tail out of view; a single
     /// or double space is left alone (a lone tab still escapes as `\u{9}`).
+    /// #353: an argv shows each element shell-quoted, so `bash -c 'ls; x'` can't read as separate words.
+    static func commandSummary(_ argv: [String]) -> String {
+        oneLine(argv.map(shellQuoted).joined(separator: " "))
+    }
+
+    static func shellQuoted(_ word: String) -> String {
+        let bare = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-+=/.,:@%")
+        if word == "~" || (!word.isEmpty && word.allSatisfy(bare.contains)) { return word }
+        return "'" + word.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
+    }
+
     private static func oneLine(_ s: String) -> String {
         let escape = { (u: Unicode.Scalar) in
             [.control, .format].contains(u.properties.generalCategory) || u.properties.isDefaultIgnorableCodePoint

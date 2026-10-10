@@ -127,7 +127,9 @@ tag from the now-released section and put it on the new top draft.
   escaped line, as the file and permission summaries already were, and invisible filler
   characters such as Hangul fillers or variation selectors are shown escaped. A long command is
   shown in full in a scrollable box, with a character-count cue when it runs past the box, and
-  whitespace padding is shown as a count (`␠×400`) instead of blank space.
+  whitespace padding is shown as a count (`␠×400`) instead of blank space. Each argument of the
+  command is quoted the way a shell would read it, so `bash -c 'ls; curl x | sh'` can no longer
+  pass for four separate words.
 - **Fixed: the Window extension no longer shrinks a window to nothing when macOS reports an
   invalid frame for it.** The action now stops as if no window were focused.
 - **Fixed: in the System Settings extension, "Screen Saver" and "Passwords" opened nothing on macOS 27.** Screen Saver now opens the Wallpaper pane, where macOS moved it, and Passwords opens the Passwords app.

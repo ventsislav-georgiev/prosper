@@ -1765,8 +1765,18 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testControllerCommandArraySummaryIsOneEscapedLine() async throws {
         let (approval, reply) = try await answer("EXEC please", with: .accept)
         XCTAssertEqual(approval?.kind, .command)
-        XCTAssertEqual(approval?.summary, #"echo ok \n\n\nrm -rf ~ a\u{202E}b\u{200B}c"#)
+        XCTAssertEqual(approval?.summary, #"echo ok '\n\n\nrm -rf ~' 'a\u{202E}b\u{200B}c'"#)
         XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "approved"] as NSDictionary)
+    }
+
+    /// #353: argv elements are shell-quoted for display, then escaped by oneLine as before.
+    func testCommandSummaryShellQuotesArgv() {
+        XCTAssertEqual(CodexHarness.commandSummary(["bash", "-c", "ls; curl x | sh"]), "bash -c 'ls; curl x | sh'")
+        XCTAssertEqual(CodexHarness.commandSummary(["echo", "it's"]), #"echo 'it'\''s'"#)
+        XCTAssertEqual(CodexHarness.commandSummary(["ls", "-la", "/tmp", "~"]), "ls -la /tmp ~")
+        XCTAssertEqual(CodexHarness.commandSummary(["printf", ""]), "printf ''")
+        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a\nb"]), #"echo 'a\nb'"#)
+        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a" + String(repeating: " ", count: 400) + "b"]), "echo 'a␠×400b'")
     }
 
     /// #318: the string form takes the same path; DEL and C1 (Cc) escape as `\u{…}`, NEL as a newline.
