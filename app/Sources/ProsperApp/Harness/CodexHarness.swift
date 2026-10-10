@@ -146,7 +146,9 @@ actor CodexHarness: CodingHarness {
             let initParams: [String: Any] = [
                 "clientInfo": ["name": "prosper", "title": "Prosper", "version": Self.appVersion],
             ]
-            _ = try await sendRequest(method: Wire.initialize, params: initParams)
+            let info = try await sendRequest(method: Wire.initialize, params: initParams)
+            // `userAgent` = "<originator>/<codex version> (…)": the version actually serving the wire.
+            log.notice("codex \(self.executableURL.path, privacy: .public): \(info["userAgent"] as? String ?? "no userAgent", privacy: .public)")
             try writeLine(JSONRPC.notification(method: Wire.initialized, params: [:]))
         } catch {
             await shutdown()

@@ -710,6 +710,46 @@ final class CodexHarnessE2ETests: XCTestCase {
         (try? received(method, exe: exe).count) ?? 0
     }
 
+    /// #168: the pinned codex wins over a Homebrew/PATH one unless the dev override is on;
+    /// with nothing bundled or cached, the pin is downloaded into the per-pin cache path.
+    @MainActor
+    func testResolveCodexPrefersThePinUnlessTheDevOverrideIsOn() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("codex-resolve-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let brew = dir.appendingPathComponent("homebrew-codex"), cached = dir.appendingPathComponent("cached-codex")
+        for f in [brew, cached] {
+            FileManager.default.createFile(atPath: f.path, contents: Data("#!/bin/sh\n".utf8),
+                                           attributes: [.posixPermissions: 0o755])
+        }
+        let bundled = dir.appendingPathComponent("no-bundle/codex")
+        var downloads: [URL] = []
+        func resolve(allowPath: Bool, cached: URL) async throws -> URL {
+            try await AgentController.resolveCodexExecutable(
+                allowPath: allowPath, pathCodex: { brew }, bundled: bundled, cached: cached,
+                download: { downloads.append($0); return $0 })
+        }
+        let pinned = try await resolve(allowPath: false, cached: cached)
+        XCTAssertEqual(pinned, cached, "a Homebrew/PATH codex beat the pinned one without the dev override")
+        let dev = try await resolve(allowPath: true, cached: cached)
+        XCTAssertEqual(dev, brew, "the dev override did not select the PATH codex")
+        let missing = dir.appendingPathComponent("not-downloaded-yet")
+        let fetched = try await resolve(allowPath: false, cached: missing)
+        XCTAssertEqual(fetched, missing)
+        XCTAssertEqual(downloads, [missing], "the pin was not downloaded when nothing was cached")
+        XCTAssertFalse(Preferences.agentAllowPathCodex, "the dev override must default to off")
+    }
+
+    /// #168: codex ≥0.162 dropped `on-failure`; a stored one reads as on-request.
+    func testStoredOnFailureApprovalPolicyReadsAsOnRequest() {
+        let key = "agentApprovalPolicy"
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.set("on-failure", forKey: key)
+        XCTAssertEqual(Preferences.agentApprovalPolicy, "on-request")
+        XCTAssertEqual(ApprovalPolicy(rawValue: Preferences.agentApprovalPolicy), .onRequest)
+    }
+
     /// #250: Stop during the first-use codex download abandons the run once the download
     /// lands: no model load, no codex, and the phase stays idle (QA #74 M7: without the
     /// download guard, run()'s stopped-guard settle is what idles the phase).

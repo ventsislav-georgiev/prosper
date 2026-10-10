@@ -5,22 +5,29 @@
 #
 # Codex delivery is on-demand by design (keeps the base app slim — the binary is ~86 MB):
 # AgentController.resolveCodexExecutable() looks at Contents/Helpers/codex first, then
-# Homebrew/PATH, then downloads the pinned, SHA-256-verified release into Application
-# Support on first use of the coding agent. So a missing codex here is NOT a failure —
-# users who never open the agent never pull it. This script only stages a binary that's
-# already on the build machine (dev convenience / reproducible bundle).
+# downloads the pinned, SHA-256-verified release into Application Support on first use
+# of the coding agent. So a missing codex here is NOT a failure — users who never open
+# the agent never pull it. This script only stages a binary that's already on the build
+# machine (dev convenience / reproducible bundle), and only if it IS the pinned version:
+# the bundled copy wins at runtime, and the harness speaks the pin's wire.
 #
 # Binary resolution order for the optional bundled codex:
 #   1. $PROSPER_CODEX_BIN  — explicit path to a prebuilt codex binary
 #   2. codex on PATH       — dev convenience
-#   (no build-time download; that's the runtime's job — keep CODEX_VERSION in lockstep
-#    with AgentController.codexVersion + codexSHA256.)
+#   Either must report `codex --version` == AgentController.codexVersion (read from the
+#   source below), else the script fails and stages nothing.
 #
 # Usage: bundle-codex.sh <APP_PATH> [SIGN_IDENTITY]
 set -euo pipefail
 
 APP="${1:?usage: bundle-codex.sh <APP_PATH> [SIGN_IDENTITY]}"
 IDENTITY="${2:--}"
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The pin lives in one place; read it rather than repeat it here.
+CODEX_VERSION="$(grep -oE 'codexVersion = "rust-v[0-9.]+"' "$ROOT/app/Sources/ProsperApp/AgentController.swift" \
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+[[ -n "$CODEX_VERSION" ]] || { echo "error: could not read AgentController.codexVersion" >&2; exit 1; }
 
 HELPERS="$APP/Contents/Helpers"
 DEST="$HELPERS/codex"
@@ -43,6 +50,15 @@ elif command -v codex >/dev/null 2>&1; then
 else
   echo "codex: no build-time binary (set PROSPER_CODEX_BIN or install codex); app downloads on first agent use."
   exit 0
+fi
+
+# Version gate: `codex --version` prints "codex-cli <x.y.z>". Bounded: on this dev Mac
+# the Homebrew binary was seen to hang in dyld; a hang reads as a mismatch.
+got="$(/usr/bin/perl -e 'alarm 30; exec @ARGV' "$src" --version 2>/dev/null | awk '{print $NF}' || true)"
+if [[ "$got" != "$CODEX_VERSION" ]]; then
+  echo "error: $src is codex '${got:-unknown}', the pin is $CODEX_VERSION (AgentController.codexVersion) — not bundling it." >&2
+  echo "       Set PROSPER_CODEX_BIN to a $CODEX_VERSION binary, or bundle without one (the app downloads the pin)." >&2
+  exit 1
 fi
 
 # Sanity-check the arch — a mismatched helper would fail to exec at runtime.
@@ -68,4 +84,4 @@ else
     echo "warn: codesign of codex helper failed (notarization will reject an unsigned helper)." >&2
 fi
 
-echo "codex: staged at $DEST (version $CODEX_VERSION, $triple)"
+echo "codex: staged at $DEST (version $CODEX_VERSION, $machoArch)"

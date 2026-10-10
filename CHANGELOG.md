@@ -92,6 +92,12 @@ tag from the now-released section and put it on the new top draft.
   start no longer leaves a codex running with no owner, and a prompt re-submitted while a
   stopped run is still downloading shares that download instead of starting a second one
   into the same file.
+- **Updated: the coding agent runs codex 0.162.1** (was 0.139.0). Prosper now always runs
+  its own pinned codex, bundled or downloaded on first use into a per-version cache, and a
+  Homebrew codex is used only under a developer override
+  (`defaults write eu.illegible.prosper agentAllowPathCodex -bool true`). The version that
+  actually answers the wire is logged once at start. The "Ask only on failure" approval
+  choice is gone (codex removed it); a saved one reads as "Ask on request".
 - **Fixed: coding agent approvals answered codex in the wrong shape.** A file-change
   approval now shows the paths and the diff being approved (codex only sends the item id;
   the card looked for fields that do not exist and always read "Apply changes to files").

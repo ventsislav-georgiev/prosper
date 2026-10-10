@@ -347,6 +347,9 @@ enum Preferences {
         // #232: set once Bypass is per device (pre-#232 builds synced it, see agentBypassAll).
         static let agentBypassLocal = "agentBypassLocal"
         static let agentApprovalPolicy = "agentApprovalPolicy"   // ApprovalPolicy raw
+        // Dev override (#168): run a Homebrew/PATH codex instead of the pinned release.
+        // `defaults write eu.illegible.prosper agentAllowPathCodex -bool true`; not synced.
+        static let agentAllowPathCodex = "agentAllowPathCodex"
         static let agentNetworkAccess = "agentNetworkAccess"
         static let agentWritableRoots = "agentWritableRoots"     // extra sandbox roots
         // Sampling for the coding agent. Read per-request by the LLM server (no
@@ -944,10 +947,14 @@ enum Preferences {
     static var agentApprovalPolicy: String {
         get {
             let v = defaults.string(forKey: Keys.agentApprovalPolicy) ?? "on-request"
+            if v == "on-failure" { return "on-request" }     // codex ≥0.162 dropped `on-failure`
             return v == "unless-trusted" ? "untrusted" : v   // legacy rename: codex dropped `unless-trusted`
         }
         set { defaults.set(newValue, forKey: Keys.agentApprovalPolicy) }
     }
+
+    /// Dev override: prefer a Homebrew/PATH codex over the pinned one. Off by default.
+    static var agentAllowPathCodex: Bool { defaults.bool(forKey: Keys.agentAllowPathCodex) }
 
     /// Allow the sandboxed agent to reach the network (workspace-write mode).
     static var agentNetworkAccess: Bool {

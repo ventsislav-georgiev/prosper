@@ -892,25 +892,37 @@ final class AgentController {
         return home.appendingPathComponent(".config/prosper/codex", isDirectory: true)
     }
 
-    /// Bundled binary at `Contents/Helpers/codex` (if a build staged one) → Homebrew/PATH
-    /// (dev) → cached download → one-time download of the pinned release. Mirrors the
-    /// model and bun on-demand delivery: a fresh install carries no codex, so users who
-    /// never open the coding agent never pull the ~86 MB helper.
-    static func resolveCodexExecutable() async throws -> URL {
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/codex")
+    /// The pinned codex only: bundled `Contents/Helpers/codex` (bundle-codex.sh checks its
+    /// version) → cached download of this pin → one-time download of the pinned release.
+    /// Mirrors the model and bun on-demand delivery: a fresh install carries no codex, so
+    /// users who never open the coding agent never pull the ~86 MB helper. A Homebrew/PATH
+    /// codex runs only under the dev override (`Preferences.agentAllowPathCodex`) — the
+    /// harness speaks the pinned version's wire. Parameters are test seams.
+    static func resolveCodexExecutable(
+        allowPath: Bool = Preferences.agentAllowPathCodex,
+        pathCodex: @MainActor () -> URL? = AgentController.pathCodex,
+        bundled: URL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/codex"),
+        cached: URL = appSupportCodex(),
+        download: (URL) async throws -> URL = { try await downloadCodex(to: $0) }
+    ) async throws -> URL {
+        if allowPath, let dev = pathCodex() { return dev }
         if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled }
+        if FileManager.default.isExecutableFile(atPath: cached.path) { return cached }
+        return try await download(cached)
+    }
+
+    /// Homebrew/PATH codex, for the dev override only.
+    private static func pathCodex() -> URL? {
         for candidate in ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"] {
             if FileManager.default.isExecutableFile(atPath: candidate) { return URL(fileURLWithPath: candidate) }
         }
-        if let path = which("codex") { return URL(fileURLWithPath: path) }
-        let cached = appSupportCodex()
-        if FileManager.default.isExecutableFile(atPath: cached.path) { return cached }
-        return try await downloadCodex(to: cached)
+        return which("codex").map { URL(fileURLWithPath: $0) }
     }
 
+    /// Named per pin, so a bump downloads the new release instead of reusing the old one.
     private static func appSupportCodex() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("Prosper/codex", isDirectory: false)
+        return base.appendingPathComponent("Prosper/codex-\(codexVersion)", isDirectory: false)
     }
 
     /// One-time download of the pinned Codex release for this arch into Application
@@ -951,6 +963,12 @@ final class AgentController {
         if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.removeItem(at: dest) }
         try FileManager.default.moveItem(at: bin, to: dest)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
+        // Drop earlier pins' binaries (the unversioned `codex`, older `codex-rust-v*`).
+        let dir = dest.deletingLastPathComponent()
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        where (name == "codex" || name.hasPrefix("codex-rust-v")) && name != dest.lastPathComponent {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+        }
 
         // A downloaded binary carries quarantine + no signature; strip + ad-hoc sign so it
         // execs without a Gatekeeper prompt or a hardened-runtime kill (same as the bun
@@ -997,14 +1015,15 @@ final class AgentController {
         return p.terminationStatus
     }
 
-    /// Pinned Codex release. Bump alongside scripts/verify-codex-wire.sh + the SHA-256s.
-    nonisolated static let codexVersion = "rust-v0.139.0"
+    /// Pinned Codex release. Bump with the SHA-256s and run scripts/verify-codex-wire.sh;
+    /// scripts/bundle-codex.sh reads this line to check the binary it stages.
+    nonisolated static let codexVersion = "rust-v0.162.1"
 
     /// SHA-256 of each arch's `codex-<triple>.tar.gz` (GitHub release asset digest). Bump
     /// in lockstep with `codexVersion` — a stale hash fails the download closed.
     nonisolated private static let codexSHA256: [String: String] = [
-        "aarch64-apple-darwin": "c28344255844d83a728c084c2d9e21e168b5d217f6049d3a9a36827903f16fdb",
-        "x86_64-apple-darwin": "c8b52d7588977f6cd055112faa0f3e6b9ec764473bc1be8efa44f3c8f68d14bf",
+        "aarch64-apple-darwin": "b293a0fcdd871900a44c0a4f40a1aa401b31e02854f790ebdb8bd5d1177fd1fe",
+        "x86_64-apple-darwin": "d68e39d8f62639f33f7d00656554cb9c3ef7809e664a3827e62ab3ace3c21b21",
     ]
 
     private static func which(_ name: String) -> String? {

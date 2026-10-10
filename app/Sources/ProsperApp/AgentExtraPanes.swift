@@ -247,7 +247,6 @@ struct PermissionsPane: View {
     private let policies: [(String, String)] = [
         ("untrusted", "Ask unless trusted"),
         ("on-request", "Ask on request"),
-        ("on-failure", "Ask only on failure"),
         ("never", "Never ask"),
     ]
 
