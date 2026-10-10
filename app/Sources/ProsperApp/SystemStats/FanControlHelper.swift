@@ -221,12 +221,14 @@ enum FanControlHelper {
 
     /// `setManual` keeping the helper's refusal apart from an unreachable helper.
     static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12) async -> FanManualReply {
+        // In flight from before the registration await: a willSleep while this engage
+        // waits there must still reset the fans an earlier engage pinned (#343).
+        engagesInFlight += 1
+        defer { engagesInFlight -= 1 }
         guard let c = await ensureConnection() else { return .unavailable }
         // A manual write is manual intent, even before the popup saves the pref (it
         // saves it only after the first engage lands), so this arms unconditionally.
         armRecoveryLifecycle()
-        engagesInFlight += 1
-        defer { engagesInFlight -= 1 }
         let late: @Sendable (Bool) -> Void = { ok in Task { @MainActor in lateEngageLanded(ok) } }
         switch await callReply(c, timeout: timeout, late: late, { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }) {
         case true?: return .engaged
@@ -254,14 +256,29 @@ enum FanControlHelper {
     }
 
     /// A later popup engage (a fan after the first) replied; false = stop, do not save
-    /// the pref. Asleep, release every pin the popup made: willSleep can have skipped the
-    /// reset (an engage waiting in `ensureConnection` is not in flight, the pref is still
-    /// unsaved), so a pin here would ride through sleep (#306). The reply itself is
-    /// ignored, as before: a sibling fan failing does not undo the others.
-    static func laterEngageLanded(sleeping: Bool = Self.sleeping,
+    /// the pref. A willSleep since `generation` (the loop's start; it bumps
+    /// `reclaimGeneration`) releases every pin the popup made: asleep, a pin here would
+    /// ride through sleep (#306); after a whole sleep+wake, willSleep reset the fans
+    /// pinned so far, so saving the pref now would claim pins that are gone (#343).
+    /// The reply itself is ignored, as before: a sibling fan failing does not undo the others.
+    static func laterEngageLanded(since generation: Int, current: Int = Self.reclaimGeneration,
                                   release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) -> Bool {
-        if sleeping { Task { await release() } }
-        return !sleeping
+        guard current != generation else { return true }
+        Task { await release() }
+        return false
+    }
+
+    /// The popup's engage of every fan after the first; false = stop, do not save the pref.
+    /// `engage`/`landed` are the test seams.
+    static func engageRest(_ targets: [Int: Double], skipping first: Int,
+                           engage: (Int, Double) async -> Bool = { await setManual($0, rpm: $1) },
+                           landed: (Int) -> Bool = { laterEngageLanded(since: $0) }) async -> Bool {
+        let generation = reclaimGeneration
+        for (i, rpm) in targets where i != first {
+            _ = await engage(i, rpm)
+            guard landed(generation) else { return false }
+        }
+        return true
     }
 
     /// An engage replied after `callReply` already gave up on it (timeout / XPC error):
@@ -503,23 +520,7 @@ enum FanControlHelper {
         guard !observersInstalled else { return }
         let nc = NSWorkspace.shared.notificationCenter
         sleepObserverTokens.append(nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
-            // Reset SYNCHRONOUSLY (bounded) — a fire-and-forget Task may not complete
-            // before the machine sleeps, so a low manual pin could ride into a
-            // high-load wake. A sleep observer may block briefly; the XPC reply fires
-            // on the connection's own queue, so blocking main here can't deadlock it.
-            // Keep the connection (daemon stays resident) so wake can re-assert.
-            // ponytail: 2s ceiling; the daemon also resets on its own cold start, so a
-            // missed deadline self-heals on next launch.
-            MainActor.assumeIsolated {
-                sleeping = true
-                reclaimGeneration &+= 1
-                guard sleepResetNeeded(), let c = connection else { return }
-                let sem = DispatchSemaphore(value: 0)
-                let proxy = c.remoteObjectProxyWithErrorHandler { _ in sem.signal() } as? ProsperHelperProtocol
-                guard let proxy else { return }
-                proxy.resetAllFans { _ in sem.signal() }
-                _ = sem.wait(timeout: .now() + 2)
-            }
+            MainActor.assumeIsolated { willSleep() }
         })
         sleepObserverTokens.append(nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated {
@@ -528,6 +529,25 @@ enum FanControlHelper {
                 startPendingWakeRecovery()
             }
         })
+    }
+
+    /// The willSleep observer's body; internal as the test seam.
+    /// Reset SYNCHRONOUSLY (bounded) — a fire-and-forget Task may not complete
+    /// before the machine sleeps, so a low manual pin could ride into a
+    /// high-load wake. A sleep observer may block briefly; the XPC reply fires
+    /// on the connection's own queue, so blocking main here can't deadlock it.
+    /// Keep the connection (daemon stays resident) so wake can re-assert.
+    // ponytail: 2s ceiling; the daemon also resets on its own cold start, so a
+    // missed deadline self-heals on next launch.
+    static func willSleep() {
+        sleeping = true
+        reclaimGeneration &+= 1
+        guard sleepResetNeeded(), let c = connection else { return }
+        let sem = DispatchSemaphore(value: 0)
+        let proxy = c.remoteObjectProxyWithErrorHandler { _ in sem.signal() } as? ProsperHelperProtocol
+        guard let proxy else { return }
+        proxy.resetAllFans { _ in sem.signal() }
+        _ = sem.wait(timeout: .now() + 2)
     }
 
     /// Test-only teardown: a test that armed the lifecycle must not leave live

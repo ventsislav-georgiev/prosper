@@ -323,23 +323,142 @@ final class FanReclaimRecoveryTests: XCTestCase {
         await fulfillment(of: [kept], timeout: 0.3)
     }
 
-    /// #306: a later popup engage landing while asleep releases and returns false, so
-    /// the loop stops and the pref stays unsaved. Awake, the loop goes on.
+    /// #306: a later popup engage landing after a willSleep (asleep, or after the wake,
+    /// #343) releases and returns false, so the loop stops and the pref stays unsaved.
+    /// No sleep since the loop began, the loop goes on.
     @MainActor
-    func testLaterEngageLandingAsleepIsReleased() async {
+    func testLaterEngageLandingAfterASleepIsReleased() async {
         let previousManualIntent = Preferences.fanManualEnabled
-        defer { Preferences.fanManualEnabled = previousManualIntent; FanControlHelper.inject(sleeping: false) }
+        defer { Preferences.fanManualEnabled = previousManualIntent }
         Preferences.fanManualEnabled = false
-        FanControlHelper.inject(sleeping: true)
-        let released = expectation(description: "released while asleep")
-        XCTAssertFalse(FanControlHelper.laterEngageLanded(release: { released.fulfill() }))
+        let released = expectation(description: "released after a willSleep")
+        XCTAssertFalse(FanControlHelper.laterEngageLanded(since: 4, current: 5, release: { released.fulfill() }))
         await fulfillment(of: [released], timeout: 1)
         XCTAssertFalse(Preferences.fanManualEnabled)
-        FanControlHelper.inject(sleeping: false)
-        let kept = expectation(description: "no release awake")
+        let kept = expectation(description: "no release without a sleep")
         kept.isInverted = true
-        XCTAssertTrue(FanControlHelper.laterEngageLanded(release: { kept.fulfill() }))
+        XCTAssertTrue(FanControlHelper.laterEngageLanded(since: 5, current: 5, release: { kept.fulfill() }))
         await fulfillment(of: [kept], timeout: 0.3)
+    }
+
+    /// #343: a later engage waiting for the helper registration counts as in flight, so a
+    /// willSleep then resets the first fan's pin; after the wake the loop releases and the
+    /// pref stays unsaved. Registration and connection are fakes: no helper, no SMC.
+    @MainActor
+    func testSleepWhileALaterEngageWaitsForRegistrationResetsAndAbandons() async {
+        let previousManualIntent = Preferences.fanManualEnabled, savedRegistration = LidSleepHelper.registration
+        let fake = FakeHelperConnection()
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent; LidSleepHelper.registration = savedRegistration
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
+        }
+        Preferences.fanManualEnabled = false
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)   // fan 0's engage landed
+        let parked = expectation(description: "fan 1's engage waits in registration")
+        let gate = DispatchSemaphore(value: 0)
+        LidSleepHelper.registration = { parked.fulfill(); gate.wait(); return .failed }
+        let rest = Task { await FanControlHelper.engageRest([0: 2000, 1: 3000], skipping: 0) }
+        await fulfillment(of: [parked], timeout: 2)
+        XCTAssertTrue(FanControlHelper.sleepResetNeeded(), "an engage waiting for registration is in flight")
+        FanControlHelper.willSleep()
+        XCTAssertEqual(fake.proxy.resets, 1, "willSleep reset fan 0's pin")
+        FanControlHelper.inject(sleeping: false)   // the wake
+        gate.signal()
+        let saved = await rest.value
+        XCTAssertFalse(saved, "the popup saved the pref after a sleep inside its engage loop")
+        await waitForTeardown()
+        XCTAssertEqual(fake.proxy.resets, 2, "the loop released after the wake")
+        XCTAssertTrue(FanControlHelper.connection == nil, "the loop's release did not tear down")
+    }
+
+    /// #343 (2), the route QA #123 left open: a later engage reporting stop ends the loop,
+    /// no fan after it is engaged, and the first fan is never re-engaged.
+    @MainActor
+    func testEngageRestStopsAtTheFirstStop() async {
+        for stopAt in [2, Int.max] {
+            var engaged: [Int] = [], checks = 0
+            let saved = await FanControlHelper.engageRest([0: 1, 1: 1, 2: 1, 3: 1], skipping: 0,
+                                                          engage: { i, _ in engaged.append(i); return true },
+                                                          landed: { _ in checks += 1; return checks < stopAt })
+            XCTAssertEqual(engaged.count, stopAt == 2 ? 2 : 3, "stopAt=\(stopAt): \(engaged)")
+            XCTAssertFalse(engaged.contains(0))
+            XCTAssertEqual(saved, stopAt != 2)
+        }
+    }
+
+    /// QA #103 M9: willSleep resets only with manual intent or an engage in flight.
+    @MainActor
+    func testWillSleepResetsOnlyWhenNeeded() {
+        let previousManualIntent = Preferences.fanManualEnabled
+        let fake = FakeHelperConnection()
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
+        }
+        Preferences.fanManualEnabled = false
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        FanControlHelper.willSleep()
+        XCTAssertEqual(fake.proxy.resets, 0, "nothing manual, nothing to reset")
+        FanControlHelper.inject(connection: fake, engagesInFlight: 1)
+        FanControlHelper.willSleep()
+        XCTAssertEqual(fake.proxy.resets, 1)
+    }
+
+    /// QA #103 M10-M13 and laterEngageLanded's release: called without them, the
+    /// sleeping / inFlight / generation defaults read the live state and the release
+    /// default really releases (sleepSafeRelease with manual off tears the connection down).
+    @MainActor
+    func testEngageLandedDefaultsReadLiveState() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
+        }
+        Preferences.fanManualEnabled = false
+        // firstEngageLanded: `sleeping` and `release` defaults.
+        FanControlHelper.inject(connection: FakeHelperConnection(), engagesInFlight: 0)
+        FanControlHelper.inject(sleeping: true)
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.engaged), "firstEngageLanded ignored Self.sleeping")
+        await waitForTeardown()
+        XCTAssertTrue(FanControlHelper.connection == nil, "firstEngageLanded's default release did not release")
+        // lateEngageLanded: `sleeping` default (manual on, so only sleep releases).
+        Preferences.fanManualEnabled = true
+        let released = expectation(description: "late engage released while asleep")
+        FanControlHelper.lateEngageLanded(true, release: { released.fulfill() })
+        await fulfillment(of: [released], timeout: 1)
+        // lateEngageLanded: `inFlight` default.
+        Preferences.fanManualEnabled = false
+        FanControlHelper.inject(sleeping: false)
+        FanControlHelper.inject(connection: nil, engagesInFlight: 1)
+        let kept = expectation(description: "held for the engage in flight")
+        kept.isInverted = true
+        FanControlHelper.lateEngageLanded(true, release: { kept.fulfill() })
+        await fulfillment(of: [kept], timeout: 0.3)
+        // lateEngageLanded: `release` default.
+        FanControlHelper.inject(connection: FakeHelperConnection(), engagesInFlight: 0)
+        FanControlHelper.lateEngageLanded(true)
+        await waitForTeardown()
+        XCTAssertTrue(FanControlHelper.connection == nil, "lateEngageLanded's default release did not release")
+        // laterEngageLanded: `current` and `release` defaults.
+        let fake = FakeHelperConnection()
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        let generation = FanControlHelper.reclaimGeneration
+        FanControlHelper.willSleep()   // nothing manual: bumps the generation, no reset
+        FanControlHelper.inject(sleeping: false)
+        XCTAssertFalse(FanControlHelper.laterEngageLanded(since: generation), "laterEngageLanded missed the willSleep")
+        await waitForTeardown()
+        XCTAssertTrue(FanControlHelper.connection == nil, "laterEngageLanded's default release did not release")
+        XCTAssertEqual(fake.proxy.resets, 1)
+        XCTAssertTrue(FanControlHelper.laterEngageLanded(since: FanControlHelper.reclaimGeneration, release: {}),
+                      "no willSleep since the loop began, yet laterEngageLanded stopped")
+    }
+
+    /// Polls until a fire-and-forget release tore the connection down (or 2 s pass).
+    @MainActor
+    private func waitForTeardown() async {
+        for _ in 0..<200 where FanControlHelper.connection != nil {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 
     /// QA #103 M8: the reclaim tick does not run while asleep, even with manual on.
@@ -526,4 +645,23 @@ private final class LockedBox: @unchecked Sendable {
     private let lock = NSLock(); private var v: [Bool] = []
     func set(_ b: Bool) { lock.lock(); v.append(b); lock.unlock() }
     func get() -> [Bool] { lock.lock(); defer { lock.unlock() }; return v }
+}
+
+/// A helper connection to nothing: every proxy is a recorder that replies true at once,
+/// and invalidate only records. No daemon, no SMC.
+private final class FakeHelperConnection: NSXPCConnection, @unchecked Sendable {
+    final class Proxy: NSObject, ProsperHelperProtocol, @unchecked Sendable {
+        var resets = 0
+        func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
+        func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void) { reply(true) }
+        func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
+        func clearRemoteSession(withReply reply: @escaping (Bool) -> Void) { reply(true) }
+        func sleepNow(withReply reply: @escaping (Bool) -> Void) { reply(true) }
+        func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) { reply(true) }
+        func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
+        func resetAllFans(withReply reply: @escaping (Bool) -> Void) { resets += 1; reply(true) }
+    }
+    let proxy = Proxy()
+    override func remoteObjectProxyWithErrorHandler(_ handler: @escaping (Error) -> Void) -> Any { proxy }
+    override func invalidate() {}
 }
