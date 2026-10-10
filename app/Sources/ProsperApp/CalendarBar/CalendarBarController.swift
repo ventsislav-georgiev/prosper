@@ -237,6 +237,7 @@ final class CalendarBarController {
             onPinChanged: { [weak self] pinned in
                 self?.popover.behavior = pinned ? .applicationDefined : .transient
                 if pinned { self?.expanded.cancelSessions() }   // #197
+                self?.updateOutsideClickMonitor()   // #197: re-arm/disarm outside-click dismisser on pin toggle
             },
             onOpenSettings: { [weak self] in
                 self?.popover.performClose(nil)
