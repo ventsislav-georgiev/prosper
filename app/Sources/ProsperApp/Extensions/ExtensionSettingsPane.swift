@@ -293,7 +293,7 @@ private struct EnumRow: View {
     }
 }
 
-private struct NumberRow: View {
+struct NumberRow: View {
     let row: SettingsUIRow
     let onEvent: (SettingsEvent) -> Void
     @State private var text: String = ""
@@ -307,12 +307,15 @@ private struct NumberRow: View {
         }
     }
     private func commit() {
-        let n = Double(text) ?? row.min ?? 0
-        let clamped = min(max(n, row.min ?? -.greatestFiniteMagnitude),
-                          row.max ?? .greatestFiniteMagnitude)
+        onEvent(.setValue(key: row.key ?? "", value: Self.format(text: text, min: row.min, max: row.max)))
+    }
+    /// Parse + clamp + format user text. Non-finite input ("inf", "nan") counts as
+    /// garbage; integers outside Int's range fall back to Double formatting (no trap).
+    static func format(text: String, min lo: Double?, max hi: Double?) -> String {
+        let n = Double(text).flatMap { $0.isFinite ? $0 : nil } ?? lo ?? 0
+        let clamped = min(max(n, lo ?? -.greatestFiniteMagnitude), hi ?? .greatestFiniteMagnitude)
         // Keep integers integer-formatted.
-        let out = (clamped == clamped.rounded()) ? String(Int(clamped)) : String(clamped)
-        onEvent(.setValue(key: row.key ?? "", value: out))
+        return Int(exactly: clamped).map(String.init) ?? String(clamped)
     }
 }
 
