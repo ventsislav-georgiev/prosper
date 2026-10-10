@@ -296,7 +296,7 @@ final class CodexWireSchemaTests: XCTestCase {
              "unknown key path"),
             ("W7 permissions decision", [(false, ["id": 0, "method": "item/permissions/requestApproval", "params": [:]]),
                                          (true, ["id": 0, "result": ["decision": "accept"]])],
-             "missing permissions"),
+             "out reply to 0: result: missing permissions"),   // the reply's own violation, not the request's
             ("W8 made-up decline result", [(false, ["id": 0, "method": "mcpServer/elicitation/request", "params": [:]]),
                                            (true, ["id": 0, "result": ["decision": "decline"]])],
              "missing action"),

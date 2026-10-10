@@ -362,7 +362,14 @@ final class CodexHarnessE2ETests: XCTestCase {
         // Both directions of everything the mock saw must match the pinned codex's schema:
         // Prosper's frames strictly (a key codex doesn't know is a setting it drops).
         addTeardownBlock {
-            guard let log = try? String(contentsOf: dir.appendingPathComponent("wire.jsonl"), encoding: .utf8) else { return }
+            let wire = dir.appendingPathComponent("wire.jsonl")
+            guard let log = try? String(contentsOf: wire, encoding: .utf8) else {
+                // The mock writes `pid` on startup: if it ran, a missing wire log is a mock that stopped logging.
+                if FileManager.default.fileExists(atPath: dir.appendingPathComponent("pid").path) {
+                    XCTFail("mock ran but wrote no \(wire.path)")
+                }
+                return
+            }
             for problem in try CodexWireSchema.shared().violations(in: CodexWireSchema.transcript(log)) {
                 XCTFail("codex \(CodexWireSchema.version) schema: \(problem)")
             }

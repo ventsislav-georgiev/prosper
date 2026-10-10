@@ -13,9 +13,10 @@ final class ProcessGroupKillTests: XCTestCase {
         let out = Pipe()
         proc.standardOutput = out
         try proc.run()
+        let leader = proc.processIdentifier
+        defer { kill(-leader, SIGKILL); proc.waitUntilExit() }   // no leak if a read below throws
         let line = String(decoding: out.fileHandleForReading.availableData, as: UTF8.self)
         let child = try XCTUnwrap(pid_t(line.trimmingCharacters(in: .whitespacesAndNewlines)))
-        let leader = proc.processIdentifier
         XCTAssertEqual(getpgid(leader), leader, "Process must spawn the child as its own group leader")
         XCTAssertEqual(getpgid(child), leader)
 
@@ -26,6 +27,5 @@ final class ProcessGroupKillTests: XCTestCase {
             kill(-leader, SIGKILL)   // don't leak it past a failing test
             XCTFail("the SIGTERM-ignoring child \(child) outlived killGroup")
         }
-        proc.waitUntilExit()
     }
 }
