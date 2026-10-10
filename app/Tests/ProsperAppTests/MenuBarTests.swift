@@ -55,20 +55,35 @@ final class MenuBarTests: XCTestCase {
         XCTAssertTrue(latest.items.contains { $0.title.hasPrefix("Prosper v") })
     }
 
-    /// #342: Sparkle's SUHost writes SU* keys into Bundle.main's standard defaults, which
-    /// under XCTest is the real `com.apple.dt.xctest.tool` domain. Building the status menu
-    /// reaches `AppUpdater.shared`; a fresh `AppUpdater()` makes the check order-independent.
-    /// SU* keys left in that xctest.tool domain (not a user domain) by older runs are removed first.
+    /// #342/#344: Sparkle's SUHost writes SU* keys into Bundle.main's standard defaults, which
+    /// under XCTest is the real `com.apple.dt.xctest.tool` domain. Write-free: snapshot the SU*
+    /// keys visible through `.standard` (incl. NSGlobalDomain), build the menu and a fresh
+    /// `AppUpdater()`, and require names and values unchanged.
     @MainActor
     func testStatusMenuLeavesNoSparkleKeysInTheXCTestDomain() {
-        let suKeys = { UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.hasPrefix("SU") } }
-        suKeys().forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        let suKeys = { NSDictionary(dictionary: UserDefaults.standard.dictionaryRepresentation().filter { $0.key.hasPrefix("SU") }) }
+        let before = suKeys()
         let controller = MenuBarController(
             onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {},
             onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {})
         _ = controller.buildMenu()
-        _ = AppUpdater()
-        XCTAssertEqual(suKeys().sorted(), [], "Sparkle wrote the xctest defaults domain")
+        let updater = AppUpdater()
+        XCTAssertFalse(updater.isConfigured, "SPUUpdater must not be built under XCTest")
+        XCTAssertEqual(suKeys(), before, "Sparkle wrote the xctest defaults domain (names or values)")
+    }
+
+    /// #344: `SPUUpdater(` is constructed in exactly one place, on the XCTestCase-gated line.
+    func testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+        var hits: [String] = []
+        for case let url as URL in files where url.pathExtension == "swift" {
+            for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") where line.contains("SPUUpdater(") {
+                hits.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        XCTAssertEqual(hits, ["AppUpdater.swift: updater = NSClassFromString(\"XCTestCase\") != nil ? nil : SPUUpdater("])
     }
 
     // MARK: - Divider length state machine (the show/hide hot path's source of truth)

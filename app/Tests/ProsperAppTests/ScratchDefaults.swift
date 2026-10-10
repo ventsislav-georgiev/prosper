@@ -75,17 +75,27 @@ final class PreferencesScratchStoreTests: XCTestCase {
             "BrowserSearchImporter.swift: let suite = UserDefaults(suiteName: \"com.apple.Safari\")": "system-domain read",
             // e2e-only throwaway suite (PROSPER_HOME set); otherwise Preferences.defaults.
             "SnippetStore.swift: if E2EConfig.isolated, let suite = UserDefaults(suiteName: suiteName) {": "e2e isolation suite",
+            // #344: menu-bar item spacing is a system-wide (AnyApplication) setting the user opts into.
+            "MenuBarSpacing.swift: CFPreferencesCopyValue(key as CFString, kCFPreferencesAnyApplication,": "global menu-bar spacing read",
+            "MenuBarSpacing.swift: CFPreferencesSetValue(key as CFString, value as CFNumber, kCFPreferencesAnyApplication,": "global menu-bar spacing write",
+            "MenuBarSpacing.swift: CFPreferencesSetValue(key as CFString, nil, kCFPreferencesAnyApplication,": "global menu-bar spacing reset",
         ]
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
         let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
         var hits: [String] = []
         for case let url as URL in files where url.pathExtension == "swift" && url.lastPathComponent != "Preferences.swift" {
-            for raw in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") {
-                let line = raw.trimmingCharacters(in: .whitespaces)
+            let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            for (i, line) in lines.enumerated() {
+                // #344: `UserDefaults` / `.standard` split across two lines counts as one.
+                let wrapped = line.hasSuffix("UserDefaults") && i + 1 < lines.count && lines[i + 1].hasPrefix(".standard")
                 guard !line.hasPrefix("//"),
-                      line.contains("UserDefaults.standard") || line.contains("UserDefaults(suiteName")
-                        || line.contains("UserDefaults()") else { continue }
+                      wrapped || line.contains("UserDefaults.standard") || line.contains("UserDefaults(suiteName")
+                        || line.contains("UserDefaults()") || line.contains("NSUserDefaults")
+                        || line.contains("CFPreferencesSet") || line.contains("CFPreferencesCopy")
+                        || line.contains("CFPreferencesGet")
+                        || (line.contains("@AppStorage(") && !line.contains("store:")) else { continue }
                 hits.append("\(url.lastPathComponent): \(line)")
             }
         }

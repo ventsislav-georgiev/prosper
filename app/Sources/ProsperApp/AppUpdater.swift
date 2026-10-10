@@ -30,6 +30,8 @@ final class AppUpdater: NSObject {
     /// defaults domain. Every use below is optional-chained, so the menu and About pane
     /// still render; checks are no-ops in tests.
     private let updater: SPUUpdater?
+    /// #344: false under XCTest — the gate that keeps Sparkle off the real defaults domain.
+    var isConfigured: Bool { updater != nil }
 
     /// Background appcast poll interval. Sparkle's own scheduler clamps small
     /// `updateCheckInterval` values to ~1h, so we drive a silent background check
