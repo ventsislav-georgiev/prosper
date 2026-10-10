@@ -69,6 +69,34 @@ final class FanReclaimRecoveryTests: XCTestCase {
         await fulfillment(of: [kept], timeout: 0.3)
     }
 
+    /// #269: a re-apply engage that timed out (ResumeOnce already resumed nil) and
+    /// whose `true` lands later with manual off pins the fan → released. With manual
+    /// on, or a late refusal, nothing is.
+    @MainActor
+    func testLateEngageAfterTimeoutReleasesWithManualOff() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+        var once: FanControlHelper.ResumeOnce?
+        let timedOut: Bool? = await withCheckedContinuation { cont in
+            once = FanControlHelper.ResumeOnce(cont)
+            XCTAssertTrue(once!.resume(nil))   // the timeout wins
+        }
+        XCTAssertNil(timedOut)
+        XCTAssertFalse(once!.resume(true))      // the helper's reply arrives late
+
+        Preferences.fanManualEnabled = false
+        let released = expectation(description: "late engage released")
+        FanControlHelper.lateEngageLanded(true, release: { released.fulfill() })
+        await fulfillment(of: [released], timeout: 1)
+
+        let kept = expectation(description: "no release")
+        kept.isInverted = true
+        FanControlHelper.lateEngageLanded(false, release: { kept.fulfill() })
+        Preferences.fanManualEnabled = true
+        FanControlHelper.lateEngageLanded(true, release: { kept.fulfill() })
+        await fulfillment(of: [kept], timeout: 0.3)
+    }
+
     /// #263 (2): a teardown must not invalidate the connection an engage picked up
     /// while the reset was in flight. The fake points at a mach name nothing serves,
     /// so the reset errors out at once and no helper is involved.

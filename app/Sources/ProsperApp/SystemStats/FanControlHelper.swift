@@ -222,7 +222,8 @@ enum FanControlHelper {
         armRecoveryLifecycle()
         engagesInFlight += 1
         defer { engagesInFlight -= 1 }
-        switch await callReply(c, timeout: timeout, { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }) {
+        let late: @Sendable (Bool) -> Void = { ok in Task { @MainActor in lateEngageLanded(ok) } }
+        switch await callReply(c, timeout: timeout, late: late, { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }) {
         case true?: return .engaged
         case false?: return .refused
         case nil: return .unavailable
@@ -239,6 +240,14 @@ enum FanControlHelper {
         guard reply != .engaged else { return true }
         if !Preferences.fanManualEnabled { removeReclaimMonitor(); Task { await release() } }
         return false
+    }
+
+    /// An engage replied after `callReply` already gave up on it (timeout / XPC error):
+    /// the helper pinned the fan anyway. With manual off nothing else will release it
+    /// (the reclaim re-apply has no popup late-engage guard), so `release` here (#269).
+    static func lateEngageLanded(_ engaged: Bool,
+                                 release: @escaping @MainActor () async -> Void = { await resetAll(teardown: true) }) {
+        if engaged, !Preferences.fanManualEnabled { Task { await release() } }
     }
 
     /// Hand one fan back to OS thermal control (other fans unaffected). Honors the
@@ -495,6 +504,7 @@ enum FanControlHelper {
     /// The helper's own reply, or nil when it never answered (XPC error / no proxy / timeout).
     private static func callReply(_ c: NSXPCConnection,
                                   timeout: TimeInterval = 12,
+                                  late: (@Sendable (Bool) -> Void)? = nil,
                                   _ body: @escaping (ProsperHelperProtocol, @escaping @Sendable (Bool) -> Void) -> Void) async -> Bool? {
         await withCheckedContinuation { cont in
             let once = ResumeOnce(cont)
@@ -504,18 +514,21 @@ enum FanControlHelper {
             } as? ProsperHelperProtocol
             guard let proxy else { once.resume(nil); return }
             once.armTimeout(timeout)
-            body(proxy) { @Sendable ok in once.resume(ok) }
+            body(proxy) { @Sendable ok in if !once.resume(ok) { late?(ok) } }
         }
     }
 
-    private final class ResumeOnce: @unchecked Sendable {
+    final class ResumeOnce: @unchecked Sendable {
         private let lock = NSLock()
         private var done = false
         private var cont: CheckedContinuation<Bool?, Never>?
         init(_ c: CheckedContinuation<Bool?, Never>) { cont = c }
-        func resume(_ v: Bool?) {
+        /// False when an earlier resume (timeout / error) already won: `v` arrived late.
+        @discardableResult
+        func resume(_ v: Bool?) -> Bool {
             lock.lock(); let c = done ? nil : cont; done = true; cont = nil; lock.unlock()
             c?.resume(returning: v)
+            return c != nil
         }
         func armTimeout(_ seconds: TimeInterval) {
             DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [weak self] in self?.resume(nil) }
