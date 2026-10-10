@@ -39,6 +39,10 @@ final class TimerScheduler: @unchecked Sendable {
 
     private static let persistKey = "ext.timers.v1"
 
+    /// 366 days. `DispatchTime + Double` traps (Int64 ns overflow) above ~9.2e9 s, and
+    /// a persisted bomb would trap at every launch, so every delay/interval is capped.
+    static let maxDelay: Double = 31_622_400
+
     /// Delivers a `timer.fired` event: (extensionID, handler, payloadJSON). Set by
     /// the app once the registry exists; nil → the fire is dropped (headless/test).
     var deliver: ((String, String, String) -> Void)?
@@ -56,7 +60,7 @@ final class TimerScheduler: @unchecked Sendable {
     /// (one-shot) or period (repeating); clamped to a sane floor so a buggy `every=0`
     /// can't spin.
     func schedule(extID: String, id: String, every: Bool, seconds: Double, handler: String) {
-        let secs = max(seconds, every ? 0.05 : 0)
+        let secs = min(max(seconds, every ? 0.05 : 0), Self.maxDelay)
         queue.async {
             let entry = Entry(extID: extID, id: id, handler: handler, every: every,
                               interval: secs, fireAt: self.now() + secs)
@@ -93,11 +97,12 @@ final class TimerScheduler: @unchecked Sendable {
         let k = Self.key(entry.extID, entry.id)
         sources[k]?.cancel()
         let src = DispatchSource.makeTimerSource(queue: queue)
-        let delay = max(entry.fireAt - now(), 0)
+        let delay = min(max(entry.fireAt - now(), 0), Self.maxDelay)
+        let interval = min(entry.interval, Self.maxDelay)
         if entry.every {
             // 10 % leeway, capped at 1 s so a short UI-refresh interval stays steady.
-            let leeway = DispatchTimeInterval.milliseconds(Int(min(entry.interval * 100, 1000)))
-            src.schedule(deadline: .now() + delay, repeating: entry.interval, leeway: leeway)
+            let leeway = DispatchTimeInterval.milliseconds(Int(min(interval * 100, 1000)))
+            src.schedule(deadline: .now() + delay, repeating: interval, leeway: leeway)
         } else {
             src.schedule(deadline: .now() + delay)
         }

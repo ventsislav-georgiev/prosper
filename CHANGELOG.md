@@ -122,7 +122,9 @@ tag from the now-released section and put it on the new top draft.
   history limit, a process id or a timer interval now falls back to the default or is
   clamped, with a warning in the extension log, and a menu bar item payload that is a
   plain string or number is encoded instead of raising. A window frame or a
-  `host.window.set` coordinate that is not a finite number is refused the same way.
+  `host.window.set` coordinate that is not a finite number is refused the same way, and a
+  timer delay or interval is capped at 366 days (a huge value used to crash Prosper when the
+  timer was armed, including at every launch once it had been saved).
 - **Fixed: stopping or ending a coding-agent session left codex's helper processes
   running.** The MCP servers and tools codex starts share its process group; Stop and End
   now shut down that whole group, and a codex that crashes takes its helpers with it, so
