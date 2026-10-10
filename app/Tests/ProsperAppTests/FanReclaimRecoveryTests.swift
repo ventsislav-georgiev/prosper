@@ -225,7 +225,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
             reclaimGeneration: FanControlHelper.reclaimGeneration,
             engage: { _, _, _ in FanControlHelper.inject(sleeping: true); return true },
             reset: { resets.append($0); return true })
-        XCTAssertEqual(resets, [true])
+        XCTAssertEqual(resets, [false], "manual on: reset without teardown (#287)")
         XCTAssertFalse(reengaged)
     }
 
@@ -248,9 +248,71 @@ final class FanReclaimRecoveryTests: XCTestCase {
                     return false
                 },
                 reset: { resets.append($0); return true })
-            XCTAssertEqual(resets, [true], "sleep=\(sleep)")
+            XCTAssertEqual(resets, [!sleep], "sleep=\(sleep): teardown only with manual off (#287)")
             XCTAssertFalse(reengaged, "sleep=\(sleep)")
         }
+    }
+
+    /// #287 item 3: Automatic landing during a failed engage of fan 0 stops the loop —
+    /// fan 1 is never engaged, one releasing reset, result false.
+    @MainActor
+    func testAutomaticDuringFailedEngageStopsTheRemainingFans() async {
+        let previousManualIntent = Preferences.fanManualEnabled, previousTargets = Preferences.fanTargets
+        defer { Preferences.fanManualEnabled = previousManualIntent; Preferences.fanTargets = previousTargets }
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = [0: 2000, 1: 3000]
+        var engaged: [Int] = []
+        var resets: [Bool] = []
+        let reengaged = await FanControlHelper.applySavedTargets(
+            reclaimGeneration: FanControlHelper.reclaimGeneration,
+            engage: { index, _, _ in
+                engaged.append(index)
+                Preferences.fanManualEnabled = false
+                return false
+            },
+            reset: { resets.append($0); return true })
+        XCTAssertEqual(engaged.count, 1, "a fan after Automatic was engaged: \(engaged)")
+        XCTAssertEqual(resets, [true])
+        XCTAssertFalse(reengaged)
+    }
+
+    /// #287 (a): willSleep resets with an engage in flight even before the pref is saved.
+    @MainActor
+    func testSleepResetCoversAnEngageInFlight() {
+        XCTAssertTrue(FanControlHelper.sleepResetNeeded(manualEnabled: false, inFlight: 1))
+        XCTAssertTrue(FanControlHelper.sleepResetNeeded(manualEnabled: true, inFlight: 0))
+        XCTAssertFalse(FanControlHelper.sleepResetNeeded(manualEnabled: false, inFlight: 0))
+    }
+
+    /// #287 (b): the popup's first engage landing on time while asleep is released and
+    /// reported false, so the popup does not save the pref. Awake, it stands.
+    @MainActor
+    func testFirstEngageLandingAsleepIsReleased() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+        Preferences.fanManualEnabled = false
+        let released = expectation(description: "released while asleep")
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.engaged, sleeping: true, release: { released.fulfill() }))
+        await fulfillment(of: [released], timeout: 1)
+        let kept = expectation(description: "no release awake")
+        kept.isInverted = true
+        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, sleeping: false, release: { kept.fulfill() }))
+        await fulfillment(of: [kept], timeout: 0.3)
+    }
+
+    /// #287 item 2: a sleep release with manual on keeps the reclaim timer (wake does
+    /// not re-arm it when the helper is unreachable); with manual off it tears down.
+    @MainActor
+    func testSleepReleaseKeepsTheReclaimTimerWithManualOn() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+        Preferences.fanManualEnabled = true
+        FanControlHelper.armRecoveryLifecycle()
+        await FanControlHelper.sleepSafeRelease()
+        XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
+        Preferences.fanManualEnabled = false
+        await FanControlHelper.sleepSafeRelease()
+        XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
     }
 
     /// #221 (3): a failed reclaim re-apply holds the next attempt for 30 s.

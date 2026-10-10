@@ -238,9 +238,15 @@ enum FanControlHelper {
     /// engage armed, and `release` everything: an older engage that landed late while
     /// this one was in flight was held for it (#263). Fire-and-forget so the button
     /// resolves now; a retry racing it is covered by the teardown guard in `resetAll`.
+    /// An engage that lands while asleep is released and reported false, so the popup
+    /// does not save manual intent for a pin that rides through sleep (#287).
     static func firstEngageLanded(_ reply: FanManualReply,
-                                  release: @escaping @MainActor () async -> Void = { await resetAll(teardown: true) }) -> Bool {
-        guard reply != .engaged else { return true }
+                                  sleeping: Bool = Self.sleeping,
+                                  release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) -> Bool {
+        guard reply != .engaged else {
+            if sleeping { Task { await release() } }
+            return !sleeping
+        }
         if !Preferences.fanManualEnabled { removeReclaimMonitor(); Task { await release() } }
         return false
     }
@@ -253,8 +259,22 @@ enum FanControlHelper {
     static func lateEngageLanded(_ engaged: Bool,
                                  sleeping: Bool = Self.sleeping,
                                  inFlight: Int = Self.engagesInFlight,
-                                 release: @escaping @MainActor () async -> Void = { await resetAll(teardown: true) }) {
+                                 release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) {
         if engaged, inFlight == 0, !Preferences.fanManualEnabled || sleeping { Task { await release() } }
+    }
+
+    /// Reset every fan; tear down only with manual off. With manual on (a release while
+    /// asleep) the reclaim timer and connection stay: wake's re-apply does not re-arm
+    /// the timer when the helper is unreachable, so a teardown here could lose it (#287).
+    static func sleepSafeRelease() async {
+        await resetAll(teardown: !Preferences.fanManualEnabled)
+    }
+
+    /// willSleep resets the fans with saved manual intent, or with an engage in flight:
+    /// that is manual intent too, the popup saves the pref only after it lands (#287).
+    static func sleepResetNeeded(manualEnabled: Bool = Preferences.fanManualEnabled,
+                                 inFlight: Int = Self.engagesInFlight) -> Bool {
+        manualEnabled || inFlight > 0
     }
 
     /// Hand one fan back to OS thermal control (other fans unaffected). Honors the
@@ -337,7 +357,8 @@ enum FanControlHelper {
             // reset can reach the daemon ahead of the pin, so release here — the caller sees false.
             // Even when this engage failed: an older engage that landed late while this one was
             // in flight was held for it (#282) and is still pinned. Nothing pinned → no-op.
-            if !Preferences.fanManualEnabled || sleeping { _ = await reset(true); return false }
+            // Asleep with manual on, keep the timer and connection, like `sleepSafeRelease` (#287).
+            if !Preferences.fanManualEnabled || sleeping { _ = await reset(!Preferences.fanManualEnabled); return false }
             reengaged = reengaged && ok
             first = false
         }
@@ -480,7 +501,7 @@ enum FanControlHelper {
             MainActor.assumeIsolated {
                 sleeping = true
                 reclaimGeneration &+= 1
-                guard Preferences.fanManualEnabled, let c = connection else { return }
+                guard sleepResetNeeded(), let c = connection else { return }
                 let sem = DispatchSemaphore(value: 0)
                 let proxy = c.remoteObjectProxyWithErrorHandler { _ in sem.signal() } as? ProsperHelperProtocol
                 guard let proxy else { return }

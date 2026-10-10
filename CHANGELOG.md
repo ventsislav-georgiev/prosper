@@ -152,7 +152,8 @@ tag from the now-released section and put it on the new top draft.
   to sleep, while saved speeds were being re-applied after launch or wake no longer leaves a
   fan pinned. A late re-apply reply no longer releases the fans while the popup is still
   engaging them, and a re-apply that fails after Automatic or sleep landed still releases
-  the fans it was holding.
+  the fans it was holding. Fans no longer stay pinned through sleep when manual control was
+  being switched on just as the Mac went to sleep.
 - **Performance: with inline autocomplete off, mouse clicks no longer pass through Prosper**
   and the global scroll monitor is not installed. The keystroke tap listened for every left
   click and every scroll tick on behalf of autocomplete even when it was disabled. Toggling
