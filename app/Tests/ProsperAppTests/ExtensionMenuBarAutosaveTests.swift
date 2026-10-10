@@ -13,6 +13,14 @@ final class ExtensionMenuBarAutosaveTests: XCTestCase {
         XCTAssertEqual(b, "ProsperExt:openlid:status")
     }
 
+    func testColonInsidePartsCannotShiftTheSplit() {
+        let a = ExtensionMenuBar.autosaveName(extensionID: "a:b", id: "c")
+        let b = ExtensionMenuBar.autosaveName(extensionID: "a", id: "b:c")
+        XCTAssertNotEqual(a, b)
+        XCTAssertEqual(a, "ProsperExt:a_b:c")
+        XCTAssertEqual(b, "ProsperExt:a:b_c")
+    }
+
     func testSamePairGivesSameNameAcrossCalls() {
         XCTAssertEqual(ExtensionMenuBar.autosaveName(extensionID: "com.x.ext", id: "i-1"),
                        ExtensionMenuBar.autosaveName(extensionID: "com.x.ext", id: "i-1"))
