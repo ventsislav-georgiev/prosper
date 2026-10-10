@@ -1952,6 +1952,8 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(CodexHarness.commandSummary(["kill", "-9   1"]), "kill '-9␠{3}1'")   // #372: closed marker
         XCTAssertEqual(WireText.oneLine("ls\r\nrm -rf ~"), #"ls\nrm -rf ~"#)
         XCTAssertEqual(WireText.oneLine("ls\rrm -rf ~"), #"ls\nrm -rf ~"#)
+        XCTAssertEqual(WireText.oneLine("a\u{B}b"), #"a\nb"#)   // #379: VT is a newline-class scalar
+        XCTAssertEqual(WireText.oneLine("a\u{C}b"), #"a\nb"#)   // #379: FF too
     }
 
     /// #318: the string form takes the same path; DEL and C1 (Cc) escape as `\u{…}`, NEL as a newline.

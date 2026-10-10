@@ -96,7 +96,7 @@ enum WireText {
     /// single or double space is left alone (a lone tab still escapes as `\u{9}`). Any newline
     /// class scalar (LF, CR, NEL, U+2028/9) shows as `\n`; a CRLF pair counts as one. The marker is
     /// closed (#372) so a following digit can't join the count: `-9␠{3}1`. VT (U+000B) and FF
-    /// (U+000C) are controls, so they escape as `\u{B}` and `\u{C}` and never join a run.
+    /// (U+000C) are in the newline class too, so they show as `\n` like LF and CR and never join a run.
     static func oneLine(_ s: String) -> String {
         let escape = escaped
         var out = "", run: [Unicode.Scalar] = []
