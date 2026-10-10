@@ -88,7 +88,10 @@ tag from the now-released section and put it on the new top draft.
   completed; the controller now remembers completed turns and drops that late announcement.
   Stop pressed during the first-use codex download no longer leaves the chat on "Loading"
   until a second Stop, and the stopped run no longer goes on to load the model and start
-  codex once that download finishes.
+  codex once that download finishes. A Stop that lands during the model load or the codex
+  start no longer leaves a codex running with no owner, and a prompt re-submitted while a
+  stopped run is still downloading shares that download instead of starting a second one
+  into the same file.
 - **Fixed: coding agent approvals answered codex in the wrong shape.** A file-change
   approval now shows the paths and the diff being approved (codex only sends the item id;
   the card looked for fields that do not exist and always read "Apply changes to files").

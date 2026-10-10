@@ -672,16 +672,20 @@ final class CodexHarnessE2ETests: XCTestCase {
     }
 
     /// A fresh controller on the mock, with its own session store (never the user's).
-    /// `downloadDelay` stands in for the first-use codex download (never the real one).
+    /// `downloadDelay` stands in for the first-use codex download (never the real one),
+    /// `onDownload` sees every download started; `spawnDelay` stands in for the model load.
     @MainActor
     private func makeController(exe: URL, home: URL, promptReturnDelay: UInt64 = 0,
-                                downloadDelay: UInt64 = 0) -> (AgentController, AgentSessionStore) {
+                                downloadDelay: UInt64 = 0, onDownload: @escaping @MainActor () -> Void = {},
+                                spawnDelay: UInt64 = 0) -> (AgentController, AgentSessionStore) {
         let store = AgentSessionStore(directory: exe.deletingLastPathComponent().appendingPathComponent("store"))
         let controller = AgentController(store: store, resolveCodex: {
+            onDownload()
             try await Task.sleep(nanoseconds: downloadDelay)
             return exe
         }, makeHarness: {
-            ShortAbortHarness(CodexHarness(executableURL: exe, codexHome: home,
+            try await Task.sleep(nanoseconds: spawnDelay)
+            return ShortAbortHarness(CodexHarness(executableURL: exe, codexHome: home,
                                            llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token"),
                               promptReturnDelay: promptReturnDelay)
         })
@@ -748,6 +752,52 @@ final class CodexHarnessE2ETests: XCTestCase {
         }
         XCTAssertTrue(loading, "the re-submitted run never got past its download")
         XCTAssertFalse(idled, "the stopped run's abandoned download idled the next run")
+    }
+
+    /// #261: prompts re-submitted during stopped runs' download await that same download
+    /// (single-flight, one install into the cached path), and only the last run boots
+    /// codex: an older stopped run (`stoppedRun` holds only the latest Stop) abandons it.
+    @MainActor
+    func testControllerResubmitDuringDownloadSharesTheDownload() async throws {
+        let (exe, home) = try makeMock()
+        var downloads = 0
+        let (controller, _) = makeController(exe: exe, home: home, downloadDelay: 300_000_000,
+                                             onDownload: { downloads += 1 })
+        for _ in 0..<2 {
+            controller.submit(goal: "hello")
+            let downloading = await Self.wait { if case .loadingModel = controller.phase { return true } else { return false } }
+            XCTAssertTrue(downloading, "the run never reached the codex download")
+            controller.stop()
+            let settled = await Self.wait { controller.phase == .idle }
+            XCTAssertTrue(settled, "Stop did not settle the phase")
+        }
+
+        controller.submit(goal: "hello")
+        let started = await Self.wait { Self.count("initialize", exe: exe) == 1 }
+        XCTAssertTrue(started, "the re-submitted run never started codex")
+        _ = await Self.wait(0.5) { false }   // a stopped run that went on would spawn by now
+        XCTAssertEqual(downloads, 1, "the re-submitted runs started more than one codex download/install")
+        XCTAssertEqual(Self.count("initialize", exe: exe), 1, "a stopped run started its own codex")
+    }
+
+    /// #261: Stop during the model load / codex spawn (the harness not stored yet) leaves
+    /// no codex behind: the fresh harness is never started and the phase ends idle.
+    @MainActor
+    func testControllerStopDuringSpawnStartsNoCodex() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home, spawnDelay: 300_000_000)
+        controller.submit(goal: "hello")
+        let spawning = await Self.wait {
+            if case .loadingModel(_, let status) = controller.phase { return status.hasPrefix("Loading") } else { return false }
+        }
+        XCTAssertTrue(spawning, "the run never reached the model load")
+
+        controller.stop()
+        let settled = await Self.wait { controller.phase == .idle }
+        XCTAssertTrue(settled, "Stop did not settle the phase")
+        _ = await Self.wait(1) { false }   // the spawn lands at 300 ms
+        XCTAssertEqual(Self.count("initialize", exe: exe), 0, "codex was started for a stopped run")
+        XCTAssertEqual(controller.phase, .idle)
     }
 
     /// QA #15: Stop while turn/start is still unanswered settles at once, interrupts the

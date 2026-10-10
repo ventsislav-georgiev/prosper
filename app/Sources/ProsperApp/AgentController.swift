@@ -89,6 +89,12 @@ final class AgentController {
     /// its events can't flip the phase back to running.
     private var runGeneration = 0
     private var stoppedRun = -1
+    /// The in-flight codex download, shared process-wide by every run awaiting it
+    /// (`ensureHarness`): two installs racing remove-then-move into one cached path fail.
+    private static var codexDownload: Task<URL, Error>?
+    /// The run is no longer the one to boot codex: Stop was pressed on it, or a newer
+    /// run started (which also means it was stopped; `stoppedRun` keeps only the last).
+    private func abandoned(_ generation: Int) -> Bool { stoppedRun == generation || generation != runGeneration }
     /// Stop pressed and no turn of the stopped run is live: drop that run's turn events.
     private var stoppedBeforeTurn: Bool { stoppedRun == runGeneration && currentTurn == nil }
     private var eventPump: Task<Void, Never>?
@@ -448,13 +454,23 @@ final class AgentController {
         // BEFORE the residency swap: a failed/slow download shouldn't have unloaded the
         // inline model for nothing.
         phase = .loadingModel(progress: 0, status: "Preparing coding agent…")
-        let executable = try await resolveCodex()
-        // Stop pressed during the download: don't go on to load the model and start codex.
-        guard stoppedRun != generation else { throw CancellationError() }
+        // Single-flight: a run re-submitted while a stopped run still downloads awaits
+        // the same download instead of racing a second one into the same cached path.
+        let download = Self.codexDownload ?? Task { try await resolveCodex() }
+        Self.codexDownload = download
+        defer { if Self.codexDownload == download { Self.codexDownload = nil } }
+        let executable = try await download.value
+        // Stop pressed during the download: don't go on to load the model and start codex,
+        // nor stomp a re-submitted run's "Preparing…" phase.
+        guard !abandoned(generation) else { throw CancellationError() }
         phase = .loadingModel(progress: 0, status: "Loading \(Preferences.agentModel)…")
         let harness: CodingHarness
         if let makeHarness { harness = try await makeHarness() } else { harness = try await spawnCodexHarness(executable) }
+        // Stop during the model load / spawn / handshake ran end() while `self.harness`
+        // was still nil: don't start or keep a codex nobody owns.
+        guard !abandoned(generation) else { throw CancellationError() }
         try await harness.start()
+        guard !abandoned(generation) else { await harness.shutdown(); throw CancellationError() }
         self.harness = harness
         pumpEvents(harness)
         return harness
