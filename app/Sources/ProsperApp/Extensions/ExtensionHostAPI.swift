@@ -548,10 +548,9 @@ struct ExtensionHost {
             return 1
         }
         lua.register("__h_window_set") { rt in
-            let x = rt.numberArgument(1) ?? 0
-            let y = rt.numberArgument(2) ?? 0
-            let w = rt.numberArgument(3) ?? 0
-            let h = rt.numberArgument(4) ?? 0
+            // Missing → 0 as before; present but NaN/±inf → false, never handed to AX. (#297)
+            let args = (Int32(1)...4).map { rt.numberArgument($0) == nil ? 0 : finiteNumber(rt, $0) }
+            guard let x = args[0], let y = args[1], let w = args[2], let h = args[3] else { rt.push(false); return 1 }
             rt.push(services.setFocusedWindowFrame(x: x, y: y, width: w, height: h))
             return 1
         }
@@ -1742,7 +1741,8 @@ struct ExtensionHost {
             "x": f.x, "y": f.y, "w": f.w, "h": f.h,
             "screen": ["x": f.visibleX, "y": f.visibleY, "w": f.visibleW, "h": f.visibleH],
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+        guard JSONSerialization.isValidJSONObject(obj),
+              let data = try? JSONSerialization.data(withJSONObject: obj),
               let str = String(data: data, encoding: .utf8)
         else { return "{\"x\":0,\"y\":0,\"w\":0,\"h\":0,\"screen\":{\"x\":0,\"y\":0,\"w\":0,\"h\":0}}" }
         return str

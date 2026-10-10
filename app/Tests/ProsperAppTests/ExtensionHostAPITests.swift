@@ -974,6 +974,35 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertTrue(svc.logs.contains { $0.level == "warn" && $0.message.contains("non-finite") })
     }
 
+    /// #297: a NaN/inf AX frame must hit the zero fallback, not a JSONSerialization trap.
+    func testEncodeWindowFrameNonFiniteFallsBackToZeros() throws {
+        let bad = ExtensionHost.encodeWindowFrame(WindowFrame(x: .nan, y: 0, w: .infinity, h: 1,
+                                                             visibleX: 0, visibleY: 0, visibleW: 0, visibleH: 0))
+        XCTAssertEqual(bad, "{\"x\":0,\"y\":0,\"w\":0,\"h\":0,\"screen\":{\"x\":0,\"y\":0,\"w\":0,\"h\":0}}")
+        let ok = ExtensionHost.encodeWindowFrame(WindowFrame(x: 1, y: 2, w: 3, h: 4,
+                                                            visibleX: 5, visibleY: 6, visibleW: 7, visibleH: 8))
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ok.utf8)) as? [String: Any])
+        XCTAssertEqual(obj["x"] as? Double, 1)
+        XCTAssertEqual(obj["h"] as? Double, 4)
+        XCTAssertEqual((obj["screen"] as? [String: Any])?["w"] as? Double, 7)
+    }
+
+    /// #297: host.window.set with a non-finite coordinate returns false and never reaches AX.
+    func testWindowSetNonFiniteReturnsFalse() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc, privileged: true).install(into: lua)
+        try lua.run("""
+        function go()
+            if host.window.set(0/0, 0, 100, 100) ~= false then error("expected false") end
+            if host.window.set(0, 0, math.huge, 100) ~= false then error("expected false") end
+        end
+        """)
+        _ = try lua.callGlobal("go")
+        XCTAssertTrue(svc.windowSets.isEmpty)
+        XCTAssertTrue(svc.logs.contains { $0.level == "warn" && $0.message.contains("non-finite") })
+    }
+
     /// #295: non-finite / out-of-range Lua numbers must not trap Int()/Int32():
     /// non-finite → the default, finite → clamped to the target range.
     func testNonFiniteAndOutOfRangeIntArgumentsDoNotTrap() throws {
