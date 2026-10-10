@@ -110,7 +110,9 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: a malformed TOML file can no longer crash Prosper.** A codex `config.toml`, an
   imported hooks or MCP config, or an extension's `extension.toml` with extremely deep
   nesting or over 1 MiB is now treated as malformed and skipped instead of overflowing the
-  parser.
+  parser. The check now counts nested inline tables and long dotted keys together, ends
+  strings exactly where the parser does, and rejects an unterminated string, so a crafted
+  file can no longer hide its nesting from it.
 - **Fixed: a hand-edited `mcp.json` or `hooks.json` that fails to parse is no longer replaced
   at launch.** The file is left as it is, the last working configuration stays active, and
   the problem is logged so you can fix it.
