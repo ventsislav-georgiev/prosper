@@ -6,12 +6,11 @@ import CoreGraphics
 /// A listen-or-default CGEvent tap with enable/disable + timeout. Self-owns its
 /// mach port + runloop source and tears them down on `deinit`.
 ///
-/// Shared: the menu-bar mover's scromble handshake (lifetime = one move) and the
-/// mouse module's long-lived scroll/navigation taps both build on this.
+/// Backs the mouse module's long-lived scroll/navigation taps.
 @MainActor
 final class EventTap {
     enum Location {
-        case session, annotatedSession, hid, pid(pid_t)
+        case session, hid
     }
 
     // CF handles: accessed from the (nonisolated) deinit for teardown, so marked
@@ -32,9 +31,7 @@ final class EventTap {
     @MainActor
     struct Proxy {
         fileprivate let tap: EventTap
-        var isEnabled: Bool { tap.isEnabled }
         func enable() { tap.enable() }
-        func disable() { tap.disable() }
     }
 
     init(label: String,
@@ -67,15 +64,7 @@ final class EventTap {
     private static func createMachPort(location: Location, options: CGEventTapOptions,
                                        place: CGEventTapPlacement,
                                        mask: CGEventMask, userInfo: UnsafeMutableRawPointer?) -> CFMachPort? {
-        if case .pid(let pid) = location {
-            return CGEvent.tapCreateForPid(pid: pid, place: place, options: options,
-                                           eventsOfInterest: mask, callback: eventTapHandler, userInfo: userInfo)
-        }
-        let tap: CGEventTapLocation = switch location {
-            case .hid: .cghidEventTap
-            case .annotatedSession: .cgAnnotatedSessionEventTap
-            default: .cgSessionEventTap
-        }
+        let tap: CGEventTapLocation = location == .hid ? .cghidEventTap : .cgSessionEventTap
         return CGEvent.tapCreate(tap: tap, place: place, options: options,
                                  eventsOfInterest: mask, callback: eventTapHandler, userInfo: userInfo)
     }
@@ -87,7 +76,7 @@ final class EventTap {
     /// The callback's return is the tap verdict and is honoured: `nil` swallows the
     /// event, a non-nil event is passed back to the system (return the same event to
     /// pass through, possibly after mutating it in place). Callbacks that only
-    /// observe must `return nil` — that is what the menu-bar scromble taps do.
+    /// observe must `return nil`.
     nonisolated static func dispatch(_ tap: EventTap, _ type: CGEventType,
                                      _ event: CGEvent) -> Unmanaged<CGEvent>? {
         // CGEvent isn't Sendable, but the C handler fires synchronously on the main
@@ -109,14 +98,6 @@ final class EventTap {
         guard let source, let machPort else { return }
         if !isAdded { CFRunLoopAddSource(runLoop, source, mode); isAdded = true }
         CGEvent.tapEnable(tap: machPort, enable: true)
-    }
-
-    func enable(timeout: Duration, onTimeout: @escaping () -> Void) {
-        enable()
-        Task { [weak self] in
-            try? await Task.sleep(for: timeout)
-            if self?.isEnabled == true { onTimeout() }
-        }
     }
 
     func disable() {

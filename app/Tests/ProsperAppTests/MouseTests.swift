@@ -4,9 +4,8 @@ import XCTest
 @testable import ProsperApp
 
 /// Mouse module, entry A: the `com.prosper.mouse` extension shell and the shared
-/// `EventTap` lifted out of MenuBarItemMover. No services yet — these cover the
-/// two things the later entries build on: the manifest the Settings page reads,
-/// and the `dispatch` return contract (the fix that makes pass/mutate possible).
+/// `EventTap`: the manifest the Settings page reads and the `dispatch` return
+/// contract (the fix that makes pass/mutate possible).
 @MainActor
 final class MouseTests: XCTestCase {
 
@@ -64,7 +63,7 @@ final class MouseTests: XCTestCase {
                  types: [.scrollWheel], callback: callback)
     }
 
-    /// Regression guard for the lift: `dispatch` used to discard the callback's
+    /// Regression guard: `dispatch` used to discard the callback's
     /// return and always swallow. Mouse services need pass-through, so a returned
     /// event must come back out — as the SAME event, not a copy.
     func testDispatchPassesTheCallbackReturnThrough() throws {
@@ -74,8 +73,7 @@ final class MouseTests: XCTestCase {
         XCTAssertTrue(out?.takeUnretainedValue() === event, "returned event must reach the system unchanged")
     }
 
-    /// The other half of the contract, and the behaviour the two menu-bar scromble
-    /// callbacks rely on: `nil` still swallows.
+    /// The other half of the contract: `nil` still swallows.
     func testDispatchSwallowsWhenCallbackReturnsNil() throws {
         let event = try XCTUnwrap(CGEvent(source: nil))
         var sawCallback = false

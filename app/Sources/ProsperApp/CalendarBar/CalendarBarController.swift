@@ -96,7 +96,7 @@ final class CalendarBarController {
             }
         }
     }
-    /// #149: shared geometric outside-click dismisser; a pinned popover never closes.
+    /// #149: shared outside-click dismisser (window-owner rule); a pinned popover never closes.
     private lazy var outsideClick = PopoverOutsideClickDismisser(
         popover: popover, canDismiss: { [weak self] in !(self?.store.pinned ?? false) },
         systemOwnedFrames: { [weak self] in self?.expanded.itemFrames ?? [] })
@@ -269,7 +269,7 @@ final class CalendarBarController {
 
     /// Outside-click dismisser: as an LSUIElement accessory app the transient
     /// popover doesn't reliably see dismissing clicks on the desktop, so close
-    /// explicitly. #149: clicks inside the popover are filtered by its frame —
+    /// explicitly. #149: clicks on our own windows are kept by owner pid —
     /// macOS 27 delivers them to the global monitor too. Skipped while pinned.
     private func updateOutsideClickMonitor() {
         outsideClick.setArmed(popover.isShown && !store.pinned)

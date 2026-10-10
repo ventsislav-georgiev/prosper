@@ -379,7 +379,7 @@ Prosper is free and open source. Extend it without touching the core: write **Lu
 Prosper takes inspiration — ideas, UI/UX, and implementation know-how — from a number of projects we admire:
 
 - **[exelban/Stats](https://github.com/exelban/stats)** — the System Stats modules (CPU / RAM / GPU / network / disk / sensors / fans) and their popups. Much of our know-how for the private IOReport / IOHID sensor paths and the SMC fan-control sequence came from studying it.
-- **[jordanbaird/Ice](https://github.com/jordanbaird/Ice)** — the menu-bar management (hiding, reordering, layout).
+- **[jordanbaird/Ice](https://github.com/jordanbaird/Ice)** — the menu-bar management (hiding, item spacing) and the event-tap wrapper.
 - **[Itsycal](https://github.com/sfsam/Itsycal)** — the menu-bar calendar: icon styles, month grid, and agenda.
 - **[openlid/openlid](https://github.com/openlid/openlid)** — the OpenLid lid-stay-awake feature.
 - **[vorssaint/vorssaint-utils](https://github.com/vorssaint/vorssaint-utils)** — the per-app volume mixer: the process-tap + aggregate-device engine, the boost limiter, the microphone input picker and mute-everything sweep, and the panel's UI/UX; the drag-a-region screen-capture overlay behind Copy Text from Screen; and the Finder keyboard habits — F2 to rename the selection, ⌘X then ⌘V to move files into the front window, and ⌘V to save a copied image there as a PNG.

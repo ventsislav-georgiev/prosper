@@ -15,7 +15,7 @@ final class MixerPanelController {
     private var item: NSStatusItem?
     private var glyphObservers: Set<AnyCancellable> = []
 
-    /// #149: shared geometric outside-click dismisser (see its file for why).
+    /// #149: shared outside-click dismisser (see its file for why).
     private lazy var outsideClick = PopoverOutsideClickDismisser(
         popover: popover, systemOwnedFrames: { [weak self] in self?.expanded.itemFrames ?? [] })
 

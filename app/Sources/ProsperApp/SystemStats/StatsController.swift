@@ -54,10 +54,9 @@ final class StatsController {
         }
     }
     private var openModule: StatsModule?
-    /// #149: closes the popover on a click outside its window frame — `.transient`
-    /// misses desktop / non-activating clicks for an accessory app, and on macOS 27
-    /// the global monitor also sees clicks inside our own popover, so the shared
-    /// dismisser decides by geometry, not by event routing.
+    /// #149: closes the popover on a click on another app's window — `.transient`
+    /// misses desktop / non-activating clicks for an accessory app; the shared
+    /// dismisser decides by the owner of the window under the click.
     private lazy var outsideClick = PopoverOutsideClickDismisser(
         popover: popover, systemOwnedFrames: { [weak self] in self?.expanded.itemFrames ?? [] })
     /// #197: macOS 27 opens/closes through each item's session. Switching A → B
