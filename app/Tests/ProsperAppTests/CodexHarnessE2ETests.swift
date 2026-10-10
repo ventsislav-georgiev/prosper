@@ -52,8 +52,11 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// Thread and turn params are checked against the codex 0.139/0.161/0.162 schemas
     /// (`ThreadStartParams.sandbox: SandboxMode`, no `sandboxPolicy` there;
     /// `TurnStartParams.sandboxPolicy: SandboxPolicy`); a mismatch is a JSON-RPC error.
+    /// SPAWNCHILD: a file `spawn-child` beside the script makes the mock start a child that
+    /// ignores SIGTERM (an MCP server stand-in), which writes its pid to `child-pid` once
+    /// the ignore is in place. It sends no frame.
     private static let mockServer = #"""
-    import sys, json, os, time
+    import sys, json, os, time, subprocess
 
     LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.jsonl")
     WIRE = os.path.join(os.path.dirname(LOG), "wire.jsonl")
@@ -62,6 +65,13 @@ final class CodexHarnessE2ETests: XCTestCase {
     LATE_ON = os.path.join(os.path.dirname(LOG), "late-on")
     with open(os.path.join(os.path.dirname(LOG), "pid"), "w") as f:
         f.write(str(os.getpid()))
+    if os.path.exists(os.path.join(os.path.dirname(LOG), "spawn-child")):
+        CHILD_PID = os.path.join(os.path.dirname(LOG), "child-pid")
+        subprocess.Popen([sys.executable, "-c",
+            "import os, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "open(sys.argv[1] + '.tmp', 'w').write(str(os.getpid())); os.rename(sys.argv[1] + '.tmp', sys.argv[1]); "
+            "time.sleep(600)", CHILD_PID],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     current_turn = None
     wedged = False
     turn_seq = 0
@@ -752,6 +762,60 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertTrue(completed, "the resumed thread should run a turn")
         let resumes = try Self.received("thread/resume", exe: exe)
         XCTAssertEqual((resumes.first?["params"] as? [String: Any])?["threadId"] as? String, "thread-1")
+    }
+
+    /// #178: codex's children (MCP servers, tools) share its process group, and teardown
+    /// signals the group: a child that ignores SIGTERM is SIGKILLed with the rest.
+    func testShutdownKillsCodexsWholeProcessGroup() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        let (_, childPid) = try await Self.startChild(harness, exe: exe)
+        await harness.shutdown()
+        try await Self.waitGone(childPid)
+    }
+
+    /// #178: codex dying on its own (crash, kill) still takes its children down.
+    func testCodexDyingOnItsOwnTakesItsChildrenDown() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        let (codexPid, childPid) = try await Self.startChild(harness, exe: exe)
+        async let drained = Self.drain(harness, timeout: 10)
+        XCTAssertEqual(kill(codexPid, SIGKILL), 0)
+        _ = await drained
+        try await Self.waitGone(childPid)
+        await harness.shutdown()
+    }
+
+    /// Starts `harness` on a mock that spawns a SIGTERM-ignoring child; returns codex's
+    /// pid and the child's once the child is up and in codex's process group.
+    private static func startChild(_ harness: CodexHarness, exe: URL) async throws -> (codex: pid_t, child: pid_t) {
+        let dir = exe.deletingLastPathComponent()
+        try Data().write(to: dir.appendingPathComponent("spawn-child"))
+        try await harness.start()
+        let childFile = dir.appendingPathComponent("child-pid")
+        let deadline = Date().addingTimeInterval(5)
+        while !FileManager.default.fileExists(atPath: childFile.path), Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let codex = try XCTUnwrap(pid_t(String(contentsOf: dir.appendingPathComponent("pid"), encoding: .utf8)))
+        let child = try XCTUnwrap(pid_t(String(contentsOf: childFile, encoding: .utf8)), "mock child never started")
+        XCTAssertEqual(getpgid(codex), codex, "codex must lead its own process group")
+        XCTAssertEqual(getpgid(child), codex, "the child must be in codex's group")
+        return (codex, child)
+    }
+
+    /// Waits up to 8 s (3 s SIGTERM grace + SIGKILL + launchd's reap) for `pid` to be gone.
+    private static func waitGone(_ pid: pid_t, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = Date().addingTimeInterval(8)
+        while kill(pid, 0) == 0, Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if kill(pid, 0) == 0 {
+            kill(pid, SIGKILL)   // don't leak it past a failing test
+            XCTFail("codex's child \(pid) outlived the teardown", file: file, line: line)
+        }
     }
 
     /// #165/#166: the user's sandbox reaches codex in the shapes its schema accepts, and

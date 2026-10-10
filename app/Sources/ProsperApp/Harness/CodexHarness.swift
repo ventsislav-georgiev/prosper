@@ -131,7 +131,8 @@ actor CodexHarness: CodingHarness {
         proc.terminationHandler = { [weak self] p in
             guard let self else { return }
             let signaled = p.terminationReason == .uncaughtSignal
-            Task { await self.handleTermination(code: p.terminationStatus, signaled: signaled) }
+            let pid = p.processIdentifier
+            Task { await self.handleTermination(code: p.terminationStatus, signaled: signaled, pgid: pid) }
         }
 
         do {
@@ -166,18 +167,29 @@ actor CodexHarness: CodingHarness {
         let proc = process
         process = nil
         proc?.terminationHandler = nil   // teardown owns this exit; no second entry
-        proc?.terminate()
         cleanupIO()
-        // Reap off the actor so a slow exit can't block it; SIGKILL the straggler.
         if let proc {
-            Task.detached {
-                let deadline = Date().addingTimeInterval(3)
-                while proc.isRunning, Date() < deadline {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                }
-                if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
-                proc.waitUntilExit()
+            Self.killGroup(proc.processIdentifier)
+            Task.detached { proc.waitUntilExit() }   // reap off the actor
+        }
+    }
+
+    /// codex runs as the leader of its own process group: Foundation's `Process`
+    /// spawns with POSIX_SPAWN_SETPGROUP, so pgid == pid (the E2E tests assert it).
+    /// Signal the group, not the pid, so the MCP servers and tools codex started go
+    /// with it instead of being reparented to launchd. SIGTERM now; SIGKILL whatever
+    /// is still in the group after 3 s, off the actor so a slow exit can't block it.
+    /// ponytail: a child that moves to its own group or session (`setsid` for a PTY)
+    /// is out of reach; codex itself has to end those on SIGTERM.
+    private nonisolated static func killGroup(_ pgid: pid_t) {
+        guard pgid > 1 else { return }   // kill(-0)/kill(-1) would hit us / everything
+        kill(-pgid, SIGTERM)
+        Task.detached {
+            let deadline = Date().addingTimeInterval(3)
+            while kill(-pgid, 0) == 0, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 100_000_000)
             }
+            if kill(-pgid, 0) == 0 { kill(-pgid, SIGKILL) }
         }
     }
 
@@ -420,10 +432,11 @@ actor CodexHarness: CodingHarness {
     /// error whatever the code: a clean exit mid-turn sends no `turn/completed` either.
     /// In-flight requests and the event stream carry the same error, which lets the
     /// controller show it once; the stream then finishes so it can drop this harness.
-    private func handleTermination(code: Int32, signaled: Bool) {
+    private func handleTermination(code: Int32, signaled: Bool, pgid: pid_t) {
         guard !terminated else { return }
         terminated = true
         process = nil
+        Self.killGroup(pgid)   // codex is gone; its children are not
         let error = HarnessError.backendError(signaled
             ? "codex app-server was killed by signal \(code)"
             : "codex app-server exited with code \(code)")
