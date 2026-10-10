@@ -175,6 +175,18 @@ enum AgentModelRegistry {
     /// calls and prompt-prefix KV reuse (the fastest correct agent path).
     static let recommendedId = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
 
+    /// This Mac's RAM in GB, same decimal conversion as the settings pane's warning.
+    static var physicalMemoryGB: Int { Int(ProcessInfo.processInfo.physicalMemory / 1_000_000_000) }
+
+    /// Default agent model for a Mac with `gb` of RAM (#332): `recommendedId` once its
+    /// floor fits, else the largest built-in row whose floor fits. Below the smallest
+    /// floor, that floor's tier. Never persisted: agentModel syncs between Macs (#256).
+    static func defaultId(physicalMemoryGB gb: Int) -> String {
+        if let rec = models.first(where: { $0.id == recommendedId }), rec.minRAMGB <= gb { return recommendedId }
+        let gb = max(gb, models.map(\.minRAMGB).min() ?? gb)
+        return models.filter { $0.minRAMGB <= gb }.max { $0.approxRAMGB < $1.approxRAMGB }?.id ?? recommendedId
+    }
+
     /// Built-in catalog plus any user-added (HF-imported) custom models. The single
     /// source the picker, the AI Models pane, and `model(for:)`/`toolFormat(for:)` read,
     /// so a custom model is tool-parsed and RAM-warned exactly like a built-in one.
@@ -229,13 +241,13 @@ enum AgentModelRegistry {
     ]
 
     /// The one self-heal for a saved agent id: known (built-in or custom) → itself,
-    /// retired → its replacement, anything else → `recommendedId`. Both
+    /// retired → its replacement, anything else → this Mac's `defaultId`. Both
     /// `Preferences.agentModel` and `model(for:)` route through here.
-    static func canonicalId(_ id: String) -> String {
+    static func canonicalId(_ id: String, physicalMemoryGB gb: Int = physicalMemoryGB) -> String {
         let ids = Set(all().map(\.id))
         if ids.contains(id) { return id }
         if let r = replacements[id], ids.contains(r) { return r }
-        return recommendedId
+        return defaultId(physicalMemoryGB: gb)
     }
 
     /// Lookup by id (built-in + custom); a removed id resolves via `canonicalId`.

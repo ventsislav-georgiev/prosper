@@ -213,7 +213,7 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(AgentModelRegistry.canonicalId("unsloth/Qwen3-8B-GGUF"), "unsloth/Qwen3.5-9B-GGUF")
         XCTAssertEqual(AgentModelRegistry.canonicalId("unsloth/Nemotron-3-Nano-30B-A3B-GGUF"),
                        "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF")
-        XCTAssertEqual(AgentModelRegistry.canonicalId("mlx-community/some-unknown-model"),
+        XCTAssertEqual(AgentModelRegistry.canonicalId("mlx-community/some-unknown-model", physicalMemoryGB: 64),
                        AgentModelRegistry.recommendedId)
         XCTAssertEqual(AgentModelRegistry.canonicalId("unsloth/Qwen3.5-4B-GGUF"), "unsloth/Qwen3.5-4B-GGUF")
         XCTAssertEqual(AgentModelRegistry.model(for: "unsloth/Qwen3-8B-GGUF").id, "unsloth/Qwen3.5-9B-GGUF")
@@ -230,11 +230,40 @@ final class LlamaAgentEngineTests: XCTestCase {
         d.set("unsloth/Nemotron-3-Nano-30B-A3B-GGUF", forKey: key)
         XCTAssertEqual(Preferences.agentModel, "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF")
         d.set("gone/unknown", forKey: key)
-        XCTAssertEqual(Preferences.agentModel, AgentModelRegistry.recommendedId)
+        XCTAssertEqual(Preferences.agentModel, thisMacDefault)
         XCTAssertEqual(d.string(forKey: key), "gone/unknown")   // may be another Mac's custom pick: not rewritten
         d.removeObject(forKey: key)
-        XCTAssertEqual(Preferences.agentModel, AgentModelRegistry.recommendedId)
+        XCTAssertEqual(Preferences.agentModel, thisMacDefault)
         XCTAssertNil(d.string(forKey: key))   // default is not persisted
+    }
+
+    private var thisMacDefault: String {
+        AgentModelRegistry.defaultId(physicalMemoryGB: AgentModelRegistry.physicalMemoryGB)
+    }
+
+    /// #332: the default follows physical RAM — 9B below the 32 GB floor, the 30B coder at or above it.
+    func testDefaultIdFollowsPhysicalMemory() {
+        for gb in [8, 16, 24] {
+            XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: gb), "unsloth/Qwen3.5-9B-GGUF", "\(gb) GB")
+        }
+        for gb in [32, 48, 64, 128] {
+            XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: gb), AgentModelRegistry.recommendedId, "\(gb) GB")
+        }
+        // Unknown id falls back to the memory-derived default; retired ids keep their #247/#248 mapping.
+        XCTAssertEqual(AgentModelRegistry.canonicalId("gone/unknown", physicalMemoryGB: 16), "unsloth/Qwen3.5-9B-GGUF")
+        XCTAssertEqual(AgentModelRegistry.canonicalId("gone/unknown", physicalMemoryGB: 32), AgentModelRegistry.recommendedId)
+        XCTAssertEqual(AgentModelRegistry.canonicalId("mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit", physicalMemoryGB: 16),
+                       "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF")
+    }
+
+    /// #332: the unset case returns this Mac's default without writing it (agentModel syncs, #256).
+    func testUnsetAgentModelIsMemoryDerivedAndNotPersisted() {
+        let d = Preferences.defaults, key = "agentModel"
+        let saved = d.object(forKey: key)
+        defer { d.set(saved, forKey: key) }
+        d.removeObject(forKey: key)
+        XCTAssertEqual(Preferences.agentModel, thisMacDefault)
+        XCTAssertNil(d.object(forKey: key))
     }
 
     /// #247: every replacement target is a live catalog id (else canonicalId falls to recommended).
@@ -294,9 +323,9 @@ final class LlamaAgentEngineTests: XCTestCase {
         d.set(id, forKey: key)
         XCTAssertEqual(Preferences.agentModel, id)
         XCTAssertEqual(d.string(forKey: key), id)
-        // Same id on a Mac without that custom model: resolves to recommended, stays stored.
+        // Same id on a Mac without that custom model: resolves to this Mac's default, stays stored.
         CustomModelStore.remove(id)
-        XCTAssertEqual(Preferences.agentModel, AgentModelRegistry.recommendedId)
+        XCTAssertEqual(Preferences.agentModel, thisMacDefault)
         XCTAssertEqual(d.string(forKey: key), id)
     }
 

@@ -121,9 +121,10 @@ tag from the now-released section and put it on the new top draft.
   shown in full in a scrollable box, with a character-count cue when it runs past the box, and
   whitespace padding is shown as a count (`␠×400`) instead of blank space.
 - **Fixed: the Window extension no longer shrinks a window to nothing when macOS reports an
+  invalid frame for it.** The action now stops as if no window were focused.
 - **Fixed: in the System Settings extension, "Screen Saver" and "Passwords" opened nothing on macOS 27.** Screen Saver now opens the Wallpaper pane, where macOS moved it, and Passwords opens the Passwords app.
 - **Fixed: an extension's menu bar icon now keeps its position across launches.** Each extension status item is saved under its own name instead of a creation-order slot. The icon moves once to its default spot on the first launch after this update.
-  invalid frame for it.** The action now stops as if no window were focused.
+- **Changed: on a fresh install the coding agent now defaults to a model that fits this Mac's memory.** Macs with less than 32 GB start with Qwen3.5-9B instead of the 32 GB Qwen3-Coder-30B; 32 GB and up keep the 30B coder. The choice is made per Mac and is never written into the synced setting. Removing the custom model the agent was using no longer resets the synced setting either.
 - **Fixed: extension timers restored from a corrupted saved schedule no longer crash Prosper at
   launch or fire in a tight loop.** Bad intervals are clamped to the normal 50 ms minimum.
 - **Fixed: typing a huge number, `inf` or `nan` into an extension's number setting no longer

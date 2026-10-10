@@ -852,17 +852,17 @@ enum Preferences {
     /// Model id used by the coding agent (a SEPARATE checkpoint from the inline
     /// `coreModel` — bigger, tool-calling-capable, loaded only while an agent run
     /// is active; see ModelResidencyCoordinator). Defaults to
-    /// `AgentModelRegistry.recommendedId`. The set of selectable ids lives in
+    /// `AgentModelRegistry.defaultId` for this Mac's RAM (#332). The set of selectable ids lives in
     /// `AgentModelRegistry.models` so adding a model is a one-row change there.
     static var agentModel: String {
         get {
             // Self-heal via AgentModelRegistry.canonicalId (shared with model(for:)):
-            // a retired id reads as its replacement, an unknown one as the recommended.
+            // a retired id reads as its replacement, an unknown one as this Mac's default.
             // Neither is written back: agentModel syncs between Macs, custom models
             // don't, so a write-back from a Mac lacking the custom row would clobber
             // the other Mac's pick (#68, #256).
             guard let stored = defaults.string(forKey: Keys.agentModel) else {
-                return AgentModelRegistry.recommendedId
+                return AgentModelRegistry.defaultId(physicalMemoryGB: AgentModelRegistry.physicalMemoryGB)
             }
             return AgentModelRegistry.canonicalId(stored)
         }

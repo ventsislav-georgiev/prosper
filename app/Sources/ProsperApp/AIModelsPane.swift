@@ -423,9 +423,10 @@ struct AIModelsPane: View {
                     }
                     if row.isCustom {
                         Button("Remove from list", role: .destructive) {
-                            // Don't leave the agent pointed at an id that no longer exists.
-                            if model.agentModel == row.id { model.agentModel = AgentModelRegistry.recommendedId }
-                            CustomModelStore.remove(row.id); refresh += 1
+                            // No agentModel write: it syncs between Macs (#256), and
+                            // Preferences.agentModel already reads a now-unknown id as this
+                            // Mac's RAM default (#332); a Mac that still has the row keeps it.
+                            CustomModelStore.remove(row.id); model.healAgentModelMirror(); refresh += 1
                         }
                     }
                 } label: { Image(systemName: "ellipsis.circle") }

@@ -283,7 +283,16 @@ final class SettingsModel: ObservableObject {
 
     /// Coding-agent model. Swapped in (residency swap) only when agent work runs, so
     /// changing it never disturbs the resident inline model — no live-switch hook.
-    @Published var agentModel: String { didSet { Preferences.agentModel = agentModel } }
+    @Published var agentModel: String { didSet { if !suppressAgentPersist { Preferences.agentModel = agentModel } } }
+    /// Set while healing the mirror so the per-Mac default isn't written to the synced key (#256, #332).
+    private var suppressAgentPersist = false
+
+    /// Re-reads `agentModel` from Preferences (healed via canonicalId) WITHOUT saving it.
+    func healAgentModelMirror() {
+        suppressAgentPersist = true
+        agentModel = Preferences.agentModel
+        suppressAgentPersist = false
+    }
 
     /// Remote Terminal (DchTerm). Set via the methods below so the server start/stop
     /// side-effect runs only on user action, not during init.
