@@ -82,6 +82,7 @@ final class AgentController {
     private var currentTurn: TurnID?
     /// Turns Stop settled locally (codex didn't acknowledge the interrupt, or Stop
     /// raced turn/start); their late `turn/completed` must not settle whatever runs next.
+    /// Completed turns too: a late `.turnStarted` for one must not revive it.
     private var settledTurns: Set<TurnID> = []
     /// Bumped per run (`startRun`). `stoppedRun` is the run Stop was pressed on: if that
     /// run's turn/start returns after the Stop, `run()` interrupts the turn at once, and
@@ -247,6 +248,7 @@ final class AgentController {
         harness = nil
         session = nil
         currentTurn = nil
+        settledTurns.removeAll()   // the next codex numbers its turns afresh
         await ModelResidencyCoordinator.shared.releaseAgent()
         // Keep an error phase visible (run() sets it just before tearing down) —
         // only a clean teardown returns to idle.
@@ -381,7 +383,13 @@ final class AgentController {
         do {
             let harness = try await ensureHarness()
             let session = try await ensureSession(harness)
-            guard stoppedRun != generation else { return }   // Stopped before turn/start went out.
+            guard stoppedRun != generation else {
+                // Stopped before turn/start went out. A Stop during the codex download already
+                // settled the phase, then spawnCodexHarness set .loadingModel again: settle it,
+                // unless a newer run owns the phase by now.
+                if generation == runGeneration, case .loadingModel = phase { phase = .idle }
+                return
+            }
             phase = .running
             let turn = try await harness.sendPrompt(session: session, input: [.text(goal)])
             guard stoppedRun != generation else {
@@ -395,7 +403,8 @@ final class AgentController {
                 }
                 return
             }
-            currentTurn = turn
+            // A fast turn can complete before turn/start returns; don't revive its id.
+            if !settledTurns.contains(turn) { currentTurn = turn }
         } catch is CancellationError {
             // Stop pressed while the model was still loading — `stop()` already tore
             // everything down; don't surface it as an error.
@@ -622,6 +631,10 @@ final class AgentController {
             // Late completion of a turn Stop already settled (or whose turn/start it
             // raced) — a no-op.
             if settledTurns.remove(t) != nil || stoppedBeforeTurn { break }
+            // CodexHarness re-announces the turn once turn/start returns, which for a fast
+            // turn is after this completion: remember the id so that .turnStarted is dropped.
+            // ponytail: one id per turn until end/respawn/exit clears the set; codex ids are UUIDs.
+            settledTurns.insert(t)
             handleTurnCompleted(outcome)
         case .error(let err):
             surfaceError(Self.describe(err))
@@ -732,6 +745,7 @@ final class AgentController {
         let dying = harness
         harness = nil
         currentTurn = nil
+        settledTurns.removeAll()   // the next codex numbers its turns afresh
         await dying?.shutdown()
     }
 

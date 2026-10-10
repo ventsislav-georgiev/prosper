@@ -82,6 +82,12 @@ tag from the now-released section and put it on the new top draft.
   kept going after Stop; turn ids were also read from the wrong field. Both are now proper
   requests, Stop waits at most 5 s for codex before settling the turn locally, and the
   local-model provider no longer retries a dropped stream for minutes.
+- **Fixed: coding agent — a reply that finished instantly could leave the chat on
+  "Working", and Stop on the next prompt then settled the wrong turn.** Codex announces a
+  turn again once its start call returns, which for a fast turn is after it already
+  completed; the controller now remembers completed turns and drops that late announcement.
+  Stop pressed during the first-use codex download no longer leaves the chat on "Loading"
+  until a second Stop.
 - **Fixed: manual fan control fought the thermal kill-switch.** When the helper reset the
   fans to automatic at 95 °C, the app re-applied the saved speed about a second later into
   a chassis still above the cut-off, and the switch fired again on its next tick. The helper

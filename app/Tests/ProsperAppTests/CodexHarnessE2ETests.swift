@@ -26,7 +26,12 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// `received.jsonl` beside the script, and the pid is written to `pid`, so tests can
     /// check what was sent and kill the process. EXITON: a file `exit-on` beside the script
     /// naming a method makes the mock delete the file and exit cleanly (code 0) on that
-    /// request, before replying (`thread/resume`: codex dies during a resume).
+    /// request, before replying (`thread/resume`: codex dies during a resume). ERRORON: a
+    /// file `error-on` naming a method makes the mock delete it and answer that request with
+    /// a JSON-RPC error, staying alive (`thread/resume`: the thread is gone). "FAST" writes
+    /// the whole turn (turn/started, turn/completed) and then the turn/start reply in one
+    /// stdout write, so the turn has completed before `sendPrompt` returns its id; with
+    /// "FAIL" too, the turn completes `failed` ("mock turn failed").
     /// Thread and turn params are checked against the codex 0.139/0.161/0.162 schemas
     /// (`ThreadStartParams.sandbox: SandboxMode`, no `sandboxPolicy` there;
     /// `TurnStartParams.sandboxPolicy: SandboxPolicy`); a mismatch is a JSON-RPC error.
@@ -35,6 +40,7 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.jsonl")
     EXIT_ON = os.path.join(os.path.dirname(LOG), "exit-on")
+    ERROR_ON = os.path.join(os.path.dirname(LOG), "error-on")
     with open(os.path.join(os.path.dirname(LOG), "pid"), "w") as f:
         f.write(str(os.getpid()))
     current_turn = None
@@ -94,6 +100,10 @@ final class CodexHarnessE2ETests: XCTestCase {
         if method and os.path.exists(EXIT_ON) and open(EXIT_ON).read().strip() == method:
             os.remove(EXIT_ON)
             sys.exit(0)
+        if method and os.path.exists(ERROR_ON) and open(ERROR_ON).read().strip() == method:
+            os.remove(ERROR_ON)
+            error(mid, "mock error on " + method)
+            continue
         # A client reply to our approval server-request (has result, no method).
         if method is None and "result" in msg:
             continue
@@ -119,6 +129,18 @@ final class CodexHarnessE2ETests: XCTestCase {
             stale = current_turn if wedged else None
             turn_seq += 1
             current_turn = "turn-%d" % turn_seq
+            if "FAST" in prompt:
+                done = turn("failed" if "FAIL" in prompt else "completed")
+                if "FAIL" in prompt:
+                    done["error"] = {"message": "mock turn failed"}
+                sys.stdout.write("".join(json.dumps(o) + "\n" for o in (
+                    {"jsonrpc": "2.0", "method": "turn/started",
+                     "params": {"threadId": "thread-1", "turn": turn("inProgress")}},
+                    {"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": "thread-1", "turn": done}},
+                    {"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})))
+                sys.stdout.flush()
+                current_turn = None
+                continue
             send({"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
             want_approval = "APPROVE" in prompt
             send({"jsonrpc": "2.0", "method": "turn/started",
@@ -543,10 +565,15 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     // MARK: - AgentController against the mock
 
-    /// A mock-backed `CodexHarness` whose Stop bound is 0.5 s instead of 5 s.
+    /// A mock-backed `CodexHarness` whose Stop bound is 0.5 s instead of 5 s. `promptReturnDelay`
+    /// holds sendPrompt's return back so the event pump applies the turn's events before run() resumes.
     private final class ShortAbortHarness: CodingHarness {
         let inner: CodexHarness
-        init(_ inner: CodexHarness) { self.inner = inner }
+        let promptReturnDelay: UInt64
+        init(_ inner: CodexHarness, promptReturnDelay: UInt64 = 0) {
+            self.inner = inner
+            self.promptReturnDelay = promptReturnDelay
+        }
         func start() async throws { try await inner.start() }
         func shutdown() async { await inner.shutdown() }
         func newSession(_ opts: SessionOptions) async throws -> SessionID { try await inner.newSession(opts) }
@@ -555,7 +582,9 @@ final class CodexHarnessE2ETests: XCTestCase {
         }
         func forkSession(_ id: SessionID) async throws -> SessionID { try await inner.forkSession(id) }
         func sendPrompt(session: SessionID, input: [PromptInput]) async throws -> TurnID {
-            try await inner.sendPrompt(session: session, input: input)
+            let turn = try await inner.sendPrompt(session: session, input: input)
+            try await Task.sleep(nanoseconds: promptReturnDelay)
+            return turn
         }
         func steer(session: SessionID, turn: TurnID, input: [PromptInput]) async throws {
             try await inner.steer(session: session, turn: turn, input: input)
@@ -572,11 +601,13 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     /// A fresh controller on the mock, with its own session store (never the user's).
     @MainActor
-    private func makeController(exe: URL, home: URL) -> (AgentController, AgentSessionStore) {
+    private func makeController(exe: URL, home: URL,
+                                promptReturnDelay: UInt64 = 0) -> (AgentController, AgentSessionStore) {
         let store = AgentSessionStore(directory: exe.deletingLastPathComponent().appendingPathComponent("store"))
         let controller = AgentController(store: store, makeHarness: {
             ShortAbortHarness(CodexHarness(executableURL: exe, codexHome: home,
-                                           llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token"))
+                                           llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token"),
+                              promptReturnDelay: promptReturnDelay)
         })
         return (controller, store)
     }
@@ -725,8 +756,7 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     private static let died = "Agent error: codex app-server exited with code 0"
 
-    /// A turn ran to completion ("Finished in" note). Not `phase == .idle`: CodexHarness's
-    /// own `.turnStarted` can land after a fast turn's `turn/completed` and re-raise `.running`.
+    /// A turn ran to completion ("Finished in" note).
     @MainActor
     private static func finishedTurn(_ controller: AgentController) -> Bool {
         controller.items.contains { if case .note = $0 { return true }; return false }
@@ -792,6 +822,143 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertTrue(failed, "the death during turn/start was not surfaced (phase \(controller.phase))")
         _ = await Self.wait(0.5) { false }   // both reports of the death have landed
         XCTAssertEqual(Self.errorRows(controller), [Self.died])
+        await controller.end()
+    }
+
+    /// QA on cc8e35e: a thread codex no longer has (thread/resume errors, codex alive) falls
+    /// back to a fresh thread and disarms the resume, so once that session ends the next
+    /// prompt opens a fresh thread instead of trying the gone one again.
+    @MainActor
+    func testControllerResumeFallbackDisarmsTheResume() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, store) = makeController(exe: exe, home: home)
+        controller.submit(goal: "EXIT0 mid-turn")   // codex dies: the next prompt resumes thread-1
+        let ended = await Self.harnessEnded(store)
+        XCTAssertTrue(ended, "codex exit was not handled")
+
+        try "thread/resume".write(to: exe.deletingLastPathComponent().appendingPathComponent("error-on"),
+                                  atomically: true, encoding: .utf8)
+        controller.submit(goal: "FAST hello")
+        let done = await Self.wait { Self.notes(controller) == 1 && controller.phase == .idle }
+        XCTAssertTrue(done, "the follow-up did not finish (phase \(controller.phase), items \(controller.items))")
+        XCTAssertEqual(Self.count("thread/resume", exe: exe), 1)
+        XCTAssertEqual(Self.count("thread/start", exe: exe), 2, "the failed resume did not fall back to a fresh thread")
+
+        await controller.end()
+        XCTAssertNil(controller.currentSessionID, "the fallback left the resume armed")
+        controller.submit(goal: "FAST again")
+        let again = await Self.wait { Self.notes(controller) == 2 && controller.phase == .idle }
+        XCTAssertTrue(again, "the next prompt did not finish (phase \(controller.phase))")
+        XCTAssertEqual(Self.count("thread/resume", exe: exe), 1, "the next prompt tried the gone thread again")
+        XCTAssertEqual(Self.count("thread/start", exe: exe), 3)
+        await controller.end()
+    }
+
+    @MainActor
+    private static func notes(_ controller: AgentController) -> Int {
+        controller.items.filter { if case .note = $0 { return true }; return false }.count
+    }
+
+    /// QA on #222 (1): a turn that completes before turn/start returns its id stays settled.
+    /// CodexHarness's own late `.turnStarted` must not put the chat back on Working, and
+    /// run() must not revive the finished turn's id: the next Stop that races turn/start
+    /// settles at once instead of interrupting the dead turn.
+    @MainActor
+    func testControllerFastTurnStaysSettled() async throws {
+        let (exe, home) = try makeMock()
+        // turn/start's reply reaches run() only after the pump settled the turn (100 ms).
+        let (controller, _) = makeController(exe: exe, home: home, promptReturnDelay: 100_000_000)
+        controller.submit(goal: "FAST hello")
+        let finished = await Self.wait { Self.finishedTurn(controller) }
+        XCTAssertTrue(finished, "the fast turn never completed")
+        var leaked: [AgentController.Phase] = []
+        let watch = { if controller.phase != .idle, leaked.last != controller.phase { leaked.append(controller.phase) } }
+        _ = await Self.wait(0.3, sample: watch) { false }
+        XCTAssertEqual(leaked, [], "the finished turn's late .turnStarted re-raised the phase")
+        XCTAssertEqual(controller.phase, .idle)
+
+        controller.submit(goal: "SLOWSTART HANG on a long command")
+        let sent = await Self.wait { Self.count("turn/start", exe: exe) == 2 }
+        XCTAssertTrue(sent, "the second turn/start never reached the mock")
+        controller.stop()
+        XCTAssertEqual(controller.phase, .idle, "Stop took the finished turn-1 for the live one")
+        let interrupted = await Self.wait { Self.count("turn/interrupt", exe: exe) >= 1 }
+        XCTAssertTrue(interrupted)
+        let ids = try Self.received("turn/interrupt", exe: exe).map { ($0["params"] as? [String: Any])?["turnId"] as? String }
+        XCTAssertEqual(ids, ["turn-2"])
+        await controller.end()
+    }
+
+    /// CHANGELOG on #222: a Stop does not hide an error the backend already reported (a
+    /// Stop click landing just after the turn failed keeps the failure on screen).
+    @MainActor
+    func testControllerStopKeepsTheBackendsError() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home)
+        controller.submit(goal: "FAST FAIL")
+        let failed = await Self.wait { controller.phase == .error("mock turn failed") }
+        XCTAssertTrue(failed, "the failed turn was not surfaced (phase \(controller.phase))")
+        _ = await Self.wait(0.3) { false }   // run() is past turn/start
+
+        controller.stop()
+        XCTAssertEqual(controller.phase, .error("mock turn failed"), "Stop hid the error")
+        _ = await Self.wait(0.3) { false }
+        XCTAssertEqual(controller.phase, .error("mock turn failed"))
+        await controller.end()
+    }
+
+    /// run()'s raced `settledTurns.insert`: a turn whose turn/start a Stop raced keeps its
+    /// late completion away from the run the user starts next.
+    @MainActor
+    func testControllerStoppedTurnsLateCompletionSparesTheNextRun() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home)
+        controller.submit(goal: "SLOWSTART WEDGE on a long command")
+        let sent = await Self.wait { Self.count("turn/start", exe: exe) == 1 }
+        XCTAssertTrue(sent, "turn/start never reached the mock")
+        controller.stop()   // no turn id yet: settles now
+        XCTAssertEqual(controller.phase, .idle)
+        // run() interrupts turn-1 once its id arrives; the wedged mock never answers.
+        let interrupted = await Self.wait { Self.count("turn/interrupt", exe: exe) == 1 }
+        XCTAssertTrue(interrupted, "turn-1 was not interrupted once turn/start returned")
+        XCTAssertEqual(Self.notes(controller), 1)
+
+        // The mock starts turn-2, then delivers turn-1's late turn/completed{interrupted}.
+        controller.submit(goal: "HANG next")
+        let second = await Self.wait { controller.items.contains { $0.id == "cmd-turn-2" } }
+        XCTAssertTrue(second, "turn-2 never started")
+        _ = await Self.wait(0.2) { false }
+        XCTAssertEqual(Self.notes(controller), 1, "turn-1's late completion settled turn-2")
+        XCTAssertEqual(controller.phase, .running)
+
+        controller.stop()
+        let stopped = await Self.wait(5) { controller.phase == .idle }
+        XCTAssertTrue(stopped)
+        await controller.end()
+    }
+
+    /// The mock numbers turns per process like a fresh codex would restart them: end() and
+    /// a config respawn forget the settled ids, so the next codex's turn-1 still settles.
+    @MainActor
+    func testControllerForgetsSettledTurnsOnEndAndRespawn() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home)
+        controller.submit(goal: "FAST one")
+        let first = await Self.wait { Self.notes(controller) == 1 && controller.phase == .idle }
+        XCTAssertTrue(first, "turn one did not finish (phase \(controller.phase))")
+
+        await controller.end()
+        controller.submit(goal: "FAST two")
+        let second = await Self.wait(5) { Self.notes(controller) == 2 && controller.phase == .idle }
+        XCTAssertTrue(second, "after end() the new codex's turn-1 was taken for the old one (phase \(controller.phase))")
+        XCTAssertEqual(Self.count("initialize", exe: exe), 2)
+
+        controller.applyAgentConfigChange()   // idle: respawns on a Task
+        _ = await Self.wait(0.3) { false }
+        controller.submit(goal: "FAST three")
+        let third = await Self.wait(5) { Self.notes(controller) == 3 && controller.phase == .idle }
+        XCTAssertTrue(third, "after a respawn the new codex's turn-1 was taken for the old one (phase \(controller.phase))")
+        XCTAssertEqual(Self.count("initialize", exe: exe), 3)
         await controller.end()
     }
 
