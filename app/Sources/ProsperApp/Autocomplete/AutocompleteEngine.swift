@@ -1164,6 +1164,8 @@ final class AutocompleteEngine {
         inFlightAnchor = nil
         pendingRefire = false
         completionTask?.cancel()
+        // #337: a cancelled task never calls back, so end its interval here.
+        endRequestSignpost()
         let token = requestToken
         let bundleId = frontApp?.bundleIdentifier
         // Tier 3 (A1): when AX gives no usable caret but the app opts into text
@@ -1705,17 +1707,15 @@ final class AutocompleteEngine {
         renderSuggestion(text: swap, caret: caret, field: field, useMirror: useMirror)
     }
 
+    private func endRequestSignpost() {
+        Perf.end("autocomplete.request", &requestSignpost)
+    }
+
     /// Renders a plain suggestion through the appropriate overlay: the mirror bubble
     /// above the field when 4b mirroring is active (no usable caret + opted-in app),
     /// else the inline caret-anchored ghost. Centralizes the choice so every
     /// suggestion source (emoji, completion) routes the same way; the inline ghost
     /// remains the default whenever a caret is available or mirroring is off.
-    private func endRequestSignpost() {
-        guard let requestSignpost else { return }
-        Perf.signposter.endInterval("autocomplete.request", requestSignpost)
-        self.requestSignpost = nil
-    }
-
     private func renderSuggestion(text: String, caret: CGRect?, field: CGRect?, useMirror: Bool) {
         Perf.signposter.emitEvent("autocomplete.ghost")
         if useMirror, let field {
