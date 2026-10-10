@@ -8,7 +8,7 @@ final class FallbackSearchTests: XCTestCase {
     /// the real `fallback.*` keys.
     private func makeStore(append: Bool = true,
                            providers: [FallbackProvider]? = nil) -> FallbackSearchStore {
-        let suite = UserDefaults(suiteName: "fallback-tests-\(UUID().uuidString)")!
+        let suite = scratchDefaults("fallback-tests")
         let store = FallbackSearchStore(defaults: suite)
         store.appendMode = append
         if let providers { store.providers = providers }

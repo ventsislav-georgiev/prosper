@@ -138,7 +138,7 @@ final class DisplayMetricsTests: XCTestCase {
 
     @MainActor
     func testSetFrostMirrorsBumpsBackdropTickAndDedups() {
-        let store = ThemeStore(defaults: UserDefaults(suiteName: "dm-\(UUID())")!, cacheDir: tmpCache())
+        let store = ThemeStore(defaults: scratchDefaults("dm"), cacheDir: tmpCache())
         var hookFired = 0
         store.onChange = { hookFired += 1 }
         let g0 = store.generation
@@ -163,7 +163,7 @@ final class DisplayMetricsTests: XCTestCase {
 
     @MainActor
     func testSetScaleMirrorsAndBumpsGeneration() {
-        let store = ThemeStore(defaults: UserDefaults(suiteName: "dm-\(UUID())")!, cacheDir: tmpCache())
+        let store = ThemeStore(defaults: scratchDefaults("dm"), cacheDir: tmpCache())
         var hookFired = 0
         store.onChange = { hookFired += 1 }
         let g0 = store.generation
@@ -182,7 +182,7 @@ final class DisplayMetricsTests: XCTestCase {
 
     @MainActor
     func testSetOpacityMirrorsAndClamps() {
-        let store = ThemeStore(defaults: UserDefaults(suiteName: "dm-\(UUID())")!, cacheDir: tmpCache())
+        let store = ThemeStore(defaults: scratchDefaults("dm"), cacheDir: tmpCache())
         let g0 = store.generation
         let t0 = store.backdropTick
         store.setOpacity(0.7)

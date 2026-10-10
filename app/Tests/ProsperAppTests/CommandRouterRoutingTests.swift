@@ -53,7 +53,7 @@ final class CommandRouterRoutingTests: XCTestCase {
         let root = try makeEchoExtension()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let defaults = UserDefaults(suiteName: "router-test-\(UUID().uuidString)")!
+        let defaults = scratchDefaults("router-test")
         let registry = ExtensionRegistry(
             systemDir: root,
             userDir: FileManager.default.temporaryDirectory
@@ -134,7 +134,7 @@ final class CommandRouterRoutingTests: XCTestCase {
             systemDir: root,
             userDir: FileManager.default.temporaryDirectory
                 .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
-            defaults: UserDefaults(suiteName: "disc-test-\(UUID().uuidString)")!
+            defaults: scratchDefaults("disc-test")
         )
         registry.discover()
         try XCTSkipIf(registry.command(id: "frob.toggle") == nil, "frob.toggle not discovered")
@@ -227,7 +227,7 @@ final class CommandRouterRoutingTests: XCTestCase {
             systemDir: root,
             userDir: FileManager.default.temporaryDirectory
                 .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
-            defaults: UserDefaults(suiteName: "stress-test-\(UUID().uuidString)")!
+            defaults: scratchDefaults("stress-test")
         )
         registry.discover()
         try XCTSkipIf(registry.command(id: "stress.cmd0") == nil, "stress fixture not discovered")
@@ -262,7 +262,7 @@ final class CommandRouterRoutingTests: XCTestCase {
             systemDir: root,
             userDir: FileManager.default.temporaryDirectory
                 .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
-            defaults: UserDefaults(suiteName: "stress-test-\(UUID().uuidString)")!
+            defaults: scratchDefaults("stress-test")
         )
         registry.discover()
         try XCTSkipIf(registry.command(id: "stress.cmd0") == nil, "stress fixture not discovered")
@@ -328,7 +328,7 @@ final class CommandRouterRoutingTests: XCTestCase {
             systemDir: root,
             userDir: FileManager.default.temporaryDirectory
                 .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
-            defaults: UserDefaults(suiteName: "listing-test-\(UUID().uuidString)")!
+            defaults: scratchDefaults("listing-test")
         )
         registry.discover()
         try XCTSkipIf(registry.command(id: "lister.run") == nil, "lister.run not discovered")

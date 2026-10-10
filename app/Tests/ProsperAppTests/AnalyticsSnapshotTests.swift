@@ -66,7 +66,7 @@ final class AnalyticsSnapshotTests: XCTestCase {
         }
         let reg = ExtensionRegistry(
             systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0",
-            defaults: UserDefaults(suiteName: "analytics-test-\(UUID().uuidString)")!)
+            defaults: scratchDefaults("analytics-test"))
         reg.discover()
         return reg
     }

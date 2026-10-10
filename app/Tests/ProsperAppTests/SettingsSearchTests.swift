@@ -250,7 +250,7 @@ final class SettingsSearchTests: XCTestCase {
                 .appendingPathComponent("prosper-search-index-user-\(UUID().uuidString)",
                                         isDirectory: true),
             hostVersion: "2.0.0",
-            defaults: UserDefaults(suiteName: "search-index-\(UUID().uuidString)")!)
+            defaults: scratchDefaults("search-index"))
         registry.discover()
         return registry
     }

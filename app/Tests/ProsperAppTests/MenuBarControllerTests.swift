@@ -7,10 +7,7 @@ final class MenuBarControllerTests: XCTestCase {
     private let vis = "NSStatusItem Visible "
 
     private func suite() -> UserDefaults {
-        let name = "MenuBarControllerTests.\(UUID().uuidString)"
-        let d = UserDefaults(suiteName: name)!
-        addTeardownBlock { UserDefaults(suiteName: name)?.removePersistentDomain(forName: name) }
-        return d
+        scratchDefaults("MenuBarControllerTests")
     }
 
     func testCarriesPositionAndVisibilityWhenNewKeyAbsent() {

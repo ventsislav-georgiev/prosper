@@ -36,7 +36,7 @@ final class ExtensionShortcutsTests: XCTestCase {
         let registry = ExtensionRegistry(
             systemDir: system, userDir: root.appendingPathComponent("user"),
             hostVersion: "2.0.0",
-            defaults: UserDefaults(suiteName: "test.\(UUID().uuidString)")!)
+            defaults: scratchDefaults("test"))
         registry.discover()
         return (registry, root)
     }

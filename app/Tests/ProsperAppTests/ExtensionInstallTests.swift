@@ -30,7 +30,7 @@ final class ExtensionInstallTests: XCTestCase {
             systemDir: nil,
             userDir: userDir,
             hostVersion: "2.0.0",
-            defaults: UserDefaults(suiteName: "test.\(UUID().uuidString)")!,
+            defaults: scratchDefaults("test"),
             services: NoopServices()
         )
     }
@@ -130,7 +130,7 @@ final class ExtensionInstallTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
         try writeSource(into: source, id: "com.test.hello")
 
-        let defaults = UserDefaults(suiteName: "test.\(UUID().uuidString)")!
+        let defaults = scratchDefaults("test")
         let registry = ExtensionRegistry(
             systemDir: nil, userDir: userDir, hostVersion: "2.0.0",
             defaults: defaults, services: NoopServices())
@@ -187,7 +187,7 @@ final class ExtensionInstallTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
         try writeSource(into: source, id: "com.test.hello")
 
-        let defaults = UserDefaults(suiteName: "test.\(UUID().uuidString)")!
+        let defaults = scratchDefaults("test")
         func freshRegistry() -> ExtensionRegistry {
             ExtensionRegistry(systemDir: nil, userDir: userDir, hostVersion: "2.0.0",
                               defaults: defaults, services: NoopServices())
@@ -223,7 +223,7 @@ final class ExtensionInstallTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
         try writeSource(into: source, id: "com.test.hello")
 
-        let defaults = UserDefaults(suiteName: "test.\(UUID().uuidString)")!
+        let defaults = scratchDefaults("test")
         // Forge the corrupt state directly: id is in the privilege set but NOT trusted.
         defaults.set(["com.test.hello"], forKey: "privilegedExtensionIDs")
 
@@ -248,7 +248,7 @@ final class ExtensionInstallTests: XCTestCase {
             systemDir: sysParent,
             userDir: tmp.appendingPathComponent("user"),
             hostVersion: "2.0.0",
-            defaults: UserDefaults(suiteName: "test.\(UUID().uuidString)")!,
+            defaults: scratchDefaults("test"),
             services: NoopServices())
         registry.discover()
         // System extensions are trusted without any user action and route immediately.
@@ -411,7 +411,7 @@ final class ExtensionInstallTests: XCTestCase {
             systemDir: sysParent,
             userDir: tmp.appendingPathComponent("user"),
             hostVersion: "2.0.0",
-            defaults: UserDefaults(suiteName: "test.\(UUID().uuidString)")!,
+            defaults: scratchDefaults("test"),
             services: NoopServices())
         registry.discover()
         XCTAssertEqual(registry.record(id: "com.test.sys")?.isSystem, true)

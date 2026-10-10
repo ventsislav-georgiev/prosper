@@ -185,9 +185,7 @@ final class BookmarksExtensionTests: XCTestCase {
     private func makeRegistry(_ fake: BookmarkFakeServices) throws -> ExtensionRegistry {
         let dir = extensionsDir()
         try XCTSkipIf(!FileManager.default.fileExists(atPath: dir.path), "extensions dir missing")
-        let suite = "bm-test-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
+        let defaults = scratchDefaults("bm-test")
         let registry = ExtensionRegistry(
             systemDir: dir,
             userDir: FileManager.default.temporaryDirectory

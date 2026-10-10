@@ -232,7 +232,7 @@ final class ExtensionManifestTests: XCTestCase {
         _ = try writeExtension(in: systemRoot, dirName: "calc", toml: Self.sampleManifest,
                                entryBody: "function run() return 'calc-ok' end")
 
-        let defaults = UserDefaults(suiteName: "test-\(UUID().uuidString)")!
+        let defaults = scratchDefaults("test")
         let registry = ExtensionRegistry(
             systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0", defaults: defaults)
         registry.discover()
@@ -260,8 +260,7 @@ final class ExtensionManifestTests: XCTestCase {
         }
         _ = try writeExtension(in: systemRoot, dirName: "calc", toml: Self.sampleManifest)
 
-        let suite = "test-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = scratchDefaults("test")
         let registry = ExtensionRegistry(
             systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0", defaults: defaults)
         registry.discover()
@@ -286,7 +285,7 @@ final class ExtensionManifestTests: XCTestCase {
         }
         _ = try writeExtension(in: systemRoot, dirName: "calc", toml: Self.sampleManifest)
 
-        let defaults = UserDefaults(suiteName: "test-\(UUID().uuidString)")!
+        let defaults = scratchDefaults("test")
         let registry = ExtensionRegistry(
             systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0", defaults: defaults)
         registry.discover()
@@ -304,7 +303,7 @@ final class ExtensionManifestTests: XCTestCase {
         let userManifest = Self.sampleManifest.replacingOccurrences(of: "system      = true", with: "system      = false")
         _ = try writeExtension(in: userRoot, dirName: "calc", toml: userManifest)
 
-        let defaults = UserDefaults(suiteName: "test-\(UUID().uuidString)")!
+        let defaults = scratchDefaults("test")
         let registry = ExtensionRegistry(
             systemDir: nil, userDir: userRoot, hostVersion: "2.0.0", defaults: defaults)
         registry.discover()
@@ -334,8 +333,7 @@ final class ExtensionManifestTests: XCTestCase {
             with: "system      = true\n    default_disabled = true")
         _ = try writeExtension(in: systemRoot, dirName: "calc", toml: optIn)
 
-        let suite = "test-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = scratchDefaults("test")
         let registry = ExtensionRegistry(
             systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0", defaults: defaults)
         registry.discover()

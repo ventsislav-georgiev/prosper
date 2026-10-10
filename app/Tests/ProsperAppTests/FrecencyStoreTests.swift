@@ -5,11 +5,9 @@ import XCTest
 /// record→boost round-trip (isolated `UserDefaults` suite), and clearing.
 final class FrecencyStoreTests: XCTestCase {
 
-    private func freshStore() -> (FrecencyStore, String) {
-        let suite = "frecency-test-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        return (FrecencyStore(defaults: defaults, storageKey: "k"), suite)
+    private func freshStore() -> FrecencyStore {
+        let defaults = scratchDefaults("frecency-test")
+        return FrecencyStore(defaults: defaults, storageKey: "k")
     }
 
     // MARK: pure scoring
@@ -38,7 +36,7 @@ final class FrecencyStoreTests: XCTestCase {
     // MARK: record / boost / clear
 
     func testRecordAccumulatesAndBoostsRankedPath() {
-        let (store, _) = freshStore()
+        let store = freshStore()
         let now: TimeInterval = 1_700_000_000
         store.record(path: "/a/x.txt", now: now)
         store.record(path: "/a/x.txt", now: now)
@@ -51,7 +49,7 @@ final class FrecencyStoreTests: XCTestCase {
     }
 
     func testBoostsForReturnsOnlyKnownPaths() {
-        let (store, _) = freshStore()
+        let store = freshStore()
         let now: TimeInterval = 1_700_000_000
         store.record(path: "/a/x.txt", now: now)
         let map = store.boosts(for: ["/a/x.txt", "/a/missing.txt"], now: now)
@@ -60,13 +58,13 @@ final class FrecencyStoreTests: XCTestCase {
     }
 
     func testRecordIgnoresEmptyPath() {
-        let (store, _) = freshStore()
+        let store = freshStore()
         store.record(path: "")
         XCTAssertEqual(store.boost(path: ""), 0)
     }
 
     func testClearForgetsEverything() {
-        let (store, _) = freshStore()
+        let store = freshStore()
         let now: TimeInterval = 1_700_000_000
         store.record(path: "/a/x.txt", now: now)
         store.clear()
@@ -74,9 +72,7 @@ final class FrecencyStoreTests: XCTestCase {
     }
 
     func testPersistsAcrossInstancesOnSameSuite() {
-        let suite = "frecency-persist-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
+        let defaults = scratchDefaults("frecency-persist")
         let now: TimeInterval = 1_700_000_000
 
         FrecencyStore(defaults: defaults, storageKey: "k").record(path: "/a/x.txt", now: now)

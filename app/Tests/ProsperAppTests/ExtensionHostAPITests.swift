@@ -194,7 +194,7 @@ final class ExtensionHostAPITests: XCTestCase {
     }
 
     func testTimerSchedulerOneShotFiresAndIsDurable() {
-        let defaults = UserDefaults(suiteName: "timer-test-\(UUID().uuidString)")!
+        let defaults = scratchDefaults("timer-test")
         let scheduler = TimerScheduler(defaults: defaults)
         let fired = expectation(description: "timer fired")
         var got: (String, String, String)?
@@ -499,8 +499,7 @@ final class ExtensionHostAPITests: XCTestCase {
             headers: [:]
         )
         // Isolated defaults so the host.prefs cache doesn't leak across runs.
-        let defaults = UserDefaults(suiteName: "currency-test-\(Int(svc.fixedEpoch))")!
-        defaults.removePersistentDomain(forName: "currency-test-\(Int(svc.fixedEpoch))")
+        let defaults = scratchDefaults("currency-test")
 
         let registry = ExtensionRegistry(
             systemDir: dir,
@@ -535,9 +534,7 @@ final class ExtensionHostAPITests: XCTestCase {
         try XCTSkipIf(!FileManager.default.fileExists(atPath: dir.path), "extensions dir missing")
 
         let svc = FakeServices()
-        let suite = "ql-test-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
+        let defaults = scratchDefaults("ql-test")
 
         let registry = ExtensionRegistry(
             systemDir: dir,
@@ -586,7 +583,7 @@ final class ExtensionHostAPITests: XCTestCase {
         // Visible frame {0,25,1440,875}; current window {100,100,600,400}.
         svc.windowFrame = WindowFrame(x: 100, y: 100, w: 600, h: 400,
                                       visibleX: 0, visibleY: 25, visibleW: 1440, visibleH: 875)
-        let defaults = UserDefaults(suiteName: "win-test-\(UUID().uuidString)")!
+        let defaults = scratchDefaults("win-test")
         let registry = ExtensionRegistry(
             systemDir: dir,
             userDir: FileManager.default.temporaryDirectory
@@ -644,7 +641,7 @@ final class ExtensionHostAPITests: XCTestCase {
             systemDir: dir,
             userDir: FileManager.default.temporaryDirectory
                 .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
-            defaults: UserDefaults(suiteName: "files-test-\(UUID().uuidString)")!,
+            defaults: scratchDefaults("files-test"),
             services: svc
         )
         registry.discover()
@@ -683,7 +680,7 @@ final class ExtensionHostAPITests: XCTestCase {
             systemDir: dir,
             userDir: FileManager.default.temporaryDirectory
                 .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
-            defaults: UserDefaults(suiteName: "files-test-\(UUID().uuidString)")!,
+            defaults: scratchDefaults("files-test"),
             services: svc
         )
         registry.discover()
@@ -715,7 +712,7 @@ final class ExtensionHostAPITests: XCTestCase {
             FileSearchEngine.IndexedFile(path: "\(home)/Projects",
                 contentTypeTree: ["public.folder"], isDir: true, kind: "Folder", modified: 150),
         ])
-        let frecencyDefaults = UserDefaults(suiteName: "files-frecency-\(UUID().uuidString)")!
+        let frecencyDefaults = scratchDefaults("files-frecency")
         let frecency = FrecencyStore(defaults: frecencyDefaults, storageKey: "k")
 
         let svc = FakeServices()
@@ -727,7 +724,7 @@ final class ExtensionHostAPITests: XCTestCase {
             systemDir: dir,
             userDir: FileManager.default.temporaryDirectory
                 .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
-            defaults: UserDefaults(suiteName: "files-test-\(UUID().uuidString)")!,
+            defaults: scratchDefaults("files-test"),
             services: svc
         )
         registry.discover()

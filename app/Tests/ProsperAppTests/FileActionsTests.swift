@@ -75,9 +75,7 @@ final class MockFileActionPerformer: FileActionPerforming, @unchecked Sendable {
 final class FileActionDispatcherTests: XCTestCase {
 
     private func isolatedFrecency() -> FrecencyStore {
-        let suite = "dispatch-frecency-\(UUID().uuidString)"
-        let d = UserDefaults(suiteName: suite)!
-        d.removePersistentDomain(forName: suite)
+        let d = scratchDefaults("dispatch-frecency")
         return FrecencyStore(defaults: d, storageKey: "k")
     }
 

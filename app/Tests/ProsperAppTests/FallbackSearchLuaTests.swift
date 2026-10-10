@@ -81,9 +81,7 @@ final class FallbackSearchLuaTests: XCTestCase {
 
     /// Isolated UserDefaults suite + store. UUID suffix guarantees no cross-test leakage.
     private func makeStore() -> FallbackSearchStore {
-        let suiteName = "fallback-lua-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        let defaults = scratchDefaults("fallback-lua-tests")
         // Seed an empty provider list so first-run defaults don't pollute assertions.
         let store = FallbackSearchStore(defaults: defaults)
         store.providers = []

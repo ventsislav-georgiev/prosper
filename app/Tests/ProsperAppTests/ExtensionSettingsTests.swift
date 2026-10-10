@@ -282,7 +282,7 @@ final class ExtensionSettingsTests: XCTestCase {
         let fake = SettingsFakeServices()
         let registry = ExtensionRegistry(
             systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0",
-            defaults: UserDefaults(suiteName: "set-test-\(UUID().uuidString)")!,
+            defaults: scratchDefaults("set-test"),
             services: fake)
         registry.discover()
         return (registry, fake)

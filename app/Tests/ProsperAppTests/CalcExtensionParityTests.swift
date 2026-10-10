@@ -64,7 +64,7 @@ final class CalcExtensionParityTests: XCTestCase {
             systemDir: dir,
             userDir: FileManager.default.temporaryDirectory
                 .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
-            defaults: UserDefaults(suiteName: "calc-pct-\(UUID().uuidString)")!
+            defaults: scratchDefaults("calc-pct")
         )
         registry.discover()
         try XCTSkipIf(registry.command(id: "calc.eval") == nil, "calc.eval not discovered")

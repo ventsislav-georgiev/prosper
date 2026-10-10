@@ -39,7 +39,7 @@ final class ThemeTests: XCTestCase {
 
     @MainActor
     func testRedundantApplyDoesNotBumpGeneration() {
-        let store = ThemeStore(defaults: UserDefaults(suiteName: "t-\(UUID())")!, cacheDir: tmpCache())
+        let store = ThemeStore(defaults: scratchDefaults("t"), cacheDir: tmpCache())
         store.setAvailable([])                 // default active, no change from initial
         let g1 = store.generation
         store.setAvailable([])                 // identical rescan
@@ -50,14 +50,14 @@ final class ThemeTests: XCTestCase {
 
     @MainActor
     func testPreviewsPopulatedForSelector() {
-        let store = ThemeStore(defaults: UserDefaults(suiteName: "t-\(UUID())")!, cacheDir: tmpCache())
+        let store = ThemeStore(defaults: scratchDefaults("t"), cacheDir: tmpCache())
         store.setAvailable([])
         XCTAssertNotNil(store.previews[ThemeDescriptor.builtInID], "selector reads previews, not disk")
     }
 
     @MainActor
     func testLightThemeFlipsAppearance() {
-        let store = ThemeStore(defaults: UserDefaults(suiteName: "t-\(UUID())")!, cacheDir: tmpCache())
+        let store = ThemeStore(defaults: scratchDefaults("t"), cacheDir: tmpCache())
         let dir = writeThemeJSON(##"{ "appearance": "light", "colors": { "bgTop": "#FFFFFF" } }"##)
         let light = ThemeDescriptor(id: "t.light", title: "Light", appearance: .light,
                                     extensionID: "e", jsonPath: dir)
@@ -70,7 +70,7 @@ final class ThemeTests: XCTestCase {
     func testDuplicateThemeIDsDoNotCrash() {
         // Two extensions declaring the same theme id must not trap the previews
         // dictionary build; the list dedups, first wins.
-        let store = ThemeStore(defaults: UserDefaults(suiteName: "t-\(UUID())")!, cacheDir: tmpCache())
+        let store = ThemeStore(defaults: scratchDefaults("t"), cacheDir: tmpCache())
         let a = ThemeDescriptor(id: "dup", title: "A", appearance: .dark, extensionID: "e1", jsonPath: nil)
         let b = ThemeDescriptor(id: "dup", title: "B", appearance: .dark, extensionID: "e2", jsonPath: nil)
         store.setAvailable([a, b])
@@ -268,8 +268,7 @@ final class ThemeTests: XCTestCase {
 
     @MainActor
     func testStoreSelectionAppliesAndPersists() {
-        let suite = "themetest-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = scratchDefaults("themetest")
         let store = ThemeStore(defaults: defaults, cacheDir: tmpCache())
 
         let dir = writeThemeJSON(##"{ "appearance": "dark", "colors": { "blue": "#FFB000" } }"##)
@@ -291,7 +290,7 @@ final class ThemeTests: XCTestCase {
 
     @MainActor
     func testStoreDefaultAlwaysPresentAndFirst() {
-        let store = ThemeStore(defaults: UserDefaults(suiteName: "t-\(UUID())")!, cacheDir: tmpCache())
+        let store = ThemeStore(defaults: scratchDefaults("t"), cacheDir: tmpCache())
         store.setAvailable([])   // no contributed themes
         XCTAssertEqual(store.available.first?.id, ThemeDescriptor.builtInID)
 
@@ -305,7 +304,7 @@ final class ThemeTests: XCTestCase {
 
     @MainActor
     func testStoreFallsBackWhenActiveThemeDisappears() {
-        let defaults = UserDefaults(suiteName: "t-\(UUID())")!
+        let defaults = scratchDefaults("t")
         let store = ThemeStore(defaults: defaults, cacheDir: tmpCache())
         let amber = ThemeDescriptor(id: "t.amber", title: "Amber", appearance: .dark, extensionID: "e", jsonPath: nil)
         store.setAvailable([amber])

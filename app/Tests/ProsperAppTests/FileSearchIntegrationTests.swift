@@ -31,9 +31,7 @@ final class FileSearchIntegrationTests: XCTestCase {
 
     /// A fresh, empty frecency store (no cross-test leakage).
     private func emptyFrecency() -> FrecencyStore {
-        let suite = "filesearch-frecency-\(UUID().uuidString)"
-        let d = UserDefaults(suiteName: suite)!
-        d.removePersistentDomain(forName: suite)
+        let d = scratchDefaults("filesearch-frecency")
         return FrecencyStore(defaults: d, storageKey: "k")
     }
 

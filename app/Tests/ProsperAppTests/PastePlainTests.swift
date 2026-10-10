@@ -123,7 +123,7 @@ final class PastePlainTests: XCTestCase {
     private func makeRegistry(userDir: URL) -> ExtensionRegistry {
         ExtensionRegistry(
             systemDir: nil, userDir: userDir, hostVersion: "2.0.0",
-            defaults: UserDefaults(suiteName: "test.\(UUID().uuidString)")!)
+            defaults: scratchDefaults("test"))
     }
 
     /// A throwaway user extension on disk. Contributes nothing but its identity —
