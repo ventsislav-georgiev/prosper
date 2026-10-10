@@ -189,13 +189,28 @@ enum AgentModelRegistry {
         return (models + customs).sorted { ($0.approxRAMGB, $0.id) < ($1.approxRAMGB, $1.id) }
     }
 
-    /// Lookup by id (built-in + custom); falls back to the recommended model for an
-    /// unknown/removed id.
+    /// Ids retired from the catalog → the row that replaced them (#159), so a saved
+    /// pick lands on its same-RAM-tier successor instead of the 32 GB recommended.
+    static let replacements: [String: String] = [
+        "unsloth/Qwen3-8B-GGUF": "unsloth/Qwen3.5-9B-GGUF",
+        "unsloth/Nemotron-3-Nano-30B-A3B-GGUF": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+    ]
+
+    /// The one self-heal for a saved agent id: known (built-in or custom) → itself,
+    /// retired → its replacement, anything else → `recommendedId`. Both
+    /// `Preferences.agentModel` and `model(for:)` route through here.
+    static func canonicalId(_ id: String) -> String {
+        let ids = Set(all().map(\.id))
+        if ids.contains(id) { return id }
+        if let r = replacements[id], ids.contains(r) { return r }
+        return recommendedId
+    }
+
+    /// Lookup by id (built-in + custom); a removed id resolves via `canonicalId`.
     static func model(for id: String) -> AgentModel {
         let everything = all()
-        return everything.first { $0.id == id }
-            ?? everything.first { $0.id == recommendedId }
-            ?? models[0]
+        let id = canonicalId(id)
+        return everything.first { $0.id == id } ?? models[0]
     }
 
     /// Tool-call format for an id (recommended model's format if unknown).

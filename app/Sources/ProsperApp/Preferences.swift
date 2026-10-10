@@ -837,13 +837,15 @@ enum Preferences {
     /// `AgentModelRegistry.models` so adding a model is a one-row change there.
     static var agentModel: String {
         get {
-            // Self-heal (same pattern as coreModel): the MLX built-in ladder was
-            // retired for llama.cpp, so a stored id no longer in the catalog (and
-            // not a user-imported custom model) falls back to the GGUF recommended
-            // — picker, tool-call format, and engine routing then all agree.
-            let id = defaults.string(forKey: Keys.agentModel) ?? AgentModelRegistry.recommendedId
-            return AgentModelRegistry.all().contains { $0.id == id }
-                ? id : AgentModelRegistry.recommendedId
+            // Self-heal via AgentModelRegistry.canonicalId (shared with model(for:)):
+            // a retired id maps to its replacement, an unknown one to the recommended.
+            // The healed id is written back once so picker and engine agree.
+            guard let stored = defaults.string(forKey: Keys.agentModel) else {
+                return AgentModelRegistry.recommendedId
+            }
+            let id = AgentModelRegistry.canonicalId(stored)
+            if id != stored { defaults.set(id, forKey: Keys.agentModel) }
+            return id
         }
         set { defaults.set(newValue, forKey: Keys.agentModel) }
     }

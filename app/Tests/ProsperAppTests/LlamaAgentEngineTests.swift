@@ -198,6 +198,34 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(AgentModelRegistry.recommendedId, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF")
     }
 
+    /// #247: a saved id #159 removed heals to its same-tier replacement, not the 32 GB recommended.
+    func testCanonicalIdMapsRemovedIdsToReplacements() {
+        XCTAssertEqual(AgentModelRegistry.canonicalId("unsloth/Qwen3-8B-GGUF"), "unsloth/Qwen3.5-9B-GGUF")
+        XCTAssertEqual(AgentModelRegistry.canonicalId("unsloth/Nemotron-3-Nano-30B-A3B-GGUF"),
+                       "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF")
+        XCTAssertEqual(AgentModelRegistry.canonicalId("mlx-community/some-unknown-model"),
+                       AgentModelRegistry.recommendedId)
+        XCTAssertEqual(AgentModelRegistry.canonicalId("unsloth/Qwen3.5-4B-GGUF"), "unsloth/Qwen3.5-4B-GGUF")
+        XCTAssertEqual(AgentModelRegistry.model(for: "unsloth/Qwen3-8B-GGUF").id, "unsloth/Qwen3.5-9B-GGUF")
+    }
+
+    /// #247: Preferences.agentModel heals through the same map and writes the healed id back.
+    func testPreferencesAgentModelHealsAndWritesBack() {
+        let d = UserDefaults.standard, key = "agentModel"
+        let saved = d.object(forKey: key)
+        defer { d.set(saved, forKey: key) }
+        d.set("unsloth/Qwen3-8B-GGUF", forKey: key)
+        XCTAssertEqual(Preferences.agentModel, "unsloth/Qwen3.5-9B-GGUF")
+        XCTAssertEqual(d.string(forKey: key), "unsloth/Qwen3.5-9B-GGUF")
+        d.set("unsloth/Nemotron-3-Nano-30B-A3B-GGUF", forKey: key)
+        XCTAssertEqual(Preferences.agentModel, "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF")
+        d.set("gone/unknown", forKey: key)
+        XCTAssertEqual(Preferences.agentModel, AgentModelRegistry.recommendedId)
+        d.removeObject(forKey: key)
+        XCTAssertEqual(Preferences.agentModel, AgentModelRegistry.recommendedId)
+        XCTAssertNil(d.string(forKey: key))   // default is not persisted
+    }
+
     func testGGUFRowsSurviveCatalogMerge() {
         let all = AgentModelRegistry.all()
         let ggufRows = all.filter { $0.gguf != nil }
