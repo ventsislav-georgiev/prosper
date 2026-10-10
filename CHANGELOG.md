@@ -113,6 +113,9 @@ tag from the now-released section and put it on the new top draft.
   parser. The check now counts nested inline tables and long dotted keys together, ends
   strings exactly where the parser does, and rejects an unterminated string, so a crafted
   file can no longer hide its nesting from it.
+- **Fixed: a tool result handed to the OpenAI-compatible Responses API as a bare number or
+  boolean no longer reaches the model empty.** A `function_call_output` whose `output` is
+  `5` or `true` is passed on as that text instead of an empty tool result.
 - **Fixed: a hand-edited `mcp.json` or `hooks.json` that fails to parse is no longer replaced
   at launch.** The file is left as it is, the last working configuration stays active, and
   the problem is logged so you can fix it.

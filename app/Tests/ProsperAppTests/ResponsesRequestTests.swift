@@ -79,13 +79,17 @@ final class ResponsesRequestTests: XCTestCase {
           {"type":"function_call","name":"g","call_id":"b","arguments":5},
           {"type":"function_call","name":"h","call_id":"c","arguments":null},
           {"type":"function_call_output","call_id":"a","output":{"n":-1e999}},
-          {"type":"function_call_output","call_id":"b","output":{"ok":true,"a":[1]}}
+          {"type":"function_call_output","call_id":"b","output":{"b":1,"a":[2]}},
+          {"type":"function_call_output","call_id":"d","output":5},
+          {"type":"function_call_output","call_id":"e","output":true},
+          {"type":"function_call_output","call_id":"f","output":null}
         ]}
         """#
         let m = try XCTUnwrap(parse(json)).chatRequest.messages
         XCTAssertEqual(m.prefix(3).map { $0.toolCalls.first?.argumentsJSON }, ["{}", "{}", "{}"])
         XCTAssertEqual(m[3].content, "")
-        XCTAssertEqual(m[4].content, #"{"a":[1],"ok":true}"#)
+        XCTAssertEqual(m[4].content, #"{"a":[2],"b":1}"#)
+        XCTAssertEqual(m[5...].map(\.content), ["5", "true", ""])
     }
 
     // MARK: - tools (flat → nested)

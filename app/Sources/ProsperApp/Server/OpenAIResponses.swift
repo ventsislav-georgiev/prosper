@@ -90,7 +90,7 @@ struct ResponsesRequest {
                              toolCallID: nil)
         case "function_call_output":
             let callID = (d["call_id"] as? String) ?? (d["id"] as? String)
-            let output = stringify(d["output"]) ?? ""
+            let output = stringify(d["output"], fragments: true) ?? ""
             return OAMessage(role: "tool", content: output, toolCalls: [], toolCallID: callID)
         case "message", nil:
             // Either an explicit message item or a bare {role, content} object.
@@ -115,11 +115,14 @@ struct ResponsesRequest {
     }
 
     /// A value that may be a JSON string already, or an object/array to re-encode.
-    private static func stringify(_ any: Any?) -> String? {
+    /// JSON null is absent at both sites (arguments -> "{}", output -> ""); `fragments`
+    /// renders a scalar output (5, true) as its JSON text instead of dropping it.
+    private static func stringify(_ any: Any?, fragments: Bool = false) -> String? {
         switch any {
         case let s as String: return s
+        case is NSNull: return nil
         case .some(let v):
-            return ToolCallParser.jsonText(v)
+            return ToolCallParser.jsonText(v, fragments: fragments)
         case .none: return nil
         }
     }
