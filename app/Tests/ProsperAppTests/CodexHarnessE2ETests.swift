@@ -1142,9 +1142,15 @@ final class CodexHarnessE2ETests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: dest.appendingPathComponent("stray").path, contents: Data("x".utf8))
-        XCTAssertThrowsError(try AgentController.installCodex(tgz: tgz, sha256: digest, dest: dest, sign: { _ in 0 }))
+        // The fixture dir also holds other pins; whatever was there before is all that may remain.
+        let before = try FileManager.default.contentsOfDirectory(atPath: dest.deletingLastPathComponent().path).sorted()
+        XCTAssertTrue(before.contains(dest.lastPathComponent))
+        XCTAssertThrowsError(try AgentController.installCodex(tgz: tgz, sha256: digest, dest: dest, sign: { _ in 0 })) {
+            guard case HarnessError.spawnFailed(let msg) = $0 else { return XCTFail("wrong error: \($0)") }
+            XCTAssertTrue(msg.contains("codex install rename failed"), "wrong failure: \(msg)")
+        }
         let left = try FileManager.default.contentsOfDirectory(atPath: dest.deletingLastPathComponent().path)
-        XCTAssertEqual(left.filter { $0.hasPrefix(".codex-") }, [], "staging file left after a failed rename")
+        XCTAssertEqual(left.sorted(), before, "install dir changed after a failed rename")
         XCTAssertFalse(FileManager.default.fileExists(atPath: tgz.path), "the tarball was left behind")
     }
 
