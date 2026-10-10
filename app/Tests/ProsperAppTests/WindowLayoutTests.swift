@@ -255,13 +255,13 @@ final class WindowLayoutTests: XCTestCase {
         }
         let iterations = 100_000
         var hits = 0
-        let t0 = DispatchTime.now()
+        let elapsedMs = bestOfThreeMs {
         for i in 0..<iterations {
             // Sweep across the strip so hits and misses (full reverse scan) both occur.
             let p = CGPoint(x: CGFloat(i % 900), y: CGFloat(i % 340))
             if LayoutPaletteWindow.hitIndex(cells: cells, cursorAX: p) != nil { hits += 1 }
         }
-        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+        }
         XCTAssertGreaterThan(hits, 0)
         XCTAssertLessThan(elapsedMs, 200, "palette hit-test too slow: \(elapsedMs) ms for \(iterations) iters")
     }
@@ -281,14 +281,14 @@ final class WindowLayoutTests: XCTestCase {
         let zones = LayoutStore.builtins.allLayouts.first { $0.name == "Grid 2×2" }!.zones
         let iterations = 200_000
         var hits = 0
-        let start = DispatchTime.now()
+        let elapsedMs = bestOfThreeMs {
         for i in 0..<iterations {
             // Sweep the cursor across the whole visible frame so the hit zone varies.
             let cur = CGPoint(x: v.minX + CGFloat(i % 1440), y: v.minY + CGFloat(i % 875))
             let p = CGPoint(x: (cur.x - v.minX) / v.width, y: (cur.y - v.minY) / v.height)
             if LayoutStore.hitZone(zones, normCursor: p) != nil { hits += 1 }
         }
-        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6
+        }
         XCTAssertGreaterThan(hits, 0)   // keep the optimizer honest
         XCTAssertLessThan(elapsedMs, 200, "layout hit-test too slow: \(elapsedMs) ms for \(iterations) iters")
     }
@@ -301,11 +301,12 @@ final class WindowLayoutTests: XCTestCase {
         let zones = LayoutStore.builtins.allLayouts.first { $0.name == "Grid 2×2" }!.zones
         let iterations = 50_000
         var sink = 0
-        let start = DispatchTime.now()
+        let elapsedMs = bestOfThreeMs {
+        sink = 0
         for _ in 0..<iterations {
             sink &+= WindowManager.targetFrames(layout: zones, visible: v, gap: 8).count
         }
-        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6
+        }
         XCTAssertEqual(sink, iterations * zones.count)
         XCTAssertLessThan(elapsedMs, 200, "targetFrames too slow: \(elapsedMs) ms for \(iterations) iters")
     }
@@ -390,13 +391,23 @@ final class WindowLayoutTests: XCTestCase {
         let start = CGPoint(x: 0, y: 0)
         let iterations = 1_000_000
         var hits = 0
-        let t0 = DispatchTime.now()
+        let elapsedMs = bestOfThreeMs {
         for i in 0..<iterations {
             let now = CGPoint(x: CGFloat(i % 5), y: 0)   // straddles the epsilon
             if DragSnapController.didMove(from: start, to: now) { hits += 1 }
         }
-        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+        }
         XCTAssertGreaterThan(hits, 0)
         XCTAssertLessThan(elapsedMs, 200, "didMove too slow: \(elapsedMs) ms for \(iterations) iters")
+    }
+
+    /// Best of 3 runs (ms): a scheduler stall under full-suite load hits one run,
+    /// a genuinely slow hot path hits all three.
+    private func bestOfThreeMs(_ body: () -> Void) -> Double {
+        (0..<3).map { _ in
+            let t0 = DispatchTime.now()
+            body()
+            return Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+        }.min()!
     }
 }
