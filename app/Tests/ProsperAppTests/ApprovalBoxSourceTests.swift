@@ -35,6 +35,23 @@ final class ApprovalBoxSourceTests: XCTestCase {
                        "text and box height measured for both boxes")
         XCTAssertFalse(bar.contains("$0.size.width"), "the cue is about height")
         XCTAssertFalse(bar.contains("CardText."), "text is display-ready at construction, not per render")
+        // #376 (QA #183): each geometry line pinned with its neighbour, once per branch, and the cue
+        // after its box measure, outside the ScrollView (the ScrollView's closing brace precedes it).
+        func flat(_ s: Substring) -> String {
+            s.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
+        }
+        let det = try XCTUnwrap(bar.range(of: "if req.kind != .command, let diff = req.detail {"))
+        let branches = [("summary", flat(bar[cmd.upperBound..<other.lowerBound]), "Summary", summaryCue),
+                        ("detail", flat(bar[det.upperBound...]), "Detail", detailCue)]
+        for (name, body, v, cue) in branches {
+            let text = ".frame(maxWidth: .infinity, alignment: .leading)\n.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approval\(v)Height = $0 }\n}"
+            let box = "}\n.frame(maxHeight: sz(160))\n.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approval\(v)BoxHeight = $0 }\n" + cue
+            XCTAssertEqual(body.components(separatedBy: text).count - 1, 1, "\(name): text measured on the Text, closing the ScrollView")
+            XCTAssertEqual(body.components(separatedBy: box).count - 1, 1, "\(name): box cap, box measure, then the cue outside the ScrollView")
+            let t = try XCTUnwrap(body.range(of: text)), b = try XCTUnwrap(body.range(of: box))
+            XCTAssertLessThan(t.lowerBound, b.lowerBound, "\(name): text measure before the box measure")
+        }
     }
 
     func testOverflowCharCountGuessIsGone() throws {
