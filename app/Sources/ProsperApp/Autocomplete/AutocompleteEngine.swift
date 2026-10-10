@@ -1164,7 +1164,9 @@ final class AutocompleteEngine {
         inFlightAnchor = nil
         pendingRefire = false
         completionTask?.cancel()
-        // #337: a cancelled task never calls back, so end its interval here.
+        // #337: a cancelled task can still call back (CoreBridge.complete's isCancelled
+        // check races the main-actor hop), but that callback is stale at the token guard
+        // and returns before its signpost defer, so end the superseded interval here.
         endRequestSignpost()
         let token = requestToken
         let bundleId = frontApp?.bundleIdentifier
@@ -2449,6 +2451,7 @@ final class AutocompleteEngine {
         lastRenderedBefore = lastRenderedBefore.map { $0 + toInsert }
 
         requestToken &+= 1 // invalidate any in-flight request
+        endRequestSignpost() // #365: its callback is now stale and never ends the interval
         // A Tab-accept is not new input: a debounce timer still pending from the
         // last real keystroke would fire a full re-request right after the accept
         // and change the ghost the user is walking down (live report). Kill it —

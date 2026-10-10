@@ -277,7 +277,7 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
         nonisolated(unsafe) var out: String? = "unset"
         let start = Date()
         DispatchQueue.global().async {
-            out = HyperKey.hidutil(["600"], timeout: 1)
+            out = HyperKey.hidutil(["612"], timeout: 1)
             returned.fulfill()
         }
         // A hang must fail here, never stall the run.

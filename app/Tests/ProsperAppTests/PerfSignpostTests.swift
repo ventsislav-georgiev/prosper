@@ -48,4 +48,23 @@ final class PerfSignpostTests: XCTestCase {
             }
         }
     }
+
+    /// #365 (source scan, no seam: the engine is not constructible in tests). A token bump
+    /// makes the in-flight callback stale, and a stale callback returns before its
+    /// `endRequestSignpost` defer, so every bump must end the request interval itself
+    /// within the next few lines (supersede, acceptFirstWord, clearSuggestion).
+    func testEveryRequestTokenBumpEndsTheRequestSignpost() throws {
+        let file = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Autocomplete/AutocompleteEngine.swift")
+        let lines = try String(contentsOf: file, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+        let bumps = lines.indices.filter { lines[$0].contains(/requestToken\s*&?\+=/) }
+        XCTAssertGreaterThanOrEqual(bumps.count, 3)
+        for i in bumps {
+            let window = lines[(i + 1)..<min(i + 16, lines.count)]
+            XCTAssertTrue(window.contains { $0.contains("endRequestSignpost()") },
+                          "AutocompleteEngine.swift:\(i + 1): requestToken bump without endRequestSignpost()")
+        }
+    }
 }
