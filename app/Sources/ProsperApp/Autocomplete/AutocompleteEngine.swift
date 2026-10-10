@@ -1155,7 +1155,7 @@ final class AutocompleteEngine {
             return
         }
 
-        requestToken &+= 1
+        invalidateRequest()
         // Past the single-flight gate: any in-flight request is now superseded.
         // Reset the pipeline state here so early-return branches below (emoji,
         // spelling-fix, typo-suppress) can't strand a stale anchor — the stale
@@ -1164,10 +1164,6 @@ final class AutocompleteEngine {
         inFlightAnchor = nil
         pendingRefire = false
         completionTask?.cancel()
-        // #337: a cancelled task can still call back (CoreBridge.complete's isCancelled
-        // check races the main-actor hop), but that callback is stale at the token guard
-        // and returns before its signpost defer, so end the superseded interval here.
-        endRequestSignpost()
         let token = requestToken
         let bundleId = frontApp?.bundleIdentifier
         // Tier 3 (A1): when AX gives no usable caret but the app opts into text
@@ -1713,6 +1709,15 @@ final class AutocompleteEngine {
         Perf.end("autocomplete.request", &requestSignpost)
     }
 
+    /// The only place `requestToken` is bumped (#370). A bump makes the in-flight
+    /// callback stale, and a stale callback returns at the token guard before its
+    /// signpost defer (#337: a cancelled CoreBridge.complete can still call back), so
+    /// the request interval must end with the bump or it leaks.
+    private func invalidateRequest() {
+        requestToken &+= 1
+        endRequestSignpost()
+    }
+
     /// Renders a plain suggestion through the appropriate overlay: the mirror bubble
     /// above the field when 4b mirroring is active (no usable caret + opted-in app),
     /// else the inline caret-anchored ghost. Centralizes the choice so every
@@ -1741,11 +1746,10 @@ final class AutocompleteEngine {
     }
 
     private func clearSuggestion() {
-        requestToken &+= 1 // invalidate any in-flight request
+        invalidateRequest()      // a late callback from the cancelled task is now stale
         completionTask?.cancel() // stop a superseded generation mid-flight
-        endRequestSignpost()     // cancelled tasks never call back
         completionTask = nil
-        inFlightAnchor = nil     // cancelled tasks never call back; unblock the next fire
+        inFlightAnchor = nil     // a stale callback returns before clearing it; unblock the next fire
         pendingRefire = false
         candidateBuffer = nil    // B2: hard-invalidate the n-best swap buffer
         clearGhost()
@@ -2450,8 +2454,7 @@ final class AutocompleteEngine {
         insert(toInsert, bundleId: bundleId)
         lastRenderedBefore = lastRenderedBefore.map { $0 + toInsert }
 
-        requestToken &+= 1 // invalidate any in-flight request
-        endRequestSignpost() // #365: its callback is now stale and never ends the interval
+        invalidateRequest() // its callback is now stale and never ends the interval
         // A Tab-accept is not new input: a debounce timer still pending from the
         // last real keystroke would fire a full re-request right after the accept
         // and change the ghost the user is walking down (live report). Kill it —

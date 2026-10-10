@@ -49,22 +49,38 @@ final class PerfSignpostTests: XCTestCase {
         }
     }
 
-    /// #365 (source scan, no seam: the engine is not constructible in tests). A token bump
-    /// makes the in-flight callback stale, and a stale callback returns before its
-    /// `endRequestSignpost` defer, so every bump must end the request interval itself
-    /// within the next few lines (supersede, acceptFirstWord, clearSuggestion).
-    func testEveryRequestTokenBumpEndsTheRequestSignpost() throws {
-        let file = URL(fileURLWithPath: #filePath)
+    /// #370 (source scan; the engine builds overlay windows in init, so it is not
+    /// constructed here). A token bump makes the in-flight callback stale, and a stale
+    /// callback returns before its `endRequestSignpost` defer, so the only bump lives
+    /// in `invalidateRequest()`, directly followed by the end.
+    func testRequestTokenBumpLivesOnlyInInvalidateRequest() throws {
+        let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/ProsperApp/Autocomplete/AutocompleteEngine.swift")
-        let lines = try String(contentsOf: file, encoding: .utf8)
-            .split(separator: "\n", omittingEmptySubsequences: false)
-        let bumps = lines.indices.filter { lines[$0].contains(/requestToken\s*&?\+=/) }
-        XCTAssertGreaterThanOrEqual(bumps.count, 3)
-        for i in bumps {
-            let window = lines[(i + 1)..<min(i + 16, lines.count)]
-            XCTAssertTrue(window.contains { $0.contains("endRequestSignpost()") },
-                          "AutocompleteEngine.swift:\(i + 1): requestToken bump without endRequestSignpost()")
+            .appendingPathComponent("Sources")
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)!
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        var hits: [(file: String, lines: [Substring], index: Int)] = []
+        for file in files {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            // Other types own an unrelated `requestToken` (RunnerPanel); an engine
+            // extension in another file would not redeclare it, so it is still caught.
+            if file.lastPathComponent != "AutocompleteEngine.swift",
+               source.contains(/var requestToken\b/) { continue }
+            let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
+            for i in lines.indices where lines[i].contains(/requestToken\s*&?\+=/) {
+                hits.append((file.lastPathComponent, lines, i))
+            }
         }
+        // Row 1: exactly one bump under Sources, in AutocompleteEngine.swift.
+        XCTAssertEqual(hits.count, 1,
+                       "requestToken bumps: \(hits.map { "\($0.file):\($0.index + 1)" })")
+        guard hits.count == 1, let hit = hits.first else { return }
+        XCTAssertEqual(hit.file, "AutocompleteEngine.swift")
+        // Row 2: it is the body of invalidateRequest(), and the very next line ends the interval.
+        let above = hit.lines[max(0, hit.index - 3)..<hit.index]
+        XCTAssertTrue(above.contains { $0.contains("func invalidateRequest()") },
+                      "bump at :\(hit.index + 1) is not inside invalidateRequest()")
+        let next = hit.index + 1 < hit.lines.count ? hit.lines[hit.index + 1] : ""
+        XCTAssertEqual(next.trimmingCharacters(in: .whitespaces), "endRequestSignpost()")
     }
 }
