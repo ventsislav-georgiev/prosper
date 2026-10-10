@@ -23,8 +23,9 @@ let package = Package(
         // GenerateParameters and the text-generation API used by MLXEngine.
         .package(
             url: "https://github.com/ml-explore/mlx-swift-lm",
-            // #169: exact until the two local patches are rebased onto 3.32.x (#156);
-            // `swift package update` would otherwise pull 3.32.x and break `git apply`.
+            // #169: exact until the two local patches are rebased onto 3.32.x (#156).
+            // The QAT patch already fails on 3.31.4 and both fail on 3.32.3 (QA), so
+            // even a patch-level `from:` range would let `swift package update` break `git apply`.
             exact: "3.31.3"
         ),
         // HuggingFace Hub client + Tokenizers backing the #hubDownloader() /
