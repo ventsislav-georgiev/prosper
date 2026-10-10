@@ -42,15 +42,19 @@ final class ApprovalBoxSourceTests: XCTestCase {
                 .map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
         }
         let det = try XCTUnwrap(bar.range(of: "if req.kind != .command, let diff = req.detail {"))
-        let branches = [("summary", flat(bar[cmd.upperBound..<other.lowerBound]), "Summary", summaryCue),
-                        ("detail", flat(bar[det.upperBound...]), "Detail", detailCue)]
-        for (name, body, v, cue) in branches {
+        let branches = [("summary", flat(bar[cmd.upperBound..<other.lowerBound]), "Summary", summaryCue, "ScrollView {\nText(req.summary)"),
+                        ("detail", flat(bar[det.upperBound...]), "Detail", detailCue, "ScrollView {\nText(diff)")]
+        for (name, body, v, cue, open) in branches {
             let text = ".frame(maxWidth: .infinity, alignment: .leading)\n.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approval\(v)Height = $0 }\n}"
             let box = "}\n.frame(maxHeight: sz(160))\n.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approval\(v)BoxHeight = $0 }\n" + cue
             XCTAssertEqual(body.components(separatedBy: text).count - 1, 1, "\(name): text measured on the Text, closing the ScrollView")
             XCTAssertEqual(body.components(separatedBy: box).count - 1, 1, "\(name): box cap, box measure, then the cue outside the ScrollView")
             let t = try XCTUnwrap(body.range(of: text)), b = try XCTUnwrap(body.range(of: box))
             XCTAssertLessThan(t.lowerBound, b.lowerBound, "\(name): text measure before the box measure")
+            // #383 (QA #195): the capped box is a ScrollView, so the scroll cue is honest (#323).
+            XCTAssertEqual(body.components(separatedBy: open).count - 1, 1, "\(name): the capped box is a ScrollView")
+            let o = try XCTUnwrap(body.range(of: open))
+            XCTAssertLessThan(o.lowerBound, t.lowerBound, "\(name): ScrollView opens before the text measure")
         }
     }
 
