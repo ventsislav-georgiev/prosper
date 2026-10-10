@@ -1373,14 +1373,26 @@ private struct RunnerView: View {
     /// the caret to the start/end of the text) even when the monitor returns nil.
     /// `.onKeyPress` intercepts at the field and returns `.handled`, so the caret
     /// never moves and arrows only switch results.
+    ///
+    /// The write is deferred one main-queue turn: SwiftUI runs `.onKeyPress`
+    /// actions inside a view update, so publishing `selectedIndex` there logged
+    /// "Publishing changes from within view updates is not allowed" once per
+    /// arrow press (#201). Index and row count are read inside the hop, so key
+    /// repeats queued before it runs still each advance by one.
     private func selectPrev() {
-        guard !rows.isEmpty else { return }
-        model.selectedIndex = (model.selectedIndex - 1 + rows.count) % rows.count
+        DispatchQueue.main.async {
+            let n = rows.count
+            guard n > 0 else { return }
+            model.selectedIndex = (model.selectedIndex - 1 + n) % n
+        }
     }
 
     private func selectNext() {
-        guard !rows.isEmpty else { return }
-        model.selectedIndex = (model.selectedIndex + 1) % rows.count
+        DispatchQueue.main.async {
+            let n = rows.count
+            guard n > 0 else { return }
+            model.selectedIndex = (model.selectedIndex + 1) % n
+        }
     }
 
     private var selectedRow: ResultRow? {
