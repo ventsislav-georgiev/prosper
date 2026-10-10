@@ -232,7 +232,23 @@ private extension String {
 
 /// Centralized UserDefaults-backed preferences.
 enum Preferences {
-    private static var defaults: UserDefaults { UserDefaults.standard }
+    /// The app's one UserDefaults store; every ProsperApp `.standard` reader goes through it.
+    /// Under XCTest it is a per-process scratch suite (pid in the path) instead of the real
+    /// `com.apple.dt.xctest.tool` domain, so a test run never writes the user's real
+    /// defaults and two concurrent `swift test` runs never share state. Removed at exit.
+    nonisolated(unsafe) static let defaults: UserDefaults = {
+        guard NSClassFromString("XCTestCase") != nil else { return .standard }
+        let name = scratchSuitePath
+        atexit {
+            UserDefaults(suiteName: Preferences.scratchSuitePath)?
+                .removePersistentDomain(forName: Preferences.scratchSuitePath)
+            try? FileManager.default.removeItem(atPath: Preferences.scratchSuitePath + ".plist")
+        }
+        return UserDefaults(suiteName: name)!
+    }()
+
+    static let scratchSuitePath = FileManager.default.temporaryDirectory
+        .appendingPathComponent("prosper-xctest-defaults-\(getpid())").path
 
     private enum Keys {
         static let autocompleteEnabled = "autocompleteEnabled"

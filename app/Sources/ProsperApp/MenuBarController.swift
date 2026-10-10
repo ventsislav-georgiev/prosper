@@ -32,7 +32,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let onQuit: () -> Void
 
     /// Copies the old autosave name's position + visibility to the new name, each only when the new key is absent.
-    nonisolated static func carryAutosave(from oldName: String, to newName: String, in d: UserDefaults = .standard) {
+    nonisolated static func carryAutosave(from oldName: String, to newName: String, in d: UserDefaults = Preferences.defaults) {
         for key in ["NSStatusItem Preferred Position ", "NSStatusItem Visible "]
         where d.object(forKey: key + newName) == nil {
             if let v = d.object(forKey: key + oldName) { d.set(v, forKey: key + newName) }
@@ -552,7 +552,7 @@ enum MenuBarTint {
     /// light mode — never "Light" — so `isSystemDark(interfaceStyle:)` above
     /// treats anything but a case-insensitive "Dark" as light.
     static var isSystemDark: Bool {
-        isSystemDark(interfaceStyle: UserDefaults.standard.string(forKey: "AppleInterfaceStyle"))
+        isSystemDark(interfaceStyle: Preferences.defaults.string(forKey: "AppleInterfaceStyle"))
     }
 }
 

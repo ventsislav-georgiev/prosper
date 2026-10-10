@@ -312,7 +312,7 @@ enum QuicklinkStore {
     /// Reconciles the on-disk file with UserDefaults. Call once at launch.
     static func bootstrap() {
         let onDisk = readFileRaw()
-        let mirror = UserDefaults.standard.string(forKey: mirrorKey)
+        let mirror = Preferences.defaults.string(forKey: mirrorKey)
 
         if let onDisk, onDisk != mirror {
             // The file changed since we last wrote it → an external edit / import.
@@ -354,7 +354,7 @@ enum QuicklinkStore {
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
             try json.write(to: url, atomically: true, encoding: .utf8)
-            UserDefaults.standard.set(json, forKey: mirrorKey)
+            Preferences.defaults.set(json, forKey: mirrorKey)
         } catch {
             NSLog("prosper: failed to write quicklinks.json: \(error)")
         }
@@ -372,7 +372,7 @@ enum QuicklinkStore {
     // MARK: - UserDefaults maps (what the Lua extension reads)
 
     private static func load(_ key: String) -> [String: String] {
-        guard let raw = UserDefaults.standard.string(forKey: key),
+        guard let raw = Preferences.defaults.string(forKey: key),
               let data = raw.data(using: .utf8),
               let map = try? JSONDecoder().decode([String: String].self, from: data)
         else { return [:] }
@@ -382,6 +382,6 @@ enum QuicklinkStore {
     private static func store(_ map: [String: String], _ key: String) {
         guard let data = try? JSONEncoder().encode(map),
               let json = String(data: data, encoding: .utf8) else { return }
-        UserDefaults.standard.set(json, forKey: key)
+        Preferences.defaults.set(json, forKey: key)
     }
 }

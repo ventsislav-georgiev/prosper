@@ -19,7 +19,7 @@ final class FrecencyStore: @unchecked Sendable {
     private let lock = NSLock()
 
     /// `defaults`/`storageKey` are injectable so tests get an isolated suite.
-    init(defaults: UserDefaults = .standard, storageKey: String = "files.frecency.v1") {
+    init(defaults: UserDefaults = Preferences.defaults, storageKey: String = "files.frecency.v1") {
         self.defaults = defaults
         self.storageKey = storageKey
     }

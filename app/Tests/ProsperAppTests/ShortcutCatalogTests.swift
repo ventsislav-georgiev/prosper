@@ -335,22 +335,22 @@ final class ShortcutCatalogTests: XCTestCase {
     /// intermittently with "53 bytes != 53 bytes", which is a property of the
     /// encoder, not of the thing under test.
     ///
-    /// `ShortcutStore` writes to `UserDefaults.standard`, so save and restore the
+    /// `ShortcutStore` writes to `Preferences.defaults`, so save and restore the
     /// real keys around it — same guard as `AppShortcutTests`.
     func testRowIdentifiersWriteTheSameDefaultsAsTheOldPane() throws {
         let keys = ["shortcut.clipboard", ShortcutStore.appsKey,
                     ShortcutStore.extensionsKey, ShortcutStore.extensionKeybindingsKey]
-        let saved = keys.map { UserDefaults.standard.data(forKey: $0) }
+        let saved = keys.map { Preferences.defaults.data(forKey: $0) }
         defer {
             for (key, data) in zip(keys, saved) {
-                if let data { UserDefaults.standard.set(data, forKey: key) }
-                else { UserDefaults.standard.removeObject(forKey: key) }
+                if let data { Preferences.defaults.set(data, forKey: key) }
+                else { Preferences.defaults.removeObject(forKey: key) }
             }
         }
         /// What the store actually holds under `key`, decoded. Nil is a real answer
         /// (nothing written) and must not be confused with "decoded to empty".
         func stored<T: Decodable>(_ key: String, as type: T.Type) throws -> T? {
-            guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+            guard let data = Preferences.defaults.data(forKey: key) else { return nil }
             return try JSONDecoder().decode(T.self, from: data)
         }
 
@@ -369,12 +369,12 @@ final class ShortcutCatalogTests: XCTestCase {
         let kb = ExtensionShortcuts.ManifestKeybinding(
             commandID: "translate.run", extensionTitle: "Translate",
             commandTitle: "Translate", defaultCombo: combo(kVK_ANSI_L, optionKey))
-        UserDefaults.standard.removeObject(forKey: ShortcutStore.extensionKeybindingsKey)
+        Preferences.defaults.removeObject(forKey: ShortcutStore.extensionKeybindingsKey)
         ShortcutStore.setExtensionKeybinding(c, for: "translate.run")
         let expectedOverride = try stored(ShortcutStore.extensionKeybindingsKey,
                                           as: [String: KeyCombo].self)
         XCTAssertEqual(expectedOverride, ["translate.run": c])
-        UserDefaults.standard.removeObject(forKey: ShortcutStore.extensionKeybindingsKey)
+        Preferences.defaults.removeObject(forKey: ShortcutStore.extensionKeybindingsKey)
         let manifestRow = catalog(manifest: [kb]).first { $0.kind == .manifest }!
         ShortcutStore.setExtensionKeybinding(c, for: manifestRow.key)
         XCTAssertEqual(try stored(ShortcutStore.extensionKeybindingsKey,

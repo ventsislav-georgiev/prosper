@@ -78,7 +78,7 @@ actor CurrencyService {
         if let cached, cached.day == today { return cached.rates }
 
         // Try persisted cache.
-        let defaults = UserDefaults.standard
+        let defaults = Preferences.defaults
         if let storedDay = defaults.string(forKey: Keys.day), storedDay == today,
            let storedRates = defaults.dictionary(forKey: Keys.rates) as? [String: Double], !storedRates.isEmpty {
             cached = Snapshot(rates: storedRates, day: today)

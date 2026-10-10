@@ -227,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the window. SettingsRootView binds the selection via @AppStorage, so
         // writing the default selects the pane whether the window is new or reused.
         LiveExtensionHostServices.shared.settingsOpener = { [weak self] selection in
-            UserDefaults.standard.set(selection, forKey: "settingsSelectedPane")
+            Preferences.defaults.set(selection, forKey: "settingsSelectedPane")
             self?.openSettings()
         }
         // Snippet auto-expand toggling on (with inline autocomplete off) must bring

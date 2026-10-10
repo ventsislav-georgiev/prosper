@@ -15,7 +15,7 @@ enum AppRelocator {
     /// Offers the move if appropriate. Call once at launch.
     static func offerIfNeeded() {
         guard shouldOffer() else { return }
-        UserDefaults.standard.set(true, forKey: didOfferKey)
+        Preferences.defaults.set(true, forKey: didOfferKey)
 
         let alert = NSAlert()
         alert.messageText = "Move Prosper to the Applications folder?"
@@ -41,7 +41,7 @@ enum AppRelocator {
 
     /// Whether the app should offer to relocate itself.
     private static func shouldOffer() -> Bool {
-        if UserDefaults.standard.bool(forKey: didOfferKey) { return false }
+        if Preferences.defaults.bool(forKey: didOfferKey) { return false }
         let path = Bundle.main.bundlePath
         // Only meaningful for a packaged .app bundle.
         guard path.hasSuffix(".app") else { return false }

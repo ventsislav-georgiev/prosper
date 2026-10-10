@@ -182,7 +182,7 @@ final class ExtensionRegistry: ObservableObject {
         systemDir: URL? = ExtensionRegistry.bundledSystemDir,
         userDir: URL = ExtensionRegistry.defaultUserDir,
         hostVersion: String = ExtensionRegistry.bundleVersion,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = Preferences.defaults,
         services: ExtensionHostServices = LiveExtensionHostServices.shared,
         callTimeout: TimeInterval = ExtensionHost.defaultCallTimeout
     ) {

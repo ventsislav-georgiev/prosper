@@ -178,18 +178,18 @@ final class ExtensionShortcutsTests: XCTestCase {
 
     // MARK: - Persistence
 
-    /// `ShortcutStore` writes to `UserDefaults.standard`, so save and restore both
+    /// `ShortcutStore` writes to `Preferences.defaults`, so save and restore both
     /// keys around the round-trip (same shape as `AppShortcutTests`).
     private func withCleanStore(_ body: () -> Void) {
         let keys = [ShortcutStore.extensionsKey, ShortcutStore.extensionKeybindingsKey]
-        let saved = keys.map { UserDefaults.standard.data(forKey: $0) }
+        let saved = keys.map { Preferences.defaults.data(forKey: $0) }
         defer {
             for (key, data) in zip(keys, saved) {
-                if let data { UserDefaults.standard.set(data, forKey: key) }
-                else { UserDefaults.standard.removeObject(forKey: key) }
+                if let data { Preferences.defaults.set(data, forKey: key) }
+                else { Preferences.defaults.removeObject(forKey: key) }
             }
         }
-        keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        keys.forEach { Preferences.defaults.removeObject(forKey: $0) }
         body()
     }
 
@@ -276,7 +276,7 @@ final class ExtensionShortcutsTests: XCTestCase {
     private let quickdirsKey = "ext.com.prosper.quickdirs.dirs"
     private let snippetsItemsKey = "ext.com.prosper.snippets.items"
 
-    /// Backs up + restores the raw `UserDefaults.standard` entries the three
+    /// Backs up + restores the raw `Preferences.defaults` entries the three
     /// native stores read, and seeds them directly with the given maps/arrays.
     /// Deliberately bypasses `.save`/`.replaceAll` on those stores: those also
     /// mirror to `~/.config/prosper/*.json` on the real machine, which a test
@@ -289,19 +289,19 @@ final class ExtensionShortcutsTests: XCTestCase {
         _ body: () async throws -> Void
     ) async rethrows {
         let keys = [quicklinksLinksKey, quickdirsKey, snippetsItemsKey]
-        let saved = keys.map { UserDefaults.standard.string(forKey: $0) }
+        let saved = keys.map { Preferences.defaults.string(forKey: $0) }
         defer {
             for (key, value) in zip(keys, saved) {
-                if let value { UserDefaults.standard.set(value, forKey: key) }
-                else { UserDefaults.standard.removeObject(forKey: key) }
+                if let value { Preferences.defaults.set(value, forKey: key) }
+                else { Preferences.defaults.removeObject(forKey: key) }
             }
         }
         func json<T: Encodable>(_ value: T) -> String {
             String(data: (try? JSONEncoder().encode(value)) ?? Data(), encoding: .utf8) ?? "{}"
         }
-        UserDefaults.standard.set(json(quicklinks), forKey: quicklinksLinksKey)
-        UserDefaults.standard.set(json(quickdirs), forKey: quickdirsKey)
-        UserDefaults.standard.set(json(snippets), forKey: snippetsItemsKey)
+        Preferences.defaults.set(json(quicklinks), forKey: quicklinksLinksKey)
+        Preferences.defaults.set(json(quickdirs), forKey: quickdirsKey)
+        Preferences.defaults.set(json(snippets), forKey: snippetsItemsKey)
         try await body()
     }
 

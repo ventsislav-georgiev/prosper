@@ -134,7 +134,7 @@ final class SupporterClient: ObservableObject {
         // NOW — it stays valid server-side until expiry, so the detached DELETE works
         // even after SupporterStore.clear() wipes it locally.
         if let session = SupporterStore.load()?.session {
-            let metaURL = UserDefaults.standard.string(forKey: LiveExtensionHostServices.wakeMetaURLKey)
+            let metaURL = Preferences.defaults.string(forKey: LiveExtensionHostServices.wakeMetaURLKey)
                 .flatMap(URL.init(string:))
             let logoutURL = URL(string: ProsperServer.baseURL.appending(path: "/auth/logout").absoluteString)
             // Best-effort, detached: the session stays valid server-side until expiry,
@@ -158,7 +158,7 @@ final class SupporterClient: ObservableObject {
                 }
             }
         }
-        UserDefaults.standard.removeObject(forKey: LiveExtensionHostServices.wakeMetaURLKey)
+        Preferences.defaults.removeObject(forKey: LiveExtensionHostServices.wakeMetaURLKey)
         SupporterStore.clear()
         Entitlements.shared.reset()
         devices = []

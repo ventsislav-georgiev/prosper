@@ -45,7 +45,7 @@ final class SettingsFocusRouter: ObservableObject {
 
     /// Switches to the Shortcuts pane with `query` prefilled in its search field.
     func requestShortcutsSearch(_ query: String) {
-        UserDefaults.standard.set("shortcuts", forKey: "settingsSelectedPane")
+        Preferences.defaults.set("shortcuts", forKey: "settingsSelectedPane")
         pendingShortcutsQuery = query
     }
 

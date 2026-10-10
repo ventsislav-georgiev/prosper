@@ -31,7 +31,7 @@ enum SnippetStore {
             suite.removePersistentDomain(forName: suiteName)
             return suite
         }
-        return .standard
+        return Preferences.defaults
     }()
 
     /// Bumped on every mutation so the inline expander can cheaply detect when its

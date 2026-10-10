@@ -49,14 +49,14 @@ final class ShortcutRulesStore {
     // MARK: - Persistence
 
     private static func load() -> [Rule] {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+        guard let data = Preferences.defaults.data(forKey: defaultsKey),
               let decoded = try? JSONDecoder().decode([Rule].self, from: data) else { return [] }
         return decoded
     }
 
     private func persist() {
         if let data = try? JSONEncoder().encode(rules) {
-            UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+            Preferences.defaults.set(data, forKey: Self.defaultsKey)
         }
     }
 

@@ -3,6 +3,29 @@ import XCTest
 import ProsperHelperProtocol
 
 final class FanReclaimRecoveryTests: XCTestCase {
+    /// #305: armRecoveryLifecycle installs real NSWorkspace sleep/wake observers; a real
+    /// sleep+wake later in the xctest process would drive real fan writes. Remove them.
+    override func tearDown() {
+        MainActor.assumeIsolated { FanControlHelper.removeSleepObservers() }
+        super.tearDown()
+    }
+
+    @MainActor
+    func testRemoveSleepObserversLeavesNoObserver() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        Preferences.fanManualEnabled = false
+        defer { Preferences.fanManualEnabled = previousManualIntent }
+
+        FanControlHelper.armRecoveryLifecycle()
+        XCTAssertEqual(FanControlHelper.sleepObserverTokens.count, 2)
+        FanControlHelper.armRecoveryLifecycle()
+        XCTAssertEqual(FanControlHelper.sleepObserverTokens.count, 2, "re-arming installs nothing twice")
+        FanControlHelper.removeSleepObservers()
+        XCTAssertEqual(FanControlHelper.sleepObserverTokens.count, 0)
+        XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
+        await FanControlHelper.resetAll(teardown: true)
+    }
+
     /// Launch with fan control never enabled must not install the 2 s reclaim timer
     /// (it used to run for the whole app lifetime: ~43k wakeups/day for nothing).
     @MainActor

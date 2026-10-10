@@ -13,13 +13,13 @@ final class LidSleepHelperRegistrationTests: XCTestCase {
         var value: Int { lock.withLock { n } }
     }
 
-    // ensureRegistered writes prosper.lidHelper.enabled to UserDefaults.standard
+    // ensureRegistered writes prosper.lidHelper.enabled to Preferences.defaults
     // (the xctest tool's domain); put back whatever was there.
     private var savedEnabled: Any?
-    override func setUp() async throws { savedEnabled = UserDefaults.standard.object(forKey: "prosper.lidHelper.enabled") }
+    override func setUp() async throws { savedEnabled = Preferences.defaults.object(forKey: "prosper.lidHelper.enabled") }
     override func tearDown() async throws {
-        if let v = savedEnabled { UserDefaults.standard.set(v, forKey: "prosper.lidHelper.enabled") }
-        else { UserDefaults.standard.removeObject(forKey: "prosper.lidHelper.enabled") }
+        if let v = savedEnabled { Preferences.defaults.set(v, forKey: "prosper.lidHelper.enabled") }
+        else { Preferences.defaults.removeObject(forKey: "prosper.lidHelper.enabled") }
     }
 
     func testConcurrentEnsureRegisteredSharesOneRegistration() async throws {

@@ -498,7 +498,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
 /// Persists per-action key combos in UserDefaults (JSON), falling back to the
 /// built-in defaults. Pure value layer — registration lives in AppDelegate.
 enum ShortcutStore {
-    private static var defaults: UserDefaults { UserDefaults.standard }
+    private static var defaults: UserDefaults { Preferences.defaults }
     private static func key(_ action: ShortcutAction) -> String { "shortcut.\(action.rawValue)" }
 
     static func combo(for action: ShortcutAction) -> KeyCombo {

@@ -738,7 +738,7 @@ private struct SettingsRootView: View {
     @StateObject private var model = SettingsModel()
     // AppStorage (not @State): the window is torn down on close, so plain view
     // state would land every reopen back on General.
-    @AppStorage("settingsSelectedPane") private var selection = "general"
+    @AppStorage("settingsSelectedPane", store: Preferences.defaults) private var selection = "general"
     @State private var registry = SettingsHooks.shared.extensionRegistry
     // Bumped on every registry change so the sidebar `groups` recompute when an
     // extension is enabled/disabled/installed (its section appears/disappears).
@@ -996,7 +996,7 @@ private struct GeneralPane: View {
     // Deep-link target: writing the shared selection key switches the sidebar
     // pane (SettingsRootView binds it via @AppStorage), so the warning below can
     // jump the user straight to the Context pane's permission grants.
-    @AppStorage("settingsSelectedPane") private var selection = "general"
+    @AppStorage("settingsSelectedPane", store: Preferences.defaults) private var selection = "general"
     // Autocomplete's keystroke tap is gated by Accessibility. Checked on appear
     // (granting happens out-of-process); the user fixes it on the Context pane
     // and returns. There's no first-run wizard, so this is the only nudge.
@@ -1905,7 +1905,7 @@ private struct ShortcutsPane: View {
     @State private var extensionActions: [BindableExtensionAction] = []
     /// #122: expanded by DEFAULT (it is a container, not a teaser). A user who
     /// collapses it still keeps that — the stored `true` wins over this default.
-    @AppStorage("settings.shortcuts.advancedCollapsed") private var advancedCollapsed = false
+    @AppStorage("settings.shortcuts.advancedCollapsed", store: Preferences.defaults) private var advancedCollapsed = false
 
     /// Section titles that live inside the Advanced disclosure, so a settings-search
     /// deep link into one of them can open it.
@@ -2709,7 +2709,7 @@ private struct AboutPane: View {
     @ObservedObject private var theme = ThemeStore.shared
     // @AppStorage so the toggle re-renders on change — a hand-rolled Binding reading
     // UserDefaults.bool directly never invalidates the body, so the switch never flips.
-    @AppStorage(TraceLog.key) private var traceVerbose = false
+    @AppStorage(TraceLog.key, store: Preferences.defaults) private var traceVerbose = false
 
     /// One predicate catches both processes (app logs "ProsperTrace(app)", daemon
     /// "ProsperTrace"). `--last 1h` since the wake events happen while away.
@@ -3020,7 +3020,7 @@ private struct RichTextEditorRepresentable: NSViewRepresentable {
 
 private struct WindowManagementPane: View {
     @ObservedObject var model: SettingsModel
-    @AppStorage("settingsSelectedPane") private var selection = "general"
+    @AppStorage("settingsSelectedPane", store: Preferences.defaults) private var selection = "general"
     @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
     @State private var newIgnored = ""
     @State private var showLayoutEditor = false

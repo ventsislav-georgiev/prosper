@@ -351,7 +351,7 @@ final class HyperKey {
         } else {
             // Covers launch-with-marker-but-feature-off (crash recovery) as well as a
             // plain disable: a leftover marker means a mapping of ours is still live.
-            deactivate(force: UserDefaults.standard.bool(forKey: Self.markerKey))
+            deactivate(force: Preferences.defaults.bool(forKey: Self.markerKey))
         }
     }
 
@@ -398,20 +398,20 @@ final class HyperKey {
         }
         let table = HyperKeyMapping.parse(Self.hidutil(["property", "--get", "UserKeyMapping"]) ?? "")
         _ = Self.hidutil(["property", "--set", HyperKeyMapping.setJSON(HyperKeyMapping.removed(from: table))])
-        UserDefaults.standard.removeObject(forKey: Self.markerKey)
+        Preferences.defaults.removeObject(forKey: Self.markerKey)
     }
 
     /// Terminate path — `applicationWillTerminate`. Same as a disable; the marker
     /// clear is what tells the next launch there is nothing to recover.
     func clearMapping() {
-        deactivate(force: UserDefaults.standard.bool(forKey: Self.markerKey))
+        deactivate(force: Preferences.defaults.bool(forKey: Self.markerKey))
     }
 
     private func applyMapping(_ table: [HyperKeyMapping.Entry]) {
         // Write-ahead: the marker goes down BEFORE the mapping so a crash between the
         // two can only ever over-report, never leave an orphan mapping behind.
-        UserDefaults.standard.set(true, forKey: Self.markerKey)
-        UserDefaults.standard.synchronize()
+        Preferences.defaults.set(true, forKey: Self.markerKey)
+        Preferences.defaults.synchronize()
         _ = Self.hidutil(["property", "--set", HyperKeyMapping.setJSON(table)])
     }
 

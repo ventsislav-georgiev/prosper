@@ -184,17 +184,17 @@ final class AppShortcutTests: XCTestCase {
 
     // MARK: - Store round-trip
 
-    /// `ShortcutStore` writes to `UserDefaults.standard`, so save and restore the key
+    /// `ShortcutStore` writes to `Preferences.defaults`, so save and restore the key
     /// around the assertions rather than polluting the dev machine's prefs.
     func testStoreRoundTrip() {
         let key = ShortcutStore.appsKey
-        let saved = UserDefaults.standard.data(forKey: key)
+        let saved = Preferences.defaults.data(forKey: key)
         defer {
-            if let saved { UserDefaults.standard.set(saved, forKey: key) }
-            else { UserDefaults.standard.removeObject(forKey: key) }
+            if let saved { Preferences.defaults.set(saved, forKey: key) }
+            else { Preferences.defaults.removeObject(forKey: key) }
         }
 
-        UserDefaults.standard.removeObject(forKey: key)
+        Preferences.defaults.removeObject(forKey: key)
         XCTAssertEqual(ShortcutStore.appShortcuts(), [], "missing key should decode to empty")
 
         let list = [shortcut("com.a", combo(kVK_ANSI_D, cmdKey | shiftKey), name: "DBeaver"),

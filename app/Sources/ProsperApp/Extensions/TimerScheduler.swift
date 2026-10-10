@@ -47,7 +47,7 @@ final class TimerScheduler: @unchecked Sendable {
     /// the app once the registry exists; nil → the fire is dropped (headless/test).
     var deliver: ((String, String, String) -> Void)?
 
-    init(store: TimerStore = UserDefaults.standard) {
+    init(store: TimerStore = Preferences.defaults) {
         self.store = store
     }
 

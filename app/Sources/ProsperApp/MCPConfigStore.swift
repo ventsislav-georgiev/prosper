@@ -119,13 +119,13 @@ enum MCPConfigStore {
     /// reload it would cause) when the content is unchanged.
     static func writeFile(_ servers: [MCPServer]) {
         guard let json = encode(servers) else { return }
-        if json == UserDefaults.standard.string(forKey: mirrorKey) { return }
+        if json == Preferences.defaults.string(forKey: mirrorKey) { return }
         let url = fileURL
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
             try json.write(to: url, atomically: true, encoding: .utf8)
-            UserDefaults.standard.set(json, forKey: mirrorKey)
+            Preferences.defaults.set(json, forKey: mirrorKey)
         } catch { NSLog("prosper: failed to write mcp.json: \(error)") }
     }
 
@@ -136,10 +136,10 @@ enum MCPConfigStore {
     /// last launch land on disk.
     static func bootstrap() {
         let onDisk = readFileRaw()
-        let mirror = UserDefaults.standard.string(forKey: mirrorKey)
+        let mirror = Preferences.defaults.string(forKey: mirrorKey)
         if let onDisk, onDisk != mirror, let servers = decode(onDisk) {
             Preferences.mcpServers = servers
-            UserDefaults.standard.set(onDisk, forKey: mirrorKey)
+            Preferences.defaults.set(onDisk, forKey: mirrorKey)
         } else {
             writeFile(Preferences.mcpServers)
         }
@@ -151,13 +151,13 @@ enum MCPConfigStore {
     @discardableResult
     static func reloadIfChanged() -> [MCPServer]? {
         guard let onDisk = readFileRaw() else { return nil }
-        if onDisk == UserDefaults.standard.string(forKey: mirrorKey) { return nil }
+        if onDisk == Preferences.defaults.string(forKey: mirrorKey) { return nil }
         guard let servers = decode(onDisk) else {
             NSLog("prosper: mcp.json changed but failed to parse — keeping last good config")
             return nil
         }
         Preferences.mcpServers = servers
-        UserDefaults.standard.set(onDisk, forKey: mirrorKey)
+        Preferences.defaults.set(onDisk, forKey: mirrorKey)
         return servers
     }
 

@@ -10,11 +10,11 @@ final class ModelSelectionTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        saved = UserDefaults.standard.string(forKey: key)
+        saved = Preferences.defaults.string(forKey: key)
     }
     override func tearDown() {
-        if let saved { UserDefaults.standard.set(saved, forKey: key) }
-        else { UserDefaults.standard.removeObject(forKey: key) }
+        if let saved { Preferences.defaults.set(saved, forKey: key) }
+        else { Preferences.defaults.removeObject(forKey: key) }
         super.tearDown()
     }
 
@@ -22,12 +22,12 @@ final class ModelSelectionTests: XCTestCase {
         // A stored 12B/26B id (exists on HF, but no loader in the fork) heals to the
         // recommended model so the user isn't stuck on a model that never loads.
         for id in Preferences.unsupportedModelIds {
-            UserDefaults.standard.set(id, forKey: key)
+            Preferences.defaults.set(id, forKey: key)
             XCTAssertEqual(Preferences.coreModel, Preferences.recommendedModelId,
                            "unsupported \(id) should heal to recommended")
         }
         // A supported selection is returned untouched.
-        UserDefaults.standard.set(Preferences.qatE2B4Id, forKey: key)
+        Preferences.defaults.set(Preferences.qatE2B4Id, forKey: key)
         XCTAssertEqual(Preferences.coreModel, Preferences.qatE2B4Id)
     }
 

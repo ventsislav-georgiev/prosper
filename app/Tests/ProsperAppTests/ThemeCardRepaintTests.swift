@@ -61,7 +61,7 @@ final class ThemeCardRepaintTests: XCTestCase {
     /// global `ThemeRuntime.palette` (the apply guard compares against it, so it
     /// never short-circuits on a palette a previous test left behind).
     private func resetThemeGlobals() {
-        UserDefaults.standard.removeObject(forKey: "prosper.activeThemeID")
+        Preferences.defaults.removeObject(forKey: "prosper.activeThemeID")
         ThemeStore.shared.setAvailable([])
     }
 

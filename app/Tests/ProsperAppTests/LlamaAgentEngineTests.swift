@@ -211,7 +211,7 @@ final class LlamaAgentEngineTests: XCTestCase {
 
     /// #247/#256: Preferences.agentModel heals on read through the same map; the stored id is never rewritten.
     func testPreferencesAgentModelHealsOnReadWithoutWriteBack() {
-        let d = UserDefaults.standard, key = "agentModel"
+        let d = Preferences.defaults, key = "agentModel"
         let saved = d.object(forKey: key)
         defer { d.set(saved, forKey: key) }
         d.set("unsloth/Qwen3-8B-GGUF", forKey: key)
@@ -272,9 +272,9 @@ final class LlamaAgentEngineTests: XCTestCase {
     }
 
     /// #247: a custom (HF-imported) id is canonical as-is, and the getter leaves it in UserDefaults.
-    /// Both stores read UserDefaults.standard only, so save/restore the two keys.
+    /// Both stores read Preferences.defaults only, so save/restore the two keys.
     func testCustomIdIsCanonicalAndNotRewritten() {
-        let d = UserDefaults.standard, key = "agentModel", customKey = "customAgentModelsV1", labelsKey = "modelLabelOverridesV1"
+        let d = Preferences.defaults, key = "agentModel", customKey = "customAgentModelsV1", labelsKey = "modelLabelOverridesV1"
         let savedPick = d.object(forKey: key), savedCustom = d.object(forKey: customKey), savedLabels = d.object(forKey: labelsKey)
         defer { d.set(savedPick, forKey: key); d.set(savedCustom, forKey: customKey); d.set(savedLabels, forKey: labelsKey) }
         let id = "test-247/Custom-Coder-GGUF"
@@ -292,7 +292,7 @@ final class LlamaAgentEngineTests: XCTestCase {
 
     /// #256: a retired id re-added as a custom model is the user's pick, not stale.
     func testRetiredIdReaddedAsCustomIsNotRewritten() throws {
-        let d = UserDefaults.standard, key = "agentModel", customKey = "customAgentModelsV1", labelsKey = "modelLabelOverridesV1"
+        let d = Preferences.defaults, key = "agentModel", customKey = "customAgentModelsV1", labelsKey = "modelLabelOverridesV1"
         let savedPick = d.object(forKey: key), savedCustom = d.object(forKey: customKey), savedLabels = d.object(forKey: labelsKey)
         defer { d.set(savedPick, forKey: key); d.set(savedCustom, forKey: customKey); d.set(savedLabels, forKey: labelsKey) }
         let id = try XCTUnwrap(AgentModelRegistry.replacements.keys.sorted().first)

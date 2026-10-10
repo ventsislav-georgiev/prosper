@@ -16,7 +16,7 @@ struct CustomAgentModel: Codable, Identifiable, Equatable, Sendable {
 /// (the "rename with my own clarifications in brackets" feature). Both are small JSON
 /// blobs in UserDefaults — no migration machinery needed for a handful of entries.
 enum CustomModelStore {
-    private static var defaults: UserDefaults { .standard }
+    private static var defaults: UserDefaults { Preferences.defaults }
     private static let modelsKey = "customAgentModelsV1"
     private static let labelsKey = "modelLabelOverridesV1"
 

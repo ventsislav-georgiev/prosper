@@ -8,7 +8,7 @@ import Foundation
 /// leaves the machine. It identifies a device across days for "distinct users"
 /// counts; it is not derived from and cannot be linked to any personal data.
 enum AnalyticsStore {
-    private static var defaults: UserDefaults { .standard }
+    private static var defaults: UserDefaults { Preferences.defaults }
 
     private enum Keys {
         static let usage = "analyticsExtUsage"      // [extId: Int]

@@ -169,12 +169,12 @@ final class CalendarBarTests: XCTestCase {
 
     func testStyleDecodeFailureFallsBackToDefault() {
         let key = "calendarBarStyle"
-        let saved = UserDefaults.standard.data(forKey: key)
+        let saved = Preferences.defaults.data(forKey: key)
         defer {
-            if let saved { UserDefaults.standard.set(saved, forKey: key) }
-            else { UserDefaults.standard.removeObject(forKey: key) }
+            if let saved { Preferences.defaults.set(saved, forKey: key) }
+            else { Preferences.defaults.removeObject(forKey: key) }
         }
-        UserDefaults.standard.set(Data("not json".utf8), forKey: key)
+        Preferences.defaults.set(Data("not json".utf8), forKey: key)
         XCTAssertEqual(CalendarBarStyleStore.load(), .default)
     }
 

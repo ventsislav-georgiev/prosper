@@ -135,7 +135,7 @@ final class SystemStatsStyleTests: XCTestCase {
     private static let storeKey = "systemStatsWidgetStyle"
 
     override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: Self.storeKey)
+        Preferences.defaults.removeObject(forKey: Self.storeKey)
         super.tearDown()
     }
 
@@ -147,7 +147,7 @@ final class SystemStatsStyleTests: XCTestCase {
         var legacy = StatsWidgetStyle.default
         legacy.order.removeAll { $0 == StatsModule.disk.rawValue }
         legacy.modules[StatsModule.disk.rawValue]?.enabled = true
-        UserDefaults.standard.set(try JSONEncoder().encode(legacy), forKey: Self.storeKey)
+        Preferences.defaults.set(try JSONEncoder().encode(legacy), forKey: Self.storeKey)
 
         XCTAssertFalse(legacy.enabledModules.contains(.disk), "the bug: enabled but absent from order")
 
@@ -160,7 +160,7 @@ final class SystemStatsStyleTests: XCTestCase {
     func testLoadKeepsPersistedOrderAndDropsUnknownKeys() throws {
         var saved = StatsWidgetStyle.default
         saved.order = ["bogus", StatsModule.gpu.rawValue, StatsModule.cpu.rawValue]
-        UserDefaults.standard.set(try JSONEncoder().encode(saved), forKey: Self.storeKey)
+        Preferences.defaults.set(try JSONEncoder().encode(saved), forKey: Self.storeKey)
 
         let loaded = SystemStatsStore.load()
         XCTAssertEqual(Array(loaded.order.prefix(2)), [StatsModule.gpu.rawValue, StatsModule.cpu.rawValue],

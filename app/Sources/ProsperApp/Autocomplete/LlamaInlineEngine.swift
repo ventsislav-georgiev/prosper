@@ -73,8 +73,8 @@ actor LlamaInlineEngine {
         if let env = ProcessInfo.processInfo.environment["PROSPER_INLINE_ENGINE"] {
             return env == "llama"
         }
-        if UserDefaults.standard.object(forKey: "inlineEngineLlama") != nil {
-            return UserDefaults.standard.bool(forKey: "inlineEngineLlama")
+        if Preferences.defaults.object(forKey: "inlineEngineLlama") != nil {
+            return Preferences.defaults.bool(forKey: "inlineEngineLlama")
         }
         return true
     }
@@ -126,14 +126,14 @@ actor LlamaInlineEngine {
     /// Active catalog entry for inline + translate. Switching unloads the
     /// engine; the next request lazily loads the new file.
     static var selectedModelId: String {
-        UserDefaults.standard.string(forKey: "llamaInlineModel") ?? catalog[0].id
+        Preferences.defaults.string(forKey: "llamaInlineModel") ?? catalog[0].id
     }
     static var selectedModel: CatalogModel {
         catalog.first { $0.id == selectedModelId } ?? catalog[0]
     }
     static func selectModel(_ id: String) {
         guard catalog.contains(where: { $0.id == id }), id != selectedModelId else { return }
-        UserDefaults.standard.set(id, forKey: "llamaInlineModel")
+        Preferences.defaults.set(id, forKey: "llamaInlineModel")
         Task { await shared.unload() }
     }
 

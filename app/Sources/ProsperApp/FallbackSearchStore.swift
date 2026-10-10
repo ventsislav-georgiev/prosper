@@ -47,7 +47,7 @@ final class FallbackSearchStore {
     private let defaults: UserDefaults
     private var cached: [FallbackProvider]?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = Preferences.defaults) {
         self.defaults = defaults
     }
 

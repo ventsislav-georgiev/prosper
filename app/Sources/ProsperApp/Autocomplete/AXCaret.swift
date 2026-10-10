@@ -58,7 +58,7 @@ enum AXCaret {
     /// Diagnostic logging for caret-geometry resolution, off by default. Enable with
     /// `defaults write com.prosper.app axDebug -bool true`; lines append to
     /// `~/Library/Logs/prosper-axdbg.log`.
-    private static let debugEnabled = UserDefaults.standard.bool(forKey: "axDebug")
+    private static let debugEnabled = Preferences.defaults.bool(forKey: "axDebug")
     private static let debugLogURL = FileManager.default
         .homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/prosper-axdbg.log")

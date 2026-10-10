@@ -36,7 +36,7 @@ private extension View {
 struct MixerPanelView: View {
     @ObservedObject private var mixer = AppVolumeMixer.shared
     @ObservedObject private var inputs = AudioInputDeviceManager.shared
-    @AppStorage(MixerDefaultsKey.hideInactiveApps) private var hideInactiveApps = true
+    @AppStorage(MixerDefaultsKey.hideInactiveApps, store: Preferences.defaults) private var hideInactiveApps = true
     @State private var editingVolumeID: String?
     /// Where the system slider was before the mute button zeroed it. The HAL
     /// mute property has no setter on the service, so "mute" is volume 0 that

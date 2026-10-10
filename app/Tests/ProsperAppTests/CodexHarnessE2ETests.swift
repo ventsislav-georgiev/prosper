@@ -1008,9 +1008,9 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// #168: codex ≥0.162 dropped `on-failure`; a stored one reads as on-request.
     func testStoredOnFailureApprovalPolicyReadsAsOnRequest() {
         let key = "agentApprovalPolicy"
-        let saved = UserDefaults.standard.object(forKey: key)
-        defer { UserDefaults.standard.set(saved, forKey: key) }
-        UserDefaults.standard.set("on-failure", forKey: key)
+        let saved = Preferences.defaults.object(forKey: key)
+        defer { Preferences.defaults.set(saved, forKey: key) }
+        Preferences.defaults.set("on-failure", forKey: key)
         XCTAssertEqual(Preferences.agentApprovalPolicy, "on-request")
         XCTAssertEqual(ApprovalPolicy(rawValue: Preferences.agentApprovalPolicy), .onRequest)
     }
@@ -1047,11 +1047,11 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// #279: the legacy `on-failure` is mapped on read but never written back.
     func testStoredOnFailureApprovalPolicyIsNotRewritten() {
         let key = "agentApprovalPolicy"
-        let saved = UserDefaults.standard.object(forKey: key)
-        defer { UserDefaults.standard.set(saved, forKey: key) }
-        UserDefaults.standard.set("on-failure", forKey: key)
+        let saved = Preferences.defaults.object(forKey: key)
+        defer { Preferences.defaults.set(saved, forKey: key) }
+        Preferences.defaults.set("on-failure", forKey: key)
         XCTAssertEqual(Preferences.agentApprovalPolicy, "on-request")
-        XCTAssertEqual(UserDefaults.standard.string(forKey: key), "on-failure")
+        XCTAssertEqual(Preferences.defaults.string(forKey: key), "on-failure")
     }
 
     /// A local release-shaped tarball (`codex-<triple>` inside) plus its SHA-256, and an

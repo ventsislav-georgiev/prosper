@@ -57,7 +57,7 @@ enum QuickdirStore {
 
     /// All configured quickdirs, in saved order.
     static func all() -> [QuickdirConfig] {
-        guard let raw = UserDefaults.standard.string(forKey: dirsKey),
+        guard let raw = Preferences.defaults.string(forKey: dirsKey),
               let data = raw.data(using: .utf8),
               let items = try? JSONDecoder().decode([QuickdirConfig].self, from: data)
         else { return [] }
@@ -103,7 +103,7 @@ enum QuickdirStore {
         let encoder = JSONEncoder()
         guard let data = try? encoder.encode(items),
               let json = String(data: data, encoding: .utf8) else { return }
-        UserDefaults.standard.set(json, forKey: dirsKey)
+        Preferences.defaults.set(json, forKey: dirsKey)
     }
 
     // MARK: - Lookup / listing
@@ -211,7 +211,7 @@ enum QuickdirStore {
     static func bootstrap() {
         let onDisk = (try? String(contentsOf: fileURL, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let mirror = UserDefaults.standard.string(forKey: mirrorKey)
+        let mirror = Preferences.defaults.string(forKey: mirrorKey)
         if let onDisk, !onDisk.isEmpty, onDisk != mirror,
            let data = onDisk.data(using: .utf8),
            let doc = try? JSONDecoder().decode(Document.self, from: data) {
@@ -231,6 +231,6 @@ enum QuickdirStore {
         let dir = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? json.write(to: fileURL, atomically: true, encoding: .utf8)
-        UserDefaults.standard.set(json, forKey: mirrorKey)
+        Preferences.defaults.set(json, forKey: mirrorKey)
     }
 }

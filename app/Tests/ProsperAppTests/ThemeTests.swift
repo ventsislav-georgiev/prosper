@@ -478,21 +478,21 @@ final class ThemeTests: XCTestCase {
     func testMenuBarDefaultsThroughPreferencesAreVulcanAtMediumForAbsentOrGarbageStoredValue() {
         let choiceKey = "menuBarIconChoice"
         let sizeKey = "menuBarIconSize"
-        let savedChoice = UserDefaults.standard.object(forKey: choiceKey)
-        let savedSize = UserDefaults.standard.object(forKey: sizeKey)
+        let savedChoice = Preferences.defaults.object(forKey: choiceKey)
+        let savedSize = Preferences.defaults.object(forKey: sizeKey)
         defer {
-            if let savedChoice { UserDefaults.standard.set(savedChoice, forKey: choiceKey) }
-            else { UserDefaults.standard.removeObject(forKey: choiceKey) }
-            if let savedSize { UserDefaults.standard.set(savedSize, forKey: sizeKey) }
-            else { UserDefaults.standard.removeObject(forKey: sizeKey) }
+            if let savedChoice { Preferences.defaults.set(savedChoice, forKey: choiceKey) }
+            else { Preferences.defaults.removeObject(forKey: choiceKey) }
+            if let savedSize { Preferences.defaults.set(savedSize, forKey: sizeKey) }
+            else { Preferences.defaults.removeObject(forKey: sizeKey) }
         }
 
         for storedChoice in [nil, "garbage"] {
-            if let storedChoice { UserDefaults.standard.set(storedChoice, forKey: choiceKey) }
-            else { UserDefaults.standard.removeObject(forKey: choiceKey) }
+            if let storedChoice { Preferences.defaults.set(storedChoice, forKey: choiceKey) }
+            else { Preferences.defaults.removeObject(forKey: choiceKey) }
             for storedSize in [nil, "garbage"] {
-                if let storedSize { UserDefaults.standard.set(storedSize, forKey: sizeKey) }
-                else { UserDefaults.standard.removeObject(forKey: sizeKey) }
+                if let storedSize { Preferences.defaults.set(storedSize, forKey: sizeKey) }
+                else { Preferences.defaults.removeObject(forKey: sizeKey) }
 
                 XCTAssertEqual(Preferences.menuBarIconChoice, .vulcan)
                 XCTAssertEqual(Preferences.menuBarIconSize, .medium)

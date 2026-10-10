@@ -8,11 +8,11 @@ final class AgentBypassPerDeviceTests: XCTestCase {
     private var saved: [String: Any] = [:]
 
     override func setUp() {
-        for k in keys { if let v = UserDefaults.standard.object(forKey: k) { saved[k] = v } }
+        for k in keys { if let v = Preferences.defaults.object(forKey: k) { saved[k] = v } }
     }
 
     override func tearDown() {
-        for k in keys { UserDefaults.standard.set(saved[k], forKey: k) }
+        for k in keys { Preferences.defaults.set(saved[k], forKey: k) }
     }
 
     func testBypassIsNotSyncedButHooksAre() {
@@ -23,19 +23,19 @@ final class AgentBypassPerDeviceTests: XCTestCase {
     }
 
     func testIncomingPayloadCannotTurnBypassOn() throws {
-        UserDefaults.standard.set(false, forKey: "agentBypassAll")
-        UserDefaults.standard.set(0.42, forKey: "agentTopP")
+        Preferences.defaults.set(false, forKey: "agentBypassAll")
+        Preferences.defaults.set(0.42, forKey: "agentTopP")
         let defaults = try PropertyListSerialization.data(
             fromPropertyList: ["agentBypassAll": true, "agentTopP": 0.5], format: .binary, options: 0)
         let root = try PropertyListSerialization.data(
             fromPropertyList: ["schema": 1, "defaults": defaults], format: .binary, options: 0)
         SyncSnapshotBuilder.apply(try XCTUnwrap(root.prosperCompressed()))
-        XCTAssertFalse(UserDefaults.standard.bool(forKey: "agentBypassAll"))
-        XCTAssertEqual(UserDefaults.standard.double(forKey: "agentTopP"), 0.5)   // synced keys still apply
+        XCTAssertFalse(Preferences.defaults.bool(forKey: "agentBypassAll"))
+        XCTAssertEqual(Preferences.defaults.double(forKey: "agentTopP"), 0.5)   // synced keys still apply
     }
 
     func testBypassResetsOnceThenHoldsTheUsersChoice() {
-        let d = UserDefaults.standard
+        let d = Preferences.defaults
         d.removeObject(forKey: "agentBypassLocal")
         d.set(true, forKey: "agentBypassAll")             // carried in by a pre-#232 sync
         XCTAssertFalse(Preferences.agentBypassAll)

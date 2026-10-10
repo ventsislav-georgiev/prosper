@@ -24,13 +24,13 @@ final class LlamaInlineEngineTests: XCTestCase {
     }
 
     override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: "inlineEngineLlama")
-        UserDefaults.standard.removeObject(forKey: "llamaInlineModel")
+        Preferences.defaults.removeObject(forKey: "inlineEngineLlama")
+        Preferences.defaults.removeObject(forKey: "llamaInlineModel")
         super.tearDown()
     }
 
     func testEnabledByDefault() {
-        UserDefaults.standard.removeObject(forKey: "inlineEngineLlama")
+        Preferences.defaults.removeObject(forKey: "inlineEngineLlama")
         // Env override may be set when the suite runs under a bench harness;
         // only assert the default when it isn't.
         if ProcessInfo.processInfo.environment["PROSPER_INLINE_ENGINE"] == nil {
@@ -39,7 +39,7 @@ final class LlamaInlineEngineTests: XCTestCase {
     }
 
     func testDefaultsFlagDisables() {
-        UserDefaults.standard.set(false, forKey: "inlineEngineLlama")
+        Preferences.defaults.set(false, forKey: "inlineEngineLlama")
         XCTAssertFalse(LlamaInlineEngine.isEnabled)
     }
 
@@ -47,14 +47,14 @@ final class LlamaInlineEngineTests: XCTestCase {
         // Without the env override the path is app-managed and names the
         // default catalog model's file.
         if ProcessInfo.processInfo.environment["PROSPER_LLAMA_GGUF"] == nil {
-            UserDefaults.standard.removeObject(forKey: "llamaInlineModel")
+            Preferences.defaults.removeObject(forKey: "llamaInlineModel")
             let url = LlamaInlineEngine.modelFileURL
             XCTAssertTrue(url.path.hasSuffix("Prosper/models/gguf/gemma-4-E2B_q4_0-it.gguf"))
         }
     }
 
     func testCatalogSelectionPersistsAndRoutesFileURL() {
-        UserDefaults.standard.removeObject(forKey: "llamaInlineModel")
+        Preferences.defaults.removeObject(forKey: "llamaInlineModel")
         XCTAssertEqual(LlamaInlineEngine.selectedModelId, LlamaInlineEngine.catalog[0].id)
         let alt = LlamaInlineEngine.catalog[1]
         LlamaInlineEngine.selectModel(alt.id)
@@ -147,7 +147,7 @@ final class LlamaInlineEngineTests: XCTestCase {
         // primary must be target-script text. Opt-in like the generate smoke.
         try XCTSkipUnless(ProcessInfo.processInfo.environment["PROSPER_LLAMA_SMOKE"] == "1")
         try XCTSkipUnless(LlamaInlineEngine.modelIsDownloaded)
-        UserDefaults.standard.set(true, forKey: "inlineEngineLlama")
+        Preferences.defaults.set(true, forKey: "inlineEngineLlama")
         var seen: [String] = []
         var result: TranslationResult?
         for _ in 0..<600 {

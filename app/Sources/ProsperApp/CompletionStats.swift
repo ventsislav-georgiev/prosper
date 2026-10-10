@@ -4,7 +4,7 @@ import Foundation
 /// Persists running totals + a per-day count in UserDefaults (no GRDB/SQLite).
 /// Counts are local-only and never transmitted.
 enum CompletionStats {
-    private static var defaults: UserDefaults { UserDefaults.standard }
+    private static var defaults: UserDefaults { Preferences.defaults }
 
     private enum Keys {
         static let totalCompletions = "stats.totalCompletions"

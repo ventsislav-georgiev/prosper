@@ -164,14 +164,14 @@ final class FinderCutPasteTests: XCTestCase {
 
     func testPreferenceIsOffUntilTheUserAsks() {
         let keys = ["finderCutPasteEnabled", "finderPasteImageEnabled"]
-        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        let saved = keys.map { Preferences.defaults.object(forKey: $0) }
         defer {
             for (key, value) in zip(keys, saved) {
-                if let value { UserDefaults.standard.set(value, forKey: key) }
-                else { UserDefaults.standard.removeObject(forKey: key) }
+                if let value { Preferences.defaults.set(value, forKey: key) }
+                else { Preferences.defaults.removeObject(forKey: key) }
             }
         }
-        keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        keys.forEach { Preferences.defaults.removeObject(forKey: $0) }
         XCTAssertFalse(Preferences.finderCutPasteEnabled, "absent must read as off")
         XCTAssertFalse(Preferences.finderPasteImageEnabled, "absent must read as off")
         // Neither feature on: the tap must not even ask.

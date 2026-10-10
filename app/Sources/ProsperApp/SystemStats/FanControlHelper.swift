@@ -173,7 +173,9 @@ enum FanControlHelper {
     /// Test seam: the teardown-guard test injects a fake connection and in-flight count.
     static func inject(connection c: NSXPCConnection?, engagesInFlight n: Int) { connection = c; engagesInFlight = n }
     static func inject(sleeping s: Bool) { sleeping = s }
-    private static var observersInstalled = false
+    /// willSleep/didWake tokens; non-empty = installed. Kept so tests can remove them.
+    private(set) static var sleepObserverTokens: [NSObjectProtocol] = []
+    private static var observersInstalled: Bool { !sleepObserverTokens.isEmpty }
     private static var reclaimTimer: Timer?
     private static var reclaimReadInFlight = false
     private static var reclaimRecoveryInFlight = false
@@ -488,9 +490,8 @@ enum FanControlHelper {
     /// feature is first used (so a never-fan user never registers observers).
     private static func installSleepObservers() {
         guard !observersInstalled else { return }
-        observersInstalled = true
         let nc = NSWorkspace.shared.notificationCenter
-        nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+        sleepObserverTokens.append(nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
             // Reset SYNCHRONOUSLY (bounded) — a fire-and-forget Task may not complete
             // before the machine sleeps, so a low manual pin could ride into a
             // high-load wake. A sleep observer may block briefly; the XPC reply fires
@@ -508,14 +509,22 @@ enum FanControlHelper {
                 proxy.resetAllFans { _ in sem.signal() }
                 _ = sem.wait(timeout: .now() + 2)
             }
-        }
-        nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+        })
+        sleepObserverTokens.append(nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated {
                 sleeping = false
                 wakeRecoveryPending = true
                 startPendingWakeRecovery()
             }
-        }
+        })
+    }
+
+    /// Test-only teardown: a test that armed the lifecycle must not leave live
+    /// sleep/wake observers driving real fan writes for the rest of the xctest process.
+    /// The app never calls this (observers live for the app's lifetime once installed).
+    static func removeSleepObservers() {
+        sleepObserverTokens.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
+        sleepObserverTokens = []
     }
 
     // MARK: - XPC call with hard timeout

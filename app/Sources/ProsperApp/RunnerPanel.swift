@@ -40,7 +40,7 @@ final class RunnerPanel {
     /// or nil if the user has never moved the runner. Other panels read this to
     /// open centered on the runner instead of the screen.
     static func savedTopLeft() -> (x: CGFloat, top: CGFloat)? {
-        guard let saved = UserDefaults.standard.dictionary(forKey: originKey),
+        guard let saved = Preferences.defaults.dictionary(forKey: originKey),
               let x = saved["x"] as? CGFloat,
               let top = saved["y"] as? CGFloat else { return nil }
         return (x, top)
@@ -161,7 +161,7 @@ final class RunnerPanel {
     /// Persists the panel's top-left corner (x, maxY) in screen coordinates.
     private func saveOrigin() {
         let f = panel.frame
-        UserDefaults.standard.set(["x": f.minX, "y": f.maxY], forKey: Self.originKey)
+        Preferences.defaults.set(["x": f.minX, "y": f.maxY], forKey: Self.originKey)
     }
 
     /// Positions per `Preferences.runnerPlacement`: under the cursor (default),
@@ -2563,7 +2563,7 @@ private func currencyCodes(from echo: String) -> (String, String)? {
 /// extension (stores epoch seconds via `host.prefs`); whichever fetched most
 /// recently is the truth about how fresh the rate table is.
 private func currencyUpdatedSubtitle() -> String? {
-    let defaults = UserDefaults.standard
+    let defaults = Preferences.defaults
     var dates: [Date] = []
     if let d = defaults.object(forKey: "fxRatesFetchedAt") as? Date { dates.append(d) }
     if let s = defaults.string(forKey: "ext.com.prosper.currency.fetchedAt"),

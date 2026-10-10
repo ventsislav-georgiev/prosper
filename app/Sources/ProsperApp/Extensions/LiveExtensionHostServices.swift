@@ -17,7 +17,7 @@ import os
 final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendable {
 
     static let shared = LiveExtensionHostServices()
-    private let defaults = UserDefaults.standard
+    private let defaults = Preferences.defaults
 
     /// Presents a host-rendered window for `host.window.open`. Injected by
     /// `AppDelegate` once the extension registry exists (the presenter wires the
@@ -640,9 +640,9 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         // re-push it (with the new trace bit) to a running daemon without the user
         // re-toggling remote-wake. Non-secret: pollURL carries only the derived tag.
         if cfg.enabled {
-            UserDefaults.standard.set(cfg.jsonString(), forKey: Self.lastWakeConfigKey)
+            Preferences.defaults.set(cfg.jsonString(), forKey: Self.lastWakeConfigKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: Self.lastWakeConfigKey)
+            Preferences.defaults.removeObject(forKey: Self.lastWakeConfigKey)
         }
         // Remember the meta URL whenever signed in (the device has a meta row on the
         // server whether enabled or not) so `signOut` can DELETE it even though it lacks
@@ -656,10 +656,10 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         // paired phone never shows the wake badge. The phone-facing identity must not
         // depend on the daemon being reachable this instant.
         if signedIn {
-            UserDefaults.standard.set(cfg.pollURL + "/meta", forKey: Self.wakeMetaURLKey)
+            Preferences.defaults.set(cfg.pollURL + "/meta", forKey: Self.wakeMetaURLKey)
             os_log("remoteWake.apply wrote metaURL=%{public}@", log: .default, type: .info, cfg.pollURL + "/meta")
         } else {
-            UserDefaults.standard.removeObject(forKey: Self.wakeMetaURLKey)
+            Preferences.defaults.removeObject(forKey: Self.wakeMetaURLKey)
             os_log("remoteWake.apply cleared metaURL (signed out)", log: .default, type: .info)
         }
         // Report state so a paired device knows whether this Mac can be woken (enabled)
@@ -694,11 +694,11 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// when remote-wake isn't enabled (nothing to trace, and we never spin the daemon
     /// up just for this). Routed through the order-preserving apply chain.
     static func reapplyRemoteWakeForTrace() {
-        guard let json = UserDefaults.standard.string(forKey: lastWakeConfigKey) else { return }
+        guard let json = Preferences.defaults.string(forKey: lastWakeConfigKey) else { return }
         var cfg = RemoteWakeConfig.from(json: json)
         guard cfg.enabled else { return }
         cfg.trace = TraceLog.on
-        UserDefaults.standard.set(cfg.jsonString(), forKey: lastWakeConfigKey)
+        Preferences.defaults.set(cfg.jsonString(), forKey: lastWakeConfigKey)
         let frozen = cfg  // immutable capture — the async apply closure can't take a `var`
         LidSleepHelper.enqueueApply { _ = await LidSleepHelper.setRemoteWake(frozen) }
     }
@@ -708,7 +708,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// (`<base>/wake/<wakeId>/meta`) so it reflects exactly what the server knows —
     /// the identity handshake hands it to the paired app so it can wake this Mac.
     static var currentWakeId: String? {
-        guard let meta = UserDefaults.standard.string(forKey: wakeMetaURLKey),
+        guard let meta = Preferences.defaults.string(forKey: wakeMetaURLKey),
               let url = URL(string: meta) else { return nil }
         let parts = url.pathComponents            // ["/", "wake", "<wakeId>", "meta"]
         guard let i = parts.firstIndex(of: "wake"), i + 1 < parts.count else { return nil }

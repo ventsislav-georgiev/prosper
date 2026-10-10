@@ -140,7 +140,7 @@ struct CalendarBarStyle: Codable, Equatable, Sendable {
 /// bad blob can never wedge the feature. Same shape as SystemStatsStore.
 enum CalendarBarStyleStore {
     static let key = "calendarBarStyle"
-    private static var defaults: UserDefaults { .standard }
+    private static var defaults: UserDefaults { Preferences.defaults }
 
     static func load() -> CalendarBarStyle {
         guard let data = defaults.data(forKey: key),

@@ -10,7 +10,7 @@ struct VolumeMixerPane: View {
     @ObservedObject private var inputs = AudioInputDeviceManager.shared
     @State private var enabled = Preferences.mixerEnabled
     @State private var iconEnabled = Preferences.mixerIconEnabled
-    @AppStorage(MixerDefaultsKey.hideInactiveApps) private var hideInactiveApps = true
+    @AppStorage(MixerDefaultsKey.hideInactiveApps, store: Preferences.defaults) private var hideInactiveApps = true
 
     var body: some View {
         NeonScroll {

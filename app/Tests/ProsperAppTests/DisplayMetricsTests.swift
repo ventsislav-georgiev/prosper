@@ -78,7 +78,7 @@ final class DisplayMetricsTests: XCTestCase {
     /// 0.9 (the v2.127.0 slightly-transparent launch default). tearDown restores
     /// the saved values.
     func testUnsetPreferencesDefaultToOne() {
-        let d = UserDefaults.standard
+        let d = Preferences.defaults
         d.removeObject(forKey: "prosper.uiScale")
         d.removeObject(forKey: "prosper.uiOpacity")
         XCTAssertEqual(Preferences.uiScale, 1.0)
@@ -113,7 +113,7 @@ final class DisplayMetricsTests: XCTestCase {
     /// Unset Frost key reads false: a fresh install gets the original opaque look,
     /// not surprise frosted glass. tearDown restores the saved value.
     func testFrostPreferenceDefaultsFalse() {
-        UserDefaults.standard.removeObject(forKey: "prosper.uiFrost")
+        Preferences.defaults.removeObject(forKey: "prosper.uiFrost")
         XCTAssertFalse(Preferences.uiFrost)
     }
 

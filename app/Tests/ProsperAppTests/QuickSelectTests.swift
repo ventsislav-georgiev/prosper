@@ -16,12 +16,12 @@ final class QuickSelectTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        saved = UserDefaults.standard.string(forKey: Self.key)
+        saved = Preferences.defaults.string(forKey: Self.key)
     }
 
     override func tearDown() {
-        if let saved { UserDefaults.standard.set(saved, forKey: Self.key) }
-        else { UserDefaults.standard.removeObject(forKey: Self.key) }
+        if let saved { Preferences.defaults.set(saved, forKey: Self.key) }
+        else { Preferences.defaults.removeObject(forKey: Self.key) }
         super.tearDown()
     }
 
@@ -91,7 +91,7 @@ final class QuickSelectTests: XCTestCase {
     }
 
     func testPreferenceDefaultsToCommand() {
-        UserDefaults.standard.removeObject(forKey: "quickSelectModifier")
+        Preferences.defaults.removeObject(forKey: "quickSelectModifier")
         XCTAssertEqual(Preferences.quickSelectModifier, .command,
                        "default modifier must be Command")
     }
@@ -104,7 +104,7 @@ final class QuickSelectTests: XCTestCase {
     }
 
     func testPreferenceHealsCorruptValue() {
-        UserDefaults.standard.set("bogus", forKey: "quickSelectModifier")
+        Preferences.defaults.set("bogus", forKey: "quickSelectModifier")
         XCTAssertEqual(Preferences.quickSelectModifier, .command,
                        "unknown stored value falls back to the default")
     }
@@ -129,8 +129,11 @@ final class QuickSelectTests: XCTestCase {
     }
 
     /// The full per-keystroke decision = read the modifier pref + map the keycode.
-    /// Budget: < 1 µs/keystroke. Reads UserDefaults each call (its in-memory cache
-    /// keeps this cheap); the test proves we don't need to add our own cache.
+    /// Budget: < 1 µs/keystroke in the app. Reads UserDefaults each call (its in-memory
+    /// cache keeps this cheap); the test proves we don't need to add our own cache.
+    /// Under XCTest `Preferences.defaults` is a $TMPDIR path suite (#305), whose reads
+    /// cost ~1 µs vs ~0.2 µs for `.standard`, so the asserted ceiling is 3 µs: still an
+    /// order of magnitude under a per-read disk/XPC hit.
     func testPerKeystrokeDecisionMeetsBudget() {
         Preferences.quickSelectModifier = .command
         let codes = Self.digitKeyCodes
@@ -145,6 +148,6 @@ final class QuickSelectTests: XCTestCase {
         }
         let nsPerCall = (CFAbsoluteTimeGetCurrent() - start) / Double(iterations) * 1e9
         XCTAssertGreaterThan(sink, 0)
-        XCTAssertLessThan(nsPerCall, 1_000, "decision took \(nsPerCall) ns (budget 1000 ns)")
+        XCTAssertLessThan(nsPerCall, 3_000, "decision took \(nsPerCall) ns (budget 3000 ns under the scratch store)")
     }
 }

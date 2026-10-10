@@ -173,7 +173,7 @@ final class MenuBarTests: XCTestCase {
     /// The band turns on once for a user who had always-hidden icons, the old blob is
     /// dropped, and a later "off" sticks across the next launch's migration call.
     func testOrderStoreMigrationTurnsAlwaysHiddenOnOnce() {
-        let d = UserDefaults.standard
+        let d = Preferences.defaults
         let keys = ["menuBarStoreJSON", "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON"]
         let saved = keys.map { d.object(forKey: $0) }
         defer { for (k, v) in zip(keys, saved) { d.set(v, forKey: k) } }
@@ -200,7 +200,7 @@ final class MenuBarTests: XCTestCase {
     /// #154: the backup blob is read when the primary is absent or corrupt, and both
     /// blobs are deleted so the migration runs once.
     func testOrderStoreMigrationReadsAndDeletesTheBackup() {
-        let d = UserDefaults.standard
+        let d = Preferences.defaults
         let keys = ["menuBarStoreJSON", "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON"]
         let saved = keys.map { d.object(forKey: $0) }
         defer { for (k, v) in zip(keys, saved) { d.set(v, forKey: k) } }

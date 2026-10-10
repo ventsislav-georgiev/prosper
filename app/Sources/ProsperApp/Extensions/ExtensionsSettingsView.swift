@@ -25,9 +25,9 @@ struct ExtensionsPane: View {
 
     // Per-section collapse state, persisted across opens (user > system > themes).
     // Themes start expanded: they are the section users browse, not manage.
-    @AppStorage("ext.collapse.user") private var userCollapsed = true
-    @AppStorage("ext.collapse.system") private var systemCollapsed = true
-    @AppStorage("ext.collapse.themes") private var themesCollapsed = false
+    @AppStorage("ext.collapse.user", store: Preferences.defaults) private var userCollapsed = true
+    @AppStorage("ext.collapse.system", store: Preferences.defaults) private var systemCollapsed = true
+    @AppStorage("ext.collapse.themes", store: Preferences.defaults) private var themesCollapsed = false
 
     private var userRecords: [ExtensionRecord] { registry.records.filter { !$0.isSystem } }
     private var systemRecords: [ExtensionRecord] {

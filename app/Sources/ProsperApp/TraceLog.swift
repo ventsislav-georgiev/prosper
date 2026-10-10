@@ -15,7 +15,7 @@ enum TraceLog {
     static let key = "prosper.trace.verbose"
     private static let logger = Logger(subsystem: "eu.illegible.prosper", category: "trace")
 
-    static var on: Bool { UserDefaults.standard.bool(forKey: key) }
+    static var on: Bool { Preferences.defaults.bool(forKey: key) }
 
     /// `@autoclosure` so the message string is never built when trace is off.
     static func emit(_ msg: @autoclosure () -> String) {

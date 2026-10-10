@@ -78,7 +78,7 @@ final class ThemeStore: ObservableObject {
     /// URLs ever become possible.
     nonisolated private static let maxAssetBytes = 32 * 1024 * 1024
 
-    init(defaults: UserDefaults = .standard,
+    init(defaults: UserDefaults = Preferences.defaults,
          cacheDir: URL = ThemeStore.defaultCacheDir) {
         self.defaults = defaults
         self.cacheDir = cacheDir

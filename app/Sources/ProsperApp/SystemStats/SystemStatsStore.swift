@@ -7,7 +7,7 @@ import StatsCore
 
 enum SystemStatsStore {
     private static let key = "systemStatsWidgetStyle"
-    private static var defaults: UserDefaults { .standard }
+    private static var defaults: UserDefaults { Preferences.defaults }
 
     static func load() -> StatsWidgetStyle {
         guard let data = defaults.data(forKey: key),

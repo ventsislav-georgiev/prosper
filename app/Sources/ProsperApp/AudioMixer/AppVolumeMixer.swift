@@ -129,7 +129,7 @@ final class AppVolumeMixer: ObservableObject {
     /// Outputs the cycle hotkey walks. `nil` = never configured, so every
     /// available output takes part (see `MixerDefaultsKey.soundOutputCycleUIDs`).
     @Published private(set) var soundOutputCycleUIDs: [String]? =
-        UserDefaults.standard.array(forKey: MixerDefaultsKey.soundOutputCycleUIDs) as? [String]
+        Preferences.defaults.array(forKey: MixerDefaultsKey.soundOutputCycleUIDs) as? [String]
 
     private var engines: [String: any GainEngine] = [:]
     /// Suppresses duplicate builds and discards a build the mixer moved past.
@@ -623,9 +623,9 @@ final class AppVolumeMixer: ObservableObject {
     func setSoundOutputCycleUIDs(_ uids: [String]?) {
         soundOutputCycleUIDs = uids
         if let uids {
-            UserDefaults.standard.set(uids, forKey: MixerDefaultsKey.soundOutputCycleUIDs)
+            Preferences.defaults.set(uids, forKey: MixerDefaultsKey.soundOutputCycleUIDs)
         } else {
-            UserDefaults.standard.removeObject(forKey: MixerDefaultsKey.soundOutputCycleUIDs)
+            Preferences.defaults.removeObject(forKey: MixerDefaultsKey.soundOutputCycleUIDs)
         }
     }
 
@@ -1198,7 +1198,7 @@ final class AppVolumeMixer: ObservableObject {
     }
 
     private func savedVolumes() -> [String: Double] {
-        let raw = UserDefaults.standard.dictionary(forKey: MixerDefaultsKey.appVolumes) ?? [:]
+        let raw = Preferences.defaults.dictionary(forKey: MixerDefaultsKey.appVolumes) ?? [:]
         var sanitized: [String: Double] = [:]
         for (id, value) in raw {
             let number: Double?
@@ -1216,7 +1216,7 @@ final class AppVolumeMixer: ObservableObject {
     }
 
     private func savedOutputDeviceUIDs() -> [String: String] {
-        let raw = UserDefaults.standard.dictionary(forKey: MixerDefaultsKey.appOutputs) ?? [:]
+        let raw = Preferences.defaults.dictionary(forKey: MixerDefaultsKey.appOutputs) ?? [:]
         return MixerRoutingSupport.sanitizedRouteMap(raw)
     }
 
@@ -1239,14 +1239,14 @@ final class AppVolumeMixer: ObservableObject {
 
     private func savedHiddenApps() -> [String: String] {
         MixerRoutingSupport.sanitizedHiddenApps(
-            UserDefaults.standard.dictionary(forKey: MixerDefaultsKey.hiddenApps) ?? [:])
+            Preferences.defaults.dictionary(forKey: MixerDefaultsKey.hiddenApps) ?? [:])
     }
 
     private func persistHiddenApps(_ hidden: [String: String]) {
         if hidden.isEmpty {
-            UserDefaults.standard.removeObject(forKey: MixerDefaultsKey.hiddenApps)
+            Preferences.defaults.removeObject(forKey: MixerDefaultsKey.hiddenApps)
         } else {
-            UserDefaults.standard.set(hidden, forKey: MixerDefaultsKey.hiddenApps)
+            Preferences.defaults.set(hidden, forKey: MixerDefaultsKey.hiddenApps)
         }
         publishHiddenApps()
     }
@@ -1300,7 +1300,7 @@ final class AppVolumeMixer: ObservableObject {
         } else {
             volumes[id] = volume
         }
-        UserDefaults.standard.set(volumes, forKey: MixerDefaultsKey.appVolumes)
+        Preferences.defaults.set(volumes, forKey: MixerDefaultsKey.appVolumes)
     }
 
     private func persistOutputDeviceUID(_ uid: String?, for app: MixerApp) {
@@ -1318,14 +1318,14 @@ final class AppVolumeMixer: ObservableObject {
         } else {
             routes.removeValue(forKey: id)
         }
-        UserDefaults.standard.set(routes, forKey: MixerDefaultsKey.appOutputs)
+        Preferences.defaults.set(routes, forKey: MixerDefaultsKey.appOutputs)
     }
 
     private func persistOutputDeviceUIDs(_ routes: [String: String]) {
         if routes.isEmpty {
-            UserDefaults.standard.removeObject(forKey: MixerDefaultsKey.appOutputs)
+            Preferences.defaults.removeObject(forKey: MixerDefaultsKey.appOutputs)
         } else {
-            UserDefaults.standard.set(routes, forKey: MixerDefaultsKey.appOutputs)
+            Preferences.defaults.set(routes, forKey: MixerDefaultsKey.appOutputs)
         }
     }
 

@@ -271,14 +271,14 @@ final class AudioInputDeviceManager: ObservableObject {
             lastError = "No microphone could be muted."
             return
         }
-        UserDefaults.standard.set(recorded, forKey: MixerDefaultsKey.micMutedDevices)
-        UserDefaults.standard.set(savedVolumes, forKey: MixerDefaultsKey.micSavedInputVolumes)
+        Preferences.defaults.set(recorded, forKey: MixerDefaultsKey.micMutedDevices)
+        Preferences.defaults.set(savedVolumes, forKey: MixerDefaultsKey.micSavedInputVolumes)
         lastError = nil
         micMuted = true
     }
 
     private func unmuteRecordedInputs() {
-        let defaults = UserDefaults.standard
+        let defaults = Preferences.defaults
         // No record at all (settings carried to another Mac, a state from before
         // this was tracked) restores everything: leaving someone muted with no
         // way back is the worse failure. A record that exists but is empty means
@@ -299,7 +299,7 @@ final class AudioInputDeviceManager: ObservableObject {
     }
 
     private func releaseStaleMute() {
-        guard UserDefaults.standard.object(forKey: MixerDefaultsKey.micMutedDevices) != nil else { return }
+        guard Preferences.defaults.object(forKey: MixerDefaultsKey.micMutedDevices) != nil else { return }
         unmuteRecordedInputs()
     }
 

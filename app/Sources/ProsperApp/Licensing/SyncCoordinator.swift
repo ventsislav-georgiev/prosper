@@ -31,7 +31,7 @@ final class SyncCoordinator: ObservableObject {
     /// Hard cap on a single extension/plugin's *compressed* size to be sync-eligible.
     private let perItemCapBytes = 5 * 1024
     private let schema = 1
-    private let defaults = UserDefaults.standard
+    private let defaults = Preferences.defaults
 
     private init() {
         lastSync = defaults.object(forKey: DKeys.lastDate) as? Date
@@ -156,7 +156,7 @@ final class SyncCoordinator: ObservableObject {
 enum SyncSnapshotBuilder {
 
     static func collect(perItemCapBytes: Int, schema: Int) -> (Data, SyncReport)? {
-        let defaults = UserDefaults.standard
+        let defaults = Preferences.defaults
         var report = SyncReport()
 
         // (a) Allowlisted preferences (+ all `shortcut.*` / `ext.*` keys), minus
@@ -202,7 +202,7 @@ enum SyncSnapshotBuilder {
               let root = (try? PropertyListSerialization.propertyList(
                 from: plist, options: [], format: nil)) as? [String: Any] else { return }
 
-        let defaults = UserDefaults.standard
+        let defaults = Preferences.defaults
         if let defaultsBlob = root["defaults"] as? Data,
            let dict = (try? PropertyListSerialization.propertyList(
             from: defaultsBlob, options: [], format: nil)) as? [String: Any] {

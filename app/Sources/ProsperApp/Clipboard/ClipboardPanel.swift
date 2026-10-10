@@ -25,7 +25,7 @@ final class ClipboardPanel {
 
     /// The panel's remembered top-left (x, maxY) from the user's last drag, or nil.
     static func savedTopLeft() -> (x: CGFloat, top: CGFloat)? {
-        guard let saved = UserDefaults.standard.dictionary(forKey: originKey),
+        guard let saved = Preferences.defaults.dictionary(forKey: originKey),
               let x = saved["x"] as? CGFloat,
               let top = saved["y"] as? CGFloat else { return nil }
         return (x, top)
@@ -86,7 +86,7 @@ final class ClipboardPanel {
 
     private func saveOrigin() {
         let f = panel.frame
-        UserDefaults.standard.set(["x": f.minX, "y": f.maxY], forKey: Self.originKey)
+        Preferences.defaults.set(["x": f.minX, "y": f.maxY], forKey: Self.originKey)
     }
     // ponytail: no deinit to remove moveObserver — AppDelegate holds this panel for
     // the app's lifetime (lazily created, never released), so deinit never fires.
@@ -164,7 +164,7 @@ final class ClipboardPanel {
             // Land on General — it's always present and now hosts the Accessibility
             // grant. (Context has the same row but is hidden when autocomplete is off,
             // which is exactly the clipboard-only case that hits this path.)
-            UserDefaults.standard.set("general", forKey: "settingsSelectedPane")
+            Preferences.defaults.set("general", forKey: "settingsSelectedPane")
             onOpenSettings()
             return
         }

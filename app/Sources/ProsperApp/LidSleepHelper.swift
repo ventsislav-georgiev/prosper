@@ -54,7 +54,7 @@ enum LidSleepHelper {
     nonisolated static var isEnabled: Bool {
         cacheLock.lock()
         if !cacheLoaded {
-            cachedEnabled = UserDefaults.standard.bool(forKey: cacheKey)
+            cachedEnabled = Preferences.defaults.bool(forKey: cacheKey)
             cacheLoaded = true
         }
         let value = cachedEnabled
@@ -93,7 +93,7 @@ enum LidSleepHelper {
     nonisolated static var permissionResolved: Bool {
         cacheLock.lock()
         if !approvalCacheLoaded {
-            approvalOK = UserDefaults.standard.object(forKey: approvalCacheKey) as? Bool ?? true
+            approvalOK = Preferences.defaults.object(forKey: approvalCacheKey) as? Bool ?? true
             approvalCacheLoaded = true
         }
         let value = approvalOK
@@ -111,7 +111,7 @@ enum LidSleepHelper {
         cacheLock.lock()
         approvalOK = v; approvalCacheLoaded = true; approvalRefreshInFlight = false
         cacheLock.unlock()
-        UserDefaults.standard.set(v, forKey: approvalCacheKey)
+        Preferences.defaults.set(v, forKey: approvalCacheKey)
         return v
     }
 
@@ -126,7 +126,7 @@ enum LidSleepHelper {
         cacheLoaded = true
         refreshInFlight = false
         cacheLock.unlock()
-        UserDefaults.standard.set(v, forKey: cacheKey)
+        Preferences.defaults.set(v, forKey: cacheKey)
     }
 
     // MARK: - Registration (off-main)
@@ -181,13 +181,13 @@ enum LidSleepHelper {
         // new version + return enabled WITHOUT re-registering, killing the daemon for
         // good. So the drift path always calls forceRegister.
         if svc.status == .enabled,
-           UserDefaults.standard.string(forKey: registeredVersionKey) != currentVersion {
+           Preferences.defaults.string(forKey: registeredVersionKey) != currentVersion {
             try? svc.unregister()
             return forceRegister(svc)
         }
         switch svc.status {
         case .enabled:
-            UserDefaults.standard.set(currentVersion, forKey: registeredVersionKey)
+            Preferences.defaults.set(currentVersion, forKey: registeredVersionKey)
             return .enabled
         case .requiresApproval:
             return .needsApproval
@@ -210,7 +210,7 @@ enum LidSleepHelper {
         }
         switch svc.status {
         case .enabled:
-            UserDefaults.standard.set(currentVersion, forKey: registeredVersionKey)
+            Preferences.defaults.set(currentVersion, forKey: registeredVersionKey)
             return .enabled
         case .requiresApproval: return .needsApproval
         default: return .failed
@@ -279,12 +279,12 @@ enum LidSleepHelper {
     /// guarded by a one-shot flag. Idempotent and safe for never-enabled users (the
     /// legacy item just isn't registered → unregister is a no-op).
     nonisolated static func migrateLegacyLabelOnLaunch() {
-        guard !UserDefaults.standard.bool(forKey: labelMigratedKey) else { return }
+        guard !Preferences.defaults.bool(forKey: labelMigratedKey) else { return }
         // Snapshot the legacy enabled flag SYNCHRONOUSLY, before spawning any task —
         // a concurrent `isEnabled`→`refreshEnabled()` (heal, settings) would otherwise
         // flip `cacheKey` to false against the not-yet-registered new label and we'd
         // skip the re-pin, silently killing the override for an upgrading user.
-        let wasEnabled = UserDefaults.standard.bool(forKey: cacheKey)
+        let wasEnabled = Preferences.defaults.bool(forKey: cacheKey)
         Task.detached(priority: .utility) {
             let legacy = SMAppService.daemon(plistName: "\(legacyHelperLabel).plist")
             if legacy.status != .notRegistered { try? await legacy.unregister() }
@@ -303,7 +303,7 @@ enum LidSleepHelper {
             }
             // markMigrated == false on a failed re-pin → next launch retries (the legacy
             // unregister is idempotent, so retrying is safe).
-            if plan.markMigrated { UserDefaults.standard.set(true, forKey: labelMigratedKey) }
+            if plan.markMigrated { Preferences.defaults.set(true, forKey: labelMigratedKey) }
         }
     }
 
@@ -327,7 +327,7 @@ enum LidSleepHelper {
         // the new label, and heal's `isEnabled`→`refreshEnabled()` against the not-yet-
         // registered new label would otherwise race-clobber the cache the migration
         // reads. Once migrated (set only after a successful re-pin), heal resumes.
-        guard UserDefaults.standard.bool(forKey: labelMigratedKey) else { return }
+        guard Preferences.defaults.bool(forKey: labelMigratedKey) else { return }
         guard isEnabled else { return }   // cached: false for never-enabled → no IPC, no registration
         Task.detached(priority: .utility) {
             guard service.status == .enabled else { return }   // real status; skip pending-approval / removed
