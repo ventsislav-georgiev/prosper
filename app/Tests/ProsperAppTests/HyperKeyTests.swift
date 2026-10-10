@@ -311,10 +311,11 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
         XCTAssertEqual(HyperKey.hidutil(["ok"]), "ok\n")
     }
 
-    /// #369 D: a TERM-ignoring child and its TERM-ignoring grandchild are both SIGKILLed
-    /// through the process group and reaped before the runner returns.
+    /// #369 D: a TERM-ignoring child is SIGKILLed through its process group and reaped
+    /// before the runner returns. #382: no backgrounded grandchild — with one, the row
+    /// caught a broken kill path only 5 of 10 runs (QA #187); this shape catches it 10 of 10.
     func testTermIgnoringGroupIsKilledAndReaped() {
-        let r = sh(#"trap "" TERM; /bin/sleep 612 & exec /bin/sleep 612"#, timeout: 0.3)
+        let r = sh(#"trap "" TERM; /bin/sleep 612"#, timeout: 0.3)
         XCTAssertGreaterThan(r.pid, 1)
         defer { if r.pid > 1 { killpg(r.pid, SIGKILL) } }   // only our own group, if an assert fails
         XCTAssertNil(r.out)
@@ -322,9 +323,8 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
         let rc = kill(r.pid, 0), err = errno
         XCTAssertEqual(rc, -1, "child must be killed and reaped")
         XCTAssertEqual(err, ESRCH)
-        let grc = killpg(r.pid, 0), gerr = errno
-        XCTAssertEqual(grc, -1, "no member of the child's group may survive")
-        XCTAssertEqual(gerr, ESRCH)
+        // errno is not asserted: Darwin answers EPERM, not ESRCH, for a zombie-only group.
+        XCTAssertEqual(killpg(r.pid, 0), -1, "no member of the child's group may survive")
     }
 
     /// #369 D: SIGTERM goes first — a cooperative child gets to run its TERM trap.
@@ -365,7 +365,9 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
             .appendingPathComponent("Sources/ProsperApp/Extensions/HyperKey.swift"), encoding: .utf8)
         XCTAssertNil(src.range(of: #""--get"[^\n]*\?\? """#, options: .regularExpression),
                      "a nil --get must not fall back to an empty table")
-        XCTAssertEqual(src.components(separatedBy: "\"--get\"").count - 1, 1, "--get only inside currentTable()")
+        // Counts --get invocations; hidutil()'s own empty-stdout check names "--get" too (#382).
+        XCTAssertEqual(src.components(separatedBy: "\"property\", \"--get\"").count - 1, 1,
+                       "--get only inside currentTable()")
         XCTAssertEqual(src.components(separatedBy: "guard let table = Self.currentTable() else").count - 1, 4,
                        "activate, wake, deactivate and tap repair each guard on currentTable()")
     }
@@ -375,5 +377,49 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
         let r = sh("/bin/sleep 2 & exit 0", timeout: 5)
         XCTAssertNil(r.out)
         XCTAssertLessThan(r.elapsed, 1.5)
+    }
+
+    /// `/bin/sh -c <script> sh property --get UserKeyMapping` — the --get argv reaches hidutil().
+    private func get(_ script: String) -> String? {
+        HyperKey.hidutilURL = URL(fileURLWithPath: "/bin/sh")
+        return HyperKey.hidutil(["-c", script, "sh", "property", "--get", "UserKeyMapping"])
+    }
+
+    private let table = "( { HIDKeyboardModifierMappingSrc = 30064771129; HIDKeyboardModifierMappingDst = 30064771181; } )"
+
+    /// #382 L1: a --get that exits non-zero is unreadable even with a valid table on stdout.
+    func testNonZeroExitReturnsNil() {
+        XCTAssertNotNil(get("echo '\(table)'; exit 0"), "control: the same table with exit 0 reads")
+        XCTAssertNil(get("echo '\(table)'; exit 1"))
+    }
+
+    /// #382 L1: a --get that exits 0 with nothing on stdout is unreadable, not an empty table.
+    func testEmptyGetReturnsNil() {
+        XCTAssertNil(get("echo '  '; exit 0"))
+    }
+
+    /// #382 L2: quit inside the backoff still makes one attempt — the --get and then the --set.
+    @MainActor
+    func testClearMappingBypassesBackoff() throws {
+        let dir = tempDir()
+        let log = dir.appendingPathComponent("calls")
+        let stub = dir.appendingPathComponent("hidutil")
+        try """
+        #!/bin/sh
+        echo "$2" >> '\(log.path)'
+        [ "$2" = --get ] && echo '\(table)'
+        exit 0
+        """.write(to: stub, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        HyperKey.hidutilURL = stub
+        Preferences.defaults.set(true, forKey: HyperKey.markerKey)
+        defer { Preferences.defaults.removeObject(forKey: HyperKey.markerKey) }
+        HyperKey.hidutilBackoffUntil = Date().addingTimeInterval(60)
+
+        HyperKey.shared.clearMapping()
+
+        let calls = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+        XCTAssertEqual(calls.split(separator: "\n"), ["--get", "--set"], "one --get, exactly one --set")
+        XCTAssertFalse(Preferences.defaults.bool(forKey: HyperKey.markerKey), "a cleared mapping drops the marker")
     }
 }

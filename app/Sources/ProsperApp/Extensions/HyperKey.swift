@@ -419,6 +419,10 @@ final class HyperKey {
     /// Terminate path — `applicationWillTerminate`. Same as a disable; the marker
     /// clear is what tells the next launch there is nothing to recover.
     func clearMapping() {
+        // #382: quit gets one attempt even inside the backoff — skipping it would leave
+        // Caps Lock sending F18 with no tap. A hang re-arms the backoff, so this costs
+        // at most one timeout (a hung --get stops before the --set).
+        Self.hidutilBackoffUntil = nil
         deactivate(force: Preferences.defaults.bool(forKey: Self.markerKey))
     }
 
@@ -567,7 +571,18 @@ final class HyperKey {
         }
         // Exited: stdout closes with it unless a grandchild still holds it — don't wait that out.
         guard read.wait(timeout: .now() + 0.5) == .success else { return nil }
-        return String(data: data, encoding: .utf8)
+        // #382: a failed or empty --get is unreadable, not an empty table — parsing it
+        // as one would make the following --set drop every other tool's entries.
+        guard process.terminationStatus == 0 else {
+            NSLog("prosper: hidutil exited %d (%@)", process.terminationStatus, args.joined(separator: " "))
+            return nil
+        }
+        let out = String(data: data, encoding: .utf8)
+        if args.contains("--get"), out?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            NSLog("prosper: hidutil --get printed nothing (%@)", args.joined(separator: " "))
+            return nil
+        }
+        return out
     }
 
     private static func withHIDSystem<T>(_ body: (io_connect_t) -> T) -> T? {
