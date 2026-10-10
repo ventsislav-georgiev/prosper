@@ -97,7 +97,10 @@ tag from the now-released section and put it on the new top draft.
   Homebrew codex is used only under a developer override
   (`defaults write eu.illegible.prosper agentAllowPathCodex -bool true`). The version that
   actually answers the wire is logged once at start. The "Ask only on failure" approval
-  choice is gone (codex removed it); a saved one reads as "Ask on request".
+  choice is gone (codex removed it); a saved one reads as "Ask on request". A downloaded codex is
+  now checked and signed before it is put in place, so a failed step never leaves an
+  unsigned binary at the pinned path, and the 210 MB archive is deleted afterwards instead
+  of staying in Application Support.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
   Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON

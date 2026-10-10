@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import ProsperApp
 
 /// End-to-end test of `CodexHarness` against a *real* subprocess speaking the
@@ -991,6 +992,102 @@ final class CodexHarnessE2ETests: XCTestCase {
         UserDefaults.standard.set("on-failure", forKey: key)
         XCTAssertEqual(Preferences.agentApprovalPolicy, "on-request")
         XCTAssertEqual(ApprovalPolicy(rawValue: Preferences.agentApprovalPolicy), .onRequest)
+    }
+
+    /// #279: bundled beats cached; the dev override with no PATH codex falls through to the
+    /// pin; a cached file without the exec bit is not trusted (re-downloaded).
+    @MainActor
+    func testResolveCodexBundledOverCachedAndUntrustedCache() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("codex-resolve-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bundled = dir.appendingPathComponent("bundled-codex"), cached = dir.appendingPathComponent("cached-codex")
+        let plain = dir.appendingPathComponent("plain-codex")
+        for (f, mode) in [(bundled, 0o755), (cached, 0o755), (plain, 0o644)] {
+            FileManager.default.createFile(atPath: f.path, contents: Data("#!/bin/sh\n".utf8),
+                                           attributes: [.posixPermissions: mode])
+        }
+        let missing = dir.appendingPathComponent("no-bundle/codex")
+        var downloads: [URL] = []
+        func resolve(allowPath: Bool, bundled: URL, cached: URL) async throws -> URL {
+            try await AgentController.resolveCodexExecutable(
+                allowPath: allowPath, pathCodex: { nil }, bundled: bundled, cached: cached,
+                download: { downloads.append($0); return $0 })
+        }
+        let a = try await resolve(allowPath: false, bundled: bundled, cached: cached)
+        XCTAssertEqual(a, bundled, "the cached codex beat the bundled one")
+        let b = try await resolve(allowPath: true, bundled: missing, cached: cached)
+        XCTAssertEqual(b, cached, "the dev override with no PATH codex did not fall through to the pin")
+        let c = try await resolve(allowPath: false, bundled: missing, cached: plain)
+        XCTAssertEqual(c, plain)
+        XCTAssertEqual(downloads, [plain], "a 0644 cached codex was trusted instead of re-downloaded")
+    }
+
+    /// #279: the legacy `on-failure` is mapped on read but never written back.
+    func testStoredOnFailureApprovalPolicyIsNotRewritten() {
+        let key = "agentApprovalPolicy"
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.set("on-failure", forKey: key)
+        XCTAssertEqual(Preferences.agentApprovalPolicy, "on-request")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: key), "on-failure")
+    }
+
+    /// A local release-shaped tarball (`codex-<triple>` inside) plus its SHA-256, and an
+    /// install dir holding a stale pin, the unversioned `codex`, and an unrelated file.
+    private static func makeCodexTarball() throws -> (dir: URL, tgz: URL, digest: String, dest: URL) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("codex-install-\(UUID().uuidString)")
+        let src = dir.appendingPathComponent("src"), install = dir.appendingPathComponent("install")
+        for d in [src, install] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        FileManager.default.createFile(atPath: src.appendingPathComponent("codex-aarch64-apple-darwin").path,
+                                       contents: Data("#!/bin/sh\necho new\n".utf8),
+                                       attributes: [.posixPermissions: 0o755])
+        let tgz = dir.appendingPathComponent("codex.tar.gz")
+        let tar = Process()
+        tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        tar.arguments = ["-czf", tgz.path, "-C", src.path, "codex-aarch64-apple-darwin"]
+        try tar.run(); tar.waitUntilExit()
+        XCTAssertEqual(tar.terminationStatus, 0)
+        for name in ["codex", "codex-rust-v0.139.0", "other"] {
+            FileManager.default.createFile(atPath: install.appendingPathComponent(name).path, contents: Data("old".utf8))
+        }
+        let digest = SHA256.hash(data: try Data(contentsOf: tgz)).map { String(format: "%02x", $0) }.joined()
+        return (dir, tgz, digest, install.appendingPathComponent("codex-rust-v0.162.1"))
+    }
+
+    /// #279: a good digest installs the binary signed in the temp dir, prunes stale pins and
+    /// deletes the tarball.
+    func testInstallCodexGoodDigestInstallsPrunesAndDeletesTarball() throws {
+        let (dir, tgz, digest, dest) = try Self.makeCodexTarball()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var signed: [URL] = []
+        let out = try AgentController.installCodex(tgz: tgz, sha256: digest, dest: dest,
+                                                   sign: { signed.append($0); return 0 })
+        XCTAssertEqual(out, dest)
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "#!/bin/sh\necho new\n")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: dest.path))
+        XCTAssertEqual(signed.count, 1)
+        XCTAssertNotEqual(signed.first?.deletingLastPathComponent(), dest.deletingLastPathComponent(),
+                          "signed at the pinned path instead of the temp dir")
+        let left = try FileManager.default.contentsOfDirectory(atPath: dest.deletingLastPathComponent().path).sorted()
+        XCTAssertEqual(left, ["codex-rust-v0.162.1", "other"], "stale codex pins were not pruned")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tgz.path), "the tarball was left behind")
+    }
+
+    /// #279: a bad digest or a failed sign fails closed and leaves the install dir untouched.
+    func testInstallCodexFailsClosedOnBadDigestOrFailedSign() throws {
+        for (label, badDigest, rc) in [("bad digest", true, Int32(0)), ("failed sign", false, Int32(1))] {
+            let (dir, tgz, digest, dest) = try Self.makeCodexTarball()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let install = dest.deletingLastPathComponent()
+            let before = try FileManager.default.contentsOfDirectory(atPath: install.path).sorted()
+            XCTAssertThrowsError(try AgentController.installCodex(
+                tgz: tgz, sha256: badDigest ? String(repeating: "0", count: 64) : digest, dest: dest,
+                sign: { _ in rc }), "\(label) did not fail closed")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: install.path).sorted(), before,
+                           "\(label) touched the install dir")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path), "\(label) left a binary at the pin")
+        }
     }
 
     /// #250: Stop during the first-use codex download abandons the run once the download

@@ -934,13 +934,24 @@ final class AgentController {
         let triple = utsMachine() == "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin"
         let url = URL(string: "https://github.com/openai/codex/releases/download/\(codexVersion)/codex-\(triple).tar.gz")!
         let (tmpTgz, _) = try await URLSession.shared.download(from: url)
+        return try installCodex(tgz: tmpTgz, sha256: codexSHA256[triple], dest: dest)
+    }
+
+    /// Verify → extract → strip quarantine → ad-hoc sign → move into `dest` → prune older
+    /// pins. The tarball is deleted on every path. Signing happens in the temp dir and its
+    /// rc is checked, so a failed sign never leaves an unsigned binary at the pinned path;
+    /// any failure leaves `dest` untouched. `sign` is a test seam returning the rc.
+    nonisolated static func installCodex(
+        tgz: URL, sha256 expected: String?, dest: URL,
+        sign: (URL) -> Int32 = { run("/usr/bin/codesign", ["--force", "--sign", "-", $0.path]) }
+    ) throws -> URL {
+        defer { try? FileManager.default.removeItem(at: tgz) }   // ~210 MB, useless once extracted
 
         // Verify against the pinned SHA-256 before extract/sign/exec — a compromised
         // release / MITM / DNS hijack would otherwise be code execution as the user.
         // Bump `codexSHA256` in lockstep with `codexVersion`.
-        let hex = SHA256.hash(data: try Data(contentsOf: tmpTgz)).map { String(format: "%02x", $0) }.joined()
-        guard hex == codexSHA256[triple] else {
-            try? FileManager.default.removeItem(at: tmpTgz)
+        let hex = SHA256.hash(data: try Data(contentsOf: tgz)).map { String(format: "%02x", $0) }.joined()
+        guard hex == expected else {
             throw HarnessError.spawnFailed("codex download checksum mismatch (\(hex))")
         }
 
@@ -949,36 +960,34 @@ final class AgentController {
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: work) }
 
-        let tar = Process()
-        tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        tar.arguments = ["-xzf", tmpTgz.path, "-C", work.path]
-        tar.standardError = Pipe(); tar.standardOutput = Pipe()
-        try tar.run(); tar.waitUntilExit()
-        guard tar.terminationStatus == 0 else { throw HarnessError.spawnFailed("codex tar extract failed") }
+        guard run("/usr/bin/tar", ["-xzf", tgz.path, "-C", work.path]) == 0 else {
+            throw HarnessError.spawnFailed("codex tar extract failed")
+        }
 
         // Tarball holds a single binary (codex or codex-<triple>).
         guard let bin = firstExecutable(in: work) else {
             throw HarnessError.spawnFailed("codex binary missing from release tarball")
         }
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.path)
+        // A downloaded binary carries quarantine + no signature; strip + ad-hoc sign so it
+        // execs without a Gatekeeper prompt or a hardened-runtime kill (same as the bun
+        // helper). ponytail: ad-hoc only works because Prosper itself is ad-hoc signed,
+        // not notarized — a notarized build with Library Validation would need the helper
+        // signed with the same Developer ID (impossible at runtime) or pre-bundled.
+        _ = run("/usr/bin/xattr", ["-d", "com.apple.quarantine", bin.path])
+        let rc = sign(bin)
+        guard rc == 0 else { throw HarnessError.spawnFailed("codex codesign failed (rc \(rc))") }
+
         try FileManager.default.createDirectory(
             at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
         if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.removeItem(at: dest) }
         try FileManager.default.moveItem(at: bin, to: dest)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
         // Drop earlier pins' binaries (the unversioned `codex`, older `codex-rust-v*`).
         let dir = dest.deletingLastPathComponent()
         for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         where (name == "codex" || name.hasPrefix("codex-rust-v")) && name != dest.lastPathComponent {
             try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
         }
-
-        // A downloaded binary carries quarantine + no signature; strip + ad-hoc sign so it
-        // execs without a Gatekeeper prompt or a hardened-runtime kill (same as the bun
-        // helper). ponytail: ad-hoc only works because Prosper itself is ad-hoc signed,
-        // not notarized — a notarized build with Library Validation would need the helper
-        // signed with the same Developer ID (impossible at runtime) or pre-bundled.
-        _ = run("/usr/bin/xattr", ["-d", "com.apple.quarantine", dest.path])
-        _ = run("/usr/bin/codesign", ["--force", "--sign", "-", dest.path])
         return dest
     }
 
