@@ -90,6 +90,16 @@ final class FanReclaimRecoveryTests: XCTestCase {
         Preferences.fanManualEnabled = true
         XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, since: FanControlHelper.reclaimGeneration, release: { kept.fulfill() }))
         await fulfillment(of: [kept], timeout: 0.3)
+
+        // #347 (2): a failed reply after a willSleep (generation changed) releases exactly
+        // once with manual off, and not at all with manual on.
+        let once = expectation(description: "failed reply after a sleep releases once")   // over-fulfill fails
+        Preferences.fanManualEnabled = false
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable, since: 4, current: 5, sleeping: true, release: { once.fulfill() }))
+        Preferences.fanManualEnabled = true
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, since: 4, current: 5, sleeping: true, release: { once.fulfill() }))
+        await fulfillment(of: [once], timeout: 1)
+        try? await Task.sleep(nanoseconds: 300_000_000)   // room for a second release to over-fulfill
     }
 
     /// #269: a re-apply engage that timed out (ResumeOnce already resumed nil) and
@@ -323,6 +333,12 @@ final class FanReclaimRecoveryTests: XCTestCase {
         kept.isInverted = true
         XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, since: 5, current: 5, release: { kept.fulfill() }))
         await fulfillment(of: [kept], timeout: 0.3)
+        // #347: captured while already asleep (generation unchanged) is released too.
+        let asleep = expectation(description: "released when captured asleep")
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.engaged, since: 5, current: 5, sleeping: true,
+                                                          release: { asleep.fulfill() }))
+        await fulfillment(of: [asleep], timeout: 1)
+        XCTAssertFalse(Preferences.fanManualEnabled)
     }
 
     /// #306: a later popup engage landing after a willSleep (asleep, or after the wake,
@@ -420,8 +436,11 @@ final class FanReclaimRecoveryTests: XCTestCase {
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
         let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
         var hits: [String] = []
+        let write = try Regex(#"reclaimGeneration\s*(&\+=|\+=|-=|=(?!=))"#)
         for case let url as URL in files where url.pathExtension == "swift" {
-            for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") where line.contains("reclaimGeneration &+= 1") {
+            // Any write (&+=, +=, -=, =), not just the one literal (#347); the declaration is not a bump.
+            for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+            where line.contains(write) && !line.contains("private(set) static var reclaimGeneration = 0") {
                 hits.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
             }
         }
@@ -472,6 +491,14 @@ final class FanReclaimRecoveryTests: XCTestCase {
             FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
         }
         Preferences.fanManualEnabled = false
+        // firstEngageLanded: `sleeping` default (#347): captured while asleep, generation unchanged.
+        FanControlHelper.inject(connection: FakeHelperConnection(), engagesInFlight: 0)
+        FanControlHelper.inject(sleeping: true)
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.engaged, since: FanControlHelper.reclaimGeneration),
+                       "firstEngageLanded missed the sleeping flag")
+        await waitForTeardown()
+        XCTAssertTrue(FanControlHelper.connection == nil, "firstEngageLanded's sleeping release did not release")
+        FanControlHelper.inject(sleeping: false)
         // firstEngageLanded: `current` and `release` defaults.
         FanControlHelper.inject(connection: FakeHelperConnection(), engagesInFlight: 0)
         let firstGeneration = FanControlHelper.reclaimGeneration

@@ -248,13 +248,14 @@ enum FanControlHelper {
     /// An engage that lands after a willSleep since `generation` (captured before the
     /// engage) is released and reported false: asleep, the pin would ride through sleep
     /// (#287); after a whole sleep+wake, willSleep already reset the fan, so saving the
-    /// pref would claim a pin that is gone (#345). willSleep sets `sleeping` and bumps the
-    /// generation in one main-actor step, so the generation check covers `sleeping` too.
+    /// pref would claim a pin that is gone (#345). The generation covers a sleep after the
+    /// capture; `sleeping` covers a capture taken while already asleep (a willSleep fired
+    /// before the click, and the Mac has not slept yet or didWake has not cleared it, #347).
     static func firstEngageLanded(_ reply: FanManualReply, since generation: Int,
-                                  current: Int = Self.reclaimGeneration,
+                                  current: Int = Self.reclaimGeneration, sleeping: Bool = Self.sleeping,
                                   release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) -> Bool {
         guard reply != .engaged else {
-            guard current == generation else { Task { await release() }; return false }
+            guard current == generation, !sleeping else { Task { await release() }; return false }
             return true
         }
         if !Preferences.fanManualEnabled { removeReclaimMonitor(); Task { await release() } }
