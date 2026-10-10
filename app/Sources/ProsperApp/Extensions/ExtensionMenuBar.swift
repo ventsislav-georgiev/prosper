@@ -205,9 +205,9 @@ final class ExtensionMenuBar {
         return obj
     }
 
-    private static func encode(_ value: Any?) -> String {
+    static func encode(_ value: Any?) -> String {
         guard let value, JSONSerialization.isValidJSONObject([value]),
-              let data = try? JSONSerialization.data(withJSONObject: value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed),
               let s = String(data: data, encoding: .utf8) else { return "{}" }
         return s
     }

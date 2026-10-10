@@ -411,6 +411,22 @@ struct ExtensionHost {
         // Automation tier = system OR trusted. The narrower `privileged` (system-only)
         // tier still gates the RCE/destructive surface (host.shell/agent/files.act).
         let automation = privileged || trusted
+        // Lua numbers are Doubles: NaN/±inf trap Int()/Int32() and make JSONSerialization
+        // raise an uncatchable NSException. Every number crossing into Swift as an Int or
+        // a serialized value goes through these: non-finite → nil (the caller's default,
+        // logged), finite → clamped to `r`. (#295)
+        func finiteNumber(_ rt: LuaRuntime, _ i: Int32) -> Double? {
+            guard let d = rt.numberArgument(i) else { return nil }
+            if d.isFinite { return d }
+            services.log(level: "warn", message: "\(extID): non-finite number argument \(i) ignored, using the default")
+            return nil
+        }
+        func intArgument(_ rt: LuaRuntime, _ i: Int32, in r: ClosedRange<Int>) -> Int? {
+            guard let d = finiteNumber(rt, i) else { return nil }
+            // Compare as Double before converting: Double(Int.max) rounds up to 2^63.
+            return d >= Double(r.upperBound) ? r.upperBound : d <= Double(r.lowerBound) ? r.lowerBound : Int(d)
+        }
+        let pidRange = Int(Int32.min)...Int(Int32.max)
 
         // --- clipboard ---
         lua.register("__h_clip_read") { rt in
@@ -422,7 +438,7 @@ struct ExtensionHost {
             return 0
         }
         lua.register("__h_clip_history") { rt in
-            let limit = Int(rt.numberArgument(1) ?? 50)
+            let limit = intArgument(rt, 1, in: 0...Int.max) ?? 50
             let items = services.clipboardHistory(limit: limit)
             // join as newline-separated for v1 (table marshalling lands with UI, #23)
             rt.push(items.joined(separator: "\n"))
@@ -478,12 +494,12 @@ struct ExtensionHost {
         // return is the refusal reason, straight from KillProcessSupport.
         if privileged {
             lua.register("__h_proc_refusal") { rt in
-                let pid = Int32(rt.numberArgument(1) ?? 0)
+                let pid = Int32(intArgument(rt, 1, in: pidRange) ?? 0)
                 if let why = services.processKillRefusal(pid: pid) { rt.push(why) } else { rt.pushNil() }
                 return 1
             }
             lua.register("__h_proc_kill") { rt in
-                let pid = Int32(rt.numberArgument(1) ?? 0)
+                let pid = Int32(intArgument(rt, 1, in: pidRange) ?? 0)
                 let force = rt.boolArgument(2) ?? false
                 if let why = services.processKill(pid: pid, force: force) { rt.push(why) } else { rt.pushNil() }
                 return 1
@@ -743,7 +759,7 @@ struct ExtensionHost {
         lua.register("__h_timer_schedule") { rt in
             let id = rt.stringArgument(1) ?? ""
             let every = rt.boolArgument(2) ?? false
-            let seconds = rt.numberArgument(3) ?? 0
+            let seconds = finiteNumber(rt, 3) ?? 0  // NaN traps TimerScheduler's Int(leeway)
             let handler = rt.stringArgument(4) ?? ""
             guard !id.isEmpty, !handler.isEmpty else { return 0 }
             services.timerSchedule(extensionID: extID, id: id, every: every,
@@ -800,9 +816,9 @@ struct ExtensionHost {
             }
             lua.register("__h_caf_remotewake") { rt in
                 let enabled = rt.boolArgument(1) ?? false
-                let ac = rt.numberArgument(2) ?? 30
-                let batt = rt.numberArgument(3) ?? 300
-                let floor = Int(rt.numberArgument(4) ?? 20)
+                let ac = finiteNumber(rt, 2) ?? 30
+                let batt = finiteNumber(rt, 3) ?? 300
+                let floor = intArgument(rt, 4, in: 0...100) ?? 20
                 let devID = rt.stringArgument(5) ?? ""
                 // Same fire-and-forget serial chain as lidsleep — privileged XPC must
                 // never block the VM, and order must hold (enable/disable in sequence).

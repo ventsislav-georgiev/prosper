@@ -31,6 +31,15 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
         XCTAssertTrue(removed, "menubarRemove from a background thread never reached main")
     }
 
+    /// #295: a scalar payload passes isValidJSONObject([value]) and must serialize as a
+    /// JSON fragment, not raise NSInvalidArgumentException.
+    @MainActor
+    func testEncodeScalarPayloadReturnsJSONFragment() {
+        XCTAssertEqual(ExtensionMenuBar.encode("hi"), #""hi""#)
+        XCTAssertEqual(ExtensionMenuBar.encode(42), "42")
+        XCTAssertEqual(ExtensionMenuBar.encode(nil), "{}")
+    }
+
     @MainActor
     private func ownsItem(_ extID: String) -> Bool {
         ExtensionMenuBar.shared.items.keys.contains { $0.hasPrefix(extID) }

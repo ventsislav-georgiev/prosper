@@ -137,6 +137,17 @@ private final class FakeServices: ExtensionHostServices, @unchecked Sendable {
     func fsAttributesJSON(_ path: String) -> String { #"{"exists":true,"isDir":true,"size":0,"mtime":1700000000}"# }
     func fsWatch(extensionID: String, path: String, handler: String) { watches.append((path, handler)) }
     func fsUnwatch(extensionID: String, path: String) { unwatches.append(path) }
+
+    let lock = NSLock()
+    var remoteWakes: [(ac: Double, batt: Double, floor: Int)] = []
+    func caffeinateSetRemoteWake(extensionID: String, enabled: Bool, deviceID: String, intervalAC: Double, intervalBatt: Double, batteryFloor: Int) async {
+        // Mirror the live sink (reportWakeMeta): a non-finite interval raises an
+        // uncatchable NSInvalidArgumentException here, aborting the test process.
+        _ = try? JSONSerialization.data(withJSONObject: ["intervalAC": intervalAC, "intervalBatt": intervalBatt])
+        lock.withLock { remoteWakes.append((intervalAC, intervalBatt, batteryFloor)) }
+    }
+    var killedPids: [Int32] = []
+    func processKill(pid: Int32, force: Bool) -> String? { killedPids.append(pid); return nil }
 }
 
 final class ExtensionHostAPITests: XCTestCase {
@@ -937,6 +948,49 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertTrue(svc.scripts.isEmpty)
         XCTAssertTrue(svc.setDefaults.isEmpty)
         XCTAssertTrue(svc.watches.isEmpty)
+    }
+
+    /// #295: a non-finite remote-wake interval must not reach JSONSerialization (an
+    /// uncatchable NSException); it falls back to the default with a logged reason.
+    func testRemoteWakeNonFiniteIntervalsFallBackToDefaults() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc, privileged: true).install(into: lua)
+        try lua.run("""
+        function go()
+            host.caffeinate.set_remote_wake{ enabled = true, interval_ac = math.huge,
+                                             interval_batt = 0/0, battery_floor = 1e300 }
+            host.caffeinate.set_remote_wake{ enabled = true, interval_ac = -math.huge,
+                                             interval_batt = 60, battery_floor = 0/0 }
+        end
+        """)
+        _ = try lua.callGlobal("go")
+        let deadline = Date().addingTimeInterval(5)
+        while svc.lock.withLock({ svc.remoteWakes.count }) < 2, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        let wakes = svc.lock.withLock { svc.remoteWakes }
+        XCTAssertEqual(wakes.map(\.ac), [30, 30])
+        XCTAssertEqual(wakes.map(\.batt), [300, 60])
+        XCTAssertEqual(wakes.map(\.floor), [100, 20])
+        XCTAssertTrue(svc.logs.contains { $0.level == "warn" && $0.message.contains("non-finite") })
+    }
+
+    /// #295: non-finite / out-of-range Lua numbers must not trap Int()/Int32():
+    /// non-finite → the default, finite → clamped to the target range.
+    func testNonFiniteAndOutOfRangeIntArgumentsDoNotTrap() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc, privileged: true).install(into: lua)
+        try lua.run("""
+        function go()
+            host.process.kill(math.huge)
+            host.process.kill(1e300)
+            host.process.kill(-1e300)
+            return host.clipboard.history(math.huge) .. "|" .. host.clipboard.history(1e300)
+                   .. "|" .. host.clipboard.history(-5)
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("go"), "a\nb\nc\nd|a\nb\nc\nd|")
+        XCTAssertEqual(svc.killedPids, [0, Int32.max, Int32.min])
     }
 
     /// Cross-language contract: the Swift wake acctTag MUST equal the server's

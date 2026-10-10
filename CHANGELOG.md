@@ -117,6 +117,11 @@ tag from the now-released section and put it on the new top draft.
   Prosper.** A model reply whose `arguments` is `null` or a bare number, a parameter
   holding a number JSON cannot encode (such as `-1e999`), or a stored turn replaying such
   a call now falls back to empty arguments instead of taking the app down.
+- **Fixed: an extension passing a non-finite or out-of-range number no longer crashes
+  Prosper.** `math.huge` or `0/0` in a remote-wake interval, a battery floor, a clipboard
+  history limit, a process id or a timer interval now falls back to the default or is
+  clamped, with a warning in the extension log, and a menu bar item payload that is a
+  plain string or number is encoded instead of raising.
 - **Fixed: stopping or ending a coding-agent session left codex's helper processes
   running.** The MCP servers and tools codex starts share its process group; Stop and End
   now shut down that whole group, and a codex that crashes takes its helpers with it, so
