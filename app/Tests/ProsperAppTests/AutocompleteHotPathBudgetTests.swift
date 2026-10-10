@@ -17,8 +17,7 @@ final class AutocompleteHotPathBudgetTests: XCTestCase {
         let before = String(repeating: "the quick brown fox jumps over the lazy dog. ", count: 7)
             + "And then we "
         let raw = "decided to ship the release on Friday afternoon"
-        let clock = ContinuousClock()
-        let elapsed = clock.measure {
+        let elapsed = bestOfThree {
             for _ in 0..<1_000 {
                 _ = CoreBridge.sanitizeCompletion(raw, before: before)
             }
@@ -39,9 +38,8 @@ final class AutocompleteHotPathBudgetTests: XCTestCase {
             default: return "λόγος\(i % 83)"  // Greek — blocked under .cyrillic
             }
         }
-        let clock = ContinuousClock()
         var blocked = 0
-        let elapsed = clock.measure {
+        let elapsed = bestOfThree {
             for p in pieces where !ScriptClassifier.isAllowed(p, target: .cyrillic) {
                 blocked += 1
             }
@@ -56,13 +54,18 @@ final class AutocompleteHotPathBudgetTests: XCTestCase {
     func testEchoGuardsBudget() {
         let samples = (0..<8).map { "sample sentence number \($0) that the user wrote before, long enough to matter." }
         let screen = String(repeating: "visible conversation line with some words. ", count: 20)
-        let clock = ContinuousClock()
-        let elapsed = clock.measure {
+        let elapsed = bestOfThree {
             for _ in 0..<1_000 {
                 _ = CoreBridge.echoesWritingSample("a fresh continuation of thought", samples: samples)
                 _ = CoreBridge.echoesScreenContext("a fresh continuation of thought", screen: screen)
             }
         }
         XCTAssertLessThan(elapsed, .milliseconds(500), "echo guards regressed: \(elapsed)")
+    }
+
+    /// Best of 3 like WindowLayoutTests.bestOfThreeMs (#252): one scheduler hiccup
+    /// under full-suite load can't fail a budget, a real regression still does.
+    private func bestOfThree(_ body: () -> Void) -> Duration {
+        (0..<3).map { _ in ContinuousClock().measure(body) }.min()!
     }
 }
