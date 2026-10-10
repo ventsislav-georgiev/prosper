@@ -105,7 +105,7 @@ final class ThemeCardRepaintTests: XCTestCase {
 
     /// Installs a light theme whose `card` is `probeCardHex` and selects it.
     private func selectProbeTheme() throws {
-        let dir = FileManager.default.temporaryDirectory.appending(path: "theme-\(UUID())")
+        let dir = tempDir("theme")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let json = dir.appending(path: "theme.json")
         let body = """

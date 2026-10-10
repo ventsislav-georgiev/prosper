@@ -308,6 +308,6 @@ final class DisplayMetricsTests: XCTestCase {
     // MARK: helpers
 
     private func tmpCache() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("dm-\(UUID().uuidString)", isDirectory: true)
+        tempDir("dm")
     }
 }

@@ -66,7 +66,7 @@ final class ExtensionInstallTests: XCTestCase {
     }
 
     func testInstallLocalCopiesAndDiscovers() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         let source = tmp.appendingPathComponent("source")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -94,7 +94,7 @@ final class ExtensionInstallTests: XCTestCase {
     }
 
     func testTrustGate() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         let source = tmp.appendingPathComponent("source")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -124,7 +124,7 @@ final class ExtensionInstallTests: XCTestCase {
     }
 
     func testPrivilegeGate() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         let source = tmp.appendingPathComponent("source")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -181,7 +181,7 @@ final class ExtensionInstallTests: XCTestCase {
     }
 
     func testUninstallClearsPrivilege() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         let source = tmp.appendingPathComponent("source")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -217,7 +217,7 @@ final class ExtensionInstallTests: XCTestCase {
     // (`record.trusted && privileged.contains`) enforces the invariant regardless of
     // which mutation path ran.
     func testPrivilegeNeverExceedsTrustOnDiscover() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         let source = tmp.appendingPathComponent("source")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -238,7 +238,7 @@ final class ExtensionInstallTests: XCTestCase {
     }
 
     func testSystemExtensionAlwaysTrusted() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let sysParent = tmp.appendingPathComponent("system")
         let extDir = sysParent.appendingPathComponent("hello")
@@ -259,7 +259,7 @@ final class ExtensionInstallTests: XCTestCase {
     func testGrandfatherTrustsPreexistingInstalls() throws {
         // An extension already on disk before the trust gate existed (no trusted key
         // in defaults yet) must be trusted on first discover, not silently disabled.
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         defer { try? FileManager.default.removeItem(at: tmp) }
         try writeSource(into: userDir.appendingPathComponent("com.test.hello"), id: "com.test.hello")
@@ -271,7 +271,7 @@ final class ExtensionInstallTests: XCTestCase {
     }
 
     func testUninstallUserExtensionRemovesIt() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         let source = tmp.appendingPathComponent("source")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -303,7 +303,7 @@ final class ExtensionInstallTests: XCTestCase {
     // MARK: - Market id binding (authenticity)
 
     func testMarketIdentityBinding() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         let source = tmp.appendingPathComponent("source")
         defer { try? FileManager.default.removeItem(at: tmp) }
         try writeSource(into: source, id: "com.test.hello")   // tarball declares this id
@@ -359,7 +359,7 @@ final class ExtensionInstallTests: XCTestCase {
     /// no regex compilation, no allocations beyond one NSRange. Asserts a non-matching
     /// worst-case query (scans every route) stays well under budget over 200 routes.
     func testRoutePerformance() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         defer { try? FileManager.default.removeItem(at: tmp) }
         try writeRoutes(into: userDir, count: 200)
@@ -382,7 +382,7 @@ final class ExtensionInstallTests: XCTestCase {
     func testCannotUninstallSystemExtension() throws {
         // A registry whose only "system" dir is our source — the loaded record is
         // flagged system and must refuse uninstall.
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let sysParent = tmp.appendingPathComponent("system")
         let extDir = sysParent.appendingPathComponent("hello")

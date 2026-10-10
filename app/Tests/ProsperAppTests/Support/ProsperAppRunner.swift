@@ -44,7 +44,7 @@ final class ProsperAppRunner: @unchecked Sendable {   // mutable state guarded b
                           "ProsperApp not built at \(bin.path); run scripts/e2e.sh (swift build) first.")
 
         // Isolated HOME with a seeded config; share the real model cache via symlink.
-        let home = fm.temporaryDirectory.appendingPathComponent("prosper-e2e-\(UUID().uuidString)", isDirectory: true)
+        let home = testTempRoot.appendingPathComponent("prosper-e2e-\(UUID().uuidString)", isDirectory: true)
         let cfg = home.appendingPathComponent(".config/prosper", isDirectory: true)
         try fm.createDirectory(at: cfg, withIntermediateDirectories: true)
         self.home = home

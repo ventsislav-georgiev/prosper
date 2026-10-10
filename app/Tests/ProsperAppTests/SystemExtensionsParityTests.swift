@@ -28,8 +28,7 @@ final class SystemExtensionsParityTests: XCTestCase {
         )
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true)
+            userDir: tempDir("prosper-ext-test")
         )
         registry.discover()
         return registry

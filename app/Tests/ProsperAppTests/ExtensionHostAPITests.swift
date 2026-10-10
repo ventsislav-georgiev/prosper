@@ -516,8 +516,7 @@ final class ExtensionHostAPITests: XCTestCase {
 
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: defaults,
             services: svc
         )
@@ -551,8 +550,7 @@ final class ExtensionHostAPITests: XCTestCase {
 
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: defaults,
             services: svc
         )
@@ -599,8 +597,7 @@ final class ExtensionHostAPITests: XCTestCase {
         let defaults = scratchDefaults("win-test")
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: defaults,
             services: svc
         )
@@ -652,8 +649,7 @@ final class ExtensionHostAPITests: XCTestCase {
                           "\"display\":\"~/budget.pdf\",\"isDir\":false,\"kind\":\"PDF document\"}]"
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: scratchDefaults("files-test"),
             services: svc
         )
@@ -691,8 +687,7 @@ final class ExtensionHostAPITests: XCTestCase {
         let svc = FakeServices()  // filesResult defaults to "[]"
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: scratchDefaults("files-test"),
             services: svc
         )
@@ -735,8 +730,7 @@ final class ExtensionHostAPITests: XCTestCase {
         }
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: scratchDefaults("files-test"),
             services: svc
         )

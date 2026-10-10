@@ -102,7 +102,7 @@ final class FinderCutPasteTests: XCTestCase {
 
     func testUniqueDestinationAppendsCounterBeforeTheExtension() throws {
         let fm = FileManager.default
-        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dir = tempDir()
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: dir) }
 
@@ -232,7 +232,7 @@ final class FinderCutPasteTests: XCTestCase {
     /// The pasted PNG lands beside whatever is already there, never on top of it.
     func testPastedImageNameIsUniquifiedOnCollision() throws {
         let fm = FileManager.default
-        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dir = tempDir()
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: dir) }
 

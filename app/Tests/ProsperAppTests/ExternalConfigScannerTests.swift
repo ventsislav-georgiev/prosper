@@ -3,8 +3,7 @@ import XCTest
 
 final class ExternalConfigScannerTests: XCTestCase {
     private func writeTemp(_ name: String, _ contents: String) -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("cmdtest-\(UUID().uuidString)-\(name)")
+        let url = tempDir("cmdtest").appendingPathComponent(name)
         try? contents.write(to: url, atomically: true, encoding: .utf8)
         return url
     }

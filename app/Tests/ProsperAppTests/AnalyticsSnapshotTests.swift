@@ -6,12 +6,6 @@ final class AnalyticsSnapshotTests: XCTestCase {
 
     // MARK: - Fixture helpers (temp-dir system extensions, mirrors ExtensionSettingsTests)
 
-    private func tempDir() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-analytics-tests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
 
     @discardableResult
     private func writeExtension(in parent: URL, dir: String, toml: String) throws -> URL {
@@ -58,8 +52,8 @@ final class AnalyticsSnapshotTests: XCTestCase {
     /// == `enabled`) are seeded from a temp dir. Uses an isolated UserDefaults suite so
     /// the enabled/trusted state never touches `.standard`.
     private func makeRegistry(system: [(id: String, name: String, commands: Int)]) throws -> ExtensionRegistry {
-        let systemRoot = try tempDir()
-        let userRoot = try tempDir()
+        let systemRoot = tempDir()
+        let userRoot = tempDir()
         for e in system {
             try writeExtension(in: systemRoot, dir: e.name,
                                toml: manifest(id: e.id, name: e.name, system: true, commands: e.commands))

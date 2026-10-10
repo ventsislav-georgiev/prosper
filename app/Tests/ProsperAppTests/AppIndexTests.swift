@@ -102,8 +102,7 @@ final class AppIndexTests: XCTestCase {
     /// `scan`'s sort must not disturb dedup precedence: a name present in an earlier
     /// search dir wins, whatever the alphabetical position of the winner's path.
     func testScanDedupPrefersFirstDirAndStaysSorted() {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("appindex-sort-\(UUID().uuidString)")
+        let tmp = tempDir("appindex-sort")
         let winner = tmp.appendingPathComponent("first")
         let loser = tmp.appendingPathComponent("second")
         defer { try? FileManager.default.removeItem(at: tmp) }

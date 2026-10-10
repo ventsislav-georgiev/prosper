@@ -53,7 +53,7 @@ final class QuarantineStripperTests: XCTestCase {
     }
 
     func testStripsQuarantineFromAScratchFile() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("qs-\(UUID().uuidString)")
+        let url = tempDir("qs").appendingPathComponent("x")
         try Data("x".utf8).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
         let attr = QuarantineStripper.attribute

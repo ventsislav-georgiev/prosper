@@ -188,8 +188,7 @@ final class BookmarksExtensionTests: XCTestCase {
         let defaults = scratchDefaults("bm-test")
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: defaults,
             services: fake
         )
@@ -618,7 +617,7 @@ final class BookmarksExtensionTests: XCTestCase {
           </dict></array>
         </dict></plist>
         """
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dir = tempDir()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let xmlURL = dir.appendingPathComponent("b.xml")

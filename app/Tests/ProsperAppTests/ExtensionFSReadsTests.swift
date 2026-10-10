@@ -3,12 +3,6 @@ import XCTest
 
 final class ExtensionFSReadsTests: XCTestCase {
 
-    private func tempDir() -> URL {
-        let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-fsreads-\(ProcessInfo.processInfo.globallyUniqueString)")
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base
-    }
 
     func testExists() {
         let dir = tempDir()

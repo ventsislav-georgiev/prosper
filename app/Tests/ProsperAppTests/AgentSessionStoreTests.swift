@@ -10,17 +10,8 @@ final class AgentSessionStoreTests: XCTestCase {
     /// singleton over a persistent Application Support file, and sharing it across
     /// tests/runs leaks rows and WAL state between runs (and silently — the store
     /// swallows write errors with `try?`). Isolation keeps the suite deterministic.
-    private var tempDir: URL!
-
     private func makeStore() -> AgentSessionStore {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("agent-store-\(UUID().uuidString)", isDirectory: true)
-        tempDir = dir
-        return AgentSessionStore(directory: dir)
-    }
-
-    override func tearDownWithError() throws {
-        if let tempDir { try? FileManager.default.removeItem(at: tempDir) }
+        AgentSessionStore(directory: tempDir("agent-store"))
     }
 
     func testTranscriptRoundTripPreservesAllItemKinds() async throws {

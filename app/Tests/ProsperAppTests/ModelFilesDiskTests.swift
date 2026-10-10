@@ -9,8 +9,7 @@ final class ModelFilesDiskTests: XCTestCase {
     private var hub: URL!
 
     override func setUpWithError() throws {
-        hub = FileManager.default.temporaryDirectory
-            .appendingPathComponent("diskstate-\(ProcessInfo.processInfo.globallyUniqueString)")
+        hub = tempDir("diskstate")
         try FileManager.default.createDirectory(at: hub, withIntermediateDirectories: true)
     }
 

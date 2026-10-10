@@ -145,8 +145,7 @@ final class TOMLGuardTests: XCTestCase {
 
     func testExtensionLoaderRoutesRejectedTextToParseError() throws {
         guard try safeToCallSites() else { return }
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-tomlguard-\(UUID().uuidString)", isDirectory: true)
+        let dir = tempDir("prosper-tomlguard")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         for (name, text) in trapping {

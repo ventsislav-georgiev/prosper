@@ -69,17 +69,11 @@ final class ExtensionManifestTests: XCTestCase {
         return dir
     }
 
-    private func tempDir() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-ext-tests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
 
     // MARK: - Parsing
 
     func testManifestParses() throws {
-        let dir = try tempDir()
+        let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         _ = try writeExtension(in: dir, dirName: "calc", toml: Self.sampleManifest)
 
@@ -142,7 +136,7 @@ final class ExtensionManifestTests: XCTestCase {
         kind = "shortcut"
         name = "menuBarToggleHidden"
         """
-        let dir = try tempDir()
+        let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         _ = try writeExtension(in: dir, dirName: "legacy", toml: toml)
 
@@ -177,7 +171,7 @@ final class ExtensionManifestTests: XCTestCase {
     }
 
     func testIncompatibleHostRejected() throws {
-        let dir = try tempDir()
+        let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         _ = try writeExtension(in: dir, dirName: "calc", toml: Self.sampleManifest)
 
@@ -191,7 +185,7 @@ final class ExtensionManifestTests: XCTestCase {
     }
 
     func testUnsupportedAPILevelRejected() throws {
-        let dir = try tempDir()
+        let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let future = Self.sampleManifest.replacingOccurrences(of: "api_level   = 1", with: "api_level   = 99")
         _ = try writeExtension(in: dir, dirName: "calc", toml: future)
@@ -206,7 +200,7 @@ final class ExtensionManifestTests: XCTestCase {
     }
 
     func testEntryMissingRejected() throws {
-        let dir = try tempDir()
+        let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let extDir = dir.appendingPathComponent("calc", isDirectory: true)
         try FileManager.default.createDirectory(at: extDir, withIntermediateDirectories: true)
@@ -223,8 +217,8 @@ final class ExtensionManifestTests: XCTestCase {
 
     @MainActor
     func testRegistryDiscoversRoutesAndActivates() throws {
-        let systemRoot = try tempDir()
-        let userRoot = try tempDir()
+        let systemRoot = tempDir()
+        let userRoot = tempDir()
         defer {
             try? FileManager.default.removeItem(at: systemRoot)
             try? FileManager.default.removeItem(at: userRoot)
@@ -252,8 +246,8 @@ final class ExtensionManifestTests: XCTestCase {
 
     @MainActor
     func testDisableRemovesFromRoutingAndPersists() throws {
-        let systemRoot = try tempDir()
-        let userRoot = try tempDir()
+        let systemRoot = tempDir()
+        let userRoot = tempDir()
         defer {
             try? FileManager.default.removeItem(at: systemRoot)
             try? FileManager.default.removeItem(at: userRoot)
@@ -277,8 +271,8 @@ final class ExtensionManifestTests: XCTestCase {
 
     @MainActor
     func testSystemExtensionCannotBeUninstalled() throws {
-        let systemRoot = try tempDir()
-        let userRoot = try tempDir()
+        let systemRoot = tempDir()
+        let userRoot = tempDir()
         defer {
             try? FileManager.default.removeItem(at: systemRoot)
             try? FileManager.default.removeItem(at: userRoot)
@@ -297,7 +291,7 @@ final class ExtensionManifestTests: XCTestCase {
 
     @MainActor
     func testUserExtensionUninstallAndResetRules() throws {
-        let userRoot = try tempDir()
+        let userRoot = tempDir()
         defer { try? FileManager.default.removeItem(at: userRoot) }
         // user extension: not system
         let userManifest = Self.sampleManifest.replacingOccurrences(of: "system      = true", with: "system      = false")
@@ -322,8 +316,8 @@ final class ExtensionManifestTests: XCTestCase {
 
     @MainActor
     func testOptInExtensionDefaultsDisabledAndPersistsEnable() throws {
-        let systemRoot = try tempDir()
-        let userRoot = try tempDir()
+        let systemRoot = tempDir()
+        let userRoot = tempDir()
         defer {
             try? FileManager.default.removeItem(at: systemRoot)
             try? FileManager.default.removeItem(at: userRoot)

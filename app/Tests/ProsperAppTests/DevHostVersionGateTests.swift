@@ -41,8 +41,7 @@ final class DevHostVersionGateTests: XCTestCase {
         try XCTSkipIf(!FileManager.default.fileExists(atPath: dir.path), "no in-repo extensions dir")
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-devhost-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-devhost"),
             hostVersion: "0.0.0"
         )
         registry.discover()

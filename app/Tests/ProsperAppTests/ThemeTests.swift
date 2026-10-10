@@ -124,8 +124,7 @@ final class ThemeTests: XCTestCase {
     // MARK: descriptor discovery from a manifest
 
     func testContributedThemesDiscoveredFromManifest() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("themetest-\(UUID().uuidString)", isDirectory: true)
+        let dir = tempDir("themetest")
         let extDir = dir.appendingPathComponent("mytheme", isDirectory: true)
         try FileManager.default.createDirectory(at: extDir, withIntermediateDirectories: true)
         try """
@@ -618,8 +617,7 @@ final class ThemeTests: XCTestCase {
     }
 
     func testBundleRelativeAssetLoads() async throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("asset-\(UUID().uuidString)", isDirectory: true)
+        let dir = tempDir("asset")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let pngData = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==")!
         try pngData.write(to: dir.appendingPathComponent("icon.png"))
@@ -665,11 +663,11 @@ final class ThemeTests: XCTestCase {
     // MARK: helpers
 
     private func tmpCache() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("tc-\(UUID().uuidString)", isDirectory: true)
+        tempDir("tc")
     }
 
     private func writeThemeJSON(_ json: String) -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("th-\(UUID().uuidString).json")
+        let url = tempDir("th").appendingPathComponent("theme.json")
         try? json.write(to: url, atomically: true, encoding: .utf8)
         return url
     }

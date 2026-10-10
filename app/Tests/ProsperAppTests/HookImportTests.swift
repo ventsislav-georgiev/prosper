@@ -108,8 +108,7 @@ final class HookImportTests: XCTestCase {
     /// Points the store at a scratch file with a known prefs value and a cleared mirror
     /// (so the pre-#311 code would have rewritten the file), then restores everything.
     private func withScratchFile(_ body: (URL) throws -> Void) rethrows {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("bootstrap-\(UUID().uuidString)", isDirectory: true)
+        let dir = tempDir("bootstrap")
         let savedURL = HooksConfigStore.fileURL, savedPrefs = Preferences.hooks
         let savedMirror = Preferences.defaults.string(forKey: "agentHooksDiskMirror")
         HooksConfigStore.fileURL = dir.appendingPathComponent("config.json")

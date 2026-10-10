@@ -2,7 +2,21 @@ import Foundation
 import XCTest
 @testable import ProsperApp
 
+/// #341: every test file and dir lives under $TMPDIR/prosper-tests/, never the $TMPDIR root
+/// (millions of entries on a dev Mac, 30-100 ms per create there, and leaks pile up).
+let testTempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("prosper-tests", isDirectory: true)
+
 extension XCTestCase {
+    /// A fresh, existing directory `prosper-tests/<label>-<8 hex>/`, removed at teardown.
+    /// Short suffix keeps unix-socket paths under the 104-byte sun_path limit.
+    func tempDir(_ label: String = #function) -> URL {
+        let name = label.filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        let dir = testTempRoot.appendingPathComponent("\(name)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return dir
+    }
+
     /// A throwaway `UserDefaults` suite that never touches ~/Library/Preferences.
     /// A plain suite name makes cfprefsd write ~/Library/Preferences/<suite>.plist,
     /// and it re-writes an empty 42-byte plist asynchronously even after

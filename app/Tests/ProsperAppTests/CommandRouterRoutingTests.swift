@@ -11,8 +11,7 @@ final class CommandRouterRoutingTests: XCTestCase {
     /// Write a throwaway "echo" extension into a temp dir and return its parent
     /// (used as the registry's systemDir so it loads without app-support setup).
     private func makeEchoExtension() throws -> URL {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("router-test-\(UUID().uuidString)", isDirectory: true)
+        let root = tempDir("router-test")
         let dir = root.appendingPathComponent("echo", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try """
@@ -56,8 +55,7 @@ final class CommandRouterRoutingTests: XCTestCase {
         let defaults = scratchDefaults("router-test")
         let registry = ExtensionRegistry(
             systemDir: root,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: defaults
         )
         registry.discover()
@@ -85,8 +83,7 @@ final class CommandRouterRoutingTests: XCTestCase {
     /// feature fills. Locks down both `commandSearchEntries()` (haystack includes
     /// ext name + keywords) and the `.search` command-hit path.
     private func makeDiscoverableExtension() throws -> URL {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("disc-test-\(UUID().uuidString)", isDirectory: true)
+        let root = tempDir("disc-test")
         let dir = root.appendingPathComponent("frobber", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try """
@@ -132,8 +129,7 @@ final class CommandRouterRoutingTests: XCTestCase {
 
         let registry = ExtensionRegistry(
             systemDir: root,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: scratchDefaults("disc-test")
         )
         registry.discover()
@@ -172,8 +168,7 @@ final class CommandRouterRoutingTests: XCTestCase {
     /// with a distinct title + keyword list, so `commandSearchEntries()` has real
     /// haystacks to build.
     private func makeStressExtension(count: Int) throws -> URL {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("stress-test-\(UUID().uuidString)", isDirectory: true)
+        let root = tempDir("stress-test")
         let dir = root.appendingPathComponent("stress", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var toml = """
@@ -225,8 +220,7 @@ final class CommandRouterRoutingTests: XCTestCase {
 
         let registry = ExtensionRegistry(
             systemDir: root,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: scratchDefaults("stress-test")
         )
         registry.discover()
@@ -260,8 +254,7 @@ final class CommandRouterRoutingTests: XCTestCase {
 
         let registry = ExtensionRegistry(
             systemDir: root,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: scratchDefaults("stress-test")
         )
         registry.discover()
@@ -281,8 +274,7 @@ final class CommandRouterRoutingTests: XCTestCase {
     /// command's own discovery row — Enter there locks the runner mode, which is
     /// where the list belongs.
     private func makeListingExtension() throws -> URL {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("listing-test-\(UUID().uuidString)", isDirectory: true)
+        let root = tempDir("listing-test")
         let dir = root.appendingPathComponent("lister", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try """
@@ -326,8 +318,7 @@ final class CommandRouterRoutingTests: XCTestCase {
 
         let registry = ExtensionRegistry(
             systemDir: root,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: scratchDefaults("listing-test")
         )
         registry.discover()

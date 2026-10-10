@@ -167,7 +167,7 @@ final class PastePlainTests: XCTestCase {
         _ body: (ExtensionRegistry, String) throws -> Void
     ) async throws {
         let id = "com.test.ruler"
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tmp = tempDir()
         defer {
             try? FileManager.default.removeItem(at: tmp)
             ExtensionKeyRules.shared.removeRules(extensionID: id)

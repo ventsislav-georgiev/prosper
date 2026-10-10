@@ -536,8 +536,7 @@ final class ExtensionPerfTests: XCTestCase {
     // MARK: stability — per-extension lanes don't head-of-line-block each other
 
     func testAsyncLanesRunInParallel() async throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-perf-\(ProcessInfo.processInfo.globallyUniqueString)")
+        let dir = tempDir("prosper-perf")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 

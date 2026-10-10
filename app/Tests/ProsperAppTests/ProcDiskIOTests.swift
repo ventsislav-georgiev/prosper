@@ -71,8 +71,7 @@ final class ProcDiskIOTests: XCTestCase {
         var s = ProcSampler()
         _ = s.sample(limit: 5)                      // priming pass: no prev, no rates
         // Make some I/O of our own so the second pass has something to see.
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("prosper-diskio-\(getpid()).bin")
+        let tmp = tempDir("diskio").appendingPathComponent("io.bin")
         try? Data(count: 2 << 20).write(to: tmp)
         defer { try? FileManager.default.removeItem(at: tmp) }
 

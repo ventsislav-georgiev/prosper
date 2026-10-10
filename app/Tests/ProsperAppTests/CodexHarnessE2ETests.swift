@@ -362,8 +362,7 @@ final class CodexHarnessE2ETests: XCTestCase {
             .first { FileManager.default.isExecutableFile(atPath: $0) }
         guard let python else { throw XCTSkip("python3 not available for the mock app-server") }
 
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("codex-e2e-\(UUID().uuidString)", isDirectory: true)
+        let dir = tempDir("codex-e2e")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let pyFile = dir.appendingPathComponent("mock_server.py")
         try Self.mockServer.write(to: pyFile, atomically: true, encoding: .utf8)
@@ -970,6 +969,12 @@ final class CodexHarnessE2ETests: XCTestCase {
                                            llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token"),
                               promptReturnDelay: promptReturnDelay, startDelay: startDelay, onShutdown: onShutdown)
         })
+        // #341: a run still unwinding at teardown persists into `store` after the temp dir is
+        // removed and recreates it. Runs before that removal (LIFO): let the writes land first.
+        addTeardownBlock { @MainActor in
+            _ = await Self.wait(5) { !controller.isActive }
+            _ = await store.recentSessions(limit: 1)
+        }
         return (controller, store)
     }
 
@@ -995,7 +1000,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// with nothing bundled or cached, the pin is downloaded into the per-pin cache path.
     @MainActor
     func testResolveCodexPrefersThePinUnlessTheDevOverrideIsOn() async throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("codex-resolve-\(UUID().uuidString)")
+        let dir = tempDir("codex-resolve")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let brew = dir.appendingPathComponent("homebrew-codex"), cached = dir.appendingPathComponent("cached-codex")
@@ -1035,7 +1040,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// pin; a cached file without the exec bit is not trusted (re-downloaded).
     @MainActor
     func testResolveCodexBundledOverCachedAndUntrustedCache() async throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("codex-resolve-\(UUID().uuidString)")
+        let dir = tempDir("codex-resolve")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let bundled = dir.appendingPathComponent("bundled-codex"), cached = dir.appendingPathComponent("cached-codex")
@@ -1073,9 +1078,9 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// A local release-shaped tarball (`codex-<triple>` inside, 0644 so the installer's chmod
     /// is what makes it executable) plus its SHA-256, and an install dir holding a stale pin,
     /// the unversioned `codex`, and an unrelated file. Pass `dir` to build into an existing one.
-    private static func makeCodexTarball(body: String = "#!/bin/sh\necho new\n", in existing: URL? = nil)
+    private func makeCodexTarball(body: String = "#!/bin/sh\necho new\n", in existing: URL? = nil)
         throws -> (dir: URL, tgz: URL, digest: String, dest: URL) {
-        let dir = existing ?? FileManager.default.temporaryDirectory.appendingPathComponent("codex-install-\(UUID().uuidString)")
+        let dir = existing ?? tempDir("codex-install")
         let src = dir.appendingPathComponent("src-\(UUID().uuidString)"), install = dir.appendingPathComponent("install")
         for d in [src, install] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
         FileManager.default.createFile(atPath: src.appendingPathComponent("codex-aarch64-apple-darwin").path,
@@ -1097,7 +1102,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// #279: a good digest installs the binary signed in the temp dir, prunes stale pins and
     /// deletes the tarball.
     func testInstallCodexGoodDigestInstallsPrunesAndDeletesTarball() throws {
-        let (dir, tgz, digest, dest) = try Self.makeCodexTarball()
+        let (dir, tgz, digest, dest) = try makeCodexTarball()
         defer { try? FileManager.default.removeItem(at: dir) }
         var signed: [URL] = []
         let out = try AgentController.installCodex(tgz: tgz, sha256: digest, dest: dest,
@@ -1116,7 +1121,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// #279: a bad digest or a failed sign fails closed and leaves the install dir untouched.
     func testInstallCodexFailsClosedOnBadDigestOrFailedSign() throws {
         for (label, badDigest, rc) in [("bad digest", true, Int32(0)), ("failed sign", false, Int32(1))] {
-            let (dir, tgz, digest, dest) = try Self.makeCodexTarball()
+            let (dir, tgz, digest, dest) = try makeCodexTarball()
             defer { try? FileManager.default.removeItem(at: dir) }
             let install = dest.deletingLastPathComponent()
             let before = try FileManager.default.contentsOfDirectory(atPath: install.path).sorted()
@@ -1133,14 +1138,14 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// #308: installing over an existing pin (the 0644 re-download path) replaces its bytes,
     /// lands 0755, and prunes a staging file an earlier crash left behind.
     func testInstallCodexOverExistingDestReplacesIt() throws {
-        let (dir, tgz, digest, dest) = try Self.makeCodexTarball()
+        let (dir, tgz, digest, dest) = try makeCodexTarball()
         defer { try? FileManager.default.removeItem(at: dir) }
         _ = try AgentController.installCodex(tgz: tgz, sha256: digest, dest: dest, sign: { _ in 0 })
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: dest.path)
         // A staging file a crash between move and rename left behind.
         FileManager.default.createFile(atPath: dest.deletingLastPathComponent()
             .appendingPathComponent(".codex-rust-v0.162.1.crashed").path, contents: Data("partial".utf8))
-        let second = try Self.makeCodexTarball(body: "#!/bin/sh\necho newer\n", in: dir)
+        let second = try makeCodexTarball(body: "#!/bin/sh\necho newer\n", in: dir)
         XCTAssertEqual(second.dest, dest)
         _ = try AgentController.installCodex(tgz: second.tgz, sha256: second.digest, dest: dest, sign: { _ in 0 })
         XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "#!/bin/sh\necho newer\n")
@@ -1922,8 +1927,7 @@ final class CodexHarnessE2ETests: XCTestCase {
         guard let bin = ProcessInfo.processInfo.environment["PROSPER_REAL_CODEX_BIN"], !bin.isEmpty else {
             throw XCTSkip("set PROSPER_REAL_CODEX_BIN to a codex binary to run against real codex")
         }
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("prc-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let dir = tempDir("prc")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let script = dir.appendingPathComponent("fake_responses.py")
         try Self.fakeResponsesServer.write(to: script, atomically: true, encoding: .utf8)

@@ -28,12 +28,6 @@ final class ExtensionSettingsTests: XCTestCase {
 
     // MARK: - Temp-extension helpers (mirrors ExtensionManifestTests)
 
-    private func tempDir() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-settings-tests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
 
     @discardableResult
     private func writeExtension(in parent: URL, dir: String, toml: String, lua: String) throws -> URL {
@@ -119,7 +113,7 @@ final class ExtensionSettingsTests: XCTestCase {
     """
 
     func testManifestDecodesSettingsSections() throws {
-        let dir = try tempDir()
+        let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try writeExtension(in: dir, dir: "settingsdemo", toml: Self.sectionedManifest,
                            lua: "-- noop")
@@ -152,7 +146,7 @@ final class ExtensionSettingsTests: XCTestCase {
     // MARK: - Tier A: manifest controls → SettingsUI
 
     func testFromManifestMapsControlsAndReadsPrefs() throws {
-        let dir = try tempDir()
+        let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try writeExtension(in: dir, dir: "settingsdemo", toml: Self.sectionedManifest, lua: "-- noop")
         let loaded = try ExtensionLoader.load(
@@ -275,8 +269,8 @@ final class ExtensionSettingsTests: XCTestCase {
 
     @MainActor
     private func makeDynRegistry() throws -> (ExtensionRegistry, SettingsFakeServices) {
-        let systemRoot = try tempDir()
-        let userRoot = try tempDir()
+        let systemRoot = tempDir()
+        let userRoot = tempDir()
         try writeExtension(in: systemRoot, dir: "dynsettings",
                            toml: Self.dynamicManifest, lua: Self.dynamicLua)
         let fake = SettingsFakeServices()

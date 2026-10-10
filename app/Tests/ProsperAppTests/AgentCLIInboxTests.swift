@@ -10,8 +10,7 @@ final class AgentCLIInboxTests: XCTestCase {
     private var dir: URL!
 
     override func setUpWithError() throws {
-        dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("agent-inbox-test-\(UUID().uuidString)", isDirectory: true)
+        dir = tempDir("agent-inbox-test")
         AgentCLI.inboxOverride = dir
     }
 

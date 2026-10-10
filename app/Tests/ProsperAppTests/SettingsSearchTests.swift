@@ -234,8 +234,7 @@ final class SettingsSearchTests: XCTestCase {
 
     @MainActor
     private func makeRegistry() throws -> ExtensionRegistry {
-        let systemRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-search-index-\(UUID().uuidString)", isDirectory: true)
+        let systemRoot = tempDir("prosper-search-index")
         let dir = systemRoot.appendingPathComponent("searchindex", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Self.manifest.write(to: dir.appendingPathComponent("extension.toml"),
@@ -246,9 +245,7 @@ final class SettingsSearchTests: XCTestCase {
 
         let registry = ExtensionRegistry(
             systemDir: systemRoot,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-search-index-user-\(UUID().uuidString)",
-                                        isDirectory: true),
+            userDir: tempDir("prosper-search-index-user"),
             hostVersion: "2.0.0",
             defaults: scratchDefaults("search-index"))
         registry.discover()

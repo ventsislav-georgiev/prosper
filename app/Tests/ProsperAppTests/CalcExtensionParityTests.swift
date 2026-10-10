@@ -17,8 +17,7 @@ final class CalcExtensionParityTests: XCTestCase {
 
     func testLuaCalcMatchesNativeAcrossGoldenInputs() throws {
         let registry = ExtensionRegistry(
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true)
+            userDir: tempDir("prosper-ext-test")
         )
         registry.discover()
         // System extensions live in Bundle.main/Contents/Resources/extensions,
@@ -62,8 +61,7 @@ final class CalcExtensionParityTests: XCTestCase {
         try XCTSkipIf(!FileManager.default.fileExists(atPath: dir.path), "extensions dir missing")
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: FileManager.default.temporaryDirectory
-                .appendingPathComponent("prosper-ext-test-\(UUID().uuidString)", isDirectory: true),
+            userDir: tempDir("prosper-ext-test"),
             defaults: scratchDefaults("calc-pct")
         )
         registry.discover()

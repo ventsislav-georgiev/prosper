@@ -25,8 +25,7 @@ final class ExtensionShortcutsTests: XCTestCase {
         let src = extensionsDir
         try XCTSkipIf(!FileManager.default.fileExists(atPath: src.path),
                       "in-repo extensions dir not found at \(src.path)")
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
+        let root = tempDir()
         let system = root.appendingPathComponent("system")
         try FileManager.default.createDirectory(at: system, withIntermediateDirectories: true)
         for name in names {
