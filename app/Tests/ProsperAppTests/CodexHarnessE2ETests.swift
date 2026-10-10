@@ -86,7 +86,7 @@ final class CodexHarnessE2ETests: XCTestCase {
             return "item/permissions/requestApproval", dict(t, itemId="perm-1", cwd="/tmp",
                 reason="needs network", permissions={"network": {"enabled": True}, "fileSystem": {
                     "read": ["/etc"], "write": ["/tmp/out"],
-                    "entries": [{"access": "write", "path": {"type": "special", "value": {"kind": "tmpdir"}}}]}})
+                    "entries": [{"access": "write", "path": {"type": "special", "value": {"kind": "tmpdir"}}}, {"access": "write", "path": {"type": "special", "value": {"kind": "root"}}}, {"access": "write", "path": {"type": "special", "value": {"kind": "unknown", "path": "/odd", "subpath": "x"}}}]}})
         if word == "PATCH":
             send({"jsonrpc": "2.0", "method": "item/started", "params": dict(t, item={
                 "id": "fc-1", "type": "fileChange", "status": "inProgress",
@@ -1285,11 +1285,13 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testControllerPermissionsReplyIsPermissionsAndScope() async throws {
         let requested: [String: Any] = ["network": ["enabled": true], "fileSystem": [
             "read": ["/etc"], "write": ["/tmp/out"],
-            "entries": [["access": "write", "path": ["type": "special", "value": ["kind": "tmpdir"]]]]]]
+            "entries": [["access": "write", "path": ["type": "special", "value": ["kind": "tmpdir"]]],
+                        ["access": "write", "path": ["type": "special", "value": ["kind": "root"]]],
+                        ["access": "write", "path": ["type": "special", "value": ["kind": "unknown", "path": "/odd", "subpath": "x"]]]]]]
         let granted = try await answer("PERMS please", with: .acceptForSession)
         XCTAssertEqual(granted.approval?.kind, .permission)
         XCTAssertEqual(granted.approval?.summary, "needs network")
-        XCTAssertEqual(granted.approval?.detail, "Read: /etc\nWrite: /tmp/out, <tmpdir>\nNetwork: enabled\nIn: /tmp")
+        XCTAssertEqual(granted.approval?.detail, "Read: /etc\nWrite: /tmp/out, the temp dir, the whole disk, /odd/x\nNetwork: enabled\nIn: /tmp")
         XCTAssertEqual(granted.reply?["result"] as? NSDictionary,
                        ["permissions": requested, "scope": "session"] as NSDictionary)
         let once = try await answer("PERMS please", with: .accept)

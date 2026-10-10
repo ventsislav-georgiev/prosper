@@ -599,8 +599,12 @@ actor CodexHarness: CodingHarness {
             for entry in fs["entries"] as? [[String: Any]] ?? [] {
                 let path = entry["path"] as? [String: Any] ?? [:]
                 let special = path["value"] as? [String: Any]
-                let name = path["path"] as? String ?? path["pattern"] as? String
-                    ?? "<\((special?["kind"] as? String) ?? "?")>\((special?["subpath"] as? String).map { "/" + $0 } ?? "")"
+                let kind = special?["kind"] as? String ?? "?"
+                let sub = (special?["subpath"] as? String).map { "/" + $0 } ?? ""
+                let label = ["root": "the whole disk", "minimal": "minimal system paths", "tmpdir": "the temp dir",
+                             "slash_tmp": "/tmp", "project_roots": "project roots" + sub][kind]
+                    ?? (kind == "unknown" ? (special?["path"] as? String ?? "?") + sub : "<\(kind)>\(sub)")
+                let name = path["path"] as? String ?? path["pattern"] as? String ?? label
                 roots[(entry["access"] as? String) ?? "?", default: []].append(name)
             }
             var lines = roots.sorted { $0.key < $1.key }.filter { !$0.value.isEmpty }
