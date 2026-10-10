@@ -1135,6 +1135,19 @@ final class CodexHarnessE2ETests: XCTestCase {
         }
     }
 
+    /// #346: a failed rename (dest is a non-empty directory) throws, removes the staging file
+    /// and still deletes the tarball.
+    func testInstallCodexFailedRenameCleansStagingFile() throws {
+        let (dir, tgz, digest, dest) = try makeCodexTarball()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: dest.appendingPathComponent("stray").path, contents: Data("x".utf8))
+        XCTAssertThrowsError(try AgentController.installCodex(tgz: tgz, sha256: digest, dest: dest, sign: { _ in 0 }))
+        let left = try FileManager.default.contentsOfDirectory(atPath: dest.deletingLastPathComponent().path)
+        XCTAssertEqual(left.filter { $0.hasPrefix(".codex-") }, [], "staging file left after a failed rename")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tgz.path), "the tarball was left behind")
+    }
+
     /// #308: installing over an existing pin (the 0644 re-download path) replaces its bytes,
     /// lands 0755, and prunes a staging file an earlier crash left behind.
     func testInstallCodexOverExistingDestReplacesIt() throws {
