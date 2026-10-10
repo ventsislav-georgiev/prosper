@@ -149,14 +149,29 @@ final class LlamaAgentEngineTests: XCTestCase {
 
     /// #245: every GGUF row downloads from a commit-sha-pinned URL matching its id and fileName.
     func testEveryGGUFRowPinnedToCommitSha() throws {
+        // HF main sha + x-linked-size as of #245 (raw responses in work/245-hf/).
+        let expected: [String: (sha: String, bytes: Int64)] = [
+            "unsloth/Qwen3.5-4B-GGUF": ("e87f176479d0855a907a41277aca2f8ee7a09523", 2_740_937_888),
+            "unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF": ("8e81be55c5aa3d63bb82b6ceec62d50805d9e1bb", 2_900_295_712),
+            "unsloth/Qwen3.5-9B-GGUF": ("3885219b6810b007914f3a7950a8d1b469d598a5", 5_680_522_464),
+            "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF": ("f2d3fe3694501008786e81e5f20360cbf715496a", 25_266_255_936),
+            "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF": ("6688872b7a4e5eb8a121ceea08009530a024ba1d", 48_506_100_512),
+            "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF": ("b17cb02dd882d5b6ab62fc777ad2995f19668350", 18_556_689_568),
+            "unsloth/Qwen3.6-35B-A3B-GGUF": ("a483e9e6cbd595906af30beda3187c2663a1118c", 22_134_528_992),
+            "unsloth/Qwen3-Coder-Next-GGUF": ("ce09c67b53bc8739eef83fe67b2f5d293c270632", 48_528_320_544),
+        ]
         let rows = AgentModelRegistry.all().filter { $0.gguf != nil }
         XCTAssertEqual(rows.count, 8)
+        XCTAssertEqual(Set(rows.map(\.id)), Set(expected.keys))
         for m in rows {
             let g = try XCTUnwrap(m.gguf)
             let pattern = "^https://huggingface\\.co/" + NSRegularExpression.escapedPattern(for: m.id)
                 + "/resolve/[0-9a-f]{40}/" + NSRegularExpression.escapedPattern(for: g.fileName) + "$"
             XCTAssertNotNil(g.downloadURL.absoluteString.range(of: pattern, options: .regularExpression),
                             "\(m.id) not pinned: \(g.downloadURL)")
+            let e = try XCTUnwrap(expected[m.id], "\(m.id) missing from table")
+            XCTAssertTrue(g.downloadURL.absoluteString.contains("/resolve/\(e.sha)/"), "\(m.id) sha")
+            XCTAssertEqual(g.bytes, e.bytes, "\(m.id) bytes")
         }
     }
 
