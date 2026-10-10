@@ -143,6 +143,21 @@ final class ExtensionSettingsTests: XCTestCase {
         XCTAssertEqual(s.allControls[5].id, "go")
     }
 
+    /// A TOML `min = inf` decodes as a non-finite Double; NumberRow.format ignores it.
+    func testManifestNonFiniteMinDecodes() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let toml = Self.sectionedManifest.replacingOccurrences(of: "min = 0", with: "min = inf")
+        try writeExtension(in: dir, dir: "settingsdemo", toml: toml, lua: "-- noop")
+        let loaded = try ExtensionLoader.load(
+            directory: dir.appendingPathComponent("settingsdemo"),
+            isSystem: true, hostVersion: "2.0.0")
+        let s = try XCTUnwrap(loaded.manifest.contributes?.allSettingsSections.first)
+        let min = try XCTUnwrap(s.allControls[3].min)
+        XCTAssertFalse(min.isFinite)
+        XCTAssertEqual(NumberRow.format(text: "5", min: min, max: s.allControls[3].max), "5")
+    }
+
     // MARK: - Tier A: manifest controls → SettingsUI
 
     func testFromManifestMapsControlsAndReadsPrefs() throws {

@@ -311,7 +311,10 @@ struct NumberRow: View {
     }
     /// Parse + clamp + format user text. Non-finite input ("inf", "nan") counts as
     /// garbage; integers outside Int's range fall back to Double formatting (no trap).
+    /// A non-finite min/max (TOML `inf`/`nan`/`1e400`) counts as absent.
     static func format(text: String, min lo: Double?, max hi: Double?) -> String {
+        let lo = lo.flatMap { $0.isFinite ? $0 : nil }
+        let hi = hi.flatMap { $0.isFinite ? $0 : nil }
         let n = Double(text).flatMap { $0.isFinite ? $0 : nil } ?? lo ?? 0
         let clamped = min(max(n, lo ?? -.greatestFiniteMagnitude), hi ?? .greatestFiniteMagnitude)
         // Keep integers integer-formatted.

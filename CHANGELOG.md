@@ -140,7 +140,9 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: extension timers restored from a corrupted saved schedule no longer crash Prosper at
   launch or fire in a tight loop.** Bad intervals are clamped to the normal 50 ms minimum.
 - **Fixed: typing a huge number, `inf` or `nan` into an extension's number setting no longer
-  crashes Prosper.** Non-numbers fall back to the field's minimum.
+  crashes Prosper.** Non-numbers fall back to the field's minimum. An extension that declares a
+  non-finite bound (`min = inf`, `max = -inf`, `nan`) no longer makes every typed value save as
+  `inf`, `-inf` or `nan`; such a bound is ignored.
 - **Fixed: a stuck plugin child no longer outlives Prosper.** Quitting now waits up to a second
   for the plugin host's processes to exit and force-kills any that ignore the polite shutdown
   signal, so an opencode helper or MCP server cannot linger after the app is gone.
