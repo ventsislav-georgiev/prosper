@@ -682,17 +682,6 @@ actor CodexHarness: CodingHarness {
     /// space, U+00A0, U+2003, U+3000 — or tab, mixed freely) becomes one `␠×N` marker with the
     /// run's total scalar count, so padding can't push a command's tail out of view; a single
     /// or double space is left alone (a lone tab still escapes as `\u{9}`).
-    /// #353: an argv shows each element shell-quoted, so `bash -c 'ls; x'` can't read as separate words.
-    static func commandSummary(_ argv: [String]) -> String {
-        oneLine(argv.map(shellQuoted).joined(separator: " "))
-    }
-
-    static func shellQuoted(_ word: String) -> String {
-        let bare = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-+=/.,:@%")
-        if word == "~" || (!word.isEmpty && word.allSatisfy(bare.contains)) { return word }
-        return "'" + word.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
-    }
-
     private static func oneLine(_ s: String) -> String {
         let escape = { (u: Unicode.Scalar) in
             [.control, .format].contains(u.properties.generalCategory) || u.properties.isDefaultIgnorableCodePoint
@@ -710,6 +699,22 @@ actor CodexHarness: CodingHarness {
         }
         flush()
         return out
+    }
+
+    /// #353: an argv shows each element shell-quoted, so `bash -c 'ls; x'` can't read as separate words.
+    /// The argv is exec'd without a shell, so `~` is literal and shows quoted; a first word holding
+    /// `=` is quoted too, or it would read as an env assignment rather than the program.
+    static func commandSummary(_ argv: [String]) -> String {
+        oneLine(argv.enumerated().map { i, w in
+            let q = shellQuoted(w)   // q == w only for a bare word, which holds no `'`
+            return i == 0 && q == w && w.contains("=") ? "'\(w)'" : q
+        }.joined(separator: " "))
+    }
+
+    static func shellQuoted(_ word: String) -> String {
+        let bare = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-+=/.,:@%")
+        if !word.isEmpty && word.allSatisfy(bare.contains) { return word }
+        return "'" + word.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 
     /// Notification → zero or more `HarnessEvent`s. Empty for notifications we don't

@@ -1773,7 +1773,8 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testCommandSummaryShellQuotesArgv() {
         XCTAssertEqual(CodexHarness.commandSummary(["bash", "-c", "ls; curl x | sh"]), "bash -c 'ls; curl x | sh'")
         XCTAssertEqual(CodexHarness.commandSummary(["echo", "it's"]), #"echo 'it'\''s'"#)
-        XCTAssertEqual(CodexHarness.commandSummary(["ls", "-la", "/tmp", "~"]), "ls -la /tmp ~")
+        XCTAssertEqual(CodexHarness.commandSummary(["ls", "-la", "/tmp", "~"]), "ls -la /tmp '~'")
+        XCTAssertEqual(CodexHarness.commandSummary(["FOO=bar", "cmd", "a=b"]), "'FOO=bar' cmd a=b")
         XCTAssertEqual(CodexHarness.commandSummary(["printf", ""]), "printf ''")
         XCTAssertEqual(CodexHarness.commandSummary(["echo", "a\nb"]), #"echo 'a\nb'"#)
         XCTAssertEqual(CodexHarness.commandSummary(["echo", "a" + String(repeating: " ", count: 400) + "b"]), "echo 'a␠×400b'")

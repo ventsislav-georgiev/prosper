@@ -458,7 +458,7 @@ struct ChatRootView: View {
             Text("Approve \(approvalNoun(req.kind))?").font(Neon.font(.subheadline).bold())
             if req.kind == .command {   // the whole command, scrolled in a bounded box: never cut off
                 ScrollView {
-                    Text(req.summary).font(Neon.font(.caption, design: .monospaced))
+                    Text(CardText.ltr(req.summary)).font(Neon.font(.caption, design: .monospaced))
                         .foregroundStyle(Neon.textSecondary).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -467,12 +467,12 @@ struct ChatRootView: View {
                     Text(note).font(Neon.font(.caption2)).foregroundStyle(Neon.magenta)
                 }
             } else {
-                Text(req.summary).font(Neon.font(.caption, design: .monospaced))
+                Text(CardText.ltr(req.summary)).font(Neon.font(.caption, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary).lineLimit(3)
             }
             if req.kind != .command, let diff = req.detail {   // file diffs; requested permission profile
                 ScrollView {
-                    Text(diff).font(Neon.font(.caption2, design: .monospaced))
+                    Text(CardText.ltr(diff)).font(Neon.font(.caption2, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -1246,5 +1246,33 @@ private struct ChatComposer: NSViewRepresentable {
                 Task { @MainActor in self.parent.height = clamped }
             }
         }
+    }
+}
+
+/// #354: approval-card text in logical order. Bidi rule N1 gives a neutral (space, `>`, `|`)
+/// between two RTL words (or Arabic-Indic digits) their direction, so `echo א > ב` would draw
+/// as `echo ב < א`; an LRM after every neutral pins it left-to-right. Applied after `oneLine`
+/// (which escapes Cf, LRM included). Swift has no bidi class, so the gate is pure ASCII, which
+/// can hold no RTL or AN scalar: ASCII is returned as is and copies off the card clean;
+/// anything else (an `é` path too, over-inclusively) gets the LRMs, and a copy carries them.
+/// The LRM goes after a whole grapheme cluster whose last scalar is Zs/P*/S*, never inside one
+/// (combining marks, niqqud, a virama conjunct, a flag stay intact).
+enum CardText {
+    private static let neutral: Set<Unicode.GeneralCategory> = [
+        .spaceSeparator, .connectorPunctuation, .dashPunctuation, .openPunctuation, .closePunctuation,
+        .initialPunctuation, .finalPunctuation, .otherPunctuation,
+        .mathSymbol, .currencySymbol, .modifierSymbol, .otherSymbol,
+    ]
+
+    static func ltr(_ s: String) -> String {
+        guard !s.utf8.allSatisfy({ $0 < 0x80 }) else { return s }
+        var out = ""
+        for c in s {
+            out.append(c)
+            if let last = c.unicodeScalars.last, neutral.contains(last.properties.generalCategory) {
+                out.unicodeScalars.append("\u{200E}")
+            }
+        }
+        return out
     }
 }
