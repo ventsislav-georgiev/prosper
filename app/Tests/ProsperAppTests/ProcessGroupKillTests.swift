@@ -23,6 +23,23 @@ final class ProcessGroupKillTests: XCTestCase {
         return (proc, leader, child)
     }
 
+    /// Polls `kill(pid, 0)` every 10 ms until ESRCH or the timeout. The group probe in
+    /// escalate skips zombies, so killGroup can return before launchd reaps an orphan,
+    /// and `kill(pid, 0)` on a not-yet-reaped zombie still answers 0 (#375).
+    private func waitGone(_ pid: pid_t, timeout: TimeInterval = 1) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            if kill(pid, 0) != 0, errno == ESRCH { return true }
+            if Date() >= deadline { return false }
+            usleep(10_000)
+        }
+    }
+
+    /// Fake pgid for the recorder rows: above PID_MAX (99999 on macOS), so no real group
+    /// can ever carry it, whatever the state of the `sendSignal` seam (a detached escalate
+    /// outliving the swap, or a row failing before the defer restores it) (#375).
+    private static let fakePGID: pid_t = 424242
+
     private let ignoringTerm = #"trap "" TERM; sleep 600 & echo $!; wait"#
 
     func testKillGroupTakesDownASigtermIgnoringChild() async throws {
@@ -32,9 +49,7 @@ final class ProcessGroupKillTests: XCTestCase {
         XCTAssertEqual(getpgid(child), leader)
 
         CodexHarness.killGroup(leader)
-        let deadline = Date().addingTimeInterval(8)   // 3 s grace + SIGKILL + reap
-        while kill(child, 0) == 0, Date() < deadline { try await Task.sleep(nanoseconds: 100_000_000) }
-        if kill(child, 0) == 0 {
+        if !waitGone(child, timeout: 8) {   // 3 s grace + SIGKILL + reap
             kill(-leader, SIGKILL)   // don't leak it past a failing test
             XCTFail("the SIGTERM-ignoring child \(child) outlived killGroup")
         }
@@ -51,7 +66,7 @@ final class ProcessGroupKillTests: XCTestCase {
             done.fulfill()
         }
         wait(for: [done], timeout: 2)
-        XCTAssertNotEqual(kill(child, 0), 0, "the SIGTERM-ignoring child \(child) outlived blocking killGroup")
+        XCTAssertTrue(waitGone(child), "the SIGTERM-ignoring child \(child) outlived blocking killGroup")
     }
 
     /// The guard as a pure predicate: never call killGroup with these, a regressed guard
@@ -69,6 +84,7 @@ final class ProcessGroupKillTests: XCTestCase {
     /// Swaps `CodexHarness.sendSignal` for a recorder that never forwards: every probe
     /// answers -1 (group gone), so escalate stops at once and nothing real is signalled.
     private func recordingSignals(_ body: () -> Void) -> [(pid: pid_t, sig: Int32)] {
+        XCTAssertGreaterThan(Self.fakePGID, 99_999, "fake pgids must exceed PID_MAX so a real signal can never land")
         let log = OSAllocatedUnfairLock(initialState: [(pid: pid_t, sig: Int32)]())
         let saved = CodexHarness.sendSignal
         CodexHarness.sendSignal = { pid, sig in log.withLock { $0.append((pid, sig)) }; return -1 }
@@ -87,8 +103,8 @@ final class ProcessGroupKillTests: XCTestCase {
         // Filter: a detached escalate from an earlier test may land in the window.
         XCTAssertEqual(sent.filter { rejected.contains(-$0.pid) }.map(\.sig), [], "signalled a rejected pgid")
 
-        let accepted = recordingSignals { CodexHarness.killGroup(424242, grace: 0.1, blocking: true) }
-            .filter { $0.pid == -424242 }
+        let accepted = recordingSignals { CodexHarness.killGroup(Self.fakePGID, grace: 0.1, blocking: true) }
+            .filter { $0.pid == -Self.fakePGID }
         XCTAssertEqual(accepted.first?.sig, SIGTERM)
         XCTAssertFalse(accepted.contains { $0.sig == SIGKILL }, "probe said gone; no SIGKILL")
     }
@@ -96,9 +112,9 @@ final class ProcessGroupKillTests: XCTestCase {
     /// The quit path's registry: everything registered gets a group SIGTERM and the
     /// registry is drained (#361).
     func testKillLiveGroupsBlockingSignalsAndDrainsTheRegistry() {
-        CodexHarness.livePGIDs.withLock { _ = $0.insert(424242) }
+        CodexHarness.livePGIDs.withLock { _ = $0.insert(Self.fakePGID) }
         let sent = recordingSignals { CodexHarness.killLiveGroupsBlocking(grace: 0.1) }
-        XCTAssertTrue(sent.contains { $0.pid == -424242 && $0.sig == SIGTERM }, "\(sent)")
+        XCTAssertTrue(sent.contains { $0.pid == -Self.fakePGID && $0.sig == SIGTERM }, "\(sent)")
         XCTAssertTrue(CodexHarness.livePGIDs.withLock { $0.isEmpty })
     }
 
@@ -164,7 +180,7 @@ final class ProcessGroupKillTests: XCTestCase {
         XCTAssertEqual(getpgid(leader), leader)
 
         harness.stopHost()
-        XCTAssertNotEqual(kill(child, 0), 0, "the host's SIGTERM-ignoring child \(child) outlived stopHost")
+        XCTAssertTrue(waitGone(child), "the host's SIGTERM-ignoring child \(child) outlived stopHost")
     }
 
     /// A host that exits on its own: the terminationHandler takes its children down.
@@ -181,9 +197,7 @@ final class ProcessGroupKillTests: XCTestCase {
         let child = try XCTUnwrap(pid_t(String(decoding: out.fileHandleForReading.availableData, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)))
 
-        let deadline = Date().addingTimeInterval(5)
-        while kill(child, 0) == 0, Date() < deadline { try await Task.sleep(nanoseconds: 100_000_000) }
-        XCTAssertNotEqual(kill(child, 0), 0, "the host's child \(child) outlived the host")
+        XCTAssertTrue(waitGone(child, timeout: 5), "the host's child \(child) outlived the host")
         withExtendedLifetime(harness) {}
     }
 }
