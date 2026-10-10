@@ -182,7 +182,9 @@ actor CodexHarness: CodingHarness {
     /// ponytail: a child that moves to its own group or session (`setsid` for a PTY)
     /// is out of reach; codex itself has to end those on SIGTERM.
     private nonisolated static func killGroup(_ pgid: pid_t) {
-        guard pgid > 1 else { return }   // kill(-0)/kill(-1) would hit us / everything
+        // kill(-0)/kill(-1) would hit us / everything; and a codex that somehow isn't its
+        // own group leader would hand us our own pgid: leak its group, don't signal ours.
+        guard pgid > 1, pgid != getpgrp() else { return }
         kill(-pgid, SIGTERM)
         Task.detached {
             let deadline = Date().addingTimeInterval(3)
@@ -361,7 +363,11 @@ actor CodexHarness: CodingHarness {
                 // Neither id nor method, or an id we can't correlate: e.g. codex's
                 // `{"id": null, "error": …}` for a request it couldn't parse. Resolves
                 // nothing; that request fails on its reply timeout.
-                let line = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
+                // Not re-serialized blindly: a parsed `-1e400` is -inf, and writing it raises
+                // an ObjC exception that `try?` doesn't catch (QA #93 abort).
+                let line = JSONSerialization.isValidJSONObject(obj)
+                    ? (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
+                    : Data(String(describing: obj).utf8)
                 log.error("dropped a codex frame with no usable id or method: \(JSONLineFramer.preview(line), privacy: .public)")
                 continue
             }

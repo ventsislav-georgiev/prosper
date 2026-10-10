@@ -39,7 +39,8 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// `late-on` naming a method makes the mock delete it and sleep 1 s before handling that
     /// request (a reply that lands after the client's timeout). "JUNK" makes turn/start first
     /// print malformed stdout (a long non-JSON line, a JSON array, an object with neither id
-    /// nor method, an `id: null` parse error, a response for unknown id 9999). "FAST" writes
+    /// nor method, an `id: null` parse error, a response for unknown id 9999, and `{"result": -1e400}`,
+    /// which parses to -inf: the harness must not re-serialize it for its log line, QA #93). "FAST" writes
     /// the whole turn (turn/started, turn/completed) and then the turn/start reply in one
     /// stdout write, so the turn has completed before `sendPrompt` returns its id; with
     /// "FAIL" too, the turn completes `failed` ("mock turn failed").
@@ -263,7 +264,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                 sys.stdout.write("not json " + "x" * 1000 + "\n[1, 2]\n" + "".join(json.dumps(o) + "\n" for o in (
                     {"jsonrpc": "2.0", "params": {}},
                     {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error: mock"}},
-                    {"jsonrpc": "2.0", "id": 9999, "result": {}})))
+                    {"jsonrpc": "2.0", "id": 9999, "result": {}})) + '{"result": -1e400}\n')
             if "SLOWSTART" in prompt:
                 time.sleep(1.0)
             stale = current_turn if wedged else None
@@ -592,10 +593,11 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "\(events)")
         let logs = try HarnessProtocolTests.errorLogs(since: since)
         for needle in ["not a JSON object: not json xxx", "(1009 bytes)", "not a JSON object: [1, 2]",
-                       "no usable id or method: {", "Parse error: mock", "unknown request id 9999 "] {
+                       "no usable id or method: {", "Parse error: mock", "unknown request id 9999 ",
+                       "-inf"] {
             XCTAssertTrue(logs.contains { $0.contains(needle) }, "no error log with \(needle): \(logs)")
         }
-        XCTAssertEqual(logs.filter { $0.contains("no usable id or method") }.count, 2, "\(logs)")
+        XCTAssertEqual(logs.filter { $0.contains("no usable id or method") }.count, 3, "\(logs)")
     }
 
     /// Steer is a request whose turn id travels as `expectedTurnId`; the mock answers

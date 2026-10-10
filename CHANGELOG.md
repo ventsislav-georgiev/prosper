@@ -106,7 +106,9 @@ tag from the now-released section and put it on the new top draft.
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON
   fails with an error instead of crashing Prosper. Malformed codex output (non-JSON lines,
   frames with no usable id, `id: null` parse errors, replies to unknown requests) is logged
-  and skipped, and a line over 16 MiB is dropped instead of growing memory without bound.
+  and skipped, a line over 16 MiB is dropped instead of growing memory without bound, and
+  a frame holding a number that cannot be written back as JSON no longer crashes Prosper
+  when it is logged.
 - **Fixed: stopping or ending a coding-agent session left codex's helper processes
   running.** The MCP servers and tools codex starts share its process group; Stop and End
   now shut down that whole group, and a codex that crashes takes its helpers with it, so
