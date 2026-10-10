@@ -153,6 +153,8 @@ tag from the now-released section and put it on the new top draft.
   for the plugin host's processes to exit and force-kills any that ignore the polite shutdown
   signal, so an opencode helper or MCP server in the host's process group cannot linger after
   the app is gone.
+- **Fixed: quitting Prosper or toggling the hyper key no longer waits forever if `hidutil`
+  hangs.** Prosper gives up after five seconds, stops the stuck process and logs it.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
   Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON

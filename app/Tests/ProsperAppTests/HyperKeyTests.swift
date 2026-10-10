@@ -261,3 +261,38 @@ final class HyperKeyTests: XCTestCase {
         XCTAssertEqual(HyperMods.glyphs(HyperMods.all), "\u{2303}\u{2325}\u{21E7}\u{2318}")
     }
 }
+
+/// #362: the hidutil runner's wait is bounded. The seam points at /bin/sleep and
+/// /bin/echo — the real hidutil never runs here.
+final class HyperKeyHidutilRunnerTests: XCTestCase {
+    override func tearDown() {
+        HyperKey.hidutilURL = URL(fileURLWithPath: "/usr/bin/hidutil")
+        super.tearDown()
+    }
+
+    func testHungChildIsKilledAndRunnerReturnsNilWithinDeadline() {
+        HyperKey.hidutilURL = URL(fileURLWithPath: "/bin/sleep")
+        HyperKey.lastHidutilPID = 0
+        let returned = expectation(description: "runner returned")
+        nonisolated(unsafe) var out: String? = "unset"
+        let start = Date()
+        DispatchQueue.global().async {
+            out = HyperKey.hidutil(["600"], timeout: 1)
+            returned.fulfill()
+        }
+        // A hang must fail here, never stall the run.
+        wait(for: [returned], timeout: 8)
+        XCTAssertNil(out)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 4)
+        let pid = HyperKey.lastHidutilPID
+        XCTAssertGreaterThan(pid, 0)
+        let rc = kill(pid, 0), err = errno
+        XCTAssertEqual(rc, -1, "the hung child must be gone")
+        XCTAssertEqual(err, ESRCH)
+    }
+
+    func testHappyPathReturnsStdout() {
+        HyperKey.hidutilURL = URL(fileURLWithPath: "/bin/echo")
+        XCTAssertEqual(HyperKey.hidutil(["ok"]), "ok\n")
+    }
+}

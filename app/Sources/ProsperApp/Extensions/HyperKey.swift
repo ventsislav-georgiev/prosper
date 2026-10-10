@@ -490,10 +490,19 @@ final class HyperKey {
 
     // MARK: Shell / IOKit
 
+    /// Test seam: the executable `hidutil()` runs. Tests point it at /bin/sleep or
+    /// /bin/echo — never at hidutil with a mapping argument.
+    nonisolated(unsafe) static var hidutilURL = URL(fileURLWithPath: "/usr/bin/hidutil")
+    /// Test seam: pid of the last child launched, so a test can prove it is gone.
+    nonisolated(unsafe) static var lastHidutilPID: pid_t = 0
+
+    /// Runs on the main thread (launch reconcile, quit, wake, tap repair), so the
+    /// wait is bounded: hidutil answers in milliseconds, and one that hangs is
+    /// terminated, then SIGKILLed, and reported as nil rather than freezing quit.
     @discardableResult
-    private static func hidutil(_ args: [String]) -> String? {
+    nonisolated static func hidutil(_ args: [String], timeout: TimeInterval = 5) -> String? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/hidutil")
+        process.executableURL = hidutilURL
         process.arguments = args
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -502,8 +511,28 @@ final class HyperKey {
             NSLog("prosper: hidutil failed to launch: %@", String(describing: error))
             return nil
         }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        lastHidutilPID = process.processIdentifier
+        // readDataToEndOfFile blocks until the child closes stdout, so it reads off-thread.
+        nonisolated(unsafe) var data = Data()
+        let read = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            read.signal()
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline { usleep(10_000) }
+        guard !process.isRunning else {
+            NSLog("prosper: hidutil timed out after %.1fs (%@) — killed", timeout, args.joined(separator: " "))
+            process.terminate()
+            let grace = Date().addingTimeInterval(0.5)
+            while process.isRunning && Date() < grace { usleep(10_000) }
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            // Foundation reaps asynchronously; wait briefly so no zombie is left behind.
+            let reap = Date().addingTimeInterval(1)
+            while process.isRunning && Date() < reap { usleep(10_000) }
+            return nil
+        }
+        guard read.wait(timeout: .now() + max(deadline.timeIntervalSinceNow, 0.5)) == .success else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
