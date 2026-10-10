@@ -1017,7 +1017,7 @@ final class AgentController {
         return p.terminationStatus
     }
 
-    /// Pinned Codex release. Bump with the SHA-256s and run scripts/verify-codex-wire.sh;
+    /// Pinned Codex release. Bump with the SHA-256s and run scripts/record-codex-wire.py;
     /// scripts/bundle-codex.sh reads this line to check the binary it stages.
     nonisolated static let codexVersion = "rust-v0.162.1"
 

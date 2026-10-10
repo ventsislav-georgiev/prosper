@@ -56,6 +56,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     import sys, json, os, time
 
     LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.jsonl")
+    WIRE = os.path.join(os.path.dirname(LOG), "wire.jsonl")
     EXIT_ON = os.path.join(os.path.dirname(LOG), "exit-on")
     ERROR_ON = os.path.join(os.path.dirname(LOG), "error-on")
     LATE_ON = os.path.join(os.path.dirname(LOG), "late-on")
@@ -65,19 +66,40 @@ final class CodexHarnessE2ETests: XCTestCase {
     wedged = False
     turn_seq = 0
 
-    def send(obj):
-        sys.stdout.write(json.dumps(obj) + "\n")
+    def log(direction, frame):
+        with open(WIRE, "a") as f:
+            f.write(json.dumps({"dir": direction, "frame": frame}) + "\n")
+
+    def send(*objs):   # one stdout write; junk lines bypass this (they aren't codex frames)
+        for obj in objs:
+            log("in", obj)
+        sys.stdout.write("".join(json.dumps(obj) + "\n" for obj in objs))
         sys.stdout.flush()
 
+    # Replies and payloads in recorded real-codex shapes (Fixtures/codex/<ver>/plain-turn.jsonl).
+    with open(os.path.join(sys.argv[1], "plain-turn.jsonl")) as f:
+        RECORDED = [json.loads(l)["frame"] for l in f]
+
+    def recorded(method):
+        """codex's result for the first `method` request, or the first `method` notification's params."""
+        rid = next((m.get("id") for m in RECORDED if m.get("method") == method and "id" in m), None)
+        for m in RECORDED:
+            if rid is None and m.get("method") == method:
+                return json.loads(json.dumps(m["params"]))
+            if rid is not None and "method" not in m and m.get("id") == rid and "result" in m:
+                return json.loads(json.dumps(m["result"]))
+
+    TURN = recorded("turn/start")["turn"]
+
     def turn(status):
-        return {"id": current_turn, "items": [], "status": status}
+        return dict(TURN, id=current_turn, rootTurnId=current_turn, items=[], status=status)
 
     def finish_turn(problem=None):
         global current_turn
         send({"jsonrpc": "2.0", "method": "item/agentMessage/delta",
-              "params": {"turnId": current_turn, "itemId": "m1", "delta": "Hello from mock"}})
+              "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "m1", "delta": "Hello from mock"}})
         send({"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
-              "params": {"turnId": current_turn, "tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}})
+              "params": dict(recorded("thread/tokenUsage/updated"), threadId="thread-1", turnId=current_turn)})
         done = turn("failed" if problem else "completed")
         if problem:
             done["error"] = {"message": "bad reply: " + problem}
@@ -106,7 +128,8 @@ final class CodexHarnessE2ETests: XCTestCase {
         if word == "AMEND":
             return "item/commandExecution/requestApproval", dict(t, itemId="cmd-1",
                 command="rm -rf build", cwd="/tmp", proposedExecpolicyAmendment=["rm", "-rf"])
-        return "mcpServer/elicitation/request", dict(t, serverName="mock-mcp")
+        return "mcpServer/elicitation/request", dict(t, serverName="mock-mcp", mode="form", message="Pick one",
+                                                     requestedSchema={"type": "object", "properties": {}})
 
     DECISIONS = ("accept", "acceptForSession", "decline", "cancel")
 
@@ -184,7 +207,9 @@ final class CodexHarnessE2ETests: XCTestCase {
         try:
             msg = json.loads(line)
         except Exception:
+            log("out", {"unparsed": line})
             continue
+        log("out", msg)
         method = msg.get("method")
         mid = msg.get("id")
         params = msg.get("params", {})
@@ -205,7 +230,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                 awaiting = None
             continue
         if method == "initialize":
-            send({"jsonrpc": "2.0", "id": mid, "result": {"capabilities": {}}})
+            send({"jsonrpc": "2.0", "id": mid, "result": recorded("initialize")})
         elif method == "initialized":
             pass
         elif method in ("thread/start", "thread/resume", "thread/fork"):
@@ -214,7 +239,9 @@ final class CodexHarnessE2ETests: XCTestCase {
                 error(mid, problem)
                 continue
             tid = {"thread/start": "thread-1", "thread/fork": "thread-2"}.get(method, params.get("threadId"))
-            send({"jsonrpc": "2.0", "id": mid, "result": {"thread": {"id": tid}}})
+            result = recorded(method)
+            result["thread"]["id"] = tid
+            send({"jsonrpc": "2.0", "id": mid, "result": result})
         elif method == "turn/start":
             problem = turn_params_error(params)
             if problem:
@@ -222,10 +249,10 @@ final class CodexHarnessE2ETests: XCTestCase {
                 continue
             prompt = json.dumps(params.get("input"))
             if "JUNK" in prompt:
-                sys.stdout.write("not json " + "x" * 1000 + "\n[1, 2]\n")
-                send({"jsonrpc": "2.0", "params": {}})
-                send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error: mock"}})
-                send({"jsonrpc": "2.0", "id": 9999, "result": {}})
+                sys.stdout.write("not json " + "x" * 1000 + "\n[1, 2]\n" + "".join(json.dumps(o) + "\n" for o in (
+                    {"jsonrpc": "2.0", "params": {}},
+                    {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error: mock"}},
+                    {"jsonrpc": "2.0", "id": 9999, "result": {}})))
             if "SLOWSTART" in prompt:
                 time.sleep(1.0)
             stale = current_turn if wedged else None
@@ -235,12 +262,10 @@ final class CodexHarnessE2ETests: XCTestCase {
                 done = turn("failed" if "FAIL" in prompt else "completed")
                 if "FAIL" in prompt:
                     done["error"] = {"message": "mock turn failed"}
-                sys.stdout.write("".join(json.dumps(o) + "\n" for o in (
-                    {"jsonrpc": "2.0", "method": "turn/started",
-                     "params": {"threadId": "thread-1", "turn": turn("inProgress")}},
-                    {"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": "thread-1", "turn": done}},
-                    {"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})))
-                sys.stdout.flush()
+                send({"jsonrpc": "2.0", "method": "turn/started",
+                      "params": {"threadId": "thread-1", "turn": turn("inProgress")}},
+                     {"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": "thread-1", "turn": done}},
+                     {"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
                 current_turn = None
                 continue
             send({"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
@@ -256,15 +281,16 @@ final class CodexHarnessE2ETests: XCTestCase {
                 sys.exit(0)
             if "HANG" in prompt or wedged:
                 send({"jsonrpc": "2.0", "method": "item/started",
-                      "params": {"threadId": "thread-1", "turnId": current_turn,
-                                 "item": {"id": "cmd-" + current_turn, "type": "commandExecution",
-                                          "command": "sleep 600", "status": "inProgress"}}})
+                      "params": {"threadId": "thread-1", "turnId": current_turn, "startedAtMs": 0,
+                                 "item": {"id": "cmd-" + current_turn, "type": "commandExecution", "cwd": "/tmp",
+                                          "command": "sleep 600", "commandActions": [], "status": "inProgress"}}})
                 continue
             if want_approval:
                 # Server→client request; client must reply before we proceed.
                 send({"jsonrpc": "2.0", "id": "appr-1",
                       "method": "item/commandExecution/requestApproval",
-                      "params": {"threadId": "thread-1", "command": ["rm", "-rf", "build"], "cwd": "/tmp"}})
+                      "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "cmd-1",
+                                 "startedAtMs": 0, "command": "rm -rf build", "cwd": "/tmp"}})
             word = next((w for w in ("PERMS", "PATCH", "LEGACY", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
@@ -305,9 +331,18 @@ final class CodexHarnessE2ETests: XCTestCase {
         // A wrapper script so CodexHarness can exec it directly with `app-server`
         // as argv[1] (ignored by the mock). Shebang to the resolved python3.
         let exe = dir.appendingPathComponent("codex")
-        let wrapper = "#!/bin/sh\nexec \"\(python)\" \"\(pyFile.path)\" \"$@\"\n"
+        let wrapper = "#!/bin/sh\nexec \"\(python)\" \"\(pyFile.path)\" \"\(CodexWireSchema.fixtures.path)\" \"$@\"\n"
         try wrapper.write(to: exe, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: exe.path)
+
+        // Both directions of everything the mock saw must match the pinned codex's schema:
+        // Prosper's frames strictly (a key codex doesn't know is a setting it drops).
+        addTeardownBlock {
+            guard let log = try? String(contentsOf: dir.appendingPathComponent("wire.jsonl"), encoding: .utf8) else { return }
+            for problem in try CodexWireSchema.shared().violations(in: CodexWireSchema.transcript(log)) {
+                XCTFail("codex \(CodexWireSchema.version) schema: \(problem)")
+            }
+        }
 
         let codexHome = dir.appendingPathComponent("home", isDirectory: true)
         return (exe, codexHome)
@@ -578,6 +613,48 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(params?["expectedTurnId"] as? String, "turn-1")
         XCTAssertNil(params?["turnId"])
         XCTAssertEqual(params?["threadId"] as? String, "thread-1")
+    }
+
+    /// #173: one pass over the frames Prosper sends that no other test here sends: a thread
+    /// per sandbox mode and approval policy, a text+image prompt, and a declined command
+    /// approval, plus steer and interrupt. The teardown checks each against the schema.
+    func testEveryOutgoingFrameKindMatchesTheSchema() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let modes: [(SandboxPolicy, ApprovalPolicy)] = [
+            (.readOnly, .untrusted), (.workspaceWrite(networkAccess: true), .onRequest), (.dangerFullAccess, .never)]
+        var session = SessionID(raw: "")
+        for (sandbox, approval) in modes {
+            session = try await harness.newSession(SessionOptions(
+                cwd: home.path, model: "test-model", approvalPolicy: approval, sandbox: sandbox))
+        }
+        async let imageTurn = Self.collect(from: harness, timeout: 10) {
+            if case .turnCompleted = $0 { return true }; return false
+        }
+        try await harness.sendPrompt(session: session, input: [.text("look"), .image(path: "/tmp/a.png")])
+        _ = await imageTurn
+
+        async let declined = Self.collect(from: harness, timeout: 10) { event in
+            if case .approvalRequest(let request) = event {
+                Task { try await harness.respondToApproval(request.id, decision: .decline) }
+            }
+            if case .turnCompleted = event { return true }; return false
+        }
+        try await harness.sendPrompt(session: session, input: [.text("AMEND please")])
+        let outcome = await declined.last
+        guard case .turnCompleted(_, .completed)? = outcome else { return XCTFail("mock rejected the decline: \(String(describing: outcome))") }
+
+        let turn = try await harness.sendPrompt(session: session, input: [.text("HANG on a long command")])
+        try await harness.steer(session: session, turn: turn, input: [.text("also list hidden files")])
+        try await harness.abort(session: session, turn: turn)
+        await harness.shutdown()
+
+        let starts = try Self.received("thread/start", exe: exe).compactMap { ($0["params"] as? [String: Any])?["sandbox"] as? String }
+        XCTAssertEqual(starts, ["read-only", "workspace-write", "danger-full-access"])
+        let input = try Self.received("turn/start", exe: exe).first.flatMap { ($0["params"] as? [String: Any])?["input"] as? [[String: Any]] }
+        XCTAssertEqual(input?.last as NSDictionary?, ["type": "localImage", "path": "/tmp/a.png"] as NSDictionary)
     }
 
     /// Every event until the stream finishes; nil if it is still open after `timeout`.
