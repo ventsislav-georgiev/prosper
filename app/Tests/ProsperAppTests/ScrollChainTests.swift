@@ -357,4 +357,35 @@ final class ScrollChainTests: XCTestCase {
         XCTAssertEqual(inner.contentView.bounds.origin.y, listBefore, accuracy: 0.01,
                        "an event in another window scrolled this window's list")
     }
+
+    /// QA #70: the latched list is torn down mid-gesture while another list keeps
+    /// the monitor alive. The rest of the gesture must be swallowed, never handed
+    /// to a pane that did not see it begin.
+    func testGestureWhoseListIsGoneIsSwallowedNotHandedToThePane() throws {
+        let (win, _, _, inner) = try host(rowCount: 200)
+        let (other, otherHosted, _, otherInner) = try host(rowCount: 3)
+        XCTAssertTrue(ScrollChainCapture.capture(try gestureEvent(win, at: windowPointInside(inner), deltaY: -40, phase: 1)))
+        win.contentView = NSView()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertTrue(ScrollChainCapture.isMonitoring, "precondition: the other window keeps the monitor")
+
+        XCTAssertTrue(ScrollChainCapture.capture(try gestureEvent(other, at: panePoint(otherHosted, clearOf: otherInner),
+                                                                  deltaY: -40, phase: 2)),
+                      "the rest of a gesture whose list is gone leaked to the pane")
+    }
+
+    /// QA #70: removing the monitor ends the latch. A `.changed` arriving after a
+    /// fresh registration is decided by the hit test, not by a dead list's latch.
+    func testRemovingTheMonitorClearsTheLatch() throws {
+        let (win, _, _, inner) = try host(rowCount: 200)
+        XCTAssertTrue(ScrollChainCapture.capture(try gestureEvent(win, at: windowPointInside(inner), deltaY: -40, phase: 1)))
+        win.contentView = NSView()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertFalse(ScrollChainCapture.isMonitoring, "precondition: last list gone, monitor removed")
+
+        let (fresh, freshHosted, _, freshInner) = try host(rowCount: 200)
+        XCTAssertFalse(ScrollChainCapture.capture(try gestureEvent(fresh, at: panePoint(freshHosted, clearOf: freshInner),
+                                                                   deltaY: -40, phase: 2)),
+                       "a stale latch from a removed monitor swallowed a pane event")
+    }
 }
