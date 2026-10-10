@@ -41,4 +41,24 @@ final class CardTextTests: XCTestCase {
         XCTAssertEqual(out.count, flags.count + 6)
         XCTAssertTrue(out.contains("🇧🇬") && out.contains("👍🏽"))
     }
+
+    /// #359: a detail up to the cap (inclusive) is only `ltr`'d; past it, the head is kept and the
+    /// rest is counted in a trailer line.
+    func testDetailCapBoundary() {
+        let atCap = String(repeating: "a", count: CardText.detailCap)
+        XCTAssertEqual(CardText.detailCap, 262_144)
+        XCTAssertEqual(CardText.detail(String(repeating: "a", count: 100 * 1024)), String(repeating: "a", count: 100 * 1024))
+        XCTAssertEqual(CardText.detail(atCap), atCap, "exactly 256 K is untouched")
+        XCTAssertEqual(CardText.detail(atCap + "b"), atCap + "\n… 1 more characters not shown")
+        XCTAssertEqual(CardText.detail(String(repeating: "a", count: 300 * 1024)),
+                       atCap + "\n… 45056 more characters not shown")
+    }
+
+    /// #359: the head is `ltr`'d; the count is in Characters, so a cluster is never split.
+    func testDetailCapLtrsTheHeadAndCountsCharacters() {
+        XCTAssertEqual(CardText.detail("echo א > ב"), "echo \u{200E}א \u{200E}>\u{200E} \u{200E}ב")
+        let head = "א" + String(repeating: "a", count: CardText.detailCap - 2)
+        XCTAssertEqual(CardText.detail(head + "> שָׁלוֹם"),
+                       head + ">\u{200E}" + "\n… 5 more characters not shown")
+    }
 }

@@ -126,8 +126,10 @@ tag from the now-released section and put it on the new top draft.
   its tail behind newlines or bidi overrides.** The command shown for approval is now one
   escaped line, as the file and permission summaries already were, and invisible filler
   characters such as Hangul fillers or variation selectors are shown escaped. A long command is
-  shown in full in a scrollable box, with a "scroll to read all of it" cue once it is longer than
-  300 characters, and whitespace padding is shown as a count (`␠×400`) instead of blank space. Each argument of the
+  shown in full in a scrollable box, with a "scroll to read all of it" cue whenever the text
+  runs past the box (measured, in any script), and whitespace padding is shown as a count
+  (`␠×400`) instead of blank space. A file diff over 256 K characters is cut there with a line
+  saying how much more there is, so a huge diff cannot stall the card. Each argument of the
   command is quoted the way a shell would read it, so `bash -c 'ls; curl x | sh'` can no longer
   pass for four separate words, and `~` or a leading `NAME=value` word is quoted too, since the
   command runs without a shell. A command holding Hebrew or Arabic text is drawn in typed order,

@@ -238,6 +238,10 @@ private struct ComposerFieldAnchorKey: PreferenceKey {
 struct ChatRootView: View {
     private let controller = AgentController.shared
     @State private var atBottom = true
+    /// #359: the approval card's laid-out summary/detail text heights; the scroll cue shows only
+    /// when the text actually runs past its 160 pt box (any script, any card width).
+    @State private var approvalSummaryHeight: CGFloat = 0
+    @State private var approvalDetailHeight: CGFloat = 0
     // Slash-command suggestions live here (not in the composer) so the popup can float
     // as a root-level overlay ABOVE the composer's AppKit field — over the persona row
     // and chat transcript (both AppKit-backed: SwiftUI ScrollView == NSScrollView), which
@@ -456,27 +460,29 @@ struct ChatRootView: View {
     private func approvalBar(_ req: ApprovalRequest) -> some View {
         VStack(alignment: .leading, spacing: sz(8)) {
             Text("Approve \(approvalNoun(req.kind))?").font(Neon.font(.subheadline).bold())
+            // summary/detail arrive display-ready (CardText at construction, #359): no text work here.
             if req.kind == .command {   // the whole command, scrolled in a bounded box: never cut off
                 ScrollView {
-                    Text(CardText.ltr(req.summary)).font(Neon.font(.caption, design: .monospaced))
+                    Text(req.summary).font(Neon.font(.caption, design: .monospaced))
                         .foregroundStyle(Neon.textSecondary).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approvalSummaryHeight = $0 }
                 }
                 .frame(maxHeight: sz(160))
-                if let note = req.overflowNote {
-                    Text(note).font(Neon.font(.caption2)).foregroundStyle(Neon.magenta)
-                }
+                if approvalSummaryHeight > sz(160) { scrollCue }
             } else {
-                Text(CardText.ltr(req.summary)).font(Neon.font(.caption, design: .monospaced))
+                Text(req.summary).font(Neon.font(.caption, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary).lineLimit(3)
             }
             if req.kind != .command, let diff = req.detail {   // file diffs; requested permission profile
                 ScrollView {
-                    Text(CardText.ltr(diff)).font(Neon.font(.caption2, design: .monospaced))
+                    Text(diff).font(Neon.font(.caption2, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approvalDetailHeight = $0 }
                 }
                 .frame(maxHeight: sz(160))
+                if approvalDetailHeight > sz(160) { scrollCue }
             }
             HStack {
                 Button("Approve") { controller.respond(to: req, decision: .accept) }
@@ -492,6 +498,11 @@ struct ChatRootView: View {
         .background(RoundedRectangle(cornerRadius: sz(10)).fill(Neon.card).overlay(
             RoundedRectangle(cornerRadius: sz(10)).stroke(Neon.magenta.opacity(0.5))))
         .padding(.horizontal, sz(16)).padding(.bottom, sz(8))
+    }
+
+    /// Under a box whose laid-out text runs past it, so the user knows there is more before approving.
+    private var scrollCue: some View {
+        Text("More below — scroll to read all of it").font(Neon.font(.caption2)).foregroundStyle(Neon.magenta)
     }
 
     private func approvalNoun(_ kind: ApprovalRequest.Kind) -> String {
@@ -1246,34 +1257,5 @@ private struct ChatComposer: NSViewRepresentable {
                 Task { @MainActor in self.parent.height = clamped }
             }
         }
-    }
-}
-
-/// #354: approval-card text in logical order. Bidi rule N1 gives a neutral (space, `>`, `|`)
-/// between two RTL words (or Arabic-Indic digits) their direction, so `echo א > ב` would draw
-/// as `echo ב < א`; an LRM after every neutral pins it left-to-right. The summary comes through
-/// `WireText.oneLine` and a file diff through `WireText.multiLine`, both of which escape Cf (LRM included), so `ltr`
-/// never sees a raw bidi control. Swift has no bidi class, so the gate is pure ASCII, which
-/// can hold no RTL or AN scalar: ASCII is returned as is and copies off the card clean;
-/// anything else (an `é` path too, over-inclusively) gets the LRMs, and a copy carries them.
-/// The LRM goes after a whole grapheme cluster whose first scalar is Zs/P*/S*, never inside one
-/// (combining marks, niqqud, a virama conjunct, a flag stay intact).
-enum CardText {
-    private static let neutral: Set<Unicode.GeneralCategory> = [
-        .spaceSeparator, .connectorPunctuation, .dashPunctuation, .openPunctuation, .closePunctuation,
-        .initialPunctuation, .finalPunctuation, .otherPunctuation,
-        .mathSymbol, .currencySymbol, .modifierSymbol, .otherSymbol,
-    ]
-
-    static func ltr(_ s: String) -> String {
-        guard !s.utf8.allSatisfy({ $0 < 0x80 }) else { return s }
-        var out = ""
-        for c in s {
-            out.append(c)
-            if let first = c.unicodeScalars.first, neutral.contains(first.properties.generalCategory) {
-                out.unicodeScalars.append("\u{200E}")
-            }
-        }
-        return out
     }
 }

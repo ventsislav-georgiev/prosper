@@ -71,18 +71,12 @@ struct ApprovalRequest: Sendable {
     let id: ApprovalID
     let kind: Kind
     let session: SessionID
-    /// Human-readable summary for the UI (the command, the file, the requested perm).
+    /// Human-readable summary for the UI (the command, the file, the requested perm), display-ready:
+    /// the harness applies `CardText.ltr` when it builds the request, so the card does no work.
     let summary: String
-    /// Backend-specific detail (e.g. the full command argv, the unified diff).
+    /// Backend-specific detail (e.g. the full command argv, the unified diff), display-ready and
+    /// capped (`CardText.detail`).
     let detail: String?
-
-    /// The card's cue under a `.command` summary that may overflow its fixed scroll box, so the
-    /// user knows there is more than the visible lines before approving.
-    // ponytail: a char-count guess (the box holds ~10 lines of ~30+ monospaced caption chars at
-    // the narrowest card); measure the laid-out text if the cue shows too early or too late.
-    var overflowNote: String? {
-        kind == .command && summary.count > 300 ? "\(summary.count) characters — scroll to read all of it" : nil
-    }
 }
 
 // MARK: - Wire text
@@ -139,6 +133,50 @@ enum WireText {
     /// through `multiLine`, so any other ESC sequence (an OSC title, a cursor move) shows escaped.
     static func toolOutput(_ s: String) -> String {
         multiLine(s.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression))
+    }
+}
+
+/// #354: approval-card text in logical order. Bidi rule N1 gives a neutral (space, `>`, `|`)
+/// between two RTL words (or Arabic-Indic digits) their direction, so `echo א > ב` would draw
+/// as `echo ב < א`; an LRM after every neutral pins it left-to-right. The summary comes through
+/// `WireText.oneLine` and a file diff through `WireText.multiLine`, both of which escape Cf (LRM included), so `ltr`
+/// never sees a raw bidi control. Swift has no bidi class, so the gate is pure ASCII, which
+/// can hold no RTL or AN scalar: ASCII is returned as is and copies off the card clean;
+/// anything else (an `é` path too, over-inclusively) gets the LRMs, and a copy carries them.
+/// The LRM goes after a whole grapheme cluster whose first scalar is Zs/P*/S*, never inside one
+/// (combining marks, niqqud, a virama conjunct, a flag stay intact).
+/// #359: applied once where the harness builds the `ApprovalRequest` (off the main thread), not in
+/// the view body, which reran it on every render (a 1 MB non-ASCII diff cost ~85 ms each time).
+enum CardText {
+    /// A detail longer than this many Characters keeps only its head on the card: codex sends no
+    /// diff cap, and a multi-megabyte diff would stall the card's layout. 256 K reads whole far
+    /// past anything a user reviews in a 160 pt box; the summary is never capped (#323 wants it whole).
+    static let detailCap = 256 * 1024
+
+    /// The approval detail as the card shows it: the first `detailCap` Characters through `ltr`,
+    /// plus a final "… N more characters not shown" line when there was more.
+    static func detail(_ s: String) -> String {
+        guard let cut = s.index(s.startIndex, offsetBy: detailCap, limitedBy: s.endIndex), cut < s.endIndex
+        else { return ltr(s) }
+        return ltr(String(s[..<cut])) + "\n… \(s[cut...].count) more characters not shown"
+    }
+
+    private static let neutral: Set<Unicode.GeneralCategory> = [
+        .spaceSeparator, .connectorPunctuation, .dashPunctuation, .openPunctuation, .closePunctuation,
+        .initialPunctuation, .finalPunctuation, .otherPunctuation,
+        .mathSymbol, .currencySymbol, .modifierSymbol, .otherSymbol,
+    ]
+
+    static func ltr(_ s: String) -> String {
+        guard !s.utf8.allSatisfy({ $0 < 0x80 }) else { return s }
+        var out = ""
+        for c in s {
+            out.append(c)
+            if let first = c.unicodeScalars.first, neutral.contains(first.properties.generalCategory) {
+                out.unicodeScalars.append("\u{200E}")
+            }
+        }
+        return out
     }
 }
 

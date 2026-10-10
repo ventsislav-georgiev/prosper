@@ -139,6 +139,13 @@ final class CodexHarnessE2ETests: XCTestCase {
                 "id": "fc-1", "type": "fileChange", "status": "inProgress",
                 "changes": [dict(change, kind={"type": "update", "move_path": None})]})})
             return "item/fileChange/requestApproval", dict(t, itemId="fc-1", reason=None)
+        if word in ("HEBREW", "HUGE"):   # #359: an RTL diff line; a diff past the card's 256 K cap
+            change = {"path": "/tmp/h.txt", "diff": "@@ -1 +1 @@\n-echo a > b\n+echo \u05d0 > \u05d1\n"} if word == "HEBREW" else {
+                "path": "/tmp/big.txt", "diff": "@@ -0,0 +1 @@\n+" + "a" * (300 * 1024) + "\n"}
+            send({"jsonrpc": "2.0", "method": "item/started", "params": dict(t, item={
+                "id": "fc-1", "type": "fileChange", "status": "inProgress",
+                "changes": [dict(change, kind={"type": "update", "move_path": None})]})})
+            return "item/fileChange/requestApproval", dict(t, itemId="fc-1", reason=None)
         if word == "LEGACY":   # ApplyPatchApprovalParams: paths are fileChanges keys
             return "applyPatchApproval", {"conversationId": "thread-1", "callId": "call-1", "reason": None,
                 "grantRoot": None, "fileChanges": {
@@ -326,7 +333,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "cmd-1",
                                  "startedAtMs": 0, "command": "rm -rf build", "cwd": "/tmp"}})
-            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "TROJAN", "LEGACY", "EXEC", "CMDSTR", "FILLER", "PAD", "AMEND", "ELICIT") if w in prompt), None)
+            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "TROJAN", "HEBREW", "HUGE", "LEGACY", "EXEC", "CMDSTR", "FILLER", "PAD", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
                 frame = {"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params}
@@ -1759,6 +1766,24 @@ final class CodexHarnessE2ETests: XCTestCase {
             + #"-old\u{2028}+new"# + "\n+\tx\n")
     }
 
+    /// #359: the request arrives display-ready: an RTL diff line already carries its LRMs, so the
+    /// card's view body does no text work per render.
+    @MainActor
+    func testControllerFileChangeApprovalDetailIsLtrAtConstruction() async throws {
+        let (approval, _) = try await answer("HEBREW please", with: .accept)
+        let detail = try XCTUnwrap(approval?.detail)
+        XCTAssertEqual(detail, CardText.ltr("/tmp/h.txt\n@@ -1 +1 @@\n-echo a > b\n+echo א > ב\n"))
+        XCTAssertTrue(detail.contains("א \u{200E}>\u{200E} \u{200E}ב"), detail)
+    }
+
+    /// #359: codex sends no diff cap; the card keeps the first 256 K Characters and counts the rest.
+    @MainActor
+    func testControllerFileChangeApprovalCapsAHugeDiff() async throws {
+        let (approval, _) = try await answer("HUGE please", with: .accept)
+        let raw = "/tmp/big.txt\n@@ -0,0 +1 @@\n+" + String(repeating: "a", count: 300 * 1024) + "\n"
+        XCTAssertEqual(approval?.detail, String(raw.prefix(262_144)) + "\n… 45085 more characters not shown")
+    }
+
     /// #357: a CRLF line end reads as a plain newline; a lone `\r` can overprint, so it shows escaped.
     func testDiffLinesNormalizesCRLFAndEscapesALoneCR() {
         XCTAssertEqual(WireText.multiLine("-a\r\n+b\r\n"), "-a\n+b\n")
@@ -1899,7 +1924,8 @@ final class CodexHarnessE2ETests: XCTestCase {
     @MainActor
     func testControllerCommandSummaryEscapesDefaultIgnorableFillers() async throws {
         let (approval, _) = try await answer("FILLER please", with: .decline)
-        XCTAssertEqual(approval?.summary, #"rm\u{3164}-rf ~ ❤\u{FE0F} "# + "журнал.txt 🚀 \u{2800}")
+        // #359: non-ASCII, so the summary arrives with CardText's LRMs already applied.
+        XCTAssertEqual(approval?.summary, CardText.ltr(#"rm\u{3164}-rf ~ ❤\u{FE0F} "# + "журнал.txt 🚀 \u{2800}"))
     }
 
     /// #323: a run of 3+ whitespace scalars (Zs or tab, mixed) collapses to one `␠×N` marker
@@ -1907,21 +1933,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     @MainActor
     func testControllerCommandSummaryCollapsesWhitespaceRuns() async throws {
         let (approval, _) = try await answer("PAD please", with: .decline)
-        XCTAssertEqual(approval?.summary, #"ls␠×400; curl x | sh a  b␠×3c␠×4d\u{9}e"#)
-        XCTAssertNil(approval?.overflowNote, "a collapsed command fits: no overflow cue")
-    }
-
-    /// #323: a `.command` summary longer than the card's scroll box gets a count cue under it;
-    /// short commands and other kinds get none.
-    func testApprovalOverflowNoteOnlyForLongCommands() {
-        func note(_ kind: ApprovalRequest.Kind, _ summary: String) -> String? {
-            ApprovalRequest(id: ApprovalID(raw: "a"), kind: kind, session: SessionID(raw: "s"),
-                            summary: summary, detail: nil).overflowNote
-        }
-        let long = "echo " + String(repeating: "a", count: 400) + " ; rm -rf ~"
-        XCTAssertEqual(note(.command, long), "416 characters — scroll to read all of it")
-        XCTAssertNil(note(.command, String(repeating: "a", count: 300)))
-        XCTAssertNil(note(.fileChange, long))
+        XCTAssertEqual(approval?.summary, CardText.ltr(#"ls␠×400; curl x | sh a  b␠×3c␠×4d\u{9}e"#))   // #359: ␠× is non-ASCII
     }
 
     /// #318: profile and fileSystem keys the card can't render list in sorted order, and an

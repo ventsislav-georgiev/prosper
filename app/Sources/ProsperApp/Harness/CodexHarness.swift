@@ -436,8 +436,8 @@ actor CodexHarness: CodingHarness {
             : []
         let request = ApprovalRequest(
             id: approvalID, kind: kind, session: session,
-            summary: Self.approvalSummary(kind: kind, params: params, changes: changes),
-            detail: Self.approvalDetail(kind: kind, params: params, changes: changes)
+            summary: CardText.ltr(Self.approvalSummary(kind: kind, params: params, changes: changes)),
+            detail: Self.approvalDetail(kind: kind, params: params, changes: changes).map(CardText.detail)
         )
         eventContinuation.yield(.approvalRequest(request))
     }
