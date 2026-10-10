@@ -672,11 +672,15 @@ final class CodexHarnessE2ETests: XCTestCase {
     }
 
     /// A fresh controller on the mock, with its own session store (never the user's).
+    /// `downloadDelay` stands in for the first-use codex download (never the real one).
     @MainActor
-    private func makeController(exe: URL, home: URL,
-                                promptReturnDelay: UInt64 = 0) -> (AgentController, AgentSessionStore) {
+    private func makeController(exe: URL, home: URL, promptReturnDelay: UInt64 = 0,
+                                downloadDelay: UInt64 = 0) -> (AgentController, AgentSessionStore) {
         let store = AgentSessionStore(directory: exe.deletingLastPathComponent().appendingPathComponent("store"))
-        let controller = AgentController(store: store, makeHarness: {
+        let controller = AgentController(store: store, resolveCodex: {
+            try await Task.sleep(nanoseconds: downloadDelay)
+            return exe
+        }, makeHarness: {
             ShortAbortHarness(CodexHarness(executableURL: exe, codexHome: home,
                                            llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token"),
                               promptReturnDelay: promptReturnDelay)
@@ -700,6 +704,50 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     private static func count(_ method: String, exe: URL) -> Int {
         (try? received(method, exe: exe).count) ?? 0
+    }
+
+    /// #250: Stop during the first-use codex download abandons the run once the download
+    /// lands: no model load, no codex, and the phase stays idle (QA #74 M7: without the
+    /// download guard, run()'s stopped-guard settle is what idles the phase).
+    @MainActor
+    func testControllerStopDuringCodexDownloadStartsNoCodex() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home, downloadDelay: 300_000_000)
+        controller.submit(goal: "hello")
+        let downloading = await Self.wait { if case .loadingModel = controller.phase { return true } else { return false } }
+        XCTAssertTrue(downloading, "the run never reached the codex download")
+
+        controller.stop()
+        let settled = await Self.wait { controller.phase == .idle }
+        XCTAssertTrue(settled, "Stop did not settle the phase")
+        var leaked: [AgentController.Phase] = []
+        let watch = { if controller.phase != .idle, leaked.last != controller.phase { leaked.append(controller.phase) } }
+        _ = await Self.wait(1, sample: watch) { false }   // the download lands at 300 ms
+        XCTAssertEqual(leaked, [], "the stopped run moved the phase after the download")
+        XCTAssertEqual(controller.phase, .idle)
+        XCTAssertEqual(Self.count("initialize", exe: exe), 0, "codex was started for a stopped run")
+    }
+
+    /// #250: a prompt re-submitted during the stopped run's download keeps its phase when
+    /// the stopped run's download lands and abandons it.
+    @MainActor
+    func testControllerAbandonedDownloadSparesTheNextRun() async throws {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home, downloadDelay: 300_000_000)
+        controller.submit(goal: "hello")
+        let downloading = await Self.wait { if case .loadingModel = controller.phase { return true } else { return false } }
+        XCTAssertTrue(downloading, "the run never reached the codex download")
+        controller.stop()
+        let settled = await Self.wait { controller.phase == .idle }
+        XCTAssertTrue(settled, "Stop did not settle the phase")
+
+        controller.submit(goal: "hello")
+        var idled = false
+        let loading = await Self.wait(sample: { if controller.phase == .idle { idled = true } }) {
+            if case .loadingModel(_, let status) = controller.phase { return status.hasPrefix("Loading") } else { return false }
+        }
+        XCTAssertTrue(loading, "the re-submitted run never got past its download")
+        XCTAssertFalse(idled, "the stopped run's abandoned download idled the next run")
     }
 
     /// QA #15: Stop while turn/start is still unanswered settles at once, interrupts the

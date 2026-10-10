@@ -114,12 +114,16 @@ final class AgentController {
     private static let maxAutoNudges = 2
 
     private let store: AgentSessionStore
-    /// Test seam: tests hand in a mock-codex harness; nil spawns codex on the local model.
+    /// Test seams: tests hand in a stand-in for the codex download and a mock-codex
+    /// harness (replacing the model load + spawn); nil spawns codex on the local model.
+    private let resolveCodex: @MainActor () async throws -> URL
     private let makeHarness: (@MainActor () async throws -> CodingHarness)?
 
     init(store: AgentSessionStore = .shared,
+         resolveCodex: @escaping @MainActor () async throws -> URL = { try await AgentController.resolveCodexExecutable() },
          makeHarness: (@MainActor () async throws -> CodingHarness)? = nil) {
         self.store = store
+        self.resolveCodex = resolveCodex
         self.makeHarness = makeHarness
     }
 
@@ -381,12 +385,11 @@ final class AgentController {
 
     private func run(goal: String, generation: Int) async {
         do {
-            let harness = try await ensureHarness()
+            let harness = try await ensureHarness(generation)
             let session = try await ensureSession(harness)
             guard stoppedRun != generation else {
-                // Stopped before turn/start went out. A Stop during the codex download already
-                // settled the phase, then spawnCodexHarness set .loadingModel again: settle it,
-                // unless a newer run owns the phase by now.
+                // Stopped before turn/start went out. A Stop that landed after the spawn began
+                // can leave .loadingModel up: settle it, unless a newer run owns the phase by now.
                 if generation == runGeneration, case .loadingModel = phase { phase = .idle }
                 return
             }
@@ -407,8 +410,8 @@ final class AgentController {
             if !settledTurns.contains(turn) { currentTurn = turn }
         } catch is CancellationError {
             // Stop pressed while the model was still loading — `stop()` already tore
-            // everything down; don't surface it as an error.
-            if case .error = phase {} else { phase = .idle }
+            // everything down; don't surface it as an error, nor idle a newer run.
+            if case .error = phase {} else if generation == runGeneration { phase = .idle }
         } catch let error where stoppedRun == generation {
             // Stop already settled this run; a request failing under it is not news.
             log.info("stopped agent run ended with: \(String(describing: error), privacy: .public)")
@@ -438,30 +441,32 @@ final class AgentController {
         }
     }
 
-    private func ensureHarness() async throws -> CodingHarness {
+    private func ensureHarness(_ generation: Int) async throws -> CodingHarness {
         if let harness { return harness }
+        // Resolve the codex helper — downloaded on first use (like the model), so a
+        // fresh install that never opens the agent never pulls the ~86 MB binary. Do this
+        // BEFORE the residency swap: a failed/slow download shouldn't have unloaded the
+        // inline model for nothing.
+        phase = .loadingModel(progress: 0, status: "Preparing coding agent…")
+        let executable = try await resolveCodex()
+        // Stop pressed during the download: don't go on to load the model and start codex.
+        guard stoppedRun != generation else { throw CancellationError() }
+        phase = .loadingModel(progress: 0, status: "Loading \(Preferences.agentModel)…")
         let harness: CodingHarness
-        if let makeHarness { harness = try await makeHarness() } else { harness = try await spawnCodexHarness() }
+        if let makeHarness { harness = try await makeHarness() } else { harness = try await spawnCodexHarness(executable) }
         try await harness.start()
         self.harness = harness
         pumpEvents(harness)
         return harness
     }
 
-    private func spawnCodexHarness() async throws -> CodingHarness {
+    /// The model load + codex spawn, once `ensureHarness` resolved the executable.
+    private func spawnCodexHarness(_ executable: URL) async throws -> CodingHarness {
         // 1. Local inference endpoint.
         let (port, token) = try ProsperLLMServer.shared.start()
         let baseURL = "http://127.0.0.1:\(port)/v1"
 
-        // 2. Resolve the codex helper — downloaded on first use (like the model), so a
-        // fresh install that never opens the agent never pulls the ~86 MB binary. Do this
-        // BEFORE the residency swap: a failed/slow download shouldn't have unloaded the
-        // inline model for nothing.
-        phase = .loadingModel(progress: 0, status: "Preparing coding agent…")
-        let executable = try await Self.resolveCodexExecutable()
-
-        // 3. Residency swap: unload inline model, load the coding model.
-        phase = .loadingModel(progress: 0, status: "Loading \(Preferences.agentModel)…")
+        // 2. Residency swap: unload inline model, load the coding model.
         _ = try await ModelResidencyCoordinator.shared.acquireAgent { [weak self] p, status in
             Task { @MainActor in
                 // A late progress tick must not stomp a phase that already moved on
@@ -471,7 +476,7 @@ final class AgentController {
             }
         }
 
-        // 4. The harness (started by `ensureHarness`).
+        // 3. The harness (started by `ensureHarness`).
         return CodexHarness(executableURL: executable, codexHome: Self.codexHomeURL(),
                             llmBaseURL: baseURL, llmToken: token)
     }
