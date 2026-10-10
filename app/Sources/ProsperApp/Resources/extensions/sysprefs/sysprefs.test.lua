@@ -32,7 +32,9 @@ h.eq(find(all, "Wi-Fi") ~= nil, true, "Wi-Fi present")
 -- Every row is openable and uniquely identified.
 local seen = {}
 for _, it in ipairs(all.items) do
-    h.eq(it.url:sub(1, 27), "x-apple.systempreferences:c", "row " .. it.title .. " carries a pane URL")
+    if it.title ~= "Passwords" then
+        h.eq(it.url:sub(1, 27), "x-apple.systempreferences:c", "row " .. it.title .. " carries a pane URL")
+    end
     h.eq(seen[it.id], nil, "duplicate pane id: " .. tostring(it.id))
     seen[it.id] = true
     h.eq(type(it.icon), "string", "row " .. it.title .. " has an icon")
@@ -46,6 +48,17 @@ h.eq(find(rows("ss displays"), "Displays").url,
 h.eq(find(rows("ss Full Disk"), "Full Disk Access").url,
      "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles",
      "permission sub-pane keeps its ?Anchor")
+
+-- macOS 27: Screen Saver lives in the Wallpaper pane; Passwords is its own app.
+local saver = find(rows("ss screen saver"), "Screen Saver")
+h.eq(saver.url, "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension",
+     "Screen Saver opens the Wallpaper pane")
+h.eq(find(rows("ss idle"), "Screen Saver") ~= nil, true, "Screen Saver keeps its 'idle' keyword")
+
+local pw = find(rows("ss passwords"), "Passwords")
+h.eq(pw.url, "/System/Applications/Passwords.app", "Passwords opens Passwords.app")
+h.eq(pw.subtitle, "App", "Passwords row is labelled as an app")
+h.eq(find(rows("ss keychain"), "Passwords") ~= nil, true, "Passwords keeps its 'keychain' keyword")
 
 h.eq(#rows("ss displays").items, 1, "specific title match is not diluted")
 h.eq(find(rows("SS DISPLAYS"), "Displays") ~= nil, true, "filter is case-insensitive")

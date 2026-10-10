@@ -24,7 +24,10 @@ local function trim(s)
     return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
--- { title, pane id, extra keywords (lowercase, space-separated), SF Symbol }.
+-- { title, pane id, extra keywords (lowercase, space-separated), SF Symbol,
+--   optional open target }. The pane id is the row id; the open target, when
+--   set, replaces the x-apple.systempreferences: URL (a pane that moved keeps its
+--   old id so the row stays stable, and an absolute path opens an app).
 -- Ids are the macOS 13+ Settings extension bundle ids; `?Anchor` selects a
 -- sub-pane. Keywords carry the old System Preferences names and the words people
 -- actually type, since the titles alone miss most of them.
@@ -51,11 +54,15 @@ local PANES = {
     { "Desktop & Dock",        "com.apple.Desktop-Settings.extension",                       "hot corners mission control spaces stage manager", "dock.rectangle" },
     { "Control Center",        "com.apple.ControlCenter-Settings.extension",                 "menu bar",                            "switch.2" },
     { "Wallpaper",             "com.apple.Wallpaper-Settings.extension",                     "desktop picture background",          "photo" },
-    { "Screen Saver",          "com.apple.ScreenSaver-Settings.extension",                   "screensaver idle",                    "sparkles.tv" },
+    -- macOS 27 folded Screen Saver into the Wallpaper pane; the old id is gone.
+    { "Screen Saver",          "com.apple.ScreenSaver-Settings.extension",                   "screensaver idle",                    "sparkles.tv",
+      "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension" },
     { "Lock Screen",           "com.apple.Lock-Screen-Settings.extension",                   "require password idle screensaver",   "lock.display" },
     { "Touch ID & Password",   "com.apple.Touch-ID-Settings.extension",                      "fingerprint biometric",               "touchid" },
     { "Users & Groups",        "com.apple.Users-Groups-Settings.extension",                  "accounts admin guest",                "person.2" },
-    { "Passwords",            "com.apple.Passwords-Settings.extension",                      "keychain autofill 2fa otp",           "key" },
+    -- Passwords left Settings for its own app; the pane id no longer exists.
+    { "Passwords",             "com.apple.Passwords-Settings.extension",                     "keychain autofill 2fa otp",           "key",
+      "/System/Applications/Passwords.app" },
     { "Internet Accounts",     "com.apple.Internet-Accounts-Settings.extension",             "mail icloud google exchange",         "at" },
     { "Apple Account",         "com.apple.systempreferences.AppleIDSettings",                "apple id icloud",                     "person.crop.circle" },
     { "Keyboard",              "com.apple.Keyboard-Settings.extension",                      "shortcuts key repeat text replacement modifier", "keyboard" },
@@ -79,10 +86,11 @@ local function row(p)
     return {
         id       = p[2],
         title    = p[1],
-        subtitle = "System Settings",
+        subtitle = (p[5] or ""):sub(1, 1) == "/" and "App" or "System Settings",
         icon     = p[4] or "gearshape",
-        -- The runner opens this natively on Enter and dismisses itself.
-        url      = "x-apple.systempreferences:" .. p[2],
+        -- The runner opens this natively on Enter and dismisses itself; an
+        -- absolute path becomes a file URL there (RunnerPanel.quicklinkURL).
+        url      = p[5] or ("x-apple.systempreferences:" .. p[2]),
     }
 end
 
