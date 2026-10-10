@@ -50,6 +50,12 @@ struct JSONRPC {
         line(["jsonrpc": "2.0", "id": id, "result": result])
     }
 
+    /// A client→server error reply to a server-initiated request we can't serve
+    /// (`JSONRPCError {id, error: {code, message}}`; -32601 = method not found).
+    static func errorResponse(id: Any, code: Int, message: String) -> Data {
+        line(["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": message]])
+    }
+
     static func line(_ obj: [String: Any]) -> Data {
         var data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
         data.append(Self.newlineByte)

@@ -88,6 +88,13 @@ tag from the now-released section and put it on the new top draft.
   completed; the controller now remembers completed turns and drops that late announcement.
   Stop pressed during the first-use codex download no longer leaves the chat on "Loading"
   until a second Stop.
+- **Fixed: coding agent approvals answered codex in the wrong shape.** A file-change
+  approval now shows the paths and the diff being approved (codex only sends the item id;
+  the card looked for fields that do not exist and always read "Apply changes to files").
+  Answering a permission request now grants or refuses the requested profile for the turn,
+  or for the session with Always, instead of a reply codex could not read. Requests Prosper
+  cannot serve, such as MCP elicitation, are refused with a JSON-RPC "method not found"
+  error instead of a made-up decision.
 - **Fixed: manual fan control fought the thermal kill-switch.** When the helper reset the
   fans to automatic at 95 °C, the app re-applied the saved speed about a second later into
   a chassis still above the cut-off, and the switch fired again on its next tick. The helper

@@ -43,10 +43,12 @@ actor CodexHarness: CodingHarness {
     /// In-flight client→server requests awaiting a response, keyed by JSON-RPC id.
     private var pending: [Int: CheckedContinuation<RPCResult, Error>] = [:]
     /// Maps an `ApprovalID` back to the server-request JSON-RPC id we must reply to,
-    /// plus whether the request used the modern `item/*` method (whose decision enum
-    /// is `accept`/`acceptForSession`/`decline`/`cancel`) or the legacy one
-    /// (`approved`/`approved_for_session`/`denied`/`abort`).
-    private var approvalReplies: [String: (rpcID: Any, modern: Bool)] = [:]
+    /// the request method (each has its own response shape, see `approvalResult`) and,
+    /// for a permissions request, the requested profile a grant echoes back.
+    private var approvalReplies: [String: (rpcID: Any, method: String, requested: [String: Any])] = [:]
+    /// `fileChange` items from `item/started`, by item id: `item/fileChange/requestApproval`
+    /// carries only the `itemId`, so the approval's diff comes from here. Cleared per turn.
+    private var fileChanges: [String: [[String: Any]]] = [:]
     /// `turn/start.sandboxPolicy` per thread id. Thread start/resume only take the mode
     /// string, so the writable roots and the network toggle ride on every turn.
     private var sandboxPolicies: [String: [String: Any]] = [:]
@@ -191,6 +193,7 @@ actor CodexHarness: CodingHarness {
         consumer?.cancel()
         consumer = nil
         approvalReplies.removeAll()   // codex is gone; no reply can land
+        fileChanges.removeAll()
         inboundContinuation.finish()
         eventContinuation.finish()
     }
@@ -284,7 +287,7 @@ actor CodexHarness: CodingHarness {
         }
         try writeLine(JSONRPC.response(
             id: reply.rpcID,
-            result: ["decision": Self.decisionString(decision, modern: reply.modern)]))
+            result: Self.approvalResult(method: reply.method, requested: reply.requested, decision: decision)))
         // Only after a successful write — a failed write keeps the mapping so the
         // decision can be retried instead of orphaning the codex-side request.
         approvalReplies.removeValue(forKey: id.raw)
@@ -344,7 +347,11 @@ actor CodexHarness: CodingHarness {
             case .notification(let method, let params):
                 // A turn ending orphans any approval it left unanswered (codex won't
                 // re-request); drop the mappings so they can't accumulate across turns.
-                if method == Wire.turnCompleted { approvalReplies.removeAll() }
+                if method == Wire.turnCompleted { approvalReplies.removeAll(); fileChanges.removeAll() }
+                if method == Wire.itemStarted, let item = params["item"] as? [String: Any],
+                   item["type"] as? String == "fileChange", let id = item["id"] as? String {
+                    fileChanges[id] = item["changes"] as? [[String: Any]] ?? []
+                }
                 for event in Self.mapNotification(method: method, params: params) {
                     eventContinuation.yield(event)
                 }
@@ -354,18 +361,23 @@ actor CodexHarness: CodingHarness {
 
     private func handleServerRequest(id: Any, method: String, params: [String: Any]) {
         guard let kind = Wire.approvalKind(for: method) else {
-            // Unknown server request — decline politely so Codex isn't left hanging.
-            let fallback = method.hasPrefix("item/") ? "decline" : "denied"
-            try? writeLine(JSONRPC.response(id: id, result: ["decision": fallback]))
+            // A request we don't serve (user input, MCP elicitation, dynamic tool call,
+            // auth refresh, …): each has its own response type, so a made-up result is
+            // undecodable. Answer with JSON-RPC "method not found" so codex isn't left hanging.
+            try? writeLine(JSONRPC.errorResponse(
+                id: id, code: -32601, message: "\(method) is not supported by this client"))
             return
         }
         let approvalID = ApprovalID(raw: UUID().uuidString)
-        approvalReplies[approvalID.raw] = (rpcID: id, modern: method.hasPrefix("item/"))
+        approvalReplies[approvalID.raw] = (rpcID: id, method: method,
+                                           requested: params["permissions"] as? [String: Any] ?? [:])
         let session = SessionID(raw: (params["threadId"] as? String) ?? "")
+        let changes = method == Wire.fileChangeApproval
+            ? (params["itemId"] as? String).flatMap { fileChanges[$0] } ?? [] : []
         let request = ApprovalRequest(
             id: approvalID, kind: kind, session: session,
-            summary: Self.approvalSummary(kind: kind, params: params),
-            detail: Self.approvalDetail(kind: kind, params: params)
+            summary: Self.approvalSummary(kind: kind, params: params, changes: changes),
+            detail: Self.approvalDetail(kind: kind, params: params, changes: changes)
         )
         eventContinuation.yield(.approvalRequest(request))
     }
@@ -503,6 +515,35 @@ actor CodexHarness: CodingHarness {
         }
     }
 
+    /// The approval reply's `result`, per request method (codex 0.162 schema):
+    /// - `item/permissions/requestApproval` → `PermissionsRequestApprovalResponse
+    ///   {permissions: GrantedPermissionProfile, scope: "turn" | "session"}` — a grant echoes
+    ///   the requested profile, a refusal grants nothing (`{}`); there is no decision field.
+    /// - `item/commandExecution/requestApproval` → `{decision}`; the amendment is the object
+    ///   variant `{"acceptWithExecpolicyAmendment": {"execpolicy_amendment": [argv prefix]}}`.
+    /// - `item/fileChange/requestApproval` / `applyPatchApproval` → `{decision}`, no amendment.
+    /// - legacy `execCommandApproval` → `{decision: ReviewDecision}`, amendment
+    ///   `{"approved_execpolicy_amendment": {"proposed_execpolicy_amendment": [...]}}`.
+    private static func approvalResult(method: String, requested: [String: Any],
+                                       decision: ApprovalDecision) -> [String: Any] {
+        if method == Wire.permissionsApproval {
+            switch decision {
+            case .accept, .acceptWithAmendment: return ["permissions": requested, "scope": "turn"]
+            case .acceptForSession: return ["permissions": requested, "scope": "session"]
+            case .decline, .cancel: return ["permissions": [String: Any](), "scope": "turn"]
+            }
+        }
+        let modern = method.hasPrefix("item/")
+        // An empty prefix would amend nothing useful: fall through to a plain accept.
+        if case .acceptWithAmendment(let prefix) = decision, !prefix.isEmpty,
+           method == Wire.commandApproval || method == Wire.legacyCommandApproval {
+            return ["decision": modern
+                ? ["acceptWithExecpolicyAmendment": ["execpolicy_amendment": prefix]]
+                : ["approved_execpolicy_amendment": ["proposed_execpolicy_amendment": prefix]]]
+        }
+        return ["decision": decisionString(decision, modern: modern)]
+    }
+
     /// Decision wire string per protocol generation (verified against
     /// `codex app-server generate-json-schema`): modern `item/*/requestApproval`
     /// responses use `CommandExecutionApprovalDecision`, legacy
@@ -513,26 +554,33 @@ actor CodexHarness: CodingHarness {
         case .acceptForSession: return modern ? "acceptForSession" : "approved_for_session"
         case .decline: return modern ? "decline" : "denied"
         case .cancel: return modern ? "cancel" : "abort"
-        case .acceptWithAmendment: return modern ? "accept" : "approved"   // amendment payload handled separately if supported
+        case .acceptWithAmendment: return modern ? "accept" : "approved"   // no amendment variant (file change) — see approvalResult
         }
     }
 
-    private static func approvalSummary(kind: ApprovalRequest.Kind, params: [String: Any]) -> String {
+    /// `changes`: the `FileUpdateChange`s (`{path, kind, diff}`) of the approval's
+    /// `fileChange` item; empty for other kinds.
+    private static func approvalSummary(kind: ApprovalRequest.Kind, params: [String: Any],
+                                        changes: [[String: Any]]) -> String {
         switch kind {
         case .command:
             if let cmd = params["command"] as? [String] { return cmd.joined(separator: " ") }
             return (params["command"] as? String) ?? "Run a command"
         case .fileChange:
-            return "Apply changes to \((params["path"] as? String) ?? "files")"
+            let paths = changes.compactMap { $0["path"] as? String }
+            return "Apply changes to \(paths.isEmpty ? "files" : paths.joined(separator: ", "))"
         case .permission:
             return (params["reason"] as? String) ?? "Grant a permission"
         }
     }
 
-    private static func approvalDetail(kind: ApprovalRequest.Kind, params: [String: Any]) -> String? {
+    private static func approvalDetail(kind: ApprovalRequest.Kind, params: [String: Any],
+                                       changes: [[String: Any]]) -> String? {
         switch kind {
         case .command: return params["cwd"] as? String
-        case .fileChange: return (params["changes"] as? [String: Any]).flatMap { try? String(data: JSONSerialization.data(withJSONObject: $0), encoding: .utf8) }
+        case .fileChange:
+            let diffs = changes.map { "\(($0["path"] as? String) ?? "")\n\(($0["diff"] as? String) ?? "")" }
+            return diffs.isEmpty ? nil : diffs.joined(separator: "\n")
         case .permission: return params["detail"] as? String
         }
     }
@@ -725,13 +773,19 @@ private enum Wire {
     static let tokenUsage = "thread/tokenUsage/updated"
 
     /// Server→client approval requests. Maps a request method to its UI kind.
+    static let commandApproval = "item/commandExecution/requestApproval"
+    static let fileChangeApproval = "item/fileChange/requestApproval"
+    static let permissionsApproval = "item/permissions/requestApproval"
+    static let legacyCommandApproval = "execCommandApproval"
+    static let legacyPatchApproval = "applyPatchApproval"
+
     static func approvalKind(for method: String) -> ApprovalRequest.Kind? {
         switch method {
-        case "item/commandExecution/requestApproval", "execCommandApproval":
+        case commandApproval, legacyCommandApproval:
             return .command
-        case "item/fileChange/requestApproval", "applyPatchApproval":
+        case fileChangeApproval, legacyPatchApproval:
             return .fileChange
-        case "item/permissions/requestApproval":
+        case permissionsApproval:
             return .permission
         default:
             return nil

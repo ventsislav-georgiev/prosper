@@ -458,6 +458,14 @@ struct ChatRootView: View {
             Text("Approve \(approvalNoun(req.kind))?").font(Neon.font(.subheadline).bold())
             Text(req.summary).font(Neon.font(.caption, design: .monospaced))
                 .foregroundStyle(Neon.textSecondary).lineLimit(3)
+            if req.kind == .fileChange, let diff = req.detail {
+                ScrollView {
+                    Text(diff).font(Neon.font(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: sz(160))
+            }
             HStack {
                 Button("Approve") { controller.respond(to: req, decision: .accept) }
                     .buttonStyle(.neon)

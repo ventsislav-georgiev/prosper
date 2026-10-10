@@ -61,7 +61,9 @@ enum ApprovalDecision: Sendable {
     case acceptForSession
     case decline
     case cancel
-    case acceptWithAmendment(String)   // codex-only; ignored where unsupported
+    /// Codex-only: accept and allow commands starting with this argv prefix from now on
+    /// (the request's `proposedExecpolicyAmendment`). Plain accept where unsupported.
+    case acceptWithAmendment([String])
 }
 
 struct ApprovalRequest: Sendable {

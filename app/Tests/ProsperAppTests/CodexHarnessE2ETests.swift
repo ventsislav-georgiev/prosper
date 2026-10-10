@@ -32,6 +32,12 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// the whole turn (turn/started, turn/completed) and then the turn/start reply in one
     /// stdout write, so the turn has completed before `sendPrompt` returns its id; with
     /// "FAIL" too, the turn completes `failed` ("mock turn failed").
+    /// PERMS / PATCH / AMEND / ELICIT issue one 0.162-schema server request (permissions
+    /// approval; a `fileChange` item/started then its file-change approval; a command
+    /// approval proposing an execpolicy amendment; an MCP elicitation, which the client
+    /// doesn't serve) with id "srv-1" and hold the turn until the client replies: a reply
+    /// in the method's response shape (exact keys, `reply_error`) finishes the turn, any
+    /// other fails it with "bad reply: …".
     /// Thread and turn params are checked against the codex 0.139/0.161/0.162 schemas
     /// (`ThreadStartParams.sandbox: SandboxMode`, no `sandboxPolicy` there;
     /// `TurnStartParams.sandboxPolicy: SandboxPolicy`); a mismatch is a JSON-RPC error.
@@ -53,6 +59,70 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     def turn(status):
         return {"id": current_turn, "items": [], "status": status}
+
+    def finish_turn(problem=None):
+        global current_turn
+        send({"jsonrpc": "2.0", "method": "item/agentMessage/delta",
+              "params": {"turnId": current_turn, "itemId": "m1", "delta": "Hello from mock"}})
+        send({"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
+              "params": {"turnId": current_turn, "tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}})
+        done = turn("failed" if problem else "completed")
+        if problem:
+            done["error"] = {"message": "bad reply: " + problem}
+        send({"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": "thread-1", "turn": done}})
+        current_turn = None
+
+    # Server requests per prompt word, params per the 0.162 schema (ServerRequest.json).
+    def server_request(word):
+        t = {"threadId": "thread-1", "turnId": current_turn, "startedAtMs": 0}
+        if word == "PERMS":
+            return "item/permissions/requestApproval", dict(t, itemId="perm-1", cwd="/tmp",
+                reason="needs network", permissions={"network": {"enabled": True}})
+        if word == "PATCH":
+            send({"jsonrpc": "2.0", "method": "item/started", "params": dict(t, item={
+                "id": "fc-1", "type": "fileChange", "status": "inProgress",
+                "changes": [{"path": "/tmp/a.txt", "kind": {"type": "update", "move_path": None},
+                             "diff": "@@ -1 +1 @@\n-old\n+new\n"}]})})
+            return "item/fileChange/requestApproval", dict(t, itemId="fc-1", reason=None)
+        if word == "AMEND":
+            return "item/commandExecution/requestApproval", dict(t, itemId="cmd-1",
+                command="rm -rf build", cwd="/tmp", proposedExecpolicyAmendment=["rm", "-rf"])
+        return "mcpServer/elicitation/request", dict(t, serverName="mock-mcp")
+
+    DECISIONS = ("accept", "acceptForSession", "decline", "cancel")
+
+    def reply_error(method, msg):
+        # None when the client's reply matches codex 0.162's response type for `method`.
+        res, err = msg.get("result"), msg.get("error")
+        if method == "mcpServer/elicitation/request":   # unserved: JSONRPCError, -32601
+            if res is not None or not isinstance(err, dict) or set(err) - {"code", "message", "data"} \
+                    or err.get("code") != -32601 or not isinstance(err.get("message"), str):
+                return "want a -32601 error, got " + json.dumps(msg)
+            return None
+        if not isinstance(res, dict) or err is not None:
+            return "want a result, got " + json.dumps(msg)
+        if method == "item/permissions/requestApproval":
+            # PermissionsRequestApprovalResponse {permissions (required), scope, strictAutoReview}
+            perms = res.get("permissions")
+            if set(res) - {"permissions", "scope", "strictAutoReview"} or not isinstance(perms, dict) \
+                    or set(perms) - {"fileSystem", "network"} or res.get("scope", "turn") not in ("turn", "session"):
+                return "permissions reply " + json.dumps(res)
+            return None
+        if set(res) != {"decision"}:   # {File,CommandExecution}RequestApprovalResponse
+            return "decision reply " + json.dumps(res)
+        d = res["decision"]
+        if d in DECISIONS:
+            return None
+        if method == "item/commandExecution/requestApproval" and isinstance(d, dict) \
+                and set(d) == {"acceptWithExecpolicyAmendment"}:
+            a = d["acceptWithExecpolicyAmendment"]
+            if isinstance(a, dict) and set(a) == {"execpolicy_amendment"} \
+                    and isinstance(a["execpolicy_amendment"], list) \
+                    and all(isinstance(x, str) for x in a["execpolicy_amendment"]):
+                return None
+        return "decision " + json.dumps(d)
+
+    awaiting = None   # method of the outstanding "srv-1" request
 
     def error(mid, message):
         send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32600, "message": message}})
@@ -104,8 +174,11 @@ final class CodexHarnessE2ETests: XCTestCase {
             os.remove(ERROR_ON)
             error(mid, "mock error on " + method)
             continue
-        # A client reply to our approval server-request (has result, no method).
-        if method is None and "result" in msg:
+        # A client reply to one of our server requests (result or error, no method).
+        if method is None and ("result" in msg or "error" in msg):
+            if awaiting and mid == "srv-1":
+                finish_turn(reply_error(awaiting, msg))
+                awaiting = None
             continue
         if method == "initialize":
             send({"jsonrpc": "2.0", "id": mid, "result": {"capabilities": {}}})
@@ -163,13 +236,12 @@ final class CodexHarnessE2ETests: XCTestCase {
                 send({"jsonrpc": "2.0", "id": "appr-1",
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "command": ["rm", "-rf", "build"], "cwd": "/tmp"}})
-            send({"jsonrpc": "2.0", "method": "item/agentMessage/delta",
-                  "params": {"turnId": current_turn, "itemId": "m1", "delta": "Hello from mock"}})
-            send({"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
-                  "params": {"turnId": current_turn, "tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}})
-            send({"jsonrpc": "2.0", "method": "turn/completed",
-                  "params": {"threadId": "thread-1", "turn": turn("completed")}})
-            current_turn = None
+            word = next((w for w in ("PERMS", "PATCH", "AMEND", "ELICIT") if w in prompt), None)
+            if word:
+                awaiting, req_params = server_request(word)
+                send({"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params})
+                continue
+            finish_turn()
         elif method in ("turn/interrupt", "turn/steer"):
             # Both are ClientRequests in codex: without an id real codex drops them.
             if mid is None or (method == "turn/interrupt" and wedged):
@@ -960,6 +1032,88 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertTrue(third, "after a respawn the new codex's turn-1 was taken for the old one (phase \(controller.phase))")
         XCTAssertEqual(Self.count("initialize", exe: exe), 3)
         await controller.end()
+    }
+
+    // MARK: - Approval reply shapes (codex 0.162 schema; the mock fails the turn on a bad reply)
+
+    /// The client's reply to the mock's "srv-1" server request, as codex received it.
+    private static func reply(exe: URL) throws -> [String: Any]? {
+        let log = exe.deletingLastPathComponent().appendingPathComponent("received.jsonl")
+        return try String(contentsOf: log, encoding: .utf8)
+            .split(separator: "\n")
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+            .first { $0["method"] == nil && $0["id"] as? String == "srv-1" }
+    }
+
+    /// Submits `goal`, answers the approval the controller shows with `decision` (nil:
+    /// expects none), and returns that approval plus the reply codex got. The turn must
+    /// finish cleanly: the mock fails it when the reply isn't in the method's shape.
+    @MainActor
+    private func answer(_ goal: String, with decision: ApprovalDecision?) async throws
+        -> (approval: ApprovalRequest?, reply: [String: Any]?) {
+        let (exe, home) = try makeMock()
+        let (controller, _) = makeController(exe: exe, home: home)
+        controller.submit(goal: goal)
+        var approval: ApprovalRequest?
+        if let decision {
+            let asked = await Self.wait { !controller.pendingApprovals.isEmpty }
+            XCTAssertTrue(asked, "no approval reached the controller (phase \(controller.phase))")
+            approval = controller.pendingApprovals.first
+            if let approval { controller.respond(to: approval, decision: decision) }
+        }
+        let failed = { if case .error = controller.phase { return true }; return false }
+        let ended = await Self.wait { Self.finishedTurn(controller) || failed() }
+        XCTAssertTrue(ended, "the turn never finished (phase \(controller.phase))")
+        XCTAssertEqual(controller.phase, .idle, "codex rejected the reply")
+        XCTAssertTrue(controller.pendingApprovals.isEmpty)
+        let reply = try Self.reply(exe: exe)
+        await controller.end()
+        return (approval, reply)
+    }
+
+    /// W7: `PermissionsRequestApprovalResponse {permissions, scope}` — no `decision`; a
+    /// grant echoes the requested profile, "Always" is the session scope, Deny grants nothing.
+    @MainActor
+    func testControllerPermissionsReplyIsPermissionsAndScope() async throws {
+        let granted = try await answer("PERMS please", with: .acceptForSession)
+        XCTAssertEqual(granted.approval?.kind, .permission)
+        XCTAssertEqual(granted.reply?["result"] as? NSDictionary,
+                       ["permissions": ["network": ["enabled": true]], "scope": "session"] as NSDictionary)
+        let denied = try await answer("PERMS please", with: .decline)
+        XCTAssertEqual(denied.reply?["result"] as? NSDictionary,
+                       ["permissions": [String: Any](), "scope": "turn"] as NSDictionary)
+    }
+
+    /// W10: file-change approval params carry only `itemId`; the card's paths and diff come
+    /// from the `fileChange` item announced in `item/started`.
+    @MainActor
+    func testControllerFileChangeApprovalShowsTheItemsDiff() async throws {
+        let (approval, reply) = try await answer("PATCH please", with: .accept)
+        XCTAssertEqual(approval?.kind, .fileChange)
+        XCTAssertEqual(approval?.summary, "Apply changes to /tmp/a.txt")
+        XCTAssertEqual(approval?.detail, "/tmp/a.txt\n@@ -1 +1 @@\n-old\n+new\n")
+        XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "accept"] as NSDictionary)
+    }
+
+    /// W12: the amendment is `CommandExecutionApprovalDecision`'s object variant, not "accept".
+    @MainActor
+    func testControllerAmendmentReplyIsTheExecpolicyObject() async throws {
+        let (approval, reply) = try await answer("AMEND please", with: .acceptWithAmendment(["rm", "-rf"]))
+        XCTAssertEqual(approval?.kind, .command)
+        XCTAssertEqual(reply?["result"] as? NSDictionary,
+                       ["decision": ["acceptWithExecpolicyAmendment": ["execpolicy_amendment": ["rm", "-rf"]]]]
+                       as NSDictionary)
+    }
+
+    /// W8: a server request the client doesn't serve (MCP elicitation) gets a JSON-RPC
+    /// "method not found" error, not a made-up `{decision}` result; no approval is shown.
+    @MainActor
+    func testControllerUnservedServerRequestGetsMethodNotFound() async throws {
+        let (_, reply) = try await answer("ELICIT please", with: nil)
+        XCTAssertNil(reply?["result"])
+        let error = reply?["error"] as? [String: Any]
+        XCTAssertEqual(error?["code"] as? Int, -32601)
+        XCTAssertEqual(Set(error?.keys.map { $0 } ?? []), ["code", "message"])
     }
 
     /// Fake Responses endpoint for the real-codex test, plus a stand-in for the Bun plugin
