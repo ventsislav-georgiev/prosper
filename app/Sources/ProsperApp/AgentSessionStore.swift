@@ -287,10 +287,12 @@ actor AgentSessionStore {
         case "assistant":
             return .assistant(id: d.id, text: d.text ?? "", reasoning: d.reasoning ?? false)
         case "toolCall":
-            return .toolCall(id: d.id, name: d.name ?? "", args: d.args ?? "",
-                             status: status(from: d.status), output: d.output ?? "")
+            // #358: history saved before ingress escaping loads escaped; WireText is idempotent,
+            // so text escaped at ingress loads unchanged.
+            return .toolCall(id: d.id, name: d.name ?? "", args: WireText.multiLine(d.args ?? ""),
+                             status: status(from: d.status), output: WireText.toolOutput(d.output ?? ""))
         case "fileDiff":
-            return .fileDiff(id: d.id, path: d.path ?? "", diff: d.diff ?? "",
+            return .fileDiff(id: d.id, path: WireText.oneLine(d.path ?? ""), diff: WireText.multiLine(d.diff ?? ""),
                              change: change(from: d.change))
         case "plan":
             return .plan(id: d.id, steps: (d.steps ?? []).map {

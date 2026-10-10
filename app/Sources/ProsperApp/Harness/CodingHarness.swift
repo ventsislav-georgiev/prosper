@@ -85,6 +85,63 @@ struct ApprovalRequest: Sendable {
     }
 }
 
+// MARK: - Wire text
+
+/// Harness text escaped for display: approval cards (CodexHarness) and the transcript's
+/// tool and file-diff cards (#358, at AgentController ingress and AgentSessionStore restore).
+/// Every function is idempotent, so restoring already-escaped history leaves it unchanged.
+enum WireText {
+    /// Wire text on one card line: an embedded newline must not forge extra card lines, and
+    /// a control (Cc: C0, DEL, C1), a format scalar (bidi override, zero-width) or another
+    /// default-ignorable one (Hangul filler, variation selector) shows as `\u{…}` rather than
+    /// reordering or hiding what is granted. A run of 3 or more whitespace scalars (any Zs —
+    /// space, U+00A0, U+2003, U+3000 — or tab, mixed freely) becomes one `␠×N` marker with the
+    /// run's total scalar count, so padding can't push a command's tail out of view; a single
+    /// or double space is left alone (a lone tab still escapes as `\u{9}`).
+    static func oneLine(_ s: String) -> String {
+        let escape = escaped
+        var out = "", run: [Unicode.Scalar] = []
+        func flush() {
+            out += run.count >= 3 ? "␠×\(run.count)" : run.map(escape).joined()
+            run = []
+        }
+        for u in s.components(separatedBy: .newlines).joined(separator: "\\n").unicodeScalars {
+            if u == "\t" || u.properties.generalCategory == .spaceSeparator { run.append(u); continue }
+            flush()
+            out += escape(u)
+        }
+        flush()
+        return out
+    }
+
+    /// #357: a file diff keeps its real newlines and indentation (no whitespace-run collapsing, a
+    /// diff's indentation is content), but every other scalar goes through `escaped`, so a bidi
+    /// override in the body (Trojan Source) shows as `\u{202E}` instead of reordering the card.
+    /// A tab stays raw: it hides nothing. A CRLF line end reads as a plain newline; a lone `\r`
+    /// (which can overprint text in some renderers) shows as `\u{D}`.
+    static func multiLine(_ s: String) -> String {
+        // Split on scalars: as Characters, "\r\n" is one cluster that never equals "\n".
+        s.replacingOccurrences(of: "\r\n", with: "\n").unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.map { $0 == "\t" ? "\t" : escaped($0) }.joined() }
+            .joined(separator: "\n")
+    }
+
+    /// A control (Cc), a format scalar (Cf), a default-ignorable one, or a line/paragraph
+    /// separator (Zl/Zp, U+2028/U+2029) as `\u{…}` text. Zl/Zp matter only to `multiLine`:
+    /// `oneLine` has already split them out with `.newlines`.
+    static func escaped(_ u: Unicode.Scalar) -> String {
+        [.control, .format, .lineSeparator, .paragraphSeparator].contains(u.properties.generalCategory)
+            || u.properties.isDefaultIgnorableCodePoint
+            ? "\\u{\(String(u.value, radix: 16, uppercase: true))}" : String(u)
+    }
+
+    /// #358: command output drops well-formed SGR colour codes (`ESC [ … m`) first, then goes
+    /// through `multiLine`, so any other ESC sequence (an OSC title, a cursor move) shows escaped.
+    static func toolOutput(_ s: String) -> String {
+        multiLine(s.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression))
+    }
+}
+
 // MARK: - Event payloads
 
 struct ToolCall: Sendable {

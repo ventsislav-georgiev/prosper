@@ -641,7 +641,9 @@ final class AgentController {
             upsertToolCall(call, output: call.output)
         case .fileChange(_, let diff):
             autoNudges = 0   // model is doing real work — reset the nudge budget
-            append(.fileDiff(id: UUID().uuidString, path: diff.path, diff: diff.unifiedDiff, change: diff.change))
+            // #358: escaped at ingress like the approval card (path on one line, body per line).
+            append(.fileDiff(id: UUID().uuidString, path: WireText.oneLine(diff.path),
+                             diff: WireText.multiLine(diff.unifiedDiff), change: diff.change))
         case .planUpdated(_, let steps):
             upsertPlan(steps)
         case .approvalRequest(let req):
@@ -855,27 +857,33 @@ final class AgentController {
         }
     }
 
+    /// #358: args and output are escaped here, at ingress (`WireText`); the items, the store and the
+    /// cards only ever hold display text. Output escaping is per scalar, so streamed chunks escape
+    /// alone: a CRLF split across two chunks keeps its `\r` as `\u{D}` (or an SGR code split
+    /// across two shows escaped) until the completion's whole output replaces the deltas.
     private func upsertToolCall(_ call: ToolCall, output: String?) {
+        let args = WireText.multiLine(call.argumentsJSON), output = output.map(WireText.toolOutput)
         if let idx = itemIndex[call.id], case .toolCall(_, _, _, _, let prevOut) = items[idx] {
-            items[idx] = .toolCall(id: call.id, name: call.name, args: call.argumentsJSON,
+            items[idx] = .toolCall(id: call.id, name: call.name, args: args,
                                    status: call.status, output: output ?? prevOut)
         } else {
             itemIndex[call.id] = items.count
-            items.append(.toolCall(id: call.id, name: call.name, args: call.argumentsJSON,
+            items.append(.toolCall(id: call.id, name: call.name, args: args,
                                    status: call.status, output: output ?? ""))
         }
     }
 
     private func appendToolOutput(_ id: String, chunk: ToolOutputChunk) {
+        let text = WireText.toolOutput(chunk.text)
         guard let idx = itemIndex[id], case .toolCall(let cid, let name, let args, let status, let out) = items[idx] else {
             // Output delta raced ahead of its item/started event — create a
             // placeholder so the leading chunks aren't silently dropped (the
             // completed event later replaces output with the authoritative whole).
             itemIndex[id] = items.count
-            items.append(.toolCall(id: id, name: "", args: "", status: .running, output: chunk.text))
+            items.append(.toolCall(id: id, name: "", args: "", status: .running, output: text))
             return
         }
-        items[idx] = .toolCall(id: cid, name: name, args: args, status: status, output: out + chunk.text)
+        items[idx] = .toolCall(id: cid, name: name, args: args, status: status, output: out + text)
     }
 
     private func upsertPlan(_ steps: [PlanStep]) {

@@ -59,6 +59,29 @@ final class AgentSessionStoreTests: XCTestCase {
         XCTAssertEqual(message, "boom")
     }
 
+    /// #358: history saved before ingress escaping loads escaped; text escaped at ingress loads
+    /// unchanged (no double escape).
+    func testRestoreEscapesRawHistoryAndKeepsEscapedHistory() async {
+        let store = makeStore()
+        let raw: [AgentItem] = [
+            .toolCall(id: "t1", name: "shell", args: "{\"cmd\":\"a\u{202E}b\"}", status: .succeeded,
+                      output: "\u{1B}[1mok\u{1B}[0m\u{202E}\r\n"),
+            .fileDiff(id: "f1", path: "x\u{202E}.go", diff: "+user\u{202E} \u{2066}# admin\n", change: .modify),
+        ]
+        let escaped: [AgentItem] = [
+            .toolCall(id: "t1", name: "shell", args: #"{"cmd":"a\u{202E}b"}"#, status: .succeeded,
+                      output: #"ok\u{202E}"# + "\n"),
+            .fileDiff(id: "f1", path: #"x\u{202E}.go"#, diff: #"+user\u{202E} \u{2066}# admin"# + "\n", change: .modify),
+        ]
+        for id in ["raw", "escaped"] { await store.upsertSession(id: id, cwd: "/tmp", model: "m", title: id) }
+        await store.saveTranscript(id: "raw", items: raw)
+        await store.saveTranscript(id: "escaped", items: escaped)
+        let loadedRaw = await store.loadTranscript(id: "raw")
+        let loadedEscaped = await store.loadTranscript(id: "escaped")
+        XCTAssertEqual(loadedRaw, escaped)
+        XCTAssertEqual(loadedEscaped, escaped)
+    }
+
     func testRecentSessionsListsAndDeletes() async throws {
         let store = makeStore()
         let id = "test-session-\(UUID().uuidString)"

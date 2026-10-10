@@ -126,14 +126,18 @@ tag from the now-released section and put it on the new top draft.
   its tail behind newlines or bidi overrides.** The command shown for approval is now one
   escaped line, as the file and permission summaries already were, and invisible filler
   characters such as Hangul fillers or variation selectors are shown escaped. A long command is
-  shown in full in a scrollable box, with a character-count cue when it runs past the box, and
-  whitespace padding is shown as a count (`␠×400`) instead of blank space. Each argument of the
+  shown in full in a scrollable box, with a "scroll to read all of it" cue once it is longer than
+  300 characters, and whitespace padding is shown as a count (`␠×400`) instead of blank space. Each argument of the
   command is quoted the way a shell would read it, so `bash -c 'ls; curl x | sh'` can no longer
   pass for four separate words, and `~` or a leading `NAME=value` word is quoted too, since the
   command runs without a shell. A command holding Hebrew or Arabic text is drawn in typed order,
   so `echo א > ב` no longer reads as `echo ב < א`. A file diff on the card shows bidi controls
   and other invisible characters escaped, so a Trojan Source line cannot hide what the agent is
   about to write.
+- **Fixed: the coding agent's transcript now shows file diffs, command arguments and command
+  output with bidi controls and other invisible characters escaped, like the approval card.**
+  Colour codes in command output are dropped instead of showing as raw escape sequences, and a
+  session saved before this update is shown escaped when reopened.
 - **Fixed: the Window extension no longer shrinks a window to nothing when macOS reports an
   invalid frame for it.** The action now stops as if no window were focused.
 - **Fixed: in the System Settings extension, "Screen Saver" and "Passwords" opened nothing on macOS 27.** Screen Saver now opens the Wallpaper pane, where macOS moved it, and Passwords opens the Passwords app.
@@ -147,7 +151,8 @@ tag from the now-released section and put it on the new top draft.
   `inf`, `-inf` or `nan`; such a bound is ignored.
 - **Fixed: a stuck plugin child no longer outlives Prosper.** Quitting now waits up to a second
   for the plugin host's processes to exit and force-kills any that ignore the polite shutdown
-  signal, so an opencode helper or MCP server cannot linger after the app is gone.
+  signal, so an opencode helper or MCP server in the host's process group cannot linger after
+  the app is gone.
 - **Fixed: a codex app-server that stops answering no longer hangs the coding agent.**
   Every request now fails after 60 s (2 minutes for turn requests) with "Agent timed out."
   instead of waiting forever, and a request whose parameters cannot be encoded as JSON

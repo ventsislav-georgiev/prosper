@@ -1761,8 +1761,95 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     /// #357: a CRLF line end reads as a plain newline; a lone `\r` can overprint, so it shows escaped.
     func testDiffLinesNormalizesCRLFAndEscapesALoneCR() {
-        XCTAssertEqual(CodexHarness.diffLines("-a\r\n+b\r\n"), "-a\n+b\n")
-        XCTAssertEqual(CodexHarness.diffLines("+x\ry"), #"+x\u{D}y"#)
+        XCTAssertEqual(WireText.multiLine("-a\r\n+b\r\n"), "-a\n+b\n")
+        XCTAssertEqual(WireText.multiLine("+x\ry"), #"+x\u{D}y"#)
+        // Split on scalars: the CRLF left after the replacement is one Character, never equal to "\n".
+        XCTAssertEqual(WireText.multiLine("+a\r\r\n+b"), #"+a\u{D}"# + "\n+b")
+    }
+
+    // MARK: - #358 transcript cards escaped at ingress
+
+    /// A harness that plays a fixed event script on every prompt, inside one completed turn.
+    private final class ScriptedHarness: CodingHarness, @unchecked Sendable {
+        let script: [HarnessEvent]
+        let events: AsyncStream<HarnessEvent>
+        let sink: AsyncStream<HarnessEvent>.Continuation
+        init(_ script: [HarnessEvent]) {
+            self.script = script
+            (events, sink) = AsyncStream<HarnessEvent>.makeStream()
+        }
+        func start() async throws {}
+        func shutdown() async { sink.finish() }
+        func newSession(_ opts: SessionOptions) async throws -> SessionID { SessionID(raw: "scripted") }
+        func resumeSession(_ id: SessionID, options: SessionOptions) async throws -> SessionID { id }
+        func forkSession(_ id: SessionID) async throws -> SessionID { id }
+        func sendPrompt(session: SessionID, input: [PromptInput]) async throws -> TurnID {
+            let turn = TurnID(raw: "turn-1")
+            sink.yield(.turnStarted(turn))
+            script.forEach { sink.yield($0) }
+            sink.yield(.turnCompleted(turn: turn, .completed))
+            return turn
+        }
+        func steer(session: SessionID, turn: TurnID, input: [PromptInput]) async throws {}
+        func abort(session: SessionID, turn: TurnID?) async throws {}
+        func respondToApproval(_ id: ApprovalID, decision: ApprovalDecision) async throws {}
+        var capabilities: HarnessCapabilities { HarnessCapabilities(forking: false, liveApprovals: false, ptyExec: false, images: false) }
+    }
+
+    /// The controller's transcript after one turn of `script`.
+    @MainActor
+    private func transcript(after script: [HarnessEvent]) async -> [AgentItem] {
+        let dir = tempDir("scripted-harness")
+        let store = AgentSessionStore(directory: dir)
+        let controller = AgentController(store: store, resolveCodex: { dir }, makeHarness: { ScriptedHarness(script) })
+        addTeardownBlock { _ = await store.recentSessions(limit: 1) }   // let the persist land before the dir goes
+        controller.submit(goal: "go")
+        let ended = await Self.wait { Self.finishedTurn(controller) }
+        XCTAssertTrue(ended, "the scripted turn never finished (phase \(controller.phase))")
+        let items = controller.items
+        await controller.end()
+        return items
+    }
+
+    /// #358: a file diff reaches the transcript escaped like the approval card: bidi controls and a
+    /// U+2028 show as `\u{…}` text, real newlines stay; the path is one escaped line.
+    @MainActor
+    func testControllerTranscriptFileDiffIsEscaped() async {
+        let items = await transcript(after: [.fileChange(turn: TurnID(raw: "turn-1"), FileDiff(
+            path: "/tmp/t\u{202E}og.go\n", unifiedDiff: "@@ -1 +1 @@\n user\u{202E} \u{2066}# admin\n-old\u{2028}+new\n",
+            change: .modify))])
+        let diffs = items.compactMap { if case .fileDiff(_, let path, let diff, _) = $0 { return (path, diff) }; return nil }
+        XCTAssertEqual(diffs.first?.0, #"/tmp/t\u{202E}og.go\n"#)
+        XCTAssertEqual(diffs.first?.1, "@@ -1 +1 @@\n" + #" user\u{202E} \u{2066}# admin"# + "\n" + #"-old\u{2028}+new"# + "\n")
+    }
+
+    /// #358: tool args and streamed output are escaped per chunk; a CRLF split across two chunks
+    /// keeps its `\r` as `\u{D}` (the completion's whole output replaces the deltas later).
+    @MainActor
+    func testControllerTranscriptToolCallIsEscapedPerChunk() async {
+        let items = await transcript(after: [
+            .toolCallStarted(ToolCall(id: "c1", name: "shell", argumentsJSON: "{\"cmd\":\"echo a\u{202E}b\"}")),
+            .toolCallOutput(id: "c1", chunk: ToolOutputChunk(stream: .stdout, text: "\u{1B}[0;31mred\u{1B}[0m\r")),
+            .toolCallOutput(id: "c1", chunk: ToolOutputChunk(stream: .stdout, text: "\nnext\u{2067}")),
+        ])
+        let calls = items.compactMap { if case .toolCall(_, _, let args, _, let out) = $0 { return (args, out) }; return nil }
+        XCTAssertEqual(calls.first?.0, #"{"cmd":"echo a\u{202E}b"}"#)
+        XCTAssertEqual(calls.first?.1, #"red\u{D}"# + "\n" + #"next\u{2067}"#)
+    }
+
+    /// #358: restoring already-escaped history must not escape it again.
+    func testWireTextIsIdempotent() {
+        let raw = "a\u{202E}b\u{2028}c\rd\r\ne\tf\u{200B}\u{1B}]0;t\u{7}  \t g\n"
+        for f in [WireText.multiLine, WireText.oneLine, WireText.toolOutput] {
+            XCTAssertEqual(f(f(raw)), f(raw))
+        }
+    }
+
+    /// #358: tool output drops well-formed SGR colour codes; any other ESC sequence (an OSC) escapes.
+    func testWireTextToolOutputStripsSGROnly() {
+        XCTAssertEqual(WireText.toolOutput("\u{1B}[0;31mred\u{1B}[0m"), "red")
+        XCTAssertEqual(WireText.toolOutput("\u{1B}]0;title\u{7}"), #"\u{1B}]0;title\u{7}"#)
+        XCTAssertEqual(WireText.multiLine("\u{1B}[0m"), #"\u{1B}[0m"#, "only tool output strips SGR")
     }
 
     /// #266: legacy `applyPatchApproval` lists its `fileChanges` keys, sorted, each on one

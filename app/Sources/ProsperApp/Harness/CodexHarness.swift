@@ -626,21 +626,21 @@ actor CodexHarness: CodingHarness {
         switch kind {
         case .command:
             if let cmd = params["command"] as? [String] { return commandSummary(cmd) }
-            return (params["command"] as? String).map(oneLine) ?? "Run a command"
+            return (params["command"] as? String).map(WireText.oneLine) ?? "Run a command"
         case .fileChange:
-            let paths = changes.compactMap { $0["path"] as? String }.map(oneLine)
+            let paths = changes.compactMap { $0["path"] as? String }.map(WireText.oneLine)
             return "Apply changes to \(paths.isEmpty ? "files" : paths.joined(separator: ", "))"
         case .permission:
-            return (params["reason"] as? String).map(oneLine) ?? "Grant a permission"
+            return (params["reason"] as? String).map(WireText.oneLine) ?? "Grant a permission"
         }
     }
 
     private static func approvalDetail(kind: ApprovalRequest.Kind, params: [String: Any],
                                        changes: [[String: Any]]) -> String? {
         switch kind {
-        case .command: return (params["cwd"] as? String).map(oneLine)
+        case .command: return (params["cwd"] as? String).map(WireText.oneLine)
         case .fileChange:
-            let diffs = changes.map { "\(oneLine(($0["path"] as? String) ?? ""))\n\(diffLines(($0["diff"] as? String) ?? ""))" }
+            let diffs = changes.map { "\(WireText.oneLine(($0["path"] as? String) ?? ""))\n\(WireText.multiLine(($0["diff"] as? String) ?? ""))" }
             return diffs.isEmpty ? nil : diffs.joined(separator: "\n")
         case .permission:
             // codex sends no `detail`; "Always" grants this whole `RequestPermissionProfile`,
@@ -662,68 +662,24 @@ actor CodexHarness: CodingHarness {
                 roots[(entry["access"] as? String) ?? "?", default: []].append(name)
             }
             var lines = roots.sorted { $0.key < $1.key }.filter { !$0.value.isEmpty }
-                .map { "\(oneLine($0.key.capitalized)): \($0.value.map(oneLine).joined(separator: ", "))" }
+                .map { "\(WireText.oneLine($0.key.capitalized)): \($0.value.map(WireText.oneLine).joined(separator: ", "))" }
             var other = profile.filter { $0.key != "fileSystem" && $0.key != "network" }.map { ($0.key, $0.value) }
                 + fs.filter { !["read", "write", "entries"].contains($0.key) }.map { ($0.key, $0.value) }
             if let on = (profile["network"] as? [String: Any])?["enabled"] as? Bool {
                 lines.append("Network: \(on ? "enabled" : "disabled")")
             } else if let net = profile["network"], !(net is NSNull) { other.append(("network", net)) }
             // The reply echoes the whole profile: a key the card can't render still shows, as JSON.
-            lines += other.sorted { $0.0 < $1.0 }.map { oneLine("\($0.0): \(jsonString($0.1))") }
-            if let cwd = params["cwd"] as? String { lines.append("In: \(oneLine(cwd))") }
+            lines += other.sorted { $0.0 < $1.0 }.map { WireText.oneLine("\($0.0): \(jsonString($0.1))") }
+            if let cwd = params["cwd"] as? String { lines.append("In: \(WireText.oneLine(cwd))") }
             return lines.isEmpty ? nil : lines.joined(separator: "\n")
         }
-    }
-
-    /// Wire text on one card line: an embedded newline must not forge extra card lines, and
-    /// a control (Cc: C0, DEL, C1), a format scalar (bidi override, zero-width) or another
-    /// default-ignorable one (Hangul filler, variation selector) shows as `\u{…}` rather than
-    /// reordering or hiding what is granted. A run of 3 or more whitespace scalars (any Zs —
-    /// space, U+00A0, U+2003, U+3000 — or tab, mixed freely) becomes one `␠×N` marker with the
-    /// run's total scalar count, so padding can't push a command's tail out of view; a single
-    /// or double space is left alone (a lone tab still escapes as `\u{9}`).
-    private static func oneLine(_ s: String) -> String {
-        let escape = escaped
-        var out = "", run: [Unicode.Scalar] = []
-        func flush() {
-            out += run.count >= 3 ? "␠×\(run.count)" : run.map(escape).joined()
-            run = []
-        }
-        for u in s.components(separatedBy: .newlines).joined(separator: "\\n").unicodeScalars {
-            if u == "\t" || u.properties.generalCategory == .spaceSeparator { run.append(u); continue }
-            flush()
-            out += escape(u)
-        }
-        flush()
-        return out
-    }
-
-    /// #357: a file diff keeps its real newlines and indentation (no whitespace-run collapsing, a
-    /// diff's indentation is content), but every other scalar goes through `escaped`, so a bidi
-    /// override in the body (Trojan Source) shows as `\u{202E}` instead of reordering the card.
-    /// A tab stays raw: it hides nothing. A CRLF line end reads as a plain newline; a lone `\r`
-    /// (which can overprint text in some renderers) shows as `\u{D}`.
-    static func diffLines(_ s: String) -> String {
-        // Split on scalars: as Characters, "\r\n" is one cluster that never equals "\n".
-        s.replacingOccurrences(of: "\r\n", with: "\n").unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { $0.map { $0 == "\t" ? "\t" : escaped($0) }.joined() }
-            .joined(separator: "\n")
-    }
-
-    /// A control (Cc), a format scalar (Cf), a default-ignorable one, or a line/paragraph
-    /// separator (Zl/Zp, U+2028/U+2029) as `\u{…}` text. Zl/Zp matter only to `diffLines`:
-    /// `oneLine` has already split them out with `.newlines`.
-    private static func escaped(_ u: Unicode.Scalar) -> String {
-        [.control, .format, .lineSeparator, .paragraphSeparator].contains(u.properties.generalCategory)
-            || u.properties.isDefaultIgnorableCodePoint
-            ? "\\u{\(String(u.value, radix: 16, uppercase: true))}" : String(u)
     }
 
     /// #353: an argv shows each element shell-quoted, so `bash -c 'ls; x'` can't read as separate words.
     /// The argv is exec'd without a shell, so `~` is literal and shows quoted; a first word holding
     /// `=` is quoted too, or it would read as an env assignment rather than the program.
     static func commandSummary(_ argv: [String]) -> String {
-        oneLine(argv.enumerated().map { i, w in
+        WireText.oneLine(argv.enumerated().map { i, w in
             let q = shellQuoted(w)   // q == w only for a bare word, which holds no `'`
             return i == 0 && q == w && w.contains("=") ? "'\(w)'" : q
         }.joined(separator: " "))
