@@ -6,11 +6,10 @@ import os
 /// SIGTERM-ignoring grandchild must still go. #327: the blocking quit-path variant,
 /// the guard predicate, and BunHarness's two call sites.
 final class ProcessGroupKillTests: XCTestCase {
-    /// A /bin/sh group leader that backgrounds `sleep 600` and prints its pid.
-    /// Cleanup signal that refuses 0 (our own group), 1 (launchd) and -1 (everything we own):
-    /// a pid read from a process or a file could be any of them (#380).
+    /// Cleanup signal that refuses 0, 1 and -1 (through pid > 1), our own group and our own
+    /// pid: a pid read from a process or a file could be any of them (#380, #386).
     private func killIfReal(_ pid: pid_t, group: Bool = true, using signal: (pid_t, Int32) -> Int32 = kill) {
-        guard pid > 1 else { return }
+        guard CodexHarness.mayKillGroup(pid), pid != getpid() else { return }
         _ = signal(group ? -pid : pid, SIGKILL)
     }
 
@@ -28,6 +27,7 @@ final class ProcessGroupKillTests: XCTestCase {
         }
     }
 
+    /// A /bin/sh group leader that backgrounds `sleep 611` and prints its pid.
     private func spawnGroup(_ script: String) throws -> (proc: Process, leader: pid_t, child: pid_t) {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -61,7 +61,7 @@ final class ProcessGroupKillTests: XCTestCase {
     /// outliving the swap, or a row failing before the defer restores it) (#375).
     private static let fakePGID: pid_t = 424242
 
-    private let ignoringTerm = #"trap "" TERM; sleep 600 & echo $!; wait"#
+    private let ignoringTerm = #"trap "" TERM; sleep 611 & echo $!; wait"#
 
     func testKillGroupTakesDownASigtermIgnoringChild() async throws {
         let (proc, leader, child) = try spawnGroup(ignoringTerm)
@@ -96,7 +96,7 @@ final class ProcessGroupKillTests: XCTestCase {
         for pgid in [0, 1, -1, getpgrp()] as [pid_t] {
             XCTAssertFalse(CodexHarness.mayKillGroup(pgid), "pgid \(pgid)")
         }
-        let (proc, leader, _) = try spawnGroup("sleep 600 & echo $!; wait")
+        let (proc, leader, _) = try spawnGroup("sleep 611 & echo $!; wait")
         defer { killIfReal(leader); proc.waitUntilExit() }
         XCTAssertEqual(getpgid(leader), leader)
         XCTAssertTrue(CodexHarness.mayKillGroup(leader))
@@ -104,7 +104,9 @@ final class ProcessGroupKillTests: XCTestCase {
 
     /// Swaps `CodexHarness.sendSignal` for a recorder that never forwards: every probe
     /// answers -1 (group gone), so escalate stops at once and nothing real is signalled.
-    private func recordingSignals(_ body: () -> Void) -> [(pid: pid_t, sig: Int32)] {
+    /// Guards the fake pgid first, so every recorder row is covered without a scan (#386).
+    private func recordingSignals(_ body: () -> Void) throws -> [(pid: pid_t, sig: Int32)] {
+        try requireFakePGID()
         let log = OSAllocatedUnfairLock(initialState: [(pid: pid_t, sig: Int32)]())
         let saved = CodexHarness.sendSignal
         CodexHarness.sendSignal = { pid, sig in log.withLock { $0.append((pid, sig)) }; return -1 }
@@ -116,15 +118,14 @@ final class ProcessGroupKillTests: XCTestCase {
     /// killGroup gates on mayKillGroup before its first signal: a rejected pgid sends
     /// nothing, an accepted one leads with SIGTERM to the group (#361).
     func testKillGroupSendsNothingForRejectedPgidsAndSigtermFirstOtherwise() throws {
-        try requireFakePGID()
         let rejected: [pid_t] = [1, getpgrp()]
-        let sent = recordingSignals {
+        let sent = try recordingSignals {
             for pgid in rejected { CodexHarness.killGroup(pgid, grace: 0.1, blocking: true) }
         }
         // Filter: a detached escalate from an earlier test may land in the window.
         XCTAssertEqual(sent.filter { rejected.contains(-$0.pid) }.map(\.sig), [], "signalled a rejected pgid")
 
-        let accepted = recordingSignals { CodexHarness.killGroup(Self.fakePGID, grace: 0.1, blocking: true) }
+        let accepted = try recordingSignals { CodexHarness.killGroup(Self.fakePGID, grace: 0.1, blocking: true) }
             .filter { $0.pid == -Self.fakePGID }
         XCTAssertEqual(accepted.first?.sig, SIGTERM)
         XCTAssertFalse(accepted.contains { $0.sig == SIGKILL }, "probe said gone; no SIGKILL")
@@ -133,9 +134,10 @@ final class ProcessGroupKillTests: XCTestCase {
     /// The quit path's registry: everything registered gets a group SIGTERM and the
     /// registry is drained (#361).
     func testKillLiveGroupsBlockingSignalsAndDrainsTheRegistry() throws {
-        try requireFakePGID()
-        CodexHarness.livePGIDs.withLock { _ = $0.insert(Self.fakePGID) }
-        let sent = recordingSignals { CodexHarness.killLiveGroupsBlocking(grace: 0.1) }
+        let sent = try recordingSignals {   // the insert sits inside, behind recordingSignals' guard
+            CodexHarness.livePGIDs.withLock { _ = $0.insert(Self.fakePGID) }
+            CodexHarness.killLiveGroupsBlocking(grace: 0.1)
+        }
         XCTAssertTrue(sent.contains { $0.pid == -Self.fakePGID && $0.sig == SIGTERM }, "\(sent)")
         XCTAssertTrue(CodexHarness.livePGIDs.withLock { $0.isEmpty })
     }
@@ -160,7 +162,7 @@ final class ProcessGroupKillTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let exe = dir.appendingPathComponent("codex"), pidFile = dir.appendingPathComponent("pid")
-        try "#!/bin/sh\necho $$ > '\(pidFile.path)'\nexec /bin/sleep 600\n".write(to: exe, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho $$ > '\(pidFile.path)'\nexec /bin/sleep 611\n".write(to: exe, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: exe.path)
 
         let harness = CodexHarness(executableURL: exe, codexHome: dir.appendingPathComponent("home"),
@@ -197,7 +199,7 @@ final class ProcessGroupKillTests: XCTestCase {
         try """
             #!/bin/sh
             trap "" TERM
-            /bin/sleep 600 &
+            /bin/sleep 611 &
             echo $! > '\(childFile.path)'
             echo $$ > '\(pidFile.path)'
             /bin/sleep 0.3
@@ -211,9 +213,14 @@ final class ProcessGroupKillTests: XCTestCase {
         func readPid(_ url: URL) -> pid_t? {
             parsePid(try? String(contentsOf: url, encoding: .utf8))
         }
-        let leader = try XCTUnwrap(readPid(pidFile), "stand-in codex never started")
+        // Child first, its defer armed before the leader unwrap can throw. Its group is taken
+        // now, while the child is certainly alive; the defer signals it by pid only if it is
+        // still in that group, so a reused pid elsewhere is never hit (#386).
         let child = try XCTUnwrap(readPid(childFile), "stand-in codex never forked its child")
-        defer { killIfReal(child, group: false) }   // by pid: the row reaps its stand-in child even when an assert throws
+        let childGroup = getpgid(child)
+        defer { if childGroup > 1, getpgid(child) == childGroup { killIfReal(child, group: false) } }
+        let leader = try XCTUnwrap(readPid(pidFile), "stand-in codex never started")
+        XCTAssertEqual(childGroup, leader, "the stand-in child is not in the codex group")
 
         XCTAssertEqual(kill(child, 0), 0, "the SIGTERM-ignoring child died before the grace ended")
         XCTAssertTrue(CodexHarness.livePGIDs.withLock { $0.contains(leader) },
@@ -261,7 +268,7 @@ final class ProcessGroupKillTests: XCTestCase {
         let harness = BunHarness()
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/sh")
-        proc.arguments = ["-c", "sleep 600 & echo $!; sleep 0.3"]
+        proc.arguments = ["-c", "sleep 611 & echo $!; sleep 0.3"]
         let out = Pipe()
         proc.standardOutput = out
         try harness.launch(proc)
@@ -273,7 +280,7 @@ final class ProcessGroupKillTests: XCTestCase {
         withExtendedLifetime(harness) {}
     }
 
-    /// #380: cleanup never signals 0, 1 or -1, and pid parsing rejects them too.
+    /// #380, #386: cleanup never signals 0, 1, -1, our group or our pid; pid parsing rejects the first three.
     func testKillIfRealSkipsSpecialPidsAndParsePidRejectsThem() {
         var sent: [pid_t] = []
         for pid in [-1, 0, 1] as [pid_t] { killIfReal(pid, using: { p, _ in sent.append(p); return 0 }) }
@@ -281,19 +288,13 @@ final class ProcessGroupKillTests: XCTestCase {
         killIfReal(424242, using: { p, _ in sent.append(p); return 0 })
         killIfReal(424242, group: false, using: { p, _ in sent.append(p); return 0 })
         XCTAssertEqual(sent, [-424242, 424242])
+        sent = []
+        killIfReal(getpgrp(), using: { p, _ in sent.append(p); return 0 })
+        killIfReal(getpid(), group: false, using: { p, _ in sent.append(p); return 0 })
+        XCTAssertEqual(sent, [], "signalled our own group or pid")
+        killIfReal(424242, using: { p, _ in sent.append(p); return 0 })   // above PID_MAX: one call, never forwarded
+        XCTAssertEqual(sent, [-424242])
         for text in ["0", "1", "-1", "x", ""] { XCTAssertNil(parsePid(text), text) }
         XCTAssertEqual(parsePid(" 4242\n"), 4242)
-    }
-
-    /// #380: each recorder row calls requireFakePGID before its first use of the fake pgid.
-    func testRecorderRowsRequireTheFakePGIDFirst() throws {
-        let source = try String(contentsOf: URL(fileURLWithPath: #filePath), encoding: .utf8)
-        for row in ["func testKillGroupSendsNothingForRejectedPgidsAndSigtermFirstOtherwise(",
-                    "func testKillLiveGroupsBlockingSignalsAndDrainsTheRegistry("] {
-            let start = try XCTUnwrap(source.range(of: row), row)
-            let guardCall = try XCTUnwrap(source.range(of: "try requireFakePGID()", range: start.upperBound..<source.endIndex), row)
-            let use = try XCTUnwrap(source.range(of: "Self.fakePGID", range: start.upperBound..<source.endIndex), row)
-            XCTAssertLessThan(guardCall.lowerBound, use.lowerBound, row)
-        }
     }
 }
