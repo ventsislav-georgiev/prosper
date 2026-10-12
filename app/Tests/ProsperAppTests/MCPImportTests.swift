@@ -347,6 +347,24 @@ final class MCPImportTests: XCTestCase {
         }
     }
 
+    /// Exactly eight hops still resolve: pins the hop bound from below (#400).
+    func testWriteFollowsEightHopChain() throws {
+        try withScratchFile { url in
+            let dir = tempDir("dotfiles")
+            let target = dir.appendingPathComponent("mcp.json")
+            try "{}".write(to: target, atomically: true, encoding: .utf8)
+            let hops = (1...7).map { dir.appendingPathComponent("l\($0)") }  // url + 7 = 8 links
+            for (link, dest) in zip([url] + hops, hops + [target]) {
+                try FileManager.default.createSymbolicLink(at: link, withDestinationURL: dest)
+            }
+            Preferences.defaults.set("stale", forKey: "agentMCPDiskMirror")
+            MCPConfigStore.writeFile(Preferences.mcpServers)
+            for link in [url] + hops { XCTAssertTrue(isSymlink(link), "\(link.lastPathComponent) was replaced") }
+            XCTAssertEqual(MCPConfigStore.decode(try String(contentsOf: target, encoding: .utf8)), Preferences.mcpServers)
+            XCTAssertNotEqual(Preferences.defaults.string(forKey: "agentMCPDiskMirror"), "stale")
+        }
+    }
+
     /// Source pin: the unreadable branch of bootstrap logs before returning.
     func testBootstrapUnreadableBranchLogs() throws {
         let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
