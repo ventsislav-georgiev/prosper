@@ -254,14 +254,23 @@ final class AgentController {
             log.warning("agent CLI queue dropped (\(self.cliQueue.count, privacy: .public) pending) — session torn down")
             cliQueue.removeAll()
         }
+        // #408: a failed run's end() starts under .error, where submit doesn't queue, so a
+        // newer run can start during the awaits below. Detach the run's state BEFORE the
+        // first one (as respawnHarnessForConfig does): the newer run spawns its own harness
+        // and re-attaches the thread through pendingResumeID instead of using the dying
+        // harness. After each await, a newer run owns the model and the phase: stop there.
+        let generation = runGeneration
         eventPump?.cancel()
         eventPump = nil
-        await harness?.shutdown()
+        let dying = harness
         harness = nil
         session = nil
         currentTurn = nil
         settledTurns.removeAll()   // the next codex numbers its turns afresh
+        await dying?.shutdown()
+        guard generation == runGeneration else { return }
         await ModelResidencyCoordinator.shared.releaseAgent()
+        guard generation == runGeneration else { return }
         // Keep an error phase visible (run() sets it just before tearing down) —
         // only a clean teardown returns to idle.
         if case .error = phase {} else { phase = .idle }

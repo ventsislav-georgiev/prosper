@@ -2283,4 +2283,159 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertTrue(lines.contains("request_max_retries = 1"), "\(table)")
         XCTAssertTrue(lines.contains("stream_idle_timeout_ms = 120000"), "\(table)")
     }
+
+    // MARK: - #408 end() racing a resubmit
+
+    /// An in-process harness for the end()/resubmit race, no subprocess. A parking one's first
+    /// shutdown suspends on a continuation until `releaseShutdown()`. Once a shutdown began,
+    /// every request fails with notStarted, as a dying codex's would. sendPrompt throws
+    /// backendError when `failsPrompt` (run()'s generic catch, which calls end()); otherwise it
+    /// opens a turn that stays open until `completeTurn()`.
+    @MainActor
+    private final class ParkingHarness: CodingHarness {
+        nonisolated let events: AsyncStream<HarnessEvent>
+        private let sink: AsyncStream<HarnessEvent>.Continuation
+        let name: String, parks: Bool, failsPrompt: Bool
+        private(set) var shutdowns = 0, prompts = 0, newSessions = 0, resumed: [String] = []
+        private var parked: CheckedContinuation<Void, Never>?
+        var isParked: Bool { parked != nil }
+        init(_ name: String, parks: Bool, failsPrompt: Bool) {
+            self.name = name; self.parks = parks; self.failsPrompt = failsPrompt
+            (events, sink) = AsyncStream<HarnessEvent>.makeStream()
+        }
+        func releaseShutdown() { parked?.resume(); parked = nil }
+        func completeTurn() { sink.yield(.turnCompleted(turn: TurnID(raw: "\(name)-turn-\(prompts)"), .completed)) }
+        func start() async throws {}
+        func shutdown() async {
+            shutdowns += 1
+            if parks, shutdowns == 1 { await withCheckedContinuation { parked = $0 } }
+            sink.finish()
+        }
+        func newSession(_ opts: SessionOptions) async throws -> SessionID {
+            guard shutdowns == 0 else { throw HarnessError.notStarted }
+            newSessions += 1
+            return SessionID(raw: "thread-\(name)")
+        }
+        func resumeSession(_ id: SessionID, options: SessionOptions) async throws -> SessionID {
+            guard shutdowns == 0 else { throw HarnessError.notStarted }
+            resumed.append(id.raw)
+            return id
+        }
+        func forkSession(_ id: SessionID) async throws -> SessionID { id }
+        func sendPrompt(session: SessionID, input: [PromptInput]) async throws -> TurnID {
+            guard shutdowns == 0 else { throw HarnessError.notStarted }
+            if failsPrompt { throw HarnessError.backendError("turn/start failed") }
+            prompts += 1
+            let turn = TurnID(raw: "\(name)-turn-\(prompts)")
+            sink.yield(.turnStarted(turn))
+            return turn
+        }
+        func steer(session: SessionID, turn: TurnID, input: [PromptInput]) async throws {}
+        func abort(session: SessionID, turn: TurnID?) async throws {}
+        func respondToApproval(_ id: ApprovalID, decision: ApprovalDecision) async throws {}
+        nonisolated var capabilities: HarnessCapabilities {
+            HarnessCapabilities(forking: false, liveApprovals: false, ptyExec: false, images: false)
+        }
+    }
+
+    @MainActor private final class Spawned { var all: [ParkingHarness] = [] }
+
+    /// Raised from `RaiseOnDeinit.deinit`. Bound as a task-local around a submit, the token is
+    /// copied into that run's Task (and the tasks it starts) and released when they end: the
+    /// one signal that a run, and the end() it awaits, has returned without a timed wait.
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var raised = false
+        var isRaised: Bool { lock.withLock { raised } }
+        func raise() { lock.withLock { raised = true } }
+    }
+    private final class RaiseOnDeinit: Sendable {
+        let flag: Flag
+        init(_ flag: Flag) { self.flag = flag }
+        deinit { flag.raise() }
+    }
+    private enum RunToken { @TaskLocal static var current: RaiseOnDeinit? }
+
+    @MainActor
+    private static func errorRows(_ controller: AgentController) -> Int {
+        controller.items.filter { if case .error = $0 { return true }; return false }.count
+    }
+
+    /// #408: run A fails at turn/start, shows its error and parks in its harness's shutdown
+    /// inside end(); run B is submitted then, and starts at once (an error phase is not active).
+    /// Returns once B has opened its turn or has failed; `aEnded` is raised once A's run is over.
+    @MainActor
+    private func parkFailedRunThenResubmit() async -> (AgentController, Spawned, aEnded: Flag) {
+        let dir = tempDir("end-race")
+        let store = AgentSessionStore(directory: dir)
+        let spawned = Spawned()
+        let controller = AgentController(store: store, resolveCodex: { dir }, makeHarness: {
+            let first = spawned.all.isEmpty
+            let harness = ParkingHarness(first ? "A" : "B", parks: first, failsPrompt: first)
+            spawned.all.append(harness)
+            return harness
+        })
+        addTeardownBlock { @MainActor in
+            spawned.all.forEach { $0.releaseShutdown() }
+            await controller.end()
+            _ = await store.recentSessions(limit: 1)   // let the persists land before the dir goes
+        }
+        let aEnded = Flag()
+        RunToken.$current.withValue(RaiseOnDeinit(aEnded)) { controller.submit(goal: "first") }
+        let parked = await Self.wait(2) { spawned.all.first?.isParked == true }
+        XCTAssertTrue(parked, "run A never reached end()'s shutdown (phase \(controller.phase))")
+        XCTAssertEqual(controller.phase, .error("Agent error: turn/start failed"))
+        controller.submit(goal: "second")
+        XCTAssertTrue(controller.queued.isEmpty, "run B queued instead of starting")
+        _ = await Self.wait(2) {
+            (spawned.all.count == 2 && spawned.all[1].prompts == 1) || Self.errorRows(controller) > 1
+        }
+        return (controller, spawned, aEnded)
+    }
+
+    /// #408 case a: a run submitted while the failed run's end() is still shutting its harness
+    /// down gets a harness of its own and re-attaches the failed run's thread on it, instead of
+    /// failing against the dying harness (a second error row and a second end()).
+    @MainActor
+    func testResubmitDuringFailedRunTeardownSpawnsItsOwnHarness() async {
+        let (controller, spawned, _) = await parkFailedRunThenResubmit()
+        XCTAssertEqual(spawned.all.count, 2, "the resubmitted run reused the harness end() is shutting down")
+        XCTAssertEqual(Self.errorRows(controller), 1, "the resubmitted run failed: \(controller.items)")
+        XCTAssertEqual(controller.phase, .running)
+        XCTAssertEqual(spawned.all.last?.resumed, ["thread-A"],
+                       "run B did not re-attach run A's thread on its own harness")
+        XCTAssertEqual(spawned.all.last?.prompts, 1)
+        XCTAssertEqual(spawned.all.first?.shutdowns, 1, "run A's harness was shut down again")
+    }
+
+    /// #408 case b: when the failed run's shutdown returns, its end() finds a newer run and stops:
+    /// that run keeps its harness (never shut down), its session and its phase, and its next turn
+    /// goes out on the same harness and thread. The model residency is not observable without
+    /// loading a model; the release sits behind the same guard as the phase.
+    @MainActor
+    func testStaleEndLeavesTheResubmittedRunItsHarnessSessionAndPhase() async {
+        let (controller, spawned, aEnded) = await parkFailedRunThenResubmit()
+        guard spawned.all.count == 2 else { return XCTFail("run B never got a harness of its own") }
+        let (a, b) = (spawned.all[0], spawned.all[1])
+        XCTAssertEqual(controller.phase, .running)
+        XCTAssertFalse(aEnded.isRaised, "run A returned while its shutdown was parked")
+        a.releaseShutdown()
+        let ended = await Self.wait(2) { aEnded.isRaised }
+        XCTAssertTrue(ended, "run A never returned from end()")
+        XCTAssertEqual(b.shutdowns, 0, "the stale end() shut the newer run's harness down")
+        XCTAssertEqual(controller.phase, .running, "the stale end() settled the newer run's phase")
+        XCTAssertEqual(controller.currentSessionID, "thread-A", "the stale end() dropped the newer run's session")
+
+        b.completeTurn()
+        let idle = await Self.wait(2) { controller.phase == .idle }
+        XCTAssertTrue(idle, "run B's turn never completed (phase \(controller.phase))")
+        controller.submit(goal: "third")
+        let sent = await Self.wait(2) { b.prompts == 2 }
+        XCTAssertTrue(sent, "run B's next turn never went out on its harness (phase \(controller.phase))")
+        XCTAssertEqual(spawned.all.count, 2, "run B's next turn spawned another harness")
+        XCTAssertEqual(b.resumed, ["thread-A"], "run B's next turn re-attached its thread again")
+        XCTAssertEqual(b.newSessions, 0)
+        b.completeTurn()
+        _ = await Self.wait(2) { controller.phase == .idle }
+    }
 }
