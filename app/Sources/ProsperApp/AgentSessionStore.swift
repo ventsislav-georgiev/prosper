@@ -290,17 +290,18 @@ actor AgentSessionStore {
             // #358: history saved before ingress escaping loads escaped; WireText is idempotent,
             // so text escaped at ingress loads unchanged. #363: args are one line (oneLine over
             // pre-#363 multiLine args is still idempotent: no newline is left for a second pass).
-            return .toolCall(id: d.id, name: d.name ?? "", args: WireText.oneLine(d.args ?? ""),
+            // #378: restoredLine, not oneLine, which would double the stored escapes' backslashes.
+            return .toolCall(id: d.id, name: d.name ?? "", args: WireText.restoredLine(d.args ?? ""),
                              status: status(from: d.status), output: WireText.toolOutput(d.output ?? ""))
         case "fileDiff":
-            return .fileDiff(id: d.id, path: WireText.oneLine(d.path ?? ""), diff: WireText.multiLine(d.diff ?? ""),
+            return .fileDiff(id: d.id, path: WireText.restoredLine(d.path ?? ""), diff: WireText.multiLine(d.diff ?? ""),
                              change: change(from: d.change))
         case "plan":
             return .plan(id: d.id, steps: (d.steps ?? []).map {
                 PlanStep(title: $0.title, state: state(from: $0.state))
             })
         case "error":
-            return .error(id: d.id, message: WireText.oneLine(d.text ?? ""))   // #363
+            return .error(id: d.id, message: WireText.restoredLine(d.text ?? ""))   // #363, #378
         case "note":
             return .note(id: d.id, text: d.text ?? "")
         default:

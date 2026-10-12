@@ -157,6 +157,8 @@ final class CodexHarnessE2ETests: XCTestCase {
         if word == "CMDSTR":   # #318: modern `command` string with a newline tail, format and control scalars
             return "item/commandExecution/requestApproval", dict(t, itemId="cmd-2", cwd="/tmp",
                 command="ls\n\n\nrm -rf ~ \u202e\u200b\x7f\u0085\u009f")
+        if word == "RTLCMD":   # #385: a command string that opens with Hebrew
+            return "item/commandExecution/requestApproval", dict(t, itemId="cmd-5", cwd="/tmp", command="\u05d0\u05d1 > x")
         if word == "FILLER":   # #319: default-ignorable fillers beside legit non-ASCII
             return "item/commandExecution/requestApproval", dict(t, itemId="cmd-3", cwd="/tmp",
                 command="rm\u3164-rf ~ \u2764\ufe0f \u0436\u0443\u0440\u043d\u0430\u043b.txt \U0001F680 \u2800")
@@ -333,7 +335,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "method": "item/commandExecution/requestApproval",
                       "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "cmd-1",
                                  "startedAtMs": 0, "command": "rm -rf build", "cwd": "/tmp"}})
-            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "TROJAN", "HEBREW", "HUGE", "LEGACY", "EXEC", "CMDSTR", "FILLER", "PAD", "AMEND", "ELICIT") if w in prompt), None)
+            word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "TROJAN", "HEBREW", "HUGE", "LEGACY", "EXEC", "CMDSTR", "RTLCMD", "FILLER", "PAD", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
                 frame = {"jsonrpc": "2.0", "id": "srv-1", "method": awaiting, "params": req_params}
@@ -1862,15 +1864,37 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(calls.first?.1, #"red\u{D}"# + "\n" + #"next\u{2067}"#)
     }
 
-    /// #358: restoring already-escaped history must not escape it again.
+    /// #358: restoring already-escaped history must not escape it again. #378: oneLine is not
+    /// idempotent over its own output (it doubles the backslash of its `\n`), so restore goes
+    /// through restoredLine, which is.
     func testWireTextIsIdempotent() {
         let raw = "a\u{202E}b\u{2028}c\rd\r\ne\tf\u{200B}\u{1B}]0;t\u{7}  \t g\u{A0}\u{A0}\u{A0}h\n"
-        for f in [WireText.multiLine, WireText.oneLine, WireText.toolOutput] {
+        for f in [WireText.multiLine, WireText.restoredLine, WireText.toolOutput] {
             XCTAssertEqual(f(f(raw)), f(raw))
         }
-        // #363: tool args saved multiLine-escaped before #363 load through oneLine.
+        XCTAssertEqual(WireText.restoredLine(WireText.oneLine(raw)), WireText.oneLine(raw))
+        XCTAssertNotEqual(WireText.oneLine(WireText.oneLine(raw)), WireText.oneLine(raw),
+                          "a second oneLine pass doubles backslashes: never re-escape stored text with it")
+        XCTAssertEqual(WireText.oneLine("ls -la a\u{A0}\u{A0}\u{A0}b"), WireText.oneLine(WireText.oneLine("ls -la a\u{A0}\u{A0}\u{A0}b")),
+                       "with no escape in its output, oneLine is still idempotent")
+        // #363: tool args saved multiLine-escaped before #363 load through restoredLine.
         let legacy = WireText.multiLine(raw)
-        XCTAssertEqual(WireText.oneLine(WireText.oneLine(legacy)), WireText.oneLine(legacy))
+        XCTAssertEqual(WireText.restoredLine(WireText.restoredLine(legacy)), WireText.restoredLine(legacy))
+    }
+
+    /// #378 (OQ-31 c): a backslash before n, u, r or t doubles, so the two characters `\n` stay
+    /// visibly different from a real LF and a typed `\u{202E}` from an escaped bidi override; any
+    /// other backslash (a Windows path) is left alone.
+    func testWireTextOneLineDoublesBackslashBeforeItsEscapeLetters() {
+        XCTAssertEqual(WireText.oneLine("a\nb"), #"a\nb"#)
+        XCTAssertEqual(WireText.oneLine(#"a\nb"#), #"a\\nb"#)
+        XCTAssertNotEqual(WireText.oneLine(#"a\nb"#), WireText.oneLine("a\nb"))
+        XCTAssertEqual(WireText.oneLine(#"x\u{202E}y"#), #"x\\u{202E}y"#)
+        XCTAssertEqual(WireText.oneLine("x\u{202E}y"), #"x\u{202E}y"#)
+        XCTAssertEqual(WireText.oneLine(#"\r\t"#), #"\\r\\t"#)
+        XCTAssertEqual(WireText.oneLine(#"C:\Users\Bob\ a\\b \d+"#), #"C:\Users\Bob\ a\\b \d+"#)
+        XCTAssertEqual(WireText.multiLine(#"a\nb"#), #"a\nb"#, "a diff keeps its backslashes verbatim")
+        XCTAssertEqual(CodexHarness.commandSummary(["printf", #"a\nb"#]), #"printf 'a\\nb'"#)
     }
 
     /// #358: tool output drops well-formed SGR colour codes; any other ESC sequence (an OSC) escapes.
@@ -1937,6 +1961,10 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(CodexHarness.commandSummary(["echo", "it's"]), #"echo 'it'\''s'"#)
         XCTAssertEqual(CodexHarness.commandSummary(["ls", "-la", "/tmp", "~"]), "ls -la /tmp '~'")
         XCTAssertEqual(CodexHarness.commandSummary(["FOO=bar", "cmd", "a=b"]), "'FOO=bar' cmd a=b")
+        // #385 (QA #164): ; | > are not bare, = is (after the first word).
+        XCTAssertEqual(CodexHarness.commandSummary(["echo", "a;b|c>d", "k=v"]), "echo 'a;b|c>d' k=v")
+        // #385 (QA #167): a first word with = and a quote is quoted once, its quote escaped.
+        XCTAssertEqual(CodexHarness.commandSummary(["a'b=c", "x"]), #"'a'\''b=c' x"#)
         XCTAssertEqual(CodexHarness.commandSummary(["printf", ""]), "printf ''")
         XCTAssertEqual(CodexHarness.commandSummary(["echo", "a\nb"]), #"echo 'a\nb'"#)
         XCTAssertEqual(CodexHarness.commandSummary(["echo", "a" + String(repeating: " ", count: 400) + "b"]), "echo 'a␠{400}b'")
@@ -1954,6 +1982,13 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(WireText.oneLine("ls\rrm -rf ~"), #"ls\nrm -rf ~"#)
         XCTAssertEqual(WireText.oneLine("a\u{B}b"), #"a\nb"#)   // #379: VT is a newline-class scalar
         XCTAssertEqual(WireText.oneLine("a\u{C}b"), #"a\nb"#)   // #379: FF too
+    }
+
+    /// #385 (QA #177): a command summary opening with an RTL run reaches the card with its LRMs.
+    @MainActor
+    func testControllerCommandSummaryStartingRTLCarriesLRMs() async throws {
+        let (approval, _) = try await answer("RTLCMD please", with: .decline)
+        XCTAssertEqual(approval?.summary, "\u{5D0}\u{5D1} \u{200E}>\u{200E} \u{200E}x")
     }
 
     /// #318: the string form takes the same path; DEL and C1 (Cc) escape as `\u{…}`, NEL as a newline.

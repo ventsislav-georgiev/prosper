@@ -83,7 +83,8 @@ struct ApprovalRequest: Sendable {
 
 /// Harness text escaped for display: approval cards (CodexHarness) and the transcript's
 /// tool and file-diff cards (#358, at AgentController ingress and AgentSessionStore restore).
-/// Every function is idempotent, so restoring already-escaped history leaves it unchanged.
+/// `multiLine` and `toolOutput` are idempotent; `oneLine` is not (#378: it doubles the backslash
+/// of its own `\n`), so restore uses `restoredLine`.
 enum WireText {
     /// Wire text on one card line: an embedded newline must not forge extra card lines, and
     /// a control (Cc: C0, DEL, C1), a format scalar (bidi override, zero-width) or another
@@ -97,7 +98,16 @@ enum WireText {
     /// class scalar (LF, CR, NEL, U+2028/9) shows as `\n`; a CRLF pair counts as one. The marker is
     /// closed (#372) so a following digit can't join the count: `-9␠{3}1`. VT (U+000B) and FF
     /// (U+000C) are in the newline class too, so they show as `\n` like LF and CR and never join a run.
+    /// #378: a backslash before `n`, `u`, `r` or `t` doubles, so a literal `\n` or `\u{202E}` can't pass
+    /// for one of these escapes; any other backslash (`C:\Users`) stays.
     static func oneLine(_ s: String) -> String {
+        restoredLine(s.replacingOccurrences(of: #"\\(?=[nurt])"#, with: #"\\\\"#, options: .regularExpression))
+    }
+
+    /// `oneLine` without the #378 backslash rule, for restore: stored text was escaped at ingress,
+    /// and a second `oneLine` would double its backslashes on every load. Idempotent, and still
+    /// escapes history saved raw before #358.
+    static func restoredLine(_ s: String) -> String {
         let escape = escaped
         var out = "", run: [Unicode.Scalar] = []
         func flush() {

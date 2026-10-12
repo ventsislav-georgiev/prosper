@@ -147,7 +147,9 @@ tag from the now-released section and put it on the new top draft.
   arguments are shown as one escaped line too, so a hidden character in an echoed path can no
   longer reorder the error text, and a two-line command on a tool card is no longer cut to its
   first line (the newline shows as `\n`). A diff cut by exactly one character now reads "1 more
-  character not shown".
+  character not shown". On those one-line card texts a backslash typed right before `n`, `u`,
+  `r` or `t` now shows doubled (`\\n`), so a typed `\n` or `\u{202E}` cannot pass for a real
+  line break or an escaped control; other backslashes, such as a Windows path, are unchanged.
 - **Fixed: an extension watching a folder with `host.fs.watch` no longer crashes Prosper on
   the first file change.** The file-event stream was created without the flag that makes
   macOS hand over the paths in the form Prosper reads; no bundled extension uses
