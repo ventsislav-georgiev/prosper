@@ -126,13 +126,17 @@ final class AgentController {
     /// harness (replacing the model load + spawn); nil spawns codex on the local model.
     private let resolveCodex: @MainActor () async throws -> URL
     private let makeHarness: (@MainActor () async throws -> CodingHarness)?
+    /// end()'s model release; a seam so tests can observe and park it (#412).
+    private let releaseModel: @MainActor () async -> Void
 
     init(store: AgentSessionStore = .shared,
          resolveCodex: @escaping @MainActor () async throws -> URL = { try await AgentController.resolveCodexExecutable() },
-         makeHarness: (@MainActor () async throws -> CodingHarness)? = nil) {
+         makeHarness: (@MainActor () async throws -> CodingHarness)? = nil,
+         releaseModel: @escaping @MainActor () async -> Void = { await ModelResidencyCoordinator.shared.releaseAgent() }) {
         self.store = store
         self.resolveCodex = resolveCodex
         self.makeHarness = makeHarness
+        self.releaseModel = releaseModel
     }
 
     // MARK: - Public API
@@ -216,7 +220,10 @@ final class AgentController {
         stoppedRun = runGeneration
         guard let harness, let session else {
             ProsperLLMServer.shared.cancelActiveGenerations()
-            Task { await end() }
+            // #412: pinned to the stopped run. Its checkpoint can idle the phase and admit a
+            // submit before this Task runs; a newer run then owns harness, model and phase.
+            let generation = runGeneration
+            Task { await end(generation: generation) }
             postElapsedNote()
             persistTranscript()
             return
@@ -272,7 +279,7 @@ final class AgentController {
         settledTurns.removeAll()   // the next codex numbers its turns afresh
         await dying?.shutdown()
         guard generation == runGeneration else { return }
-        await ModelResidencyCoordinator.shared.releaseAgent()
+        await releaseModel()
         guard generation == runGeneration else { return }
         // Keep an error phase visible (run() sets it just before tearing down) —
         // only a clean teardown returns to idle.

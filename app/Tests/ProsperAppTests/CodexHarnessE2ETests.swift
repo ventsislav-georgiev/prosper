@@ -2356,7 +2356,26 @@ final class CodexHarnessE2ETests: XCTestCase {
         }
     }
 
-    @MainActor private final class Spawned { var all: [ParkingHarness] = [] }
+    @MainActor private final class Spawned {
+        var all: [ParkingHarness] = []
+        /// #412: runs once inside the next makeHarness call, in the spawning run's own job.
+        var onSpawn: (@MainActor () -> Void)?
+    }
+
+    /// #412: a main-actor gate standing in for a seam (end()'s releaseModel, makeHarness).
+    /// `pass()` counts the call and, while `parks`, suspends until `open()`.
+    @MainActor private final class Gate {
+        var parks: Bool
+        private(set) var calls = 0
+        private var parked: CheckedContinuation<Void, Never>?
+        var isParked: Bool { parked != nil }
+        init(parks: Bool = false) { self.parks = parks }
+        func pass() async {
+            calls += 1
+            if parks { await withCheckedContinuation { parked = $0 } }
+        }
+        func open() { parked?.resume(); parked = nil }
+    }
 
     /// Raised from `RaiseOnDeinit.deinit`. Bound as a task-local around a submit, the token is
     /// copied into that run's Task (and the tasks it starts) and released when they end: the
@@ -2382,26 +2401,33 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// #408: run A fails at turn/start, shows its error and parks in its harness's shutdown
     /// inside end(); run B is submitted then, and starts at once (an error phase is not active).
     /// Returns once B has opened its turn or has failed; `aEnded` is raised once A's run is over.
+    /// `release` is end()'s releaseModel; a parking one (#412) moves A's park from its shutdown
+    /// (which then returns) to the release.
     @MainActor
-    private func parkFailedRunThenResubmit() async -> (AgentController, Spawned, aEnded: Flag) {
+    private func parkFailedRunThenResubmit(release: Gate = Gate()) async -> (AgentController, Spawned, aEnded: Flag) {
         let dir = tempDir("end-race")
         let store = AgentSessionStore(directory: dir)
         let spawned = Spawned()
+        let parksInRelease = release.parks
         let controller = AgentController(store: store, resolveCodex: { dir }, makeHarness: {
             let first = spawned.all.isEmpty
-            let harness = ParkingHarness(first ? "A" : "B", parks: first, failsPrompt: first)
+            let harness = ParkingHarness(first ? "A" : "B", parks: first && !parksInRelease, failsPrompt: first)
             spawned.all.append(harness)
             return harness
-        })
+        }, releaseModel: { await release.pass() })
         addTeardownBlock { @MainActor in
             spawned.all.forEach { $0.releaseShutdown() }
+            release.parks = false
+            release.open()
             await controller.end()
             _ = await store.recentSessions(limit: 1)   // let the persists land before the dir goes
         }
         let aEnded = Flag()
         RunToken.$current.withValue(RaiseOnDeinit(aEnded)) { controller.submit(goal: "first") }
-        let parked = await Self.wait(2) { spawned.all.first?.isParked == true }
-        XCTAssertTrue(parked, "run A never reached end()'s shutdown (phase \(controller.phase))")
+        let parked = await Self.wait(2) {
+            parksInRelease ? release.isParked : spawned.all.first?.isParked == true
+        }
+        XCTAssertTrue(parked, "run A never parked in end() (phase \(controller.phase))")
         XCTAssertEqual(controller.phase, .error("Agent error: turn/start failed"))
         controller.submit(goal: "second")
         XCTAssertTrue(controller.queued.isEmpty, "run B queued instead of starting")
@@ -2455,6 +2481,106 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(b.newSessions, 0)
         b.completeTurn()
         _ = await Self.wait(2) { controller.phase == .idle }
+    }
+
+    // MARK: - #412 end()'s guards, observed through the releaseModel seam
+
+    /// #412 B2: the stale end() resumed from its parked shutdown returns at the post-shutdown
+    /// guard: it never releases the model the newer run owns, and leaves its harness and phase.
+    @MainActor
+    func testStaleEndReturnsBeforeReleasingTheModelUnderTheResubmittedRun() async {
+        let release = Gate()
+        let (controller, spawned, aEnded) = await parkFailedRunThenResubmit(release: release)
+        guard spawned.all.count == 2, spawned.all[1].prompts == 1 else {
+            return XCTFail("run B never opened its turn (phase \(controller.phase))")
+        }
+        let (a, b) = (spawned.all[0], spawned.all[1])
+        XCTAssertEqual(release.calls, 0, "run A's end() released the model before its shutdown returned")
+        a.releaseShutdown()
+        let ended = await Self.wait(2) { aEnded.isRaised }
+        XCTAssertTrue(ended, "run A never returned from end()")
+        XCTAssertEqual(release.calls, 0, "the stale end() released the model under the newer run")
+        XCTAssertEqual(controller.phase, .running, "the stale end() settled the newer run's phase")
+        XCTAssertEqual(b.shutdowns, 0, "the stale end() shut the newer run's harness down")
+    }
+
+    /// #412 B7: A's end() gets past its shutdown and parks in the release; B is submitted and
+    /// opens its turn; once the release returns, the post-release guard stops the stale end()
+    /// before it settles B's phase.
+    @MainActor
+    func testStaleEndParkedInTheReleaseLeavesTheResubmittedRunsPhase() async {
+        let release = Gate(parks: true)
+        let (controller, spawned, aEnded) = await parkFailedRunThenResubmit(release: release)
+        guard spawned.all.count == 2, spawned.all[1].prompts == 1 else {
+            return XCTFail("run B never opened its turn (phase \(controller.phase))")
+        }
+        let (a, b) = (spawned.all[0], spawned.all[1])
+        XCTAssertEqual(a.shutdowns, 1)
+        XCTAssertFalse(aEnded.isRaised, "run A returned while its release was parked")
+        release.open()
+        let ended = await Self.wait(2) { aEnded.isRaised }
+        XCTAssertTrue(ended, "run A never returned from end()")
+        XCTAssertEqual(controller.phase, .running, "the stale end() settled the newer run's phase")
+        XCTAssertEqual(b.shutdowns, 0, "the stale end() shut the newer run's harness down")
+        XCTAssertEqual(controller.currentSessionID, "thread-A", "the stale end() dropped the newer run's session")
+        XCTAssertEqual(release.calls, 1)
+    }
+
+    /// #412 R2: Stop with no harness and no session defers end() to a Task; that end() belongs to
+    /// the stopped run, whatever runs before it. Stop lands while run A's makeHarness is in flight
+    /// (`onSpawn`, in A's own main-actor job), so A throws at its post-spawn checkpoint and its catch
+    /// idles the phase in that same job, ahead of the deferred end(). Part 1: nothing else runs in
+    /// between, so that end() is in-generation: it releases the model. Part 2: a submit queued
+    /// before the Stop is accepted between A's catch and the deferred end(), which must then
+    /// return at entry. (Parking A on a continuation and calling stop() from the test does not
+    /// order it: the resumed run was observed landing behind a Task the test created after the
+    /// resume, so the test cannot place A's catch ahead of the deferred end() from outside.)
+    @MainActor
+    func testDeferredStopEndBelongsToTheStoppedRun() async {
+        let dir = tempDir("stop-capture")
+        let store = AgentSessionStore(directory: dir)
+        let spawned = Spawned()
+        let release = Gate()
+        let controller = AgentController(store: store, resolveCodex: { dir }, makeHarness: {
+            let hook = spawned.onSpawn
+            spawned.onSpawn = nil
+            hook?()
+            let harness = ParkingHarness("H\(spawned.all.count + 1)", parks: false, failsPrompt: false)
+            spawned.all.append(harness)
+            return harness
+        }, releaseModel: { await release.pass() })
+        addTeardownBlock { @MainActor in
+            await controller.end()
+            _ = await store.recentSessions(limit: 1)   // let the persists land before the dir goes
+        }
+
+        // Part 1: Stop during A1's load; the deferred end() runs in A1's generation.
+        let a1Ended = Flag(), end1Done = Flag()
+        spawned.onSpawn = { RunToken.$current.withValue(RaiseOnDeinit(end1Done)) { controller.stop() } }
+        RunToken.$current.withValue(RaiseOnDeinit(a1Ended)) { controller.submit(goal: "first") }
+        let done1 = await Self.wait(2) { end1Done.isRaised && a1Ended.isRaised }
+        XCTAssertTrue(done1, "run A1 or its deferred end() never returned")
+        XCTAssertEqual(release.calls, 1, "Stop during the load did not release the model")
+        XCTAssertEqual(controller.phase, .idle)
+
+        // Part 2: Stop during A2's load with run B's submit already queued on the main actor.
+        let end2Done = Flag()
+        spawned.onSpawn = {
+            Task { controller.submit(goal: "third") }   // runs after A2's catch, before the end()
+            RunToken.$current.withValue(RaiseOnDeinit(end2Done)) { controller.stop() }
+        }
+        controller.submit(goal: "second")
+        let opened = await Self.wait(2) { spawned.all.count == 3 && spawned.all[2].prompts == 1 }
+        guard opened else {
+            return XCTFail("run B never opened its turn (phase \(controller.phase), queued \(controller.queued))")
+        }
+        let b = spawned.all[2]
+        XCTAssertTrue(end2Done.isRaised, "the deferred end() had not run when B opened its turn")
+        XCTAssertTrue(controller.queued.isEmpty, "B was queued: A2's catch did not idle the phase first")
+        XCTAssertEqual(release.calls, 1, "the stopped run's deferred end() released the model under run B")
+        XCTAssertEqual(controller.phase, .running, "the stopped run's deferred end() settled run B's phase")
+        XCTAssertEqual(b.shutdowns, 0, "the deferred end() shut run B's harness down")
+        XCTAssertEqual(controller.currentSessionID, "thread-\(b.name)")
     }
 
     // MARK: - #410 a dead run's late catch after a resubmit
