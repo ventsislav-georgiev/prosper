@@ -26,9 +26,11 @@ tag from the now-released section and put it on the new top draft.
   the screen captures and the opt-in icon-ordering engine are gone; macOS owns the
   left-to-right order (⌘-drag) and remembers it. Hiding, revealing, the reveal shortcut,
   auto-rehide, icon spacing and the chevron style are unchanged. The always-hidden section
-  is now a plain "Always-hidden section" toggle in the pane (off by default; turned on once
-  for anyone who had icons marked always-hidden). The old saved order is deleted on the first
-  launch with Menu Bar Management enabled, so a downgrade to 2.155 will not bring it back.
+  (a second divider further left, shown only by ⌥-clicking the chevron) is gone too: its
+  divider never showed until you knew to ⌥-click, and getting an icon back out of it meant
+  a ⌘-drag inside the auto-rehide window. Icons that sat left of it are simply hidden icons
+  now, revealed by a chevron click. The old saved order is deleted on the first launch with
+  Menu Bar Management enabled, so a downgrade to 2.155 will not bring it back.
 
 - **Fixed: the sensors, audio mixer and calendar popovers closed when you clicked
   inside them on macOS 27.** Each popover closes itself on a click outside it. The

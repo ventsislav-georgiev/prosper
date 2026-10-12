@@ -1,8 +1,8 @@
 import AppKit
 import ApplicationServices
 
-/// Ice/Bartender-style menu-bar manager. Owns one (optionally two) divider
-/// `NSStatusItem`s that act as section delimiters. Hiding works by expanding the
+/// Ice/Bartender-style menu-bar manager. Owns one divider `NSStatusItem` that
+/// acts as the section delimiter. Hiding works by expanding the
 /// hidden divider's `length` so every item the user has ⌘-dragged to its LEFT is
 /// pushed off the screen edge; revealing collapses it back. This is the only
 /// mechanism macOS exposes — there is no API to hide a *chosen* foreign item in
@@ -39,11 +39,11 @@ final class MenuBarManager: NSObject {
         }
         return (NSScreen.main?.frame.width ?? 2000) + 200
     }
-    /// Hosted room the expanded dividers were last sized for (#198).
+    /// Hosted room the expanded divider was last sized for (#198).
     private var appliedRoom: CGFloat?
 
     /// The always-visible control item (rightmost of ours). Clicking it toggles the
-    /// hidden section; ⌥-clicking toggles the always-hidden band. It NEVER expands —
+    /// hidden section. It NEVER expands —
     /// that's the whole fix: a single divider that did double duty as chevron AND
     /// expander rode itself (and Prosper's own icon) off-screen when it expanded, so
     /// nothing was clickable. Splitting the control from the expander (the Ice /
@@ -52,10 +52,8 @@ final class MenuBarManager: NSObject {
     /// Empty expanding separator. Sits to the LEFT of the chevron; growing its
     /// `length` pushes every item left of it (the hidden section) off the screen edge.
     private var hiddenSeparator: NSStatusItem?
-    /// Second-tier expander for the always-hidden band (leftmost of ours).
-    private var alwaysHiddenSeparator: NSStatusItem?
 
-    /// Transient: is the hidden section currently revealed (separators collapsed)?
+    /// Transient: is the hidden section currently revealed (separator collapsed)?
     var revealed = false   // internal for tests only (#154)
     private var rehideTimer: Timer?
 
@@ -89,28 +87,22 @@ final class MenuBarManager: NSObject {
 
         // Order matters: the FIRST-created status item is rightmost, later ones appear
         // to its left. We want screen order (left→right):
-        //   [alwaysHiddenSeparator] [always-hidden items] [hiddenSeparator] [hidden items] [chevron] [visible items]
-        // so the chevron (created first) stays right of the expanders and is never
-        // pushed off-screen when they grow.
+        //   [hidden items] [hiddenSeparator] [chevron] [visible items]
+        // so the chevron (created first) stays right of the expander and is never
+        // pushed off-screen when it grows.
         chevron = makeChevron()
         hiddenSeparator = makeSeparator(autosave: "ProsperMenuBarHiddenSeparator", id: "hidden")
-        // Always-hidden band (leftmost): opt-in via the "Always-hidden section" toggle.
-        // The user ⌘-drags icons left of it; it stays expanded, so they show only on ⌥-click.
-        // #132: this gate used to be "the order store has always-hidden icons"; the
-        // ordering engine is gone, so it is a plain preference now (migrated once).
+        // Drops the removed ordering engine's blobs and the removed second divider's
+        // position memory (#132, #398); a no-op from the second launch on.
         Preferences.migrateMenuBarOrderStore()
-        if Preferences.menuBarStore.alwaysHiddenEnabled {
-            alwaysHiddenSeparator = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator", id: "alwaysHidden")
-        }
-        for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
+        for item in [chevron, hiddenSeparator].compactMap({ $0 }) {
             ProsperStatusItems.register(item)
         }
 
-        // Start in the hidden state (separators expanded). A crash can't strand
+        // Start in the hidden state (separator expanded). A crash can't strand
         // third-party icons off-screen: our status items die with the process, so
         // the OS reflows the menu bar automatically — no persistent off-screen push.
         revealed = false
-        revealedAlwaysHidden = false
         // Hosted bars are measured through Accessibility (no CGS windows to read), so
         // hiding itself needs the grant there — ask once when the feature comes up.
         if MenuBarHost.isHosted { PermissionsManager.ensureAccessibilityTrust(prompt: true) }
@@ -122,14 +114,12 @@ final class MenuBarManager: NSObject {
 
     private func teardown() {
         rehideTimer?.invalidate(); rehideTimer = nil
-        for item in [chevron, hiddenSeparator, alwaysHiddenSeparator].compactMap({ $0 }) {
+        for item in [chevron, hiddenSeparator].compactMap({ $0 }) {
             NSStatusBar.system.removeStatusItem(item)
         }
         chevron = nil
         hiddenSeparator = nil
-        alwaysHiddenSeparator = nil
         revealed = false
-        revealedAlwaysHidden = false
         if let o = terminationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(o); terminationObserver = nil
         }
@@ -143,8 +133,7 @@ final class MenuBarManager: NSObject {
         appliedRoom = nil
     }
 
-    /// The always-visible clickable control. Left-click toggles the hidden section;
-    /// ⌥-left-click toggles the always-hidden band (when the two-tier mode is on).
+    /// The always-visible clickable control. A click toggles the hidden section.
     private func makeChevron() -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: Lengths.standard)
         item.autosaveName = "ProsperMenuBarChevron"
@@ -152,7 +141,7 @@ final class MenuBarManager: NSObject {
             button.setAccessibilityIdentifier(MenuBarAX.identifierPrefix + "chevron")
             button.image = Self.chevronImage(Preferences.menuBarStore.chevronStyle.collapsedSymbol)
             button.target = self
-            button.action = #selector(chevronClicked)
+            button.action = #selector(toggleHidden)
         }
         return item
     }
@@ -198,39 +187,20 @@ final class MenuBarManager: NSObject {
 
     // MARK: - Show / hide (the hot path)
 
-    /// Collapse/expand dividers to match `revealed`. A single length assignment per
-    /// divider — visually instant, no enumeration.
-    /// Single source of truth for both divider widths. Every length change routes
-    /// through here (derived from `revealed` + `revealedAlwaysHidden`) so the two
-    /// dividers can never disagree — no inline `length =` pokes elsewhere.
-    /// #132: keep `revealedAlwaysHidden` flowing in here (2.154.0 hard-coded `false`);
-    /// with the always-hidden band on, a constant would pin that band shut forever.
+    /// Collapse/expand the divider to match `revealed`. A single length assignment —
+    /// visually instant, no enumeration. Every length change routes through here, so
+    /// there are no inline `length =` pokes elsewhere.
     private func applyDividerLengths(room: CGFloat? = nil) {
         defer { updateChevron() }
         if MenuBarHost.isHosted { appliedRoom = room ?? MenuBarAX.roomWidth(on: NSScreen.main) }
-        let l = dividerLengths(room: appliedRoom)
-        hiddenSeparator?.length = l.hidden
-        alwaysHiddenSeparator?.length = l.alwaysHidden
+        hiddenSeparator?.length = dividerLengths(room: appliedRoom)
     }
 
-    /// The lengths `applyDividerLengths` sets, from the live reveal state (#154: the
-    /// test seam that pins `revealedAlwaysHidden` reaching the math).
-    func dividerLengths(room: CGFloat?) -> (hidden: CGFloat, alwaysHidden: CGFloat) {
-        MenuBarLogic.dividerLengths(revealed: revealed, revealedAlwaysHidden: revealedAlwaysHidden,
-                                    standard: Lengths.standard, expanded: expandedLength(room: room))
-    }
-
-    var revealedAlwaysHidden = false   // internal for tests only (#154)
-
-    /// Chevron click handler. Plain click toggles the hidden section; ⌥-click toggles
-    /// the always-hidden band (when enabled).
-    @objc private func chevronClicked() {
-        let optionDown = NSApp.currentEvent?.modifierFlags.contains(.option) ?? false
-        if optionDown && alwaysHiddenSeparator != nil {
-            toggleAlwaysHidden()
-        } else {
-            toggleHidden()
-        }
+    /// The length `applyDividerLengths` sets, from the live reveal state (#154: the
+    /// test seam that pins `revealed` reaching the math).
+    func dividerLengths(room: CGFloat?) -> CGFloat {
+        MenuBarLogic.dividerLength(revealed: revealed,
+                                   standard: Lengths.standard, expanded: expandedLength(room: room))
     }
 
     @objc func toggleHidden() {
@@ -239,25 +209,12 @@ final class MenuBarManager: NSObject {
         setRevealed(!revealed)
     }
 
-    @objc func toggleAlwaysHidden() {
-        guard alwaysHiddenSeparator != nil else { return }
-        if isActiveSpaceFullscreen { return }
-        revealedAlwaysHidden.toggle()
-        if revealedAlwaysHidden {
-            setRevealed(true)        // revealing always-hidden implies hidden shown (applies lengths + timer)
-        } else {
-            applyDividerLengths()    // collapse just the always-hidden band; keep hidden as-is
-            scheduleRehide()
-        }
-    }
-
     func setRevealed(_ value: Bool) {
         revealed = value
         applyDividerLengths()
         if revealed {
             scheduleRehide()
         } else {
-            revealedAlwaysHidden = false
             rehideTimer?.invalidate(); rehideTimer = nil
         }
     }
@@ -294,27 +251,6 @@ final class MenuBarManager: NSObject {
         }
     }
 
-    // MARK: - Always-hidden band
-
-    /// Create (or remove) the always-hidden separator WITHOUT tearing down the
-    /// chevron/hidden separator — a full teardown+setup reflows the bar and drops the
-    /// regular hidden section's positions, so every hidden icon popped back on-screen.
-    /// Called when the "Always-hidden section" toggle flips.
-    func ensureAlwaysHiddenBand(_ needed: Bool) {
-        guard menubarExtLive && MenuBarBridge.available, chevron != nil else { return }
-        if needed, alwaysHiddenSeparator == nil {
-            let s = makeSeparator(autosave: "ProsperMenuBarAlwaysHiddenSeparator", id: "alwaysHidden")
-            ProsperStatusItems.register(s)
-            alwaysHiddenSeparator = s
-            applyDividerLengths()
-        } else if !needed, let s = alwaysHiddenSeparator {
-            NSStatusBar.system.removeStatusItem(s)
-            alwaysHiddenSeparator = nil
-            revealedAlwaysHidden = false
-            applyDividerLengths()
-        }
-    }
-
     // MARK: - Spacing
 
     /// Persist + apply a new spacing (no relaunch). Caller surfaces the relaunch
@@ -338,7 +274,7 @@ final class MenuBarManager: NSObject {
     private var terminationObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
 
-    /// Re-apply divider widths when the display layout changes (resolution change,
+    /// Re-apply the divider width when the display layout changes (resolution change,
     /// display attach/detach, sleep/wake). `expandedLength` is display-relative, so
     /// a stale width could under-push items off-screen otherwise.
     private func observeScreenChanges() {
@@ -355,7 +291,7 @@ final class MenuBarManager: NSObject {
     private var activationWork: DispatchWorkItem?
 
     /// #198: on a notch-less hosted bar the room depends on the frontmost app's menu
-    /// width, so re-size the expanded dividers after an app switch. Debounced (⌘-Tab
+    /// width, so re-size the expanded divider after an app switch. Debounced (⌘-Tab
     /// bursts, and the new app's menus need a beat to lay out); the decision is
     /// `MenuBarHost.shouldReapplyDivider`, so notched displays (fixed room) and
     /// windowed bars never get past it.
@@ -384,7 +320,7 @@ final class MenuBarManager: NSObject {
         // any other app (#198 QA F3).
         let ownFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid()
             && NSApp.activationPolicy() != .regular
-        let anyExpanded = !revealed || (alwaysHiddenSeparator != nil && !revealedAlwaysHidden)
+        let anyExpanded = !revealed
         // One AX read of the frontmost app's menu bar per settled switch (none on a
         // notched display); it also keeps `roomWidth`'s last-measurement cache current.
         let room = MenuBarAX.roomWidth(on: NSScreen.main)

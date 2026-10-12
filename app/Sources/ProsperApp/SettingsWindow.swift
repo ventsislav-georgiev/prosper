@@ -3167,10 +3167,10 @@ private struct WindowManagementPane: View {
 
 /// Footer pane for the menubar extension's settings section (renders inside its
 /// NeonScroll, below the declarative shortcut header). Spacing slider, auto-rehide,
-/// the always-hidden band, chevron style, and the data-loss-safe "relaunch to apply
-/// spacing". #132: no ordering engine and no live preview — macOS owns icon order
-/// (⌘-drag), and the preview flashed both hidden bands open to screenshot them every
-/// time this pane appeared. Nothing here enumerates or captures the bar on appear.
+/// chevron style, and the data-loss-safe "relaunch to apply spacing". #132: no ordering
+/// engine and no live preview — macOS owns icon order (⌘-drag), and the preview flashed
+/// both hidden bands open to screenshot them every time this pane appeared. Nothing here
+/// enumerates or captures the bar on appear.
 private struct MenuBarPane: View {
     @State private var store = Preferences.menuBarStore
     @State private var skipped: [String] = []
@@ -3219,13 +3219,6 @@ private struct MenuBarPane: View {
                     Text("Hidden icons stay revealed until you click the chevron again.")
                         .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 }
-                NeonDivider()
-                Toggle("Always-hidden section", isOn: Binding(
-                    get: { store.alwaysHiddenEnabled },
-                    set: { v in mutate { $0.alwaysHiddenEnabled = v }
-                           MenuBarManager.shared.ensureAlwaysHiddenBand(v) }))
-                Text("Adds a second divider further left. Icons you ⌘-drag left of it stay hidden even when you click the chevron; ⌥-click the chevron to show them.")
-                    .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 NeonDivider()
                 NeonRow("Chevron", subtitle: "Divider glyph") {
                     Picker("", selection: Binding(

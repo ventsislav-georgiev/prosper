@@ -55,11 +55,6 @@ struct MenuBarStore: Codable, Equatable, Sendable {
     /// point of the feature is a denser bar. Clamped on read.
     var spacing: Int = 3
 
-    /// Master gate for the always-hidden third section (two-tier hide). Off → a
-    /// single hidden section, one chevron. #132: replaces the removed ordering
-    /// engine's "any icon marked always-hidden" gate.
-    var alwaysHiddenEnabled: Bool = false
-
     /// Master gate for auto-rehide. Off → the hidden section stays revealed until
     /// the user collapses it themselves (chevron click / reveal shortcut): no timer.
     /// The timer is the ONLY automatic collapse — starts on reveal, cleared on hide.
@@ -88,20 +83,9 @@ struct MenuBarStore: Codable, Equatable, Sendable {
         let d = MenuBarStore.default
         schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? d.schemaVersion
         spacing = try c.decodeIfPresent(Int.self, forKey: .spacing) ?? d.spacing
-        alwaysHiddenEnabled = try c.decodeIfPresent(Bool.self, forKey: .alwaysHiddenEnabled) ?? d.alwaysHiddenEnabled
         autoRehideEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoRehideEnabled) ?? d.autoRehideEnabled
         autoRehideSeconds = try c.decodeIfPresent(Int.self, forKey: .autoRehideSeconds) ?? d.autoRehideSeconds
         chevronStyle = try c.decodeIfPresent(ChevronStyle.self, forKey: .chevronStyle) ?? d.chevronStyle
-    }
-
-    /// #132: whether the removed ordering engine's saved store (`menuBarOrderStoreJSON`)
-    /// had any icon marked always-hidden — then that user had the band, so the
-    /// one-shot migration turns `alwaysHiddenEnabled` on. Reads only that one key, so
-    /// it survives the engine's types being deleted.
-    static func legacyHadAlwaysHidden(orderStoreJSON data: Data?) -> Bool {
-        struct Legacy: Decodable { var alwaysHidden: [String]? }
-        guard let data, let legacy = try? JSONDecoder().decode(Legacy.self, from: data) else { return false }
-        return !(legacy.alwaysHidden ?? []).isEmpty
     }
 }
 
@@ -109,15 +93,11 @@ struct MenuBarStore: Codable, Equatable, Sendable {
 /// CGS/AppKit — the load-bearing logic (divider lengths,
 /// spacing key mapping) lives here so the manager stays a thin imperative shell.
 enum MenuBarLogic {
-    /// The (hidden, alwaysHidden) divider lengths for a given reveal state — the
-    /// single source of truth for the show/hide hot path. `expanded` pushes every
-    /// item left of a divider past the screen edge; `standard` collapses it to a
-    /// normal divider. The always-hidden divider only collapses when explicitly
-    /// revealed (which implies the hidden section is revealed too).
-    static func dividerLengths(revealed: Bool, revealedAlwaysHidden: Bool,
-                               standard: CGFloat, expanded: CGFloat) -> (hidden: CGFloat, alwaysHidden: CGFloat) {
-        (hidden: revealed ? standard : expanded,
-         alwaysHidden: revealedAlwaysHidden ? standard : expanded)
+    /// The hidden divider's length for a given reveal state — the single source of
+    /// truth for the show/hide hot path. `expanded` pushes every item left of the
+    /// divider past the screen edge; `standard` collapses it to a normal divider.
+    static func dividerLength(revealed: Bool, standard: CGFloat, expanded: CGFloat) -> CGFloat {
+        revealed ? standard : expanded
     }
 
     // MARK: Hosted menu bar (macOS 27+)

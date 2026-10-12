@@ -126,36 +126,14 @@ final class MenuBarTests: XCTestCase {
     private let std: CGFloat = -1     // variableLength sentinel
     private let exp: CGFloat = 2120   // screen-derived "push off-screen" width
 
-    func testDividerLengthsHiddenState() {
-        // Nothing revealed: both dividers expanded (everything left of them pushed off).
-        let l = MenuBarLogic.dividerLengths(revealed: false, revealedAlwaysHidden: false,
-                                            standard: std, expanded: exp)
-        XCTAssertEqual(l.hidden, exp)
-        XCTAssertEqual(l.alwaysHidden, exp)
+    func testDividerLengthHiddenState() {
+        // Collapsed: the divider is expanded (everything left of it pushed off).
+        XCTAssertEqual(MenuBarLogic.dividerLength(revealed: false, standard: std, expanded: exp), exp)
     }
 
-    func testDividerLengthsHiddenRevealed() {
-        // Hidden section revealed, always-hidden still tucked away.
-        let l = MenuBarLogic.dividerLengths(revealed: true, revealedAlwaysHidden: false,
-                                            standard: std, expanded: exp)
-        XCTAssertEqual(l.hidden, std)
-        XCTAssertEqual(l.alwaysHidden, exp)
-    }
-
-    func testDividerLengthsBothRevealed() {
-        // Revealing always-hidden implies the hidden section is shown too → both collapse.
-        let l = MenuBarLogic.dividerLengths(revealed: true, revealedAlwaysHidden: true,
-                                            standard: std, expanded: exp)
-        XCTAssertEqual(l.hidden, std)
-        XCTAssertEqual(l.alwaysHidden, std)
-    }
-
-    func testDividerLengthsAlwaysHiddenRevealedAloneStillCollapsesIt() {
-        // Degenerate combo (revealed=false but revealedAlwaysHidden=true) shouldn't
-        // strand the always-hidden divider expanded — its band is driven by its own flag.
-        let l = MenuBarLogic.dividerLengths(revealed: false, revealedAlwaysHidden: true,
-                                            standard: std, expanded: exp)
-        XCTAssertEqual(l.alwaysHidden, std)
+    func testDividerLengthRevealed() {
+        // Revealed: the divider shrinks back to a normal item.
+        XCTAssertEqual(MenuBarLogic.dividerLength(revealed: true, standard: std, expanded: exp), std)
     }
 
     // MARK: - Spacing key mapping
@@ -192,7 +170,6 @@ final class MenuBarTests: XCTestCase {
     func testStoreRoundTrips() throws {
         var s = MenuBarStore.default
         s.spacing = 8
-        s.alwaysHiddenEnabled = true
         s.autoRehideEnabled = false
         s.autoRehideSeconds = 12
         s.chevronStyle = .circle
@@ -207,7 +184,6 @@ final class MenuBarTests: XCTestCase {
         let json = #"{"schemaVersion":1}"#.data(using: .utf8)!
         let s = try JSONDecoder().decode(MenuBarStore.self, from: json)
         XCTAssertEqual(s.spacing, 3)   // model default (denser than macOS stock 16)
-        XCTAssertFalse(s.alwaysHiddenEnabled)
         XCTAssertTrue(s.autoRehideEnabled)
         XCTAssertEqual(s.autoRehideSeconds, 5)
         XCTAssertEqual(s.chevronStyle, .ellipsis)
@@ -222,82 +198,50 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(s.chevronStyle, .arrow)
     }
 
-    // MARK: - #132: always-hidden gate migrated off the removed ordering engine
-
-    func testLegacyOrderStoreAlwaysHiddenDetection() {
-        let marked = #"{"schemaVersion":1,"enabled":true,"alwaysHidden":["x#A"],"desiredOrder":[]}"#
-        let unmarked = #"{"schemaVersion":1,"enabled":true,"alwaysHidden":[]}"#
-        XCTAssertTrue(MenuBarStore.legacyHadAlwaysHidden(orderStoreJSON: Data(marked.utf8)))
-        XCTAssertFalse(MenuBarStore.legacyHadAlwaysHidden(orderStoreJSON: Data(unmarked.utf8)))
-        XCTAssertFalse(MenuBarStore.legacyHadAlwaysHidden(orderStoreJSON: Data(#"{"schemaVersion":1}"#.utf8)))
-        XCTAssertFalse(MenuBarStore.legacyHadAlwaysHidden(orderStoreJSON: Data("not json".utf8)))
-        XCTAssertFalse(MenuBarStore.legacyHadAlwaysHidden(orderStoreJSON: nil))
+    // #398: a blob written while the always-hidden section existed still carries its
+    // gate key; the store no longer has that field, so the key is ignored, not fatal.
+    func testStoreIgnoresRemovedSecondDividerKey() throws {
+        let json = Data(#"{"schemaVersion":1,"spacing":7,"alwaysHiddenEnabled":true,"chevronStyle":"circle"}"#.utf8)
+        let s = try JSONDecoder().decode(MenuBarStore.self, from: json)
+        XCTAssertEqual(s.spacing, 7)
+        XCTAssertEqual(s.chevronStyle, .circle)
+        XCTAssertEqual(s, { var e = MenuBarStore.default; e.spacing = 7; e.chevronStyle = .circle; return e }())
     }
 
-    /// The band turns on once for a user who had always-hidden icons, the old blob is
-    /// dropped, and a later "off" sticks across the next launch's migration call.
-    func testOrderStoreMigrationTurnsAlwaysHiddenOnOnce() {
-        let d = Preferences.defaults
-        let keys = ["menuBarStoreJSON", "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON"]
-        let saved = keys.map { d.object(forKey: $0) }
-        defer { for (k, v) in zip(keys, saved) { d.set(v, forKey: k) } }
+    // MARK: - #132 / #398: leftover menu-bar state is deleted once
 
-        Preferences.menuBarStore = .default
-        d.set(Data(#"{"schemaVersion":1,"alwaysHidden":["x#A"]}"#.utf8), forKey: "menuBarOrderStoreJSON")
-        Preferences.migrateMenuBarOrderStore()
-        XCTAssertTrue(Preferences.menuBarStore.alwaysHiddenEnabled)
-        XCTAssertNil(d.object(forKey: "menuBarOrderStoreJSON"), "old blob must go so this runs once")
-
-        var s = Preferences.menuBarStore
-        s.alwaysHiddenEnabled = false
-        Preferences.menuBarStore = s
-        Preferences.migrateMenuBarOrderStore()
-        XCTAssertFalse(Preferences.menuBarStore.alwaysHiddenEnabled, "user's later off must stick")
-
-        // No icon was marked always-hidden: the band stays off, the blob still goes.
-        d.set(Data(#"{"schemaVersion":1,"alwaysHidden":[]}"#.utf8), forKey: "menuBarOrderStoreJSON")
-        Preferences.migrateMenuBarOrderStore()
-        XCTAssertFalse(Preferences.menuBarStore.alwaysHiddenEnabled)
-        XCTAssertNil(d.object(forKey: "menuBarOrderStoreJSON"))
-    }
-
-    /// #154: the backup blob is read when the primary is absent or corrupt, and both
-    /// blobs are deleted so the migration runs once.
+    /// #154: both ordering-engine blobs are deleted (also with a corrupt primary), and
+    /// #398: so is macOS's position memory for the removed second divider.
     func testOrderStoreMigrationReadsAndDeletesTheBackup() {
         let d = Preferences.defaults
-        let keys = ["menuBarStoreJSON", "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON"]
+        let position = "NSStatusItem Preferred Position ProsperMenuBarAlwaysHiddenSeparator"
+        let keys = ["menuBarStoreJSON", "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON", position]
         let saved = keys.map { d.object(forKey: $0) }
         defer { for (k, v) in zip(keys, saved) { d.set(v, forKey: k) } }
-        let marked = Data(#"{"schemaVersion":1,"alwaysHidden":["x#A"]}"#.utf8)
+        let blob = Data(#"{"schemaVersion":1,"desiredOrder":[]}"#.utf8)
 
         for primary in [nil, Data("corrupt".utf8)] {
-            Preferences.menuBarStore = .default
             d.set(primary, forKey: "menuBarOrderStoreJSON")
-            d.set(marked, forKey: "menuBarOrderStoreBackupJSON")
+            d.set(blob, forKey: "menuBarOrderStoreBackupJSON")
+            d.set(1234.0, forKey: position)
             Preferences.migrateMenuBarOrderStore()
-            XCTAssertTrue(Preferences.menuBarStore.alwaysHiddenEnabled, "backup must count (primary \(String(describing: primary)))")
             XCTAssertNil(d.object(forKey: "menuBarOrderStoreJSON"))
-            XCTAssertNil(d.object(forKey: "menuBarOrderStoreBackupJSON"), "backup must go too")
+            XCTAssertNil(d.object(forKey: "menuBarOrderStoreBackupJSON"), "backup must go too (primary \(String(describing: primary)))")
+            XCTAssertNil(d.object(forKey: position), "removed divider's position memory must go")
         }
     }
 
-    /// #154 / QA #5 (3): the manager feeds its own `revealedAlwaysHidden` into the length
-    /// math (2.154.0 passed a literal `false`, pinning the band shut). No status items:
-    /// a bare manager, never `reconcile()`d.
+    /// #154 / QA #5 (3): the manager feeds its own `revealed` into the length math.
+    /// No status items: a bare manager, never `reconcile()`d.
     @MainActor
-    func testManagerPassesRevealedAlwaysHiddenToDividerLengths() {
+    func testManagerPassesRevealedToDividerLengths() {
         let m = MenuBarManager()
         m.revealed = true
-        m.revealedAlwaysHidden = false
-        let shut = m.dividerLengths(room: 1000)
-        m.revealedAlwaysHidden = true
-        let open = m.dividerLengths(room: 1000)
-        XCTAssertEqual(shut.hidden, open.hidden)
-        XCTAssertNotEqual(shut.alwaysHidden, open.alwaysHidden, "always-hidden band must follow its flag")
-        XCTAssertEqual(open.alwaysHidden, NSStatusItem.variableLength)
+        XCTAssertEqual(m.dividerLengths(room: 1000), NSStatusItem.variableLength)
         m.revealed = false
-        m.revealedAlwaysHidden = false
-        XCTAssertNotEqual(m.dividerLengths(room: 1000).hidden, shut.hidden, "hidden band must follow `revealed`")
+        // Hosted (macOS 27+): just under the 1000 pt room; windowed: past the screen edge.
+        let want = MenuBarHost.isHosted ? MenuBarLogic.dropLength(room: 1000) : (NSScreen.main?.frame.width ?? 2000) + 200
+        XCTAssertEqual(m.dividerLengths(room: 1000), want, "hidden band must follow `revealed`")
     }
 
     // MARK: - Chevron style (cosmetic glyph mapping)

@@ -785,22 +785,15 @@ enum Preferences {
         }
     }
 
-    /// #132: one-shot migration off the removed menu-bar ordering engine. Its saved
-    /// order is dropped (nothing reads it any more); the one thing worth carrying over
-    /// is whether the user had the always-hidden band, which the engine switched on
-    /// whenever an icon was marked always-hidden. Deleting the blobs makes this a
-    /// no-op from the second launch on, so turning the band off later sticks.
+    /// Cleanup of state nothing reads any more: the removed ordering engine's saved
+    /// order and its backup (#132), and macOS's position memory for the removed
+    /// second divider (#398). Nothing is carried over: icons that sat left of that
+    /// divider now belong to the hidden section. A no-op once the keys are gone.
     static func migrateMenuBarOrderStore() {
-        let key = "menuBarOrderStoreJSON", backupKey = "menuBarOrderStoreBackupJSON"
-        // Either blob counts (#154): `??` only fell back on absent Data, so a corrupt
-        // primary hid a valid backup.
-        if [key, backupKey].contains(where: { MenuBarStore.legacyHadAlwaysHidden(orderStoreJSON: defaults.data(forKey: $0)) }) {
-            var store = menuBarStore
-            store.alwaysHiddenEnabled = true
-            menuBarStore = store
+        for key in ["menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON",
+                    "NSStatusItem Preferred Position ProsperMenuBarAlwaysHiddenSeparator"] {
+            defaults.removeObject(forKey: key)
         }
-        defaults.removeObject(forKey: key)
-        defaults.removeObject(forKey: backupKey)
     }
 
     /// Minimal envelope to read just `schemaVersion` from a stored blob without
