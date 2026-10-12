@@ -790,12 +790,18 @@ enum Preferences {
     /// removed second divider (#398). Nothing is carried over: icons that sat left of that
     /// divider now belong to the hidden section. A no-op once the keys are gone.
     static func migrateMenuBarOrderStore() {
-        for key in ["menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON",
-                    "NSStatusItem Preferred Position ProsperMenuBarAlwaysHiddenSeparator",
-                    "NSStatusItem Visible ProsperMenuBarAlwaysHiddenSeparator"] {
+        for key in menuBarCleanupKeys {
             defaults.removeObject(forKey: key)
         }
     }
+
+    /// Dead keys removed on every launch by migrateMenuBarOrderStore. Pinned by
+    /// MenuBarTests.testMenuBarCleanupRemovesExactlyTheFourDeadKeys.
+    static let menuBarCleanupKeys: [String] = [
+        "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON",
+        "NSStatusItem Preferred Position ProsperMenuBarAlwaysHiddenSeparator",
+        "NSStatusItem Visible ProsperMenuBarAlwaysHiddenSeparator",
+    ]
 
     /// Minimal envelope to read just `schemaVersion` from a stored blob without
     /// decoding the whole (possibly newer, unknown-shaped) store.

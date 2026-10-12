@@ -210,6 +210,16 @@ final class MenuBarTests: XCTestCase {
 
     // MARK: - #132 / #398: leftover menu-bar state is deleted once
 
+    /// QA #217: the cleanup's only key source is this list, so over-deletion of a live
+    /// item's position or visibility memory fails here, whatever the autosave name.
+    func testMenuBarCleanupRemovesExactlyTheFourDeadKeys() {
+        XCTAssertEqual(Preferences.menuBarCleanupKeys, [
+            "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON",
+            "NSStatusItem Preferred Position ProsperMenuBarAlwaysHiddenSeparator",
+            "NSStatusItem Visible ProsperMenuBarAlwaysHiddenSeparator",
+        ], "the migration runs every launch: any new key here must be dead state and must be added to this list on purpose")
+    }
+
     /// #154: both ordering-engine blobs are deleted (also with a corrupt primary), and
     /// #398: so is macOS's position memory for the removed second divider.
     func testOrderStoreMigrationReadsAndDeletesTheBackup() {
