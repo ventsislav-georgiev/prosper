@@ -245,8 +245,12 @@ final class AgentController {
     }
 
     /// End the session entirely: shut the harness down and release the agent model so
-    /// inline completions resume.
-    func end() async {
+    /// inline completions resume. `generation`: the run whose teardown this is; nil (Stop,
+    /// tests) means whichever run is current. A run's teardown arriving after a newer run
+    /// started owns nothing here, the CLI queue included (#410).
+    func end(generation: Int? = nil) async {
+        let generation = generation ?? runGeneration
+        guard generation == runGeneration else { return }
         // Any teardown that bypasses handleTurnCompleted (Stop during model load,
         // setup failure, codex crash) must still halt the CLI queue — pending CLI
         // jobs firing on the NEXT drain kick would defeat the stop.
@@ -259,7 +263,6 @@ final class AgentController {
         // first one (as respawnHarnessForConfig does): the newer run spawns its own harness
         // and re-attaches the thread through pendingResumeID instead of using the dying
         // harness. After each await, a newer run owns the model and the phase: stop there.
-        let generation = runGeneration
         eventPump?.cancel()
         eventPump = nil
         let dying = harness
@@ -433,6 +436,13 @@ final class AgentController {
             // Stop already settled this run; a request failing under it is not news.
             log.info("stopped agent run ended with: \(String(describing: error), privacy: .public)")
         } catch {
+            // #410: codex died under this run (its .error and harnessEnded admit a submit) and a
+            // newer run started before this request failed. Phase, transcript, resume id and
+            // harness are that run's now: drop this error instead of surfacing it over them.
+            guard generation == runGeneration else {
+                log.info("stale agent run's error dropped, a newer run is live: \(String(describing: error), privacy: .public)")
+                return
+            }
             log.error("agent run failed: \(String(describing: error), privacy: .public)")
             // `notStarted` under an error already on screen: codex died before this
             // request went out, and its `.error` event (the informative row, with the exit
@@ -454,7 +464,7 @@ final class AgentController {
                 persistSessionMeta(failed)
                 persistTranscript()
             }
-            await end()
+            await end(generation: generation)
         }
     }
 

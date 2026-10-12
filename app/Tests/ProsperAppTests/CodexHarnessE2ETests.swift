@@ -2289,41 +2289,59 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// An in-process harness for the end()/resubmit race, no subprocess. A parking one's first
     /// shutdown suspends on a continuation until `releaseShutdown()`. Once a shutdown began,
     /// every request fails with notStarted, as a dying codex's would. sendPrompt throws
-    /// backendError when `failsPrompt` (run()'s generic catch, which calls end()); otherwise it
-    /// opens a turn that stays open until `completeTurn()`.
+    /// backendError when `failsPrompt` (run()'s generic catch, which calls end()); with
+    /// `parksPrompt` (#410) it suspends until `releasePrompt()` and then throws notStarted, a
+    /// request that outlived its codex; otherwise it opens a turn that stays open until
+    /// `completeTurn()`. `die()` is codex exiting on its own, as CodexHarness.handleTermination
+    /// reports it: an .error event, then the stream finishes (which is what reaches the
+    /// controller's harnessEnded).
     @MainActor
     private final class ParkingHarness: CodingHarness {
         nonisolated let events: AsyncStream<HarnessEvent>
         private let sink: AsyncStream<HarnessEvent>.Continuation
-        let name: String, parks: Bool, failsPrompt: Bool
+        let name: String, parks: Bool, failsPrompt: Bool, parksPrompt: Bool
         private(set) var shutdowns = 0, prompts = 0, newSessions = 0, resumed: [String] = []
+        private var gone = false
         private var parked: CheckedContinuation<Void, Never>?
+        private var promptParked: CheckedContinuation<Void, Never>?
         var isParked: Bool { parked != nil }
-        init(_ name: String, parks: Bool, failsPrompt: Bool) {
-            self.name = name; self.parks = parks; self.failsPrompt = failsPrompt
+        var isPromptParked: Bool { promptParked != nil }
+        init(_ name: String, parks: Bool, failsPrompt: Bool, parksPrompt: Bool = false) {
+            self.name = name; self.parks = parks; self.failsPrompt = failsPrompt; self.parksPrompt = parksPrompt
             (events, sink) = AsyncStream<HarnessEvent>.makeStream()
         }
         func releaseShutdown() { parked?.resume(); parked = nil }
+        func releasePrompt() { promptParked?.resume(); promptParked = nil }
         func completeTurn() { sink.yield(.turnCompleted(turn: TurnID(raw: "\(name)-turn-\(prompts)"), .completed)) }
+        func die() {
+            gone = true
+            sink.yield(.error(.backendError("codex app-server exited with code 1")))
+            sink.finish()
+        }
         func start() async throws {}
         func shutdown() async {
             shutdowns += 1
+            gone = true
             if parks, shutdowns == 1 { await withCheckedContinuation { parked = $0 } }
             sink.finish()
         }
         func newSession(_ opts: SessionOptions) async throws -> SessionID {
-            guard shutdowns == 0 else { throw HarnessError.notStarted }
+            guard !gone else { throw HarnessError.notStarted }
             newSessions += 1
             return SessionID(raw: "thread-\(name)")
         }
         func resumeSession(_ id: SessionID, options: SessionOptions) async throws -> SessionID {
-            guard shutdowns == 0 else { throw HarnessError.notStarted }
+            guard !gone else { throw HarnessError.notStarted }
             resumed.append(id.raw)
             return id
         }
         func forkSession(_ id: SessionID) async throws -> SessionID { id }
         func sendPrompt(session: SessionID, input: [PromptInput]) async throws -> TurnID {
-            guard shutdowns == 0 else { throw HarnessError.notStarted }
+            guard !gone else { throw HarnessError.notStarted }
+            if parksPrompt {
+                await withCheckedContinuation { promptParked = $0 }
+                throw HarnessError.notStarted
+            }
             if failsPrompt { throw HarnessError.backendError("turn/start failed") }
             prompts += 1
             let turn = TurnID(raw: "\(name)-turn-\(prompts)")
@@ -2437,5 +2455,83 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(b.newSessions, 0)
         b.completeTurn()
         _ = await Self.wait(2) { controller.phase == .idle }
+    }
+
+    // MARK: - #410 a dead run's late catch after a resubmit
+
+    /// `wait` for a condition that needs an await (the session store is an actor).
+    @MainActor
+    private static func waitAsync(_ seconds: TimeInterval = 2, until condition: () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !(await condition()) {
+            if Date() >= deadline { return false }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return true
+    }
+
+    private static func errorCount(_ items: [AgentItem]) -> Int {
+        items.filter { if case .error = $0 { return true }; return false }.count
+    }
+
+    /// #410: codex dies while run A's turn/start is in flight (.error, then the stream ends, so
+    /// harnessEnded leaves .error and no harness), run B is submitted and opens its turn, and
+    /// only then does A's request fail. A's late catch leaves B alone: no second error row, B's
+    /// phase, harness and session intact, B's turn completes, and the store holds B's thread
+    /// with A's death as its only error and no failed session.
+    @MainActor
+    func testDeadRunsLateCatchLeavesTheResubmittedRunAlone() async {
+        let dir = tempDir("late-catch")
+        let store = AgentSessionStore(directory: dir)
+        let spawned = Spawned()
+        let controller = AgentController(store: store, resolveCodex: { dir }, makeHarness: {
+            let first = spawned.all.isEmpty
+            let harness = ParkingHarness(first ? "A" : "B", parks: false, failsPrompt: false, parksPrompt: first)
+            spawned.all.append(harness)
+            return harness
+        })
+        addTeardownBlock { @MainActor in
+            spawned.all.forEach { $0.releasePrompt() }
+            await controller.end()
+            _ = await store.recentSessions(limit: 1)   // let the persists land before the dir goes
+        }
+        let aEnded = Flag()
+        RunToken.$current.withValue(RaiseOnDeinit(aEnded)) { controller.submit(goal: "first") }
+        let inFlight = await Self.wait(2) { spawned.all.first?.isPromptParked == true }
+        guard inFlight, let a = spawned.all.first else { return XCTFail("run A's turn/start never went out") }
+
+        a.die()
+        // harnessEnded persists the transcript before it drops the harness, in one synchronous
+        // pass, and nothing earlier saved one: a saved transcript means the harness is gone.
+        let dropped = await Self.waitAsync { await !store.loadTranscript(id: "thread-A").isEmpty }
+        XCTAssertTrue(dropped, "the controller never dropped run A's dead harness")
+        XCTAssertEqual(controller.phase, .error("Agent error: codex app-server exited with code 1"))
+
+        controller.submit(goal: "second")
+        let opened = await Self.wait(2) { spawned.all.count == 2 && spawned.all[1].prompts == 1 }
+        guard opened else { return XCTFail("run B never opened its turn (phase \(controller.phase))") }
+        let b = spawned.all[1]
+        XCTAssertEqual(b.resumed, ["thread-A"], "run B did not re-attach the dead run's thread")
+        XCTAssertFalse(aEnded.isRaised, "run A returned while its request was parked")
+
+        a.releasePrompt()
+        let late = await Self.wait(2) { aEnded.isRaised }
+        XCTAssertTrue(late, "run A's late catch never returned")
+        XCTAssertEqual(Self.errorRows(controller), 1, "run A's late catch surfaced over run B: \(controller.items)")
+        XCTAssertEqual(controller.phase, .running, "run A's late catch settled run B's phase")
+        XCTAssertEqual(b.shutdowns, 0, "run A's late catch shut run B's harness down")
+        XCTAssertEqual(controller.currentSessionID, "thread-A", "run A's late catch dropped run B's session")
+
+        b.completeTurn()
+        let idle = await Self.wait(2) { controller.phase == .idle }
+        XCTAssertTrue(idle, "run B's turn never completed (phase \(controller.phase))")
+        let final = await Self.waitAsync {
+            await store.loadTranscript(id: "thread-A").contains { if case .note = $0 { return true }; return false }
+        }
+        XCTAssertTrue(final, "run B's finished transcript never reached the store")
+        let saved = await store.loadTranscript(id: "thread-A")
+        XCTAssertEqual(Self.errorCount(saved), 1, "the store holds a failure for run B: \(saved)")
+        let sessions = await store.recentSessions().map(\.id)
+        XCTAssertEqual(sessions, ["thread-A"], "a failed session was minted")
     }
 }
