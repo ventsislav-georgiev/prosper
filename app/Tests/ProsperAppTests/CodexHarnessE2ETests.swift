@@ -16,6 +16,21 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// its fake URL to the next test's controller.
     override func setUp() async throws {
         await MainActor.run { AgentController.resetCodexDownloadForTesting() }
+        groupsBefore = Set(CodexHarness.livePGIDs.withLock { $0.keys })
+    }
+
+    /// #402: every codex group a row started must be gone after it: a leftover entry is a
+    /// live mock, and ProcessGroupKillTests' drain row (run later) refuses a non-empty registry.
+    /// Polls: shutdown unregisters off-thread once the group is empty (escalate, ≤ grace + 1 s).
+    private var groupsBefore: Set<pid_t> = []
+    override func tearDown() async throws {
+        let deadline = Date().addingTimeInterval(5)
+        var leaked = Set(CodexHarness.livePGIDs.withLock { $0.keys }).subtracting(groupsBefore)
+        while !leaked.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            leaked = Set(CodexHarness.livePGIDs.withLock { $0.keys }).subtracting(groupsBefore)
+        }
+        XCTAssertEqual(leaked, [], "codex groups this row started are still registered in livePGIDs")
     }
 
     /// The mock app-server: reads JSONL requests on stdin, replies on stdout, and
@@ -981,8 +996,11 @@ final class CodexHarnessE2ETests: XCTestCase {
         })
         // #341: a run still unwinding at teardown persists into `store` after the temp dir is
         // removed and recreates it. Runs before that removal (LIFO): let the writes land first.
+        // #402: the controller keeps codex resident between runs until end(); a row that never
+        // ends it leaves the mock running and its group in livePGIDs.
         addTeardownBlock { @MainActor in
             _ = await Self.wait(5) { !controller.isActive }
+            await controller.end()
             _ = await store.recentSessions(limit: 1)
         }
         return (controller, store)
