@@ -170,7 +170,9 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: a symlinked `~/.config/prosper/mcp.json` or `hooks.json` (kept in a dotfiles repo,
   say) is no longer replaced by a plain file when settings change.** Writes follow the link to
   its target, and a link whose target is missing is left alone at launch and filled in on the
-  next settings change.
+  next settings change. Relative links (as GNU stow makes them) and chains of links (as Nix
+  home-manager makes them) are followed too; a link loop, or a chain of more than eight
+  links, skips the write and logs it instead of replacing a link with a plain file.
 - **Fixed: clicking Manual in the fan popup just as the Mac goes to sleep no longer saves
   Manual for fans that sleep put back on automatic.** When the helper's reply arrives after
   the wake, the click is dropped and the fans stay automatic, so the popup no longer shows

@@ -281,6 +281,72 @@ final class MCPImportTests: XCTestCase {
         }
     }
 
+    /// GNU stow makes relative links: the destination resolves against the link's
+    /// directory, never the process working directory (#399).
+    func testWriteFollowsRelativeSymlink() throws {
+        try withScratchFile { url in
+            let sibling = tempDir("dotfiles")
+            let target = sibling.appendingPathComponent("mcp.json")
+            try "{}".write(to: target, atomically: true, encoding: .utf8)
+            let rel = "../\(sibling.lastPathComponent)/mcp.json"
+            try FileManager.default.createSymbolicLink(atPath: url.path, withDestinationPath: rel)
+            let stray = URL(fileURLWithPath: rel, relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+            defer { try? FileManager.default.removeItem(at: stray.deletingLastPathComponent()) }  // regression litter only
+            MCPConfigStore.writeFile(Preferences.mcpServers)
+            XCTAssertTrue(isSymlink(url), "link was replaced by a regular file")
+            XCTAssertEqual(MCPConfigStore.decode(try String(contentsOf: target, encoding: .utf8)), Preferences.mcpServers)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: stray.path), "relative link resolved against the cwd")
+        }
+    }
+
+    /// Nix home-manager makes two-hop chains: the write lands on the last hop (#399).
+    func testWriteFollowsTwoHopSymlink() throws {
+        try withScratchFile { url in
+            let dir = tempDir("dotfiles")
+            let a = dir.appendingPathComponent("a"), b = dir.appendingPathComponent("b")
+            try "{}".write(to: b, atomically: true, encoding: .utf8)
+            try FileManager.default.createSymbolicLink(at: a, withDestinationURL: b)
+            try FileManager.default.createSymbolicLink(at: url, withDestinationURL: a)
+            MCPConfigStore.writeFile(Preferences.mcpServers)
+            XCTAssertTrue(isSymlink(url) && isSymlink(a), "a link in the chain was replaced")
+            XCTAssertEqual(MCPConfigStore.decode(try String(contentsOf: b, encoding: .utf8)), Preferences.mcpServers)
+        }
+    }
+
+    /// An unresolved chain (cycle, or past the hop bound) skips the write: no link is
+    /// replaced by a regular file and the mirror key is left as is (#399).
+    private func assertUnresolvedChainSkipped(_ links: [URL], file: StaticString = #filePath, line: UInt = #line) {
+        Preferences.defaults.set("stale", forKey: "agentMCPDiskMirror")
+        MCPConfigStore.writeFile(Preferences.mcpServers)
+        for link in links { XCTAssertTrue(isSymlink(link), "\(link.lastPathComponent) was replaced", file: file, line: line) }
+        XCTAssertEqual(Preferences.defaults.string(forKey: "agentMCPDiskMirror"), "stale", "mirror must be left as is", file: file, line: line)
+    }
+
+    func testWriteSkipsSymlinkCycle() throws {
+        try withScratchFile { url in
+            let dir = tempDir("dotfiles")
+            let a = dir.appendingPathComponent("a"), b = dir.appendingPathComponent("b")
+            try FileManager.default.createSymbolicLink(at: url, withDestinationURL: a)
+            try FileManager.default.createSymbolicLink(at: a, withDestinationURL: b)
+            try FileManager.default.createSymbolicLink(at: b, withDestinationURL: a)
+            assertUnresolvedChainSkipped([url, a, b])
+        }
+    }
+
+    func testWriteSkipsNineHopChain() throws {
+        try withScratchFile { url in
+            let dir = tempDir("dotfiles")
+            let target = dir.appendingPathComponent("mcp.json")
+            try "{}".write(to: target, atomically: true, encoding: .utf8)
+            let hops = (1...8).map { dir.appendingPathComponent("l\($0)") }  // url + 8 = 9 links
+            for (link, dest) in zip([url] + hops, hops + [target]) {
+                try FileManager.default.createSymbolicLink(at: link, withDestinationURL: dest)
+            }
+            assertUnresolvedChainSkipped([url] + hops)
+            XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "{}")
+        }
+    }
+
     /// Source pin: the unreadable branch of bootstrap logs before returning.
     func testBootstrapUnreadableBranchLogs() throws {
         let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

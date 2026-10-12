@@ -120,7 +120,7 @@ enum MCPConfigStore {
     static func writeFile(_ servers: [MCPServer]) {
         guard let json = encode(servers) else { return }
         if json == Preferences.defaults.string(forKey: mirrorKey) { return }
-        let url = symlinkTarget(fileURL)
+        guard let url = symlinkTarget(fileURL) else { return }
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
@@ -131,14 +131,19 @@ enum MCPConfigStore {
 
     /// Where a config write lands: a symlinked config (kept in a dotfiles repo) is
     /// followed, dangling or not, so the atomic replace hits the target and the link
-    /// survives (#391). Shared with `HooksConfigStore`.
-    static func symlinkTarget(_ url: URL) -> URL {
+    /// survives (#391). Shared with `HooksConfigStore`. nil when the chain does not
+    /// resolve (a cycle, or more than 8 hops): the write is skipped rather than
+    /// replacing a link in the user's dotfiles with a regular file (#399).
+    static func symlinkTarget(_ url: URL) -> URL? {
         var url = url
         for _ in 0..<8 {  // bounded: a link cycle stops here instead of spinning
-            guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else { break }
+            guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else { return url }
             url = URL(fileURLWithPath: dest, relativeTo: url.deletingLastPathComponent()).standardizedFileURL
         }
-        return url
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil else { return url }
+        Logger(subsystem: "eu.illegible.prosper", category: "mcp")
+            .error("\(url.path, privacy: .public) is still a symlink after 8 hops (cycle or long chain); config write skipped")
+        return nil
     }
 
     /// lstat existence: a symlink, even dangling, is the user's file, not absent (#391).

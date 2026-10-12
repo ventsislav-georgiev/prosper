@@ -252,6 +252,22 @@ final class HookImportTests: XCTestCase {
         }
     }
 
+    /// A link cycle skips the write through the shared helper: no link is replaced and
+    /// the mirror key is left as is (#399).
+    func testWriteSkipsSymlinkCycle() throws {
+        try withScratchFile { url in
+            let dir = tempDir("dotfiles")
+            let a = dir.appendingPathComponent("a"), b = dir.appendingPathComponent("b")
+            try FileManager.default.createSymbolicLink(at: url, withDestinationURL: a)
+            try FileManager.default.createSymbolicLink(at: a, withDestinationURL: b)
+            try FileManager.default.createSymbolicLink(at: b, withDestinationURL: a)
+            Preferences.defaults.set("stale", forKey: "agentHooksDiskMirror")
+            HooksConfigStore.writeFile(Preferences.hooks)
+            for link in [url, a, b] { XCTAssertTrue(isSymlink(link), "\(link.lastPathComponent) was replaced") }
+            XCTAssertEqual(Preferences.defaults.string(forKey: "agentHooksDiskMirror"), "stale", "mirror must be left as is")
+        }
+    }
+
     /// Source pin: the unreadable branch of bootstrap logs before returning.
     func testBootstrapUnreadableBranchLogs() throws {
         let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

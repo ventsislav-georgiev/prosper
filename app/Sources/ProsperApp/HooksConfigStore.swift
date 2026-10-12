@@ -114,7 +114,7 @@ enum HooksConfigStore {
     static func writeFile(_ hooks: [HookRule]) {
         guard let json = encode(hooks) else { return }
         if json == Preferences.defaults.string(forKey: mirrorKey) { return }
-        let url = MCPConfigStore.symlinkTarget(fileURL)
+        guard let url = MCPConfigStore.symlinkTarget(fileURL) else { return }
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
