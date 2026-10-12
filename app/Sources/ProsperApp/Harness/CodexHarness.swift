@@ -141,7 +141,8 @@ actor CodexHarness: CodingHarness {
             throw HarnessError.spawnFailed(String(describing: error))
         }
         self.process = proc
-        Self.livePGIDs.withLock { _ = $0.insert(proc.processIdentifier) }
+        let pid = proc.processIdentifier
+        Self.livePGIDs.withLock { $0[pid] = Self.startTime(pid) ?? 0 }   // 0: already gone, matches no live pid
 
         // Handshake: initialize → wait for result → initialized notification. On any
         // failure tear the half-spawned process down before rethrowing — otherwise the
@@ -176,16 +177,41 @@ actor CodexHarness: CodingHarness {
     }
 
     /// Every codex group started and not yet torn down, readable off the actor so the
-    /// quit path can reach it synchronously (#361). Internal for ProcessGroupKillTests.
-    static let livePGIDs = OSAllocatedUnfairLock(initialState: Set<pid_t>())
+    /// quit path can reach it synchronously (#361), with its leader's start time for the
+    /// drain's probe (#387). Internal for ProcessGroupKillTests.
+    static let livePGIDs = OSAllocatedUnfairLock(initialState: [pid_t: UInt64]())
 
     /// The quit path: `applicationWillTerminate` can't await `shutdown` before its
     /// `atexit { _exit(0) }`, so it takes every live codex group down inline here.
     /// ponytail: groups are killed one after another, so N stuck groups cost N × (grace + 1) s;
     /// one harness is live in practice.
     nonisolated static func killLiveGroupsBlocking(grace: TimeInterval) {
-        let pgids = livePGIDs.withLock { set in defer { set.removeAll() }; return set }
-        for pgid in pgids { killGroup(pgid, grace: grace, blocking: true) }
+        let groups = livePGIDs.withLock { dict in defer { dict.removeAll() }; return dict }
+        for (pgid, start) in groups where isOurGroup(pgid, leaderStart: start) {
+            killGroup(pgid, grace: grace, blocking: true)
+        }
+    }
+
+    /// The drain's probe before its first real signal: an entry can outlive its group (a
+    /// harness released without shutdown never unregisters) and the id can be reused (#387).
+    /// Ours: the group exists and pid `pgid` is either our leader (same start time, still
+    /// leading) or gone. A gone leader is the normal case after shutdown's SIGTERM or an
+    /// exit with children left (#377); the id stays reserved while a member lives.
+    /// ponytail: a reused id whose new leader already died with members left passes;
+    /// listing members with proc_listpids would close it.
+    nonisolated static func isOurGroup(_ pgid: pid_t, leaderStart: UInt64) -> Bool {
+        guard kill(-pgid, 0) == 0 else { return false }
+        guard let start = startTime(pgid) else { return true }
+        return start == leaderStart && getpgid(pgid) == pgid
+    }
+
+    /// A process's start time in microseconds (proc_pidinfo PROC_PIDTBSDINFO), nil once
+    /// the pid is gone: a pid alone can be reused, pid plus start time cannot.
+    nonisolated static func startTime(_ pid: pid_t) -> UInt64? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard pid > 0, proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
     }
 
     /// Every signal killGroup/escalate send, liveness probes included, goes through
@@ -220,15 +246,22 @@ actor CodexHarness: CodingHarness {
     /// the kill to land, so a blocking caller returns with the group gone. The group
     /// leaves `livePGIDs` only here, at the end: a quit during the grace still finds it
     /// and kills it inline instead of leaving a TERM-ignoring member behind (#377).
-    /// A no-op for groups the quit drain already took, and for BunHarness's groups.
+    /// A group SIGKILL did not empty stays registered for a later quit, behind the
+    /// drain's probe (#387). A no-op for groups the quit drain already took, and for
+    /// BunHarness's groups.
     private nonisolated static func escalate(_ pgid: pid_t, grace: TimeInterval) {
-        defer { livePGIDs.withLock { _ = $0.remove(pgid) } }
+        var survived = false
+        defer { if !survived { livePGIDs.withLock { _ = $0.removeValue(forKey: pgid) } } }
         var deadline = Date().addingTimeInterval(grace)
         while sendSignal(-pgid, 0) == 0, Date() < deadline { usleep(50_000) }
         guard sendSignal(-pgid, 0) == 0 else { return }
         _ = sendSignal(-pgid, SIGKILL)
         deadline = Date().addingTimeInterval(1)
         while sendSignal(-pgid, 0) == 0, Date() < deadline { usleep(20_000) }
+        if sendSignal(-pgid, 0) == 0 {
+            survived = true
+            NSLog("prosper: codex group %d outlived SIGKILL by 1 s; left registered for the quit drain", pgid)
+        }
     }
 
     /// Shared by `shutdown` and `handleTermination`: detach pipe handlers (they

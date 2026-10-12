@@ -183,7 +183,10 @@ tag from the now-released section and put it on the new top draft.
   signal, so an opencode helper or MCP server in the host's process group cannot linger after
   the app is gone. Quitting also stops the coding agent's codex process and the command it is
   running, instead of leaving them behind, and still does so when codex has just exited on its
-  own and Prosper is giving the command it ran its few seconds to stop.
+  own and Prosper is giving the command it ran its few seconds to stop. That stop is only sent
+  to the codex session's own processes, never to an unrelated program that later took over the
+  same process-group number, and a command that ignores even the force-kill is logged and tried
+  again at the next quit instead of being forgotten.
 - **Fixed: quitting Prosper or toggling the hyper key no longer waits forever if `hidutil`
   hangs.** Prosper gives up after five seconds, stops the stuck process together with anything
   it started, logs it, and waits a minute before trying `hidutil` again. If `hidutil` fails or
