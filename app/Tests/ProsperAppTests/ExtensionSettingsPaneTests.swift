@@ -15,5 +15,7 @@ final class ExtensionSettingsPaneTests: XCTestCase {
         XCTAssertEqual(NumberRow.format(text: "5", min: nil, max: -.infinity), "5")
         XCTAssertEqual(NumberRow.format(text: "5", min: .infinity, max: nil), "5")
         XCTAssertEqual(NumberRow.format(text: "9", min: -.infinity, max: 3), "3")
+        // #385 (QA #168): garbage input with a -inf min saves 0, never the text "-inf".
+        XCTAssertEqual(NumberRow.format(text: "abc", min: -.infinity, max: nil), "0")
     }
 }

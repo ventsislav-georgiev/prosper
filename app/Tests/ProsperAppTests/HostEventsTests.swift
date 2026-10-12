@@ -140,7 +140,8 @@ final class HostEventsTests: XCTestCase {
     // MARK: helpers
 
     private static func scratchPasteboard() -> NSPasteboard {
-        NSPasteboard(name: NSPasteboard.Name("com.prosper.tests.clipboard"))
+        // #385 (QA #163): per-call UUID name, so a suite in another clone never shares (and releases) it.
+        NSPasteboard(name: NSPasteboard.Name("com.prosper.tests.clipboard.\(UUID().uuidString)"))
     }
 
     private static func json(_ s: String) -> [String: Any]? {

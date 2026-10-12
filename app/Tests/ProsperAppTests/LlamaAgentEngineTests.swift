@@ -7,6 +7,15 @@ import MLXLMCommon
 /// (Decode-path behavior needs a loaded model — covered by the agent bench.)
 final class LlamaAgentEngineTests: XCTestCase {
 
+    /// #385 (QA #184): a row that overrides the `physicalMemoryGB` seam must restore it; a leak
+    /// would let later rows read a fake RAM tier. Reset after the check so only the leaker fails.
+    override func tearDown() {
+        let real = Int(ProcessInfo.processInfo.physicalMemory / 1_000_000_000)
+        XCTAssertEqual(AgentModelRegistry.physicalMemoryGB, real, "a row leaked a physicalMemoryGB override")
+        AgentModelRegistry.physicalMemoryGB = real
+        super.tearDown()
+    }
+
     // MARK: ChatML rendering
 
     func testRenderChatMLBasicTurns() {

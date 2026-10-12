@@ -72,18 +72,39 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(suKeys(), before, "Sparkle wrote the xctest defaults domain (names or values)")
     }
 
-    /// #344: `SPUUpdater(` is constructed in exactly one place, on the XCTestCase-gated line.
+    /// #344: a Sparkle updater is constructed in exactly one place, on the XCTestCase-gated line.
+    /// #385 (QA #155): `SPUUpdater(`, `SPUUpdater.init(` and `SPUStandardUpdaterController(` all count.
     func testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
         let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
         var hits: [String] = []
         for case let url as URL in files where url.pathExtension == "swift" {
-            for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") where line.contains("SPUUpdater(") {
+            for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+            where line.contains(/SPU(Updater|StandardUpdaterController)\s*(\.\s*init\s*)?\(/) {
                 hits.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
             }
         }
         XCTAssertEqual(hits, ["AppUpdater.swift: updater = NSClassFromString(\"XCTestCase\") != nil ? nil : SPUUpdater("])
+    }
+
+    /// #385 (QA #153): with no SPUUpdater under XCTest, `automaticChecks` lives in
+    /// `Preferences.automaticUpdateChecks` (the scratch suite): the setter writes it, the getter reads it.
+    @MainActor
+    func testAutomaticChecksPersistsToPreferencesWithoutAnUpdater() {
+        let key = "automaticUpdateChecks", saved = Preferences.defaults.object(forKey: key)
+        let updater = AppUpdater()
+        defer {
+            updater.automaticChecks = false   // stops the poll timer the `true` write started
+            Preferences.defaults.set(saved, forKey: key)
+        }
+        XCTAssertFalse(updater.isConfigured)
+        updater.automaticChecks = false
+        XCTAssertFalse(Preferences.automaticUpdateChecks)
+        XCTAssertFalse(updater.automaticChecks)
+        updater.automaticChecks = true
+        XCTAssertTrue(Preferences.automaticUpdateChecks)
+        XCTAssertTrue(updater.automaticChecks)
     }
 
     // MARK: - Divider length state machine (the show/hide hot path's source of truth)

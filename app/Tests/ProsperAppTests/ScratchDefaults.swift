@@ -105,22 +105,30 @@ final class PreferencesScratchStoreTests: XCTestCase {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
         let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+        // #385 (QA #155): matched over the whole comment-stripped file, so a call wrapped across lines
+        // (`UserDefaults` / `.standard`, `UserDefaults(` / `suiteName:`) still counts, reported at the
+        // line the match starts on. Spellings: `UserDefaults.standard`, a typed `UserDefaults = .standard`,
+        // `UserDefaults(` and `UserDefaults.init(`, CFPreferences{Set,Copy,Get}, and `@AppStorage` with
+        // no `store:` or with `store: .standard`. A wrap can also start a fail-safe false hit on an
+        // innocent line; accepted, the same cost-of-an-exact-scan stance as #383. No NSUserDefaults
+        // rule: that name does not compile in Swift.
+        let rule = /UserDefaults\s*(\.\s*standard\b|(\.\s*init\s*)?\(|=\s*\.standard\b)|CFPreferences(Set|Copy|Get)|@AppStorage\s*\((?![^)]*store:)|@AppStorage\s*\([^)]*store:\s*\.standard\b/
         var hits: [String] = []
         for case let url as URL in files where url.pathExtension == "swift" && url.lastPathComponent != "Preferences.swift" {
-            let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+            let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
-            for (i, line) in lines.enumerated() {
-                // #344: `UserDefaults` / `.standard` split across two lines counts as one.
-                let wrapped = line.hasSuffix("UserDefaults") && i + 1 < lines.count && lines[i + 1].hasPrefix(".standard")
-                guard !line.hasPrefix("//"),
-                      wrapped || line.contains("UserDefaults.standard") || line.contains("UserDefaults(suiteName")
-                        || line.contains("UserDefaults()") || line.contains("NSUserDefaults")
-                        || line.contains("CFPreferencesSet") || line.contains("CFPreferencesCopy")
-                        || line.contains("CFPreferencesGet")
-                        || (line.contains("@AppStorage(") && !line.contains("store:")) else { continue }
-                hits.append("\(url.lastPathComponent): \(line)")
+            let text = lines.map { $0.hasPrefix("//") ? "" : $0 }.joined(separator: "\n")
+            var seen = Set<Int>()
+            for match in text.matches(of: rule) {
+                let i = text[..<match.range.lowerBound].filter { $0 == "\n" }.count
+                if seen.insert(i).inserted { hits.append("\(url.lastPathComponent): \(lines[i])") }
             }
         }
-        XCTAssertEqual(Set(hits), Set(allowed.keys), "a source outside Preferences.swift opens its own UserDefaults store")
+        XCTAssertEqual(hits.filter { allowed[$0] == nil }, [], "a source outside Preferences.swift opens its own UserDefaults store")
+        // #385 (QA #153): a stale key (renamed file, edited or re-indented line) or a duplicated line fails by name.
+        for key in allowed.keys.sorted() {
+            let n = hits.filter { $0 == key }.count
+            XCTAssertEqual(n, 1, "allowlist key matched \(n) times, want exactly once: \(key)")
+        }
     }
 }

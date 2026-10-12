@@ -55,6 +55,17 @@ final class ApprovalBoxSourceTests: XCTestCase {
             XCTAssertEqual(body.components(separatedBy: open).count - 1, 1, "\(name): the capped box is a ScrollView")
             let o = try XCTUnwrap(body.range(of: open))
             XCTAssertLessThan(o.lowerBound, t.lowerBound, "\(name): ScrollView opens before the text measure")
+            // #385 (QA #199 t2): the text measure sits inside the ScrollView. Braces counted from the
+            // ScrollView's `{` to the measure line never close it (a ScrollView shut right after the
+            // `Text(` line would move the measure onto the ScrollView and the cue would never show).
+            let measure = try XCTUnwrap(body.range(of: ".onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approval\(v)Height = $0 }"))
+            guard o.lowerBound < measure.lowerBound else { XCTFail("\(name): text measure before the ScrollView"); continue }
+            var depth = 1
+            for c in body[body.index(o.lowerBound, offsetBy: "ScrollView {".count)..<measure.lowerBound] {
+                depth += c == "{" ? 1 : c == "}" ? -1 : 0
+                if depth == 0 { break }
+            }
+            XCTAssertGreaterThan(depth, 0, "\(name): the ScrollView closes before the text measure")
         }
     }
 

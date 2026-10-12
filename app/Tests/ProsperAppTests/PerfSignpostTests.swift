@@ -67,7 +67,10 @@ final class PerfSignpostTests: XCTestCase {
             if file.lastPathComponent != "AutocompleteEngine.swift",
                source.contains(/var requestToken\b/) { continue }
             let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
-            for i in lines.indices where lines[i].contains(/requestToken\s*&?\+=/) {
+            // #385 (QA #191): any assignment counts as a bump (`&+=`, `+=`, `= requestToken &+ 1`, ...);
+            // `==` / `!=` reads and the declaration do not.
+            for i in lines.indices where lines[i].contains(/requestToken\s*(&?[-+*\/%|^&])?=(?!=)/)
+                && !lines[i].contains(/\b(var|let)\s+requestToken\b/) {
                 hits.append((file.lastPathComponent, lines, i))
             }
         }
