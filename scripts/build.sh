@@ -47,6 +47,13 @@ else
     xcodebuild -downloadComponent MetalToolchain
   fi
   DD="$ROOT/app/.build/xcode-metallib"
+  # We only get here when Package.resolved changed since the last staged metallib.
+  # A restored CI cache then still holds this DerivedData's intermediates (explicit
+  # module .pcm files, objects) built against the previous dependency set, and
+  # xcodebuild refuses them: "SUAppcastItem.h has been modified since the module
+  # file ... was built" (Sparkle 2.9.3 → 2.10.0 failed the v2.156.0-beta.1 run).
+  # Start the build tree clean; the resolved checkouts in SourcePackages stay.
+  rm -rf "$DD/Build"
   # xcodebuild compiles from its OWN SourcePackages tree — resolve it first,
   # then re-apply the mlx-swift-lm patches there (apply-patches.sh covers the
   # xcode tree only once it exists). Skipping this fails the build with
