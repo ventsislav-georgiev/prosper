@@ -365,6 +365,23 @@ final class MCPImportTests: XCTestCase {
         }
     }
 
+    /// Eight hops ending in a dangling link: readlink says "still a link", so the write is refused.
+    /// A fileExists-style check would call it absent and replace the dangling link (QA #215).
+    /// After eight hops the path is l8, itself a link to a missing file.
+    func testWriteSkipsEightHopChainEndingInADanglingLink() throws {
+        try withScratchFile { url in
+            let dir = tempDir("dotfiles")
+            let missing = dir.appendingPathComponent("missing.json")
+            let hops = (1...8).map { dir.appendingPathComponent("l\($0)") }  // url + 8 links, l8 dangles
+            for (link, dest) in zip([url] + hops, hops + [missing]) {
+                try FileManager.default.createSymbolicLink(at: link, withDestinationURL: dest)
+            }
+            assertUnresolvedChainSkipped([url] + hops)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path), "nothing may be written at the dangling destination")
+            XCTAssertNil(try? FileManager.default.attributesOfItem(atPath: missing.path), "dangling destination must stay absent")
+        }
+    }
+
     /// Source pin: the unreadable branch of bootstrap logs before returning.
     func testBootstrapUnreadableBranchLogs() throws {
         let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
