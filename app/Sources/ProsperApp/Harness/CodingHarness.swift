@@ -154,7 +154,7 @@ enum WireText {
 
 /// #354: approval-card text in logical order. Bidi rule N1 gives a neutral (space, `>`, `|`)
 /// between two RTL words (or Arabic-Indic digits) their direction, so `echo א > ב` would draw
-/// as `echo ב < א`; an LRM after every neutral pins it left-to-right. The summary comes through
+/// as `echo ב < א`; an LRM after every neutral pins it left-to-right. The summary, a cwd and each permission line come through
 /// `WireText.oneLine` and a file diff through `WireText.multiLine`, both of which escape Cf (LRM included), so `ltr`
 /// never sees a raw bidi control. Swift has no bidi class, so the gate is pure ASCII, which
 /// can hold no RTL or AN scalar: ASCII is returned as is and copies off the card clean;

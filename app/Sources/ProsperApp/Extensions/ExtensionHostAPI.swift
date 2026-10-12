@@ -1009,7 +1009,7 @@ struct ExtensionHost {
         timer  = {
             schedule = function(opts)
                 opts = opts or {}
-                local every = opts.every ~= nil
+                local every = type(opts.every) == "number"
                 local seconds = every and opts.every or (opts.after or 0)
                 _timer_schedule(opts.id or "", every, seconds, opts.handler or "")
             end,

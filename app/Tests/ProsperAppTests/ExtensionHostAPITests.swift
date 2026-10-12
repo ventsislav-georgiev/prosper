@@ -1073,6 +1073,17 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertEqual(svc.logs.filter { $0.level == "warn" && $0.message.contains("non-finite") }.count, 3)
     }
 
+    /// QA #169: only a number makes a timer repeating; `every = false` is a one-shot on `after`.
+    func testTimerScheduleEveryFalseIsOneShot() throws {
+        let svc = FakeServices()
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("function go() host.timer.schedule{ id='f', every=false, after=30, handler='h' } end")
+        _ = try lua.callGlobal("go")
+        XCTAssertEqual(svc.timerSchedules.map(\.every), [false])
+        XCTAssertEqual(svc.timerSchedules.map(\.seconds), [30])
+    }
+
     /// Cross-language contract: the Swift wake acctTag MUST equal the server's
     /// (wakeId.mjs `acctTag`) byte-for-byte, else every wake POST 403s against this
     /// device's URL silently. Golden value computed from the JS impl for the same

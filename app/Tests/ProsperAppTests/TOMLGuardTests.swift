@@ -82,6 +82,15 @@ final class TOMLGuardTests: XCTestCase {
         XCTAssertFalse(TOMLGuard.accepts("a = " + String(repeating: "{a.b = ", count: d / 2 + 1) + "1" + String(repeating: "}", count: d / 2 + 1)))
     }
 
+    /// QA #160: a `}` restores the enclosing base, so a sibling key after a nested table's pop
+    /// gets the whole budget back (a pop leaving base at the inner level over-rejects it).
+    func testSiblingAfterNestedPopKeepsItsBudget() {
+        let sibling = Array(repeating: "k", count: TOMLGuard.maxDepth).joined(separator: ".")   // 63 dots + the `{`: 64 frames
+        let text = "t = {a = {b = 1}, " + sibling + " = 1}\n"
+        XCTAssertTrue(TOMLGuard.accepts(text))
+        XCTAssertNoThrow(try TOMLDecoder().decode(Empty.self, from: text))
+    }
+
     /// Every bundled and example extension.toml passes the guard.
     func testAcceptsShippedManifests() throws {
         let app = URL(fileURLWithPath: #filePath)
@@ -166,6 +175,9 @@ final class TOMLGuardTests: XCTestCase {
         ("unterminated literal", "a = 'x\nb = 1\n", false),
         ("unterminated ml basic", "a = " + dq(3) + "x\n", false),
         ("unterminated ml literal", "a = '''x\n", false),
+        // QA #160: a bare triple quote at EOF, where the multi-line open condition differs per quote.
+        ("bare ml basic open at EOF", "a = " + dq(3), false),
+        ("bare ml literal open at EOF", "a = '''", false),
     ]
 
     /// Every corpus item the parser decodes, the guard accepts; every corpus item with a
@@ -186,7 +198,8 @@ final class TOMLGuardTests: XCTestCase {
         }
     }
 
-    /// True when `source` builds a TOML parser some way other than `TOMLDecoder().decodeGuarded(`.
+    /// True when `source` builds a TOML parser some way other than `TOMLDecoder().decodeGuarded(`,
+    /// or takes or returns a decoder (a parameter or return type), which hides where it decodes.
     private static func hasRawDecode(_ source: String) -> Bool {
         func count(_ pattern: String) -> Int {
             (try? NSRegularExpression(pattern: pattern))?
@@ -194,28 +207,33 @@ final class TOMLGuardTests: XCTestCase {
         }
         return count(#"TOMLDecoder\s*(\.init)?\s*\("#) != count(#"TOMLDecoder\(\)\.decodeGuarded\("#)
             || count(#"TOMLTable\s*(\.init)?\s*\("#) > 0
+            || count(#"(:|->)\s*(inout\s+)?TOMLDecoder\b"#) > 0
     }
 
     func testRawDecodeScanCatchesEveryShape() {
         for raw in ["TOMLDecoder().decode(T.self, from: s)", "let d = TOMLDecoder()\nlet x = try d.decode(T.self, from: s)",
                     "TOMLDecoder.init().decode(T.self, from: s)", "TOMLDecoder(isLenient: false).decode(T.self, from: s)",
-                    "try TOMLTable(source: s)", "try TOMLTable.init(source: s)"] {
+                    "try TOMLTable(source: s)", "try TOMLTable.init(source: s)",
+                    "func load(_ d: TOMLDecoder) throws -> T { try d.decode(T.self, from: s) }",
+                    "func load(d: inout TOMLDecoder) {}", "func make() -> TOMLDecoder { shared }"] {
             XCTAssertTrue(Self.hasRawDecode(raw), raw)
         }
         XCTAssertFalse(Self.hasRawDecode("try TOMLDecoder().decodeGuarded(T.self, from: s) // dduan/TOMLDecoder"))
     }
 
-    /// Scans app sources: files calling the raw decoder, and the count of guarded calls.
+    /// Scans every Swift file under Sources/ (any target) that imports the decoder: files
+    /// calling the raw decoder, and the count of guarded calls.
     private func decodeSites() throws -> (raw: [String], guarded: Int) {
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/ProsperApp")
+            .appendingPathComponent("Sources")
         let enumerator = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)
         var raw: [String] = [], guarded = 0
         while let url = enumerator?.nextObject() as? URL {
             guard url.pathExtension == "swift", url.lastPathComponent != "TOMLGuard.swift" else { continue }
             let text = try String(contentsOf: url, encoding: .utf8)
-            if Self.hasRawDecode(text) { raw.append(url.lastPathComponent) }
+            guard text.range(of: #"import\s+TOMLDecoder\b"#, options: .regularExpression) != nil else { continue }
+            if Self.hasRawDecode(text) { raw.append(url.path.replacingOccurrences(of: sources.path + "/", with: "")) }
             guarded += text.components(separatedBy: "TOMLDecoder().decodeGuarded(").count - 1
         }
         return (raw, guarded)

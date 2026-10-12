@@ -1001,7 +1001,7 @@ final class AgentController {
         // that a crash can leave half-written), then rename(2) over it: atomic on one volume,
         // so `dest` is always either the old binary or the whole new one, never missing/partial.
         let dir = dest.deletingLastPathComponent()
-        let staged = dir.appendingPathComponent(".\(dest.lastPathComponent).\(UUID().uuidString)")
+        let staged = dir.appendingPathComponent(stagingName(for: dest))
         try FileManager.default.moveItem(at: bin, to: staged)
         guard rename(staged.path, dest.path) == 0 else {
             let err = errno
@@ -1017,6 +1017,9 @@ final class AgentController {
         }
         return dest
     }
+
+    /// The staging file `installCodex` renames over `dest`; the crash-leftover prune keys on its `.codex-` prefix.
+    nonisolated static func stagingName(for dest: URL) -> String { ".\(dest.lastPathComponent).\(UUID().uuidString)" }
 
     /// First regular executable file under `dir` (the release tarball's single binary).
     nonisolated private static func firstExecutable(in dir: URL) -> URL? {

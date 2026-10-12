@@ -162,6 +162,8 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: extension timers restored from a corrupted saved schedule no longer crash Prosper at
   launch or fire in a tight loop.** Bad intervals are clamped to the normal 50 ms minimum. A
   schedule that lists the same timer twice keeps the later copy instead of crashing at launch.
+  For extension authors: `host.timer.schedule` with `every = false` is now a one-shot on
+  `after`, not a repeating timer at the minimum interval; only a number makes a timer repeat.
 - **Fixed: a hand-edited saved fan speed whose fan index is spelled unusually (`01`, `+1`) no
   longer crashes Prosper at launch or when the stats popup opens.** Only the plain index
   Prosper writes is read back; other spellings are ignored.

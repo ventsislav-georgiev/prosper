@@ -1153,35 +1153,50 @@ final class CodexHarnessE2ETests: XCTestCase {
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: dest.appendingPathComponent("stray").path, contents: Data("x".utf8))
         // The fixture dir also holds other pins; whatever was there before is all that may remain.
-        let before = try FileManager.default.contentsOfDirectory(atPath: dest.deletingLastPathComponent().path).sorted()
+        // readdir, not FileManager: contentsOfDirectory hides AppleDouble `._` names (QA #158).
+        let before = Self.names(in: dest.deletingLastPathComponent())
         XCTAssertTrue(before.contains(dest.lastPathComponent))
         XCTAssertThrowsError(try AgentController.installCodex(tgz: tgz, sha256: digest, dest: dest, sign: { _ in 0 })) {
             guard case HarnessError.spawnFailed(let msg) = $0 else { return XCTFail("wrong error: \($0)") }
             XCTAssertTrue(msg.contains("codex install rename failed"), "wrong failure: \(msg)")
         }
-        let left = try FileManager.default.contentsOfDirectory(atPath: dest.deletingLastPathComponent().path)
-        XCTAssertEqual(left.sorted(), before, "install dir changed after a failed rename")
+        XCTAssertEqual(Self.names(in: dest.deletingLastPathComponent()), before, "install dir changed after a failed rename")
         XCTAssertFalse(FileManager.default.fileExists(atPath: tgz.path), "the tarball was left behind")
     }
 
     /// #308: installing over an existing pin (the 0644 re-download path) replaces its bytes,
-    /// lands 0755, and prunes a staging file an earlier crash left behind.
+    /// lands 0755, and prunes a staging file an earlier crash left behind. QA #157: the leftover
+    /// is named by `stagingName`, so renaming the staging file can't outrun the prune filter.
     func testInstallCodexOverExistingDestReplacesIt() throws {
         let (dir, tgz, digest, dest) = try makeCodexTarball()
         defer { try? FileManager.default.removeItem(at: dir) }
         _ = try AgentController.installCodex(tgz: tgz, sha256: digest, dest: dest, sign: { _ in 0 })
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: dest.path)
         // A staging file a crash between move and rename left behind.
+        let crashed = AgentController.stagingName(for: dest)
         FileManager.default.createFile(atPath: dest.deletingLastPathComponent()
-            .appendingPathComponent(".codex-rust-v0.162.1.crashed").path, contents: Data("partial".utf8))
+            .appendingPathComponent(crashed).path, contents: Data("partial".utf8))
+        XCTAssertTrue(Self.names(in: dest.deletingLastPathComponent()).contains(crashed))
         let second = try makeCodexTarball(body: "#!/bin/sh\necho newer\n", in: dir)
         XCTAssertEqual(second.dest, dest)
         _ = try AgentController.installCodex(tgz: second.tgz, sha256: second.digest, dest: dest, sign: { _ in 0 })
         XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "#!/bin/sh\necho newer\n")
         XCTAssertEqual(try Self.mode(dest), 0o755)
-        let left = try FileManager.default.contentsOfDirectory(atPath: dest.deletingLastPathComponent().path).sorted()
-        XCTAssertEqual(left, ["codex-rust-v0.162.1", "other"], "a staging file or stale pin was left behind")
+        XCTAssertEqual(Self.names(in: dest.deletingLastPathComponent()), ["codex-rust-v0.162.1", "other"],
+                       "a staging file or stale pin was left behind")
         XCTAssertFalse(FileManager.default.fileExists(atPath: second.tgz.path))
+    }
+
+    /// Every name in `dir` but `.`/`..`, sorted, via readdir: FileManager hides `._` names.
+    private static func names(in dir: URL) -> [String] {
+        guard let d = opendir(dir.path) else { return [] }
+        defer { closedir(d) }
+        var out: [String] = []
+        while let e = readdir(d) {
+            let name = withUnsafeBytes(of: e.pointee.d_name) { String(decoding: $0.prefix(Int(e.pointee.d_namlen)), as: UTF8.self) }
+            if name != "." && name != ".." { out.append(name) }
+        }
+        return out.sorted()
     }
 
     private static func mode(_ url: URL) throws -> Int {
@@ -1862,6 +1877,20 @@ final class CodexHarnessE2ETests: XCTestCase {
         let calls = items.compactMap { if case .toolCall(_, _, let args, _, let out) = $0 { return (args, out) }; return nil }
         XCTAssertEqual(calls.first?.0, #"{"cmd":"echo a\u{202E}b"}"#)
         XCTAssertEqual(calls.first?.1, #"red\u{D}"# + "\n" + #"next\u{2067}"#)
+    }
+
+    /// #358 (QA #173): the completion's output replaces the streamed deltas on the card, escaped
+    /// like them (`WireText.toolOutput`): a bidi override and a non-SGR ESC sequence show as text.
+    @MainActor
+    func testControllerTranscriptToolCallCompletedOutputIsEscaped() async {
+        let items = await transcript(after: [
+            .toolCallStarted(ToolCall(id: "c1", name: "shell", argumentsJSON: "{}")),
+            .toolCallOutput(id: "c1", chunk: ToolOutputChunk(stream: .stdout, text: "partial")),
+            .toolCallCompleted(ToolCall(id: "c1", name: "shell", argumentsJSON: "{}", status: .succeeded,
+                                        output: "a\u{202E}b\u{1B}[2Jc")),
+        ])
+        let outs = items.compactMap { if case .toolCall(_, _, _, _, let out) = $0 { return out }; return nil }
+        XCTAssertEqual(outs, [#"a\u{202E}b\u{1B}[2Jc"#])
     }
 
     /// #358: restoring already-escaped history must not escape it again. #378: oneLine is not
