@@ -4,7 +4,9 @@ import AppKit
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
 
-    private let statusItem: NSStatusItem
+    let statusItem: NSStatusItem
+    /// QA OQ-6: tests pass a private `NSStatusBar()` so nothing lands on the real menu bar.
+    private let statusBar: NSStatusBar
     private let versionItem: NSMenuItem
     private let secureInputItem: NSMenuItem
     private let agentStatusItem: NSMenuItem
@@ -46,7 +48,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         onCheckForUpdates: @escaping () -> Void,
         onRerunSetup: @escaping () -> Void,
         onRestart: @escaping () -> Void,
-        onQuit: @escaping () -> Void
+        onQuit: @escaping () -> Void,
+        statusBar: NSStatusBar = .system
     ) {
         self.onOpenRunner = onOpenRunner
         self.onOpenClipboard = onOpenClipboard
@@ -55,8 +58,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.onRerunSetup = onRerunSetup
         self.onRestart = onRestart
         self.onQuit = onQuit
+        self.statusBar = statusBar
 
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = statusBar.statusItem(withLength: NSStatusItem.variableLength)
         // Stable identity (NSStatusItem.h): otherwise the state dump and position key read "Item-N".
         // Carry this launch's Item-N position (and visibility) over once, so the fresh name can't land in the hidden section.
         Self.carryAutosave(from: statusItem.autosaveName ?? "", to: "ProsperLauncher")

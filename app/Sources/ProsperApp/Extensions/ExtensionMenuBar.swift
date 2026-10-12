@@ -20,6 +20,8 @@ final class ExtensionMenuBar {
 
     /// Live status items keyed by "extID\u{1}id". Readable for tests.
     private(set) var items: [String: NSStatusItem] = [:]
+    /// QA OQ-6: tests swap in a private `NSStatusBar()` so nothing lands on the real menu bar.
+    var statusBar: NSStatusBar = .system
     private var hud: NSPanel?
     private var hudHide: DispatchWorkItem?
 
@@ -49,7 +51,7 @@ final class ExtensionMenuBar {
         guard let obj = Self.object(json) else { return }
         let k = Self.key(extensionID, id)
         let isNew = items[k] == nil
-        let item = items[k] ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let item = items[k] ?? statusBar.statusItem(withLength: NSStatusItem.variableLength)
         items[k] = item
         // .content: extension icons are user-facing data icons — keep them orderable/
         // previewable, named by the extension's title (else the extension id).
@@ -98,7 +100,7 @@ final class ExtensionMenuBar {
     func remove(extensionID: String, id: String) {
         assert(Thread.isMainThread, "ExtensionMenuBar mutated off the main thread")
         let k = Self.key(extensionID, id)
-        if let item = items.removeValue(forKey: k) { NSStatusBar.system.removeStatusItem(item) }
+        if let item = items.removeValue(forKey: k) { statusBar.removeStatusItem(item) }
     }
 
     /// Tear down every status item an extension owns (disable / reset / quit).
@@ -106,7 +108,7 @@ final class ExtensionMenuBar {
         assert(Thread.isMainThread, "ExtensionMenuBar mutated off the main thread")
         let prefix = "\(extensionID)\u{1}"
         for (k, item) in items where k.hasPrefix(prefix) {
-            NSStatusBar.system.removeStatusItem(item)
+            statusBar.removeStatusItem(item)
             items[k] = nil
         }
     }

@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import ProsperApp
 
 /// #199: extension menubar calls arrive on the Lua runtime thread. The host
@@ -10,6 +11,10 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
     @MainActor
     func testMenubarCallsFromBackgroundThreadLandOnMain() async throws {
         let extID = "test.threading.\(UUID().uuidString)"
+        // QA OQ-6: a private bar, restored after removeAll (defers run in reverse).
+        let savedBar = ExtensionMenuBar.shared.statusBar
+        ExtensionMenuBar.shared.statusBar = NSStatusBar()
+        defer { ExtensionMenuBar.shared.statusBar = savedBar }
         defer { ExtensionMenuBar.shared.removeAll(extensionID: extID) }
         let services = LiveExtensionHostServices.shared
         let json = #"{"title":"T","menu":[{"title":"A","handler":"h"},{"separator":true}]}"#
@@ -22,6 +27,7 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
         XCTAssertTrue(added, "menubarSet from a background thread never reached main")
         let item = try XCTUnwrap(ExtensionMenuBar.shared.items.first { $0.key.hasPrefix(extID) }?.value)
         XCTAssertEqual(item.menu?.items.count, 2)
+        XCTAssertFalse(item.statusBar === NSStatusBar.system, "extension item landed on the system bar")
         XCTAssertEqual(item.autosaveName, ExtensionMenuBar.autosaveName(extensionID: extID, id: "x"))
 
         await Task.detached {

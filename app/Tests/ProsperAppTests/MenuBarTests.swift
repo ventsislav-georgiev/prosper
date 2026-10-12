@@ -16,7 +16,7 @@ final class MenuBarTests: XCTestCase {
 
         let controller = MenuBarController(
             onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {},
-            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {})
+            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {}, statusBar: NSStatusBar())
         let menu = controller.buildMenu()
 
         XCTAssertFalse(menu.items.contains { $0.title == "Inline Autocomplete" })
@@ -42,7 +42,7 @@ final class MenuBarTests: XCTestCase {
     func testRepeatedBuildMenuDoesNotThrow() {
         let controller = MenuBarController(
             onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {},
-            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {})
+            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {}, statusBar: NSStatusBar())
         // Each call detaches the reused rows from whichever menu currently
         // holds them, so only the LAST built menu is a live, complete menu —
         // earlier ones are expected to end up with holes where those rows
@@ -65,11 +65,23 @@ final class MenuBarTests: XCTestCase {
         let before = suKeys()
         let controller = MenuBarController(
             onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {},
-            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {})
+            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {}, statusBar: NSStatusBar())
         _ = controller.buildMenu()
         let updater = AppUpdater()
         XCTAssertFalse(updater.isConfigured, "SPUUpdater must not be built under XCTest")
         XCTAssertEqual(suKeys(), before, "Sparkle wrote the xctest defaults domain (names or values)")
+    }
+
+    /// QA OQ-6: a controller built on a private bar owns its item there, never on the system bar.
+    @MainActor
+    func testControllerOnPrivateBarKeepsItsItemOffTheSystemBar() {
+        let bar = NSStatusBar()
+        let controller = MenuBarController(
+            onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {},
+            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {}, statusBar: bar)
+        defer { bar.removeStatusItem(controller.statusItem) }
+        XCTAssertTrue(controller.statusItem.statusBar === bar, "item not on the injected bar")
+        XCTAssertFalse(controller.statusItem.statusBar === NSStatusBar.system, "item landed on the system bar")
     }
 
     /// #344: a Sparkle updater is constructed in exactly one place, on the XCTestCase-gated line.
