@@ -2583,6 +2583,142 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(controller.currentSessionID, "thread-\(b.name)")
     }
 
+    // MARK: - #413 Stop during the model load settles the phase at once
+
+    /// #413: run A submitted and parked inside makeHarness on `load` (the model load: no harness,
+    /// no session yet; a real cancelled load runs to its end). `load` stops parking then, so a
+    /// later run's makeHarness returns at once; A stays parked until `load.open()`. Harnesses are
+    /// named by the makeHarness call they came from. `release` is end()'s releaseModel, parking.
+    /// `aEnded` is raised once run A has returned.
+    @MainActor
+    private func parkRunInLoad() async -> (AgentController, Spawned, load: Gate, release: Gate, aEnded: Flag) {
+        let dir = tempDir("stop-load")
+        let store = AgentSessionStore(directory: dir)
+        let spawned = Spawned()
+        let load = Gate(parks: true), release = Gate(parks: true)
+        let controller = AgentController(store: store, resolveCodex: { dir }, makeHarness: {
+            let name = load.calls == 0 ? "A" : "B"
+            await load.pass()
+            let harness = ParkingHarness(name, parks: false, failsPrompt: false)
+            spawned.all.append(harness)
+            return harness
+        }, releaseModel: { await release.pass() })
+        addTeardownBlock { @MainActor in
+            load.open()
+            release.parks = false
+            release.open()
+            await controller.end()
+            _ = await store.recentSessions(limit: 1)   // let the persists land before the dir goes
+        }
+        let aEnded = Flag()
+        RunToken.$current.withValue(RaiseOnDeinit(aEnded)) { controller.submit(goal: "first") }
+        let parked = await Self.wait(2) { load.isParked }
+        XCTAssertTrue(parked, "run A never reached makeHarness (phase \(controller.phase))")
+        load.parks = false
+        guard case .loadingModel = controller.phase else {
+            XCTFail("run A parked in the load under \(controller.phase)")
+            return (controller, spawned, load, release, aEnded)
+        }
+        return (controller, spawned, load, release, aEnded)
+    }
+
+    /// #413 part 1: Stop during A's load idles the phase in stop() itself, so B is accepted at
+    /// once and opens its turn while A is still in its load. Ordering driven: the deferred end()
+    /// runs at the test's first await, in A's generation (B not yet submitted), and parks in the
+    /// release; B is submitted then, so once the release returns the post-release guard stops
+    /// that end(): release.calls is exactly 1, and B keeps its phase, harness and session.
+    @MainActor
+    func testStopDuringTheLoadSettlesThePhaseAndAdmitsAResubmit() async {
+        let (controller, spawned, load, release, aEnded) = await parkRunInLoad()
+        let endDone = Flag()
+        RunToken.$current.withValue(RaiseOnDeinit(endDone)) { controller.stop() }
+        XCTAssertEqual(controller.phase, .idle, "Stop during the load left the phase pending")
+        XCTAssertFalse(controller.isActive)
+
+        let inRelease = await Self.wait(2) { release.isParked }
+        XCTAssertTrue(inRelease, "the deferred end() never reached the release")
+        controller.submit(goal: "second")
+        XCTAssertTrue(controller.queued.isEmpty, "B was queued behind the stopped load")
+        let opened = await Self.wait(2) { spawned.all.first?.name == "B" && spawned.all.first?.prompts == 1 }
+        guard opened, let b = spawned.all.first else {
+            return XCTFail("run B never opened its turn (phase \(controller.phase), queued \(controller.queued))")
+        }
+        XCTAssertTrue(load.isParked, "run A left its load before B opened its turn")
+        XCTAssertEqual(controller.phase, .running)
+
+        load.open()
+        let aDone = await Self.wait(2) { aEnded.isRaised }
+        XCTAssertTrue(aDone, "run A never returned from its post-spawn checkpoint")
+        XCTAssertEqual(controller.phase, .running, "run A's catch settled run B's phase")
+        release.open()
+        let ended = await Self.wait(2) { endDone.isRaised }
+        XCTAssertTrue(ended, "the deferred end() never returned")
+        XCTAssertEqual(release.calls, 1, "the deferred end() did not release exactly once")
+        XCTAssertEqual(controller.phase, .running, "the stopped run's deferred end() settled run B's phase")
+        XCTAssertEqual(b.shutdowns, 0, "the stopped run's deferred end() shut run B's harness down")
+        XCTAssertEqual(controller.currentSessionID, "thread-B", "the stopped run's deferred end() dropped B's session")
+    }
+
+    /// #413 part 2: Stop during the load with no resubmit: the phase is idle at once, A's
+    /// checkpoint throws and leaves it so, and the deferred end() releases exactly once.
+    @MainActor
+    func testStopDuringTheLoadReleasesOnceAndStaysIdle() async {
+        let (controller, spawned, load, release, aEnded) = await parkRunInLoad()
+        let endDone = Flag()
+        RunToken.$current.withValue(RaiseOnDeinit(endDone)) { controller.stop() }
+        XCTAssertEqual(controller.phase, .idle, "Stop during the load left the phase pending")
+        XCTAssertFalse(controller.isActive)
+
+        load.open()
+        let aDone = await Self.wait(2) { aEnded.isRaised }
+        XCTAssertTrue(aDone, "run A never returned from its post-spawn checkpoint")
+        XCTAssertEqual(controller.phase, .idle)
+        let inRelease = await Self.wait(2) { release.isParked }
+        XCTAssertTrue(inRelease, "the deferred end() never reached the release")
+        release.open()
+        let ended = await Self.wait(2) { endDone.isRaised }
+        XCTAssertTrue(ended, "the deferred end() never returned")
+        XCTAssertEqual(release.calls, 1)
+        XCTAssertEqual(controller.phase, .idle)
+        XCTAssertEqual(load.calls, 1, "another run reached the load")
+        XCTAssertEqual(spawned.all.map(\.shutdowns), [0], "run A's unkept harness was shut down")
+    }
+
+    /// #413 part 3: a goal queued during the load stays queued through Stop: the settle never
+    /// drains (a drain would start a run inside stop() and hand the deferred end() its generation).
+    /// Synchronously after stop(): idle, the goal still queued, no user bubble for it (submit and
+    /// the drain both append one); afterwards no other run reached the load.
+    @MainActor
+    func testStopDuringTheLoadLeavesAQueuedGoalQueued() async {
+        let (controller, spawned, load, release, aEnded) = await parkRunInLoad()
+        controller.submit(goal: "second")
+        XCTAssertEqual(controller.queued.map(\.text), ["second"])
+        let started: () -> Bool = {
+            controller.items.contains { if case .user(_, "second") = $0 { return true }; return false }
+        }
+        let endDone = Flag()
+        RunToken.$current.withValue(RaiseOnDeinit(endDone)) { controller.stop() }
+        XCTAssertEqual(controller.phase, .idle, "Stop during the load left the phase pending")
+        XCTAssertEqual(controller.queued.map(\.text), ["second"], "Stop started the queued goal")
+        XCTAssertFalse(started(), "Stop started the queued goal")
+        XCTAssertEqual(load.calls, 1)
+
+        load.open()
+        let aDone = await Self.wait(2) { aEnded.isRaised }
+        XCTAssertTrue(aDone, "run A never returned from its post-spawn checkpoint")
+        let inRelease = await Self.wait(2) { release.isParked }
+        XCTAssertTrue(inRelease, "the deferred end() never reached the release")
+        release.open()
+        let ended = await Self.wait(2) { endDone.isRaised }
+        XCTAssertTrue(ended, "the deferred end() never returned")
+        XCTAssertEqual(release.calls, 1)
+        XCTAssertEqual(controller.phase, .idle)
+        XCTAssertEqual(controller.queued.map(\.text), ["second"], "the queued goal left the queue")
+        XCTAssertFalse(started(), "the queued goal was started")
+        XCTAssertEqual(load.calls, 1, "another run reached the load")
+        XCTAssertEqual(spawned.all.count, 1)
+    }
+
     // MARK: - #410 a dead run's late catch after a resubmit
 
     /// `wait` for a condition that needs an await (the session store is an actor).

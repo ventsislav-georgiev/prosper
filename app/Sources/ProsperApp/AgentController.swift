@@ -218,11 +218,17 @@ final class AgentController {
         let stale = pendingApprovals
         pendingApprovals.removeAll()
         stoppedRun = runGeneration
+        // #412: the deferred end() below is pinned to the stopped run. Its checkpoint can idle
+        // the phase and admit a submit before that Task runs; a newer run then owns harness,
+        // model and phase. Captured with stoppedRun so the two always agree.
+        let generation = runGeneration
         guard let harness, let session else {
             ProsperLLMServer.shared.cancelActiveGenerations()
-            // #412: pinned to the stopped run. Its checkpoint can idle the phase and admit a
-            // submit before this Task runs; a newer run then owns harness, model and phase.
-            let generation = runGeneration
+            // #413: settle now. A cancelled load runs to its end (GGUF/MLX ignore cancellation)
+            // and end()'s release waits for it: until then a pending phase keeps Stop looking
+            // dead and parks a submit in `queued`, which nothing drains. A bare assignment:
+            // Stop never starts a queued goal (a drain here would also bump the generation).
+            if case .error = phase {} else { phase = .idle }
             Task { await end(generation: generation) }
             postElapsedNote()
             persistTranscript()
@@ -252,9 +258,9 @@ final class AgentController {
     }
 
     /// End the session entirely: shut the harness down and release the agent model so
-    /// inline completions resume. `generation`: the run whose teardown this is; nil (Stop,
-    /// tests) means whichever run is current. A run's teardown arriving after a newer run
-    /// started owns nothing here, the CLI queue included (#410).
+    /// inline completions resume. `generation`: the run whose teardown this is; nil, used
+    /// only by the tests' teardown, means whichever run is current. A run's teardown
+    /// arriving after a newer run started owns nothing here, the CLI queue included (#410).
     func end(generation: Int? = nil) async {
         let generation = generation ?? runGeneration
         guard generation == runGeneration else { return }
