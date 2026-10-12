@@ -331,7 +331,7 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
     func testTermIgnoringGroupIsKilledAndReaped() {
         let r = sh(#"trap "" TERM; /bin/sleep 612"#, timeout: 0.3)
         XCTAssertGreaterThan(r.pid, 1)
-        defer { if r.pid > 1 { killpg(r.pid, SIGKILL) } }   // only our own group, if an assert fails
+        defer { killIfReal(r.pid) }   // only our own group, if an assert fails
         XCTAssertNil(r.out)
         XCTAssertLessThan(r.elapsed, 2.3)
         let rc = kill(r.pid, 0), err = errno
@@ -345,7 +345,7 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
     func testTermIsSentBeforeKill() {
         let marker = tempDir().appendingPathComponent("term")
         let r = sh("trap \"echo T > '\(marker.path)'; exit 0\" TERM; while :; do /bin/sleep 0.05; done", timeout: 0.3)
-        defer { if r.pid > 1 { killpg(r.pid, SIGKILL) } }
+        defer { killIfReal(r.pid) }
         XCTAssertNil(r.out)
         XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path), "the child never saw SIGTERM")
     }
@@ -354,7 +354,7 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
     func testTimeoutArmsBackoffThatSkipsLaunches() {
         HyperKey.hidutilURL = URL(fileURLWithPath: "/bin/sleep")
         var pids: [pid_t] = []
-        defer { for p in pids where p > 1 && kill(p, 0) == 0 { kill(p, SIGKILL) } }
+        defer { for p in pids where p > 1 && kill(p, 0) == 0 { killIfReal(p, group: false) } }
         XCTAssertNil(HyperKey.hidutil(["613"], timeout: 0.3))
         let first = HyperKey.lastHidutilPID
         pids.append(first)

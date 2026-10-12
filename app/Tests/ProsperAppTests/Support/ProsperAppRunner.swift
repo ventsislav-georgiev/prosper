@@ -131,7 +131,7 @@ final class ProsperAppRunner: @unchecked Sendable {   // mutable state guarded b
             while p.isRunning, Date() < deadline {
                 RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
             }
-            if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+            if p.isRunning { killIfReal(p.processIdentifier, group: false) }
         }
         if let home { try? FileManager.default.removeItem(at: home); self.home = nil }
     }
