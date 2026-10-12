@@ -786,8 +786,8 @@ enum Preferences {
     }
 
     /// Cleanup of state nothing reads any more: the removed ordering engine's saved
-    /// order and its backup (#132), and macOS's position memory for the removed
-    /// second divider (#398). Nothing is carried over: icons that sat left of that
+    /// order and its backup (#132), and macOS's position and visibility memory for the
+    /// removed second divider (#398). Nothing is carried over: icons that sat left of that
     /// divider now belong to the hidden section. A no-op once the keys are gone.
     static func migrateMenuBarOrderStore() {
         for key in ["menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON",

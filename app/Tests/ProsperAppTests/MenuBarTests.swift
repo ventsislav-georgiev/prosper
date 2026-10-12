@@ -216,7 +216,14 @@ final class MenuBarTests: XCTestCase {
         let d = Preferences.defaults
         let position = "NSStatusItem Preferred Position ProsperMenuBarAlwaysHiddenSeparator"
         let visible = "NSStatusItem Visible ProsperMenuBarAlwaysHiddenSeparator"
+        // QA #217: keys AppKit keeps for the status items that still exist must survive.
+        let survivors: [(String, Any)] = [
+            ("NSStatusItem Preferred Position ProsperMenuBarHiddenSeparator", 321.5),
+            ("NSStatusItem Visible ProsperMenuBarChevron", false),
+            ("NSStatusItem Preferred Position ProsperLauncher", 654.25),
+        ]
         let keys = ["menuBarStoreJSON", "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON", position, visible]
+            + survivors.map { $0.0 }
         let saved = keys.map { d.object(forKey: $0) }
         defer { for (k, v) in zip(keys, saved) { d.set(v, forKey: k) } }
         let blob = Data(#"{"schemaVersion":1,"desiredOrder":[]}"#.utf8)
@@ -226,6 +233,7 @@ final class MenuBarTests: XCTestCase {
             d.set(blob, forKey: "menuBarOrderStoreBackupJSON")
             d.set(1234.0, forKey: position)
             d.set(false, forKey: visible)
+            for (k, v) in survivors { d.set(v, forKey: k) }
             // QA #215: the user's live store must survive the cleanup.
             let live = { var e = MenuBarStore.default; e.spacing = 9; e.chevronStyle = .circle; return e }()
             Preferences.menuBarStore = live
@@ -238,6 +246,9 @@ final class MenuBarTests: XCTestCase {
             XCTAssertNil(d.object(forKey: "menuBarOrderStoreBackupJSON"), "backup must go too (primary \(String(describing: primary)))")
             XCTAssertNil(d.object(forKey: position), "removed divider's position memory must go")
             XCTAssertNil(d.object(forKey: visible), "removed divider's visibility memory must go")
+            for (k, v) in survivors {
+                XCTAssertEqual(d.object(forKey: k) as? NSObject, v as? NSObject, "\(k) must survive")
+            }
         }
     }
 
