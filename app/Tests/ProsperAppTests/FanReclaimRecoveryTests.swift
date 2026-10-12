@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import ProsperApp
 import ProsperHelperProtocol
@@ -507,16 +508,19 @@ final class FanReclaimRecoveryTests: XCTestCase {
         await waitForTeardown()
         XCTAssertTrue(FanControlHelper.connection == nil, "firstEngageLanded's sleeping release did not release")
         FanControlHelper.inject(sleeping: false)
-        // firstEngageLanded: `current` and `release` defaults.
+        // firstEngageLanded: `current` and `release` defaults. The wake clears `sleeping`,
+        // so only the generation the willSleep moved can stop it (QA #159).
         FanControlHelper.inject(connection: FakeHelperConnection(), engagesInFlight: 0)
         let firstGeneration = FanControlHelper.reclaimGeneration
         FanControlHelper.willSleep()   // nothing manual: bumps the generation, no reset
+        FanControlHelper.inject(sleeping: false)   // the wake
         XCTAssertFalse(FanControlHelper.firstEngageLanded(.engaged, since: firstGeneration),
                        "firstEngageLanded missed the willSleep")
         await waitForTeardown()
         XCTAssertTrue(FanControlHelper.connection == nil, "firstEngageLanded's default release did not release")
         // lateEngageLanded: `sleeping` default (manual on, so only sleep releases).
         Preferences.fanManualEnabled = true
+        FanControlHelper.inject(sleeping: true)
         let released = expectation(description: "late engage released while asleep")
         FanControlHelper.lateEngageLanded(true, release: { released.fulfill() })
         await fulfillment(of: [released], timeout: 1)
@@ -545,6 +549,107 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertEqual(fake.proxy.resets, 1)
         XCTAssertTrue(FanControlHelper.laterEngageLanded(since: FanControlHelper.reclaimGeneration, release: {}),
                       "no willSleep since the loop began, yet laterEngageLanded stopped")
+    }
+
+    /// Runs the popup's Manual flow on the fan-control fakes with prefs saved and restored:
+    /// manual off, a fake connection, awake. `body` gets the targets and the sentinel prefs.
+    @MainActor
+    private func withPopupFakes(_ body: ([Int: Double], [Int: Double]) async -> Void) async {
+        let previousManualIntent = Preferences.fanManualEnabled, previousTargets = Preferences.fanTargets
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent; Preferences.fanTargets = previousTargets
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
+        }
+        Preferences.fanManualEnabled = false
+        Preferences.fanTargets = [0: 1500]
+        FanControlHelper.inject(sleeping: false)
+        FanControlHelper.inject(connection: FakeHelperConnection(), engagesInFlight: 0)
+        await body([0: 2000, 1: 3000], [0: 1500])
+    }
+
+    /// #390 (QA #159): a click after willSleep whose first reply lands after didWake. The
+    /// generation did not move after the click, but the click was taken asleep: release,
+    /// engage nothing else and write no pref.
+    @MainActor
+    func testClickWhileAsleepWhoseReplyLandsAfterWakeSavesNoPref() async {
+        await withPopupFakes { targets, sentinel in
+            FanControlHelper.willSleep()   // nothing manual: bumps the generation, no reset
+            var restEngaged: [Int] = []
+            let (saved, _) = await FanControlHelper.popupEngage(targets, first: 0,
+                engageFirst: { FanControlHelper.inject(sleeping: false); return .engaged },   // the wake, then the reply
+                engage: { i, _ in restEngaged.append(i); return true })
+            XCTAssertFalse(saved, "a click taken asleep saved the pref after the wake")
+            XCTAssertEqual(restEngaged, [])
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, sentinel)
+            await waitForTeardown()
+            XCTAssertTrue(FanControlHelper.connection == nil, "the refused engage was not released")
+        }
+    }
+
+    /// QA #156 (#345): popupEngage captures the generation at the click, before the first
+    /// engage, and hands that one to engageRest. A sleep+wake inside the first engage stops
+    /// the flow at the first fan; with the first let through (seam) the rest still stops.
+    @MainActor
+    func testPopupEngageStaleGenerationStopsTheRest() async {
+        await withPopupFakes { targets, sentinel in
+            let sleepAndWake: () async -> FanManualReply = {
+                FanControlHelper.willSleep(); FanControlHelper.inject(sleeping: false); return .engaged
+            }
+            // Capture before the first engage: the first engage is refused.
+            var restEngaged: [Int] = []
+            var (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: sleepAndWake,
+                engage: { i, _ in restEngaged.append(i); return true })
+            XCTAssertFalse(saved, "the generation was captured after the first engage")
+            XCTAssertEqual(restEngaged, [])
+            await waitForTeardown()
+            // since: pass-through: the rest checks the click's generation, not its own.
+            FanControlHelper.inject(connection: FakeHelperConnection(), engagesInFlight: 0)
+            (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: sleepAndWake,
+                firstLanded: { _, _, _ in true },
+                engage: { i, _ in restEngaged.append(i); return true })
+            XCTAssertFalse(saved, "engageRest did not get the click's generation")
+            XCTAssertEqual(restEngaged, [1], "the rest went on after the stale check")
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, sentinel)
+            await waitForTeardown()
+        }
+    }
+
+    /// QA #154 (#343): the popup saves the pref only when every later engage landed.
+    @MainActor
+    func testPopupEngageSavesOnlyWhenTheRestLanded() async {
+        await withPopupFakes { targets, sentinel in
+            var (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
+                engage: { _, _ in true }, landed: { _ in false })
+            XCTAssertFalse(saved, "the popup saved the pref after engageRest stopped")
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, sentinel)
+            (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
+                engage: { _, _ in true }, landed: { _ in true })
+            XCTAssertTrue(saved)
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, targets)
+        }
+    }
+
+    /// QA #154 (#343): the willSleep observer runs willSleep (the generation bump is its mark).
+    /// In-process notification only: no real sleep, nothing manual, no connection.
+    @MainActor
+    func testWillSleepNotificationRunsWillSleep() async {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent; FanControlHelper.inject(sleeping: false) }
+        Preferences.fanManualEnabled = false
+        FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        FanControlHelper.armRecoveryLifecycle()
+        let generation = FanControlHelper.reclaimGeneration
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+        for _ in 0..<100 where FanControlHelper.reclaimGeneration == generation {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(FanControlHelper.reclaimGeneration, generation &+ 1, "the willSleep observer did not run willSleep")
+        FanControlHelper.removeSleepObservers()
+        await FanControlHelper.resetAll(teardown: true)
     }
 
     /// Polls until a fire-and-forget release tore the connection down (or 2 s pass).

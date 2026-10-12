@@ -169,6 +169,11 @@ tag from the now-released section and put it on the new top draft.
   say) is no longer replaced by a plain file when settings change.** Writes follow the link to
   its target, and a link whose target is missing is left alone at launch and filled in on the
   next settings change.
+- **Fixed: clicking Manual in the fan popup just as the Mac goes to sleep no longer saves
+  Manual for fans that sleep put back on automatic.** When the helper's reply arrives after
+  the wake, the click is dropped and the fans stay automatic, so the popup no longer shows
+  Manual over fans running on their own and the next launch does not re-apply a speed that
+  never took.
 - **Fixed: typing a huge number, `inf` or `nan` into an extension's number setting no longer
   crashes Prosper.** Non-numbers fall back to the field's minimum. An extension that declares a
   non-finite bound (`min = inf`, `max = -inf`, `nan`) no longer makes every typed value save as

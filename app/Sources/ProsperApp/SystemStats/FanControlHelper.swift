@@ -288,6 +288,28 @@ enum FanControlHelper {
         return true
     }
 
+    /// The popup's Manual click, from the click to the saved pref; `saved` = every fan engaged
+    /// and the pref is written. The generation AND the sleeping flag are captured at the click,
+    /// before the first engage: a sleep after it moves the generation (#345); a click taken
+    /// while asleep (willSleep fired, the Mac not yet asleep) is refused even when its reply
+    /// lands after didWake cleared the flag (#390). No await between the last check and the save.
+    /// `engageFirst` is the first engage; `firstLanded`/`engage`/`landed` are the test seams.
+    static func popupEngage(_ targets: [Int: Double], first: Int,
+                            engageFirst: () async -> FanManualReply,
+                            firstLanded: (FanManualReply, Int, Bool) -> Bool = {
+                                firstEngageLanded($0, since: $1, sleeping: $2 || Self.sleeping) },
+                            engage: (Int, Double) async -> Bool = { await setManual($0, rpm: $1) },
+                            landed: (Int) -> Bool = { laterEngageLanded(since: $0) })
+        async -> (saved: Bool, reply: FanManualReply) {
+        let generation = reclaimGeneration, asleepAtClick = sleeping
+        let reply = await engageFirst()
+        guard firstLanded(reply, generation, asleepAtClick) else { return (false, reply) }
+        guard await engageRest(targets, skipping: first, since: generation, engage: engage, landed: landed) else { return (false, reply) }
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = targets
+        return (true, reply)
+    }
+
     /// An engage replied after `callReply` already gave up on it (timeout / XPC error):
     /// the helper pinned the fan anyway. With manual off nothing else will release it
     /// (the reclaim re-apply has no popup late-engage guard), so `release` here (#269).
