@@ -19,6 +19,17 @@ import os.lock
 actor ModelResidencyCoordinator {
     static let shared = ModelResidencyCoordinator()
 
+    /// Frees the inline engines and loads the agent engine for a model id. Test seam:
+    /// the default is the real load; tests pass a fake so no model is ever touched.
+    typealias MakeEngine = @Sendable (
+        _ modelId: String, _ progress: @escaping @Sendable (Double, String) -> Void
+    ) async throws -> any AgentChatEngine
+    private let makeEngine: MakeEngine
+
+    init(makeEngine: @escaping MakeEngine = ModelResidencyCoordinator.loadAgentEngine) {
+        self.makeEngine = makeEngine
+    }
+
     enum Mode: Sendable, Equatable { case inline, agent }
     private(set) var mode: Mode = .inline
 
@@ -30,7 +41,9 @@ actor ModelResidencyCoordinator {
     /// the inline hot path without an actor hop. `OSAllocatedUnfairLock` is the
     /// lightest correct primitive available on macOS 14 (no `Synchronization.Atomic`
     /// until macOS 15).
-    private static let activeFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
+    /// Internal (not private) only so tests can restore it: it is static, shared by
+    /// every instance including `shared`.
+    static let activeFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
 
     /// True while the agent model is (being) loaded/resident. Inline completion
     /// consults this and skips generation so it never fights the agent for memory.
@@ -47,6 +60,11 @@ actor ModelResidencyCoordinator {
     /// Bumped by `releaseAgent`; a load that finishes after a release must not
     /// resurrect agent mode (window already closed).
     private var epoch = 0
+    /// The in-flight release: unloads the engine `releaseAgent` took out of service and
+    /// waits out (then unloads) the load it cancelled. Every new load awaits it first, so
+    /// the dying engine is never handed out, never resident beside its successor, and
+    /// never unloaded after the successor loaded (the GGUF engine is ONE singleton).
+    private var releasing: Task<Void, Never>?
 
     /// Enter agent mode. Unloads the inline model, then loads the configured agent
     /// model on a dedicated engine. Idempotent + coalescing: returns the live agent
@@ -67,33 +85,25 @@ actor ModelResidencyCoordinator {
         } else {
             Self.activeFlag.withLock { $0 = true }
             let modelId = Preferences.agentModel
-            // Strong capture: `self` is a process-lifetime singleton and the closure
-            // dies with the load.
+            let pending = releasing
+            // Strong capture: the closure dies with the load.
             task = Task {
-                // One resident at a time: free BOTH inline engines (MLX and
-                // llama.cpp — ~3 GB) before the multi-GB agent model loads. The
-                // inline model reloads lazily on the first keystroke after release.
-                await MLXEngine.shared.unload()
-                await LlamaInlineEngine.shared.unload()
-                if let gguf = AgentModelRegistry.gguf(for: modelId) {
-                    try await LlamaAgentEngine.shared.ensureModel(gguf) { p, s in
-                        Task { await ModelResidencyCoordinator.shared.fanProgress(p, s) }
-                    }
-                    return LlamaAgentEngine.shared
+                // Never load beside (or under) a release still unloading.
+                await pending?.value
+                try Task.checkCancellation()
+                return try await makeEngine(modelId) { p, s in
+                    Task { await self.fanProgress(p, s) }
                 }
-                let engine = MLXEngine(modelId: modelId)
-                try await engine.load { p, s in
-                    Task { await ModelResidencyCoordinator.shared.fanProgress(p, s) }
-                }
-                return engine
             }
             acquireTask = task
         }
         do {
             let engine = try await task.value
             guard epoch == myEpoch else {
-                // Released (window closed) while loading — don't resurrect.
-                await engine.unload()
+                // Released (window closed) while loading — don't resurrect, and don't
+                // unload: the release that moved the epoch owns this engine (its
+                // `releasing` unloads it before any newer load starts). Unloading here
+                // could hit `LlamaAgentEngine.shared` after a newer acquire loaded it.
                 throw CancellationError()
             }
             agent = engine
@@ -120,13 +130,48 @@ actor ModelResidencyCoordinator {
     /// eagerly reloaded — it comes back lazily on the next completion request.
     func releaseAgent() async {
         epoch += 1
-        acquireTask?.cancel()
+        let loading = acquireTask
+        loading?.cancel()
         acquireTask = nil
         progressSinks = []
-        await agent?.unload()
+        // Out of service before the first await: the fast path must not hand a new
+        // run the engine being unloaded (#411 R1).
+        let dying = agent
         agent = nil
         mode = .inline
-        Self.activeFlag.withLock { $0 = false }
+        if dying != nil || loading != nil {
+            let prior = releasing
+            let release = Task {
+                await prior?.value
+                await dying?.unload()
+                // A cancelled load may still finish; its engine is ours to free.
+                if let engine = try? await loading?.value { await engine.unload() }
+            }
+            releasing = release
+            await release.value
+            if releasing == release { releasing = nil }
+        }
+        // Only if nothing newer started meanwhile (an acquire may be waiting on us).
+        if agent == nil, acquireTask == nil, releasing == nil {
+            Self.activeFlag.withLock { $0 = false }
+        }
+    }
+
+    /// The real load: one resident at a time, so free BOTH inline engines (MLX and
+    /// llama.cpp — ~3 GB) before the multi-GB agent model loads. The inline model
+    /// reloads lazily on the first keystroke after release.
+    static func loadAgentEngine(
+        modelId: String, progress: @escaping @Sendable (Double, String) -> Void
+    ) async throws -> any AgentChatEngine {
+        await MLXEngine.shared.unload()
+        await LlamaInlineEngine.shared.unload()
+        if let gguf = AgentModelRegistry.gguf(for: modelId) {
+            try await LlamaAgentEngine.shared.ensureModel(gguf, progress: progress)
+            return LlamaAgentEngine.shared
+        }
+        let engine = MLXEngine(modelId: modelId)
+        try await engine.load(progress: progress)
+        return engine
     }
 
     /// The live agent engine, if resident (nil in inline mode).

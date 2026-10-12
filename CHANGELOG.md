@@ -102,9 +102,11 @@ tag from the now-released section and put it on the new top draft.
   its own codex and picks the thread back up, and a teardown that finishes after a newer
   run has started leaves that run's model and state alone. The same held when codex itself
   died mid-request: its request's late failure no longer shows up as an error on, or tears
-  down, the prompt sent after it. Stop pressed while codex was still starting, followed
-  straight away by a new prompt, is held to the same rule: the stopped run's deferred
-  teardown can no longer reach the new prompt's codex, model or state.
+  down, the prompt sent after it.
+- **Fixed: coding agent — a prompt sent while the previous run's model was still unloading
+  could borrow that model and lose it mid-request.** The new run now waits for the unload
+  and loads its own. A load that Stop cancelled is likewise unloaded before the next prompt's
+  load starts, instead of being torn out from under it once it had already been reused.
 - **Updated: the coding agent runs codex 0.162.1** (was 0.139.0). Prosper now always runs
   its own pinned codex, bundled or downloaded on first use into a per-version cache, and a
   Homebrew codex is used only under a developer override
