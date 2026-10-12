@@ -135,9 +135,12 @@ final class ExpandedInterfacePolicyTests: XCTestCase {
     }
 
     // Below 27 the bridge installs nothing; on 27 it owns the item's delegate.
+    // A private bar, not the system one (QA OQ-6): its item has a button and a
+    // window like a real one, but never lands in the operator's menu bar.
     func testInstallMatchesTheOS() {
-        let item = NSStatusBar.system.statusItem(withLength: 10)
-        defer { NSStatusBar.system.removeStatusItem(item) }
+        let bar = NSStatusBar()
+        let item = bar.statusItem(withLength: 10)
+        defer { bar.removeStatusItem(item) }
         let bridge = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in })
         #if compiler(>=6.4)
         if #available(macOS 27, *) {

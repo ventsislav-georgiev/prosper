@@ -36,10 +36,13 @@ final class MixerPanelAnchorTests: XCTestCase {
     /// The measurement that matters: the rect `NSPopover` is handed. Without the
     /// fixed box this reads 24.5x29 for the slashed speaker and 24.0x28 for the
     /// wave, one point apart in the button's window.
+    /// The button sits on a private bar, not the system one (QA OQ-6): same
+    /// `NSStatusBarButton`, same autosizing to its image, never on screen.
     func testStatusItemButtonBoxIsIdenticalForEveryGlyph() throws {
         _ = NSApplication.shared
-        let item = NSStatusBar.system.statusItem(withLength: 24)
-        defer { NSStatusBar.system.removeStatusItem(item) }
+        let bar = NSStatusBar()
+        let item = bar.statusItem(withLength: 24)
+        defer { bar.removeStatusItem(item) }
         let button = try XCTUnwrap(item.button)
 
         var reference: (bounds: NSRect, inWindow: NSRect)?
