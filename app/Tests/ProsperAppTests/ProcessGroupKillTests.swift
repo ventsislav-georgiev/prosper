@@ -6,18 +6,6 @@ import os
 /// SIGTERM-ignoring grandchild must still go. #327: the blocking quit-path variant,
 /// the guard predicate, and BunHarness's two call sites.
 final class ProcessGroupKillTests: XCTestCase {
-    /// Cleanup signal that refuses 0, 1 and -1 (through pid > 1), our own group and our own
-    /// pid: a pid read from a process or a file could be any of them (#380, #386).
-    private func killIfReal(_ pid: pid_t, group: Bool = true, using signal: (pid_t, Int32) -> Int32 = kill) {
-        guard CodexHarness.mayKillGroup(pid), pid != getpid() else { return }
-        _ = signal(group ? -pid : pid, SIGKILL)
-    }
-
-    /// A pid parsed from script output or a file; nil unless > 1 so an XCTUnwrap fails (#380).
-    private func parsePid(_ text: String?) -> pid_t? {
-        text.flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }.flatMap { $0 > 1 ? $0 : nil }
-    }
-
     /// Stops a recorder row before it touches anything when the fake pgid is not above PID_MAX
     /// (continueAfterFailure is on, so an assert alone would not) (#380).
     private func requireFakePGID() throws {
@@ -238,6 +226,10 @@ final class ProcessGroupKillTests: XCTestCase {
         defer { killIfReal(leader) }   // no leak if an assert below throws
         XCTAssertEqual(getpgid(leader), leader)
         XCTAssertTrue(CodexHarness.livePGIDs.withLock { $0[leader] != nil }, "start did not register the group")
+        // QA #212: start stores the leader's real start time; a 0 would make the quit drain skip it (#401).
+        let registeredStart = CodexHarness.livePGIDs.withLock { $0[leader] }
+        XCTAssertEqual(registeredStart, CodexHarness.startTime(leader))
+        XCTAssertNotEqual(registeredStart ?? 0, 0, "start registered start time 0: the quit drain would skip a live codex")
 
         await harness.shutdown()
         _ = try? await starting.value

@@ -779,8 +779,8 @@ final class CodexHarnessE2ETests: XCTestCase {
         while (try? Self.received("turn/interrupt", exe: exe))?.isEmpty != false, Date() < deadline {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        let pid = try String(contentsOf: exe.deletingLastPathComponent().appendingPathComponent("pid"), encoding: .utf8)
-        XCTAssertEqual(kill(try XCTUnwrap(pid_t(pid)), SIGKILL), 0)
+        let pid = try XCTUnwrap(parsePid(try String(contentsOf: exe.deletingLastPathComponent().appendingPathComponent("pid"), encoding: .utf8)))
+        XCTAssertEqual(killIfReal(pid, group: false), 0)
 
         let drained = await eventsTask
         let events = try XCTUnwrap(drained, "event stream still open after codex was killed")
@@ -829,7 +829,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                                    llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
         let (codexPid, childPid) = try await Self.startChild(harness, exe: exe)
         async let drained = Self.drain(harness, timeout: 10)
-        XCTAssertEqual(kill(codexPid, SIGKILL), 0)
+        XCTAssertEqual(killIfReal(codexPid, group: false), 0)
         _ = await drained
         try await Self.waitGone(childPid)
         await harness.shutdown()
@@ -846,8 +846,8 @@ final class CodexHarnessE2ETests: XCTestCase {
         while !FileManager.default.fileExists(atPath: childFile.path), Date() < deadline {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        let codex = try XCTUnwrap(pid_t(String(contentsOf: dir.appendingPathComponent("pid"), encoding: .utf8)))
-        let child = try XCTUnwrap(pid_t(String(contentsOf: childFile, encoding: .utf8)), "mock child never started")
+        let codex = try XCTUnwrap(parsePid(String(contentsOf: dir.appendingPathComponent("pid"), encoding: .utf8)))
+        let child = try XCTUnwrap(parsePid(String(contentsOf: childFile, encoding: .utf8)), "mock child never started")
         XCTAssertEqual(getpgid(codex), codex, "codex must lead its own process group")
         XCTAssertEqual(getpgid(child), codex, "the child must be in codex's group")
         return (codex, child)
@@ -860,7 +860,7 @@ final class CodexHarnessE2ETests: XCTestCase {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         if kill(pid, 0) == 0 {
-            kill(pid, SIGKILL)   // don't leak it past a failing test
+            killIfReal(pid, group: false)   // don't leak it past a failing test
             XCTFail("codex's child \(pid) outlived the teardown", file: file, line: line)
         }
     }
