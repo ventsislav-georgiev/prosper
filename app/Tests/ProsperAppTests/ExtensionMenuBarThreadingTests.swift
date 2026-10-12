@@ -29,6 +29,8 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
         XCTAssertEqual(item.menu?.items.count, 2)
         XCTAssertFalse(item.statusBar === NSStatusBar.system, "extension item landed on the system bar")
         XCTAssertEqual(item.autosaveName, ExtensionMenuBar.autosaveName(extensionID: extID, id: "x"))
+        // QA #213: the status item's window hides only when the bar it was created on removes it.
+        XCTAssertEqual(item.button?.window?.isVisible, true)
 
         await Task.detached {
             XCTAssertFalse(Thread.isMainThread)
@@ -36,6 +38,13 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
         }.value
         let removed = await waitFor { !self.ownsItem(extID) }
         XCTAssertTrue(removed, "menubarRemove from a background thread never reached main")
+        XCTAssertEqual(item.button?.window?.isVisible, false, "remove did not take the item off its own bar")
+
+        ExtensionMenuBar.shared.set(extensionID: extID, id: "y", json: json)
+        let y = try XCTUnwrap(ExtensionMenuBar.shared.items.first { $0.key.hasPrefix(extID) }?.value)
+        XCTAssertEqual(y.button?.window?.isVisible, true)
+        ExtensionMenuBar.shared.removeAll(extensionID: extID)
+        XCTAssertEqual(y.button?.window?.isVisible, false, "removeAll did not take the item off its own bar")
     }
 
     /// #364: the separator sits outside the cleaned charset, so dotted parts cannot collide.
