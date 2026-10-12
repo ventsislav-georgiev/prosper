@@ -47,8 +47,9 @@ else
     xcodebuild -downloadComponent MetalToolchain
   fi
   DD="$ROOT/app/.build/xcode-metallib"
-  # We only get here when Package.resolved changed since the last staged metallib.
-  # A restored CI cache then still holds this DerivedData's intermediates (explicit
+  # We only get here when the staged metallib is missing or carries another
+  # Package.resolved hash (fresh checkout, cleaned .build/<profile>, dependency
+  # bump). A restored CI cache then still holds this DerivedData's intermediates (explicit
   # module .pcm files, objects) built against the previous dependency set, and
   # xcodebuild refuses them: "SUAppcastItem.h has been modified since the module
   # file ... was built" (Sparkle 2.9.3 → 2.10.0 failed the v2.156.0-beta.1 run).
