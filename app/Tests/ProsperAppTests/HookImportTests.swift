@@ -192,6 +192,66 @@ final class HookImportTests: XCTestCase {
         }
     }
 
+    func testBootstrapCreatesAbsentFileWithNilMirror() throws {
+        try withScratchFile { url in  // withScratchFile leaves the mirror nil
+            HooksConfigStore.bootstrap()
+            XCTAssertEqual(HooksConfigStore.decode(try String(contentsOf: url, encoding: .utf8))?.map(\.command), ["echo keep"])
+        }
+    }
+
+    func testBootstrapAdoptsDifferentValidFile() throws {
+        try withScratchFile { url in
+            let json = try XCTUnwrap(HooksConfigStore.encode([HookRule(event: .stop, matcher: "", command: "echo disk", timeout: nil, enabled: true)]))
+            try json.write(to: url, atomically: true, encoding: .utf8)
+            Preferences.defaults.set("stale", forKey: "agentHooksDiskMirror")
+            HooksConfigStore.bootstrap()
+            XCTAssertEqual(Preferences.hooks.map(\.command), ["echo disk"])
+            XCTAssertEqual(Preferences.defaults.string(forKey: "agentHooksDiskMirror"), json)
+        }
+    }
+
+    func testBootstrapFileEqualToMirrorWritesPrefs() throws {
+        try withScratchFile { url in
+            let json = try XCTUnwrap(HooksConfigStore.encode([HookRule(event: .stop, matcher: "", command: "echo old", timeout: nil, enabled: true)]))
+            try json.write(to: url, atomically: true, encoding: .utf8)
+            Preferences.defaults.set(json, forKey: "agentHooksDiskMirror")
+            HooksConfigStore.bootstrap()  // unchanged on disk: in-app prefs win and land on disk
+            XCTAssertEqual(HooksConfigStore.decode(try String(contentsOf: url, encoding: .utf8))?.map(\.command), ["echo keep"])
+        }
+    }
+
+    // MARK: Symlinked config (#391): a dotfiles link survives, writes land on its target
+
+    private func isSymlink(_ url: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == .typeSymbolicLink
+    }
+
+    func testWriteFollowsValidSymlink() throws {
+        try withScratchFile { url in
+            let target = tempDir("dotfiles").appendingPathComponent("hooks.json")
+            try "{}".write(to: target, atomically: true, encoding: .utf8)
+            try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+            HooksConfigStore.writeFile(Preferences.hooks)
+            XCTAssertTrue(isSymlink(url), "link was replaced by a regular file")
+            XCTAssertEqual(HooksConfigStore.decode(try String(contentsOf: target, encoding: .utf8))?.map(\.command), ["echo keep"])
+        }
+    }
+
+    func testBootstrapLeavesDanglingSymlinkAndWriteCreatesTarget() throws {
+        try withScratchFile { url in
+            let target = tempDir("dotfiles").appendingPathComponent("sub/hooks.json")
+            try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+            Preferences.defaults.set("stale", forKey: "agentHooksDiskMirror")
+            HooksConfigStore.bootstrap()
+            XCTAssertTrue(isSymlink(url), "dangling link was replaced")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: target.path), "bootstrap treated the link as absent")
+            XCTAssertEqual(Preferences.defaults.string(forKey: "agentHooksDiskMirror"), "stale", "mirror must be left as is")
+            HooksConfigStore.writeFile(Preferences.hooks)
+            XCTAssertTrue(isSymlink(url), "write replaced the dangling link")
+            XCTAssertEqual(HooksConfigStore.decode(try String(contentsOf: target, encoding: .utf8))?.map(\.command), ["echo keep"])
+        }
+    }
+
     /// Source pin: the unreadable branch of bootstrap logs before returning.
     func testBootstrapUnreadableBranchLogs() throws {
         let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

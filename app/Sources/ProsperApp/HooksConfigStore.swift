@@ -114,7 +114,7 @@ enum HooksConfigStore {
     static func writeFile(_ hooks: [HookRule]) {
         guard let json = encode(hooks) else { return }
         if json == Preferences.defaults.string(forKey: mirrorKey) { return }
-        let url = fileURL
+        let url = MCPConfigStore.symlinkTarget(fileURL)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
@@ -142,13 +142,13 @@ enum HooksConfigStore {
             Preferences.defaults.set(onDisk, forKey: mirrorKey)
         } else {
             // Absent file: forget the mirror so writeFile's no-change skip can't leave it missing.
-            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            guard MCPConfigStore.entryExists(fileURL) else {
                 Preferences.defaults.removeObject(forKey: mirrorKey)
                 writeFile(Preferences.hooks)
                 return
             }
-            // Present but unreadable (non-UTF-8, no permission, a directory): the user's
-            // file, not ours to replace. Same as a malformed hand edit.
+            // Present but unreadable (non-UTF-8, no permission, a directory, a dangling
+            // symlink): the user's file, not ours to replace. Same as a malformed hand edit.
             if onDisk == nil {
                 Logger(subsystem: "eu.illegible.prosper", category: "hooks")
                     .error("\(fileURL.path, privacy: .public) is not readable as UTF-8 text at launch; left untouched, using last good config")

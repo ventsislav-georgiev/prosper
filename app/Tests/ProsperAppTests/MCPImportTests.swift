@@ -221,6 +221,66 @@ final class MCPImportTests: XCTestCase {
         }
     }
 
+    func testBootstrapCreatesAbsentFileWithNilMirror() throws {
+        try withScratchFile { url in  // withScratchFile leaves the mirror nil
+            MCPConfigStore.bootstrap()
+            XCTAssertEqual(MCPConfigStore.decode(try String(contentsOf: url, encoding: .utf8)), Preferences.mcpServers)
+        }
+    }
+
+    func testBootstrapAdoptsDifferentValidFile() throws {
+        try withScratchFile { url in
+            let json = try XCTUnwrap(MCPConfigStore.encode([MCPServer(id: "disk", transport: .stdio, enabled: true, command: "uvx")]))
+            try json.write(to: url, atomically: true, encoding: .utf8)
+            Preferences.defaults.set("stale", forKey: "agentMCPDiskMirror")
+            MCPConfigStore.bootstrap()
+            XCTAssertEqual(Preferences.mcpServers.map(\.id), ["disk"])
+            XCTAssertEqual(Preferences.defaults.string(forKey: "agentMCPDiskMirror"), json)
+        }
+    }
+
+    func testBootstrapFileEqualToMirrorWritesPrefs() throws {
+        try withScratchFile { url in
+            let json = try XCTUnwrap(MCPConfigStore.encode([MCPServer(id: "old", transport: .stdio, enabled: true, command: "uvx")]))
+            try json.write(to: url, atomically: true, encoding: .utf8)
+            Preferences.defaults.set(json, forKey: "agentMCPDiskMirror")
+            MCPConfigStore.bootstrap()  // unchanged on disk: in-app prefs win and land on disk
+            XCTAssertEqual(MCPConfigStore.decode(try String(contentsOf: url, encoding: .utf8))?.map(\.id), ["keep"])
+        }
+    }
+
+    // MARK: Symlinked config (#391): a dotfiles link survives, writes land on its target
+
+    private func isSymlink(_ url: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == .typeSymbolicLink
+    }
+
+    func testWriteFollowsValidSymlink() throws {
+        try withScratchFile { url in
+            let target = tempDir("dotfiles").appendingPathComponent("mcp.json")
+            try "{}".write(to: target, atomically: true, encoding: .utf8)
+            try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+            MCPConfigStore.writeFile(Preferences.mcpServers)
+            XCTAssertTrue(isSymlink(url), "link was replaced by a regular file")
+            XCTAssertEqual(MCPConfigStore.decode(try String(contentsOf: target, encoding: .utf8)), Preferences.mcpServers)
+        }
+    }
+
+    func testBootstrapLeavesDanglingSymlinkAndWriteCreatesTarget() throws {
+        try withScratchFile { url in
+            let target = tempDir("dotfiles").appendingPathComponent("sub/mcp.json")
+            try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+            Preferences.defaults.set("stale", forKey: "agentMCPDiskMirror")
+            MCPConfigStore.bootstrap()
+            XCTAssertTrue(isSymlink(url), "dangling link was replaced")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: target.path), "bootstrap treated the link as absent")
+            XCTAssertEqual(Preferences.defaults.string(forKey: "agentMCPDiskMirror"), "stale", "mirror must be left as is")
+            MCPConfigStore.writeFile(Preferences.mcpServers)
+            XCTAssertTrue(isSymlink(url), "write replaced the dangling link")
+            XCTAssertEqual(MCPConfigStore.decode(try String(contentsOf: target, encoding: .utf8)), Preferences.mcpServers)
+        }
+    }
+
     /// Source pin: the unreadable branch of bootstrap logs before returning.
     func testBootstrapUnreadableBranchLogs() throws {
         let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

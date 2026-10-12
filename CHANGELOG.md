@@ -165,6 +165,10 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: a hand-edited saved fan speed whose fan index is spelled unusually (`01`, `+1`) no
   longer crashes Prosper at launch or when the stats popup opens.** Only the plain index
   Prosper writes is read back; other spellings are ignored.
+- **Fixed: a symlinked `~/.config/prosper/mcp.json` or `hooks.json` (kept in a dotfiles repo,
+  say) is no longer replaced by a plain file when settings change.** Writes follow the link to
+  its target, and a link whose target is missing is left alone at launch and filled in on the
+  next settings change.
 - **Fixed: typing a huge number, `inf` or `nan` into an extension's number setting no longer
   crashes Prosper.** Non-numbers fall back to the field's minimum. An extension that declares a
   non-finite bound (`min = inf`, `max = -inf`, `nan`) no longer makes every typed value save as

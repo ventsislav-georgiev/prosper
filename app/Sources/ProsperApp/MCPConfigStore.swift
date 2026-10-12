@@ -120,13 +120,30 @@ enum MCPConfigStore {
     static func writeFile(_ servers: [MCPServer]) {
         guard let json = encode(servers) else { return }
         if json == Preferences.defaults.string(forKey: mirrorKey) { return }
-        let url = fileURL
+        let url = symlinkTarget(fileURL)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
             try json.write(to: url, atomically: true, encoding: .utf8)
             Preferences.defaults.set(json, forKey: mirrorKey)
         } catch { NSLog("prosper: failed to write mcp.json: \(error)") }
+    }
+
+    /// Where a config write lands: a symlinked config (kept in a dotfiles repo) is
+    /// followed, dangling or not, so the atomic replace hits the target and the link
+    /// survives (#391). Shared with `HooksConfigStore`.
+    static func symlinkTarget(_ url: URL) -> URL {
+        var url = url
+        for _ in 0..<8 {  // bounded: a link cycle stops here instead of spinning
+            guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else { break }
+            url = URL(fileURLWithPath: dest, relativeTo: url.deletingLastPathComponent()).standardizedFileURL
+        }
+        return url
+    }
+
+    /// lstat existence: a symlink, even dangling, is the user's file, not absent (#391).
+    static func entryExists(_ url: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
     }
 
     private static func readFileRaw() -> String? { try? String(contentsOf: fileURL, encoding: .utf8) }
@@ -149,13 +166,13 @@ enum MCPConfigStore {
             Preferences.defaults.set(onDisk, forKey: mirrorKey)
         } else {
             // Absent file: forget the mirror so writeFile's no-change skip can't leave it missing.
-            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            guard entryExists(fileURL) else {
                 Preferences.defaults.removeObject(forKey: mirrorKey)
                 writeFile(Preferences.mcpServers)
                 return
             }
-            // Present but unreadable (non-UTF-8, no permission, a directory): the user's
-            // file, not ours to replace. Same as a malformed hand edit.
+            // Present but unreadable (non-UTF-8, no permission, a directory, a dangling
+            // symlink): the user's file, not ours to replace. Same as a malformed hand edit.
             if onDisk == nil {
                 Logger(subsystem: "eu.illegible.prosper", category: "mcp")
                     .error("\(fileURL.path, privacy: .public) is not readable as UTF-8 text at launch; left untouched, using last good config")
