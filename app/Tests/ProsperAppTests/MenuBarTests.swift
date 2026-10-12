@@ -215,7 +215,8 @@ final class MenuBarTests: XCTestCase {
     func testOrderStoreMigrationReadsAndDeletesTheBackup() {
         let d = Preferences.defaults
         let position = "NSStatusItem Preferred Position ProsperMenuBarAlwaysHiddenSeparator"
-        let keys = ["menuBarStoreJSON", "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON", position]
+        let visible = "NSStatusItem Visible ProsperMenuBarAlwaysHiddenSeparator"
+        let keys = ["menuBarStoreJSON", "menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON", position, visible]
         let saved = keys.map { d.object(forKey: $0) }
         defer { for (k, v) in zip(keys, saved) { d.set(v, forKey: k) } }
         let blob = Data(#"{"schemaVersion":1,"desiredOrder":[]}"#.utf8)
@@ -224,10 +225,19 @@ final class MenuBarTests: XCTestCase {
             d.set(primary, forKey: "menuBarOrderStoreJSON")
             d.set(blob, forKey: "menuBarOrderStoreBackupJSON")
             d.set(1234.0, forKey: position)
+            d.set(false, forKey: visible)
+            // QA #215: the user's live store must survive the cleanup.
+            let live = { var e = MenuBarStore.default; e.spacing = 9; e.chevronStyle = .circle; return e }()
+            Preferences.menuBarStore = live
+            let liveData = d.data(forKey: "menuBarStoreJSON")
+            XCTAssertNotNil(liveData)
             Preferences.migrateMenuBarOrderStore()
+            XCTAssertEqual(Preferences.menuBarStore, live, "live store must survive")
+            XCTAssertEqual(d.data(forKey: "menuBarStoreJSON"), liveData, "live store bytes must be unchanged")
             XCTAssertNil(d.object(forKey: "menuBarOrderStoreJSON"))
             XCTAssertNil(d.object(forKey: "menuBarOrderStoreBackupJSON"), "backup must go too (primary \(String(describing: primary)))")
             XCTAssertNil(d.object(forKey: position), "removed divider's position memory must go")
+            XCTAssertNil(d.object(forKey: visible), "removed divider's visibility memory must go")
         }
     }
 

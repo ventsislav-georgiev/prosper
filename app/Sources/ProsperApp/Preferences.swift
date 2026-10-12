@@ -791,7 +791,8 @@ enum Preferences {
     /// divider now belong to the hidden section. A no-op once the keys are gone.
     static func migrateMenuBarOrderStore() {
         for key in ["menuBarOrderStoreJSON", "menuBarOrderStoreBackupJSON",
-                    "NSStatusItem Preferred Position ProsperMenuBarAlwaysHiddenSeparator"] {
+                    "NSStatusItem Preferred Position ProsperMenuBarAlwaysHiddenSeparator",
+                    "NSStatusItem Visible ProsperMenuBarAlwaysHiddenSeparator"] {
             defaults.removeObject(forKey: key)
         }
     }
