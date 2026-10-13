@@ -46,6 +46,13 @@ enum VisionOCR {
         }
     }()
 
+    /// `.accurate` garbles or drops UI-sized text in images wider than about 2,600 px
+    /// (a full-width strip on a Retina display) while reading the same pixels fine once
+    /// the width is squeezed to this, text height kept (#418). `.fast` has no such cliff.
+    /// ponytail: one horizontal squeeze; still unreliable past ~5,000 px, where tiling
+    /// with a line merge would be the upgrade.
+    static let maxAccurateWidth = 2400
+
     /// Recognizes text in `image`, returning one entry per text line with its
     /// normalized bounding box. Empty on failure. Async; the request itself runs
     /// off the calling actor.
@@ -61,7 +68,15 @@ enum VisionOCR {
             request.recognitionLevel = level
             request.usesLanguageCorrection = (level == .accurate)
 
-            let handler = VNImageRequestHandler(cgImage: image, options: [:])
+            let handler: VNImageRequestHandler
+            if level == .accurate, image.width > maxAccurateWidth {
+                // Normalized boxes are unchanged by a horizontal-only scale.
+                let squeeze = CGAffineTransform(scaleX: CGFloat(maxAccurateWidth) / CGFloat(image.width), y: 1)
+                handler = VNImageRequestHandler(
+                    ciImage: CIImage(cgImage: image).samplingLinear().transformed(by: squeeze), options: [:])
+            } else {
+                handler = VNImageRequestHandler(cgImage: image, options: [:])
+            }
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(returning: Self.lines(from: Self.observations(handler, request)))
             }

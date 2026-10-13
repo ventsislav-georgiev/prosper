@@ -114,6 +114,11 @@ tag from the now-released section and put it on the new top draft.
   again. The close is now recorded, and a click on the icon within 0.4 s of it, or carrying
   the same event, counts as the closing click and does nothing more. The same guard covers
   the macOS 27 menu-bar session path.
+- **Fixed: small UI text in a wide Copy Text from Region selection came back garbled or
+  empty.** The accurate recognizer breaks down on captures wider than about 2,600 px, a
+  full-width strip on a Retina display: 11 pt text came back as "The duick brown tox
+  lumps" or as nothing at all. Wider captures are now squeezed to 2,400 px horizontally
+  before recognition, text height kept, which reads them correctly.
 - **Fixed: the first Copy Text from Region after an update looked like it copied nothing.**
   On macOS 27 the first text recognition in a freshly updated build waits about 25 s while
   the system compiles the recognizer for the Neural Engine, and the app showed nothing during

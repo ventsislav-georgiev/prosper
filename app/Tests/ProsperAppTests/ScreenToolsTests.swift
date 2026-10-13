@@ -107,6 +107,39 @@ final class ScreenToolsTests: XCTestCase {
         XCTAssertEqual(VisionOCR.prewarmRequestCount, 1)
     }
 
+    /// #418: 11 pt UI text in a full-width Retina strip, drawn at 2x the way a screen
+    /// capture carries it. Unsqueezed, `.accurate` garbles the dark-on-light strip
+    /// ("The duick brown tox lumps…") and returns nothing for the light-on-dark one.
+    private func uiStrip(width: Int, height: Int, lightOnDark: Bool) throws -> CGImage {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB)),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue))
+        context.setFillColor(CGColor(gray: lightOnDark ? 0.12 : 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        defer { NSGraphicsContext.current = nil }
+        context.scaleBy(x: 2, y: 2)
+        let pt: CGFloat = 11
+        (Self.stripSentence as NSString).draw(
+            at: NSPoint(x: 16, y: CGFloat(height) / 4 - pt / 2),
+            withAttributes: [.font: NSFont.systemFont(ofSize: pt),
+                             .foregroundColor: lightOnDark ? NSColor(white: 0.9, alpha: 1) : NSColor.black])
+        return try XCTUnwrap(context.makeImage())
+    }
+
+    private static let stripSentence = "The quick brown fox jumps over the lazy dog 0123456789 user@example.com"
+
+    func testAccurateReadsSmallDarkOnLightTextInWideStrip() async throws {
+        let lines = await VisionOCR.recognizeLines(in: try uiStrip(width: 3024, height: 236, lightOnDark: false))
+        XCTAssertEqual(ScreenToolsSupport.joinedRecognizedText(lines), Self.stripSentence)
+    }
+
+    func testAccurateReadsSmallLightOnDarkTextInWideStrip() async throws {
+        let lines = await VisionOCR.recognizeLines(in: try uiStrip(width: 3454, height: 242, lightOnDark: true))
+        XCTAssertEqual(ScreenToolsSupport.joinedRecognizedText(lines), Self.stripSentence)
+    }
+
     // MARK: - 3. Reading order
 
     func testJoinedRecognizedTextSortsTopDownThenLeftToRight() {
