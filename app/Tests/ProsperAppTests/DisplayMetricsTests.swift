@@ -417,6 +417,7 @@ final class DisplayMetricsTests: XCTestCase {
         func minWidth<V: View>(_ v: V) -> CGFloat {
             NSHostingController(rootView: v).sizeThatFits(in: NSSize(width: 1, height: 10_000)).width
         }
+        var pinned = 0
         for scale in AppearanceSettingsPane.sizePresets {
             ThemeRuntime.scale = scale
             let room = SettingsWindow.contentMinSize(scale: scale).width - 302 * scale
@@ -426,6 +427,7 @@ final class DisplayMetricsTests: XCTestCase {
             XCTAssertLessThanOrEqual(activity, room, "Activity controls overflow their card at the minimum window, scale \(scale)")
             // #429: at the card's room, 1.0 keeps one row, 0.85 stacks with natural-width pickers.
             guard scale == 1.0 || scale == 0.85 else { continue }
+            pinned += 1
             let pickerH = NSHostingController(rootView: Picker("", selection: .constant(0)) { Text("7d").tag(0) }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()).sizeThatFits(in: NSSize(width: 10_000, height: 10_000)).height
             let fit = NSHostingController(rootView: ActivityControls(metric: .constant(.completions), rangeDays: .constant(30)))
@@ -438,6 +440,7 @@ final class DisplayMetricsTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(activity, fit.width - 0.5, "Activity pickers compress below their natural width, scale \(scale)")
             }
         }
+        XCTAssertEqual(pinned, 2, "the 1.0 and 0.85 presets must both be pinned")
     }
 
     /// The System Stats Display picker ("Text | Graph | Text + Graph") must reserve
