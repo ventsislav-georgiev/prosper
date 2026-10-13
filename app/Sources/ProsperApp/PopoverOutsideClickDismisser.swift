@@ -194,7 +194,8 @@ enum ExpandedInterfacePolicy {
     /// it. Serves both paths: the macOS 27 session's begin after the item's end, and
     /// the target/action button click after the popover's close. Long enough to
     /// cover the begin or the mouse-up landing after the transient/monitor close;
-    /// the cost is that a double-click on the open icon stays closed (right).
+    /// the cost is that a double-click on the open icon stays closed on the session
+    /// path (the button path consumes the record on the first click; its second reopens).
     // ponytail: time window only. Two swallowed cases: a keyboard return to the
     // same item within 0.4 s, and a fast A, B, A Stats switch on the session path
     // (the second A begin lands inside the window of A's own end). One reopen case
