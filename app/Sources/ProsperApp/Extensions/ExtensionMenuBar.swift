@@ -22,8 +22,11 @@ final class ExtensionMenuBar {
     private(set) var items: [String: NSStatusItem] = [:]
     /// QA OQ-6: tests swap in a private `NSStatusBar()` so nothing lands on the real menu bar.
     var statusBar: NSStatusBar = .system
-    private var hud: NSPanel?
-    private var hudHide: DispatchWorkItem?
+    /// The app-wide toast panel and its pending auto-hide. Readable for tests.
+    private(set) var hud: NSPanel?
+    private(set) var hudHide: DispatchWorkItem?
+    /// Token of the toast on screen now; `alert` bumps it, `dismissAlert(token:)` checks it.
+    private var hudToken = 0
 
     private static func key(_ extID: String, _ id: String) -> String { "\(extID)\u{1}\(id)" }
 
@@ -159,7 +162,9 @@ final class ExtensionMenuBar {
 
     /// Show a transient borderless HUD with `text`, auto-dismissed after `seconds`
     /// (0 → default 1.5s). Replaces any visible HUD. The Hammerspoon `hs.alert` feel.
-    func alert(text: String, seconds: Double) {
+    /// Returns a token that lets the caller take down this toast, and only this one.
+    @discardableResult
+    func alert(text: String, seconds: Double) -> Int {
         hudHide?.cancel()
         let panel = hud ?? Self.makeHUD()
         hud = panel
@@ -181,10 +186,15 @@ final class ExtensionMenuBar {
         hudHide = hide
         let delay = seconds > 0 ? seconds : 1.5
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: hide)
+        hudToken += 1
+        return hudToken
     }
 
-    /// Hides the HUD now and cancels its pending auto-hide.
-    func dismissAlert() {
+    /// Hides the HUD now and cancels its pending auto-hide, but only while the toast
+    /// that returned `token` is still the one showing: a later toast from another
+    /// feature stays up.
+    func dismissAlert(token: Int) {
+        guard token == hudToken else { return }
         hudHide?.cancel()
         hudHide = nil
         hud?.orderOut(nil)

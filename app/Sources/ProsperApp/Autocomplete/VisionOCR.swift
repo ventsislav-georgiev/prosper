@@ -118,13 +118,14 @@ enum VisionOCR {
     /// dimension") — and the previous handler-plus-`catch` shape then resumed its
     /// `CheckedContinuation` twice, trapping with CONTINUATION MISUSE. Reachable from
     /// `ScreenTools` on a thin stray drag. Such a request compiles nothing, so only a
-    /// `perform` that did not throw marks the recognizer warm.
+    /// `perform` that did not throw AND left results on the request marks the recognizer
+    /// warm (Vision's headers allow a non-throwing failure with nil results).
     private static func observations(_ handler: VNImageRequestHandler,
                                      _ request: VNRecognizeTextRequest)
         -> [VNRecognizedTextObservation] {
         do {
             try handler.perform([request])
-            isWarm = true
+            if request.results != nil { isWarm = true }
         } catch {}
         return request.results as? [VNRecognizedTextObservation] ?? []
     }

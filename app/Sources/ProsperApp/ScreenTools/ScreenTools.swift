@@ -42,12 +42,13 @@ enum ScreenTools {
             return
         }
         // A cold recognizer takes ~25 s; say so, and take the note down when the read
-        // ends, whatever follows (the URL alert shows no HUD of its own).
-        let cold = !VisionOCR.isWarm
-        if cold { hud("Reading text…", seconds: 30) }
+        // ends, whatever follows (the URL alert shows no HUD of its own). The token
+        // leaves a toast another feature showed meanwhile alone. The 60 s self-hide is
+        // only a safety net in case the dismiss never runs.
+        let coldToast = VisionOCR.isWarm ? nil : hud("Reading text…", seconds: 60)
         var lines = await VisionOCR.recognizeLines(in: image)
         if lines.isEmpty { lines = await VisionOCR.recognizeLines(in: image, level: .fast) }
-        if cold { ExtensionMenuBar.shared.dismissAlert() }
+        if let coldToast { ExtensionMenuBar.shared.dismissAlert(token: coldToast) }
         let text = ScreenToolsSupport.joinedRecognizedText(lines)
         guard !text.isEmpty else {
             hud("No text found in that region")
@@ -97,7 +98,8 @@ enum ScreenTools {
         Pasteboard.general.setString(text, forType: .string)
     }
 
-    private static func hud(_ text: String, seconds: Double = 1.6) {
+    @discardableResult
+    private static func hud(_ text: String, seconds: Double = 1.6) -> Int {
         ExtensionMenuBar.shared.alert(text: text, seconds: seconds)
     }
 }

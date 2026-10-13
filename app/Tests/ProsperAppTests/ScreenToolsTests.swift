@@ -128,6 +128,23 @@ final class ScreenToolsTests: XCTestCase {
         XCTAssertTrue(VisionOCR.isWarm)
     }
 
+    /// #421: the cold-read toast is dismissed by its token, so a toast another feature
+    /// shows meanwhile (the HUD is app-wide) stays up, and the right token takes the
+    /// panel down and cancels its auto-hide.
+    @MainActor
+    func testDismissAlertTakesDownOnlyTheToastItsTokenNames() throws {
+        let bar = ExtensionMenuBar.shared
+        let a = bar.alert(text: "cold read", seconds: 30)
+        let b = bar.alert(text: "another feature", seconds: 30)
+        let panel = try XCTUnwrap(bar.hud)
+        bar.dismissAlert(token: a)
+        XCTAssertTrue(panel.isVisible, "a stale token took down a newer toast")
+        XCTAssertNotNil(bar.hudHide)
+        bar.dismissAlert(token: b)
+        XCTAssertFalse(panel.isVisible, "the live token left the toast up")
+        XCTAssertNil(bar.hudHide)
+    }
+
     /// #418: 11 pt UI text in a full-width Retina strip, drawn at 2x the way a screen
     /// capture carries it. Unsqueezed, `.accurate` garbles the dark-on-light strip
     /// ("The duick brown tox lumps…") and returns nothing for the light-on-dark one.
