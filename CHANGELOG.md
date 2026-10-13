@@ -113,7 +113,7 @@ tag from the now-released section and put it on the new top draft.
   was left to tell the icon that this click had already closed the popover, so it opened it
   again. The close is now recorded, and a click on the icon within 0.4 s of it, or carrying
   the same event, counts as the closing click and does nothing more. The same guard covers
-  the macOS 27 menu-bar session path for builds that include it.
+  the macOS 27 menu-bar session path.
 - **Updated: the coding agent runs codex 0.162.1** (was 0.139.0). Prosper now always runs
   its own pinned codex, bundled or downloaded on first use into a per-version cache, and a
   Homebrew codex is used only under a developer override
