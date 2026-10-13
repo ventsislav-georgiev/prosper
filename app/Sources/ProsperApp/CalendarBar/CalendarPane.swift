@@ -88,7 +88,7 @@ struct CalendarPane: View {
                 Picker("", selection: binding(\.textScale)) {
                     ForEach(CalendarTextScale.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
-                .labelsHidden().pickerStyle(.segmented).frame(width: sz(220))
+                .labelsHidden().pickerStyle(.segmented).fixedSize()
             }
             NeonDivider()
             NeonRow("First day of week") {

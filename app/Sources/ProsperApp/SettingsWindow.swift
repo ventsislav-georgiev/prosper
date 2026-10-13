@@ -36,6 +36,15 @@ final class SettingsWindow {
         win.invalidateShadow()
     }
 
+    /// The sidebar (218·scale) plus the content column need ~820·scale. Below the
+    /// 85% preset the width stops shrinking: segmented controls keep their natural
+    /// width at every UI size, and the widest (Calendar Font style, 410 pt) only
+    /// fits its card from the 85% row up (#427). Height is free so the window can
+    /// grow to show more rows.
+    static func contentMinSize(scale: CGFloat) -> NSSize {
+        NSSize(width: 820 * max(scale, 0.85), height: 480 * scale)
+    }
+
     func show() {
         // #195: show → this transaction committed (pane laid out and handed to the render server).
         let signpost = Perf.signposter.beginInterval("settings.show")
@@ -83,10 +92,8 @@ final class SettingsWindow {
         win.identifier = SettingsWindow.themedIdentifier
         let scale = ThemeRuntime.scale
         win.setContentSize(NSSize(width: 900 * scale, height: 640 * scale))
-        // The sidebar (218·scale) plus the content column need ~820·scale minimum;
-        // height is free so the window can grow to show more rows. Width is now
-        // resizable (the sidebar + scrolling cards reflow).
-        win.contentMinSize = NSSize(width: 820 * scale, height: 480 * scale)
+        // Width is resizable (the sidebar + scrolling cards reflow) down to the minimum.
+        win.contentMinSize = SettingsWindow.contentMinSize(scale: scale)
         SettingsWindow.applyWindowOpacity(win)
         win.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                     height: CGFloat.greatestFiniteMagnitude)
@@ -134,11 +141,21 @@ extension NSWindow {
     /// root and clips both sides (#426). setFrameUsingName clamps on macOS 27, but a
     /// frame autosaved below the min has restored unclamped before (ChatWindow), so
     /// call this after every restore and every min change.
-    func clampToContentMinSize() {
+    func clampToContentMinSize() { clampToContentMinSize(within: screen?.visibleFrame) }
+
+    /// setContentSize keeps the top-left corner, so a grown window flush with the
+    /// right or bottom edge would hang off `visible`; shift it back (top-left wins
+    /// when it is larger than `visible`). Only a grown window moves.
+    func clampToContentMinSize(within visible: NSRect?) {
         let size = contentRect(forFrameRect: frame).size
         let min = contentMinSize
         guard size.width < min.width || size.height < min.height else { return }
         setContentSize(NSSize(width: max(size.width, min.width), height: max(size.height, min.height)))
+        guard let visible else { return }
+        var origin = frame.origin
+        origin.x = max(Swift.min(origin.x, visible.maxX - frame.width), visible.minX)
+        origin.y = Swift.min(max(origin.y, visible.minY), visible.maxY - frame.height)
+        if origin != frame.origin { setFrameOrigin(origin) }
     }
 }
 
@@ -1774,7 +1791,7 @@ private struct StatisticsPane: View {
                         ForEach(ranges, id: \.0) { Text($0.1).tag($0.0) }
                     }
                     .pickerStyle(.segmented).labelsHidden()
-                    .frame(width: sz(150))
+                    .fixedSize()
                 }
                 chart
             }

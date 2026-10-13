@@ -314,10 +314,13 @@ final class DisplayMetricsTests: XCTestCase {
     func testWindowBelowRaisedContentMinSizeIsClamped() {
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
                            styleMask: [.titled, .resizable], backing: .buffered, defer: true)
-        func width() -> CGFloat { win.contentRect(forFrameRect: win.frame).width }
-        // A saved frame narrower than the min comes back clamped on restore.
+        func content() -> NSSize { win.contentRect(forFrameRect: win.frame).size }
+        func width() -> CGFloat { content().width }
+        // setFrame(_:display:) does not clamp to the min (#427: pins the helper, not the OS).
         win.contentMinSize = NSSize(width: 820, height: 480)
-        win.setFrame(from: "100 100 610 700 0 0 1920 1080")
+        win.setFrame(NSRect(x: 100, y: 100, width: 610, height: 700), display: false)
+        XCTAssertLessThan(width(), 820, "precondition: setFrame leaves the window below the min")
+        win.clampToContentMinSize()
         XCTAssertGreaterThanOrEqual(width(), 820)
 
         win.contentMinSize = NSSize(width: 615, height: 360)
@@ -325,9 +328,61 @@ final class DisplayMetricsTests: XCTestCase {
         win.contentMinSize = NSSize(width: 820, height: 480)
         XCTAssertLessThan(width(), 820, "precondition: raising the min leaves the window below it")
         win.clampToContentMinSize()
+        XCTAssertGreaterThanOrEqual(content().width, 820)
+        XCTAssertGreaterThanOrEqual(content().height, 480)
+
+        // Height only, less short than the title bar: a clamp reading frame.size misses it.
+        win.setContentSize(NSSize(width: 900, height: 460))
+        win.clampToContentMinSize()
+        XCTAssertGreaterThanOrEqual(content().height, 480, "content height, not frame height, is clamped")
+
+        // Flush with the right edge of a 1920 x 1080 screen: the grown window stays on it.
+        // The visible rect is passed in, so no real screen is involved.
+        let visible = NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        win.contentMinSize = NSSize(width: 615, height: 360)
+        win.setContentSize(NSSize(width: 615, height: 400))
+        win.setFrameOrigin(NSPoint(x: visible.maxX - win.frame.width, y: 100))
+        win.contentMinSize = NSSize(width: 820, height: 480)
+        win.clampToContentMinSize(within: visible)
+        XCTAssertGreaterThanOrEqual(width(), 820)
+        XCTAssertLessThanOrEqual(win.frame.maxX, visible.maxX, "grown window pushed off the right edge")
+        XCTAssertGreaterThanOrEqual(win.frame.minY, visible.minY)
+    }
+
+    /// The theme hook's per-window step (AppDelegate.applyThemeToAppKit) raises the
+    /// Settings minimum on a live UI-size change and must grow the open window (#427, QM2).
+    @MainActor
+    func testThemedWindowSizingGrowsSettingsWindow() {
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 615, height: 400),
+                           styleMask: [.titled, .resizable], backing: .buffered, defer: true)
+        win.identifier = SettingsWindow.themedIdentifier
+        win.contentMinSize = NSSize(width: 615, height: 360)
+        AppDelegate.applyThemedWindowSizing([win], scale: 1.0)
         let size = win.contentRect(forFrameRect: win.frame).size
+        XCTAssertEqual(win.contentMinSize, SettingsWindow.contentMinSize(scale: 1.0))
         XCTAssertGreaterThanOrEqual(size.width, 820)
         XCTAssertGreaterThanOrEqual(size.height, 480)
+    }
+
+    /// Segmented controls keep their natural width at every UI size; the Settings
+    /// minimum must leave the widest one (Calendar Font style) inside its card at
+    /// every preset (#427). Card row = content - sidebar 218 - scroll padding 2x26
+    /// - card padding 2x16 = content - 302, all scaled.
+    @MainActor
+    func testSettingsMinimumFitsWidestSegmentedRow() {
+        let labels = CalendarIconFontDesign.allCases.map(\.label)
+        for scale in AppearanceSettingsPane.sizePresets {
+            ThemeRuntime.scale = scale
+            let row = NeonRow("Font style") {
+                Picker("", selection: .constant(0)) {
+                    ForEach(Array(labels.enumerated()), id: \.offset) { Text($0.element).tag($0.offset) }
+                }
+                .labelsHidden().pickerStyle(.segmented).fixedSize()
+            }
+            let needed = NSHostingController(rootView: row).sizeThatFits(in: NSSize(width: 1, height: 10_000)).width
+            let room = SettingsWindow.contentMinSize(scale: scale).width - 302 * scale
+            XCTAssertLessThanOrEqual(needed, room, "Font style row overflows its card at the minimum window, scale \(scale)")
+        }
     }
 
     /// The System Stats Display picker ("Text | Graph | Text + Graph") must reserve

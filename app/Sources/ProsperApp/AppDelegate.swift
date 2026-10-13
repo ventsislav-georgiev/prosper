@@ -681,12 +681,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // flip opaque/clear for transparency and rescale the minimum content size so
         // the scaled sidebar + content column always fit. Borderless floating panels
         // (runner/clipboard) are already transparent and redraw themselves via SwiftUI.
-        let scale = ThemeRuntime.scale
-        for win in NSApp.windows {
+        AppDelegate.applyThemedWindowSizing(NSApp.windows, scale: ThemeRuntime.scale)
+    }
+
+    /// The per-window part of applyThemeToAppKit, static so a test can hand it a
+    /// private window (#427).
+    static func applyThemedWindowSizing(_ windows: [NSWindow], scale: CGFloat) {
+        for win in windows {
             switch win.identifier {
             case SettingsWindow.themedIdentifier:
                 SettingsWindow.applyWindowOpacity(win)
-                win.contentMinSize = NSSize(width: 820 * scale, height: 480 * scale)
+                win.contentMinSize = SettingsWindow.contentMinSize(scale: scale)
             case ChatWindow.themedIdentifier:
                 SettingsWindow.applyWindowOpacity(win)
                 win.contentMinSize = NSSize(width: 560 * scale, height: 520 * scale)
