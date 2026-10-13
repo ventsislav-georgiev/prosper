@@ -112,22 +112,35 @@ jobs:
             app/.build
             ~/Library/Caches/org.swift.swiftpm
             ~/Library/org.swift.swiftpm
+          # `v3` salt (#416): app/.build now holds the swiftbuild backend's out/ layout;
+          # a v2 cache would restore a dead native-backend tree beside it.
           # `v2` salt: the cache now also carries the MLX metallib bundle staged by
           # build.sh. Bumping the prefix forces a one-time miss so the warmer re-saves
           # WITH the metallib (actions/cache skips saving on an exact-key hit, so the
           # old metallib-less v1 cache would otherwise stay frozen at the same key).
           # The trailing v1 restore-key keeps the swift build incremental on that first
           # miss; only the metallib recompiles once.
-          key: spm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
+          key: spm-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: |
-            spm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
-            spm-v2-${{ runner.os }}-
+            spm-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
+            spm-v3-${{ runner.os }}-
             spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
 
       - name: Build (release)
         run: |
           # scripts/build.sh runs `swift build -c release` AND compiles MLX's Metal shaders.
           ./scripts/build.sh release
+
+      - name: Check build output
+        # The swiftbuild backend (#416) lays out app/.build/release as a symlink to
+        # out/Products/Release; bundle.sh reads through it, and the app aborts on the
+        # first model load without the MLX metallib. Fail here, before any signing.
+        run: |
+          R=app/.build/release
+          for f in "$R/ProsperApp" "$R/ProsperHelper" "$R/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"; do
+            [[ -f "$f" ]] || { echo "::error::$f missing after build.sh"; exit 1; }
+          done
+          echo "release -> $(readlink "$R" || echo '(dir)')"
 
       - name: Import code-signing certificate
         # With MACOS_SIGN_CERT_P12 + MACOS_SIGN_CERT_PWD set, import the "Developer
@@ -201,6 +214,10 @@ jobs:
           PROSPER_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           ./scripts/bundle.sh release
+          # The app aborts on the first model load without MLX's metallib; assert it
+          # reached the .app (bundle.sh copies app/.build/release/*.bundle).
+          M=dist/Prosper.app/Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib
+          [[ -f "$M" ]] || { echo "::error::$M missing in the bundled app"; exit 1; }
           # bundle.sh only warns (to suppressed stderr) if dch is missing — assert
           # it actually embedded so a broken Remote Terminal can't ship silently.
           test -x dist/Prosper.app/Contents/Resources/dch \

@@ -11,22 +11,25 @@ echo "==> Building Swift app ($PROFILE)"
 # the SwiftPM checkouts before compiling. Idempotent — safe on warm caches.
 "$ROOT/scripts/apply-patches.sh"
 cd "$ROOT/app"
-# Xcode 27's SwiftPM defaults to the swiftbuild backend, which runs the helper's
-# `-import-objc-header` path from the repo root and fails to find
-# ProsperHelper/include/RemoteWakeSPI.h; the native backend keeps the classic
-# .build/release layout bundle.sh expects. SwiftPM 6.4 warns the flag is
-# deprecated: when it goes, Package.swift must pass that header path in a form
-# the swiftbuild backend resolves (absolute, or a headerSearchPath).
+# SwiftPM's swiftbuild backend (the default since Xcode 27) compiles mlx-swift's
+# Metal kernels during `swift build`, so the Metal toolchain must be installed
+# before it runs; CI images may ship without it.
+if ! /usr/bin/xcrun -f metal >/dev/null 2>&1; then
+  echo "==> Metal toolchain missing — downloading (one-time, ~700 MB)"
+  xcodebuild -downloadComponent MetalToolchain
+fi
 if [[ "$PROFILE" == "release" ]]; then
-  swift build -c release --build-system native
+  swift build -c release
 else
-  swift build --build-system native
+  swift build
 fi
 # --- MLX Metal shaders (default.metallib) --------------------------------
 # Apple MLX runs its kernels from a precompiled `default.metallib` shipped in a
 # `mlx-swift_Cmlx.bundle` resource bundle (the C++ define SWIFTPM_BUNDLE +
-# METAL_PATH in mlx-swift's Package.swift). Plain `swift build` CANNOT compile
-# Metal shaders — only `xcodebuild` can (mlx-swift README explicitly says so).
+# METAL_PATH in mlx-swift's Package.swift). The native SwiftPM backend cannot
+# compile Metal shaders; the swiftbuild backend does, but its bundle carries no
+# Package.resolved stamp, so the stamped xcodebuild copy below stays the one we
+# ship (ponytail: drop this step once a beta proves the in-tree metallib).
 # Without the metallib the app aborts the instant it touches the GPU:
 #   "MLX error: Failed to load the default metallib. library not found ...
 #    mlx-swift/.../mlx/c/stream.cpp" — i.e. crash on first model load.
@@ -47,11 +50,7 @@ if [[ -f "$METALLIB_BUNDLE/Contents/Resources/default.metallib" \
    && "$(cat "$METALLIB_STAMP" 2>/dev/null)" == "$RESOLVED_HASH" ]]; then
   echo "==> MLX metallib already staged (matches Package.resolved): $METALLIB_BUNDLE"
 else
-  echo "==> Compiling MLX Metal shaders via xcodebuild (swift build cannot)"
-  if ! /usr/bin/xcrun -f metal >/dev/null 2>&1; then
-    echo "==> Metal toolchain missing — downloading (one-time, ~700 MB)"
-    xcodebuild -downloadComponent MetalToolchain
-  fi
+  echo "==> Compiling MLX Metal shaders via xcodebuild"
   DD="$ROOT/app/.build/xcode-metallib"
   # We only get here when the staged metallib is missing or carries another
   # Package.resolved hash (fresh checkout, cleaned .build/<profile>, dependency

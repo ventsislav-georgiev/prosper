@@ -148,8 +148,10 @@ let package = Package(
             // RemoteWakeSPI.h re-declares the IOPMConnection dark-wake observer
             // family (SPI, exported from IOKit but absent from the SDK headers).
             // No entitlement; passes notarization. See the header for why.
+            // Absolute path: the swiftbuild backend runs the compiler from the
+            // repo root, so a package-relative path misses app/.
             swiftSettings: [
-                .unsafeFlags(["-import-objc-header", "Sources/ProsperHelper/include/RemoteWakeSPI.h"])
+                .unsafeFlags(["-import-objc-header", Context.packageDirectory + "/Sources/ProsperHelper/include/RemoteWakeSPI.h"])
             ],
             linkerSettings: [
                 .linkedFramework("IOKit")
