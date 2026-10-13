@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.156.0 *(unreleased)*
+## v2.156.0
 
 - **Fixed: Settings could open narrower than its content, cutting the sidebar and the
   cards off on both sides.** Raising the UI size left an already open window below its
