@@ -134,9 +134,15 @@ final class ScreenToolsTests: XCTestCase {
     @MainActor
     func testDismissAlertTakesDownOnlyTheToastItsTokenNames() throws {
         let bar = ExtensionMenuBar.shared
+        // QA #228: keep the real panel off the operator's screen.
+        bar.hudScreenFrame = NSRect(x: -100_000, y: -100_000, width: 1000, height: 1000)
+        defer { bar.hudScreenFrame = nil }
         let a = bar.alert(text: "cold read", seconds: 30)
         let b = bar.alert(text: "another feature", seconds: 30)
         let panel = try XCTUnwrap(bar.hud)
+        for screen in NSScreen.screens {
+            XCTAssertFalse(panel.frame.intersects(screen.frame), "the toast landed on a display")
+        }
         bar.dismissAlert(token: a)
         XCTAssertTrue(panel.isVisible, "a stale token took down a newer toast")
         XCTAssertNotNil(bar.hudHide)

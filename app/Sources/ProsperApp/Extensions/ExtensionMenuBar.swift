@@ -27,6 +27,8 @@ final class ExtensionMenuBar {
     private(set) var hudHide: DispatchWorkItem?
     /// Token of the toast on screen now; `alert` bumps it, `dismissAlert(token:)` checks it.
     private var hudToken = 0
+    /// QA #228: tests park the toast in a far-offscreen rect; nil centers it on `NSScreen.main`.
+    var hudScreenFrame: NSRect?
 
     private static func key(_ extID: String, _ id: String) -> String { "\(extID)\u{1}\(id)" }
 
@@ -175,8 +177,7 @@ final class ExtensionMenuBar {
         label?.sizeToFit()
         if let label {
             let w = max(120, label.frame.width + 48), h = label.frame.height + 32
-            if let screen = NSScreen.main {
-                let f = screen.frame
+            if let f = hudScreenFrame ?? NSScreen.main?.frame {
                 panel.setFrame(NSRect(x: f.midX - w / 2, y: f.midY - h / 2, width: w, height: h), display: true)
             }
             label.frame = NSRect(x: 24, y: 16, width: w - 48, height: h - 32)
