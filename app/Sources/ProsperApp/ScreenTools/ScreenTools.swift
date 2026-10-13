@@ -41,10 +41,13 @@ enum ScreenTools {
             finish(reading.payload, open: reading.url)
             return
         }
-        // A cold recognizer takes ~25 s; say so, and the result HUD replaces this one.
-        if !VisionOCR.isWarm { hud("Reading text…", seconds: 30) }
+        // A cold recognizer takes ~25 s; say so, and take the note down when the read
+        // ends, whatever follows (the URL alert shows no HUD of its own).
+        let cold = !VisionOCR.isWarm
+        if cold { hud("Reading text…", seconds: 30) }
         var lines = await VisionOCR.recognizeLines(in: image)
         if lines.isEmpty { lines = await VisionOCR.recognizeLines(in: image, level: .fast) }
+        if cold { ExtensionMenuBar.shared.dismissAlert() }
         let text = ScreenToolsSupport.joinedRecognizedText(lines)
         guard !text.isEmpty else {
             hud("No text found in that region")

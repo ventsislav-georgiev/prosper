@@ -183,6 +183,13 @@ final class ExtensionMenuBar {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: hide)
     }
 
+    /// Hides the HUD now and cancels its pending auto-hide.
+    func dismissAlert() {
+        hudHide?.cancel()
+        hudHide = nil
+        hud?.orderOut(nil)
+    }
+
     private static func makeHUD() -> NSPanel {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 200, height: 60),
                             styleMask: [.borderless, .nonactivatingPanel],

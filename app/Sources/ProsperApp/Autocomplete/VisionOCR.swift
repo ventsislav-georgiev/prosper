@@ -20,10 +20,18 @@ struct OCRLine: Sendable {
 /// never persisted.
 enum VisionOCR {
 
-    /// True once any recognition request has completed in this process (prewarm or real).
+    /// True once any recognition request has run without throwing in this process
+    /// (prewarm or real). A request Vision rejects up front compiles nothing.
     nonisolated(unsafe) private(set) static var isWarm = false
-    /// Requests `prewarm()` has issued; the once-guard keeps it at 1 per process.
+    /// Prewarm requests Vision actually ran (results set); the once-guard keeps it at 1 per process.
     nonisolated(unsafe) private(set) static var prewarmRequestCount = 0
+    /// Leaves when the prewarm request has finished. Tests wait on it so an in-flight
+    /// prewarm cannot flip `isWarm` under them.
+    static let prewarmDone = DispatchGroup()
+
+    /// Test-only: `isWarm` otherwise only ever goes false to true per process, so a
+    /// row pinning the cold state resets it first (after waiting on `prewarmDone`).
+    static func resetWarmForTests() { isWarm = false }
 
     /// On macOS 27 the first request after an update waits about 25 s on
     /// ANECompilerService; the compiled networks are cached per code identity after that.
@@ -31,8 +39,7 @@ enum VisionOCR {
     static func prewarm() { _ = prewarmOnce }
 
     private static let prewarmOnce: Void = {
-        prewarmRequestCount += 1
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async(group: prewarmDone) {
             guard let context = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8,
                                           bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
@@ -43,6 +50,7 @@ enum VisionOCR {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             _ = observations(VNImageRequestHandler(cgImage: image, options: [:]), request)
+            if request.results != nil { prewarmRequestCount += 1 }
         }
     }()
 
@@ -106,12 +114,15 @@ enum VisionOCR {
     /// the completion handler *and* throws ("The image is too small in at least one
     /// dimension") — and the previous handler-plus-`catch` shape then resumed its
     /// `CheckedContinuation` twice, trapping with CONTINUATION MISUSE. Reachable from
-    /// `ScreenTools` on a thin stray drag.
+    /// `ScreenTools` on a thin stray drag. Such a request compiles nothing, so only a
+    /// `perform` that did not throw marks the recognizer warm.
     private static func observations(_ handler: VNImageRequestHandler,
                                      _ request: VNRecognizeTextRequest)
         -> [VNRecognizedTextObservation] {
-        try? handler.perform([request])
-        isWarm = true
+        do {
+            try handler.perform([request])
+            isWarm = true
+        } catch {}
         return request.results as? [VNRecognizedTextObservation] ?? []
     }
 

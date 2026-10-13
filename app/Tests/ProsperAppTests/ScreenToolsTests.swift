@@ -100,11 +100,32 @@ final class ScreenToolsTests: XCTestCase {
         XCTAssertTrue(VisionOCR.isWarm)
     }
 
-    /// #417: the once-guard — repeated prewarm calls issue a single request per process.
+    /// #417: the once-guard — repeated prewarm calls run a single request per process.
+    /// The count is taken after the request returns, so the row waits on `prewarmDone` first.
     func testPrewarmIssuesOneRequestPerProcess() {
         VisionOCR.prewarm()
         VisionOCR.prewarm()
+        XCTAssertEqual(VisionOCR.prewarmDone.wait(timeout: .now() + 60), .success)
         XCTAssertEqual(VisionOCR.prewarmRequestCount, 1)
+    }
+
+    /// #419: a request Vision rejects (a side under 3 px, a thin stray drag) compiles
+    /// nothing, so it must not mark the recognizer warm; a real read then does.
+    /// `isWarm` is process-global and earlier rows (OCRCaretAnchorTests' 2 px reads) run
+    /// in the same process, so the order is pinned inside this one row: let any prewarm
+    /// finish (it would flip `isWarm` mid-row), reset, rejected read, real read.
+    func testRejectedRequestLeavesRecognizerColdUntilARealRead() async throws {
+        VisionOCR.prewarm()
+        XCTAssertEqual(VisionOCR.prewarmDone.wait(timeout: .now() + 60), .success)
+        VisionOCR.resetWarmForTests()
+        let context = try XCTUnwrap(CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8,
+                                              bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let tiny = await VisionOCR.recognizeLines(in: try XCTUnwrap(context.makeImage()))
+        XCTAssertTrue(tiny.isEmpty)
+        XCTAssertFalse(VisionOCR.isWarm, "a thrown request marked the recognizer warm")
+        _ = await VisionOCR.recognizeLines(in: try textImage("HELLO 42"))
+        XCTAssertTrue(VisionOCR.isWarm)
     }
 
     /// #418: 11 pt UI text in a full-width Retina strip, drawn at 2x the way a screen
