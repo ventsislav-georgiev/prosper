@@ -191,14 +191,20 @@ final class ScreenToolsTests: XCTestCase {
         assertReadsStripSentence(await VisionOCR.recognizeLines(in: try uiStrip(width: 3454, height: 242, lightOnDark: true)))
     }
 
-    /// #420: squeezed, this 20 pt line reads "O failing", a silent digit-to-letter swap
-    /// in copied text; the full-width read gets the zero.
+    /// #420/#424: this 20 pt line can read "O failing", a silent digit-to-letter swap in
+    /// copied text. At 3456 the squeezed read swaps it, at 3024 the full-width one does and
+    /// the digit tiebreak keeps the squeezed read. At 4200 dark on light every accurate
+    /// read swaps or drops it (#424 matrix), so that width is pinned light on dark.
     func testAccurateKeepsDigitZeroInLargeTextInWideStrip() async throws {
         let sentence = "Deploy finished: 128 services healthy, 0 failing, report sent to ops@example.net"
-        let lines = await VisionOCR.recognizeLines(
-            in: try uiStrip(width: 3456, height: 160, lightOnDark: false, pt: 20, text: sentence))
-        let text = ScreenToolsSupport.joinedRecognizedText(lines)
-        XCTAssertTrue(text.contains("0 failing"), "OCR read \(text.debugDescription)")
+        var misreads: [String] = []  // one assertion naming every failing width
+        for (width, lightOnDark) in [(3024, false), (3456, false), (4200, true)] {
+            let lines = await VisionOCR.recognizeLines(
+                in: try uiStrip(width: width, height: 160, lightOnDark: lightOnDark, pt: 20, text: sentence))
+            let text = ScreenToolsSupport.joinedRecognizedText(lines)
+            if !text.contains("0 failing") { misreads.append("\(width) px: \(text.debugDescription)") }
+        }
+        XCTAssertEqual(misreads, [])
     }
 
     // MARK: - 3. Reading order

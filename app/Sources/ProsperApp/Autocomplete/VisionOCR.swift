@@ -20,8 +20,8 @@ struct OCRLine: Sendable {
 /// never persisted.
 enum VisionOCR {
 
-    /// True once any recognition request has run without throwing in this process
-    /// (prewarm or real). A request Vision rejects up front compiles nothing.
+    /// True once a recognition request has run without throwing and left results in
+    /// this process (prewarm or real). A request Vision rejects up front compiles nothing.
     nonisolated(unsafe) private(set) static var isWarm = false
     /// Prewarm requests Vision actually ran (results set); the once-guard keeps it at 1 per process.
     nonisolated(unsafe) private(set) static var prewarmRequestCount = 0
@@ -60,9 +60,10 @@ enum VisionOCR {
     /// The squeeze in turn misreads some text the full width reads exactly (a 20 pt
     /// "0 failing" becomes "O failing", code gains stray spaces), so wider images are read
     /// both ways and `keepsSqueezed` picks one (#420).
-    /// ponytail: one squeeze plus a character-count pick; still unreliable past ~5,000 px
-    /// (both reads empty, the screen tools' `.fast` retry covers it). Tiling with a line
-    /// merge measured worse on #420's cases.
+    /// ponytail: one squeeze plus a count pick; still unreliable past ~5,000 px (both reads
+    /// empty, the screen tools' `.fast` retry covers it), and blind to a swap both reads
+    /// share (20 pt "0 failing" at 4200 px dark on light, #424). Tiling with a line merge
+    /// measured worse on #420's cases.
     static let maxAccurateWidth = 2400
 
     /// Recognizes text in `image`, returning one entry per text line with its
@@ -76,7 +77,7 @@ enum VisionOCR {
     static func recognizeLines(in image: CGImage,
                                level: VNRequestTextRecognitionLevel = .accurate) async -> [OCRLine] {
         await withCheckedContinuation { (continuation: CheckedContinuation<[OCRLine], Never>) in
-            func read(_ handler: VNImageRequestHandler) -> [OCRLine] {
+            @Sendable func read(_ handler: VNImageRequestHandler) -> [OCRLine] {
                 let request = VNRecognizeTextRequest()
                 request.recognitionLevel = level
                 request.usesLanguageCorrection = (level == .accurate)
@@ -97,16 +98,19 @@ enum VisionOCR {
     }
 
     /// Which of the two reads of a wide image to keep: the squeezed one when it found
-    /// strictly more non-space characters (the full width garbled or dropped text), else
-    /// the full-width one. A squeezed read that found nothing is kept too, so the screen
-    /// tools' `.fast` retry runs; at these widths that retry reads what the full width
-    /// mostly garbles. Picked by measurement (#420): confidence is pinned at 1.0 on every
-    /// read, and spell-checked words or agreement with `.fast` separated the cases worse.
+    /// strictly more non-space characters (the full width garbled or dropped text) or, on
+    /// a tie, more digits (a same-length swap of "0" for "O", #424), else the full-width
+    /// one. A squeezed read that found nothing is kept too, so the screen tools' `.fast`
+    /// retry runs; at these widths that retry reads what the full width mostly garbles.
+    /// Picked by measurement (#420, #424): confidence is pinned at 1.0 on every read,
+    /// spell-checked words or agreement with `.fast` separated the cases worse, and
+    /// language correction off reads the same "O".
     private static func keepsSqueezed(_ squeezed: [OCRLine], over full: [OCRLine]) -> Bool {
-        func characters(_ lines: [OCRLine]) -> Int {
-            lines.reduce(0) { $0 + $1.text.filter { !$0.isWhitespace }.count }
+        func counts(_ lines: [OCRLine]) -> (Int, Int) {
+            let text = lines.map(\.text).joined()
+            return (text.filter { !$0.isWhitespace }.count, text.filter(\.isNumber).count)
         }
-        return squeezed.isEmpty || characters(squeezed) > characters(full)
+        return squeezed.isEmpty || counts(squeezed) > counts(full)
     }
 
     /// Runs `request` synchronously and hands back what it recognized.
