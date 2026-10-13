@@ -21,6 +21,7 @@ enum ScreenTools {
             PermissionsManager.openScreenRecordingSettings()
             return
         }
+        VisionOCR.prewarm()
         RegionSelector.begin { outcome in
             guard case .region(let rect) = outcome else { return }
             Task { @MainActor in await readRegion(rect) }
@@ -40,6 +41,8 @@ enum ScreenTools {
             finish(reading.payload, open: reading.url)
             return
         }
+        // A cold recognizer takes ~25 s; say so, and the result HUD replaces this one.
+        if !VisionOCR.isWarm { hud("Reading text…", seconds: 30) }
         var lines = await VisionOCR.recognizeLines(in: image)
         if lines.isEmpty { lines = await VisionOCR.recognizeLines(in: image, level: .fast) }
         let text = ScreenToolsSupport.joinedRecognizedText(lines)
@@ -91,7 +94,7 @@ enum ScreenTools {
         Pasteboard.general.setString(text, forType: .string)
     }
 
-    private static func hud(_ text: String) {
-        ExtensionMenuBar.shared.alert(text: text, seconds: 1.6)
+    private static func hud(_ text: String, seconds: Double = 1.6) {
+        ExtensionMenuBar.shared.alert(text: text, seconds: seconds)
     }
 }

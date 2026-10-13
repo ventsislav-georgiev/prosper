@@ -114,6 +114,12 @@ tag from the now-released section and put it on the new top draft.
   again. The close is now recorded, and a click on the icon within 0.4 s of it, or carrying
   the same event, counts as the closing click and does nothing more. The same guard covers
   the macOS 27 menu-bar session path.
+- **Fixed: the first Copy Text from Region after an update looked like it copied nothing.**
+  On macOS 27 the first text recognition in a freshly updated build waits about 25 s while
+  the system compiles the recognizer for the Neural Engine, and the app showed nothing during
+  that wait; the text reached the clipboard only afterwards. The recognizer is now compiled
+  in the background at launch, and a read that still hits the cold start shows "Reading
+  text…" in the menu-bar HUD until the result replaces it.
 - **Updated: the coding agent runs codex 0.162.1** (was 0.139.0). Prosper now always runs
   its own pinned codex, bundled or downloaded on first use into a per-version cache, and a
   Homebrew codex is used only under a developer override

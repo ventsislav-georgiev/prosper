@@ -124,6 +124,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // warm cache instead of an empty one. See Autocomplete/AppOverrideStore.
         Task.detached(priority: .utility) { await AppOverrideStore.shared.warmUp() }
 
+        // Compile Vision's text recognizer off the main thread (~25 s once per update on
+        // macOS 27) so the first Copy Text from Region read is not silent. See VisionOCR.
+        VisionOCR.prewarm()
+
         // Install the off-peak LoRA training scheduler (WS6). Fires periodically; each
         // fire trains only when the machine is idle + on wall power AND the feature is
         // enabled with enough samples — otherwise a cheap no-op. See LoRATrainer.

@@ -90,6 +90,23 @@ final class ScreenToolsTests: XCTestCase {
         XCTAssertTrue(text.contains("HELLO"), "OCR read \(text.debugDescription)")
     }
 
+    /// #417: prewarm then a real read. A fresh test binary can pay the ~25 s cold compile here.
+    func testPrewarmThenRecognizeReadsTextAndMarksWarm() async throws {
+        VisionOCR.prewarm()
+        VisionOCR.prewarm()
+        let lines = await VisionOCR.recognizeLines(in: try textImage("HELLO 42"))
+        let text = ScreenToolsSupport.joinedRecognizedText(lines)
+        XCTAssertTrue(text.contains("HELLO"), "OCR read \(text.debugDescription)")
+        XCTAssertTrue(VisionOCR.isWarm)
+    }
+
+    /// #417: the once-guard — repeated prewarm calls issue a single request per process.
+    func testPrewarmIssuesOneRequestPerProcess() {
+        VisionOCR.prewarm()
+        VisionOCR.prewarm()
+        XCTAssertEqual(VisionOCR.prewarmRequestCount, 1)
+    }
+
     // MARK: - 3. Reading order
 
     func testJoinedRecognizedTextSortsTopDownThenLeftToRight() {

@@ -20,6 +20,32 @@ struct OCRLine: Sendable {
 /// never persisted.
 enum VisionOCR {
 
+    /// True once any recognition request has completed in this process (prewarm or real).
+    nonisolated(unsafe) private(set) static var isWarm = false
+    /// Requests `prewarm()` has issued; the once-guard keeps it at 1 per process.
+    nonisolated(unsafe) private(set) static var prewarmRequestCount = 0
+
+    /// On macOS 27 the first request after an update waits about 25 s on
+    /// ANECompilerService; the compiled networks are cached per code identity after that.
+    /// Pays that once, off the main thread, by recognizing a small blank image.
+    static func prewarm() { _ = prewarmOnce }
+
+    private static let prewarmOnce: Void = {
+        prewarmRequestCount += 1
+        DispatchQueue.global(qos: .utility).async {
+            guard let context = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8,
+                                          bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return }
+            context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+            guard let image = context.makeImage() else { return }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            _ = observations(VNImageRequestHandler(cgImage: image, options: [:]), request)
+        }
+    }()
+
     /// Recognizes text in `image`, returning one entry per text line with its
     /// normalized bounding box. Empty on failure. Async; the request itself runs
     /// off the calling actor.
@@ -70,6 +96,7 @@ enum VisionOCR {
                                      _ request: VNRecognizeTextRequest)
         -> [VNRecognizedTextObservation] {
         try? handler.perform([request])
+        isWarm = true
         return request.results as? [VNRecognizedTextObservation] ?? []
     }
 
