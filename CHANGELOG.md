@@ -27,8 +27,10 @@ tag from the now-released section and put it on the new top draft.
   do after a restored frame, and a grown window is kept on its screen. Segmented
   pickers keep their natural width at every UI size, so the System Stats, Calendar
   and Appearance pickers ("Text + Graph", the font styles, Text size, Icon Size, the
-  Statistics range) no longer hang past their card, and the Settings width stops
-  shrinking below the 85% preset's minimum so the widest picker still fits at 70%.
+  Statistics range) no longer hang past their card, the Settings width stops
+  shrinking below the 85% preset's minimum so the widest picker still fits at 70%,
+  and the Statistics Activity pickers stack when their row is too narrow instead of
+  squeezing their labels.
 - **Menu Bar Management drops the ordering engine and the live preview.** Opening the
   extension's settings used to flash both hidden bands open and screenshot the bar every
   time (Screen Recording permission, visible flicker, and a slow pane). The preview strip,

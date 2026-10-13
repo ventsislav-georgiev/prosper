@@ -65,11 +65,8 @@ struct CalendarPane: View {
                     .disabled(style.hideIcon)
                 }
                 NeonRow("Font style") {
-                    Picker("", selection: optionalBinding(\.iconFontDesign, default: .standard)) {
-                        ForEach(CalendarIconFontDesign.allCases, id: \.self) { Text($0.label).tag($0) }
-                    }
-                    .labelsHidden().pickerStyle(.segmented).fixedSize()
-                    .disabled(style.hideIcon)
+                    CalendarFontStylePicker(design: optionalBinding(\.iconFontDesign, default: .standard))
+                        .disabled(style.hideIcon)
                 }
             }
             NeonDivider()
@@ -237,5 +234,18 @@ struct CalendarPane: View {
         }
         commitWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+}
+
+/// The Calendar Font style picker, the widest segmented row in Settings; a test
+/// hosts it to pin the Settings minimum width (#428).
+struct CalendarFontStylePicker: View {
+    @Binding var design: CalendarIconFontDesign
+
+    var body: some View {
+        Picker("", selection: $design) {
+            ForEach(CalendarIconFontDesign.allCases, id: \.self) { Text($0.label).tag($0) }
+        }
+        .labelsHidden().pickerStyle(.segmented).fixedSize()
     }
 }

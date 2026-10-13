@@ -347,41 +347,83 @@ final class DisplayMetricsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(width(), 820)
         XCTAssertLessThanOrEqual(win.frame.maxX, visible.maxX, "grown window pushed off the right edge")
         XCTAssertGreaterThanOrEqual(win.frame.minY, visible.minY)
+
+        // On the bottom edge: setContentSize keeps the top-left, so growing the height
+        // pushes the window below visible.minY; the clamp lifts it back (#428).
+        win.contentMinSize = NSSize(width: 615, height: 360)
+        win.setContentSize(NSSize(width: 900, height: 400))
+        win.setFrameOrigin(NSPoint(x: 100, y: visible.minY))
+        win.contentMinSize = NSSize(width: 820, height: 480)
+        win.clampToContentMinSize(within: visible)
+        XCTAssertGreaterThanOrEqual(content().height, 480)
+        XCTAssertEqual(win.frame.minY, visible.minY, "grown window pushed off the bottom edge")
+
+        // Wider than the visible rect: the left edge wins over the right (#428).
+        let narrow = NSRect(x: 100, y: 0, width: 600, height: 1080)
+        win.contentMinSize = NSSize(width: 615, height: 360)
+        win.setContentSize(NSSize(width: 615, height: 400))
+        win.setFrameOrigin(NSPoint(x: 300, y: 100))
+        win.contentMinSize = NSSize(width: 820, height: 480)
+        win.clampToContentMinSize(within: narrow)
+        XCTAssertGreaterThan(win.frame.width, narrow.width, "precondition: the grown window is wider than the visible rect")
+        XCTAssertEqual(win.frame.minX, narrow.minX, "a window wider than the visible rect keeps its left edge on it")
+    }
+
+    /// The no-argument clamp forwards the window's own screen (#428, QM3): a private
+    /// window on the bottom edge of the main screen's visible frame is lifted back
+    /// onto it. Never ordered front; skipped on a host with no screen.
+    @MainActor
+    func testClampWithoutRectKeepsWindowOnItsScreen() throws {
+        guard let main = NSScreen.main?.visibleFrame else { throw XCTSkip("no screen on this host") }
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 615, height: 400),
+                           styleMask: [.titled, .resizable], backing: .buffered, defer: true)
+        win.contentMinSize = NSSize(width: 615, height: 360)
+        win.setFrameOrigin(NSPoint(x: main.minX + 50, y: main.minY))
+        guard let visible = win.screen?.visibleFrame else { throw XCTSkip("no screen on this host") }
+        win.contentMinSize = NSSize(width: 820, height: 480)
+        win.clampToContentMinSize()
+        XCTAssertGreaterThanOrEqual(win.contentRect(forFrameRect: win.frame).height, 480)
+        XCTAssertGreaterThanOrEqual(win.frame.minY, visible.minY, "grown window pushed off the bottom of its screen")
     }
 
     /// The theme hook's per-window step (AppDelegate.applyThemeToAppKit) raises the
     /// Settings minimum on a live UI-size change and must grow the open window (#427, QM2).
+    /// At 0.7 the minimum is floored at the 85% width (#428), so a hook that inlines
+    /// 820 x scale fails there.
     @MainActor
     func testThemedWindowSizingGrowsSettingsWindow() {
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 615, height: 400),
-                           styleMask: [.titled, .resizable], backing: .buffered, defer: true)
-        win.identifier = SettingsWindow.themedIdentifier
-        win.contentMinSize = NSSize(width: 615, height: 360)
-        AppDelegate.applyThemedWindowSizing([win], scale: 1.0)
-        let size = win.contentRect(forFrameRect: win.frame).size
-        XCTAssertEqual(win.contentMinSize, SettingsWindow.contentMinSize(scale: 1.0))
-        XCTAssertGreaterThanOrEqual(size.width, 820)
-        XCTAssertGreaterThanOrEqual(size.height, 480)
+        for scale: CGFloat in [0.7, 1.0] {
+            let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 615, height: 400),
+                               styleMask: [.titled, .resizable], backing: .buffered, defer: true)
+            win.identifier = SettingsWindow.themedIdentifier
+            win.contentMinSize = NSSize(width: 615, height: 360)
+            AppDelegate.applyThemedWindowSizing([win], scale: scale)
+            let size = win.contentRect(forFrameRect: win.frame).size
+            let min = SettingsWindow.contentMinSize(scale: scale)
+            XCTAssertEqual(win.contentMinSize, min, "scale \(scale)")
+            XCTAssertGreaterThanOrEqual(win.contentMinSize.width, 697, "scale \(scale)")
+            XCTAssertGreaterThanOrEqual(size.width, min.width, "scale \(scale)")
+            XCTAssertGreaterThanOrEqual(size.height, min.height, "scale \(scale)")
+        }
     }
 
     /// Segmented controls keep their natural width at every UI size; the Settings
-    /// minimum must leave the widest one (Calendar Font style) inside its card at
-    /// every preset (#427). Card row = content - sidebar 218 - scroll padding 2x26
-    /// - card padding 2x16 = content - 302, all scaled.
+    /// minimum must leave the widest row (Calendar Font style) and the Statistics
+    /// Activity controls inside their card at every preset (#427, #428). Card row =
+    /// content - sidebar 218 - scroll padding 2x26 - card padding 2x16 = content - 302,
+    /// all scaled.
     @MainActor
-    func testSettingsMinimumFitsWidestSegmentedRow() {
-        let labels = CalendarIconFontDesign.allCases.map(\.label)
+    func testSettingsMinimumFitsWidestSegmentedRows() {
+        func minWidth<V: View>(_ v: V) -> CGFloat {
+            NSHostingController(rootView: v).sizeThatFits(in: NSSize(width: 1, height: 10_000)).width
+        }
         for scale in AppearanceSettingsPane.sizePresets {
             ThemeRuntime.scale = scale
-            let row = NeonRow("Font style") {
-                Picker("", selection: .constant(0)) {
-                    ForEach(Array(labels.enumerated()), id: \.offset) { Text($0.element).tag($0.offset) }
-                }
-                .labelsHidden().pickerStyle(.segmented).fixedSize()
-            }
-            let needed = NSHostingController(rootView: row).sizeThatFits(in: NSSize(width: 1, height: 10_000)).width
             let room = SettingsWindow.contentMinSize(scale: scale).width - 302 * scale
-            XCTAssertLessThanOrEqual(needed, room, "Font style row overflows its card at the minimum window, scale \(scale)")
+            let font = minWidth(NeonRow("Font style") { CalendarFontStylePicker(design: .constant(.standard)) })
+            XCTAssertLessThanOrEqual(font, room, "Font style row overflows its card at the minimum window, scale \(scale)")
+            let activity = minWidth(ActivityControls(metric: .constant(.completions), rangeDays: .constant(30)))
+            XCTAssertLessThanOrEqual(activity, room, "Activity controls overflow their card at the minimum window, scale \(scale)")
         }
     }
 

@@ -1752,8 +1752,6 @@ private struct StatisticsPane: View {
     @State private var rangeDays = 30
     @State private var series: [CompletionStats.DayPoint] = []
 
-    private let ranges = [(7, "7d"), (30, "30d"), (90, "90d")]
-
     /// `series` re-keyed to real `Date`s so the chart's x-axis can format clean,
     /// evenly spaced day labels instead of cramming every raw `yyyy-MM-dd` string
     /// (the old axis overlapped them into an unreadable smear).
@@ -1782,17 +1780,7 @@ private struct StatisticsPane: View {
             }
 
             NeonSection("Activity") {
-                HStack(spacing: sz(16)) {
-                    Picker("", selection: $metric) {
-                        ForEach(CompletionStats.Metric.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented).labelsHidden()
-                    Picker("", selection: $rangeDays) {
-                        ForEach(ranges, id: \.0) { Text($0.1).tag($0.0) }
-                    }
-                    .pickerStyle(.segmented).labelsHidden()
-                    .fixedSize()
-                }
+                ActivityControls(metric: $metric, rangeDays: $rangeDays)
                 chart
             }
 
@@ -1860,6 +1848,39 @@ private struct StatisticsPane: View {
 
     private func reloadSeries() {
         series = CompletionStats.series(metric: metric, days: rangeDays)
+    }
+}
+
+/// Metric and range pickers of the Statistics Activity card. Side by side when
+/// they fit; stacked at the 85% minimum window, where the row is narrower than
+/// both natural widths (#428).
+struct ActivityControls: View {
+    @Binding var metric: CompletionStats.Metric
+    @Binding var rangeDays: Int
+
+    private let ranges = [(7, "7d"), (30, "30d"), (90, "90d")]
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: sz(16)) { metricPicker; rangePicker }
+            VStack(alignment: .leading, spacing: sz(8)) { metricPicker; rangePicker }
+        }
+    }
+
+    private var metricPicker: some View {
+        Picker("", selection: $metric) {
+            ForEach(CompletionStats.Metric.allCases, id: \.self) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented).labelsHidden()
+        .fixedSize()
+    }
+
+    private var rangePicker: some View {
+        Picker("", selection: $rangeDays) {
+            ForEach(ranges, id: \.0) { Text($0.1).tag($0.0) }
+        }
+        .pickerStyle(.segmented).labelsHidden()
+        .fixedSize()
     }
 }
 
