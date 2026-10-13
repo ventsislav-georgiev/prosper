@@ -16,14 +16,6 @@ cd "$ROOT/app"
 # not read for it. /usr/bin/swift (the xcrun shim) sets SDKROOT, the toolchain
 # binary path does not, so pin it here whoever calls us (QA #226).
 export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
-# The xcodebuild metallib step below needs the Metal toolchain (so does the
-# swiftbuild backend, which compiles mlx-swift's kernels in-tree); CI images
-# may ship without it. xcrun -f finds a stub that exists before the
-# component is downloaded (cache-warm run 38386428435), so run the tool.
-if ! /usr/bin/xcrun metal --version >/dev/null 2>&1; then
-  echo "==> Metal toolchain missing — downloading (one-time, ~700 MB)"
-  xcodebuild -downloadComponent MetalToolchain
-fi
 # --build-system native, not the swiftbuild default since Xcode 27: swiftbuild
 # runs its link task without SDKROOT, so its products say sdk 14.0 and AppKit
 # runs them with macOS 14 behaviour on 26 and 27 (QA #226 on #416). Native
@@ -76,6 +68,14 @@ if [[ -f "$METALLIB_BUNDLE/Contents/Resources/default.metallib" \
   echo "==> MLX metallib already staged (matches Package.resolved): $METALLIB_BUNDLE"
 else
   echo "==> Compiling MLX Metal shaders via xcodebuild"
+  # Only this step needs the Metal toolchain (the native backend compiles no
+  # Metal), and CI images ship without it: a cache-staged metallib skips the
+  # ~840 MB download (QA on run 38392780742). xcrun -f finds a stub that exists
+  # before the component is downloaded (cache-warm run 38386428435), so run it.
+  if ! /usr/bin/xcrun metal --version >/dev/null 2>&1; then
+    echo "==> Metal toolchain missing — downloading (one-time, ~840 MB)"
+    xcodebuild -downloadComponent MetalToolchain
+  fi
   DD="$ROOT/app/.build/xcode-metallib"
   # We only get here when the staged metallib is missing or carries another
   # Package.resolved hash (fresh checkout, cleaned .build/<profile>, dependency
