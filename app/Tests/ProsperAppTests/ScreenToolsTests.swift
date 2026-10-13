@@ -131,7 +131,8 @@ final class ScreenToolsTests: XCTestCase {
     /// #418: 11 pt UI text in a full-width Retina strip, drawn at 2x the way a screen
     /// capture carries it. Unsqueezed, `.accurate` garbles the dark-on-light strip
     /// ("The duick brown tox lumps…") and returns nothing for the light-on-dark one.
-    private func uiStrip(width: Int, height: Int, lightOnDark: Bool) throws -> CGImage {
+    private func uiStrip(width: Int, height: Int, lightOnDark: Bool, pt: CGFloat = 11,
+                         text: String = stripSentence) throws -> CGImage {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
             space: try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB)),
@@ -141,8 +142,7 @@ final class ScreenToolsTests: XCTestCase {
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
         defer { NSGraphicsContext.current = nil }
         context.scaleBy(x: 2, y: 2)
-        let pt: CGFloat = 11
-        (Self.stripSentence as NSString).draw(
+        (text as NSString).draw(
             at: NSPoint(x: 16, y: CGFloat(height) / 4 - pt / 2),
             withAttributes: [.font: NSFont.systemFont(ofSize: pt),
                              .foregroundColor: lightOnDark ? NSColor(white: 0.9, alpha: 1) : NSColor.black])
@@ -151,14 +151,31 @@ final class ScreenToolsTests: XCTestCase {
 
     private static let stripSentence = "The quick brown fox jumps over the lazy dog 0123456789 user@example.com"
 
+    /// Key tokens rather than the exact sentence, so a Vision model update that changes
+    /// a letter elsewhere does not turn these red; the unsqueezed read fails them.
+    private func assertReadsStripSentence(_ lines: [OCRLine], line: UInt = #line) {
+        let text = ScreenToolsSupport.joinedRecognizedText(lines)
+        for token in ["quick", "fox", "0123456789", "user@example.com"] {
+            XCTAssertTrue(text.contains(token), "no \(token) in \(text.debugDescription)", line: line)
+        }
+    }
+
     func testAccurateReadsSmallDarkOnLightTextInWideStrip() async throws {
-        let lines = await VisionOCR.recognizeLines(in: try uiStrip(width: 3024, height: 236, lightOnDark: false))
-        XCTAssertEqual(ScreenToolsSupport.joinedRecognizedText(lines), Self.stripSentence)
+        assertReadsStripSentence(await VisionOCR.recognizeLines(in: try uiStrip(width: 3024, height: 236, lightOnDark: false)))
     }
 
     func testAccurateReadsSmallLightOnDarkTextInWideStrip() async throws {
-        let lines = await VisionOCR.recognizeLines(in: try uiStrip(width: 3454, height: 242, lightOnDark: true))
-        XCTAssertEqual(ScreenToolsSupport.joinedRecognizedText(lines), Self.stripSentence)
+        assertReadsStripSentence(await VisionOCR.recognizeLines(in: try uiStrip(width: 3454, height: 242, lightOnDark: true)))
+    }
+
+    /// #420: squeezed, this 20 pt line reads "O failing", a silent digit-to-letter swap
+    /// in copied text; the full-width read gets the zero.
+    func testAccurateKeepsDigitZeroInLargeTextInWideStrip() async throws {
+        let sentence = "Deploy finished: 128 services healthy, 0 failing, report sent to ops@example.net"
+        let lines = await VisionOCR.recognizeLines(
+            in: try uiStrip(width: 3456, height: 160, lightOnDark: false, pt: 20, text: sentence))
+        let text = ScreenToolsSupport.joinedRecognizedText(lines)
+        XCTAssertTrue(text.contains("0 failing"), "OCR read \(text.debugDescription)")
     }
 
     // MARK: - 3. Reading order

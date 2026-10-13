@@ -1,6 +1,5 @@
 import AppKit
 import CoreGraphics
-import CoreImage
 import ScreenCaptureKit
 
 /// Screen-capture helpers backing the optional "use screenshots for context"
@@ -23,16 +22,6 @@ enum VisionContext {
     @discardableResult
     static func requestScreenRecordingPermission() -> Bool {
         CGRequestScreenCaptureAccess()
-    }
-
-    /// Captures a box around the caret (in Cocoa screen coordinates) as a
-    /// downscaled `CIImage` for the VLM. Returns nil without permission or on
-    /// failure. The region is padded so surrounding UI/text is visible.
-    static func captureAroundCaret(_ caretRect: CGRect) async -> CIImage? {
-        guard hasScreenRecordingPermission() else { return nil }
-        guard let cgRect = cgRegion(around: caretRect, padX: 320, padY: 140) else { return nil }
-        guard let image = await capture(cgRect) else { return nil }
-        return CIImage(cgImage: image)
     }
 
     /// Samples the average background color in a small box at the caret so the

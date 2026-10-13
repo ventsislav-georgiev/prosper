@@ -117,8 +117,10 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: small UI text in a wide Copy Text from Region selection came back garbled or
   empty.** The accurate recognizer breaks down on captures wider than about 2,600 px, a
   full-width strip on a Retina display: 11 pt text came back as "The duick brown tox
-  lumps" or as nothing at all. Captures wider than 2,400 px are now squeezed to that width
-  before recognition, text height kept, which reads them correctly.
+  lumps" or as nothing at all. Captures wider than 2,400 px are now read twice, at full
+  width and squeezed to that width with the text height kept, and the read that found
+  more text wins, so small text is recovered without the squeeze's own misreads (a
+  20 pt "0" coming back as "O").
 - **Fixed: the first Copy Text from Region after an update looked like it copied nothing.**
   On macOS 27 the first text recognition in a freshly updated build waits about 25 s while
   the system compiles the recognizer for the Neural Engine, and the app showed nothing during

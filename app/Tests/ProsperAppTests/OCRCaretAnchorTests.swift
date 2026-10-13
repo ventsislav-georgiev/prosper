@@ -1,5 +1,4 @@
 import CoreGraphics
-import CoreImage
 import XCTest
 @testable import ProsperApp
 
@@ -63,8 +62,6 @@ final class OCRCaretAnchorTests: XCTestCase {
         XCTAssertTrue(accurate.isEmpty, "got \(accurate.map(\.text))")
         let fast = await VisionOCR.recognizeLines(in: sliver, level: .fast)
         XCTAssertTrue(fast.isEmpty, "got \(fast.map(\.text))")
-        let ci = await VisionOCR.recognizeLines(in: CIImage(cgImage: sliver))
-        XCTAssertTrue(ci.isEmpty, "got \(ci.map(\.text))")
         let anchor = await VisionOCR.caretAnchor(in: sliver, targetLine: "hello there", column: 4)
         XCTAssertNil(anchor)
     }

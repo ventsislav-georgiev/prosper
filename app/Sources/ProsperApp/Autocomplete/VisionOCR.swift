@@ -57,8 +57,12 @@ enum VisionOCR {
     /// `.accurate` garbles or drops UI-sized text in images wider than about 2,600 px
     /// (a full-width strip on a Retina display) while reading the same pixels fine once
     /// the width is squeezed to this, text height kept (#418). `.fast` has no such cliff.
-    /// ponytail: one horizontal squeeze; still unreliable past ~5,000 px, where tiling
-    /// with a line merge would be the upgrade.
+    /// The squeeze in turn misreads some text the full width reads exactly (a 20 pt
+    /// "0 failing" becomes "O failing", code gains stray spaces), so wider images are read
+    /// both ways and `keepsSqueezed` picks one (#420).
+    /// ponytail: one squeeze plus a character-count pick; still unreliable past ~5,000 px
+    /// (both reads empty, the screen tools' `.fast` retry covers it). Tiling with a line
+    /// merge measured worse on #420's cases.
     static let maxAccurateWidth = 2400
 
     /// Recognizes text in `image`, returning one entry per text line with its
@@ -72,38 +76,37 @@ enum VisionOCR {
     static func recognizeLines(in image: CGImage,
                                level: VNRequestTextRecognitionLevel = .accurate) async -> [OCRLine] {
         await withCheckedContinuation { (continuation: CheckedContinuation<[OCRLine], Never>) in
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = level
-            request.usesLanguageCorrection = (level == .accurate)
-
-            let handler: VNImageRequestHandler
-            if level == .accurate, image.width > maxAccurateWidth {
-                // Normalized boxes are unchanged by a horizontal-only scale.
-                let squeeze = CGAffineTransform(scaleX: CGFloat(maxAccurateWidth) / CGFloat(image.width), y: 1)
-                handler = VNImageRequestHandler(
-                    ciImage: CIImage(cgImage: image).samplingLinear().transformed(by: squeeze), options: [:])
-            } else {
-                handler = VNImageRequestHandler(cgImage: image, options: [:])
+            func read(_ handler: VNImageRequestHandler) -> [OCRLine] {
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = level
+                request.usesLanguageCorrection = (level == .accurate)
+                return Self.lines(from: Self.observations(handler, request))
             }
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: Self.lines(from: Self.observations(handler, request)))
+                let full = read(VNImageRequestHandler(cgImage: image, options: [:]))
+                guard level == .accurate, image.width > maxAccurateWidth else {
+                    return continuation.resume(returning: full)
+                }
+                // Normalized boxes are unchanged by a horizontal-only scale.
+                let squeeze = CGAffineTransform(scaleX: CGFloat(maxAccurateWidth) / CGFloat(image.width), y: 1)
+                let squeezed = read(VNImageRequestHandler(
+                    ciImage: CIImage(cgImage: image).samplingLinear().transformed(by: squeeze), options: [:]))
+                continuation.resume(returning: keepsSqueezed(squeezed, over: full) ? squeezed : full)
             }
         }
     }
 
-    /// `recognizeLines(in:)` over a `CIImage` (what `VisionContext` capture returns),
-    /// avoiding a CIImage→CGImage round-trip — Vision accepts CIImage natively.
-    static func recognizeLines(in image: CIImage) async -> [OCRLine] {
-        await withCheckedContinuation { (continuation: CheckedContinuation<[OCRLine], Never>) in
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-
-            let handler = VNImageRequestHandler(ciImage: image, options: [:])
-            DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: Self.lines(from: Self.observations(handler, request)))
-            }
+    /// Which of the two reads of a wide image to keep: the squeezed one when it found
+    /// strictly more non-space characters (the full width garbled or dropped text), else
+    /// the full-width one. A squeezed read that found nothing is kept too, so the screen
+    /// tools' `.fast` retry runs; at these widths that retry reads what the full width
+    /// mostly garbles. Picked by measurement (#420): confidence is pinned at 1.0 on every
+    /// read, and spell-checked words or agreement with `.fast` separated the cases worse.
+    private static func keepsSqueezed(_ squeezed: [OCRLine], over full: [OCRLine]) -> Bool {
+        func characters(_ lines: [OCRLine]) -> Int {
+            lines.reduce(0) { $0 + $1.text.filter { !$0.isWhitespace }.count }
         }
+        return squeezed.isEmpty || characters(squeezed) > characters(full)
     }
 
     /// Runs `request` synchronously and hands back what it recognized.
