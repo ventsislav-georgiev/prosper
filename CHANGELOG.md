@@ -117,14 +117,14 @@ tag from the now-released section and put it on the new top draft.
 - **Fixed: small UI text in a wide Copy Text from Region selection came back garbled or
   empty.** The accurate recognizer breaks down on captures wider than about 2,600 px, a
   full-width strip on a Retina display: 11 pt text came back as "The duick brown tox
-  lumps" or as nothing at all. Wider captures are now squeezed to 2,400 px horizontally
+  lumps" or as nothing at all. Captures wider than 2,400 px are now squeezed to that width
   before recognition, text height kept, which reads them correctly.
 - **Fixed: the first Copy Text from Region after an update looked like it copied nothing.**
   On macOS 27 the first text recognition in a freshly updated build waits about 25 s while
   the system compiles the recognizer for the Neural Engine, and the app showed nothing during
   that wait; the text reached the clipboard only afterwards. The recognizer is now compiled
   in the background at launch, and a read that still hits the cold start shows "Reading
-  text…" in the menu-bar HUD until the result replaces it.
+  text…" on screen until the result replaces it.
 - **Updated: the coding agent runs codex 0.162.1** (was 0.139.0). Prosper now always runs
   its own pinned codex, bundled or downloaded on first use into a per-version cache, and a
   Homebrew codex is used only under a developer override
