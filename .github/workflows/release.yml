@@ -99,7 +99,7 @@ jobs:
           for t in gh python3 make cc curl shasum tar; do
             command -v "$t" >/dev/null || { echo "::error::$t missing on runner"; exit 1; }
           done
-          xcrun -f metal >/dev/null 2>&1 || echo "::warning::Metal toolchain not installed; build.sh downloads it (~700 MB)"
+          xcrun metal --version >/dev/null 2>&1 || echo "::warning::Metal toolchain not installed; build.sh downloads it (~700 MB)"
 
       - name: Cache SwiftPM build + dependencies
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5

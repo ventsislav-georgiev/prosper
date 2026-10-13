@@ -18,8 +18,9 @@ cd "$ROOT/app"
 export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
 # The xcodebuild metallib step below needs the Metal toolchain (so does the
 # swiftbuild backend, which compiles mlx-swift's kernels in-tree); CI images
-# may ship without it.
-if ! /usr/bin/xcrun -f metal >/dev/null 2>&1; then
+# may ship without it. xcrun -f finds a stub that exists before the
+# component is downloaded (cache-warm run 38386428435), so run the tool.
+if ! /usr/bin/xcrun metal --version >/dev/null 2>&1; then
   echo "==> Metal toolchain missing — downloading (one-time, ~700 MB)"
   xcodebuild -downloadComponent MetalToolchain
 fi
