@@ -11,30 +11,49 @@ echo "==> Building Swift app ($PROFILE)"
 # the SwiftPM checkouts before compiling. Idempotent — safe on warm caches.
 "$ROOT/scripts/apply-patches.sh"
 cd "$ROOT/app"
-# SwiftPM's swiftbuild backend (the default since Xcode 27) compiles mlx-swift's
-# Metal kernels during `swift build`, so the Metal toolchain must be installed
-# before it runs; CI images may ship without it.
+# The linked SDK version (LC_BUILD_VERSION sdk, checked below) reaches the
+# linker only through SDKROOT: swift-driver passes --sysroot, which clang does
+# not read for it. /usr/bin/swift (the xcrun shim) sets SDKROOT, the toolchain
+# binary path does not, so pin it here whoever calls us (QA #226).
+export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
+# The xcodebuild metallib step below needs the Metal toolchain (so does the
+# swiftbuild backend, which compiles mlx-swift's kernels in-tree); CI images
+# may ship without it.
 if ! /usr/bin/xcrun -f metal >/dev/null 2>&1; then
   echo "==> Metal toolchain missing — downloading (one-time, ~700 MB)"
   xcodebuild -downloadComponent MetalToolchain
 fi
+# --build-system native, not the swiftbuild default since Xcode 27: swiftbuild
+# runs its link task without SDKROOT, so its products say sdk 14.0 and AppKit
+# runs them with macOS 14 behaviour on 26 and 27 (QA #226 on #416). Native
+# inherits the export above. ponytail: back to the default backend once a
+# vtool check on its product reads the host SDK; the flag is deprecated.
 if [[ "$PROFILE" == "release" ]]; then
-  swift build -c release
+  swift build --build-system native -c release
 else
-  swift build
+  swift build --build-system native
 fi
+
+# The linker records the SDK it linked against (LC_BUILD_VERSION sdk) and AppKit
+# keys compatibility behaviour off it: a binary that says 14.0 runs with macOS 14
+# quirks on 26 and 27, and the macOS 27 session paths compile in but behave old.
+# clang takes that version from -isysroot or SDKROOT only, never from the
+# --sysroot swift-driver's link job passes, so SDKROOT must reach the link (see
+# the export above). Gate it here so no backend or shell can ship a 14.0 (QA #226).
+for bin in ProsperApp ProsperHelper; do
+  got="$(xcrun vtool -show-build ".build/$PROFILE/$bin" | awk '/^ *sdk /{print $2}')"
+  [[ "${got%%.*}" -ge 26 ]] || { echo "error: $bin linked against SDK ${got:-?} (expected >= 26)" >&2; exit 1; }
+  echo "==> $bin links against SDK $got"
+done
+
 # --- MLX Metal shaders (default.metallib) --------------------------------
 # Apple MLX runs its kernels from a precompiled `default.metallib` shipped in a
 # `mlx-swift_Cmlx.bundle` resource bundle (the C++ define SWIFTPM_BUNDLE +
 # METAL_PATH in mlx-swift's Package.swift). The native SwiftPM backend cannot
-# compile Metal shaders; the swiftbuild backend does, in-tree, with the same
-# Metal toolchain, and measured byte-identical to the xcodebuild output (#416).
-# The next incremental swift build re-copies its in-tree metallib over the copy
-# staged below while the stamp survives, so after the first rebuild the in-tree
-# one is what ships. This step still runs on every missing or stale stamp
-# (fresh tree, cleaned .build, dependency bump), whatever swiftbuild produced;
-# its only remaining value is a metallib on the native backend. ponytail: drop
-# it once a beta proves a model load on the in-tree metallib (#422).
+# compile Metal shaders, so a Release build of the ProsperApp scheme via
+# xcodebuild produces the metallib and it is staged into the SwiftPM bundle
+# below. (The swiftbuild backend compiles it in-tree, byte-identical, but links
+# against the wrong SDK, see above; #422 drops this step once that is fixed.)
 # Without the metallib the app aborts the instant it touches the GPU:
 #   "MLX error: Failed to load the default metallib. library not found ...
 #    mlx-swift/.../mlx/c/stream.cpp" — i.e. crash on first model load.

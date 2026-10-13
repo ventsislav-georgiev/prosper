@@ -88,8 +88,8 @@ jobs:
         run: ./scripts/build.sh release
 
       - name: Check build output
-        # The swiftbuild backend (#416) lays out app/.build/release as a symlink to
-        # out/Products/Release; bundle.sh reads through it, and the app aborts on the
+        # app/.build/release is a symlink into the backend's product dir (#416);
+        # bundle.sh reads through it, and the app aborts on the
         # first model load without the MLX metallib. Fail here, before any signing.
         run: |
           R=app/.build/release
