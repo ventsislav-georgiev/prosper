@@ -107,6 +107,11 @@ tag from the now-released section and put it on the new top draft.
   could borrow that model and lose it mid-request.** The new run now waits for the unload
   and loads its own. A load that Stop cancelled is likewise unloaded before the next prompt's
   load starts, instead of being torn out from under it once it had already been reused.
+- **Fixed: on macOS 27, clicking the icon of an open popover sometimes closed it and
+  reopened it at once.** The popover's own outside-click close and the menu bar's session
+  handling both react to that click; when ours ran first, the menu bar saw no open session
+  and began a new one. A begin landing right after the same icon's session ended is now
+  taken as that same click and refused, so the click always closes.
 - **Updated: the coding agent runs codex 0.162.1** (was 0.139.0). Prosper now always runs
   its own pinned codex, bundled or downloaded on first use into a per-version cache, and a
   Homebrew codex is used only under a developer override

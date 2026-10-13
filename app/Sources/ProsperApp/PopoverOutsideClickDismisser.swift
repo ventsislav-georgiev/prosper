@@ -11,6 +11,10 @@
 // menus/pickers opened from inside a popover, which can sit outside its frame.
 
 import AppKit
+import os
+
+/// #414: which closer wins the status-item click race, for the next beta's logs.
+private let popoverLog = Logger(subsystem: "eu.illegible.prosper", category: "popover")
 
 @MainActor
 final class PopoverOutsideClickDismisser {
@@ -81,6 +85,8 @@ final class PopoverOutsideClickDismisser {
         let frame = popover.contentViewController?.view.window?.frame
         if Self.shouldDismiss(ownerPID: Self.ownerPID(at: p), ourPID: getpid(),
                               click: p, popoverFrame: frame) {
+            let n = systemOwnedFrames().count
+            popoverLog.debug("dismisser closes at (\(p.x, privacy: .public), \(p.y, privacy: .public)), item frames \(n, privacy: .public)")
             lastDismissClick = ClickStamp(event)
             popover.performClose(nil)
         }
@@ -155,6 +161,24 @@ enum ExpandedInterfacePolicy {
     static func systemOwnsClick(_ p: NSPoint, itemFrames: [NSRect]) -> Bool {
         itemFrames.contains { ($0.minX...$0.maxX).contains(p.x) && ($0.minY...$0.maxY).contains(p.y) }
     }
+
+    /// #414: how soon after an item's session ended a new begin on the same item
+    /// counts as the same click. Long enough to cover the system's begin landing
+    /// after the transient/monitor close already cancelled the session; the cost
+    /// is that a double-click on the open icon stays closed (right) and a keyboard
+    /// return to the same item inside the window is swallowed.
+    // ponytail: time window only; a keyboard re-open within 0.4 s is lost. If that
+    // shows up, compare NSEvent.mouseLocation against the item frame at end and begin.
+    static let sameClickWindow: TimeInterval = 0.4
+
+    /// #414: a begin this soon after the same item's session ended is the second
+    /// half of the click that just closed it (the session is modelled on menu
+    /// tracking: a click on the live item closes, never reopens).
+    static func isReopenOfSameClick(endedAt: TimeInterval?, now: TimeInterval,
+                                    window: TimeInterval = sameClickWindow) -> Bool {
+        guard let endedAt else { return false }
+        return now - endedAt < window
+    }
 }
 
 /// Routes an item's session to `begin`/`end`. Holds itself as the weak
@@ -165,10 +189,15 @@ final class ExpandedInterfaceBridge: NSObject {
     private let begin: (NSStatusItem) -> Void
     private let end: (NSStatusItem) -> Void
     private let items = NSHashTable<NSStatusItem>.weakObjects()
+    /// #414: when each item's session last ended or was cancelled by us.
+    private let endedAt = NSMapTable<NSStatusItem, NSNumber>.weakToStrongObjects()
+    private let now: () -> TimeInterval
 
-    init(begin: @escaping (NSStatusItem) -> Void, end: @escaping (NSStatusItem) -> Void) {
+    init(begin: @escaping (NSStatusItem) -> Void, end: @escaping (NSStatusItem) -> Void,
+         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.begin = begin
         self.end = end
+        self.now = now
     }
 
     /// true on macOS 27: the system now opens/closes, so the caller must NOT also
@@ -188,14 +217,41 @@ final class ExpandedInterfaceBridge: NSObject {
     /// We closed (Escape, transient, outside click, an action in the popover) or
     /// pinned: tell the menu bar. It answers with didEnd, so `end` must be
     /// idempotent. `only`: just that item's session (Stats — another item's may
-    /// be about to begin). No-op below 27 or with no live session.
+    /// be about to begin). Cancels nothing below 27 or with no live session, but
+    /// always stamps the end time the same-click guard reads.
     func cancelSessions(only item: NSStatusItem? = nil) {
+        let targets = item.map { [$0] } ?? items.allObjects
+        // #414: stamped whether or not a session is live — this is when we gave it up.
+        for i in targets { stampEnd(i) }
         #if compiler(>=6.4)
         guard #available(macOS 27, *) else { return }
-        for i in item.map({ [$0] }) ?? items.allObjects { i.expandedInterfaceSession?.cancel() }
-        #else
-        _ = item
+        for i in targets {
+            popoverLog.debug("session cancel, live \(i.expandedInterfaceSession != nil, privacy: .public)")
+            i.expandedInterfaceSession?.cancel()
+        }
         #endif
+    }
+
+    private func stampEnd(_ item: NSStatusItem) { endedAt.setObject(NSNumber(value: now()), forKey: item) }
+
+    /// didBegin's body. A begin right after this item's session ended is the click
+    /// that just closed it: refuse the new session instead of reopening.
+    func sessionDidBegin(_ item: NSStatusItem, cancelSession: () -> Void) {
+        if ExpandedInterfacePolicy.isReopenOfSameClick(endedAt: endedAt.object(forKey: item)?.doubleValue,
+                                                       now: now()) {
+            popoverLog.debug("session begin refused as the same click")
+            cancelSession()
+            return
+        }
+        popoverLog.debug("session begin forwarded")
+        begin(item)
+    }
+
+    /// didEnd's body.
+    func sessionDidEnd(_ item: NSStatusItem) {
+        stampEnd(item)
+        popoverLog.debug("session end")
+        end(item)
     }
 
     /// Our items' frames, for the dismisser to leave their clicks to the system.
@@ -205,12 +261,12 @@ final class ExpandedInterfaceBridge: NSObject {
 #if compiler(>=6.4)
 @available(macOS 27, *)
 extension ExpandedInterfaceBridge: @MainActor NSStatusItemExpandedInterfaceDelegate {
-    func statusItem(_ statusItem: NSStatusItem, didBegin _: NSStatusItemExpandedInterfaceSession) {
-        begin(statusItem)
+    func statusItem(_ statusItem: NSStatusItem, didBegin session: NSStatusItemExpandedInterfaceSession) {
+        sessionDidBegin(statusItem) { session.cancel() }
     }
 
     func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated _: Bool) {
-        end(statusItem)
+        sessionDidEnd(statusItem)
     }
 }
 #endif

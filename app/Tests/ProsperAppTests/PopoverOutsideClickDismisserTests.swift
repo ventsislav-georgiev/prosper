@@ -156,4 +156,83 @@ final class ExpandedInterfacePolicyTests: XCTestCase {
         XCTAssertFalse(bridge.install(on: item))
         #endif
     }
+
+    // #414: a begin right after the same item's session ended is the click that
+    // closed it, not a reopen.
+    func testReopenOfSameClickWindow() {
+        XCTAssertFalse(P.isReopenOfSameClick(endedAt: nil, now: 10))
+        XCTAssertTrue(P.isReopenOfSameClick(endedAt: 10, now: 10.1))
+        XCTAssertFalse(P.isReopenOfSameClick(endedAt: 10, now: 10.4), "the window is open-ended at 0.4 s")
+        XCTAssertFalse(P.isReopenOfSameClick(endedAt: 10, now: 11))
+    }
+
+    /// A bridge on an injected clock counting its forwards, and a private-bar item.
+    @MainActor private final class Rig {
+        let bar = NSStatusBar()
+        var t: TimeInterval = 100
+        var begun: [NSStatusItem] = [], ended = 0, cancelled = 0
+        lazy var bridge = ExpandedInterfaceBridge(begin: { [unowned self] in begun.append($0) },
+                                                  end: { [unowned self] _ in ended += 1 },
+                                                  now: { [unowned self] in t })
+        func item() -> NSStatusItem { bar.statusItem(withLength: 10) }
+        func beginAfter(_ dt: TimeInterval, _ item: NSStatusItem) {
+            t += dt
+            bridge.sessionDidBegin(item) { cancelled += 1 }
+        }
+    }
+
+    // (i) the system ended the session on the click, then began a new one.
+    func testBeginRightAfterEndIsRefused() {
+        let r = Rig(), a = r.item()
+        defer { r.bar.removeStatusItem(a) }
+        r.bridge.sessionDidEnd(a)
+        r.beginAfter(0.1, a)
+        XCTAssertTrue(r.begun.isEmpty)
+        XCTAssertEqual(r.cancelled, 1, "the refused session is cancelled, not left live")
+        XCTAssertEqual(r.ended, 1)
+    }
+
+    // (ii) a later click is a genuine reopen.
+    func testBeginLongAfterEndOpens() {
+        let r = Rig(), a = r.item()
+        defer { r.bar.removeStatusItem(a) }
+        r.bridge.sessionDidEnd(a)
+        r.beginAfter(1, a)
+        XCTAssertEqual(r.begun.count, 1)
+        XCTAssertEqual(r.cancelled, 0)
+    }
+
+    // (iii) transient/monitor closed first: our cancel is the end that counts.
+    func testBeginRightAfterOurCancelIsRefused() {
+        let r = Rig(), a = r.item()
+        defer { r.bar.removeStatusItem(a) }
+        r.bridge.cancelSessions(only: a)
+        r.beginAfter(0.1, a)
+        XCTAssertTrue(r.begun.isEmpty)
+        XCTAssertEqual(r.cancelled, 1)
+    }
+
+    // (iv) Stats A → B: A's end never refuses B.
+    func testEndOfOneItemDoesNotRefuseAnother() {
+        let r = Rig(), a = r.item(), b = r.item()
+        defer { r.bar.removeStatusItem(a); r.bar.removeStatusItem(b) }
+        r.bridge.sessionDidEnd(a)
+        r.beginAfter(0.1, b)
+        XCTAssertEqual(r.begun.count, 1)
+        XCTAssertTrue(r.begun.first === b)
+        XCTAssertEqual(r.cancelled, 0)
+    }
+
+    // (v) after a refused begin the window closes again.
+    func testRefusalDoesNotStick() {
+        let r = Rig(), a = r.item()
+        defer { r.bar.removeStatusItem(a) }
+        r.bridge.sessionDidEnd(a)
+        r.beginAfter(0.1, a)
+        r.bridge.sessionDidEnd(a)   // the system's answer to the cancel
+        r.beginAfter(1, a)
+        XCTAssertEqual(r.begun.count, 1)
+        XCTAssertTrue(r.begun.first === a)
+        XCTAssertEqual(r.cancelled, 1)
+    }
 }
