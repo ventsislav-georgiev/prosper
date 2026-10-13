@@ -424,6 +424,19 @@ final class DisplayMetricsTests: XCTestCase {
             XCTAssertLessThanOrEqual(font, room, "Font style row overflows its card at the minimum window, scale \(scale)")
             let activity = minWidth(ActivityControls(metric: .constant(.completions), rangeDays: .constant(30)))
             XCTAssertLessThanOrEqual(activity, room, "Activity controls overflow their card at the minimum window, scale \(scale)")
+            // #429: at the card's room, 1.0 keeps one row, 0.85 stacks with natural-width pickers.
+            guard scale == 1.0 || scale == 0.85 else { continue }
+            let pickerH = NSHostingController(rootView: Picker("", selection: .constant(0)) { Text("7d").tag(0) }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()).sizeThatFits(in: NSSize(width: 10_000, height: 10_000)).height
+            let fit = NSHostingController(rootView: ActivityControls(metric: .constant(.completions), rangeDays: .constant(30)))
+                .sizeThatFits(in: NSSize(width: room, height: 10_000))
+            if scale == 1.0 {
+                XCTAssertLessThanOrEqual(fit.height, pickerH + 2, "Activity controls stacked at room \(room), scale 1.0")
+            } else {
+                XCTAssertGreaterThanOrEqual(fit.height, 2 * pickerH + sz(8) - 0.5, "Activity controls did not stack at room \(room), scale \(scale)")
+                XCTAssertLessThanOrEqual(fit.width, room, "Stacked Activity controls overflow at room \(room), scale \(scale)")
+                XCTAssertGreaterThanOrEqual(activity, fit.width - 0.5, "Activity pickers compress below their natural width, scale \(scale)")
+            }
         }
     }
 
