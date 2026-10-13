@@ -46,9 +46,10 @@ permissions:
 
 jobs:
   release:
-    # macos-15 ships Xcode 16.3/16.4 (Swift 6.1+); macos-14 tops out at Swift
-    # 6.0, which can't resolve mlx-swift-lm (requires tools version 6.1).
-    runs-on: macos-15
+    # xcode-27 (arm64, preview image) ships Xcode 27.0 = Swift 6.4, so the
+    # `#if compiler(>=6.4)` macOS 27 paths (menu-bar sessions) are in the build;
+    # the GA macos-26 image tops out at Xcode 26.6 and compiles them out.
+    runs-on: xcode-27
     steps:
       - name: Resolve version
         id: ver
@@ -73,12 +74,14 @@ jobs:
         with:
           ref: ${{ steps.ver.outputs.tag }}
 
-      - name: Select Xcode 16 (Swift 6 toolchain)
+      - name: Select Xcode 27 (Swift 6.4 toolchain)
         id: xcode
         run: |
-          XC=$(ls -d /Applications/Xcode_16*.app /Applications/Xcode_2*.app 2>/dev/null | sort -V | tail -n1)
-          if [[ -z "$XC" ]]; then
-            echo "::error::No Xcode 16+ found on runner"; ls -d /Applications/Xcode_*.app; exit 1
+          # The image also carries 27.1/27.2 betas; pin the GA 27.0 (the local
+          # toolchain) instead of version-sorting into a beta.
+          XC=/Applications/Xcode_27.app
+          if [[ ! -d "$XC" ]]; then
+            echo "::error::$XC not found on runner"; ls -d /Applications/Xcode_*.app; exit 1
           fi
           echo "Selecting $XC"
           sudo xcode-select -s "$XC/Contents/Developer"

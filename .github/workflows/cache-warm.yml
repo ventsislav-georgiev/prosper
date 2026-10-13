@@ -27,17 +27,19 @@ permissions:
 jobs:
   warm:
     if: ${{ github.repository == 'ventsislav-georgiev/prosper' }}
-    runs-on: macos-15
+    runs-on: xcode-27 # same image as release.yml, or the key never matches
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - name: Select Xcode 16 (Swift 6 toolchain)
+      - name: Select Xcode 27 (Swift 6.4 toolchain)
         id: xcode
         run: |
-          XC=$(ls -d /Applications/Xcode_16*.app /Applications/Xcode_2*.app 2>/dev/null | sort -V | tail -n1)
-          if [[ -z "$XC" ]]; then
-            echo "::error::No Xcode 16+ found on runner"; ls -d /Applications/Xcode_*.app; exit 1
+          # The image also carries 27.1/27.2 betas; pin the GA 27.0 (the local
+          # toolchain) instead of version-sorting into a beta.
+          XC=/Applications/Xcode_27.app
+          if [[ ! -d "$XC" ]]; then
+            echo "::error::$XC not found on runner"; ls -d /Applications/Xcode_*.app; exit 1
           fi
           echo "Selecting $XC"
           sudo xcode-select -s "$XC/Contents/Developer"

@@ -11,10 +11,16 @@ echo "==> Building Swift app ($PROFILE)"
 # the SwiftPM checkouts before compiling. Idempotent — safe on warm caches.
 "$ROOT/scripts/apply-patches.sh"
 cd "$ROOT/app"
+# Xcode 27's SwiftPM defaults to the swiftbuild backend, which runs the helper's
+# `-import-objc-header` path from the repo root and fails to find
+# ProsperHelper/include/RemoteWakeSPI.h; the native backend keeps the classic
+# .build/release layout bundle.sh expects. SwiftPM 6.4 warns the flag is
+# deprecated: when it goes, Package.swift must pass that header path in a form
+# the swiftbuild backend resolves (absolute, or a headerSearchPath).
 if [[ "$PROFILE" == "release" ]]; then
-  swift build -c release
+  swift build -c release --build-system native
 else
-  swift build
+  swift build --build-system native
 fi
 # --- MLX Metal shaders (default.metallib) --------------------------------
 # Apple MLX runs its kernels from a precompiled `default.metallib` shipped in a
