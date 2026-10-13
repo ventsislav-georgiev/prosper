@@ -95,6 +95,7 @@ final class SettingsWindow {
         if !win.setFrameUsingName("ProsperSettingsWindow") {
             win.centerOnScreen()
         }
+        win.clampToContentMinSize()
         window = win
         // Standard windows close via the title-bar button / ⌘W (performClose),
         // which posts willClose rather than going through an orderOut funnel — so
@@ -124,6 +125,20 @@ final class SettingsWindow {
         DockPolicy.windowDidShow(win)
         NSApp.activate(ignoringOtherApps: true)
         win.makeKeyAndOrderFront(nil)
+    }
+}
+
+extension NSWindow {
+    /// contentMinSize only blocks *user* resizes: raising it (a larger UI size) leaves
+    /// an open window below it, and the hosting view then centres the wider SwiftUI
+    /// root and clips both sides (#426). setFrameUsingName clamps on macOS 27, but a
+    /// frame autosaved below the min has restored unclamped before (ChatWindow), so
+    /// call this after every restore and every min change.
+    func clampToContentMinSize() {
+        let size = contentRect(forFrameRect: frame).size
+        let min = contentMinSize
+        guard size.width < min.width || size.height < min.height else { return }
+        setContentSize(NSSize(width: max(size.width, min.width), height: max(size.height, min.height)))
     }
 }
 

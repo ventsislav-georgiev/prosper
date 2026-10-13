@@ -40,6 +40,7 @@ final class MarketplaceWindow {
         win.isReleasedWhenClosed = false
         win.setFrameAutosaveName("ProsperMarketplaceWindow")
         if !win.setFrameUsingName("ProsperMarketplaceWindow") { win.centerOnScreen() }
+        win.clampToContentMinSize()
         window = win
 
         closeObserver = NotificationCenter.default.addObserver(

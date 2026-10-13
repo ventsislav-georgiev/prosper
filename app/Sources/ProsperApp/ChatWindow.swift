@@ -58,15 +58,9 @@ final class ChatWindow {
         win.isReleasedWhenClosed = false
         win.setFrameAutosaveName("ProsperChatWindow")
         if !win.setFrameUsingName("ProsperChatWindow") { win.centerOnScreen() }
-        // A frame autosaved before the min was raised restores below contentMinSize
-        // (which only blocks *user* resize, not a programmatic restore). Grow it back
-        // so the 8-row suggestion popup always has room above the field.
-        let saved = win.contentRect(forFrameRect: win.frame).size
-        let min = win.contentMinSize
-        if saved.width < min.width || saved.height < min.height {
-            win.setContentSize(NSSize(width: max(saved.width, min.width),
-                                      height: max(saved.height, min.height)))
-        }
+        // Grow a restored frame back to the min so the 8-row suggestion popup always
+        // has room above the field.
+        win.clampToContentMinSize()
         window = win
 
         closeObserver = NotificationCenter.default.addObserver(

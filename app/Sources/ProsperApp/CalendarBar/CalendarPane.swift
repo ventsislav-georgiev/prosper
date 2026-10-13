@@ -32,7 +32,7 @@ struct CalendarPane: View {
                 Picker("", selection: binding(\.iconMode)) {
                     ForEach(CalendarIconMode.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
-                .labelsHidden().pickerStyle(.segmented).frame(width: sz(280))
+                .labelsHidden().pickerStyle(.segmented).fixedSize()
                 .disabled(style.hideIcon)
             }
             if style.iconMode == .solid || style.iconMode == .outline {
@@ -61,14 +61,14 @@ struct CalendarPane: View {
                     Picker("", selection: optionalBinding(\.iconTextWeight, default: .regular)) {
                         ForEach(CalendarIconTextWeight.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
-                    .labelsHidden().pickerStyle(.segmented).frame(width: sz(280))
+                    .labelsHidden().pickerStyle(.segmented).fixedSize()
                     .disabled(style.hideIcon)
                 }
                 NeonRow("Font style") {
                     Picker("", selection: optionalBinding(\.iconFontDesign, default: .standard)) {
                         ForEach(CalendarIconFontDesign.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
-                    .labelsHidden().pickerStyle(.segmented).frame(width: sz(280))
+                    .labelsHidden().pickerStyle(.segmented).fixedSize()
                     .disabled(style.hideIcon)
                 }
             }

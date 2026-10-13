@@ -691,8 +691,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 SettingsWindow.applyWindowOpacity(win)
                 win.contentMinSize = NSSize(width: 560 * scale, height: 520 * scale)
             default:
-                break
+                continue
             }
+            // A raised min does not resize the open window (#426).
+            win.clampToContentMinSize()
         }
     }
 

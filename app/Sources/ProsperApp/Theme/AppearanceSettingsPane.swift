@@ -60,7 +60,7 @@ struct AppearanceSettingsPane: View {
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         .controlSize(.small)
-                        .frame(width: sz(180))
+                        .fixedSize()
                     }
                 }
             }

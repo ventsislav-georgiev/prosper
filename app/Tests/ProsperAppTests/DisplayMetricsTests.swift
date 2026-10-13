@@ -305,6 +305,50 @@ final class DisplayMetricsTests: XCTestCase {
         XCTAssertFalse(win.isOpaque, "transparency below 1.0 is non-opaque regardless of frost")
     }
 
+    // MARK: #426 — Settings width
+
+    /// A window sized at a small UI scale (min 820 x 0.75 = 615) stays that narrow
+    /// when a larger UI size raises contentMinSize (the min only blocks user
+    /// resizes); the shared clamp must grow it back. Private window, never shown.
+    @MainActor
+    func testWindowBelowRaisedContentMinSizeIsClamped() {
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
+                           styleMask: [.titled, .resizable], backing: .buffered, defer: true)
+        func width() -> CGFloat { win.contentRect(forFrameRect: win.frame).width }
+        // A saved frame narrower than the min comes back clamped on restore.
+        win.contentMinSize = NSSize(width: 820, height: 480)
+        win.setFrame(from: "100 100 610 700 0 0 1920 1080")
+        XCTAssertGreaterThanOrEqual(width(), 820)
+
+        win.contentMinSize = NSSize(width: 615, height: 360)
+        win.setContentSize(NSSize(width: 615, height: 400))
+        win.contentMinSize = NSSize(width: 820, height: 480)
+        XCTAssertLessThan(width(), 820, "precondition: raising the min leaves the window below it")
+        win.clampToContentMinSize()
+        let size = win.contentRect(forFrameRect: win.frame).size
+        XCTAssertGreaterThanOrEqual(size.width, 820)
+        XCTAssertGreaterThanOrEqual(size.height, 480)
+    }
+
+    /// The System Stats Display picker ("Text | Graph | Text + Graph") must reserve
+    /// its segmented control's natural width; a fixed frame narrower than it made the
+    /// control overflow the card.
+    @MainActor
+    func testDisplayPickerReservesItsSegmentedWidth() {
+        func segmented(in v: NSView) -> NSSegmentedControl? {
+            v as? NSSegmentedControl ?? v.subviews.lazy.compactMap(segmented).first
+        }
+        for scale: CGFloat in [1.0, 1.25] {
+            ThemeRuntime.scale = scale
+            let host = NSHostingView(rootView: StatsDisplayModePicker(mode: .constant(.both)))
+            host.frame.size = host.fittingSize
+            host.layoutSubtreeIfNeeded()
+            guard let seg = segmented(in: host) else { return XCTFail("no NSSegmentedControl at scale \(scale)") }
+            XCTAssertGreaterThanOrEqual(host.fittingSize.width, seg.intrinsicContentSize.width - 0.5,
+                                        "row reserves less than the control draws at scale \(scale)")
+        }
+    }
+
     // MARK: helpers
 
     private func tmpCache() -> URL {

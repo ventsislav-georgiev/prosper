@@ -35,7 +35,7 @@ struct SystemStatsPane: View {
                             Text("1s").tag(1.0); Text("2s").tag(2.0)
                             Text("3s").tag(3.0); Text("5s").tag(5.0)
                         }
-                        .labelsHidden().pickerStyle(.segmented).frame(width: sz(180))
+                        .labelsHidden().pickerStyle(.segmented).fixedSize()
                     }
                     NeonDivider()
                     NeonRow("Sensors interval", subtitle: "Temps & power are the priciest reads. Never faster than the update interval; popups always refresh live.") {
@@ -43,14 +43,14 @@ struct SystemStatsPane: View {
                             Text("1s").tag(1.0); Text("2s").tag(2.0)
                             Text("3s").tag(3.0); Text("5s").tag(5.0); Text("10s").tag(10.0)
                         }
-                        .labelsHidden().pickerStyle(.segmented).frame(width: sz(220))
+                        .labelsHidden().pickerStyle(.segmented).fixedSize()
                     }
                     NeonDivider()
                     NeonRow("Number alignment") {
                         Picker("", selection: alignmentBinding) {
                             ForEach(StatsWidgetAlignment.allCases, id: \.self) { Text($0.label).tag($0) }
                         }
-                        .labelsHidden().pickerStyle(.segmented).frame(width: sz(220))
+                        .labelsHidden().pickerStyle(.segmented).fixedSize()
                     }
                 }
             }
@@ -73,11 +73,7 @@ struct SystemStatsPane: View {
             if cfg.wrappedValue.enabled {
                 if m.historyKey != nil {
                     NeonDivider()
-                    NeonRow("Display") {
-                        Picker("", selection: cfg.mode) {
-                            ForEach(StatsDisplayMode.allCases, id: \.self) { Text($0.label).tag($0) }
-                        }.labelsHidden().pickerStyle(.segmented).frame(width: sz(220))
-                    }
+                    NeonRow("Display") { StatsDisplayModePicker(mode: cfg.mode) }
                 }
                 if m != .network {
                     NeonDivider()
@@ -191,4 +187,16 @@ struct SystemStatsPane: View {
 
     /// Immediate (un-debounced) notify for the master toggle — a single discrete event.
     private func notify() { NotificationCenter.default.post(name: .systemStatsConfigChanged, object: nil) }
+}
+
+/// Per-module Display picker. Natural width, never a fixed frame: "Text + Graph"
+/// needs ~306 pt and a narrower frame left the control overflowing its card (#426).
+struct StatsDisplayModePicker: View {
+    @Binding var mode: StatsDisplayMode
+
+    var body: some View {
+        Picker("", selection: $mode) {
+            ForEach(StatsDisplayMode.allCases, id: \.self) { Text($0.label).tag($0) }
+        }.labelsHidden().pickerStyle(.segmented).fixedSize()
+    }
 }

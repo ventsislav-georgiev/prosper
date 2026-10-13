@@ -20,6 +20,12 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.156.0 *(unreleased)*
 
+- **Fixed: Settings could open narrower than its content, cutting the sidebar and the
+  cards off on both sides.** Raising the UI size left an already open window below its
+  new minimum width, and the window never grew back. It now grows to the minimum when
+  the size changes and after a restored frame. The System Stats and Calendar segmented
+  pickers ("Text + Graph", the font styles) no longer hang past their card: they take
+  their natural width instead of a fixed one that was too narrow for their labels.
 - **Menu Bar Management drops the ordering engine and the live preview.** Opening the
   extension's settings used to flash both hidden bands open and screenshot the bar every
   time (Screen Recording permission, visible flicker, and a slow pane). The preview strip,
