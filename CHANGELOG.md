@@ -120,7 +120,8 @@ tag from the now-released section and put it on the new top draft.
   lumps" or as nothing at all. Captures wider than 2,400 px are now read twice, at full
   width and squeezed to that width with the text height kept, and the read that found
   more text wins, with more digits as the tiebreak, so small text is recovered and a
-  20 pt "0" keeps its digit wherever one of the two reads gets it right.
+  20 pt "0 failing" keeps its digit at 3,024 px. The tiebreak can also turn a letter
+  into a digit (a 20 pt "IO bound" can come back as "I0 bound").
 - **Fixed: the first Copy Text from Region after an update looked like it copied nothing.**
   On macOS 27 the first text recognition in a freshly updated build waits about 25 s while
   the system compiles the recognizer for the Neural Engine, and the app showed nothing during

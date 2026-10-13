@@ -100,7 +100,9 @@ enum VisionOCR {
     /// Which of the two reads of a wide image to keep: the squeezed one when it found
     /// strictly more non-space characters (the full width garbled or dropped text) or, on
     /// a tie, more digits (a same-length swap of "0" for "O", #424), else the full-width
-    /// one. A squeezed read that found nothing is kept too, so the screen tools' `.fast`
+    /// one. Known limit: the tiebreak also takes the reverse swap, so 20 pt "IO bound" at
+    /// 3024 px dark on light ships the squeezed "I0 bound" over an exact full read (#425).
+    /// A squeezed read that found nothing is kept too, so the screen tools' `.fast`
     /// retry runs; at these widths that retry reads what the full width mostly garbles.
     /// Picked by measurement (#420, #424): confidence is pinned at 1.0 on every read,
     /// spell-checked words or agreement with `.fast` separated the cases worse, and
