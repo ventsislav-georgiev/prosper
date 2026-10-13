@@ -31,9 +31,10 @@ fi
 # Metal toolchain, and measured byte-identical to the xcodebuild output (#416).
 # The next incremental swift build re-copies its in-tree metallib over the copy
 # staged below while the stamp survives, so after the first rebuild the in-tree
-# one is what ships; this step only guarantees a metallib exists when the
-# backend produced none. ponytail: drop it once a beta proves a model load on
-# the in-tree metallib (#422).
+# one is what ships. This step still runs on every missing or stale stamp
+# (fresh tree, cleaned .build, dependency bump), whatever swiftbuild produced;
+# its only remaining value is a metallib on the native backend. ponytail: drop
+# it once a beta proves a model load on the in-tree metallib (#422).
 # Without the metallib the app aborts the instant it touches the GPU:
 #   "MLX error: Failed to load the default metallib. library not found ...
 #    mlx-swift/.../mlx/c/stream.cpp" — i.e. crash on first model load.
