@@ -65,6 +65,83 @@ final class PopoverDismissSameClickTests: XCTestCase {
     }
 }
 
+// #415: the button (target/action) path recognises the click the popover closed
+// on even when AppKit's transient close beat the monitor to it. Named to match the
+// PopoverDismissSameClickTests filter.
+@MainActor
+final class ButtonPathPopoverDismissSameClickTests: XCTestCase {
+    private typealias S = PopoverOutsideClickDismisser.ClickStamp
+    private func closed(_ close: (stamp: S?, at: TimeInterval)?, _ event: S?) -> Bool {
+        PopoverOutsideClickDismisser.closedByThisClick(close: close, event: event)
+    }
+
+    private func mouse(_ type: NSEvent.EventType, _ n: Int, at t: TimeInterval) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: .zero, modifierFlags: [], timestamp: t,
+                           windowNumber: 0, context: nil, eventNumber: n, clickCount: 1, pressure: 1)!
+    }
+
+    func testPureRows() {
+        XCTAssertFalse(closed(nil, S(time: 10, number: 1)), "no close")
+        XCTAssertFalse(closed((S(time: 10, number: 1), 10), nil), "no event")
+        XCTAssertTrue(closed((S(time: 10, number: 9), 10), S(time: 10.5, number: 9)), "number beats the window")
+        XCTAssertTrue(closed((nil, 10), S(time: 10.1, number: 12)), "inside the window")
+        XCTAssertFalse(closed((nil, 0), S(time: 0.4, number: 12)), "the window is open-ended at 0.4 s")
+        XCTAssertTrue(closed((nil, 10), S(time: 9.98, number: 12)), "earlier than the close, inside the window")
+        XCTAssertFalse(closed((nil, 10), S(time: 9.5, number: 12)), "long before the close")
+        XCTAssertFalse(closed((nil, 10), S(time: 11, number: 12)), "long after the close")
+    }
+
+    // (i) transient close on the mouse-down, action on its mouse-up.
+    func testMouseUpOfTheClosingClickIsRecognisedOnce() {
+        let d = PopoverOutsideClickDismisser(popover: NSPopover())
+        d.noteClosed(stamp: S(time: 10, number: 9), at: 10)
+        let up = mouse(.leftMouseUp, 9, at: 10.2)
+        XCTAssertTrue(d.dismissed(by: up))
+        XCTAssertFalse(d.dismissed(by: up), "consumed: the next click reopens")
+    }
+
+    // (ii) close with no mouse event, a click right after.
+    func testClickInsideTheWindowIsRecognised() {
+        let d = PopoverOutsideClickDismisser(popover: NSPopover())
+        d.noteClosed(stamp: nil, at: 10)
+        XCTAssertTrue(d.dismissed(by: mouse(.leftMouseDown, 20, at: 10.1)))
+    }
+
+    // (iii) a later click is a genuine reopen.
+    func testClickAfterTheWindowReopens() {
+        let d = PopoverOutsideClickDismisser(popover: NSPopover())
+        d.noteClosed(stamp: nil, at: 10)
+        XCTAssertFalse(d.dismissed(by: mouse(.leftMouseDown, 20, at: 11)))
+    }
+
+    // (iv) the production hook: armed to disarmed with the popover not shown is a
+    // close. The one row in this file that arms: a listen-only mouse-down monitor,
+    // removed by the setArmed(false) below.
+    func testDisarmTransitionRecordsTheClose() {
+        let d = PopoverOutsideClickDismisser(popover: NSPopover())
+        d.setArmed(true)
+        d.setArmed(false)
+        let now = ProcessInfo.processInfo.systemUptime
+        XCTAssertTrue(d.dismissed(by: mouse(.leftMouseDown, 20, at: now)))
+    }
+
+    // A disarm with no monitor (init, nothing closing) records nothing.
+    func testDisarmWithoutMonitorRecordsNothing() {
+        let d = PopoverOutsideClickDismisser(popover: NSPopover())
+        d.setArmed(false)
+        let now = ProcessInfo.processInfo.systemUptime
+        XCTAssertFalse(d.dismissed(by: mouse(.leftMouseDown, 20, at: now)))
+    }
+
+    // (v) the monitor's stamp still recognises its click on its own.
+    func testMonitorStampStillRecognised() {
+        let d = PopoverOutsideClickDismisser(popover: NSPopover())
+        let e = mouse(.leftMouseDown, 9, at: 10)
+        d.handleClick(e, at: NSPoint(x: -100_000, y: -100_000))
+        XCTAssertTrue(d.dismissed(by: e))
+    }
+}
+
 // #213: the stamp lifecycle and the Stats per-module reopen skip.
 @MainActor
 final class PopoverDismissStampTests: XCTestCase {

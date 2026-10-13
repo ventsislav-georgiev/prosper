@@ -30,6 +30,11 @@ final class PopoverOutsideClickDismisser {
     /// closed. Do not drop this as redundant with the pid rule — it exists because
     /// of it.
     private var lastDismissClick: ClickStamp?
+    /// #415: when the popover last closed and on which click (stamp nil for Escape
+    /// and other non-mouse closes). The status button's action fires on mouse-up;
+    /// when AppKit's transient close beats the monitor to the mouse-down, the
+    /// monitor is removed before it stamps, so this is the only record of the click.
+    private var lastClose: (stamp: ClickStamp?, at: TimeInterval)?
 
     /// Identity of one physical click: its time (seconds since boot) and the
     /// mouse-event number, which a mouse-up shares with its mouse-down.
@@ -74,8 +79,18 @@ final class PopoverOutsideClickDismisser {
         } else if let m = monitor {
             NSEvent.removeMonitor(m)
             monitor = nil
+            // #415: armed to disarmed with the popover gone is a close (every
+            // popoverDidClose lands here through updateOutsideClickMonitor). Not a
+            // pin toggle with the popover still shown, not an init-time disarm.
+            // Same clock as NSEvent.timestamp.
+            if !popover.isShown {
+                noteClosed(stamp: ClickStamp(NSApp?.currentEvent), at: ProcessInfo.processInfo.systemUptime)
+            }
         }
     }
+
+    /// #415: setArmed(false)'s record of the close; internal so tests pass explicit values.
+    func noteClosed(stamp: ClickStamp?, at: TimeInterval) { lastClose = (stamp, at) }
 
     /// The monitor's body; internal so tests can drive a click without an event tap.
     func handleClick(_ event: NSEvent, at p: NSPoint) {
@@ -92,12 +107,25 @@ final class PopoverOutsideClickDismisser {
         }
     }
 
-    /// #149: true when `event` is the click the monitor just closed the popover
-    /// on — the status item's own toggle click; the caller must then NOT reopen.
-    /// Consumes the stamp so the next genuine click opens normally.
+    /// #149/#415: true when the popover closed on `event`, whoever closed it (the
+    /// monitor's stamp, or the recorded close for AppKit's transient close) — the
+    /// status item's own toggle click; the caller must then NOT reopen. Consumes
+    /// both records so the next genuine click opens normally.
     func dismissed(by event: NSEvent?) -> Bool {
-        defer { lastDismissClick = nil }
-        return Self.isSameClick(lastDismissClick, ClickStamp(event))
+        defer { lastDismissClick = nil; lastClose = nil }
+        let click = ClickStamp(event)
+        return Self.isSameClick(lastDismissClick, click) || Self.closedByThisClick(close: lastClose, event: click)
+    }
+
+    /// Pure. #415: the close was this click when its stamp is the same click, or
+    /// when the click lands within `window` of the close on either side: on a busy
+    /// main thread a fast tap's mouse-up carries a hardware timestamp earlier than
+    /// the close's own clock read.
+    nonisolated static func closedByThisClick(close: (stamp: ClickStamp?, at: TimeInterval)?, event: ClickStamp?,
+                                              window: TimeInterval = ExpandedInterfacePolicy.sameClickWindow) -> Bool {
+        guard let close, let event else { return false }
+        if isSameClick(close.stamp, event) { return true }
+        return abs(event.time - close.at) < window
     }
 
     /// Pure. Same click when the mouse-event numbers match — the status button
@@ -162,13 +190,19 @@ enum ExpandedInterfacePolicy {
         itemFrames.contains { ($0.minX...$0.maxX).contains(p.x) && ($0.minY...$0.maxY).contains(p.y) }
     }
 
-    /// #414: how soon after an item's session ended a new begin on the same item
-    /// counts as the same click. Long enough to cover the system's begin landing
-    /// after the transient/monitor close already cancelled the session; the cost
-    /// is that a double-click on the open icon stays closed (right) and a keyboard
-    /// return to the same item inside the window is swallowed.
-    // ponytail: time window only; a keyboard re-open within 0.4 s is lost. If that
-    // shows up, compare NSEvent.mouseLocation against the item frame at end and begin.
+    /// #414/#415: how soon after a close a new open counts as the click that closed
+    /// it. Serves both paths: the macOS 27 session's begin after the item's end, and
+    /// the target/action button click after the popover's close. Long enough to
+    /// cover the begin or the mouse-up landing after the transient/monitor close;
+    /// the cost is that a double-click on the open icon stays closed (right).
+    // ponytail: time window only. Two swallowed cases: a keyboard return to the
+    // same item within 0.4 s, and a fast A, B, A Stats switch on the session path
+    // (the second A begin lands inside the window of A's own end). One reopen case
+    // on the button path: a press held longer than 0.4 s whose action event carries
+    // no matching event number falls back to time and reopens (the stamp taken from
+    // NSApp.currentEvent at close covers the normal case, where the mouse-down is
+    // current). If any shows up, compare NSEvent.mouseLocation against the item
+    // frame at close and open.
     static let sameClickWindow: TimeInterval = 0.4
 
     /// #414: a begin this soon after the same item's session ended is the second
