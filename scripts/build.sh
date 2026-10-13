@@ -27,9 +27,13 @@ fi
 # Apple MLX runs its kernels from a precompiled `default.metallib` shipped in a
 # `mlx-swift_Cmlx.bundle` resource bundle (the C++ define SWIFTPM_BUNDLE +
 # METAL_PATH in mlx-swift's Package.swift). The native SwiftPM backend cannot
-# compile Metal shaders; the swiftbuild backend does, but its bundle carries no
-# Package.resolved stamp, so the stamped xcodebuild copy below stays the one we
-# ship (ponytail: drop this step once a beta proves the in-tree metallib).
+# compile Metal shaders; the swiftbuild backend does, in-tree, with the same
+# Metal toolchain, and measured byte-identical to the xcodebuild output (#416).
+# The next incremental swift build re-copies its in-tree metallib over the copy
+# staged below while the stamp survives, so after the first rebuild the in-tree
+# one is what ships; this step only guarantees a metallib exists when the
+# backend produced none. ponytail: drop it once a beta proves a model load on
+# the in-tree metallib (#422).
 # Without the metallib the app aborts the instant it touches the GPU:
 #   "MLX error: Failed to load the default metallib. library not found ...
 #    mlx-swift/.../mlx/c/stream.cpp" — i.e. crash on first model load.
