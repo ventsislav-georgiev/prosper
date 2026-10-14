@@ -170,8 +170,8 @@ final class PopoverOutsideClickDismisser {
 
 // #197: macOS 27 drives status-item popovers through an expanded-interface
 // session (NSStatusItem.h:27-37): the system calls didBegin on the item's click
-// or keyboard navigation and didEnd when it closes it (our item clicked again,
-// another status menu opening, navigation away). That replaces target/action
+// or keyboard navigation and didEnd when it closes it (another status menu
+// opening, navigation away — not our item clicked again, #430). That replaces target/action
 // toggling and with it the ClickStamp reopen race. Below 27 nothing is installed
 // and the #149 path above runs unchanged.
 
@@ -183,11 +183,21 @@ enum ExpandedInterfacePolicy {
         showingThisItem && !pinned
     }
 
-    /// A click on one of our own status items belongs to the session — closing
-    /// on it here would end the session and let the same click begin a new one.
-    /// Closed rect, like `shouldDismiss`'s frame rule.
+    /// A click inside `itemFrames` (from `systemOwnedFrames`) belongs to the system,
+    /// which begins that item's session. Closed rect, like `shouldDismiss`'s frame rule.
     static func systemOwnsClick(_ p: NSPoint, itemFrames: [NSRect]) -> Bool {
         itemFrames.contains { ($0.minX...$0.maxX).contains(p.x) && ($0.minY...$0.maxY).contains(p.y) }
+    }
+
+    /// #430: the frames `systemOwnsClick` leaves to the system — items with no live
+    /// session (a click there begins one: Stats B while A is open). Not the item whose
+    /// session is live: macOS 27 does not end it on that click (AppKit's
+    /// _beginExpandedInterfaceSession: returns early while a session exists, and the
+    /// session's own click monitor, NSStatusItemCancelOnClickMonitor, is off), so the
+    /// dismisser closes the popover; a begin the same click sends after that is
+    /// dropped by AppKit's dismiss timestamp or refused by `isReopenOfSameClick`.
+    static func systemOwnedFrames(_ items: [(frame: NSRect, sessionLive: Bool)]) -> [NSRect] {
+        items.filter { !$0.sessionLive }.map(\.frame)
     }
 
     /// #414/#415: how soon after a close a new open counts as the click that closed
@@ -289,8 +299,20 @@ final class ExpandedInterfaceBridge: NSObject {
         end(item)
     }
 
-    /// Our items' frames, for the dismisser to leave their clicks to the system.
-    var itemFrames: [NSRect] { items.allObjects.compactMap { $0.button?.window?.frame } }
+    /// Our items' frames, for the dismisser to leave their clicks to the system —
+    /// all but the item with a live session (#430).
+    var itemFrames: [NSRect] {
+        ExpandedInterfacePolicy.systemOwnedFrames(items.allObjects.compactMap { i in
+            i.button?.window.map { ($0.frame, Self.hasLiveSession(i)) }
+        })
+    }
+
+    private static func hasLiveSession(_ item: NSStatusItem) -> Bool {
+        #if compiler(>=6.4)
+        if #available(macOS 27, *) { return item.expandedInterfaceSession != nil }
+        #endif
+        return false
+    }
 }
 
 #if compiler(>=6.4)

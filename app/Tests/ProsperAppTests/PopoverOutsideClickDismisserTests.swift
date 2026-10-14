@@ -313,3 +313,34 @@ final class ExpandedInterfacePolicyTests: XCTestCase {
         XCTAssertEqual(r.cancelled, 1)
     }
 }
+
+// #430: the second click on the open item's icon closes on macOS 27. Named to match
+// the PopoverOutsideClickDismisserTests filter.
+@MainActor
+final class OpenItemPopoverOutsideClickDismisserTests: XCTestCase {
+    private let item = NSRect(x: 1000, y: 1100, width: 40, height: 24)
+
+    // #430: macOS 27 sends nothing usable for a click on the item whose session is
+    // live, so that click is the dismisser's; another item's click still begins its
+    // own session (Stats A open, B clicked).
+    func testOpenItemClickIsTheDismissersOtherItemsStayTheSystems() {
+        let other = NSRect(x: 1100, y: 1100, width: 40, height: 24)
+        let owned = ExpandedInterfacePolicy.systemOwnedFrames([(item, sessionLive: true), (other, sessionLive: false)])
+        XCTAssertFalse(ExpandedInterfacePolicy.systemOwnsClick(NSPoint(x: 1020, y: 1110), itemFrames: owned), "second click on the open item")
+        XCTAssertTrue(ExpandedInterfacePolicy.systemOwnsClick(NSPoint(x: 1120, y: 1110), itemFrames: owned), "a different module still opens")
+        XCTAssertEqual(ExpandedInterfacePolicy.systemOwnedFrames([(item, sessionLive: false)]), [item], "no session: the click begins one")
+    }
+
+    // #430 through the dismisser: a click on the open item closes and stamps. The
+    // begin that click may send next is refused by testBeginRightAfterOurCancelIsRefused's rule.
+    func testDismisserClosesOnTheOpenItemsClick() {
+        let p = NSPoint(x: -100_000, y: -100_000)   // off-screen → would close
+        let e = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 10,
+                                   windowNumber: 0, context: nil, eventNumber: 9, clickCount: 1, pressure: 1)!
+        let open = NSRect(origin: p, size: NSSize(width: 1, height: 1))
+        let d = PopoverOutsideClickDismisser(popover: NSPopover(),
+                                             systemOwnedFrames: { ExpandedInterfacePolicy.systemOwnedFrames([(open, sessionLive: true)]) })
+        d.handleClick(e, at: p)
+        XCTAssertTrue(d.dismissed(by: e))
+    }
+}

@@ -18,6 +18,15 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.157.0 *(unreleased)*
+
+- **Fixed: a second click on the open Stats, Mixer or Calendar icon closes the popover
+  again on macOS 27.** Since v2.156.0-beta.5 (the first build with the macOS 27
+  status-item session) the click on the open item was left to the system, which does
+  nothing while that item's session is live, so the popover stayed open. The
+  outside-click dismisser now owns the click on the open item and still leaves clicks on
+  the other icons to the system. (#430)
+
 ## v2.156.0
 
 - **Fixed: Settings could open narrower than its content, cutting the sidebar and the
