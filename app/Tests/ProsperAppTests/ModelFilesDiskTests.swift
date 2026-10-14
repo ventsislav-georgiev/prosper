@@ -160,8 +160,8 @@ final class ModelFilesDiskTests: XCTestCase {
         XCTAssertFalse(ModelFiles.isModelDownloaded("shard/badindex", hubURL: hub))
     }
 
-    // No index: swift-huggingface fetches the LFS shards before the small files (index
-    // included), so a cancelled sharded fetch leaves N of M "-of-" shards and no index.
+    // No index: swift-huggingface queues every file by size descending, eight at a time,
+    // so with eight or more shards the index starts last and a cancel leaves shards, no index.
     func testNoIndexOneOfTwoShardsIsNotDownloaded() throws {
         try makeCachedModel("noidx/half", blobs: [("sha-1", twoShards[0], 100)])
         XCTAssertFalse(ModelFiles.diskState("noidx/half", hubURL: hub).downloaded)
@@ -187,6 +187,17 @@ final class ModelFilesDiskTests: XCTestCase {
         ])
         XCTAssertFalse(ModelFiles.diskState("noidx/three", hubURL: hub).downloaded)
         XCTAssertFalse(ModelFiles.isModelDownloaded("noidx/three", hubURL: hub))
+    }
+
+    func testNoIndexShardsDisagreeOnTotalIsNotDownloaded() throws {
+        // A complete 2-shard family plus a stray shard from a 3-shard family.
+        try makeCachedModel("noidx/mixed", blobs: [
+            ("sha-1", "model-00001-of-00002.safetensors", 100),
+            ("sha-2", "model-00002-of-00002.safetensors", 100),
+            ("sha-3", "model-00003-of-00003.safetensors", 100),
+        ])
+        XCTAssertFalse(ModelFiles.diskState("noidx/mixed", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("noidx/mixed", hubURL: hub))
     }
 
     func testNoIndexZeroByteSingleFileIsNotDownloaded() throws {
