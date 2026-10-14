@@ -236,7 +236,7 @@ actor MLXEngine {
         let pairs = await TypingHistoryStore.shared.trainingDataset()
         guard pairs.count >= Self.ngramMinSamples else { setInlineNgramModel(nil); return }
         let texts = pairs.map { TypingHistoryStore.trainingText(prompt: $0.prompt, completion: $0.completion) }
-        let model: NgramModel? = try? await container.perform { context in
+        let model: NgramModel? = await container.perform { context in
             var m = NgramModel()
             for t in texts where !t.isEmpty {
                 m.train(context.tokenizer.encode(text: t))
