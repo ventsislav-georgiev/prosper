@@ -54,6 +54,20 @@ final class ModelSelectionTests: XCTestCase {
         XCTAssertEqual(AIModelSection.models.map(\.0), Preferences.selectableModelIds)
     }
 
+    /// #436: the AI Models pane's Download / Use-for gate. Inline rows use the picker's RAM
+    /// tier, agent rows their minRAMGB floor; ids the pane does not know fit.
+    func testPaneFitsGatesInlineAndAgentRowsByRAM() {
+        AgentModelRegistry.physicalMemoryGB = 8 // the default argument must read the seam
+        XCTAssertFalse(AIModelsPane.fits(Preferences.qat26B8Id, role: .inline))
+        XCTAssertTrue(AIModelsPane.fits(Preferences.qat26B8Id, role: .inline, physicalGB: 36))
+        let agent = "unsloth/Qwen3-Coder-Next-GGUF"
+        XCTAssertEqual(AgentModelRegistry.all().first { $0.id == agent }?.minRAMGB, 64)
+        XCTAssertFalse(AIModelsPane.fits(agent, role: .agent))
+        XCTAssertTrue(AIModelsPane.fits(agent, role: .agent, physicalGB: 64))
+        XCTAssertTrue(AIModelsPane.fits("unknown/model", role: .agent, physicalGB: 8))
+        XCTAssertTrue(AIModelsPane.fits("unknown/model", role: .inline, physicalGB: 8))
+    }
+
     func testRecommendedIsSelectable() {
         XCTAssertTrue(Preferences.selectableModelIds.contains(Preferences.recommendedModelId))
     }

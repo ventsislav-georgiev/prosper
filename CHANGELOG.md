@@ -31,7 +31,9 @@ tag from the now-released section and put it on the new top draft.
   machine cannot hold. A model load that fails inside the MLX library now reports its
   error in the setup window instead of ending the process, and a load that aborts the
   process during launch is skipped on the next launch (the picker steps down one row)
-  instead of aborting every launch (#435).
+  instead of aborting every launch. The AI Models pane applies the same rule: Download
+  and Use-for are disabled on a row this Mac cannot hold, and an agent row that does not
+  fit says how much RAM it needs (#435, #436).
 - **Tokenizer and chat-template libraries updated.** swift-transformers 1.3.5 and swift-
   jinja 2.5.1: tokenizers honor the model's byte-fallback setting, and tool definitions
   render into the prompt in the same JSON form the model's own template expects (#171).

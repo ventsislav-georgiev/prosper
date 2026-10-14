@@ -132,7 +132,7 @@ enum AgentModelRegistry {
             id: "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
             label: "Qwen3-Next 80B-A3B (llama.cpp)",
             approxRAMGB: 50, minRAMGB: 64, toolFormat: .qwenXML,
-            note: "GGUF Q4_K_M ~45 GB · needs 64 GB · hybrid-attention flagship MoE (3B active)",
+            note: "GGUF Q4_K_M ~45 GB · hybrid-attention flagship MoE (3B active)",
             gguf: AgentGGUF(
                 fileName: "Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
                 downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF/resolve/6688872b7a4e5eb8a121ceea08009530a024ba1d/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf")!,
@@ -162,7 +162,7 @@ enum AgentModelRegistry {
             id: "unsloth/Qwen3-Coder-Next-GGUF",
             label: "Qwen3-Coder-Next 80B-A3B (llama.cpp)",
             approxRAMGB: 50, minRAMGB: 64, toolFormat: .qwenXML,
-            note: "GGUF Q4_K_M ~45 GB · needs 64 GB · near-frontier agentic coding",
+            note: "GGUF Q4_K_M ~45 GB · near-frontier agentic coding",
             gguf: AgentGGUF(
                 fileName: "Qwen3-Coder-Next-Q4_K_M.gguf",
                 downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF/resolve/ce09c67b53bc8739eef83fe67b2f5d293c270632/Qwen3-Coder-Next-Q4_K_M.gguf")!,

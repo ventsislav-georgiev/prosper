@@ -119,7 +119,9 @@ struct AIModelsPane: View {
             NeonSection("Coding-agent models",
                         footer: "Models for the coding agent (loaded only while a task runs). Add your own from a Hugging Face URL — it must be an MLX (.safetensors) checkpoint; whether it loads depends on architecture support.") {
                 catalogRows(AgentModelRegistry.all().map {
-                    Row(id: $0.id, fallbackLabel: $0.label, subtitle: $0.note,
+                    Row(id: $0.id, fallbackLabel: $0.label,
+                        subtitle: Self.fits($0.id, role: .agent) ? $0.note
+                            : "\($0.note) · needs \($0.minRAMGB) GB RAM",
                         isCustom: CustomModelStore.exists($0.id))
                 }, role: .agent)
                 NeonDivider()
@@ -330,6 +332,16 @@ struct AIModelsPane: View {
         let isCustom: Bool
     }
 
+    /// Whether `id` can load on a Mac with `physicalGB` (#436): inline rows use the picker's
+    /// RAM tier, agent rows their `minRAMGB` floor (same test as `defaultId`). Unknown ids fit.
+    static func fits(_ id: String, role: ModelRole,
+                     physicalGB: Int = AgentModelRegistry.physicalMemoryGB) -> Bool {
+        switch role {
+        case .inline: return Preferences.modelFits(id, physicalGB: physicalGB)
+        case .agent: return (AgentModelRegistry.all().first { $0.id == id }?.minRAMGB ?? 0) <= physicalGB
+        }
+    }
+
     /// All catalog model ids (inline + agent, incl. custom). Source of truth for which
     /// rows exist and which disk states to memoize.
     private static func catalogIDs() -> [String] {
@@ -400,6 +412,7 @@ struct AIModelsPane: View {
                 Button("Stop") { downloads.cancel() }.buttonStyle(.neon)
             }
         } else {
+            let fits = Self.fits(row.id, role: role)
             HStack(spacing: sz(6)) {
                 if downloaded {
                     // Delete bumps downloads.revision when the async unlink finishes,
@@ -410,13 +423,13 @@ struct AIModelsPane: View {
                     // Disable while ANY download is in flight, else start() would
                     // silently cancel it.
                     Button("Download") { downloads.start(row.id) }.buttonStyle(.neon)
-                        .disabled(anyDownloadActive)
+                        .disabled(anyDownloadActive || !fits)
                 }
                 Menu {
                     if !isCurrent {
                         Button(role == .inline ? "Use for inline" : "Use for agent") {
                             if role == .inline { model.coreModel = row.id } else { model.agentModel = row.id }
-                        }
+                        }.disabled(!fits)
                     }
                     if downloaded {
                         Button("Reveal in Finder") { ModelFiles.reveal(row.id) }
