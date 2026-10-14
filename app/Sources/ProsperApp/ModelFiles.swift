@@ -37,14 +37,15 @@ enum ModelFiles {
     /// True when `dir` holds a complete weight set: with a `model.safetensors.index.json`,
     /// every distinct file in its `weight_map` exists in `dir` with a size above zero (a
     /// sharded download cancelled after its first shard is not complete; an unparseable
-    /// index is not complete either). Without an index (swift-huggingface fetches the
-    /// LFS shards before the small files, so a cancelled fetch leaves shards and no
-    /// index): shards named `*-XXXXX-of-NNNNN.safetensors` need all NNNNN present;
-    /// otherwise any non-empty `*.safetensors`.
-    // ponytail: weights only. A cancel inside the small-file tail (config, tokenizer,
-    // index, fetched after every shard) still reads as downloaded; the loader fetches
-    // those KB on load. An app-written completion marker would close it but needs a
-    // legacy rule for snapshots downloaded before the marker existed.
+    /// index is not complete either). Without an index (swift-huggingface queues every
+    /// file by size descending, eight at a time, so with eight or more shards the index
+    /// starts last and a cancelled fetch can leave shards and no index): shards named
+    /// `*-XXXXX-of-NNNNN.safetensors` need all NNNNN present; otherwise any non-empty
+    /// `*.safetensors`.
+    // ponytail: weights only. A cancel after the shards but before a small file (config,
+    // tokenizer, index) finishes still reads as downloaded; the loader fetches those KB
+    // on load. An app-written completion marker would close it but needs a legacy rule
+    // for snapshots downloaded before the marker existed.
     private static func holdsWeights(_ dir: URL) -> Bool {
         let fm = FileManager.default
         // Snapshot files are symlinks into blobs/ (copies where symlinks fail).

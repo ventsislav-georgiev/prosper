@@ -195,6 +195,13 @@ final class ModelFilesDiskTests: XCTestCase {
         XCTAssertFalse(ModelFiles.isModelDownloaded("noidx/empty", hubURL: hub))
     }
 
+    func testIndexWithEmptyWeightMapIsNotDownloaded() throws {
+        let root = try makeCachedModel("shard/emptymap", blobs: [("sha-w", "model.safetensors", 100)])
+        try writeIndex(root, shards: [])
+        XCTAssertFalse(ModelFiles.diskState("shard/emptymap", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("shard/emptymap", hubURL: hub))
+    }
+
     // Hot-path budget: the pane calls diskState per catalog model. A sharded weights
     // checkpoint (many blobs) must still resolve in well under a frame.
     func testDiskStatePerfBudget() throws {
