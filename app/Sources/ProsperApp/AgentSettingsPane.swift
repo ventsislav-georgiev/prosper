@@ -10,17 +10,19 @@ struct AgentPane: View {
     @State private var temperature = Preferences.agentTemperature
     @State private var topP = Preferences.agentTopP
 
-    /// Warns when the stored (raw, unhealed) pick does not fit this Mac (#440): the load
-    /// path heals it through canonicalId, so name the model that actually runs.
+    /// Warns when a pick made in this pane during the session does not fit this Mac (#440):
+    /// a synced id arrives healed through the SettingsModel mirror and never shows it. The
+    /// load path heals the pick through canonicalId, so name the model that actually runs.
     private var agentRAMWarning: String? {
         let id = model.agentModel
         guard let m = AgentModelRegistry.all().first(where: { $0.id == id }),
               !AgentModelRegistry.fits(id) else { return nil }
         let runs = AgentModelRegistry.model(for: id)
-        let then = runs.id == id ? "It may fail to load or run very slowly."   // below every floor: no smaller row
-            : "The agent runs \(CustomModelStore.label(for: runs.id, fallback: runs.label)) instead."
-        return "Needs ~\(m.minRAMGB) GB RAM; this Mac has \(AgentModelRegistry.physicalMemoryGB) GB. "
-            + then + " Pick a smaller agent model."
+        let runsName = CustomModelStore.label(for: runs.id, fallback: runs.label)
+        let then = AgentModelRegistry.fits(runs.id)
+            ? "The agent runs \(runsName) instead. Pick a smaller agent model."
+            : "No agent model fits this Mac; \(runsName) is used and may fail to load or run very slowly."
+        return "Needs ~\(m.minRAMGB) GB RAM; this Mac has \(AgentModelRegistry.physicalMemoryGB) GB. " + then
     }
 
     /// Picker row text: "<name> — <note>", plus the RAM floor when the row cannot load here (#437).
@@ -60,7 +62,7 @@ struct AgentPane: View {
                 }
                 Spacer()
                 Button("Download") { downloads.start(id) }.buttonStyle(.neon)
-                    .disabled(!AgentModelRegistry.fits(id))
+                    .disabled(!AgentModelRegistry.fits(id) || downloads.activeModelId != nil)
             }
         }
     }
