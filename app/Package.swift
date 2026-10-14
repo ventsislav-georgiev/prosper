@@ -34,7 +34,7 @@ let package = Package(
         // model. mlx-swift-lm intentionally has no Hub dependency of its own.
         .package(
             url: "https://github.com/huggingface/swift-transformers",
-            .upToNextMajor(from: "1.3.0")
+            .upToNextMajor(from: "1.3.5")
         ),
         // Local encrypted-capable SQLite store (GRDB) backing typing-history
         // personalization + privacy data management. Data stays on-device.

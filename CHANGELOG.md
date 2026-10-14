@@ -20,6 +20,9 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.157.0 *(unreleased)*
 
+- **Tokenizer and chat-template libraries updated.** swift-transformers 1.3.5 and swift-
+  jinja 2.5.1: tokenizers honor the model's byte-fallback setting, and tool definitions
+  render into the prompt in the same JSON form the model's own template expects (#171).
 - **The on-device AI engine moved to the current MLX release.** The two local patches
   Prosper carried for Gemma 4 QAT checkpoints and for stopping speculative decoding cleanly
   are part of the upstream library now, so the app builds from the stock dependency. Model
