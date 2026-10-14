@@ -177,6 +177,22 @@ actor MLXEngine {
     /// Loaded text container, or nil until `load` completes.
     private var container: ModelContainer?
 
+    /// Id of a loaded container that has not yet run a successful eval; set by `load` and
+    /// `loadVLM`, nil after `unload` or once `evalSucceeded` proved it.
+    private var unprovenId: String?
+
+    /// Clears the launch crash-loop marker (#435) once per loaded container, on its first
+    /// successful eval: memory peaks at the first prefill (weights plus KV cache), not in
+    /// loadContainer. Called only after an eval guard returned; a throw never reaches it.
+    /// A cancelled task is skipped, it may have returned before any eval.
+    /// ponytail: a death between loadContainer and the first eval exit loops once more; the
+    /// second launch's warm-up death leaves the marker and steps down.
+    private func evalSucceeded() {
+        guard !Task.isCancelled, let id = unprovenId else { return }
+        unprovenId = nil
+        Preferences.modelLoadSucceeded(id)
+    }
+
     /// In-flight generation count (inline + `generate` + chat). Unload paths consult it so a
     /// free can't `clearCache()` GPU buffers under an active compute. Actor-isolated →
     /// no lock; stays >0 across a generation's internal `await`s (where actor reentrancy
@@ -470,6 +486,7 @@ actor MLXEngine {
             let loaded = try await task.value
             poll.cancel()
             container = loaded
+            unprovenId = id
             if self === Self.shared { Self.inlineLoadedFlag.withLock { $0 = true } }
             inlineBox.reset() // a fresh model invalidates any primed inline cache
             chatBox.reset()
@@ -584,6 +601,7 @@ actor MLXEngine {
         draftLoadTask?.cancel()  // WS2: cancel any in-flight draft load
         draftLoadTask = nil
         container = nil
+        unprovenId = nil
         if self === Self.shared { Self.inlineLoadedFlag.withLock { $0 = false } }
         vlmContainer = nil
         draftContainer = nil     // WS2: drop the second (draft) model's weights
@@ -880,6 +898,7 @@ actor MLXEngine {
             return text
             }
         }
+        evalSucceeded()
 
         // NOTE: we deliberately do NOT call `Memory.clearCache()` here. The cache
         // pool is already bounded by `configureMemoryLimits()` (384 MB), and the
@@ -1100,6 +1119,7 @@ actor MLXEngine {
                 return 0
             }
             }
+            evalSucceeded()
         } catch {
             // Self-heal (same as inline): an MLX runtime error can leave a reused
             // cache inconsistent; the box was already stolen/reset above, but make
@@ -1161,7 +1181,7 @@ actor MLXEngine {
         let maxPrompt = Self.maxPromptTokens
 
         do {
-            return try await withMLXErrorGuard("inline") { mlxError in
+            let result: String = try await withMLXErrorGuard("inline") { mlxError in
                 try await container.perform { context in
             // Tokenize the full prompt (system + user) through the chat template.
             var messages: [Chat.Message] = []
@@ -1424,6 +1444,8 @@ actor MLXEngine {
             return text
                 }
             }
+            evalSucceeded()
+            return result
         } catch {
             // Self-heal: an MLX runtime error may have left the persisted inline
             // KV cache in an inconsistent state (e.g. keys/mask length mismatch
@@ -1606,7 +1628,7 @@ actor MLXEngine {
             // so the `@Sendable` closures don't capture each other's `ModelContext`.
             // Outer = main container (gives `context`); inner = draft container (gives
             // `draftContext`), into which we pass the main `context` + prepared `lmInput`.
-            return try await withMLXErrorGuard("speculative") { mlxError in
+            let result: String = try await withMLXErrorGuard("speculative") { mlxError in
                 try await container.perform(nonSendable: lmInput) { context, lmInput in
                 // Bundle the (non-Sendable) main context + prepared input so the inner
                 // draft closure receives them as a single parameter instead of capturing.
@@ -1654,6 +1676,8 @@ actor MLXEngine {
                 }
                 }
             }
+            evalSucceeded()
+            return result
         } catch {
             // ANY speculative failure (KVCacheError "requires trimmable caches",
             // tokenizer mismatch, etc.) degrades to the proven single-model path —
@@ -1783,6 +1807,7 @@ actor MLXEngine {
         let poll = Self.startProgressPoll(box, modelId: id, fallback: "Downloading vision model\u{2026}", progress)
         do {
             vlmContainer = try await task.value
+            unprovenId = id
             poll.cancel()
             vlmLoadTask = nil
         } catch {
@@ -1867,6 +1892,7 @@ actor MLXEngine {
             return text
             }
         }
+        evalSucceeded()
         // Vision prefill allocates large image-feature buffers; release them
         // immediately so they don't pin memory until the next VLM call.
         Memory.clearCache()

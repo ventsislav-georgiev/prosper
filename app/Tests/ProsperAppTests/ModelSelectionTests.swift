@@ -149,13 +149,16 @@ final class ModelSelectionTests: XCTestCase {
         return UserDefaults(suiteName: name)!
     }
 
+    /// Disk seam for the marker tests, so none reads the real hub cache.
+    private let everyRow: (String) -> Bool = { _ in true }
+
     func testMarkerArmsBeforeLoadAndSkipsAfterADeath() {
         let d = markerDefaults(), k = Preferences.modelLoadMarkerKey, x = Preferences.qatE4B8Id
         // Launch 1: armed before the load, nothing to skip.
         XCTAssertNil(Preferences.launchLoadFallback(for: x, physicalGB: gb(16), defaults: d))
         XCTAssertEqual(d.string(forKey: k), x, "marker must be set before the load")
         // Launch 2 with no success in between: the previous launch died loading x.
-        XCTAssertEqual(Preferences.launchLoadFallback(for: x, physicalGB: gb(16), defaults: d), Preferences.qatE4B6Id)
+        XCTAssertEqual(Preferences.launchLoadFallback(for: x, physicalGB: gb(16), defaults: d, isOnDisk: everyRow), Preferences.qatE4B6Id)
         XCTAssertEqual(d.string(forKey: k), x, "the marker is never cleared at launch")
         // A success for another id leaves it; a success for x clears it, and the next launch loads.
         Preferences.modelLoadSucceeded(Preferences.qatE2B4Id, defaults: d)
@@ -170,11 +173,20 @@ final class ModelSelectionTests: XCTestCase {
         let d = markerDefaults()
         var id = Preferences.qatE2B6Id, path: [String] = []
         for _ in 0..<8 where !id.isEmpty {
-            if let next = Preferences.launchLoadFallback(for: id, physicalGB: gb(8), defaults: d) { id = next; path.append(next) }
+            if let next = Preferences.launchLoadFallback(for: id, physicalGB: gb(8), defaults: d, isOnDisk: everyRow) { id = next; path.append(next) }
         }
         XCTAssertEqual(path, [Preferences.qatE2B4Id, ""])
         // From the smallest, a death means no automatic load.
         XCTAssertEqual(Preferences.launchLoadFallback(for: Preferences.qatE2B4Id, physicalGB: gb(8), defaults: d), "")
+    }
+
+    /// The fallback is only ever a model already on disk, so no launch starts a download (#438).
+    func testLaunchFallbackIsOnDiskOnly() {
+        let d = markerDefaults(), x = Preferences.qat26B8Id
+        d.set(x, forKey: Preferences.modelLoadMarkerKey) // the previous launch died loading x
+        XCTAssertEqual(Preferences.launchLoadFallback(for: x, physicalGB: gb(64), defaults: d,
+                                                      isOnDisk: { $0 == Preferences.qatE4B8Id }), Preferences.qatE4B8Id)
+        XCTAssertEqual(Preferences.launchLoadFallback(for: x, physicalGB: gb(64), defaults: d, isOnDisk: { _ in false }), "")
     }
 
     func testAgentPickerRowLabelShowsRAMFloorOnlyWhenRowDoesNotFit() throws {
@@ -191,5 +203,11 @@ final class ModelSelectionTests: XCTestCase {
     func testSetupFailureNetworkClassification() {
         XCTAssertTrue(ModelSetup.isNetworkError(URLError(.notConnectedToInternet)))
         XCTAssertFalse(ModelSetup.isNetworkError(MLXEngineError.mlxRuntime("load: [metal::malloc] too large")))
+    }
+
+    func testSetupFailureNetworkClassificationReadsTheUnderlyingError() {
+        let wrapped = { (underlying: Error) in NSError(domain: "HubApi", code: 1, userInfo: [NSUnderlyingErrorKey: underlying]) }
+        XCTAssertTrue(ModelSetup.isNetworkError(wrapped(URLError(.timedOut))))
+        XCTAssertFalse(ModelSetup.isNetworkError(wrapped(CocoaError(.fileReadNoSuchFile))))
     }
 }

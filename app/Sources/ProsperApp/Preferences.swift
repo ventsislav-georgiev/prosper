@@ -518,25 +518,29 @@ enum Preferences {
     private static let loggedModelResolution = OSAllocatedUnfairLock(initialState: Set<String>())
 
     /// Launch crash-loop guard (#435): UserDefaults key naming the model whose launch-time
-    /// load is in flight. Set before that load, cleared only after it succeeded.
+    /// load is in flight. Set before that load, cleared only after its first successful eval.
     static let modelLoadMarkerKey = "modelLoadInFlight"
 
     /// Called right before the launch-time load of `id`. A marker still naming `id` means the
     /// previous launch died in that load (jetsam or a Metal abort, which no Swift guard
-    /// catches): returns the model to use instead, the largest smaller row that fits ("" when
-    /// none), and the caller skips this launch's load. Otherwise arms the marker and returns
-    /// nil. Each fallback is strictly smaller, so repeated deaths end at "".
+    /// catches): returns the model to use instead, the largest smaller row that fits and is
+    /// already on disk ("" when none, so no download ever starts from here), and the caller
+    /// skips this launch's load. Otherwise arms the marker and returns nil. Each fallback is
+    /// strictly smaller, so repeated deaths end at "".
     static func launchLoadFallback(for id: String, physicalGB: Int = AgentModelRegistry.physicalMemoryGB,
-                                   defaults: UserDefaults = Preferences.defaults) -> String? {
+                                   defaults: UserDefaults = Preferences.defaults,
+                                   isOnDisk: (String) -> Bool = { ModelFiles.isModelDownloaded($0) }) -> String? {
         if defaults.string(forKey: modelLoadMarkerKey) == id {
             let gb = selectableModels.first { $0.id == id }?.gb ?? 0
-            return largestFittingModel(physicalGB: physicalGB, belowGB: gb) ?? ""
+            return largestFittingModel(physicalGB: physicalGB, belowGB: gb,
+                                       models: selectableModels.filter { isOnDisk($0.id) }) ?? ""
         }
         defaults.set(id, forKey: modelLoadMarkerKey)
         return nil
     }
 
-    /// Clears the marker once `id` loaded. Never call it before the load succeeded.
+    /// Clears the marker once `id` ran its first successful eval (MLXEngine.evalSucceeded).
+    /// Never call it before that.
     static func modelLoadSucceeded(_ id: String, defaults: UserDefaults = Preferences.defaults) {
         if defaults.string(forKey: modelLoadMarkerKey) == id { defaults.removeObject(forKey: modelLoadMarkerKey) }
     }

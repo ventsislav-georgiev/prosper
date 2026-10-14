@@ -508,7 +508,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       id, fallback.isEmpty ? "none" : fallback)
                 if fallback.isEmpty { dropToNoModel() } else { Preferences.coreModel = fallback }
             } else {
-                runModelSetup(force: false, loaded: { Preferences.modelLoadSucceeded(id) })
+                // The marker clears on the model's first successful eval (MLXEngine.evalSucceeded).
+                runModelSetup(force: false)
             }
         }
         startAutocompleteIfReady()
@@ -1182,11 +1183,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func runModelSetup(force: Bool, loaded: (() -> Void)? = nil) {
+    private func runModelSetup(force: Bool) {
         let setup = modelSetup ?? ModelSetup()
         modelSetup = setup
         setup.runIfNeeded(force: force) { [weak self] ok in
-            if ok { loaded?() }
             // Cancelled/failed download with no model on disk → drop to "None" and
             // turn inline completions off (can't complete without weights).
             if !ok, ModelFiles.firstDownloadedModel() == nil {
@@ -1205,8 +1205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let setup = modelSetup ?? ModelSetup()
         modelSetup = setup
         setup.runSwitch { [weak self] ok in
-            // A model that loads fine in Settings is no longer a launch death (#435).
-            guard !ok else { Preferences.modelLoadSucceeded(Preferences.coreModel); return }
+            guard !ok else { return }
             self?.revertModelSelection(previous: previous)
         }
     }
