@@ -101,27 +101,34 @@ jobs:
           done
           xcrun metal --version >/dev/null 2>&1 || echo "::warning::Metal toolchain not installed; build.sh downloads it (~840 MB) if the metallib step runs"
 
-      - name: Cache SwiftPM build + dependencies
+      - name: Cache SwiftPM dependencies
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          # app/.build holds checked-out dep sources + compiled artifacts; the
-          # swiftpm caches hold the global dependency/manifest cache. Key + path +
-          # restore-keys MUST stay byte-identical to cache-warm.yml so dispatched
-          # runs restore the cache the warmer saved under the main scope.
+          # Git mirrors, artifact zips and the manifest cache. Safe to restore from
+          # an older key: SwiftPM fetches whatever is missing. Both cache steps MUST
+          # stay byte-identical between cache-warm.yml and release.yml, or tag runs
+          # never hit what the warmer saved under the main scope.
           path: |
-            app/.build
             ~/Library/Caches/org.swift.swiftpm
             ~/Library/org.swift.swiftpm
-          # `v3` salt (#416): app/.build now holds the swiftbuild backend's out/ layout;
-          # a v2 cache would restore a dead native-backend tree beside it.
-          # `v2` salt: the cache now also carries the MLX metallib bundle staged by
-          # build.sh. Bumping the prefix forces a one-time miss so the warmer re-saves
-          # WITH the metallib (actions/cache skips saving on an exact-key hit, so the
-          # old metallib-less v1 cache would otherwise stay frozen at the same key).
-          key: spm-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
+          key: spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: |
-            spm-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
-            spm-v3-${{ runner.os }}-
+            spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
+            spm-deps-v1-${{ runner.os }}-
+
+      - name: Cache SwiftPM build tree
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          # Checkouts, compiled products, macro plugins and the staged MLX metallib.
+          # Exact Package.resolved match only, no restore-keys (#433): a tree built
+          # against another dependency set is not an incremental starting point.
+          # Restored through a prefix it shipped a stale Sparkle PCH (v2.156.0-beta.1),
+          # would have shipped a stale metallib (build.sh stamps it since) and crashed
+          # the swift-syntax macro plugins after the mlx-swift-lm 3.32.3 bump
+          # (cache-warm run 38607018559). A miss rebuilds from the dependency cache
+          # above; Package.resolved changes a few times a month.
+          path: app/.build
+          key: spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
 
       - name: Build (release)
         run: |
