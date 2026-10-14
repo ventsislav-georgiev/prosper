@@ -37,26 +37,45 @@ enum ModelFiles {
     /// True when `dir` holds a complete weight set: with a `model.safetensors.index.json`,
     /// every distinct file in its `weight_map` exists in `dir` with a size above zero (a
     /// sharded download cancelled after its first shard is not complete; an unparseable
-    /// index is not complete either); without an index, any `*.safetensors`.
+    /// index is not complete either). Without an index (swift-huggingface fetches the
+    /// LFS shards before the small files, so a cancelled fetch leaves shards and no
+    /// index): shards named `*-XXXXX-of-NNNNN.safetensors` need all NNNNN present;
+    /// otherwise any non-empty `*.safetensors`.
+    // ponytail: weights only. A cancel inside the small-file tail (config, tokenizer,
+    // index, fetched after every shard) still reads as downloaded; the loader fetches
+    // those KB on load. An app-written completion marker would close it but needs a
+    // legacy rule for snapshots downloaded before the marker existed.
     private static func holdsWeights(_ dir: URL) -> Bool {
         let fm = FileManager.default
+        // Snapshot files are symlinks into blobs/ (copies where symlinks fail).
+        // fileExists follows the link (dangling = absent); attributesOfItem does not,
+        // so size the resolved blob. A missing, dangling or zero-byte file is absent.
+        func present(_ name: String) -> Bool {
+            let file = dir.appendingPathComponent(name)
+            guard fm.fileExists(atPath: file.path) else { return false }
+            let blob = file.resolvingSymlinksInPath().path
+            return ((try? fm.attributesOfItem(atPath: blob))?[.size] as? Int64 ?? 0) > 0
+        }
         let index = dir.appendingPathComponent("model.safetensors.index.json")
         if let data = fm.contents(atPath: index.path) {
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let map = json["weight_map"] as? [String: String], !map.isEmpty
             else { return false }
-            // Snapshot files are symlinks into blobs/ (copies where symlinks fail).
-            // fileExists follows the link (dangling = absent); attributesOfItem does not,
-            // so size the resolved blob. A missing, dangling or zero-byte shard is absent.
-            return Set(map.values).allSatisfy {
-                let shard = dir.appendingPathComponent($0)
-                guard fm.fileExists(atPath: shard.path) else { return false }
-                let blob = shard.resolvingSymlinksInPath().path
-                return ((try? fm.attributesOfItem(atPath: blob))?[.size] as? Int64 ?? 0) > 0
-            }
+            return Set(map.values).allSatisfy(present)
         }
         guard let files = try? fm.contentsOfDirectory(atPath: dir.path) else { return false }
-        return files.contains(where: { $0.hasSuffix(".safetensors") })
+        let weights = files.filter { $0.hasSuffix(".safetensors") }
+        // Shard count NNNNN from each "-XXXXX-of-NNNNN.safetensors" name.
+        let shards = weights.compactMap { name -> (name: String, total: Int)? in
+            let parts = name.dropLast(".safetensors".count).components(separatedBy: "-of-")
+            guard parts.count == 2, let n = Int(parts[1]),
+                  let i = parts[0].split(separator: "-").last, Int(i) != nil else { return nil }
+            return (name, n)
+        }
+        if shards.isEmpty { return weights.contains(where: present) }
+        let totals = Set(shards.map(\.total))
+        guard totals.count == 1, let total = totals.first else { return false }
+        return shards.filter { present($0.name) }.count == total
     }
 
     /// Hub cache subdir name for a model id: `mlx-community/gemma-4-e2b-it-4bit`

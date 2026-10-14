@@ -160,6 +160,41 @@ final class ModelFilesDiskTests: XCTestCase {
         XCTAssertFalse(ModelFiles.isModelDownloaded("shard/badindex", hubURL: hub))
     }
 
+    // No index: swift-huggingface fetches the LFS shards before the small files (index
+    // included), so a cancelled sharded fetch leaves N of M "-of-" shards and no index.
+    func testNoIndexOneOfTwoShardsIsNotDownloaded() throws {
+        try makeCachedModel("noidx/half", blobs: [("sha-1", twoShards[0], 100)])
+        XCTAssertFalse(ModelFiles.diskState("noidx/half", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("noidx/half", hubURL: hub))
+    }
+
+    func testNoIndexAllShardsIsDownloaded() throws {
+        try makeCachedModel("noidx/full", blobs: [("sha-1", twoShards[0], 100), ("sha-2", twoShards[1], 100)])
+        XCTAssertTrue(ModelFiles.diskState("noidx/full", hubURL: hub).downloaded)
+        XCTAssertTrue(ModelFiles.isModelDownloaded("noidx/full", hubURL: hub))
+    }
+
+    func testNoIndexAllShardsOneZeroByteIsNotDownloaded() throws {
+        try makeCachedModel("noidx/zero", blobs: [("sha-1", twoShards[0], 100), ("sha-2", twoShards[1], 0)])
+        XCTAssertFalse(ModelFiles.diskState("noidx/zero", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("noidx/zero", hubURL: hub))
+    }
+
+    func testNoIndexTwoOfThreeShardsIsNotDownloaded() throws {
+        try makeCachedModel("noidx/three", blobs: [
+            ("sha-1", "model-00001-of-00003.safetensors", 100),
+            ("sha-2", "model-00002-of-00003.safetensors", 100),
+        ])
+        XCTAssertFalse(ModelFiles.diskState("noidx/three", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("noidx/three", hubURL: hub))
+    }
+
+    func testNoIndexZeroByteSingleFileIsNotDownloaded() throws {
+        try makeCachedModel("noidx/empty", blobs: [("sha-w", "model.safetensors", 0)])
+        XCTAssertFalse(ModelFiles.diskState("noidx/empty", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("noidx/empty", hubURL: hub))
+    }
+
     // Hot-path budget: the pane calls diskState per catalog model. A sharded weights
     // checkpoint (many blobs) must still resolve in well under a frame.
     func testDiskStatePerfBudget() throws {
