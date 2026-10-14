@@ -32,12 +32,14 @@ tag from the now-released section and put it on the new top draft.
   error in the setup window instead of ending the process, and an inline (MLX) load that
   aborts the process during launch is skipped on the next launch, stepping down to a
   smaller model already on disk (or to none) rather than aborting every launch; no
-  download ever starts from that fallback. The AI Models pane applies the same rule:
-  Download and Use-for are disabled on a row this Mac cannot hold, and an agent row that
-  does not fit says how much RAM it needs. The Agent model picker does the same, never
-  starts a download for such a row, its RAM warning names the model that runs instead of
-  a pick this Mac cannot hold, and an agent model synced from a bigger Mac reads as this
-  Mac's default instead of being loaded as-is (#435, #436, #437, #438, #440).
+  download ever starts from that fallback, and a sharded checkpoint whose download was
+  cancelled part-way no longer counts as downloaded (so neither the fallback nor the AI
+  Models pane treats it as ready). The AI Models pane applies the same rule: Download
+  and Use-for are disabled on a row this Mac cannot hold, and an agent row that does not
+  fit says how much RAM it needs. The Agent model picker does the same, never starts a
+  download for such a row, its RAM warning names the model that runs instead of a pick
+  this Mac cannot hold, and an agent model synced from a bigger Mac reads as this Mac's
+  default instead of being loaded as-is (#435, #436, #437, #438, #440, #441).
 - **Tokenizer and chat-template libraries updated.** swift-transformers 1.3.5 and swift-
   jinja 2.5.1: tokenizers honor the model's byte-fallback setting, and tool definitions
   render into the prompt in the same JSON form the model's own template expects (#171).

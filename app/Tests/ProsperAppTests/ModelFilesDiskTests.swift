@@ -77,6 +77,89 @@ final class ModelFilesDiskTests: XCTestCase {
         XCTAssertNil(s.sizeBytes)
     }
 
+    // Sharded checkpoints: model.safetensors.index.json names the shard set; a download
+    // cancelled after its first shard must not count as on disk (#441).
+    private func writeIndex(_ root: URL, shards: [String]) throws {
+        var map: [String: String] = [:]
+        for (i, f) in shards.enumerated() { map["layer.\(i).weight"] = f; map["layer.\(i).bias"] = f }
+        let data = try JSONSerialization.data(withJSONObject: ["metadata": [:], "weight_map": map])
+        try data.write(to: root.appendingPathComponent("snapshots/main/model.safetensors.index.json"))
+    }
+
+    private let twoShards = ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]
+
+    func testShardedIndexWithOneShardMissingIsNotDownloaded() throws {
+        let root = try makeCachedModel("shard/half", blobs: [("sha-1", twoShards[0], 100)])
+        try writeIndex(root, shards: twoShards)
+        XCTAssertFalse(ModelFiles.diskState("shard/half", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("shard/half", hubURL: hub))
+    }
+
+    func testShardedIndexWithAllShardsIsDownloaded() throws {
+        let root = try makeCachedModel("shard/full", blobs: [
+            ("sha-1", twoShards[0], 100), ("sha-2", twoShards[1], 100),
+        ])
+        try writeIndex(root, shards: twoShards)
+        let s = ModelFiles.diskState("shard/full", hubURL: hub)
+        XCTAssertTrue(s.downloaded)
+        XCTAssertNotNil(s.sizeBytes)
+        XCTAssertTrue(ModelFiles.isModelDownloaded("shard/full", hubURL: hub))
+    }
+
+    func testNoIndexSingleSafetensorsIsDownloaded() throws {
+        try makeCachedModel("single/m", blobs: [("sha-w", "model.safetensors", 100)])
+        XCTAssertTrue(ModelFiles.diskState("single/m", hubURL: hub).downloaded)
+        XCTAssertTrue(ModelFiles.isModelDownloaded("single/m", hubURL: hub))
+    }
+
+    func testIndexWithNoShardFilesIsNotDownloaded() throws {
+        let root = try makeCachedModel("shard/none", blobs: [("sha-config", "config.json", 50)])
+        try writeIndex(root, shards: twoShards)
+        XCTAssertFalse(ModelFiles.diskState("shard/none", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("shard/none", hubURL: hub))
+    }
+
+    func testZeroByteListedShardIsNotDownloaded() throws {
+        let root = try makeCachedModel("shard/empty", blobs: [
+            ("sha-1", twoShards[0], 100), ("sha-2", twoShards[1], 0),
+        ])
+        try writeIndex(root, shards: twoShards)
+        XCTAssertFalse(ModelFiles.diskState("shard/empty", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("shard/empty", hubURL: hub))
+    }
+
+    func testDanglingShardSymlinkIsNotDownloaded() throws {
+        let root = try makeCachedModel("shard/dangling", blobs: [
+            ("sha-1", twoShards[0], 100), ("sha-2", twoShards[1], 100),
+        ])
+        try writeIndex(root, shards: twoShards)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("blobs/sha-2"))
+        XCTAssertFalse(ModelFiles.diskState("shard/dangling", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("shard/dangling", hubURL: hub))
+    }
+
+    // Copy fallback (no symlinks): plain shard files, one of them zero bytes.
+    func testPlainFileShardsZeroByteIsNotDownloadedCompleteIs() throws {
+        let root = try makeCachedModel("shard/plain", blobs: [])
+        let snap = root.appendingPathComponent("snapshots/main")
+        try writeIndex(root, shards: twoShards)
+        try Data(count: 100).write(to: snap.appendingPathComponent(twoShards[0]))
+        try Data().write(to: snap.appendingPathComponent(twoShards[1]))
+        XCTAssertFalse(ModelFiles.diskState("shard/plain", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("shard/plain", hubURL: hub))
+        try Data(count: 100).write(to: snap.appendingPathComponent(twoShards[1]))
+        XCTAssertTrue(ModelFiles.diskState("shard/plain", hubURL: hub).downloaded)
+        XCTAssertTrue(ModelFiles.isModelDownloaded("shard/plain", hubURL: hub))
+    }
+
+    func testInvalidIndexIsNotDownloadedEvenWithSafetensors() throws {
+        let root = try makeCachedModel("shard/badindex", blobs: [("sha-w", "model.safetensors", 100)])
+        try Data("{not json".utf8).write(
+            to: root.appendingPathComponent("snapshots/main/model.safetensors.index.json"))
+        XCTAssertFalse(ModelFiles.diskState("shard/badindex", hubURL: hub).downloaded)
+        XCTAssertFalse(ModelFiles.isModelDownloaded("shard/badindex", hubURL: hub))
+    }
+
     // Hot-path budget: the pane calls diskState per catalog model. A sharded weights
     // checkpoint (many blobs) must still resolve in well under a frame.
     func testDiskStatePerfBudget() throws {

@@ -17,8 +17,8 @@ enum ModelFiles {
     }
 
     /// True when a model snapshot with weights is on disk — i.e. setup's download
-    /// step is done. Scans for a `*.safetensors` under any
-    /// `hub/models--*/snapshots/*`.
+    /// step is done. Scans `hub/models--*/snapshots/*` for a complete weight set
+    /// (see `holdsWeights`).
     static var isModelDownloaded: Bool {
         let fm = FileManager.default
         guard let models = try? fm.contentsOfDirectory(
@@ -29,14 +29,34 @@ enum ModelFiles {
             guard let revs = try? fm.contentsOfDirectory(
                 at: snapshots, includingPropertiesForKeys: nil
             ) else { continue }
-            for rev in revs {
-                if let files = try? fm.contentsOfDirectory(atPath: rev.path),
-                   files.contains(where: { $0.hasSuffix(".safetensors") }) {
-                    return true
-                }
-            }
+            if revs.contains(where: holdsWeights) { return true }
         }
         return false
+    }
+
+    /// True when `dir` holds a complete weight set: with a `model.safetensors.index.json`,
+    /// every distinct file in its `weight_map` exists in `dir` with a size above zero (a
+    /// sharded download cancelled after its first shard is not complete; an unparseable
+    /// index is not complete either); without an index, any `*.safetensors`.
+    private static func holdsWeights(_ dir: URL) -> Bool {
+        let fm = FileManager.default
+        let index = dir.appendingPathComponent("model.safetensors.index.json")
+        if let data = fm.contents(atPath: index.path) {
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let map = json["weight_map"] as? [String: String], !map.isEmpty
+            else { return false }
+            // Snapshot files are symlinks into blobs/ (copies where symlinks fail).
+            // fileExists follows the link (dangling = absent); attributesOfItem does not,
+            // so size the resolved blob. A missing, dangling or zero-byte shard is absent.
+            return Set(map.values).allSatisfy {
+                let shard = dir.appendingPathComponent($0)
+                guard fm.fileExists(atPath: shard.path) else { return false }
+                let blob = shard.resolvingSymlinksInPath().path
+                return ((try? fm.attributesOfItem(atPath: blob))?[.size] as? Int64 ?? 0) > 0
+            }
+        }
+        guard let files = try? fm.contentsOfDirectory(atPath: dir.path) else { return false }
+        return files.contains(where: { $0.hasSuffix(".safetensors") })
     }
 
     /// Hub cache subdir name for a model id: `mlx-community/gemma-4-e2b-it-4bit`
@@ -46,27 +66,22 @@ enum ModelFiles {
     }
 
     /// True when THIS specific model's weights are on disk (download done).
-    /// Scans `hub/models--<sanitized id>/snapshots/*` for any `*.safetensors`.
-    static func isModelDownloaded(_ modelId: String) -> Bool {
+    /// Scans `hub/models--<sanitized id>/snapshots/*` for a complete weight set
+    /// (see `holdsWeights`). `hubURL` is injectable for tests.
+    static func isModelDownloaded(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> Bool {
         guard !modelId.isEmpty else { return false }
         if let gguf = AgentModelRegistry.gguf(for: modelId) {
             return FileManager.default.fileExists(
                 atPath: LlamaAgentEngine.fileURL(fileName: gguf.fileName).path)
         }
         let fm = FileManager.default
-        let snapshots = ModelPaths.hubURL
+        let snapshots = hubURL
             .appendingPathComponent(cacheDirName(for: modelId))
             .appendingPathComponent("snapshots")
         guard let revs = try? fm.contentsOfDirectory(
             at: snapshots, includingPropertiesForKeys: nil
         ) else { return false }
-        for rev in revs {
-            if let files = try? fm.contentsOfDirectory(atPath: rev.path),
-               files.contains(where: { $0.hasSuffix(".safetensors") }) {
-                return true
-            }
-        }
-        return false
+        return revs.contains(where: holdsWeights)
     }
 
     struct DiskState: Equatable { let downloaded: Bool; let sizeBytes: Int64? }
@@ -78,8 +93,9 @@ enum ModelFiles {
     /// `.safetensors` name is on the `snapshots/*` symlinks pointing at those blobs. So:
     ///   - size = sum of *real* files only — symlinks are skipped (following one would
     ///     double-count the blob it targets),
-    ///   - "has weights" = any entry (symlink OR regular file) named `*.safetensors`,
-    ///     which also covers a flat, non-cache layout.
+    ///   - "has weights" = a directory holding a `*.safetensors` entry (symlink OR regular
+    ///     file) passes `holdsWeights` (complete shard set when an index exists), which
+    ///     also covers a flat, non-cache layout.
     /// One walk, not two (vs separate `isModelDownloaded` + size), because the AI Models
     /// pane computes this for every catalog row.
     static func diskState(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> DiskState {
@@ -99,14 +115,15 @@ enum ModelFiles {
             return DiskState(downloaded: false, sizeBytes: nil)
         }
         var total: Int64 = 0
-        var hasWeights = false
+        var weightDirs = Set<URL>()
         for case let url as URL in en {
-            if url.pathExtension == "safetensors" { hasWeights = true }
+            if url.pathExtension == "safetensors" { weightDirs.insert(url.deletingLastPathComponent()) }
             guard let v = try? url.resourceValues(forKeys: keys),
                   v.isSymbolicLink != true, v.isRegularFile == true, let sz = v.fileSize
             else { continue }
             total += Int64(sz)
         }
+        let hasWeights = weightDirs.contains(where: holdsWeights)
         return DiskState(downloaded: hasWeights, sizeBytes: hasWeights ? total : nil)
     }
 
@@ -126,7 +143,7 @@ enum ModelFiles {
             + [Preferences.liteModelId,
                Preferences.defaultModelId,
                Preferences.alternateModelId])
-            .first(where: isModelDownloaded)
+            .first(where: { isModelDownloaded($0) })
     }
 
     /// Reveals one model's files in Finder: the GGUF file for llama.cpp agent
