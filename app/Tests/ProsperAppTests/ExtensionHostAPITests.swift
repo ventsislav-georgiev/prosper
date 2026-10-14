@@ -253,6 +253,38 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertEqual(obj?["pid"] as? Int, 42)
     }
 
+    /// #431: macOS clobbers our select right after an app switch, so setSource
+    /// re-asserts; a re-assert must win the clobber back while focus stays put, and
+    /// stand down once ANY app activates — even with no app.activated subscriber
+    /// (HyperKey's cycle re-asserts too). Focus is read from the activation stream,
+    /// never `frontmostApplication`, which lags the notification.
+    @MainActor
+    func testKeyboardReassertsUntilAnActivationSupersedesThem() {
+        var current = "ABC"
+        var selects: [String] = []
+        let saved = (KeyboardSource.readCurrent, KeyboardSource.select)
+        KeyboardSource.readCurrent = { current }
+        KeyboardSource.select = { selects.append($0); current = $0; return true }
+        defer { KeyboardSource.readCurrent = saved.0; KeyboardSource.select = saved.1 }
+
+        // Clobbered after the set, nothing activates → the 0.25 s re-assert wins it back.
+        _ = KeyboardSource.setSource("BG")
+        current = "ABC"
+        RunLoop.main.run(until: Date() + 0.4)
+        XCTAssertEqual(selects, ["BG", "BG"])
+        XCTAssertEqual(current, "BG")
+
+        // Clobbered, then focus moves before the re-asserts fire → both stand down.
+        _ = KeyboardSource.setSource("BG")
+        current = "ABC"
+        let w = SystemEventWatchers()
+        w.shouldEmit = { _ in false }
+        w.emitAppActivated(bundleID: "com.apple.Safari", name: "Safari", pid: 42)
+        RunLoop.main.run(until: Date() + 0.8)
+        XCTAssertEqual(selects, ["BG", "BG", "BG"], "a re-assert fired after the user switched apps")
+        XCTAssertEqual(current, "ABC")
+    }
+
     func testClipboardPrefsNotify() throws {
         let lua = try LuaRuntime()
         let svc = FakeServices()

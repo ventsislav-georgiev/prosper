@@ -27,6 +27,13 @@ tag from the now-released section and put it on the new top draft.
   outside-click dismisser now owns the click on the open item and still leaves clicks on
   the other icons to the system. (#430)
 
+- **Fixed: the input switcher could leave a configured app on the other language until
+  you switched away and back.** macOS flips the layout back right after an app switch,
+  so Prosper re-asserts the configured source twice within 0.6 s. Those re-asserts
+  checked the frontmost app through a property that can still name the previous app when
+  the activation arrives, so both stood down and the flip stuck. They now stand down
+  only when a newer switch or any app activation supersedes them. (#431)
+
 ## v2.156.0
 
 - **Fixed: Settings could open narrower than its content, cutting the sidebar and the
