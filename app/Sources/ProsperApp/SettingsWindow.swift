@@ -1247,18 +1247,20 @@ private struct PermissionWarningRow: View {
 struct AIModelSection: View {
     @ObservedObject var model: SettingsModel
 
-    /// Picker-offered models, smallest→largest. The full-size 12B/26B QAT checkpoints
-    /// are NOT offered: the vendored mlx-swift-lm fork has no loader for them (12B =
-    /// unregistered model_type `gemma4_unified`; 26B-A4B = 128-expert MoE that doesn't
-    /// map onto the dense Gemma4Model). See Preferences.unsupportedModelIds — re-add
-    /// here only once the architectures are ported AND verified to load.
+    /// Picker-offered models, same order as `Preferences.selectableModelIds`.
     static let models: [(String, String)] = [
         (Preferences.qatE2B4Id, "Gemma 4 E2B (QAT 4-bit, ~4.3 GB) — fastest, lightest"),
         (Preferences.qatE2B6Id, "Gemma 4 E2B (QAT 6-bit, ~5.1 GB) — sharper E2B, more RAM"),
         (Preferences.qatE2B8Id, "Gemma 4 E2B (QAT 8-bit, ~5.9 GB) — sharpest E2B, most RAM"),
         (Preferences.qatE4B4Id, "Gemma 4 E4B (QAT 4-bit, ~6.8 GB) — larger base, smarter"),
         (Preferences.qatE4B6Id, "Gemma 4 E4B (QAT 6-bit, ~7.8 GB) — larger base, sharper"),
-        (Preferences.qatE4B8Id, "Gemma 4 E4B (QAT 8-bit, ~8.9 GB) — recommended (smartest, most RAM)"),
+        (Preferences.qatE4B8Id, "Gemma 4 E4B (QAT 8-bit, ~8.9 GB) — recommended"),
+        (Preferences.qat12B4Id, "Gemma 4 12B (QAT 4-bit, ~6.7 GB) — dense 12B, slower"),
+        (Preferences.qat12B6Id, "Gemma 4 12B (QAT 6-bit, ~9.6 GB) — sharper 12B, more RAM"),
+        (Preferences.qat12B8Id, "Gemma 4 12B (QAT 8-bit, ~12.6 GB) — sharpest 12B, high-RAM Macs"),
+        (Preferences.qat26B4Id, "Gemma 4 26B-A4B MoE (QAT 4-bit, ~14 GB) — 4B active, high-RAM Macs"),
+        (Preferences.qat26B6Id, "Gemma 4 26B-A4B MoE (QAT 6-bit, ~20 GB) — 4B active, high-RAM Macs"),
+        (Preferences.qat26B8Id, "Gemma 4 26B-A4B MoE (QAT 8-bit, ~27 GB) — smartest, most RAM"),
     ]
 
     /// Prepends a "None" row whenever no model is selected (e.g. after cancelling the

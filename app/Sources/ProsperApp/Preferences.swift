@@ -441,44 +441,36 @@ enum Preferences {
     static let qatE4B4Id = "mlx-community/gemma-4-E4B-it-qat-4bit"  // ~6.8 GB
     static let qatE4B6Id = "mlx-community/gemma-4-E4B-it-qat-6bit"  // ~7.8 GB
     static let qatE4B8Id = "mlx-community/gemma-4-E4B-it-qat-8bit"  // ~8.9 GB
-    // Heavier full-size Gemma 4 QAT (dense 12B and the 26B-A4B MoE — 26B total,
-    // only ~4B active per token, so it runs closer to E4B speed than its size
-    // implies). Same QAT load path (heterogeneous quant + KV-sharing) as the
-    // E-series. Offered for high-RAM Macs that want sharper completions; the inline
-    // hot-path tradeoff is download/RAM and (for the dense 12B) latency.
-    static let qat12B4Id = "mlx-community/gemma-4-12B-it-qat-4bit"        // ~6.7 GB
-    static let qat12B6Id = "mlx-community/gemma-4-12B-it-qat-6bit"        // ~9.6 GB
-    static let qat12B8Id = "mlx-community/gemma-4-12B-it-qat-8bit"        // ~12.6 GB
-    static let qat26B4Id = "mlx-community/gemma-4-26B-A4B-it-qat-4bit"    // ~14 GB · MoE 4B active
-    static let qat26B6Id = "mlx-community/gemma-4-26B-A4B-it-qat-6bit"    // ~20 GB · MoE 4B active
-    static let qat26B8Id = "mlx-community/gemma-4-26B-A4B-it-qat-8bit"    // ~27 GB · MoE 4B active
+    // Heavier full-size Gemma 4 QAT, offered for high-RAM Macs that want sharper
+    // completions; the inline hot-path tradeoff is download/RAM and (for the dense
+    // 12B) latency. Both load through LLMModelFactory on mlx-swift-lm 3.32.3:
+    // - 12B: `model_type: gemma4_unified` (dense, encoder-free vision), registered
+    //   to the text `Gemma4Model`, whose `sanitize` drops the `vision_embedder`
+    //   weights. The checkpoint ships those vision weights, so its download is a
+    //   bit larger than a text-only 12B.
+    // - 26B-A4B: MoE, 128 experts with ~4B active per token, so it runs closer to E4B
+    //   speed than its size suggests. `Gemma4TextModel` builds the router and
+    //   SwitchGLU experts from `enable_moe_block` / `num_experts` / `top_k_experts`.
+    // Sizes are estimates from parameter count x bits. They have not been checked
+    // against a real download yet (#157: confirm each one loads on a real machine).
+    static let qat12B4Id = "mlx-community/gemma-4-12B-it-qat-4bit"        // ~6.7 GB est.
+    static let qat12B6Id = "mlx-community/gemma-4-12B-it-qat-6bit"        // ~9.6 GB est.
+    static let qat12B8Id = "mlx-community/gemma-4-12B-it-qat-8bit"        // ~12.6 GB est.
+    static let qat26B4Id = "mlx-community/gemma-4-26B-A4B-it-qat-4bit"    // ~14 GB est. · MoE 4B active
+    static let qat26B6Id = "mlx-community/gemma-4-26B-A4B-it-qat-6bit"    // ~20 GB est. · MoE 4B active
+    static let qat26B8Id = "mlx-community/gemma-4-26B-A4B-it-qat-8bit"    // ~27 GB est. · MoE 4B active
 
-    /// Recommended default: Gemma 4 E4B, **QAT 8-bit** (~8.9 GB) — the largest,
-    /// smartest, highest-RAM option in the ladder (biggest base × most bits =
-    /// sharpest completions). This is the `coreModel` fallback so a fresh install
-    /// runs it; users can step down the ladder from the AI Model picker to trade
-    /// quality for RAM/speed.
+    /// Recommended default: Gemma 4 E4B, **QAT 8-bit** (~8.9 GB) — the sharpest
+    /// E-series option and the best fit for the inline hot path on a typical Mac.
+    /// This is the `coreModel` fallback so a fresh install runs it; users can step
+    /// down the ladder to trade quality for RAM/speed, or up to 12B/26B-A4B on a
+    /// high-RAM Mac.
     static let recommendedModelId = qatE4B8Id
 
-    /// Every picker-offered model, smallest→largest. Drives the AI Model picker and
-    /// the revert-target search.
-    ///
-    /// The full-size 12B/26B QAT checkpoints are deliberately EXCLUDED: the vendored
-    /// mlx-swift-lm fork has no loader for them. The 12B dense ships `model_type:
-    /// gemma4_unified` (Gemma4UnifiedForConditionalGeneration) which is not registered
-    /// in LLMModelFactory, and the 26B-A4B is a 128-expert MoE whose weights don't map
-    /// onto the dense `Gemma4Model`. Both fail at load. Re-add them here (and to the
-    /// picker `models` array) only once those architectures are ported AND verified to
-    /// load — see `unsupportedModelIds`.
+    /// Every picker-offered model, ordered by base (E2B, E4B, 12B, 26B-A4B), then by
+    /// bits within a base. Drives the AI Model picker and the revert-target search.
     static let selectableModelIds: [String] = [
         qatE2B4Id, qatE2B6Id, qatE2B8Id, qatE4B4Id, qatE4B6Id, qatE4B8Id,
-    ]
-
-    /// Checkpoints that exist on Hugging Face and have id constants above, but cannot
-    /// be loaded by the current fork (see `selectableModelIds`). `coreModel` rewrites a
-    /// stored value from this set back to `recommendedModelId` so a user who selected
-    /// one before it was pulled from the picker isn't stuck on a model that never loads.
-    static let unsupportedModelIds: Set<String> = [
         qat12B4Id, qat12B6Id, qat12B8Id, qat26B4Id, qat26B6Id, qat26B8Id,
     ]
 
@@ -853,9 +845,7 @@ enum Preferences {
     /// Hugging Face MLX model id used by MLXEngine. Defaults to `defaultModelId`.
     static var coreModel: String {
         get {
-            let id = defaults.string(forKey: Keys.coreModel) ?? recommendedModelId
-            // Self-heal a selection that the current fork can't load (the pulled 12B/26B).
-            return unsupportedModelIds.contains(id) ? recommendedModelId : id
+            defaults.string(forKey: Keys.coreModel) ?? recommendedModelId
         }
         set { defaults.set(newValue, forKey: Keys.coreModel) }
     }
