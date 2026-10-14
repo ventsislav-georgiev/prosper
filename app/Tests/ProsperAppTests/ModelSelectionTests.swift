@@ -4,9 +4,10 @@ import XCTest
 
 /// Covers the model-picker catalog invariants, including the 12B/26B-A4B QAT rows
 /// re-enabled once mlx-swift-lm 3.32.3 registered gemma4_unified and the MoE text path.
+@MainActor
 final class ModelSelectionTests: XCTestCase {
     private let key = "coreModel"
-    private var saved: String?
+    nonisolated(unsafe) private var saved: String?
 
     override func setUp() {
         super.setUp()

@@ -451,14 +451,13 @@ enum Preferences {
     // - 26B-A4B: MoE, 128 experts with ~4B active per token, so it runs closer to E4B
     //   speed than its size suggests. `Gemma4TextModel` builds the router and
     //   SwitchGLU experts from `enable_moe_block` / `num_experts` / `top_k_experts`.
-    // Sizes are estimates from parameter count x bits. They have not been checked
-    // against a real download yet (#157: confirm each one loads on a real machine).
-    static let qat12B4Id = "mlx-community/gemma-4-12B-it-qat-4bit"        // ~6.7 GB est.
-    static let qat12B6Id = "mlx-community/gemma-4-12B-it-qat-6bit"        // ~9.6 GB est.
-    static let qat12B8Id = "mlx-community/gemma-4-12B-it-qat-8bit"        // ~12.6 GB est.
-    static let qat26B4Id = "mlx-community/gemma-4-26B-A4B-it-qat-4bit"    // ~14 GB est. · MoE 4B active
-    static let qat26B6Id = "mlx-community/gemma-4-26B-A4B-it-qat-6bit"    // ~20 GB est. · MoE 4B active
-    static let qat26B8Id = "mlx-community/gemma-4-26B-A4B-it-qat-8bit"    // ~27 GB est. · MoE 4B active
+    // Sizes are Hugging Face safetensors totals (decimal GB, 2026-10-14).
+    static let qat12B4Id = "mlx-community/gemma-4-12B-it-qat-4bit"        // ~11.0 GB
+    static let qat12B6Id = "mlx-community/gemma-4-12B-it-qat-6bit"        // ~11.9 GB
+    static let qat12B8Id = "mlx-community/gemma-4-12B-it-qat-8bit"        // ~12.7 GB
+    static let qat26B4Id = "mlx-community/gemma-4-26B-A4B-it-qat-4bit"    // ~15.6 GB · MoE 4B active
+    static let qat26B6Id = "mlx-community/gemma-4-26B-A4B-it-qat-6bit"    // ~21.8 GB · MoE 4B active
+    static let qat26B8Id = "mlx-community/gemma-4-26B-A4B-it-qat-8bit"    // ~28 GB · MoE 4B active
 
     /// Recommended default: Gemma 4 E4B, **QAT 8-bit** (~8.9 GB) — the sharpest
     /// E-series option and the best fit for the inline hot path on a typical Mac.

@@ -20,11 +20,11 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.157.0 *(unreleased)*
 
-- **The AI Model picker offers the Gemma 4 12B and 26B-A4B QAT checkpoints again.** They
-  were hidden while the bundled MLX library could not load them; the current release
-  registers both architectures (the dense 12B and the 128-expert MoE with about 4B
-  active parameters), so the six rows are back, labelled for high-RAM Macs. Download
-  sizes shown are estimates until confirmed (#157).
+- **The AI Model picker offers the Gemma 4 12B and 26B-A4B QAT checkpoints again when
+  the MLX engine is selected.** They were hidden while the bundled MLX library could not
+  load them; the current release registers both architectures (the dense 12B and the
+  128-expert MoE with about 4B active parameters), so the six rows are back with their
+  real download sizes (11 to 28 GB) and the RAM tier each needs (#157, #434).
 - **Tokenizer and chat-template libraries updated.** swift-transformers 1.3.5 and swift-
   jinja 2.5.1: tokenizers honor the model's byte-fallback setting, and tool definitions
   render into the prompt in the same JSON form the model's own template expects (#171).

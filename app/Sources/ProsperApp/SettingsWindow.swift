@@ -1255,12 +1255,12 @@ struct AIModelSection: View {
         (Preferences.qatE4B4Id, "Gemma 4 E4B (QAT 4-bit, ~6.8 GB) — larger base, smarter"),
         (Preferences.qatE4B6Id, "Gemma 4 E4B (QAT 6-bit, ~7.8 GB) — larger base, sharper"),
         (Preferences.qatE4B8Id, "Gemma 4 E4B (QAT 8-bit, ~8.9 GB) — recommended"),
-        (Preferences.qat12B4Id, "Gemma 4 12B (QAT 4-bit, ~6.7 GB) — dense 12B, slower"),
-        (Preferences.qat12B6Id, "Gemma 4 12B (QAT 6-bit, ~9.6 GB) — sharper 12B, more RAM"),
-        (Preferences.qat12B8Id, "Gemma 4 12B (QAT 8-bit, ~12.6 GB) — sharpest 12B, high-RAM Macs"),
-        (Preferences.qat26B4Id, "Gemma 4 26B-A4B MoE (QAT 4-bit, ~14 GB) — 4B active, high-RAM Macs"),
-        (Preferences.qat26B6Id, "Gemma 4 26B-A4B MoE (QAT 6-bit, ~20 GB) — 4B active, high-RAM Macs"),
-        (Preferences.qat26B8Id, "Gemma 4 26B-A4B MoE (QAT 8-bit, ~27 GB) — smartest, most RAM"),
+        (Preferences.qat12B4Id, "Gemma 4 12B (QAT 4-bit, ~11.0 GB) — dense 12B, slower, 16 GB+ RAM"),
+        (Preferences.qat12B6Id, "Gemma 4 12B (QAT 6-bit, ~11.9 GB) — sharper 12B, 16 GB+ RAM"),
+        (Preferences.qat12B8Id, "Gemma 4 12B (QAT 8-bit, ~12.7 GB) — sharpest 12B, 18 GB+ RAM"),
+        (Preferences.qat26B4Id, "Gemma 4 26B-A4B MoE (QAT 4-bit, ~15.6 GB) — 4B active, 24 GB+ RAM"),
+        (Preferences.qat26B6Id, "Gemma 4 26B-A4B MoE (QAT 6-bit, ~21.8 GB) — 4B active, 32 GB+ RAM"),
+        (Preferences.qat26B8Id, "Gemma 4 26B-A4B MoE (QAT 8-bit, ~28 GB) — smartest, 36 GB+ RAM"),
     ]
 
     /// Prepends a "None" row whenever no model is selected (e.g. after cancelling the
