@@ -6,7 +6,7 @@ import XCTest
 
 /// ON-DEVICE validation that Gemma **QAT-4bit** (quantization-aware-trained,
 /// heterogeneous / mixed-precision checkpoint) loads and generates through our
-/// pinned `mlx-swift-lm` 3.31.3 stack — the exact production path MLXEngine uses.
+/// pinned `mlx-swift-lm` 3.32.3 stack — the exact production path MLXEngine uses.
 ///
 /// Background: QAT checkpoints ship a `config.json` whose `quantization` block
 /// interleaves a global `{group_size, bits:4}` with many per-layer overrides
@@ -98,7 +98,7 @@ final class QATModelE2ETests: XCTestCase {
             "E4B QAT output not coherent (expected 'Paris'): \(trimmed)")
     }
 
-    /// REGRESSION: the QAT patch gates K/V proj+norm allocation to non-shared
+    /// REGRESSION: upstream (formerly our QAT patch) gates K/V proj+norm allocation to non-shared
     /// layers and strips the redundant shared-layer K/V weights in `sanitize`.
     /// A UNIFORM checkpoint ships those redundant weights for every layer, so
     /// this proves the patch keeps uniform models loadable (they would otherwise

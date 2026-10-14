@@ -425,11 +425,11 @@ enum Preferences {
 
     /// QAT model ladder (the ONLY checkpoints offered in the picker). All are
     /// quantization-aware-trained Gemma 4 (E2B = effective ~2B, E4B = effective ~4B)
-    /// and load via the mlx-swift-lm QAT patch (heterogeneous quant + KV-sharing):
-    /// the checkpoints are heterogeneous (per-layer) quant AND omit K/V proj+norm on
-    /// KV-shared layers; the patch (`app/patches/mlx-swift-lm-qat.patch`, re-applied
-    /// by `scripts/apply-patches.sh`) makes the per-layer projection quantizable and
-    /// gates K/V proj+norm to non-shared layers.
+    /// and load natively on mlx-swift-lm 3.32.3 (no local patch): the checkpoints are
+    /// heterogeneous (per-layer) quant AND omit K/V proj+norm on KV-shared layers;
+    /// upstream's Gemma 4 text model uses a quantizable `Linear` for the per-layer
+    /// projection, allocates K/V proj+norm only on non-shared layers, and `sanitize`
+    /// drops the redundant shared-layer K/V weights uniform checkpoints still ship.
     /// Within a base, more bits = sharper output + larger download/RAM; bigger base
     /// = smarter at every bit width. Sizes are total safetensors on disk. The 12B
     /// (dense) and 26B-A4B (MoE) bases are offered too for high-RAM Macs. The dense
@@ -443,7 +443,7 @@ enum Preferences {
     static let qatE4B8Id = "mlx-community/gemma-4-E4B-it-qat-8bit"  // ~8.9 GB
     // Heavier full-size Gemma 4 QAT (dense 12B and the 26B-A4B MoE — 26B total,
     // only ~4B active per token, so it runs closer to E4B speed than its size
-    // implies). Same QAT load path (heterogeneous quant + KV-sharing patch) as the
+    // implies). Same QAT load path (heterogeneous quant + KV-sharing) as the
     // E-series. Offered for high-RAM Macs that want sharper completions; the inline
     // hot-path tradeoff is download/RAM and (for the dense 12B) latency.
     static let qat12B4Id = "mlx-community/gemma-4-12B-it-qat-4bit"        // ~6.7 GB

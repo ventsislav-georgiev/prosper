@@ -429,6 +429,10 @@ tag from the now-released section and put it on the new top draft.
   **popup now says so** instead of claiming the helper isn't running or wasn't approved,
   and a speed change the helper refuses snaps the slider back to the last speed the
   helper accepted.
+- **The on-device AI engine moved to the current MLX release.** The two local patches
+  Prosper carried for Gemma 4 QAT checkpoints and for stopping speculative decoding cleanly
+  are part of the upstream library now, so the app builds from the stock dependency. Model
+  loading and generation are unchanged.
 
 ## v2.155.0
 

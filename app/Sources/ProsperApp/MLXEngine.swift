@@ -168,7 +168,7 @@ actor MLXEngine {
     /// Currently-resident MLX memory in bytes (active arrays — weights + live KV). Only
     /// one LLM is resident at a time (inline OR agent — `ModelResidencyCoordinator`), so
     /// this is effectively the loaded model's footprint. Nonisolated: a plain global read.
-    nonisolated static var residentMemoryBytes: Int64 { Int64(MLX.GPU.activeMemory) }
+    nonisolated static var residentMemoryBytes: Int64 { Int64(Memory.activeMemory) }
 
     /// Hugging Face model id (MLX format). Configurable via Preferences and swappable
     /// at runtime via `prepareSwitch(to:)` (the Settings model picker → live switch).
@@ -424,7 +424,7 @@ actor MLXEngine {
     nonisolated static func configureMemoryLimits() {
         // 384 MB keeps enough scratch for fast repeated inference while
         // preventing the multi-GB runaway users observed.
-        MLX.GPU.set(cacheLimit: 384 * 1024 * 1024)
+        Memory.cacheLimit = 384 * 1024 * 1024
     }
 
     func load(progress: @escaping @Sendable (Double, String) -> Void) async throws {
@@ -589,7 +589,7 @@ actor MLXEngine {
         chatBox.reset()
         didWarmup = false        // next load must re-warm the kernels
         pendingUnload = false     // satisfied any deferred forced unload
-        MLX.GPU.clearCache()     // release pooled GPU buffers held by the weights
+        Memory.clearCache()     // release pooled GPU buffers held by the weights
     }
 
     /// Unload only when no generation is in flight. The idle auto-unloader calls this
@@ -754,7 +754,7 @@ actor MLXEngine {
         // Prefill chunk size (default 512). The agent path passes 2048: its
         // prompts run tens of thousands of tokens, where 512-token chunks are
         // pure kernel-launch overhead on first-turn/post-compaction prefill.
-        if let prefillStepSize { parameters.prefillStepSize = prefillStepSize }
+        if let prefillStepSize { parameters.prefill.stepSize = prefillStepSize }
         // Gemma 4's recommended sampling is temp≈1.0 with top_k=64 shaping (the value
         // baked into the model's own GGUF: general.sampling.top_k=64/top_p=0.95/temp=1.0).
         // top_k caps the candidate set so a higher temperature stays in-language without
@@ -879,7 +879,7 @@ actor MLXEngine {
             }
         }
 
-        // NOTE: we deliberately do NOT call `MLX.GPU.clearCache()` here. The cache
+        // NOTE: we deliberately do NOT call `Memory.clearCache()` here. The cache
         // pool is already bounded by `configureMemoryLimits()` (384 MB), and the
         // pool is exactly the reusable scratch/KV buffers that make the *next*
         // completion's prefill fast. Clearing it after every keystroke forced each
@@ -994,7 +994,7 @@ actor MLXEngine {
                     if plan.trim > 0 { trimPromptCache(cache, numTokens: plan.trim) }
                     prefill = Array(promptTokens[plan.commonPrefix...])
                 } else {
-                    cache = context.model.newCache(parameters: parameters)
+                    cache = try context.model.newCache(parameters: parameters)
                     prefill = promptTokens
                 }
                 let reusedPrefix = promptTokens.count - prefill.count
@@ -1227,7 +1227,7 @@ actor MLXEngine {
                     NSLog("%@", msg.replacingOccurrences(of: "\n", with: "\\n"))
                 }
             } else {
-                cache = context.model.newCache(parameters: parameters)
+                cache = try context.model.newCache(parameters: parameters)
                 prefill = promptTokens
                 if Self.inlineTimingEnabled {
                     NSLog("prosper inline: fresh prefill — %@",
@@ -1616,8 +1616,8 @@ actor MLXEngine {
                     // trimmable main+draft caches. Throws KVCacheError if a cache turns
                     // out non-trimmable, caught by the outer `catch` → fallback.
                     var text = ""
-                    // Task-returning variant (our mlx-swift-lm-speculative-task.patch
-                    // exposes it): cancel + await after the loop so the producer
+                    // Task-returning variant (upstream's generic `generateTask` takes
+                    // any TokenIteratorProtocol): cancel + await after the loop so the producer
                     // never outlives the compute gate. Caches are fresh here, but
                     // an escaped producer still computes ungated.
                     let iterator = try SpeculativeTokenIterator(
@@ -1867,7 +1867,7 @@ actor MLXEngine {
         }
         // Vision prefill allocates large image-feature buffers; release them
         // immediately so they don't pin memory until the next VLM call.
-        MLX.GPU.clearCache()
+        Memory.clearCache()
         return output
     }
 }
