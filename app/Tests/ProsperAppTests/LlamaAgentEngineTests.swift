@@ -219,6 +219,9 @@ final class LlamaAgentEngineTests: XCTestCase {
 
     /// #247: a saved id #159 removed heals to its same-tier replacement, not the 32 GB recommended.
     func testCanonicalIdMapsRemovedIdsToReplacements() {
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer { AgentModelRegistry.physicalMemoryGB = savedGB }
+        AgentModelRegistry.physicalMemoryGB = 64 // canonicalId heals non-fitting rows (#437): pin a Mac every row here fits
         XCTAssertEqual(AgentModelRegistry.canonicalId("unsloth/Qwen3-8B-GGUF"), "unsloth/Qwen3.5-9B-GGUF")
         XCTAssertEqual(AgentModelRegistry.canonicalId("unsloth/Nemotron-3-Nano-30B-A3B-GGUF"),
                        "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF")
@@ -230,6 +233,9 @@ final class LlamaAgentEngineTests: XCTestCase {
 
     /// #247/#256: Preferences.agentModel heals on read through the same map; the stored id is never rewritten.
     func testPreferencesAgentModelHealsOnReadWithoutWriteBack() {
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer { AgentModelRegistry.physicalMemoryGB = savedGB }
+        AgentModelRegistry.physicalMemoryGB = 64 // canonicalId heals non-fitting rows (#437): pin a Mac every row here fits
         let d = Preferences.defaults, key = "agentModel"
         let saved = d.object(forKey: key)
         defer { d.set(saved, forKey: key) }
@@ -310,6 +316,9 @@ final class LlamaAgentEngineTests: XCTestCase {
     /// persist guard is released afterwards so a later user pick still persists.
     @MainActor
     func testHealAgentModelMirrorDoesNotPersistAndReleasesGuard() {
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer { AgentModelRegistry.physicalMemoryGB = savedGB }
+        AgentModelRegistry.physicalMemoryGB = 64 // canonicalId heals non-fitting rows (#437): pin a Mac every row here fits
         let d = Preferences.defaults, key = "agentModel"
         let saved = d.object(forKey: key)
         defer { d.set(saved, forKey: key) }

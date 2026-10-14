@@ -119,10 +119,9 @@ struct AIModelsPane: View {
             NeonSection("Coding-agent models",
                         footer: "Models for the coding agent (loaded only while a task runs). Add your own from a Hugging Face URL — it must be an MLX (.safetensors) checkpoint; whether it loads depends on architecture support.") {
                 catalogRows(AgentModelRegistry.all().map {
-                    Row(id: $0.id, fallbackLabel: $0.label,
-                        subtitle: Self.fits($0.id, role: .agent) ? $0.note
-                            : "\($0.note) · needs \($0.minRAMGB) GB RAM",
-                        isCustom: CustomModelStore.exists($0.id))
+                    let ram = Self.fits($0.id, role: .agent) ? "" : " · needs \($0.minRAMGB) GB RAM"
+                    return Row(id: $0.id, fallbackLabel: $0.label, subtitle: $0.note + ram,
+                               isCustom: CustomModelStore.exists($0.id), ramNote: ram)
                 }, role: .agent)
                 NeonDivider()
                 HStack {
@@ -330,6 +329,7 @@ struct AIModelsPane: View {
         let fallbackLabel: String
         let subtitle: String?
         let isCustom: Bool
+        var ramNote = ""   // " · needs N GB RAM" on a non-fitting agent row, kept in every subtitle branch
     }
 
     /// Whether `id` can load on a Mac with `physicalGB` (#436): inline rows use the picker's
@@ -396,9 +396,9 @@ struct AIModelsPane: View {
     }
 
     private func subtitle(_ row: Row, downloaded: Bool) -> String {
-        if downloads.isDownloading(row.id) { return downloads.status }
+        if downloads.isDownloading(row.id) { return downloads.status + row.ramNote }
         if downloaded, let sz = disk[row.id]?.sizeBytes {
-            return "Downloaded · \(MLXEngine.fmtBytes(sz)) on disk"
+            return "Downloaded · \(MLXEngine.fmtBytes(sz)) on disk" + row.ramNote
         }
         if let s = row.subtitle, !s.isEmpty { return s }
         return downloaded ? "Downloaded" : "Not downloaded"

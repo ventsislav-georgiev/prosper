@@ -10,14 +10,17 @@ struct AgentPane: View {
     @State private var temperature = Preferences.agentTemperature
     @State private var topP = Preferences.agentTopP
 
-    /// Warns when the selected model's minimum RAM exceeds this Mac's physical memory
-    /// (the model will likely fail to load or thrash to swap).
+    /// Warns when the stored (raw, unhealed) pick does not fit this Mac (#440): the load
+    /// path heals it through canonicalId, so name the model that actually runs.
     private var agentRAMWarning: String? {
-        let m = AgentModelRegistry.model(for: model.agentModel)
-        let physicalGB = AgentModelRegistry.physicalMemoryGB
-        guard m.minRAMGB > physicalGB else { return nil }
-        return "Needs ~\(m.minRAMGB) GB RAM; this Mac has \(physicalGB) GB. "
-            + "It may fail to load or run very slowly. Pick a smaller agent model."
+        let id = model.agentModel
+        guard let m = AgentModelRegistry.all().first(where: { $0.id == id }),
+              !AgentModelRegistry.fits(id) else { return nil }
+        let runs = AgentModelRegistry.model(for: id)
+        let then = runs.id == id ? "It may fail to load or run very slowly."   // below every floor: no smaller row
+            : "The agent runs \(CustomModelStore.label(for: runs.id, fallback: runs.label)) instead."
+        return "Needs ~\(m.minRAMGB) GB RAM; this Mac has \(AgentModelRegistry.physicalMemoryGB) GB. "
+            + then + " Pick a smaller agent model."
     }
 
     /// Picker row text: "<name> — <note>", plus the RAM floor when the row cannot load here (#437).
@@ -57,6 +60,7 @@ struct AgentPane: View {
                 }
                 Spacer()
                 Button("Download") { downloads.start(id) }.buttonStyle(.neon)
+                    .disabled(!AgentModelRegistry.fits(id))
             }
         }
     }

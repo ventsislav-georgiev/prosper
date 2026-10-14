@@ -177,7 +177,7 @@ final class ModelSelectionTests: XCTestCase {
         }
         XCTAssertEqual(path, [Preferences.qatE2B4Id, ""])
         // From the smallest, a death means no automatic load.
-        XCTAssertEqual(Preferences.launchLoadFallback(for: Preferences.qatE2B4Id, physicalGB: gb(8), defaults: d), "")
+        XCTAssertEqual(Preferences.launchLoadFallback(for: Preferences.qatE2B4Id, physicalGB: gb(8), defaults: d, isOnDisk: everyRow), "")
     }
 
     /// The fallback is only ever a model already on disk, so no launch starts a download (#438).
