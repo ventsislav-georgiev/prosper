@@ -101,7 +101,7 @@ final class QATModelE2ETests: XCTestCase {
     /// REGRESSION: upstream (formerly our QAT patch) gates K/V proj+norm allocation to non-shared
     /// layers and strips the redundant shared-layer K/V weights in `sanitize`.
     /// A UNIFORM checkpoint ships those redundant weights for every layer, so
-    /// this proves the patch keeps uniform models loadable (they would otherwise
+    /// this proves upstream keeps uniform models loadable (they would otherwise
     /// trip `verify: [.all]`'s `noUnusedKeys` on the now-unallocated modules).
     func testUniformModelLoadsAndGenerates() async throws {
         try requireE2E()
