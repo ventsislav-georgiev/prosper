@@ -338,7 +338,7 @@ struct AIModelsPane: View {
                      physicalGB: Int = AgentModelRegistry.physicalMemoryGB) -> Bool {
         switch role {
         case .inline: return Preferences.modelFits(id, physicalGB: physicalGB)
-        case .agent: return (AgentModelRegistry.all().first { $0.id == id }?.minRAMGB ?? 0) <= physicalGB
+        case .agent: return AgentModelRegistry.fits(id, physicalMemoryGB: physicalGB)
         }
     }
 

@@ -177,6 +177,17 @@ final class ModelSelectionTests: XCTestCase {
         XCTAssertEqual(Preferences.launchLoadFallback(for: Preferences.qatE2B4Id, physicalGB: gb(8), defaults: d), "")
     }
 
+    func testAgentPickerRowLabelShowsRAMFloorOnlyWhenRowDoesNotFit() throws {
+        let coder = try XCTUnwrap(AgentModelRegistry.all().first { $0.id == "unsloth/Qwen3-Coder-Next-GGUF" })
+        XCTAssertEqual(coder.minRAMGB, 64)
+        AgentModelRegistry.physicalMemoryGB = 8 // the default argument must read the seam
+        XCTAssertTrue(AgentPane.rowLabel(for: coder, name: coder.label).hasSuffix(" · needs 64 GB RAM"))
+        XCTAssertFalse(AgentPane.rowLabel(for: coder, name: coder.label, physicalGB: 64).contains("needs"))
+        AgentModelRegistry.physicalMemoryGB = 16
+        let fitting = try XCTUnwrap(AgentModelRegistry.all().first { $0.minRAMGB <= 16 })
+        XCTAssertEqual(AgentPane.rowLabel(for: fitting, name: "N"), "N — \(fitting.note)")
+    }
+
     func testSetupFailureNetworkClassification() {
         XCTAssertTrue(ModelSetup.isNetworkError(URLError(.notConnectedToInternet)))
         XCTAssertFalse(ModelSetup.isNetworkError(MLXEngineError.mlxRuntime("load: [metal::malloc] too large")))

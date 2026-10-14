@@ -245,13 +245,19 @@ enum AgentModelRegistry {
         "pipenetwork/Kimi-K2.7-Code-MLX-4bit-hiprec": "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF",
     ]
 
+    /// Whether `id`'s `minRAMGB` floor fits a Mac with `gb` (#437). Unknown ids fit.
+    static func fits(_ id: String, physicalMemoryGB gb: Int = physicalMemoryGB) -> Bool {
+        (all().first { $0.id == id }?.minRAMGB ?? 0) <= gb
+    }
+
     /// The one self-heal for a saved agent id: known (built-in or custom) → itself,
-    /// retired → its replacement, anything else → this Mac's `defaultId`. Both
-    /// `Preferences.agentModel` and `model(for:)` route through here.
+    /// retired → its replacement, anything else → this Mac's `defaultId`. A known id or
+    /// replacement whose floor does not fit this Mac (synced from a bigger one) also
+    /// reads as `defaultId` (#437). Both `Preferences.agentModel` and `model(for:)` route through here.
     static func canonicalId(_ id: String, physicalMemoryGB gb: Int = physicalMemoryGB) -> String {
         let ids = Set(all().map(\.id))
-        if ids.contains(id) { return id }
-        if let r = replacements[id], ids.contains(r) { return r }
+        if ids.contains(id), fits(id, physicalMemoryGB: gb) { return id }
+        if let r = replacements[id], ids.contains(r), fits(r, physicalMemoryGB: gb) { return r }
         return defaultId(physicalMemoryGB: gb)
     }
 

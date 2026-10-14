@@ -33,7 +33,9 @@ tag from the now-released section and put it on the new top draft.
   process during launch is skipped on the next launch (the picker steps down one row)
   instead of aborting every launch. The AI Models pane applies the same rule: Download
   and Use-for are disabled on a row this Mac cannot hold, and an agent row that does not
-  fit says how much RAM it needs (#435, #436).
+  fit says how much RAM it needs. The Agent model picker does the same, never starts a
+  download for such a row, and an agent model synced from a bigger Mac reads as this
+  Mac's default instead of being loaded as-is (#435, #436, #437).
 - **Tokenizer and chat-template libraries updated.** swift-transformers 1.3.5 and swift-
   jinja 2.5.1: tokenizers honor the model's byte-fallback setting, and tool definitions
   render into the prompt in the same JSON form the model's own template expects (#171).

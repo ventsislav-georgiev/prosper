@@ -265,8 +265,19 @@ final class LlamaAgentEngineTests: XCTestCase {
         // Unknown id falls back to the memory-derived default; retired ids keep their #247/#248 mapping.
         XCTAssertEqual(AgentModelRegistry.canonicalId("gone/unknown", physicalMemoryGB: 16), "unsloth/Qwen3.5-9B-GGUF")
         XCTAssertEqual(AgentModelRegistry.canonicalId("gone/unknown", physicalMemoryGB: 32), AgentModelRegistry.recommendedId)
-        XCTAssertEqual(AgentModelRegistry.canonicalId("mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit", physicalMemoryGB: 16),
+        XCTAssertEqual(AgentModelRegistry.canonicalId("mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit", physicalMemoryGB: 64),
                        "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF")
+    }
+
+    /// #437: a known or retired id whose row does not fit this Mac (synced from a bigger one)
+    /// reads as this Mac's default; at 64 GB it reads as itself.
+    func testCanonicalIdHealsNonFittingIdToDefault() {
+        let coder = "unsloth/Qwen3-Coder-Next-GGUF"
+        XCTAssertEqual(AgentModelRegistry.canonicalId(coder, physicalMemoryGB: 16), AgentModelRegistry.defaultId(physicalMemoryGB: 16))
+        XCTAssertNotEqual(AgentModelRegistry.canonicalId(coder, physicalMemoryGB: 16), coder)
+        XCTAssertEqual(AgentModelRegistry.canonicalId(coder, physicalMemoryGB: 64), coder)
+        XCTAssertEqual(AgentModelRegistry.canonicalId("mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit", physicalMemoryGB: 16),
+                       AgentModelRegistry.defaultId(physicalMemoryGB: 16))
     }
 
     /// #332: the unset case returns this Mac's default without writing it (agentModel syncs, #256).
@@ -344,6 +355,9 @@ final class LlamaAgentEngineTests: XCTestCase {
                   "pipenetwork/Kimi-K2.7-Code-MLX-4bit-hiprec"],
         ]
         XCTAssertEqual(retired.values.joined().count, 25)
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer { AgentModelRegistry.physicalMemoryGB = savedGB }
+        AgentModelRegistry.physicalMemoryGB = 512 // every row fits: this checks the map, not the RAM heal (#437)
         let catalog = Dictionary(uniqueKeysWithValues: AgentModelRegistry.models.map { ($0.id, $0) })
         for (tier, ids) in retired {
             for old in ids {

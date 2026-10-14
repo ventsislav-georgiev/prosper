@@ -14,10 +14,18 @@ struct AgentPane: View {
     /// (the model will likely fail to load or thrash to swap).
     private var agentRAMWarning: String? {
         let m = AgentModelRegistry.model(for: model.agentModel)
-        let physicalGB = Int(ProcessInfo.processInfo.physicalMemory / 1_000_000_000)
+        let physicalGB = AgentModelRegistry.physicalMemoryGB
         guard m.minRAMGB > physicalGB else { return nil }
         return "Needs ~\(m.minRAMGB) GB RAM; this Mac has \(physicalGB) GB. "
             + "It may fail to load or run very slowly. Pick a smaller agent model."
+    }
+
+    /// Picker row text: "<name> — <note>", plus the RAM floor when the row cannot load here (#437).
+    static func rowLabel(for m: AgentModel, name: String,
+                         physicalGB: Int = AgentModelRegistry.physicalMemoryGB) -> String {
+        let base = "\(name) — \(m.note)"
+        return AgentModelRegistry.fits(m.id, physicalMemoryGB: physicalGB) ? base
+            : base + " · needs \(m.minRAMGB) GB RAM"
     }
 
     /// Download/Stop/Delete controls for the selected model. Selecting a model auto-
@@ -63,11 +71,19 @@ struct AgentPane: View {
                 Picker("Agent model", selection: $model.agentModel) {
                     ForEach(AgentModelRegistry.all(), id: \.id) {
                         let name = CustomModelStore.label(for: $0.id, fallback: $0.label)
-                        let base = "\(name) — \($0.note)"
+                        let base = Self.rowLabel(for: $0, name: name)
                         Text(ModelFiles.pickerLabel(for: $0.id, base: base)).tag($0.id)
+                            .disabled(!AgentModelRegistry.fits($0.id))
                     }
                 }
-                .onChange(of: model.agentModel) { _, new in downloads.start(new) }
+                .onChange(of: model.agentModel) { _, new in
+                    // A non-fitting id (row disable not honoured, or synced from a bigger Mac) never auto-downloads.
+                    guard AgentModelRegistry.fits(new) else {
+                        NSLog("[AgentPane] not auto-downloading %@: needs more RAM than this Mac has", new)
+                        return
+                    }
+                    downloads.start(new)
+                }
                 .disabled(downloads.activeModelId != nil)
                 NeonDivider()
                 modelDownloadControls
