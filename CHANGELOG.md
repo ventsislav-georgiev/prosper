@@ -20,11 +20,11 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.157.0 *(unreleased)*
 
-- **Changed: the kill command no longer spawns a login shell on every keystroke.**
-  The process list behind `kill <name>` is read once and reused for 2 s while you type;
-  each keystroke used to run `ps` through a fresh login shell (hundreds of milliseconds
-  each), so the list stuttered and the CPU column jumped. The kill itself still looks
-  the pid up fresh and goes through the native guard (#432).
+- **Changed: the kill command no longer spawns a login shell on every settled
+  keystroke.** The process list behind `kill <name>` is read once and reused for 2 s
+  while you type; each settled keystroke used to run `ps` through a fresh login shell
+  (hundreds of milliseconds each), so the list stuttered and the CPU column jumped. The
+  kill itself still looks the pid up fresh and goes through the native guard (#432).
 
 ## v2.156.1
 
