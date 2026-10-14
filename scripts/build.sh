@@ -55,9 +55,10 @@ done
 METALLIB_BUNDLE="$ROOT/app/.build/$PROFILE/mlx-swift_Cmlx.bundle"
 # The metallib is MLX's compiled shaders, so it's only valid for the MLX version
 # the build resolved. Stamp the staged bundle with Package.resolved's hash and
-# rebuild when it changes — otherwise a metallib restored from a stale SwiftPM
-# cache (CI restore-keys can fall back to an older cache after a dep bump) would
-# be skipped here and shipped against the wrong MLX → crash on first model load.
+# rebuild when it changes — otherwise a metallib left in .build by an earlier
+# dependency set (a local bump; CI restores app/.build only on an exact
+# Package.resolved match since #433) would be skipped here and shipped against
+# the wrong MLX → crash on first model load.
 RESOLVED_HASH=$(/usr/bin/shasum -a 256 "$ROOT/app/Package.resolved" | cut -d' ' -f1)
 METALLIB_STAMP="$METALLIB_BUNDLE/.prosper-resolved-hash"
 if [[ -f "$METALLIB_BUNDLE/Contents/Resources/default.metallib" \
@@ -76,10 +77,11 @@ else
   DD="$ROOT/app/.build/xcode-metallib"
   # We only get here when the staged metallib is missing or carries another
   # Package.resolved hash (fresh checkout, cleaned .build/<profile>, dependency
-  # bump). A restored CI cache then still holds this DerivedData's intermediates (explicit
+  # bump). After a bump this DerivedData still holds intermediates (explicit
   # module .pcm files, objects) built against the previous dependency set, and
   # xcodebuild refuses them: "SUAppcastItem.h has been modified since the module
-  # file ... was built" (Sparkle 2.9.3 → 2.10.0 failed the v2.156.0-beta.1 run).
+  # file ... was built" (Sparkle 2.9.3 → 2.10.0 failed the v2.156.0-beta.1 run,
+  # back when CI restored stale build trees; #433 ended that, local bumps remain).
   # Start the build tree clean; the resolved checkouts in SourcePackages stay.
   rm -rf "$DD/Build"
   # xcodebuild compiles from its OWN SourcePackages tree — resolve it first.
