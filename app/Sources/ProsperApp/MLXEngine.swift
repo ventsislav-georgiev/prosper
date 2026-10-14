@@ -453,7 +453,9 @@ actor MLXEngine {
             // the agent model loading while an inline generation still decoded).
             // ponytail: gate also spans a first-time download; split download from
             // load if that stall ever matters.
-            return try await MLXComputeGate.shared.run {
+            // The error guard (#435) turns a Metal allocation failure while the weights
+            // materialize into a thrown error instead of MLX's default fatalError.
+            return try await withMLXErrorGuard("load") { _ in
                 try await LLMModelFactory.shared.loadContainer(
                     from: downloader,
                     using: loader,
@@ -545,7 +547,7 @@ actor MLXEngine {
             let downloader = #hubDownloader()
             let loader = #huggingFaceTokenizerLoader()
             // Gated: see MLXComputeGate — never load weights under a live eval.
-            return try await MLXComputeGate.shared.run {
+            return try await withMLXErrorGuard("loadDraft") { _ in
                 try await LLMModelFactory.shared.loadContainer(
                     from: downloader,
                     using: loader,
@@ -1769,7 +1771,7 @@ actor MLXEngine {
             let downloader = #hubDownloader()
             let loader = #huggingFaceTokenizerLoader()
             // Gated: see MLXComputeGate — never load weights under a live eval.
-            return try await MLXComputeGate.shared.run {
+            return try await withMLXErrorGuard("loadVLM") { _ in
                 try await VLMModelFactory.shared.loadContainer(
                     from: downloader,
                     using: loader,

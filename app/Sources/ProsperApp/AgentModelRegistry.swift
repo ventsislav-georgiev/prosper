@@ -177,7 +177,10 @@ enum AgentModelRegistry {
 
     /// This Mac's RAM in GB, same decimal conversion as the settings pane's warning.
     /// Test seam (#366): settable so tests can pin the RAM tier; no production caller writes it.
-    nonisolated(unsafe) static var physicalMemoryGB: Int = Int(ProcessInfo.processInfo.physicalMemory / 1_000_000_000)
+    nonisolated(unsafe) static var physicalMemoryGB: Int = physicalGB(bytes: ProcessInfo.processInfo.physicalMemory)
+
+    /// Bytes of RAM → the decimal GB every RAM gate compares (a 16 GiB Mac reads 17).
+    static func physicalGB(bytes: UInt64) -> Int { Int(bytes / 1_000_000_000) }
 
     /// Default agent model for a Mac with `gb` of RAM (#332): `recommendedId` once its
     /// floor fits, else the largest built-in row whose floor fits. Below every floor,

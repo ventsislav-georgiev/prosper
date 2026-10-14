@@ -25,6 +25,13 @@ tag from the now-released section and put it on the new top draft.
   load them; the current release registers both architectures (the dense 12B and the
   128-expert MoE with about 4B active parameters), so the six rows are back with their
   real download sizes (11 to 28 GB) and the RAM tier each needs (#157, #434).
+- **Every AI Model picker row now shows the RAM it needs, and rows this Mac cannot hold
+  are disabled.** A stored model that needs more RAM than the Mac has is read as the
+  largest row that fits (or no model at all), so the app never loads a checkpoint the
+  machine cannot hold. A model load that fails inside the MLX library now reports its
+  error in the setup window instead of ending the process, and a load that aborts the
+  process during launch is skipped on the next launch (the picker steps down one row)
+  instead of aborting every launch (#435).
 - **Tokenizer and chat-template libraries updated.** swift-transformers 1.3.5 and swift-
   jinja 2.5.1: tokenizers honor the model's byte-fallback setting, and tool definitions
   render into the prompt in the same JSON form the model's own template expects (#171).

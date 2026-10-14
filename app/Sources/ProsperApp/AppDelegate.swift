@@ -497,7 +497,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // settings surfaces a clickable warning if the needed grant is missing
         // (no first-run wizard — see GeneralPane).
         if Preferences.autocompleteEnabled {
-            runModelSetup(force: false)
+            // Crash-loop guard (#435): a load that aborts the process (jetsam, Metal)
+            // would abort every launch before Settings is reachable. Armed only for an
+            // on-disk MLX model, so a quit or an offline launch mid-download never
+            // reads as a death; a first download that dies re-arms on the next launch.
+            let id = Preferences.coreModel
+            if !LlamaInlineEngine.isEnabled, ModelFiles.isModelDownloaded(id),
+               let fallback = Preferences.launchLoadFallback(for: id) {
+                NSLog("prosper: the previous launch died loading %@, skipping the automatic load once, model now %@",
+                      id, fallback.isEmpty ? "none" : fallback)
+                if fallback.isEmpty { dropToNoModel() } else { Preferences.coreModel = fallback }
+            } else {
+                runModelSetup(force: false, loaded: { Preferences.modelLoadSucceeded(id) })
+            }
         }
         startAutocompleteIfReady()
         // Drag-to-snap rides its own passive monitors (NOT the keystroke tap); start
@@ -1170,10 +1182,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func runModelSetup(force: Bool) {
+    private func runModelSetup(force: Bool, loaded: (() -> Void)? = nil) {
         let setup = modelSetup ?? ModelSetup()
         modelSetup = setup
         setup.runIfNeeded(force: force) { [weak self] ok in
+            if ok { loaded?() }
             // Cancelled/failed download with no model on disk → drop to "None" and
             // turn inline completions off (can't complete without weights).
             if !ok, ModelFiles.firstDownloadedModel() == nil {
@@ -1192,7 +1205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let setup = modelSetup ?? ModelSetup()
         modelSetup = setup
         setup.runSwitch { [weak self] ok in
-            guard !ok else { return }
+            // A model that loads fine in Settings is no longer a launch death (#435).
+            guard !ok else { Preferences.modelLoadSucceeded(Preferences.coreModel); return }
             self?.revertModelSelection(previous: previous)
         }
     }

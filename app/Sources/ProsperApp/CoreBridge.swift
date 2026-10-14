@@ -237,7 +237,7 @@ enum CoreBridge {
             } catch {
                 NSLog("ProsperModelLoad error for \(Preferences.coreModel): \(error)")
                 let update = SetupProgress(
-                    phase: "error",
+                    phase: ModelSetup.isNetworkError(error) ? "network-error" : "error",
                     status: error.localizedDescription,
                     completed: nil,
                     total: nil,

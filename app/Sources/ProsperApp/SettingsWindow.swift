@@ -1247,7 +1247,8 @@ private struct PermissionWarningRow: View {
 struct AIModelSection: View {
     @ObservedObject var model: SettingsModel
 
-    /// Picker-offered models, same order as `Preferences.selectableModelIds`.
+    /// Picker-offered models, same order as `Preferences.selectableModelIds`. Each label
+    /// ends in the RAM tier the gate compares (#435), derived from the size table.
     static let models: [(String, String)] = [
         (Preferences.qatE2B4Id, "Gemma 4 E2B (QAT 4-bit, ~4.3 GB) — fastest, lightest"),
         (Preferences.qatE2B6Id, "Gemma 4 E2B (QAT 6-bit, ~5.1 GB) — sharper E2B, more RAM"),
@@ -1255,13 +1256,16 @@ struct AIModelSection: View {
         (Preferences.qatE4B4Id, "Gemma 4 E4B (QAT 4-bit, ~6.8 GB) — larger base, smarter"),
         (Preferences.qatE4B6Id, "Gemma 4 E4B (QAT 6-bit, ~7.8 GB) — larger base, sharper"),
         (Preferences.qatE4B8Id, "Gemma 4 E4B (QAT 8-bit, ~8.9 GB) — recommended"),
-        (Preferences.qat12B4Id, "Gemma 4 12B (QAT 4-bit, ~11.0 GB) — dense 12B, slower, 16 GB+ RAM"),
-        (Preferences.qat12B6Id, "Gemma 4 12B (QAT 6-bit, ~11.9 GB) — sharper 12B, 16 GB+ RAM"),
-        (Preferences.qat12B8Id, "Gemma 4 12B (QAT 8-bit, ~12.7 GB) — sharpest 12B, 18 GB+ RAM"),
-        (Preferences.qat26B4Id, "Gemma 4 26B-A4B MoE (QAT 4-bit, ~15.6 GB) — 4B active, 24 GB+ RAM"),
-        (Preferences.qat26B6Id, "Gemma 4 26B-A4B MoE (QAT 6-bit, ~21.8 GB) — 4B active, 32 GB+ RAM"),
-        (Preferences.qat26B8Id, "Gemma 4 26B-A4B MoE (QAT 8-bit, ~28 GB) — smartest, 36 GB+ RAM"),
-    ]
+        (Preferences.qat12B4Id, "Gemma 4 12B (QAT 4-bit, ~11.0 GB) — dense 12B, slower"),
+        (Preferences.qat12B6Id, "Gemma 4 12B (QAT 6-bit, ~11.9 GB) — sharper 12B"),
+        (Preferences.qat12B8Id, "Gemma 4 12B (QAT 8-bit, ~12.7 GB) — sharpest 12B"),
+        (Preferences.qat26B4Id, "Gemma 4 26B-A4B MoE (QAT 4-bit, ~15.6 GB) — 4B active"),
+        (Preferences.qat26B6Id, "Gemma 4 26B-A4B MoE (QAT 6-bit, ~21.8 GB) — 4B active"),
+        (Preferences.qat26B8Id, "Gemma 4 26B-A4B MoE (QAT 8-bit, ~28 GB) — smartest"),
+    ].map { row in
+        let gb = Preferences.selectableModels.first { $0.id == row.0 }?.gb ?? 0
+        return (row.0, "\(row.1), \(Preferences.ramTierGB(sizeGB: gb)) GB+ RAM")
+    }
 
     /// Prepends a "None" row whenever no model is selected (e.g. after cancelling the
     /// first download) so the empty `coreModel` tag has a match — without it SwiftUI
@@ -1302,6 +1306,7 @@ struct AIModelSection: View {
                 Picker("Model", selection: $model.coreModel) {
                     ForEach(modelOptions, id: \.0) {
                         Text(ModelFiles.pickerLabel(for: $0.0, base: CustomModelStore.label(for: $0.0, fallback: $0.1))).tag($0.0)
+                            .disabled(!Preferences.modelFits($0.0))
                     }
                 }
                 NeonDivider()

@@ -23,6 +23,17 @@ final class ModelSetup: NSObject, NSWindowDelegate {
     /// Reports the run outcome: `true` only when the model loaded successfully.
     /// `false` on cancel or genuine failure — callers revert the selection.
     private var onFinish: ((Bool) -> Void)?
+    /// The thrown message of this run's non-network failure (#435), shown instead of the
+    /// connection hint.
+    private var failure: String?
+
+    /// Whether a setup failure is the network's (offline, DNS, timeout). Anything else, a
+    /// thrown MLX load error first of all, shows its own message.
+    nonisolated static func isNetworkError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain
+            || (ns.userInfo[NSUnderlyingErrorKey] as? NSError)?.domain == NSURLErrorDomain
+    }
 
     /// Checks health and, if the model/server isn't ready (or `force`), runs setup.
     func runIfNeeded(force: Bool, onFinish: ((Bool) -> Void)? = nil) {
@@ -67,6 +78,7 @@ final class ModelSetup: NSObject, NSWindowDelegate {
     private func start() {
         guard !isRunning, let operation else { return }
         isRunning = true
+        failure = nil
         operation(
             { [weak self] progress in self?.update(with: progress) },
             { [weak self] success in self?.finish(success: success) }
@@ -166,6 +178,7 @@ final class ModelSetup: NSObject, NSWindowDelegate {
 
     private func update(with progress: SetupProgress) {
         statusLabel?.stringValue = progress.status
+        if progress.phase == "error" { failure = progress.status }
 
         if let percent = progress.percent, percent > 0 {
             progressBar?.isIndeterminate = false
@@ -195,7 +208,9 @@ final class ModelSetup: NSObject, NSWindowDelegate {
         // close + revert the selection. (Don't fire onFinish here — that would revert
         // the pending model, making a retry switch back to the old one.)
         progressBar?.stopAnimation(nil)
-        statusLabel?.stringValue = "Setup failed \u{2014} check your internet connection, then Retry."
+        statusLabel?.stringValue = failure.map { "Setup failed: \($0)" }
+            ?? "Setup failed \u{2014} check your internet connection, then Retry."
+        statusLabel?.toolTip = failure
         retryButton?.isHidden = false
     }
 

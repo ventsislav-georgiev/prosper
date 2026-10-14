@@ -468,10 +468,78 @@ enum Preferences {
 
     /// Every picker-offered model, ordered by base (E2B, E4B, 12B, 26B-A4B), then by
     /// bits within a base. Drives the AI Model picker and the revert-target search.
-    static let selectableModelIds: [String] = [
-        qatE2B4Id, qatE2B6Id, qatE2B8Id, qatE4B4Id, qatE4B6Id, qatE4B8Id,
-        qat12B4Id, qat12B6Id, qat12B8Id, qat26B4Id, qat26B6Id, qat26B8Id,
+    static let selectableModelIds: [String] = selectableModels.map(\.id)
+
+    // MARK: - Inline model RAM gate (#435)
+
+    /// Download size per picker row, decimal GB (Hugging Face safetensors totals). The one
+    /// table both the RAM gate and the picker's "N GB+ RAM" text read, so they cannot disagree.
+    static let selectableModels: [(id: String, gb: Double)] = [
+        (qatE2B4Id, 4.33), (qatE2B6Id, 5.10), (qatE2B8Id, 5.87),
+        (qatE4B4Id, 6.80), (qatE4B6Id, 7.84), (qatE4B8Id, 8.88),
+        (qat12B4Id, 10.99), (qat12B6Id, 11.85), (qat12B8Id, 12.72),
+        (qat26B4Id, 15.61), (qat26B6Id, 21.78), (qat26B8Id, 27.95),
     ]
+
+    /// RAM a row needs, by the agent catalog's rule (ModelCatalog `asAgentModels`): resident
+    /// ≈ download × 1.15, plus 2 GB headroom, floor 8; rounded up to the next Apple RAM tier
+    /// so the label reads a Mac you can buy. The gate compares this same number.
+    static func ramTierGB(sizeGB: Double) -> Int {
+        let minRAM = max(8, Int((sizeGB * 1.15).rounded(.up)) + 2)
+        return [8, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192, 256, 512].first { $0 >= minRAM } ?? minRAM
+    }
+
+    /// Whether a picker row fits `physicalGB` (AgentModelRegistry's decimal GB, so a 16 GB Mac
+    /// reads 17 and still misses an "18 GB+" row). Ids outside the table (legacy, "") fit.
+    static func modelFits(_ id: String, physicalGB: Int = AgentModelRegistry.physicalMemoryGB,
+                          models: [(id: String, gb: Double)] = selectableModels) -> Bool {
+        guard let gb = models.first(where: { $0.id == id })?.gb else { return true }
+        return ramTierGB(sizeGB: gb) <= physicalGB
+    }
+
+    /// The largest row that fits `physicalGB` and is strictly smaller than `belowGB`; nil when none.
+    static func largestFittingModel(physicalGB: Int, belowGB: Double = .infinity,
+                                    models: [(id: String, gb: Double)] = selectableModels) -> String? {
+        models.filter { $0.gb < belowGB && modelFits($0.id, physicalGB: physicalGB, models: models) }
+            .max { $0.gb < $1.gb }?.id
+    }
+
+    /// The one read-side gate for `coreModel`: an id that fits reads as itself, one that does
+    /// not as the largest row that does, or "" (no automatic load) when none fits. Always
+    /// lands on a fitting id, so resolving twice changes nothing.
+    static func resolveModelId(_ id: String, physicalGB: Int = AgentModelRegistry.physicalMemoryGB,
+                               models: [(id: String, gb: Double)] = selectableModels) -> String {
+        guard !modelFits(id, physicalGB: physicalGB, models: models),
+              let gb = models.first(where: { $0.id == id })?.gb else { return id }
+        return largestFittingModel(physicalGB: physicalGB, belowGB: gb, models: models) ?? ""
+    }
+
+    /// Stored ids already logged by the `coreModel` gate, so a read in a hot path logs once.
+    private static let loggedModelResolution = OSAllocatedUnfairLock(initialState: Set<String>())
+
+    /// Launch crash-loop guard (#435): UserDefaults key naming the model whose launch-time
+    /// load is in flight. Set before that load, cleared only after it succeeded.
+    static let modelLoadMarkerKey = "modelLoadInFlight"
+
+    /// Called right before the launch-time load of `id`. A marker still naming `id` means the
+    /// previous launch died in that load (jetsam or a Metal abort, which no Swift guard
+    /// catches): returns the model to use instead, the largest smaller row that fits ("" when
+    /// none), and the caller skips this launch's load. Otherwise arms the marker and returns
+    /// nil. Each fallback is strictly smaller, so repeated deaths end at "".
+    static func launchLoadFallback(for id: String, physicalGB: Int = AgentModelRegistry.physicalMemoryGB,
+                                   defaults: UserDefaults = Preferences.defaults) -> String? {
+        if defaults.string(forKey: modelLoadMarkerKey) == id {
+            let gb = selectableModels.first { $0.id == id }?.gb ?? 0
+            return largestFittingModel(physicalGB: physicalGB, belowGB: gb) ?? ""
+        }
+        defaults.set(id, forKey: modelLoadMarkerKey)
+        return nil
+    }
+
+    /// Clears the marker once `id` loaded. Never call it before the load succeeded.
+    static func modelLoadSucceeded(_ id: String, defaults: UserDefaults = Preferences.defaults) {
+        if defaults.string(forKey: modelLoadMarkerKey) == id { defaults.removeObject(forKey: modelLoadMarkerKey) }
+    }
 
     /// Lightest uniform option, NOT in the picker (QAT-only menu). Gemma 4 E2B,
     /// uniform **4-bit** (~3.6 GB). Still used as the speculative-decoding draft
@@ -841,10 +909,18 @@ enum Preferences {
         "com.apple.Spotlight",
     ]
 
-    /// Hugging Face MLX model id used by MLXEngine. Defaults to `defaultModelId`.
+    /// Hugging Face MLX model id used by MLXEngine. Defaults to `recommendedModelId`.
+    /// Read through the RAM gate (#435): a row this Mac cannot hold reads as the largest
+    /// one it can. Not written back: coreModel syncs between Macs, like agentModel.
     static var coreModel: String {
         get {
-            defaults.string(forKey: Keys.coreModel) ?? recommendedModelId
+            let stored = defaults.string(forKey: Keys.coreModel) ?? recommendedModelId
+            let id = resolveModelId(stored)
+            if id != stored, loggedModelResolution.withLock({ $0.insert(stored).inserted }) {
+                NSLog("prosper: model %@ needs more RAM than this Mac has (%d GB), using %@",
+                      stored, AgentModelRegistry.physicalMemoryGB, id.isEmpty ? "none" : id)
+            }
+            return id
         }
         set { defaults.set(newValue, forKey: Keys.coreModel) }
     }
