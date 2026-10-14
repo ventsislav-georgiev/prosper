@@ -21,7 +21,7 @@ struct AgentPane: View {
         let runsName = CustomModelStore.label(for: runs.id, fallback: runs.label)
         let then = AgentModelRegistry.fits(runs.id)
             ? "The agent runs \(runsName) instead. Pick a smaller agent model."
-            : "No agent model fits this Mac; \(runsName) is used and may fail to load or run very slowly."
+            : "No built-in agent model fits this Mac; \(runsName) is used and may fail to load or run very slowly."
         return "Needs ~\(m.minRAMGB) GB RAM; this Mac has \(AgentModelRegistry.physicalMemoryGB) GB. " + then
     }
 
