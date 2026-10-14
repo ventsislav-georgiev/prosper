@@ -44,7 +44,8 @@ local CACHE_SECS = 2
 local cached_rows, cached_at
 local function processes()
     local now = host.time()
-    if cached_rows and now - cached_at < CACHE_SECS then return cached_rows end
+    -- wall clock: a backward jump (now < cached_at) must expire, not freeze
+    if cached_rows and now >= cached_at and now - cached_at < CACHE_SECS then return cached_rows end
     local out = host.shell.run("ps -Ao pid=,pcpu=,rss=,comm= -r | head -n 200") or ""
     local rows = {}
     for line in out:gmatch("[^\n]+") do

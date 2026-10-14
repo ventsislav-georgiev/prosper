@@ -161,6 +161,9 @@ env.now = env.now + 2
 run("kill safa")
 h.eq(#env.shellLog, 2, "a listing past the window runs ps again")
 h.eq(env.shellLog[2]:find("^ps %-Ao") ~= nil, true, "the refresh is the listing ps")
+env.now = env.now - 100
+run("kill safar")
+h.eq(#env.shellLog, 3, "a backward clock jump refreshes instead of freezing the listing")
 
 -- ── 12. a commit after a cached listing still looks up the pid itself ────────
 local before = #env.shellLog
