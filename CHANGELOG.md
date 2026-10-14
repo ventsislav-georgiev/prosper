@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.157.0 *(unreleased)*
+## v2.156.1
 
 - **Fixed: a second click on the open Stats, Mixer or Calendar icon closes the popover
   again on macOS 27.** Since v2.156.0-beta.5 (the first build with the macOS 27
