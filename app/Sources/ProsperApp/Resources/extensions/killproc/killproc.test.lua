@@ -150,4 +150,22 @@ for _, c in ipairs(env.shellLog) do
          "the targeted ps lookup only ever sees a numeric pid: " .. c)
 end
 
+-- ── 11. the listing caches ps for 2 s (one login shell per window) ──────────
+-- Each h.load re-runs init.lua, so the cache starts empty per fresh host.
+host, env = newHost{ comm = { ["501"] = "/Applications/Safari.app/Contents/MacOS/Safari" } }
+G = h.load(h.dir() .. "init.lua", host); run = G.killproc_run
+run("kill s"); env.now = env.now + 1.5; run("kill sa")
+h.eq(#env.shellLog, 1, "two listings inside the window run ps once")
+h.eq(run("kill saf").items[1].title, "Safari", "the filter still runs on cached rows")
+env.now = env.now + 2
+run("kill safa")
+h.eq(#env.shellLog, 2, "a listing past the window runs ps again")
+h.eq(env.shellLog[2]:find("^ps %-Ao") ~= nil, true, "the refresh is the listing ps")
+
+-- ── 12. a commit after a cached listing still looks up the pid itself ────────
+local before = #env.shellLog
+run("kill 501!")
+h.eq(env.shellLog[before + 1], "ps -o comm= -p 501", "the kill path issues its targeted ps, never the cache")
+h.eq(env.kills[1].pid, "501", "and the kill goes through host.process")
+
 print("✅ killproc")

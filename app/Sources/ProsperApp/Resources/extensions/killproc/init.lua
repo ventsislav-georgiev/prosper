@@ -37,7 +37,14 @@ local function human_rss(kb)
 end
 
 -- One `ps` call -> { { pid, cpu, rss, comm, name }, ... } sorted by CPU desc.
+-- Cached for CACHE_SECS: host.shell.run spawns a login shell (hundreds of ms) and
+-- ps walks every process, and the runner calls this on every settled keystroke.
+-- Display only: the kill path (comm_for, host.process) never reads this cache.
+local CACHE_SECS = 2
+local cached_rows, cached_at
 local function processes()
+    local now = host.time()
+    if cached_rows and now - cached_at < CACHE_SECS then return cached_rows end
     local out = host.shell.run("ps -Ao pid=,pcpu=,rss=,comm= -r | head -n 200") or ""
     local rows = {}
     for line in out:gmatch("[^\n]+") do
@@ -55,6 +62,7 @@ local function processes()
         if a.cpu ~= b.cpu then return a.cpu > b.cpu end
         return a.pid < b.pid
     end)
+    cached_rows, cached_at = rows, now
     return rows
 end
 
