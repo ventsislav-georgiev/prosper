@@ -415,7 +415,7 @@ enum Scripting {
 }
 
 /// Persisted (default level) so a reverted layout can be diagnosed after the fact:
-/// /usr/bin/log show --last 1h --predicate 'subsystem == "eu.illegible.prosper" AND category == "inputswitch"'
+/// /usr/bin/log show --last 1h --predicate 'process == "ProsperApp" AND subsystem == "eu.illegible.prosper" AND category == "inputswitch"'
 private let inputSwitchLog = Logger(subsystem: "eu.illegible.prosper", category: "inputswitch")
 
 /// Keyboard input source via Carbon TIS (§F). Reads are open; set is privileged.
