@@ -285,6 +285,25 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertEqual(current, "ABC")
     }
 
+    /// #431 (QA #237 QM2): a newer setSource cancels the previous one's re-asserts,
+    /// so a stale re-assert never reverts e.g. a HyperKey cycle made within 0.6 s.
+    @MainActor
+    func testKeyboardNewerSetSourceCancelsStaleReasserts() {
+        var current = "ABC"
+        var selects: [String] = []
+        let saved = (KeyboardSource.readCurrent, KeyboardSource.select)
+        KeyboardSource.readCurrent = { current }
+        KeyboardSource.select = { selects.append($0); current = $0; return true }
+        defer { KeyboardSource.readCurrent = saved.0; KeyboardSource.select = saved.1 }
+
+        _ = KeyboardSource.setSource("X")
+        _ = KeyboardSource.setSource("Y")
+        current = "X" // clobber, no activation
+        RunLoop.main.run(until: Date() + 0.8)
+        XCTAssertEqual(selects, ["X", "Y", "Y"], "a stale re-assert from the older setSource fired")
+        XCTAssertEqual(current, "Y")
+    }
+
     func testClipboardPrefsNotify() throws {
         let lua = try LuaRuntime()
         let svc = FakeServices()

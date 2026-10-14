@@ -414,6 +414,10 @@ enum Scripting {
     }
 }
 
+/// Persisted (default level) so a reverted layout can be diagnosed after the fact:
+/// /usr/bin/log show --last 1h --predicate 'subsystem == "eu.illegible.prosper" AND category == "inputswitch"'
+private let inputSwitchLog = Logger(subsystem: "eu.illegible.prosper", category: "inputswitch")
+
 /// Keyboard input source via Carbon TIS (§F). Reads are open; set is privileged.
 enum KeyboardSource {
     static func currentSourceID() -> String {
@@ -453,7 +457,9 @@ enum KeyboardSource {
     static func setSource(_ wantedID: String) -> Bool {
         setGeneration += 1
         let gen = setGeneration
+        let before = readCurrent()
         let ok = select(wantedID)
+        inputSwitchLog.log("set gen=\(gen) want=\(wantedID, privacy: .public) was=\(before, privacy: .public) ok=\(ok)")
         // macOS keeps a per-app remembered input source and restores it
         // ASYNCHRONOUSLY up to ~1s after the app activates — clobbering the set we
         // just did, so the layout flips to the right one then reverts a moment
@@ -469,8 +475,17 @@ enum KeyboardSource {
         // macOS's clobber stuck, leaving Slack on the default layout.
         for delay in [0.25, 0.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard gen == setGeneration else { return }
-                if readCurrent() != wantedID { _ = select(wantedID) }
+                guard gen == setGeneration else {
+                    inputSwitchLog.log("reassert gen=\(gen) +\(delay)s dropped (now \(setGeneration))")
+                    return
+                }
+                let now = readCurrent()
+                if now == wantedID {
+                    inputSwitchLog.log("reassert gen=\(gen) +\(delay)s matching \(now, privacy: .public)")
+                } else {
+                    let ok = select(wantedID)
+                    inputSwitchLog.log("reassert gen=\(gen) +\(delay)s selected \(wantedID, privacy: .public) was=\(now, privacy: .public) ok=\(ok)")
+                }
             }
         }
         return ok
