@@ -2303,6 +2303,32 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertTrue(lines.contains(line), "\(topLevel)")
     }
 
+    /// #185 negative: an MLX agent model has no known ceiling, so codex keeps its default.
+    /// The built-in MLX ladder retired in #248 (those ids canonicalize to GGUF rows), so the
+    /// only MLX agent model is a custom HF import. Checks the whole file, tables included.
+    func testConfigOmitsModelContextWindowForMLXModel() async throws {
+        let saved = Preferences.defaults.string(forKey: "agentModel")
+        let mlxId = "test-owner/Custom-MLX-185-zzz"
+        defer {
+            Preferences.defaults.set(saved, forKey: "agentModel")
+            CustomModelStore.remove(mlxId)
+        }
+        CustomModelStore.upsert(CustomAgentModel(id: mlxId, label: "MLX 185", sizeBytes: 0,
+                                                 note: "", toolFormat: .qwenXML))
+        Preferences.agentModel = mlxId
+        XCTAssertEqual(Preferences.agentModel, mlxId) // a registry row, not healed away
+        XCTAssertTrue(AgentModelRegistry.gguf(for: mlxId) == nil)
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        await harness.shutdown()
+
+        let toml = try String(contentsOf: home.appendingPathComponent("config.toml"), encoding: .utf8)
+        let lines = toml.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertFalse(lines.contains { $0.hasPrefix("model_context_window") }, toml)
+    }
+
     // MARK: - #408 end() racing a resubmit
 
     /// An in-process harness for the end()/resubmit race, no subprocess. A parking one's first
