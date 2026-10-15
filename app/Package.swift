@@ -69,12 +69,12 @@ let package = Package(
     // resident). See the binaryTarget below and Autocomplete/LlamaInlineEngine.swift.
     targets: [
         // Prebuilt llama.cpp (see the note above `targets`). Pinned to release
-        // b9866 by checksum; bump BOTH url and checksum together
+        // b11429 by checksum; bump BOTH url and checksum together
         // (`swift package compute-checksum <zip>`).
         .binaryTarget(
             name: "llama",
-            url: "https://github.com/ggml-org/llama.cpp/releases/download/b9866/llama-b9866-xcframework.zip",
-            checksum: "b7285442515df927ae34e3e9dbcd82696b259e9d43e91656ffaaa583daeee09d"
+            url: "https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-xcframework.zip",
+            checksum: "e26a6a0a813f5760fe45834ce239d5b525e4e2442d4fd017221d9f0438383174"
         ),
         // Vendored Lua 5.4.9 interpreter (pure C99) backing the extension runtime.
         // See docs/ADR-002-extensibility.md. Pure bytecode VM — no JIT, no

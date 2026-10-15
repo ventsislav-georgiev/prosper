@@ -40,6 +40,9 @@ tag from the now-released section and put it on the new top draft.
   overflowed; it now compacts in time. Custom MLX models keep Codex's default (#185).
 - **The extension runtime moved to Lua 5.4.9.** Upstream bug fixes only (14 files, no API
   change); the vendored sources match the lua.org release byte for byte (#180).
+- **The bundled llama.cpp moved from build b9866 to b11429, the build of llama.cpp v0.6.0
+  (ggml 0.26.0).** Inline autocomplete and the GGUF coding-agent engine run on it; no
+  settings or model files change (#179).
 
 ## v2.157.0
 
