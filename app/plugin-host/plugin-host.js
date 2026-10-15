@@ -23,7 +23,7 @@ import { join } from "node:path";
 
 const HOOK_TIMEOUT_MS = 15_000;   // a wedged plugin hook can't stall a tool call forever
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;   // cap the per-connection request buffer
-// structuredClone is native on Bun 1.3.14; fall back if an older bun is on PATH.
+// structuredClone is native on Bun 1.4.3; fall back if an older bun is on PATH.
 const clone = typeof structuredClone === "function"
   ? structuredClone
   : (v) => JSON.parse(JSON.stringify(v));
