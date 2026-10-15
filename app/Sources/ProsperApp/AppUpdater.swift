@@ -36,7 +36,10 @@ final class AppUpdater: NSObject {
     /// Background appcast poll interval. Sparkle's own scheduler clamps small
     /// `updateCheckInterval` values to ~1h, so we drive a silent background check
     /// ourselves on this cadence. The check is just a small appcast XML fetch.
-    private static let pollInterval: TimeInterval = 600 // 10 minutes
+    /// Beta channel: 10 minutes, so testers get a fresh beta quickly. Stable: 4 hours;
+    /// 144 checks a day were about 60 % of the app's log lines and a stable install
+    /// needs far fewer.
+    static var pollInterval: TimeInterval { Preferences.allowBetaUpdates ? 600 : 4 * 3600 }
 
     private var pollTimer: Timer?
 
@@ -140,6 +143,7 @@ final class AppUpdater: NSObject {
         get { Preferences.allowBetaUpdates }
         set {
             Preferences.allowBetaUpdates = newValue
+            if automaticChecks { restartPolling() } // cadence follows the channel
             if newValue {
                 driver.userInitiated = false
                 updater?.checkForUpdatesInBackground()
@@ -173,6 +177,7 @@ final class AppUpdater: NSObject {
     /// Restarts the background cadence so the next automatic check fires a full
     /// interval from now (used after a manual check).
     private func restartPolling() {
+        updater?.updateCheckInterval = Self.pollInterval // Sparkle's own scheduler follows too
         stopPolling()
         startPolling()
     }

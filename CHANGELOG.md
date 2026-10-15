@@ -18,7 +18,14 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.157.0 *(unreleased)*
+## v2.158.0 *(unreleased)*
+
+- **Stable installs check for updates every 4 hours instead of every 10 minutes.** The
+  10-minute cadence stays on the beta channel so testers pick up a new beta quickly;
+  144 daily checks were about 60 % of a stable install's log lines. Toggling the beta
+  channel in Settings switches the cadence at once (#192).
+
+## v2.157.0
 
 - **The AI Model picker offers the Gemma 4 12B and 26B-A4B QAT checkpoints again when
   the MLX engine is selected.** They were hidden while the bundled MLX library could not
@@ -45,8 +52,9 @@ tag from the now-released section and put it on the new top draft.
   render into the prompt in the same JSON form the model's own template expects (#171).
 - **The on-device AI engine moved to the current MLX release.** The two local patches
   Prosper carried for Gemma 4 QAT checkpoints and for stopping speculative decoding cleanly
-  are part of the upstream library now, so the app builds from the stock dependency. Model
-  loading and generation are unchanged.
+  are part of the upstream library now, so the app builds from the stock dependency. The
+  upstream library now defaults to balanced prefill chunking; loading and generation were
+  verified on-device with the Gemma 4 E2B QAT checkpoint after the move.
 - **Changed: the kill command no longer spawns a login shell on every settled
   keystroke.** The process list behind `kill <name>` is read once and reused for 2 s
   while you type; each settled keystroke used to run `ps` through a fresh login shell

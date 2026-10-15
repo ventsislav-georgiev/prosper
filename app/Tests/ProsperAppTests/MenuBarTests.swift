@@ -427,4 +427,15 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(pick("other.id", 201), p + "Volume", "a foreign identifier is no identifier")
         XCTAssertNil(pick(nil, 150), "no identifier, no minX match")
     }
+
+    /// #192: beta polls every 10 minutes, stable every 4 hours.
+    @MainActor
+    func testPollIntervalFollowsTheChannel() {
+        let saved = Preferences.allowBetaUpdates
+        defer { Preferences.allowBetaUpdates = saved }
+        Preferences.allowBetaUpdates = true
+        XCTAssertEqual(AppUpdater.pollInterval, 600)
+        Preferences.allowBetaUpdates = false
+        XCTAssertEqual(AppUpdater.pollInterval, 4 * 3600)
+    }
 }
