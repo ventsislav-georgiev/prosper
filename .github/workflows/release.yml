@@ -228,9 +228,10 @@ jobs:
         # bundle.sh embeds $ROOT/../dch/dch into Resources so Remote Terminal works
         # with zero user install. The runner has no sibling clone, so fetch + build
         # it here. dch is a public C/autotools repo. Build fails loudly (bundle.sh
-        # only warns), and we pin the same tag-less HEAD of main.
+        # only warns). Pinned to a dch release tag (#181): a push to dch main can no
+        # longer change what a Prosper tag embeds; bump the tag deliberately.
         run: |
-          git clone --depth 1 https://github.com/ventsislav-georgiev/dch.git "$GITHUB_WORKSPACE/../dch"
+          git clone --depth 1 --branch v1.19.0 https://github.com/ventsislav-georgiev/dch.git "$GITHUB_WORKSPACE/../dch"
           ( cd "$GITHUB_WORKSPACE/../dch" && ./configure && make )
           test -x "$GITHUB_WORKSPACE/../dch/dch" || { echo "::error::dch did not build"; exit 1; }
 
