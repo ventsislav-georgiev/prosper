@@ -24,6 +24,9 @@ tag from the now-released section and put it on the new top draft.
   10-minute cadence stays on the beta channel so testers pick up a new beta quickly;
   144 daily checks were about 60 % of a stable install's log lines. Toggling the beta
   channel in Settings switches the cadence at once (#192).
+- **Copy Text from Screen no longer hangs for up to 40 s when the accurate text recognizer
+  stalls.** The accurate pass gets 5 s; when it has not answered by then, or reads nothing,
+  the fast recognizer takes over. Autocomplete's screen reading is unchanged (#335).
 
 ## v2.157.0
 

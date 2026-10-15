@@ -1,4 +1,5 @@
 import AppKit
+import os
 import Vision
 
 /// The two user-facing screen tools: copy text out of a dragged screen region,
@@ -46,8 +47,7 @@ enum ScreenTools {
         // leaves a toast another feature showed meanwhile alone. The 60 s self-hide is
         // only a safety net in case the dismiss never runs.
         let coldToast = VisionOCR.isWarm ? nil : hud("Reading text…", seconds: 60)
-        var lines = await VisionOCR.recognizeLines(in: image)
-        if lines.isEmpty { lines = await VisionOCR.recognizeLines(in: image, level: .fast) }
+        let lines = await boundedRecognizeLines(in: image)
         if let coldToast { ExtensionMenuBar.shared.dismissAlert(token: coldToast) }
         let text = ScreenToolsSupport.joinedRecognizedText(lines)
         guard !text.isEmpty else {
@@ -55,6 +55,32 @@ enum ScreenTools {
             return
         }
         finish(text, open: ScreenToolsSupport.openableURL(from: text))
+    }
+
+    /// `.accurate` raced against `deadline` seconds, then `.fast` when it lost or read nothing.
+    /// `.accurate` has stalled 28-41 s returning nothing on macOS 27 (#335); a task group
+    /// would wait for that hung child (#249), so one continuation is resumed by whichever
+    /// finishes first and a late `.accurate` result is dropped.
+    nonisolated static func boundedRecognizeLines(
+        in image: CGImage, deadline: Double = 5,
+        recognize: @escaping @Sendable (CGImage, VNRequestTextRecognitionLevel) async -> [OCRLine]
+            = { await VisionOCR.recognizeLines(in: $0, level: $1) }
+    ) async -> [OCRLine] {
+        let accurateSignpost = Perf.signposter.beginInterval("ocr.accurate", id: Perf.signposter.makeSignpostID())
+        let accurate: [OCRLine]? = await withCheckedContinuation { continuation in
+            let resumed = OSAllocatedUnfairLock(initialState: false)
+            let once: @Sendable ([OCRLine]?) -> Void = { lines in
+                if !resumed.withLock({ defer { $0 = true }; return $0 }) { continuation.resume(returning: lines) }
+            }
+            Task { once(await recognize(image, .accurate)) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + deadline) { once(nil) }
+        }
+        Perf.signposter.endInterval("ocr.accurate", accurateSignpost,
+                                    "\(accurate == nil ? "deadline" : "done", privacy: .public)")
+        if let accurate, !accurate.isEmpty { return accurate }
+        let fastSignpost = Perf.signposter.beginInterval("ocr.fast", id: Perf.signposter.makeSignpostID())
+        defer { Perf.signposter.endInterval("ocr.fast", fastSignpost) }
+        return await recognize(image, .fast)
     }
 
     /// Copies `text`, then offers to open it when the whole result is one URL.
