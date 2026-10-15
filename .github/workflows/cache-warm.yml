@@ -44,13 +44,13 @@ jobs:
           echo "Selecting $XC"
           sudo xcode-select -s "$XC/Contents/Developer"
           swift --version
-          # Toolchain fingerprint so the build cache busts on any Swift/Xcode change,
-          # and on a runner image update: the same Xcode on a rebuilt image recompiled
-          # 185 C++ files on every tag (v2.157.0-beta.4, +2.5 min) because a primary-key
-          # hit never re-saves. A new image costs one cold build, then stays warm.
-          echo "ImageVersion=${ImageVersion:-unset}"
-          TC=$( { swift --version 2>/dev/null; echo "${ImageVersion:-}"; } | tr -d ' \n' | shasum -a 256 | cut -c1-12)
+          # Toolchain fingerprint so the build cache busts on any Swift/Xcode change.
+          TC=$(swift --version 2>/dev/null | tr -d ' \n' | shasum -a 256 | cut -c1-12)
           echo "toolchain=$TC" >> "$GITHUB_OUTPUT"
+          # Runner image version, a separate key part (#443): the build-tree key ends
+          # with it and its restore-key drops only it, see that cache step.
+          echo "ImageVersion=${ImageVersion:-unset}"
+          echo "image=${ImageVersion:-unset}" >> "$GITHUB_OUTPUT"
 
       - name: Check image tools
         # Proves the preview image before a tag depends on it: the release steps
@@ -82,15 +82,20 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           # Checkouts, compiled products, macro plugins and the staged MLX metallib.
-          # Exact Package.resolved match only, no restore-keys (#433): a tree built
-          # against another dependency set is not an incremental starting point.
-          # Restored through a prefix it shipped a stale Sparkle PCH (v2.156.0-beta.1),
+          # Exact toolchain and Package.resolved match (#433): a tree built against
+          # another dependency set is not an incremental starting point. Restored
+          # through a looser prefix it shipped a stale Sparkle PCH (v2.156.0-beta.1),
           # would have shipped a stale metallib (build.sh stamps it since) and crashed
           # the swift-syntax macro plugins after the mlx-swift-lm 3.32.3 bump
-          # (cache-warm run 38607018559). A miss rebuilds from the dependency cache
-          # above; Package.resolved changes a few times a month.
+          # (cache-warm run 38607018559). The one restore-key drops only the runner
+          # image version (#443): the same tree on a rebuilt image recompiles what the
+          # image touched (185 C++ files, v2.157.0-beta.4, output verified identical)
+          # and saves under its own key, where a primary-key hit never re-saves. A full
+          # miss rebuilds from the dependency cache above.
           path: app/.build
-          key: spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
+          key: spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}-${{ steps.xcode.outputs.image }}
+          restore-keys: |
+            spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}-
 
       - name: Build (release) to warm cache
         # Run the full build.sh (not bare `swift build`) so the warmed cache also
