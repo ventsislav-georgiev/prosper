@@ -503,11 +503,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // reads as a death; a first download that dies re-arms on the next launch.
             let id = Preferences.coreModel
             if !LlamaInlineEngine.isEnabled, ModelFiles.isModelDownloaded(id),
-               let fallback = Preferences.launchLoadFallback(for: id) {
+               let fallback = Preferences.applyLaunchFallback(for: id) { // writes the per-Mac override (OQ-38)
                 NSLog("prosper: the previous launch died loading %@, skipping the automatic load once, model now %@",
                       id, fallback.isEmpty ? "none" : fallback)
-                Preferences.defaults.set(fallback, forKey: Preferences.coreModelOverrideKey) // not synced (OQ-38)
-                if fallback.isEmpty { dropToNoModel(local: true) }
+                if fallback.isEmpty { showNoModel() } // prefs already dropped locally
             } else {
                 // The marker clears on the model's first successful eval (MLXEngine.evalSucceeded).
                 runModelSetup(force: false)
@@ -1223,9 +1222,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// No model available: select "None" in the picker and force inline completions
-    /// off — without weights they can't run. `local`: the caller already wrote the per-Mac override.
-    private func dropToNoModel(local: Bool = false) {
-        if !local { Preferences.coreModel = "" }
+    /// off — without weights they can't run.
+    private func dropToNoModel() {
+        Preferences.dropToNoModel()
+        showNoModel()
+    }
+
+    /// UI/engine side of the no-model drop; the preference writes are Preferences.dropToNoModel.
+    private func showNoModel() {
         SettingsHooks.shared.revertModelSelection?(nil)
         setAutocomplete(enabled: false)
     }

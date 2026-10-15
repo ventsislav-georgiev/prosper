@@ -220,6 +220,41 @@ final class ModelSelectionTests: XCTestCase {
         XCTAssertEqual(Preferences.launchLoadFallback(for: x, physicalGB: gb(64), defaults: d, isOnDisk: { _ in false }), "")
     }
 
+    /// The launch path (AppDelegate) through applyLaunchFallback: the step-down lands in the
+    /// per-Mac override and never in the synced coreModel key (#439, QA mutants P3/P3b).
+    func testLaunchFallbackWritesOnlyTheLocalOverride() {
+        let d = markerDefaults(), o = Preferences.coreModelOverrideKey, x = Preferences.qat26B8Id
+        d.set("synced-pick", forKey: key)
+        d.set(true, forKey: "autocompleteEnabled")
+        d.set(x, forKey: Preferences.modelLoadMarkerKey) // the previous launch died loading x
+        XCTAssertEqual(Preferences.applyLaunchFallback(for: x, physicalGB: gb(64), defaults: d,
+                                                       isOnDisk: { $0 == Preferences.qatE4B8Id }), Preferences.qatE4B8Id)
+        XCTAssertEqual(d.string(forKey: o), Preferences.qatE4B8Id)
+        XCTAssertEqual(d.string(forKey: key), "synced-pick", "the fallback must not touch the synced key")
+        XCTAssertTrue(d.bool(forKey: "autocompleteEnabled"), "a smaller model keeps completions on")
+    }
+
+    /// Nothing smaller on disk: no model on this Mac only, completions off (as before #439).
+    func testLaunchFallbackToNoModelStaysLocal() {
+        let d = markerDefaults(), o = Preferences.coreModelOverrideKey, x = Preferences.qat26B8Id
+        d.set("synced-pick", forKey: key)
+        d.set(true, forKey: "autocompleteEnabled")
+        d.set(x, forKey: Preferences.modelLoadMarkerKey)
+        XCTAssertEqual(Preferences.applyLaunchFallback(for: x, physicalGB: gb(64), defaults: d, isOnDisk: { _ in false }), "")
+        XCTAssertEqual(d.string(forKey: o), "")
+        XCTAssertEqual(d.string(forKey: key), "synced-pick", "the local drop must not write the synced \"\"")
+        XCTAssertEqual(d.object(forKey: "autocompleteEnabled") as? Bool, false)
+    }
+
+    /// No death: the marker is armed and neither model key is written.
+    func testNoLaunchDeathWritesNoModelKey() {
+        let d = markerDefaults(), x = Preferences.qat26B8Id
+        XCTAssertNil(Preferences.applyLaunchFallback(for: x, physicalGB: gb(64), defaults: d, isOnDisk: everyRow))
+        XCTAssertNil(d.object(forKey: Preferences.coreModelOverrideKey))
+        XCTAssertNil(d.object(forKey: key))
+        XCTAssertNil(d.object(forKey: "autocompleteEnabled"))
+    }
+
     func testAgentPickerRowLabelShowsRAMFloorOnlyWhenRowDoesNotFit() throws {
         let coder = try XCTUnwrap(AgentModelRegistry.all().first { $0.id == "unsloth/Qwen3-Coder-Next-GGUF" })
         XCTAssertEqual(coder.minRAMGB, 64)

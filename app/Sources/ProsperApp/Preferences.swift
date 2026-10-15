@@ -539,6 +539,30 @@ enum Preferences {
         return nil
     }
 
+    /// Launch path of the crash-loop guard: `launchLoadFallback`, then the fallback goes to the
+    /// per-Mac override (OQ-38), never the synced coreModel; "" also drops to no model locally.
+    /// Returns the fallback (nil = no death, load as usual); the caller does the UI.
+    static func applyLaunchFallback(for id: String, physicalGB: Int = AgentModelRegistry.physicalMemoryGB,
+                                    defaults: UserDefaults = Preferences.defaults,
+                                    isOnDisk: (String) -> Bool = { ModelFiles.isModelDownloaded($0) }) -> String? {
+        guard let fallback = launchLoadFallback(for: id, physicalGB: physicalGB, defaults: defaults, isOnDisk: isOnDisk)
+        else { return nil }
+        defaults.set(fallback, forKey: coreModelOverrideKey) // not synced (OQ-38)
+        if fallback.isEmpty { dropToNoModel(local: true, defaults: defaults) }
+        return fallback
+    }
+
+    /// Preference writes of "no model": coreModel "" (same as the setter: override removed, synced
+    /// key "") unless `local` (the caller already wrote the per-Mac override), and inline
+    /// completions off, since they cannot run without weights.
+    static func dropToNoModel(local: Bool = false, defaults: UserDefaults = Preferences.defaults) {
+        if !local {
+            defaults.removeObject(forKey: coreModelOverrideKey)
+            defaults.set("", forKey: Keys.coreModel)
+        }
+        defaults.set(false, forKey: Keys.autocompleteEnabled)
+    }
+
     /// Clears the marker once `id` ran its first successful eval (MLXEngine.evalSucceeded).
     /// Never call it before that.
     static func modelLoadSucceeded(_ id: String, defaults: UserDefaults = Preferences.defaults) {
