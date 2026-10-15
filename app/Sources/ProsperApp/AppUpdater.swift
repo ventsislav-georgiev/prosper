@@ -131,7 +131,7 @@ final class AppUpdater: NSObject {
         set {
             updater?.automaticallyChecksForUpdates = newValue
             Preferences.automaticUpdateChecks = newValue
-            if newValue { startPolling() } else { stopPolling() }
+            if newValue { restartPolling() } else { stopPolling() } // restart refreshes Sparkle's interval too
         }
     }
 

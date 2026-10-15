@@ -438,4 +438,28 @@ final class MenuBarTests: XCTestCase {
         Preferences.allowBetaUpdates = false
         XCTAssertEqual(AppUpdater.pollInterval, 4 * 3600)
     }
+
+    /// #192 QA U2 + LOW: toggling the channel, or re-enabling checks after a toggle, re-arms the Timer.
+    @MainActor
+    func testChannelToggleRestartsPolling() {
+        let savedBeta = Preferences.allowBetaUpdates
+        let savedAuto = Preferences.automaticUpdateChecks
+        defer {
+            Preferences.allowBetaUpdates = savedBeta
+            Preferences.automaticUpdateChecks = savedAuto
+        }
+        let updater = AppUpdater()
+        defer { updater.automaticChecks = false }
+        func distance() -> TimeInterval? { updater.nextCheckDate?.timeIntervalSinceNow }
+        updater.automaticChecks = true
+        updater.allowBetaUpdates = true
+        XCTAssertEqual(distance() ?? -1, 600, accuracy: 5)
+        updater.allowBetaUpdates = false
+        XCTAssertEqual(distance() ?? -1, 4 * 3600, accuracy: 5, "channel toggle must restart polling")
+        updater.automaticChecks = false
+        XCTAssertNil(distance())
+        updater.allowBetaUpdates = true
+        updater.automaticChecks = true
+        XCTAssertEqual(distance() ?? -1, 600, accuracy: 5, "re-enabling checks must use the current channel")
+    }
 }
