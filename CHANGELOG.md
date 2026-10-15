@@ -33,8 +33,8 @@ tag from the now-released section and put it on the new top draft.
   with the next model pick there; the synced pick stays what you chose (#439).
 - **JS plugins run on Bun 1.4.3.** The plugin host runs the pinned Bun release: the one
   bundled with the app, else the one it downloads on first use (checked against the release
-  checksums). Only when that download fails does it fall back to a Bun found on your PATH,
-  whatever version that is. A build that bundles a Bun of another version fails instead of
+  checksums). Only when that download fails does it fall back to a Bun already installed by
+  Homebrew or the Bun installer, whatever version that is. A build that bundles a Bun of another version fails instead of
   warning (#182).
 - **The coding agent tells Codex the local model's real context window.** Codex sized the
   local model at 272k tokens and never compacted before the 40,960-token llama.cpp context
