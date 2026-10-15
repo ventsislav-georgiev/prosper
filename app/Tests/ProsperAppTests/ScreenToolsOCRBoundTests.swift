@@ -44,7 +44,7 @@ final class ScreenToolsOCRBoundTests: XCTestCase {
     }
 
     /// Mutant O1: without the resume-once guard the deadline's late resume is a fatal double resume.
-    /// Accurate finishes at 50 ms, the 1 s deadline fires later; the 1.2 s sleep outlives it.
+    /// Accurate finishes at 50 ms, the 1 s deadline fires later; the trailing 1.2 s sleep ends 200 ms after it.
     func testNoDoubleResumeAfterAccurateWins() async throws {
         let lines = await ScreenTools.boundedRecognizeLines(in: image, deadline: 1.0) { _, level in
             if level == .accurate { try? await Task.sleep(for: .milliseconds(50)) }
@@ -55,7 +55,7 @@ final class ScreenToolsOCRBoundTests: XCTestCase {
     }
 
     /// Mutant O1: without the guard the late `.accurate` finisher resumes a second time.
-    /// The 0.1 s deadline wins over accurate at 1 s; the 1.2 s sleep outlives the accurate finisher.
+    /// The 0.1 s deadline wins over accurate at 1 s; the trailing 1.2 s sleep ends 200 ms after the accurate finisher.
     func testNoDoubleResumeAfterDeadlineWins() async throws {
         let lines = await ScreenTools.boundedRecognizeLines(in: image, deadline: 0.1) { _, level in
             if level == .accurate { try? await Task.sleep(for: .milliseconds(1000)) }
