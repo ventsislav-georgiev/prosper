@@ -27,7 +27,8 @@ enum DockPolicy {
     private static var visible = Set<ObjectIdentifier>()
     private static var pendingDemotion: DispatchWorkItem?
     private static var demotionGeneration = 0
-    private static var demotionDelay: TimeInterval = 0.2
+    static let defaultDemotionDelay: TimeInterval = 0.2
+    private static var demotionDelay = defaultDemotionDelay
     private static func liveSetPolicy(_ target: NSApplication.ActivationPolicy) {
         guard NSApp.activationPolicy() != target else { return }
         NSApp.setActivationPolicy(target)
@@ -93,7 +94,7 @@ enum DockPolicy {
     }
 
     static func resetForTesting(
-        demotionDelay: TimeInterval = 0.2,
+        demotionDelay: TimeInterval = defaultDemotionDelay,
         setPolicy: (@MainActor (NSApplication.ActivationPolicy) -> Void)? = nil
     ) {
         cancelPendingDemotion()
