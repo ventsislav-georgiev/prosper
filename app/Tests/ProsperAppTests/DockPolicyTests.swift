@@ -8,7 +8,7 @@ final class DockPolicyTests: XCTestCase {
         var policies: [NSApplication.ActivationPolicy] = []
         var currentPolicy: NSApplication.ActivationPolicy = .accessory
         Preferences.showDockIcon = true
-        DockPolicy.resetForTesting { target in
+        DockPolicy.resetForTesting(demotionDelay: 1.0) { target in
             guard currentPolicy != target else { return }
             currentPolicy = target
             policies.append(target)
@@ -24,10 +24,11 @@ final class DockPolicyTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         DockPolicy.windowDidShow(window)
         DockPolicy.windowDidHide(window)
-        try await Task.sleep(for: .milliseconds(125))
+        // 3-vCPU CI runner flaked with 0.2 s delay; 1 s delay keeps 500 ms margins on both asserts.
+        try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(policies, [.regular])
 
-        try await Task.sleep(for: .milliseconds(125))
+        try await Task.sleep(for: .milliseconds(1000))
         XCTAssertEqual(policies, [.regular, .accessory])
     }
 }
