@@ -18,6 +18,7 @@ final class ModelSelectionTests: XCTestCase {
     override func tearDown() {
         if let saved { Preferences.defaults.set(saved, forKey: key) }
         else { Preferences.defaults.removeObject(forKey: key) }
+        Preferences.defaults.removeObject(forKey: Preferences.coreModelOverrideKey)
         AgentModelRegistry.physicalMemoryGB = savedGB
         super.tearDown()
     }
@@ -139,6 +140,36 @@ final class ModelSelectionTests: XCTestCase {
         XCTAssertEqual(Preferences.coreModel, Preferences.qatE2B6Id, "the default must fit too")
         AgentModelRegistry.physicalMemoryGB = gb(16)
         XCTAssertEqual(Preferences.coreModel, Preferences.recommendedModelId)
+    }
+
+    // MARK: - Per-Mac launch override (OQ-38)
+
+    /// The launch fallback's override wins over the synced pick on this Mac, through the same gate.
+    func testLocalOverrideReadsThroughTheGate() {
+        let o = Preferences.coreModelOverrideKey
+        AgentModelRegistry.physicalMemoryGB = gb(8)
+        Preferences.defaults.set(Preferences.qatE4B8Id, forKey: key)
+        Preferences.defaults.set(Preferences.qat26B8Id, forKey: o)
+        XCTAssertEqual(Preferences.coreModel, Preferences.qatE2B6Id)
+        Preferences.defaults.set(Preferences.qatE2B4Id, forKey: o)
+        XCTAssertEqual(Preferences.coreModel, Preferences.qatE2B4Id)
+        Preferences.defaults.set("", forKey: o)
+        XCTAssertEqual(Preferences.coreModel, "", "an empty override is no model, not unset")
+        XCTAssertEqual(Preferences.defaults.string(forKey: key), Preferences.qatE4B8Id, "the synced pick is untouched")
+    }
+
+    /// A pick (Settings picker, AI Models pane, revert after a failed switch) ends the step-down.
+    func testUserPickClearsLocalOverride() {
+        AgentModelRegistry.physicalMemoryGB = gb(16)
+        Preferences.defaults.set("", forKey: Preferences.coreModelOverrideKey)
+        Preferences.coreModel = Preferences.qatE4B8Id
+        XCTAssertNil(Preferences.defaults.string(forKey: Preferences.coreModelOverrideKey))
+        XCTAssertEqual(Preferences.coreModel, Preferences.qatE4B8Id)
+    }
+
+    func testLocalOverrideIsNotSynced() {
+        XCTAssertFalse(SyncedKeys.isSynced(Preferences.coreModelOverrideKey))
+        XCTAssertTrue(SyncedKeys.isSynced(key))
     }
 
     // MARK: - Launch crash-loop marker (#435)

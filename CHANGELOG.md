@@ -27,6 +27,10 @@ tag from the now-released section and put it on the new top draft.
 - **Copy Text from Screen no longer hangs for up to 40 s when the accurate text recognizer
   stalls.** The accurate pass gets 5 s; when it has not answered by then, or reads nothing,
   the fast recognizer takes over. Autocomplete's screen reading is unchanged (#335).
+- **A launch crash while loading the AI model no longer switches your other Macs.** The
+  smaller model the crashed Mac steps down to was written into the synced settings, so
+  every Mac on the same account switched with it. The step-down is now per Mac and ends
+  with the next model pick there; the synced pick stays what you chose (#439).
 
 ## v2.157.0
 

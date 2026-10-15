@@ -296,8 +296,9 @@ final class SettingsModel: ObservableObject {
     @Published var coreModel: String {
         didSet {
             guard coreModel != oldValue else { return }
-            Preferences.coreModel = coreModel
+            // A revert's caller already wrote Preferences; writing here would clear the per-Mac override.
             if suppressModelHook { return }
+            Preferences.coreModel = coreModel
             // Live switch: download-if-needed + reload the new model (no restart).
             SettingsHooks.shared.onModelChanged?(coreModel)
         }

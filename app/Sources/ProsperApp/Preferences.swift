@@ -918,7 +918,8 @@ enum Preferences {
     /// one it can. Not written back: coreModel syncs between Macs, like agentModel.
     static var coreModel: String {
         get {
-            let stored = defaults.string(forKey: Keys.coreModel) ?? recommendedModelId
+            let stored = defaults.string(forKey: coreModelOverrideKey)
+                ?? defaults.string(forKey: Keys.coreModel) ?? recommendedModelId
             let id = resolveModelId(stored)
             if id != stored, loggedModelResolution.withLock({ $0.insert(stored).inserted }) {
                 NSLog("prosper: model %@ needs more RAM than this Mac has (%d GB), using %@",
@@ -926,8 +927,15 @@ enum Preferences {
             }
             return id
         }
-        set { defaults.set(newValue, forKey: Keys.coreModel) }
+        set {
+            defaults.removeObject(forKey: coreModelOverrideKey) // a user pick ends the step-down
+            defaults.set(newValue, forKey: Keys.coreModel)
+        }
     }
+
+    /// Per-Mac model the launch fallback steps down to (OQ-38). Not in `SyncedKeys`, so one
+    /// Mac's launch death leaves the user's other Macs alone. Absent = unset, "" = no model.
+    static let coreModelOverrideKey = "coreModelLocalOverride"
 
     /// Model id used by the coding agent (a SEPARATE checkpoint from the inline
     /// `coreModel` — bigger, tool-calling-capable, loaded only while an agent run

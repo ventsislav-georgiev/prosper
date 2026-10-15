@@ -506,7 +506,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                let fallback = Preferences.launchLoadFallback(for: id) {
                 NSLog("prosper: the previous launch died loading %@, skipping the automatic load once, model now %@",
                       id, fallback.isEmpty ? "none" : fallback)
-                if fallback.isEmpty { dropToNoModel() } else { Preferences.coreModel = fallback }
+                Preferences.defaults.set(fallback, forKey: Preferences.coreModelOverrideKey) // not synced (OQ-38)
+                if fallback.isEmpty { dropToNoModel(local: true) }
             } else {
                 // The marker clears on the model's first successful eval (MLXEngine.evalSucceeded).
                 runModelSetup(force: false)
@@ -1222,9 +1223,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// No model available: select "None" in the picker and force inline completions
-    /// off — without weights they can't run.
-    private func dropToNoModel() {
-        Preferences.coreModel = ""
+    /// off — without weights they can't run. `local`: the caller already wrote the per-Mac override.
+    private func dropToNoModel(local: Bool = false) {
+        if !local { Preferences.coreModel = "" }
         SettingsHooks.shared.revertModelSelection?(nil)
         setAutocomplete(enabled: false)
     }
