@@ -83,10 +83,11 @@ final class AutocompleteContinuationTests: XCTestCase {
                        "orphaned fragment + new word: \(f)")
     }
 
-    func testCompleteButUnspacedWordStillGetsItsSpace() throws {
-        // The engine's word check is NSSpellChecker in the primary language
-        // (automaticallyIdentifiesLanguages = false). The 3-vCPU hosted runner's
-        // checker flagged "brown"; run the same call as a canary and skip there.
+    // The engine's word check is NSSpellChecker in the primary language
+    // (automaticallyIdentifiesLanguages = false, set by the engine itself). The
+    // 3-vCPU hosted runner's checker flagged "brown"; run the same call as a
+    // canary and skip there.
+    private func skipUnlessEnglishCheckerWorks() throws {
         let checker = NSSpellChecker.shared
         let autoID = checker.automaticallyIdentifiesLanguages
         checker.automaticallyIdentifiesLanguages = false
@@ -97,6 +98,10 @@ final class AutocompleteContinuationTests: XCTestCase {
         }
         try XCTSkipUnless(!flagged("brown") && flagged("xqzvw"),
                           "NSSpellChecker not functional for English here (hosted CI runner flags \"brown\")")
+    }
+
+    func testCompleteButUnspacedWordStillGetsItsSpace() throws {
+        try skipUnlessEnglishCheckerWorks()
         // Counterpart to the suppression: "brown" IS a word, so the user just
         // hasn't hit space — the new word is wanted, spaced.
         XCTAssertEqual(field(before: "the quick brown", raw: "fox"),
@@ -111,7 +116,8 @@ final class AutocompleteContinuationTests: XCTestCase {
             "Dear team, thank you for your patience")
     }
 
-    func testLastWordEchoWithStraySpaceStripped() {
+    func testLastWordEchoWithStraySpaceStripped() throws {
+        try skipUnlessEnglishCheckerWorks()
         XCTAssertEqual(field(before: "the quick", raw: " quick brown"),
                        "the quick brown")
     }
