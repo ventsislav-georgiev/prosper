@@ -60,6 +60,7 @@
 /* type of protected functions, to be ran by 'runprotected' */
 typedef void (*Pfunc) (lua_State *L, void *ud);
 
+LUAI_FUNC l_noret luaD_errerr (lua_State *L);
 LUAI_FUNC void luaD_seterrorobj (lua_State *L, int errcode, StkId oldtop);
 LUAI_FUNC int luaD_protectedparser (lua_State *L, ZIO *z, const char *name,
                                                   const char *mode);
@@ -79,6 +80,7 @@ LUAI_FUNC int luaD_reallocstack (lua_State *L, int newsize, int raiseerror);
 LUAI_FUNC int luaD_growstack (lua_State *L, int n, int raiseerror);
 LUAI_FUNC void luaD_shrinkstack (lua_State *L);
 LUAI_FUNC void luaD_inctop (lua_State *L);
+LUAI_FUNC int luaD_checkminstack (lua_State *L);
 
 LUAI_FUNC l_noret luaD_throw (lua_State *L, int errcode);
 LUAI_FUNC int luaD_rawrunprotected (lua_State *L, Pfunc f, void *ud);

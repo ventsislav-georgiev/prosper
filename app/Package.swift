@@ -76,7 +76,7 @@ let package = Package(
             url: "https://github.com/ggml-org/llama.cpp/releases/download/b9866/llama-b9866-xcframework.zip",
             checksum: "b7285442515df927ae34e3e9dbcd82696b259e9d43e91656ffaaa583daeee09d"
         ),
-        // Vendored Lua 5.4.7 interpreter (pure C99) backing the extension runtime.
+        // Vendored Lua 5.4.9 interpreter (pure C99) backing the extension runtime.
         // See docs/ADR-002-extensibility.md. Pure bytecode VM — no JIT, no
         // MAP_JIT, so Hardened Runtime/notarization need no extra entitlements.
         // lua.c / luac.c (the standalone interpreter + compiler `main`s) are
