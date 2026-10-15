@@ -48,6 +48,11 @@ tag from the now-released section and put it on the new top draft.
   network ping while no popup is open.** Only the popup shows them; the idle app sent
   about 29,000 ping packets a day and read IOReport every tick for nothing. The menu bar
   keeps every reading it shows (#188).
+- **Stopping a Codex session no longer parks a thread on its exit.** The teardown used to
+  wait for the codex process on a Swift-concurrency thread, often for seconds after it was
+  gone; with every such thread busy, the delayed SIGKILL for a group that ignored SIGTERM
+  never ran. The wait is gone (the process is reaped anyway) and the SIGKILL escalation
+  runs on its own thread (#446).
 
 ## v2.157.0
 

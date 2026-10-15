@@ -170,10 +170,9 @@ actor CodexHarness: CodingHarness {
         process = nil
         proc?.terminationHandler = nil   // teardown owns this exit; no second entry
         cleanupIO()
-        if let proc {
-            Self.killGroup(proc.processIdentifier)   // escalate unregisters the group (#377)
-            Task.detached { proc.waitUntilExit() }   // reap off the actor
-        }
+        // No waitUntilExit: Foundation reaps codex itself, and the wait parked a cooperative
+        // thread for seconds past the reap; ncpu parked ones starve escalate's queue (#446).
+        if let proc { Self.killGroup(proc.processIdentifier) }   // escalate unregisters the group (#377)
     }
 
     /// Every codex group started and not yet torn down, readable off the actor so the
@@ -227,14 +226,16 @@ actor CodexHarness: CodingHarness {
     /// callers, BunHarness.stopHost and `killLiveGroupsBlocking` (from
     /// applicationWillTerminate), where `atexit { _exit(0) }` would end us before a
     /// detached SIGKILL fires (#327, #361). A healthy group exits in milliseconds and
-    /// the wait returns early.
+    /// the wait returns early. The detached wait gets its own thread, not a GCD global
+    /// queue: the kernel stops admitting global-queue work while ncpu cooperative threads
+    /// are blocked, and the SIGKILL must not depend on that (#446).
     /// ponytail: a child that moves to its own group or session (`setsid` for a PTY)
     /// is out of reach; codex itself has to end those on SIGTERM.
     nonisolated static func killGroup(_ pgid: pid_t, grace: TimeInterval = 3, blocking: Bool = false) {
         guard mayKillGroup(pgid) else { return }
         _ = sendSignal(-pgid, SIGTERM)
         if blocking { escalate(pgid, grace: grace) }
-        else { DispatchQueue.global(qos: .utility).async { escalate(pgid, grace: grace) } }
+        else { Thread.detachNewThread { escalate(pgid, grace: grace) } }
     }
 
     /// kill(-0)/kill(-1) would hit us / everything; and a codex that somehow isn't its
