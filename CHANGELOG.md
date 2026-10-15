@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.158.0 *(unreleased)*
+## v2.158.0
 
 - **Stable installs check for updates every 4 hours instead of every 10 minutes.** The
   10-minute cadence stays on the beta channel so testers pick up a new beta quickly;
