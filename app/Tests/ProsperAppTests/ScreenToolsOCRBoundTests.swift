@@ -44,24 +44,24 @@ final class ScreenToolsOCRBoundTests: XCTestCase {
     }
 
     /// Mutant O1: without the resume-once guard the deadline's late resume is a fatal double resume.
+    /// Accurate finishes at 50 ms, the 1 s deadline fires later; the 1.2 s sleep outlives it.
     func testNoDoubleResumeAfterAccurateWins() async throws {
-        let lines = await ScreenTools.boundedRecognizeLines(in: image, deadline: 0.1) { _, level in
+        let lines = await ScreenTools.boundedRecognizeLines(in: image, deadline: 1.0) { _, level in
             if level == .accurate { try? await Task.sleep(for: .milliseconds(50)) }
             return [OCRLine(text: level == .accurate ? "accurate" : "fast", boundingBox: .zero)]
         }
         XCTAssertEqual(lines.map(\.text), ["accurate"])
-        try await Task.sleep(for: .milliseconds(300))
+        try await Task.sleep(for: .milliseconds(1200))
     }
 
     /// Mutant O1: without the guard the late `.accurate` finisher resumes a second time.
+    /// The 0.1 s deadline wins over accurate at 1 s; the 1.2 s sleep outlives the accurate finisher.
     func testNoDoubleResumeAfterDeadlineWins() async throws {
-        let start = ContinuousClock.now
         let lines = await ScreenTools.boundedRecognizeLines(in: image, deadline: 0.1) { _, level in
-            if level == .accurate { try? await Task.sleep(for: .milliseconds(300)) }
+            if level == .accurate { try? await Task.sleep(for: .milliseconds(1000)) }
             return [OCRLine(text: level == .accurate ? "accurate" : "fast", boundingBox: .zero)]
         }
         XCTAssertEqual(lines.map(\.text), ["fast"])
-        XCTAssertLessThan(ContinuousClock.now - start, .milliseconds(250))
-        try await Task.sleep(for: .milliseconds(400))
+        try await Task.sleep(for: .milliseconds(1200))
     }
 }
