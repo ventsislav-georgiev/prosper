@@ -260,10 +260,11 @@ jobs:
             || { echo "::error::dch was not embedded into the bundle"; exit 1; }
           # Every Mach-O must run on LSMinimumSystemVersion: the embedded dch was
           # built for the runner's macOS for five releases and nothing failed (#447).
+          # A universal binary reports one minos per slice; the highest one counts.
           MIN=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' dist/Prosper.app/Contents/Info.plist)
           BAD=0
           while IFS= read -r f; do
-            MINOS=$(xcrun vtool -show-build "$f" 2>/dev/null | awk '/^ *minos /{print $2; exit}' || true)
+            MINOS=$(xcrun vtool -show-build "$f" 2>/dev/null | awk '/^ *minos /{split($2, v, "."); n = v[1] * 1000 + v[2]; if (n > m) { m = n; top = $2 }} END{print top}' || true)
             [[ -n "$MINOS" ]] || continue
             if [[ "$(printf '%s\n' "$MIN" "$MINOS" | sort -t. -k1,1n -k2,2n | tail -1)" != "$MIN" ]]; then
               echo "::error::$f targets macOS $MINOS, above LSMinimumSystemVersion $MIN"; BAD=1
