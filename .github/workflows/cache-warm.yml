@@ -6,7 +6,7 @@ name: Warm SwiftPM Cache
 # the default branch). Without this warmer every release would build cold — an MLX
 # build from scratch is very slow.
 #
-# Runs when app/Package.resolved changes on main (deps moved → cache stale), plus
+# Runs when app/Package.resolved or app/Package.swift changes on main (deps moved → cache stale), plus
 # a daily schedule + manual dispatch as a safety net. After a runner image update
 # only this warmer's save on main makes tag runs exact again (#443): a tag run's
 # own save lands in the tag's ref scope, unreadable by later tags. Dispatch it by
@@ -21,6 +21,7 @@ on:
     branches: [main]
     paths:
       - "app/Package.resolved"
+      - "app/Package.swift" # binaryTargets (llama) live here, not in Package.resolved (#179)
   schedule:
     - cron: "0 6 * * *" # daily 06:00 UTC (OQ-39)
   workflow_dispatch:
@@ -78,7 +79,7 @@ jobs:
           path: |
             ~/Library/Caches/org.swift.swiftpm
             ~/Library/org.swift.swiftpm
-          key: spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
+          key: spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}
           restore-keys: |
             spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
             spm-deps-v1-${{ runner.os }}-
@@ -87,7 +88,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           # Checkouts, compiled products, macro plugins and the staged MLX metallib.
-          # Exact toolchain and Package.resolved match (#433): a tree built against
+          # Exact toolchain and Package.resolved + Package.swift match (#433, #179): a tree built against
           # another dependency set is not an incremental starting point. Restored
           # through a looser prefix it shipped a stale Sparkle PCH (v2.156.0-beta.1),
           # would have shipped a stale metallib (build.sh stamps it since) and crashed
@@ -100,16 +101,16 @@ jobs:
           # later tags, so release.yml restores only. A full miss rebuilds from the
           # dependency cache above.
           path: app/.build
-          key: spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}-${{ steps.xcode.outputs.image }}
+          key: spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-${{ steps.xcode.outputs.image }}
           restore-keys: |
-            spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}-
+            spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-
 
       - name: Build (release) to warm cache
         # Run the full build.sh (not bare `swift build`) so the warmed cache also
         # captures the MLX `default.metallib` bundle in app/.build/release. That
         # bundle comes from a ~6-minute one-shot xcodebuild that `swift build` can't
         # do; it's dependency-derived (arch-portable, config-independent, unaffected
-        # by app source) so once cached it stays valid until Package.resolved changes
+        # by app source) so once cached it stays valid until Package.resolved or Package.swift changes
         # — which re-triggers this warmer. release.yml's Build step then finds it
         # already staged ("metallib already staged") and skips the xcodebuild compile.
         run: ./scripts/build.sh release

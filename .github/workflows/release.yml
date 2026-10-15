@@ -116,7 +116,7 @@ jobs:
           path: |
             ~/Library/Caches/org.swift.swiftpm
             ~/Library/org.swift.swiftpm
-          key: spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
+          key: spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}
           restore-keys: |
             spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
             spm-deps-v1-${{ runner.os }}-
@@ -139,9 +139,9 @@ jobs:
           # later tags, so release.yml restores only. A full miss rebuilds from the
           # dependency cache above.
           path: app/.build
-          key: spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}-${{ steps.xcode.outputs.image }}
+          key: spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-${{ steps.xcode.outputs.image }}
           restore-keys: |
-            spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}-
+            spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-
 
       - name: Build-tree cache cue
         # A prefix hit is invisible unless two log lines are compared; say it out
