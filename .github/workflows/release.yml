@@ -135,7 +135,7 @@ jobs:
           # image version (#443): the same tree on a rebuilt image recompiles what the
           # image touched (185 C++ files, v2.157.0-beta.4, output verified identical).
           # Tags stay on that path until the warmer (cache-warm.yml) saves the new-image
-          # key on main, Monday cron or a dispatch: a tag-scope save is unreadable by
+          # key on main, daily cron or a dispatch: a tag-scope save is unreadable by
           # later tags, so release.yml restores only. A full miss rebuilds from the
           # dependency cache above.
           path: app/.build
