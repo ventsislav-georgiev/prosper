@@ -106,12 +106,13 @@ jobs:
           xcrun metal --version >/dev/null 2>&1 || echo "::warning::Metal toolchain not installed; build.sh downloads it (~840 MB) if the metallib step runs"
 
       - name: Cache SwiftPM dependencies
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, restore only
         with:
           # Git mirrors, artifact zips and the manifest cache. Safe to restore from
-          # an older key: SwiftPM fetches whatever is missing. Both cache steps MUST
-          # stay byte-identical between cache-warm.yml and release.yml, or tag runs
-          # never hit what the warmer saved under the main scope.
+          # an older key: SwiftPM fetches whatever is missing. Paths, keys and
+          # restore-keys MUST stay byte-identical between cache-warm.yml and
+          # release.yml, or tag runs never hit what the warmer saved under the main
+          # scope; release.yml restores only (a tag-scope save is unreadable later).
           path: |
             ~/Library/Caches/org.swift.swiftpm
             ~/Library/org.swift.swiftpm
@@ -121,7 +122,7 @@ jobs:
             spm-deps-v1-${{ runner.os }}-
 
       - name: Cache SwiftPM build tree
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, restore only
         with:
           # Checkouts, compiled products, macro plugins and the staged MLX metallib.
           # Exact toolchain and Package.resolved match (#433): a tree built against
@@ -131,9 +132,11 @@ jobs:
           # the swift-syntax macro plugins after the mlx-swift-lm 3.32.3 bump
           # (cache-warm run 38607018559). The one restore-key drops only the runner
           # image version (#443): the same tree on a rebuilt image recompiles what the
-          # image touched (185 C++ files, v2.157.0-beta.4, output verified identical)
-          # and saves under its own key, where a primary-key hit never re-saves. A full
-          # miss rebuilds from the dependency cache above.
+          # image touched (185 C++ files, v2.157.0-beta.4, output verified identical).
+          # Tags stay on that path until the warmer (cache-warm.yml) saves the new-image
+          # key on main, Monday cron or a dispatch: a tag-scope save is unreadable by
+          # later tags, so release.yml restores only. A full miss rebuilds from the
+          # dependency cache above.
           path: app/.build
           key: spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}-${{ steps.xcode.outputs.image }}
           restore-keys: |
