@@ -18,6 +18,13 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.158.1 *(unreleased)*
+
+- **Remote Terminal starts again on macOS 14 through 26.** The dch binary embedded since
+  v2.156.0-beta.5 was built for macOS 27, so those systems refused to load it and no
+  session could start. The release build now targets macOS 14.0 and refuses to ship any
+  binary built for a newer macOS than the app supports (#447).
+
 ## v2.158.0
 
 - **Stable installs check for updates every 4 hours instead of every 10 minutes.** The
