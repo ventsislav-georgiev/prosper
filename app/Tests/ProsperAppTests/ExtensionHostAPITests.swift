@@ -154,15 +154,22 @@ private final class FakeServices: ExtensionHostServices, @unchecked Sendable {
 
 final class ExtensionHostAPITests: XCTestCase {
 
+    private struct OffMainTimeout: Error {}
+
     /// Run a closure off the main thread (host async bridge blocks its thread).
-    private func offMain(timeout: TimeInterval = 10, _ body: @escaping () throws -> Void) {
-        let exp = expectation(description: "offMain")
+    /// Throws when the body has not finished within `timeout`, so the test ends
+    /// there instead of reading FakeServices state the late body still mutates.
+    private func offMain(timeout: TimeInterval = 10, _ body: @escaping () throws -> Void) throws {
+        let exp = XCTestExpectation(description: "offMain")
         var thrown: Error?
         DispatchQueue.global().async {
             do { try body() } catch { thrown = error }
             exp.fulfill()
         }
-        wait(for: [exp], timeout: timeout)
+        guard XCTWaiter().wait(for: [exp], timeout: timeout) == .completed else {
+            XCTFail("offMain body did not finish within \(timeout)s")
+            throw OffMainTimeout()
+        }
         if let thrown { XCTFail("threw: \(thrown)") }
     }
 
@@ -196,12 +203,14 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertEqual(try lua.callGlobal("t_log"), "ok")
         XCTAssertEqual(try lua.callGlobal("t_env"), "vim")
         XCTAssertEqual(svc.timerSchedules.count, 2)
-        XCTAssertEqual(svc.timerSchedules[0].id, "expiry")
-        XCTAssertFalse(svc.timerSchedules[0].every)
-        XCTAssertEqual(svc.timerSchedules[0].seconds, 120)
-        XCTAssertEqual(svc.timerSchedules[0].handler, "on_expiry")
-        XCTAssertTrue(svc.timerSchedules[1].every)
-        XCTAssertEqual(svc.timerSchedules[1].seconds, 5)
+        let after = try XCTUnwrap(svc.timerSchedules.first)
+        XCTAssertEqual(after.id, "expiry")
+        XCTAssertFalse(after.every)
+        XCTAssertEqual(after.seconds, 120)
+        XCTAssertEqual(after.handler, "on_expiry")
+        let every = try XCTUnwrap(svc.timerSchedules.dropFirst().first)
+        XCTAssertTrue(every.every)
+        XCTAssertEqual(every.seconds, 5)
         XCTAssertEqual(svc.timerCancels, ["expiry"])
         XCTAssertEqual(svc.logs.first?.level, "warn")
     }
@@ -308,7 +317,7 @@ final class ExtensionHostAPITests: XCTestCase {
         let lua = try LuaRuntime()
         let svc = FakeServices()
         try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t_clip() host.clipboard.write('hello'); return host.clipboard.read() end
             function t_pref() host.prefs.set('k', 'v'); return host.prefs.get('k') end
@@ -328,7 +337,7 @@ final class ExtensionHostAPITests: XCTestCase {
     func testAsyncLLMAndShellBridge() throws {
         let lua = try LuaRuntime()
         try ExtensionHost(extensionID: "com.test", services: FakeServices()).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t_llm() return host.llm.complete('hi') end
             function t_tr() local r = host.llm.translate('x', 'French'); return r and r.primary or '' end
@@ -348,7 +357,7 @@ final class ExtensionHostAPITests: XCTestCase {
         let lua = try LuaRuntime()
         let svc = FakeServices()
         try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t_st()
                 local r = host.llm.translate('x', 'French')
@@ -368,7 +377,7 @@ final class ExtensionHostAPITests: XCTestCase {
         let svc = FakeServices()
         svc.llmDelay = 2.0  // longer than the 0.2s call timeout below
         try ExtensionHost(extensionID: "com.test", services: svc, callTimeout: 0.2).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("function t_slow() return host.llm.complete('hi') end")
             // bridge times out → empty string, never wedges the runtime
             XCTAssertEqual(try lua.callGlobal("t_slow"), "")
@@ -381,7 +390,7 @@ final class ExtensionHostAPITests: XCTestCase {
         svc.appsResult = "[{\"name\":\"Safari\",\"path\":\"/Applications/Safari.app\"}," +
                          "{\"name\":\"Mail\",\"path\":\"/Applications/Mail.app\"}]"
         try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t_apps()
                 local a = host.apps.search('a')
@@ -396,7 +405,7 @@ final class ExtensionHostAPITests: XCTestCase {
     func testAppsSearchEmptyYieldsEmptyTable() throws {
         let lua = try LuaRuntime()
         try ExtensionHost(extensionID: "com.test", services: FakeServices()).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t_empty()
                 local a = host.apps.search('zzz')
@@ -417,7 +426,7 @@ final class ExtensionHostAPITests: XCTestCase {
                           "{\"name\":\"Projects\",\"path\":\"/Users/me/Projects\"," +
                           "\"display\":\"~/Projects\",\"isDir\":true,\"kind\":\"Folder\"}]"
         try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t_files()
                 local f = host.files.search{ name = "note", kind = { "pdf" }, ["in"] = "~/Documents" }
@@ -431,7 +440,7 @@ final class ExtensionHostAPITests: XCTestCase {
         }
         // The options table was marshalled to JSON the host can decode.
         XCTAssertEqual(svc.fileSearches.count, 1)
-        let opts = svc.fileSearches[0]
+        let opts = try XCTUnwrap(svc.fileSearches.first)
         XCTAssertTrue(opts.contains("\"name\""))
         XCTAssertTrue(opts.contains("note"))
         XCTAssertTrue(opts.contains("pdf"))
@@ -441,7 +450,7 @@ final class ExtensionHostAPITests: XCTestCase {
     func testFilesSearchEmptyYieldsEmptyTable() throws {
         let lua = try LuaRuntime()
         try ExtensionHost(extensionID: "com.test", services: FakeServices()).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t_empty()
                 local f = host.files.search{ name = "zzz" }
@@ -456,7 +465,7 @@ final class ExtensionHostAPITests: XCTestCase {
         let lua = try LuaRuntime()
         let svc = FakeServices()
         try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t_act()
                 host.files.act("file.reveal", "/Users/me/notes.txt")
@@ -466,8 +475,9 @@ final class ExtensionHostAPITests: XCTestCase {
             XCTAssertEqual(try lua.callGlobal("t_act"), "ok")
         }
         XCTAssertEqual(svc.fileActs.count, 1)
-        XCTAssertEqual(svc.fileActs[0].id, "file.reveal")
-        XCTAssertEqual(svc.fileActs[0].path, "/Users/me/notes.txt")
+        let act = try XCTUnwrap(svc.fileActs.first)
+        XCTAssertEqual(act.id, "file.reveal")
+        XCTAssertEqual(act.path, "/Users/me/notes.txt")
     }
 
     // MARK: - host.http (retry, decode, convenience verbs)
@@ -478,7 +488,7 @@ final class ExtensionHostAPITests: XCTestCase {
         svc.httpResponses["https://x/api"] =
             HTTPResponse(status: 200, body: #"{"ok":true,"n":7}"#, headers: ["X-Test": "1"])
         try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t() local r = host.http.get('https://x/api')
               if r == nil then return 'nil' end
@@ -501,7 +511,7 @@ final class ExtensionHostAPITests: XCTestCase {
             HTTPResponse(status: 200, body: #"{"ok":true}"#, headers: [:]),
         ]
         try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
-        offMain {
+        try offMain {
             // retries=3 → up to 4 attempts; backoff tiny so the test is fast.
             try lua.run("""
             function t() local r = host.http.request{ url='https://x/api', retries=3, backoff=0.01 }
@@ -519,7 +529,7 @@ final class ExtensionHostAPITests: XCTestCase {
         let svc = FakeServices()
         svc.httpResponses["https://x/api"] = HTTPResponse(status: 503, body: "", headers: [:])
         try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("""
             function t() local r, err = host.http.request{ url='https://x/api', retries=1, backoff=0.01 }
               return tostring(r ~= nil)..','..tostring(err)
@@ -534,7 +544,7 @@ final class ExtensionHostAPITests: XCTestCase {
     func testHttpRejectsMissingURL() throws {
         let lua = try LuaRuntime()
         try ExtensionHost(extensionID: "com.test", services: FakeServices()).install(into: lua)
-        offMain {
+        try offMain {
             try lua.run("function t() local r, e = host.http.request{} return tostring(r)..','..tostring(e) end")
             XCTAssertEqual(try lua.callGlobal("t"), "nil,missing url")
         }
@@ -726,8 +736,9 @@ final class ExtensionHostAPITests: XCTestCase {
         }
         // The Lua layer parsed the kind: filter and forwarded it structured.
         XCTAssertEqual(svc.fileSearches.count, 1)
-        XCTAssertTrue(svc.fileSearches[0].contains("pdf"))
-        XCTAssertTrue(svc.fileSearches[0].contains("budget"))
+        let search = try XCTUnwrap(svc.fileSearches.first)
+        XCTAssertTrue(search.contains("pdf"))
+        XCTAssertTrue(search.contains("budget"))
     }
 
     @MainActor
@@ -812,6 +823,7 @@ final class ExtensionHostAPITests: XCTestCase {
         let performer = MockFileActionPerformer()
         let dispatcher = FileActionDispatcher(performer: performer, frecency: frecency)
         let path = try XCTUnwrap(first.launch)
+        guard actions.count >= 2 else { return XCTFail("expected Open + Reveal actions, got \(actions.count)") }
         dispatcher.run(id: actions[0].id, path: path, now: now)  // ⏎ Open
         dispatcher.run(id: actions[1].id, path: path, now: now)  // ⌘⏎ Reveal
 
@@ -887,8 +899,9 @@ final class ExtensionHostAPITests: XCTestCase {
         """)
         _ = try lua.callGlobal("go")
         XCTAssertEqual(svc.keyRulesJSON.count, 1)
-        XCTAssertTrue(svc.keyRulesJSON[0].contains("com.apple.Safari"))
-        XCTAssertTrue(svc.keyRulesJSON[0].contains("cmd+alt+i"))
+        let rules = try XCTUnwrap(svc.keyRulesJSON.first)
+        XCTAssertTrue(rules.contains("com.apple.Safari"))
+        XCTAssertTrue(rules.contains("cmd+alt+i"))
         XCTAssertEqual(svc.keyStrokes, ["cmd+alt+i"])
         XCTAssertEqual(svc.keySystems, ["REWIND"])
     }

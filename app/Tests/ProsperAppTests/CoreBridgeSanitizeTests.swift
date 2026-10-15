@@ -488,6 +488,14 @@ final class CoreBridgeSanitizeTests: XCTestCase {
         let available = NSSpellChecker.shared.availableLanguages
         try XCTSkipUnless(available.contains("bg") && available.contains("ru"),
                           "bg/ru dictionaries not installed on this runner")
+        // Listed is not working: on the hosted CI runner both dictionaries are
+        // listed but the checker flags nothing. Canary: a Russian-only word.
+        func isWord(_ w: String, _ lang: String) -> Bool {
+            NSSpellChecker.shared.checkSpelling(of: w, startingAt: 0, language: lang, wrap: false,
+                                                inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
+        }
+        try XCTSkipUnless(!isWord("сегодня", "bg") && isWord("сегодня", "ru"),
+                          "bg/ru spellchecking not functional here (hosted CI runner lists but does not flag)")
         // Confidently-Russian words (bg flags, ru accepts) → rejected.
         XCTAssertTrue(CoreBridge.containsRussianOnlyCyrillicWord("в пятница"))
         XCTAssertTrue(CoreBridge.containsRussianOnlyCyrillicWord("сегодня вечером"))
