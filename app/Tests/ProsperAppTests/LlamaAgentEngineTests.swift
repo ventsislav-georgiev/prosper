@@ -383,6 +383,9 @@ final class LlamaAgentEngineTests: XCTestCase {
     /// #247: a custom (HF-imported) id is canonical as-is, and the getter leaves it in UserDefaults.
     /// Both stores read Preferences.defaults only, so save/restore the two keys.
     func testCustomIdIsCanonicalAndNotRewritten() {
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer { AgentModelRegistry.physicalMemoryGB = savedGB }
+        AgentModelRegistry.physicalMemoryGB = 64 // canonicalId heals non-fitting rows (#437): pin a Mac every row here fits
         let d = Preferences.defaults, key = "agentModel", customKey = "customAgentModelsV1", labelsKey = "modelLabelOverridesV1"
         let savedPick = d.object(forKey: key), savedCustom = d.object(forKey: customKey), savedLabels = d.object(forKey: labelsKey)
         defer { d.set(savedPick, forKey: key); d.set(savedCustom, forKey: customKey); d.set(savedLabels, forKey: labelsKey) }
@@ -401,6 +404,9 @@ final class LlamaAgentEngineTests: XCTestCase {
 
     /// #256: a retired id re-added as a custom model is the user's pick, not stale.
     func testRetiredIdReaddedAsCustomIsNotRewritten() throws {
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer { AgentModelRegistry.physicalMemoryGB = savedGB }
+        AgentModelRegistry.physicalMemoryGB = 64 // canonicalId heals non-fitting rows (#437): pin a Mac every row here fits
         let d = Preferences.defaults, key = "agentModel", customKey = "customAgentModelsV1", labelsKey = "modelLabelOverridesV1"
         let savedPick = d.object(forKey: key), savedCustom = d.object(forKey: customKey), savedLabels = d.object(forKey: labelsKey)
         defer { d.set(savedPick, forKey: key); d.set(savedCustom, forKey: customKey); d.set(savedLabels, forKey: labelsKey) }
