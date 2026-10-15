@@ -1,0 +1,97 @@
+# Headless-safe test suite on every push to main (#172).
+#
+# Runs `swift test` on the same xcode-27 image as release.yml, minus the suites
+# that cannot pass on a GitHub-hosted runner (the --skip regex below, from the
+# #172 survey of all 198 test classes):
+#   - LogitProcessorTests: runs MLX GPU kernels, which need the default.metallib
+#     that only scripts/build.sh stages; without it MLX aborts the whole xctest
+#     process.
+#   - ScreenToolsTests text-OCR cases: the first Vision text request on macOS 27
+#     waits ~25 s on the ANE compiler and the runner VM has no Neural Engine.
+#   - Timing-budget classes and tests (ns-to-ms wall-clock asserts): a shared
+#     VM cannot hold them.
+# Tests gated on PROSPER_E2E / PROSPER_QAT_E2E / PROSPER_LLAMA_SMOKE, a model on
+# disk or a TCC grant skip themselves and need no filter. No TMPDIR override and
+# no PROSPER_* variable (PreferencesScratchStoreTests scans $TMPDIR/prosper-tests).
+#
+# Advisory for now: a red run notifies, it gates nothing. Once it has stayed
+# green, release.yml can require it on the tagged commit.
+name: test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: xcode-27 # same image as release.yml: Xcode 27.0 = Swift 6.4
+    timeout-minutes: 60 # ~15 min cold, 5-7 min on a cached debug tree
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Select Xcode 27 (Swift 6.4 toolchain)
+        id: xcode
+        run: |
+          # Same selection as release.yml: pin the GA 27.0, not a 27.x beta.
+          XC=/Applications/Xcode_27.app
+          if [[ ! -d "$XC" ]]; then
+            echo "::error::$XC not found on runner"; ls -d /Applications/Xcode_*.app; exit 1
+          fi
+          sudo xcode-select -s "$XC/Contents/Developer"
+          swift --version
+          TC=$(swift --version 2>/dev/null | tr -d ' \n' | shasum -a 256 | cut -c1-12)
+          echo "toolchain=$TC" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageVersion:-unset}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, restore only
+        with:
+          # Read-only view of the cache cache-warm.yml saves; paths and keys stay
+          # byte-identical to release.yml and cache-warm.yml.
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}
+          restore-keys: |
+            spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
+            spm-deps-v1-${{ runner.os }}-
+
+      - name: Cache debug build tree
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          # Own key family: tests build debug, release.yml and cache-warm.yml build
+          # release, so their tree is no starting point. Saved on main, so later
+          # pushes hit it; the restore-key drops only the image version (#443).
+          path: app/.build
+          key: spm-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-${{ steps.xcode.outputs.image }}
+          restore-keys: |
+            spm-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-
+
+      - name: Test
+        working-directory: app
+        env:
+          # The --skip regex (#172 survey); see the header comment for each group.
+          SKIP: 'LogitProcessorTests|ScreenToolsTests/test(VisionOCR|Prewarm|RejectedRequest|Accurate)|(ExtensionPerf|StatsHotPathBudget|AutocompleteHotPathBudget|RemoteWakeCorePerf)Tests/|/test\w*(HotPath|Performance|_perf|IsFast|(BiasesLookup|Builder)IsCheap|ScalesLinearlyWith|(Under|Meets|Lookup|Render|Perf|Accumulation|Index|Frames|DidMove)Budget|DispatchBudgetAborts)'
+        run: |
+          # --build-system native: the backend scripts/build.sh ships with (the
+          # swiftbuild default links against SDK 14.0, see build.sh). Serial, not
+          # --parallel: suites share process-wide state (defaults, pasteboard seam).
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"; export SDKROOT
+          swift test --disable-keychain --build-system native --skip "$SKIP" 2>&1 | tee test.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Summary
+        if: always()
+        working-directory: app
+        run: |
+          grep -E 'Executed [0-9]+ tests' test.log | tail -1 | tee -a "$GITHUB_STEP_SUMMARY" || true
+          grep -E ' error: |failed \(' test.log | head -40 | tee -a "$GITHUB_STEP_SUMMARY" || true
