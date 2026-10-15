@@ -7,7 +7,7 @@ name: Warm SwiftPM Cache
 # build from scratch is very slow.
 #
 # Runs when app/Package.resolved changes on main (deps moved → cache stale), plus
-# a weekly schedule + manual dispatch as a safety net. After a runner image update
+# a daily schedule + manual dispatch as a safety net. After a runner image update
 # only this warmer's save on main makes tag runs exact again (#443): a tag run's
 # own save lands in the tag's ref scope, unreadable by later tags. Dispatch it by
 # hand when a tag run shows a restored (not exact) build-tree hit.
@@ -22,7 +22,7 @@ on:
     paths:
       - "app/Package.resolved"
   schedule:
-    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+    - cron: "0 6 * * *" # daily 06:00 UTC (OQ-39)
   workflow_dispatch:
 
 permissions:
@@ -96,7 +96,7 @@ jobs:
           # image version (#443): the same tree on a rebuilt image recompiles what the
           # image touched (185 C++ files, v2.157.0-beta.4, output verified identical).
           # Tags stay on that path until the warmer (cache-warm.yml) saves the new-image
-          # key on main, Monday cron or a dispatch: a tag-scope save is unreadable by
+          # key on main, daily cron or a dispatch: a tag-scope save is unreadable by
           # later tags, so release.yml restores only. A full miss rebuilds from the
           # dependency cache above.
           path: app/.build
