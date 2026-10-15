@@ -10,10 +10,15 @@
 #     waits ~25 s on the ANE compiler and the runner VM has no Neural Engine.
 #   - Timing-budget classes and tests (ns-to-ms wall-clock asserts): a shared
 #     VM cannot hold them.
-#   - The three tests whose answer is NSSpellChecker's: the runner's spell server
-#     times out mid-run ("NSSpellServer findMisspelledWordInString timed out")
-#     and a timed-out check reads as a misspelling, so a canary at the start of
-#     the test cannot vouch for the call inside it.
+#   - The tests whose answer is NSSpellChecker's (under swift test the word list
+#     is not loaded, so the checker decides even "brown"): the runner's spell
+#     server times out mid-run ("NSSpellServer findMisspelledWordInString timed
+#     out"), a timed-out check reads as a misspelling, and its Bulgarian
+#     dictionary flags nothing, so a canary at the start of a test cannot vouch
+#     for the call inside it. The #172 survey (work/172g-survey.md) lists them.
+#   - ModelIdleUnloaderTests' real unload rows: MLXEngine.unload clears the MLX
+#     cache even with nothing loaded, which needs the metallib (see above); and
+#     its 2 s malloc-relief wall-clock row.
 # Tests gated on PROSPER_E2E / PROSPER_QAT_E2E / PROSPER_LLAMA_SMOKE, a model on
 # disk or a TCC grant skip themselves and need no filter. No TMPDIR override and
 # no PROSPER_* variable (PreferencesScratchStoreTests scans $TMPDIR/prosper-tests).
@@ -94,7 +99,7 @@ jobs:
           # that started is in the log when the step is killed.
           NSUnbufferedIO: "YES"
           # The --skip regex (#172 survey); see the header comment for each group.
-          SKIP: 'LogitProcessorTests|ScreenToolsTests/test(VisionOCR|Prewarm|RejectedRequest|Accurate)|AutocompleteContinuationTests/test(CompleteButUnspacedWordStillGetsItsSpace|LastWordEchoWithStraySpaceStripped)|CoreBridgeSanitizeTests/testRussianOnlyWordGate|(ExtensionPerf|StatsHotPathBudget|AutocompleteHotPathBudget|RemoteWakeCorePerf)Tests/|/test\w*(HotPath|Performance|_perf|IsFast|(BiasesLookup|Builder)IsCheap|ScalesLinearlyWith|(Under|Meets|Lookup|Render|Perf|Accumulation|Index|Frames|DidMove)Budget|DispatchBudgetAborts)'
+          SKIP: 'LogitProcessorTests|ScreenToolsTests/test(VisionOCR|Prewarm|RejectedRequest|Accurate)|AutocompleteContinuationTests/test(CompleteButUnspacedWordStillGetsItsSpace|LastWordEchoWithStraySpaceStripped|NewWordAfterCompleteWordGetsSpaced|NewWordWhenModelAlreadySpacedStaysSingleSpaced|MidWordContinuationNoSpace|MidWordWholeWordRepeatLowercaseDeduped|MidWordContinuationFromBareFragment|MidWordNewWordAgainstUnfinishedFragmentSuppressed|WholeRestatementStripped)|AutocompleteWordBoundaryTests/test(NewWordAfterCompleteWordGetsSpace|MidWordContinuationKeepsNoSpace|CrossLanguageGlueStillGetsSpace)|CompletionCandidatesTests/testDeriveIncludesTypoCorrection|CoreBridgeSanitizeTests/testRussianOnlyWordGate|RussianGateFragmentTests/testStandaloneRussianWordStillRejected|MidWordCyrillicTests/|ModelIdleUnloaderTests/test(FireWithDefaultUnloadActionDrivesRealTeardown|UnloadIdleEnginesIsSafeAndIdempotentWithNothingLoaded|MallocPressureReliefIsCallableAndFast)|(ExtensionPerf|StatsHotPathBudget|AutocompleteHotPathBudget|RemoteWakeCorePerf)Tests/|/test\w*(HotPath|Performance|_perf|IsFast|(BiasesLookup|Builder)IsCheap|ScalesLinearlyWith|(Under|Meets|Lookup|Render|Perf|Accumulation|Index|Frames|DidMove)Budget|DispatchBudgetAborts)'
         run: |
           # --build-system native: the backend scripts/build.sh ships with (the
           # swiftbuild default links against SDK 14.0, see build.sh). Serial, not
@@ -107,7 +112,10 @@ jobs:
         if: always()
         working-directory: app
         run: |
-          grep -E 'Executed [0-9]+ tests' test.log | tail -1 | tee -a "$GITHUB_STEP_SUMMARY" || true
+          # The suite total follows the 'All tests' line; the last per-class
+          # "Executed N tests" reads like a total when xctest exits early.
+          { grep -A1 -E "^Test Suite '(All|Selected) tests' (passed|failed)" test.log | grep -E 'Executed [0-9]+ tests' \
+            || echo "no suite total: xctest exited early"; } | tee -a "$GITHUB_STEP_SUMMARY"
           grep -E ' error: |failed \(' test.log | head -40 | tee -a "$GITHUB_STEP_SUMMARY" || true
 
       - name: Save debug build tree
