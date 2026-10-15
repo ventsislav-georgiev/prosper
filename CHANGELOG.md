@@ -54,7 +54,7 @@ tag from the now-released section and put it on the new top draft.
   never ran. The wait is gone (the process is reaped anyway) and the SIGKILL escalation
   runs on its own thread (#446).
 - **The embedded Remote Terminal binary reports its real version.** dch answered 0.14 to
-  a version query since its first tag; it now answers 1.19.1, and a release build fails
+  a version query since v1.0; it now answers 1.19.1, and a release build fails
   when a dch tag and its configure.ac disagree instead of shipping the wrong string (#181).
 
 ## v2.157.0
