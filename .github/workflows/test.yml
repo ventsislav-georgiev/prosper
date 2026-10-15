@@ -66,11 +66,14 @@ jobs:
             spm-deps-v1-${{ runner.os }}-
 
       - name: Cache debug build tree
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        id: debugtree
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, restore half
         with:
           # Own key family: tests build debug, release.yml and cache-warm.yml build
           # release, so their tree is no starting point. Saved on main, so later
           # pushes hit it; the restore-key drops only the image version (#443).
+          # Split restore/save: the combined action saves only on a green job, so
+          # every red run rebuilt cold (~4.5 min); the save step below runs always.
           path: app/.build
           key: spm-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-${{ steps.xcode.outputs.image }}
           restore-keys: |
@@ -95,3 +98,10 @@ jobs:
         run: |
           grep -E 'Executed [0-9]+ tests' test.log | tail -1 | tee -a "$GITHUB_STEP_SUMMARY" || true
           grep -E ' error: |failed \(' test.log | head -40 | tee -a "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Save debug build tree
+        if: always() && steps.debugtree.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, save half
+        with:
+          path: app/.build
+          key: ${{ steps.debugtree.outputs.cache-primary-key }}
