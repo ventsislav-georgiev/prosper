@@ -2309,6 +2309,9 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testConfigOmitsModelContextWindowForMLXModel() async throws {
         let saved = Preferences.defaults.string(forKey: "agentModel")
         let mlxId = "test-owner/Custom-MLX-185-zzz"
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer { AgentModelRegistry.physicalMemoryGB = savedGB }
+        AgentModelRegistry.physicalMemoryGB = 64 // canonicalId heals non-fitting rows (#437): pin a Mac this row fits
         defer {
             Preferences.defaults.set(saved, forKey: "agentModel")
             CustomModelStore.remove(mlxId)
