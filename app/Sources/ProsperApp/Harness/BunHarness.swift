@@ -175,24 +175,28 @@ final class BunHarness {
         return FileManager.default.fileExists(atPath: repo.path) ? repo : nil
     }
 
-    /// Bundled `Contents/Helpers/bun` → PATH → cached download → fresh download.
+    /// Pinned first: bundled `Contents/Helpers/bun` → cached pinned download → fresh
+    /// pinned download; an unpinned bun on PATH only when the download fails (offline).
     /// `nonisolated` so the synchronous unzip/sign work in `downloadBun` runs off the
     /// main actor (it would otherwise freeze the UI for seconds on first plugin use).
     nonisolated private static func resolveBun() async throws -> URL {
         let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/bun")
         if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled }
-        for c in ["/opt/homebrew/bin/bun", "/usr/local/bin/bun",
-                  NSHomeDirectory() + "/.bun/bin/bun"] {
-            if FileManager.default.isExecutableFile(atPath: c) { return URL(fileURLWithPath: c) }
-        }
         let cached = appSupportBun()
         if FileManager.default.isExecutableFile(atPath: cached.path) { return cached }
-        return try await downloadBun(to: cached)
+        do { return try await downloadBun(to: cached) } catch {
+            for c in ["/opt/homebrew/bin/bun", "/usr/local/bin/bun",
+                      NSHomeDirectory() + "/.bun/bin/bun"] {
+                if FileManager.default.isExecutableFile(atPath: c) { return URL(fileURLWithPath: c) }
+            }
+            throw error
+        }
     }
 
+    /// Keyed by `bunVersion` so a pin bump never reuses the previous release's download.
     nonisolated private static func appSupportBun() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("Prosper/bun", isDirectory: false)
+        return base.appendingPathComponent("Prosper/\(bunVersion)/bun", isDirectory: false)
     }
 
     /// One-time download of the pinned Bun release for this arch into Application Support.
@@ -257,12 +261,12 @@ final class BunHarness {
     }
 
     /// Pinned Bun release. Bump deliberately (the plugin host is tested against it).
-    nonisolated private static let bunVersion = "bun-v1.3.14"
+    nonisolated private static let bunVersion = "bun-v1.4.3"
 
     /// SHA-256 of each arch's release zip (from the release's `SHASUMS256.txt`). Bump
     /// in lockstep with `bunVersion` — a stale hash fails the download closed.
     nonisolated private static let bunSHA256: [String: String] = [
-        "aarch64": "d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620",
-        "x64": "4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633",
+        "aarch64": "80afd4c069b46a6fa8f3ec520bebc750a7843e4a8d5b9583d29ad436c00a3403",
+        "x64": "62660e6438eb872278877acca77e1152d5d031324df368d4a81b428211489d2d",
     ]
 }

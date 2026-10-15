@@ -234,8 +234,9 @@ fi
 
 # Bun plugin host: always stage plugin-host.js; stage the bun runtime only if one is
 # available at build time (on-demand download otherwise — keeps the base app slim).
-"$ROOT/scripts/bundle-bun.sh" "$APP" "$IDENTITY" || \
-  echo "warn: bundle-bun.sh failed; JS plugins fall back to a runtime bun download." >&2
+# A build-time bun whose version is not the pin fails the build (#182): the plugin
+# host is tested against the pinned release only.
+"$ROOT/scripts/bundle-bun.sh" "$APP" "$IDENTITY"
 
 # Privileged lid-sleep helper daemon (ProsperHelper) behind openlid's "keep
 # awake with the lid closed". It runs `pmset -a disablesleep` as root via launchd,

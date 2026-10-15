@@ -4,9 +4,9 @@
 #   - Contents/Helpers/bun             (only if a bun runtime is available at build time)
 #
 # Bun delivery is on-demand by design (keeps the base app slim, like the codex helper):
-# BunHarness.resolveBun() looks at Contents/Helpers/bun first, then PATH, then downloads
-# the pinned release into Application Support on first use. So a missing bun here is a
-# warning, not a failure — the app fetches it the first time a JS plugin is installed.
+# BunHarness.resolveBun() looks at Contents/Helpers/bun first, then the pinned release in
+# Application Support (downloaded on first use), then PATH only if that download fails. So a
+# missing bun here is not a failure; a bun whose version is not the pin is.
 #
 # Binary resolution order for the optional bundled bun:
 #   1. $PROSPER_BUN_BIN  — explicit path to a bun binary
@@ -46,14 +46,16 @@ if [[ -z "$src" ]]; then
   exit 0
 fi
 
-# Warn on a runtime mismatch — the plugin host is tested against the pinned release,
+# Refuse a runtime mismatch — the plugin host is tested against the pinned release,
 # and a stale dev bun bundled here would diverge from the on-demand download path.
-# Keep PINNED_BUN in lockstep with BunHarness.bunVersion ("bun-v1.3.14").
-PINNED_BUN="1.3.14"
+# Keep PINNED_BUN in lockstep with BunHarness.bunVersion ("bun-v1.4.3").
+PINNED_BUN="1.4.3"
 got="$("$src" --version 2>/dev/null | tr -d '[:space:]' || true)"
-if [[ -n "$got" && "$got" != "$PINNED_BUN" ]]; then
-  echo "warn: bundling bun $got but app pins $PINNED_BUN (BunHarness.bunVersion)." >&2
+if [[ "$got" != "$PINNED_BUN" ]]; then
+  echo "error: $src is bun ${got:-unknown} but app pins $PINNED_BUN (BunHarness.bunVersion)." >&2
+  exit 1
 fi
+echo "bun: version $got matches pin $PINNED_BUN"
 
 DEST="$HELPERS/bun"
 cp "$src" "$DEST"
