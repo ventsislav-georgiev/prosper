@@ -86,8 +86,12 @@ jobs:
           echo "Selecting $XC"
           sudo xcode-select -s "$XC/Contents/Developer"
           swift --version
-          # Toolchain fingerprint so the build cache busts on any Swift/Xcode change.
-          TC=$(swift --version 2>/dev/null | tr -d ' \n' | shasum -a 256 | cut -c1-12)
+          # Toolchain fingerprint so the build cache busts on any Swift/Xcode change,
+          # and on a runner image update: the same Xcode on a rebuilt image recompiled
+          # 185 C++ files on every tag (v2.157.0-beta.4, +2.5 min) because a primary-key
+          # hit never re-saves. A new image costs one cold build, then stays warm.
+          echo "ImageVersion=${ImageVersion:-unset}"
+          TC=$( { swift --version 2>/dev/null; echo "${ImageVersion:-}"; } | tr -d ' \n' | shasum -a 256 | cut -c1-12)
           echo "toolchain=$TC" >> "$GITHUB_OUTPUT"
 
       - name: Check image tools
