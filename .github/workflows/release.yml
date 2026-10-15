@@ -123,6 +123,7 @@ jobs:
 
       - name: Cache SwiftPM build tree
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, restore only
+        id: build-tree
         with:
           # Checkouts, compiled products, macro plugins and the staged MLX metallib.
           # Exact toolchain and Package.resolved match (#433): a tree built against
@@ -141,6 +142,14 @@ jobs:
           key: spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}-${{ steps.xcode.outputs.image }}
           restore-keys: |
             spm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}-
+
+      - name: Build-tree cache cue
+        # A prefix hit is invisible unless two log lines are compared; say it out
+        # loud so the dispatch cue in cache-warm.yml's header gets seen (#443).
+        if: steps.build-tree.outputs.cache-hit != 'true'
+        env:
+          MATCHED: ${{ steps.build-tree.outputs.cache-matched-key }}
+        run: echo "::notice::Build tree was not an exact cache hit (matched '${MATCHED:-nothing}'); dispatch cache-warm.yml so later tags hit exactly (#443)"
 
       - name: Build (release)
         run: |
