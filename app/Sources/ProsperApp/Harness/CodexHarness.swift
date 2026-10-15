@@ -558,12 +558,18 @@ actor CodexHarness: CodingHarness {
         let bridge = HookRule.tomlBlocks(for: BunHarness.neededEvents().map {
             HookRule(event: $0, command: BunHarness.bridgeCommand())
         })
+        // codex sizes an unknown slug at 272k tokens and never compacts before llama.cpp's
+        // n_ctx overflows. A served `model_catalog_url` would also have to carry codex's
+        // whole base prompt (#185), so only the context window is set; MLX custom models
+        // have no known ceiling and keep codex's default.
+        let contextWindow = AgentModelRegistry.gguf(for: Preferences.agentModel) == nil
+            ? "" : "model_context_window = \(LlamaAgentEngine.contextTokens)\n"
         // Quote interpolated values (model id is registry-controlled today, but
         // TOML injection via a future settable path is a one-character mistake).
         let config = """
         model = \(MCPServer.q(Preferences.agentModel))
         model_provider = "prosper"
-        developer_instructions = \(Self.developerInstructions())
+        \(contextWindow)developer_instructions = \(Self.developerInstructions())
 
         [model_providers.prosper]
         name = "Prosper local MLX"

@@ -35,6 +35,9 @@ tag from the now-released section and put it on the new top draft.
   the one bundled with the app, else the one it downloads on first use (checked against the
   release checksums), and a Bun found on your PATH only when that download fails. A build
   that bundles a Bun of another version fails instead of warning (#182).
+- **The coding agent tells Codex the local model's real context window.** Codex sized the
+  local model at 272k tokens and never compacted before the 40,960-token llama.cpp context
+  overflowed; it now compacts in time. Custom MLX models keep Codex's default (#185).
 
 ## v2.157.0
 

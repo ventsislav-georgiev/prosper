@@ -2284,6 +2284,25 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertTrue(lines.contains("stream_idle_timeout_ms = 120000"), "\(table)")
     }
 
+    /// #185: codex learns the llama.cpp context window instead of its 272k unknown-slug
+    /// guess, so it compacts before the prompt overflows n_ctx. Top-level key, before any table.
+    func testConfigWritesModelContextWindowForGGUFModel() async throws {
+        let saved = Preferences.defaults.string(forKey: "agentModel")
+        defer { Preferences.defaults.set(saved, forKey: "agentModel") }
+        Preferences.agentModel = "unsloth/Qwen3.5-4B-GGUF" // a registry GGUF row, whatever this Mac's default
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        await harness.shutdown()
+
+        let toml = try String(contentsOf: home.appendingPathComponent("config.toml"), encoding: .utf8)
+        let topLevel = toml[..<(toml.range(of: "\n[")?.lowerBound ?? toml.endIndex)]
+        let lines = topLevel.split(separator: "\n").map(String.init)
+        let line = "model_context_window = \(LlamaAgentEngine.contextTokens)"
+        XCTAssertTrue(lines.contains(line), "\(topLevel)")
+    }
+
     // MARK: - #408 end() racing a resubmit
 
     /// An in-process harness for the end()/resubmit race, no subprocess. A parking one's first
