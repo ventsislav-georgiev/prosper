@@ -71,6 +71,43 @@ final class StatsPopupGateTests: XCTestCase {
         Thread.sleep(forTimeInterval: 1.5)   // past the loop's 1 s sleep: a live loop pings again
         XCTAssertEqual(lock.withLock { pings }, 1, "closing the popup stops the ping thread")
     }
+
+    func testPauseStopsPingAndResumeRestartsItOnlyForOpenPopup() {
+        URLProtocol.registerClass(NoNetwork.self)
+        let lock = NSLock()
+        var pings = 0
+        var nextPing: XCTestExpectation?
+        NetPingReader.pinger = { _, _, _ in
+            lock.withLock { pings += 1; nextPing?.fulfill(); nextPing = nil }
+            return 5
+        }
+        let (p, _) = poller([.network], ticks: 2)
+        defer { p.stop() }
+        func expectPing(_ what: String, _ action: () -> Void) {
+            let e = expectation(description: what)
+            lock.withLock { nextPing = e }
+            action()
+            wait(for: [e], timeout: 1)
+        }
+        func settled() -> Int {   // queue.sync, then past the loop's 1 s sleep
+            _ = p.history("net.up")
+            Thread.sleep(forTimeInterval: 1.5)
+            return lock.withLock { pings }
+        }
+
+        expectPing("echo on open") { p.setPopupActive(true) }
+        p.setPaused(true)
+        var n = settled()
+        XCTAssertEqual(settled(), n, "pause stops the ping thread")
+
+        expectPing("echo on resume with popup open") { p.setPaused(false) }
+
+        p.setPaused(true)
+        p.setPopupActive(false)   // closed while paused: flag only
+        p.setPaused(false)
+        n = settled()
+        XCTAssertEqual(settled(), n, "resume with a closed popup must not ping")
+    }
 }
 
 /// Fails every URLSession request in-process so no test traffic leaves the machine.
