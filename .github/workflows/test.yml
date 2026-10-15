@@ -80,6 +80,7 @@ jobs:
             spm-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-
 
       - name: Test
+        id: test
         working-directory: app
         env:
           # The --skip regex (#172 survey); see the header comment for each group.
@@ -100,7 +101,10 @@ jobs:
           grep -E ' error: |failed \(' test.log | head -40 | tee -a "$GITHUB_STEP_SUMMARY" || true
 
       - name: Save debug build tree
-        if: always() && steps.debugtree.outputs.cache-hit != 'true'
+        # Red runs save (the tree is complete), cancelled ones never do: a cancel
+        # mid-build would freeze a partial tree under the real key, and every
+        # later run is then an exact hit that skips its own save.
+        if: ${{ !cancelled() && steps.debugtree.outputs.cache-primary-key != '' && steps.debugtree.outputs.cache-hit != 'true' && steps.test.outcome != 'skipped' }}
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, save half
         with:
           path: app/.build
