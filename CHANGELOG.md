@@ -25,6 +25,9 @@ tag from the now-released section and put it on the new top draft.
   that), so those systems refused to load it and no session could start. The release build
   now targets macOS 14.0 and refuses to ship any binary built for a newer macOS than the
   app supports (#447).
+- **The embedded Remote Terminal binary reports its real version.** dch said 1.19.0 in
+  every build since it was pinned, whatever the tag; it now says 1.19.2, and its version
+  comes from one place so the tag and the binary can no longer disagree (#448).
 
 ## v2.158.0
 
