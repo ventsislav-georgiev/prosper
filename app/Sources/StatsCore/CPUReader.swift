@@ -18,6 +18,11 @@ public struct CPUReader: StatsReader {
     // Reference type: residency state lives across reads. nil on Intel / when the
     // IOReport "CPU Stats" group or DVFS tables are unavailable → freq stays NaN.
     private let freq: CPUFrequency?
+    /// The clock is a popup-only readout: the poller clears this while no popup is
+    /// open so an idle tick skips the IOReport sample + delta (freq then reads NaN).
+    public var sampleFrequency = true
+    /// Test seam: called whenever a read samples the clock.
+    nonisolated(unsafe) static var onFrequencySample: (() -> Void)?
 
     public init(facts: SystemFacts = .current, eCoresFirst: Bool = true, frequency: Bool = true) {
         self.facts = facts
@@ -55,7 +60,8 @@ public struct CPUReader: StatsReader {
         let uptime = Self.uptimeSeconds()
         // Residency is a ratio over the interval — both readers share the same
         // tick cadence, so freq's delta window lines up with the load delta.
-        let f = freq?.read() ?? (.nan, .nan)
+        var f: (e: Double, p: Double) = (.nan, .nan)
+        if sampleFrequency { Self.onFrequencySample?(); f = freq?.read() ?? f }
 
         // First read: store baseline, report idle (no prior delta to rate).
         guard prev.count == n else {

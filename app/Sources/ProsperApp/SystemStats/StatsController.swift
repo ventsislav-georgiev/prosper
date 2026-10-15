@@ -151,6 +151,7 @@ final class StatsController {
             }
         }
         p.start()
+        p.setPopupActive(popover.isShown)   // rebuilt while open: keep the popup-only readers on
         p.setPaused(screenHidden)   // config change while the screen is off
         poller = p
     }

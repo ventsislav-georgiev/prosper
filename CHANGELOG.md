@@ -43,6 +43,10 @@ tag from the now-released section and put it on the new top draft.
 - **The bundled llama.cpp moved from build b9866 to b11429, the build of llama.cpp v0.6.0
   (ggml 0.26.0).** Inline autocomplete and the GGUF coding-agent engine run on it; no
   settings or model files change (#179).
+- **The system-stats poller no longer samples the CPU clock, the power rails or the
+  network ping while no popup is open.** Only the popup shows them; the idle app sent
+  about 29,000 ping packets a day and read IOReport every tick for nothing. The menu bar
+  keeps every reading it shows (#188).
 
 ## v2.157.0
 

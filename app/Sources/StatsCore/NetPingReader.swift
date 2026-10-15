@@ -22,7 +22,7 @@ public struct NetLatency: Sendable, Equatable {
 public final class NetPingReader {
     private let host: String
     private let lock = NSLock()
-    private var _latency = NetLatency(latencyMs: .nan, jitterMs: .nan, reachable: false)
+    private var _latency: NetLatency?    // nil until this run's first echo lands
     private var rtts: [Double] = []      // recent RTTs (ms) for the jitter window
     private var reach: [Bool] = []       // connectivity history (oldest→newest)
     private let reachCap: Int
@@ -30,11 +30,11 @@ public final class NetPingReader {
     // Lifecycle epoch — bumped on stop() so an old loop still draining its
     // recv()/sleep exits instead of racing a freshly-started one. Guarded by lock.
     private var epoch = 0
-    // Seconds between pings; follows the poller's base interval so a background
-    // menu-bar app isn't waking (and sending an ICMP packet) every second when the
-    // user asked for a slower refresh. Guarded by lock; the loop re-reads it each
-    // cycle so a change takes effect after at most one stale sleep.
-    private var sleepInterval: TimeInterval
+    // Seconds between pings: the popup's refresh rate (the poller runs this thread
+    // only while a popup is open).
+    private let sleepInterval: TimeInterval
+    /// Test seam: the echo itself, so a test can drive the thread without ICMP.
+    nonisolated(unsafe) static var pinger: (String, UInt16, Double) -> Double? = NetPingReader.ping(host:seq:timeout:)
 
     public init(host: String = "1.1.1.1", historyLength: Int = 120,
                 interval: TimeInterval = 1.0) {
@@ -42,14 +42,14 @@ public final class NetPingReader {
         self.sleepInterval = max(1.0, interval)
     }
 
-    /// Retune the ping cadence (popup open → fast, closed → poller base interval).
-    public func setInterval(_ v: TimeInterval) {
-        lock.withLock { sleepInterval = max(1.0, v) }
-    }
-
     public func start() {
         guard thread == nil else { return }   // thread var touched only on the poller queue
-        let myEpoch = lock.withLock { epoch += 1; return epoch }
+        // Each run starts a fresh history: samples only exist while a popup is open,
+        // so stitching runs together would fake a continuous timeline.
+        let myEpoch = lock.withLock {
+            reach.removeAll(); rtts.removeAll(); _latency = nil
+            epoch += 1; return epoch
+        }
         let t = Thread { [weak self] in self?.loop(epoch: myEpoch) }
         t.stackSize = 256 * 1024
         t.qualityOfService = .background
@@ -62,7 +62,7 @@ public final class NetPingReader {
         thread = nil
     }
 
-    public func latest() -> NetLatency { lock.withLock { _latency } }
+    public func latest() -> NetLatency? { lock.withLock { _latency } }
     public func connectivity() -> [Bool] { lock.withLock { reach } }
 
     private func alive(_ myEpoch: Int) -> Bool { lock.withLock { epoch == myEpoch } }
@@ -70,7 +70,7 @@ public final class NetPingReader {
     private func loop(epoch myEpoch: Int) {
         var seq: UInt16 = 0
         while alive(myEpoch) {
-            let rtt = Self.ping(host: host, seq: seq, timeout: 1.0)
+            let rtt = Self.pinger(host, seq, 1.0)
             seq &+= 1
             guard alive(myEpoch) else { return }   // dropped while pinging → don't write
             lock.withLock {
@@ -85,7 +85,7 @@ public final class NetPingReader {
                 }
                 _latency = NetLatency(latencyMs: rtt ?? .nan, jitterMs: Self.jitter(rtts), reachable: ok)
             }
-            Thread.sleep(forTimeInterval: lock.withLock { sleepInterval })   // (plus the timeout above)
+            Thread.sleep(forTimeInterval: sleepInterval)   // (plus the timeout above)
         }
     }
 

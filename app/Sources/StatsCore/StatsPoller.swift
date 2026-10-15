@@ -5,7 +5,8 @@
 // `slowDivider` ticks — derived from the user's sensors interval; battery
 // every 10) so cheap fast metrics stay responsive while expensive/slow-moving
 // ones don't burn cycles. Only ENABLED modules instantiate readers and run.
-// ProcSampler (the ~4 ms all-pid scan) runs only while a popup is open.
+// Popup-only readouts (ProcSampler's ~4 ms all-pid scan, the CPU clock, the
+// voltage/current rails, the ping thread) run only while a popup is open.
 //
 // The timer fires on `queue`; snapshots are delivered on `deliverQueue` (main
 // by default) so the UI never touches reader state. Stop tears the timer down
@@ -13,6 +14,7 @@
 
 import Foundation
 import IOKit.ps
+import Network
 import os
 
 public enum StatsModule: String, CaseIterable, Sendable {
@@ -101,9 +103,10 @@ public final class StatsPoller {
     /// decide whether a config change needs a fresh poller).
     public var enabledSet: Set<StatsModule> { enabled }
     public var onSnapshot: ((StatsSnapshot) -> Void)?
-    /// Set true while a popup is open: enables the expensive top-process scan AND
-    /// reschedules the timer to the faster `activeInterval` (back to baseInterval on
-    /// close). One call from the popover delegate drives both.
+    /// Set true while a popup is open: enables the popup-only readers (top-process
+    /// scan, CPU clock, power rails, ping thread) AND reschedules the timer to the
+    /// faster `activeInterval` (back to baseInterval on close). One call from the
+    /// popover delegate drives all of it.
     private let procFlag = ManagedAtomicFlag()
     /// Set by the IOPS power-source notification (plug/unplug, charge step) so the
     /// next tick reads the battery even if it isn't a `batteryDivider` tick — the
@@ -112,10 +115,10 @@ public final class StatsPoller {
     public func setPopupActive(_ on: Bool) {
         procFlag.set(on)
         queue.async { [self] in
-            guard let timer else { return }   // not running → nothing to reschedule
-            // Live latency while the user is looking; back to the quiet rate on close.
-            ping?.setInterval(on ? Swift.min(config.activeInterval, config.baseInterval)
-                                 : config.baseInterval)
+            guard let timer else { return }   // not running/paused → nothing to reschedule
+            // Latency/connectivity are popup-only, and a background ping thread sent
+            // ~29k ICMP packets a day to 1.1.1.1. start() sends its first echo now.
+            if on { ping?.start() } else { ping?.stop() }
             // Kick a sample at the instant of open so the ~1 s reader work (top/nettop)
             // starts now, not at the next background tick — which may be seconds away
             // if the user picked a slow update interval. Readers deliver via onUpdate.
@@ -143,6 +146,10 @@ public final class StatsPoller {
     private var ping: NetPingReader?
     private var netLink: NetLinkReader?
     private var netProc: NetProcessReader?
+    /// Reachability while the ping thread is off (popup closed / first frame after
+    /// open): event-driven, sends nothing.
+    private var path: NWPathMonitor?
+    private let pathUp = ManagedAtomicFlag()
 
     // Headline histories for charts. Mutated only on `queue`; read via history().
     private var histories: [String: RingBuffer<Double>] = [:]
@@ -190,8 +197,7 @@ public final class StatsPoller {
             let on = procFlag.get()
             let target = on ? Swift.min(config.activeInterval, config.baseInterval) : config.baseInterval
             currentInterval = target
-            ping?.setInterval(target)
-            ping?.start()
+            if on { ping?.start() }   // popup-only, see setPopupActive
             let t = DispatchSource.makeTimerSource(queue: queue)
             t.schedule(deadline: .now(), repeating: target, leeway: .milliseconds(100))
             t.setEventHandler { [weak self] in self?.poll() }
@@ -211,6 +217,7 @@ public final class StatsPoller {
             procs = nil   // drop the pid cpu-time map
             topProc = nil
             ping?.stop(); ping = nil
+            path?.cancel(); path = nil
             netProc = nil; netLink = nil
         }
     }
@@ -220,11 +227,13 @@ public final class StatsPoller {
         if enabled.contains(.memory) { memory = MemoryReader() }
         if enabled.contains(.network) {
             network = NetworkReader()
-            // Ping at the user's chosen refresh rate, not a hardwired 1 s — latency/
-            // connectivity are popup-only readouts; setPopupActive speeds this up.
+            // Started/stopped by setPopupActive: latency/connectivity are popup-only.
             ping = NetPingReader(historyLength: config.historyLength,
-                                 interval: config.baseInterval)
-            ping?.start()
+                                 interval: Swift.min(config.activeInterval, config.baseInterval))
+            let m = NWPathMonitor()
+            m.pathUpdateHandler = { [pathUp] p in pathUp.set(p.status == .satisfied) }
+            m.start(queue: queue)
+            path = m
             netLink = NetLinkReader()
         }
         if enabled.contains(.disk) { disk = DiskReader() }
@@ -275,6 +284,8 @@ public final class StatsPoller {
         if batt { battFlag.set(false) }
         tick &+= 1
 
+        // The clock is popup-only; its IOReport sample is skipped on idle ticks.
+        cpu?.sampleFrequency = procFlag.get()
         if cpu != nil, let s = try? cpu!.read() {
             latest.cpu = s; push("cpu", s.total)
         }
@@ -285,6 +296,7 @@ public final class StatsPoller {
             latest.network = s
             push("net.up", s.uploadBytesPerSec); push("net.down", s.downloadBytesPerSec)
             latest.netLatency = ping?.latest()
+                ?? NetLatency(latencyMs: .nan, jitterMs: .nan, reachable: pathUp.get())
             if let c = ping?.connectivity() { latest.connectivity = c }
             // netLink recomputes off-queue (CoreWLAN RSSI can block ~tens of ms) and
             // we read its cache here — never blocks this serial tick. POPUP-GATED:
@@ -323,8 +335,10 @@ public final class StatsPoller {
             // Aggregates first: Average/Hottest CPU/GPU lead the popup list.
             if !temps.isEmpty { latest.temperatures = tempAggregates(temps) + temps }
         }
-        if slow, let vi = powerSensors?.read(), !vi.isEmpty {
-            latest.powerSensors = vi
+        // Voltage/current rails are popup-only (temps above feed the menu bar).
+        if slow, procFlag.get() {
+            Self.onPowerRailsRead?()
+            if let vi = powerSensors?.read(), !vi.isEmpty { latest.powerSensors = vi }
         }
         if batt, battery != nil, let b = try? battery!.read() {
             latest.battery = b
@@ -391,6 +405,9 @@ public final class StatsPoller {
         }
     }
 
+    /// Test seam: called whenever a tick reads the power rails.
+    nonisolated(unsafe) static var onPowerRailsRead: (() -> Void)?
+
     private func push(_ key: String, _ value: Double) {
         histories[key]?.append(value)
     }
@@ -404,7 +421,7 @@ public final class StatsPoller {
 /// Thread-safe boolean flag (popup open/closed). `OSAllocatedUnfairLock` owns the
 /// state behind a stable heap pointer — avoids the `os_unfair_lock`-as-stored-var
 /// move hazard for zero contention.
-final class ManagedAtomicFlag {
+final class ManagedAtomicFlag: Sendable {
     private let lock = OSAllocatedUnfairLock(initialState: false)
     func set(_ v: Bool) { lock.withLock { $0 = v } }
     func get() -> Bool { lock.withLock { $0 } }
