@@ -176,7 +176,7 @@ final class BunHarness {
     }
 
     /// Pinned first: bundled `Contents/Helpers/bun` → cached pinned download → fresh
-    /// pinned download; an unpinned bun on PATH only when the download fails (offline).
+    /// pinned download; an unpinned bun on PATH only when the download fails (offline or a checksum mismatch).
     /// `nonisolated` so the synchronous unzip/sign work in `downloadBun` runs off the
     /// main actor (it would otherwise freeze the UI for seconds on first plugin use).
     nonisolated private static func resolveBun() async throws -> URL {
