@@ -347,7 +347,7 @@ actor LlamaInlineEngine {
     /// Reload is lazy: `complete`/`generate` open with `try ensureLoaded(...)`, which
     /// re-runs `llama_backend_init` + model + context load when `ctx == nil`.
     ///
-    /// Backend-level teardown is deliberately absent: `llama_backend_free()` in b9866 is
+    /// Backend-level teardown is deliberately absent: `llama_backend_free()` in b9866 and still in b11429 is
     /// a tail-call to `ggml_quantize_free()` (frees only IQ2/IQ3 quantization grids that
     /// inference never allocates), and ggml's Metal device — the rsets keep-alive thread
     /// plus the compiled shader library — is a process-lifetime singleton with no

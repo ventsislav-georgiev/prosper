@@ -107,7 +107,7 @@ final class ModelIdleUnloader {
     /// freed at exit) that owns the rsets keep-alive thread and the compiled shader
     /// library, and MLX's two `static ThreadPool{4}` in `mlx/io/load.cpp` plus its
     /// scheduler `StreamThread` are function-local statics with no C API. Note that
-    /// `llama_backend_free()` is NOT that API — in b9866 it is a tail-call to
+    /// `llama_backend_free()` is NOT that API — in b9866 and still in b11429 it is a tail-call to
     /// `ggml_quantize_free()`, which frees only the IQ2/IQ3 quantization grids that a
     /// load-only workload never allocates.
     static func unloadIdleEngines() async {
