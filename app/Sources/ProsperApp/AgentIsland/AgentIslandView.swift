@@ -414,6 +414,7 @@ struct AgentCardLayout: Equatable {
 
     static let tooLongCaption = "Too long to show in full, open the terminal to approve"
     static let hiddenCaption = "Hidden characters in this prompt, open the terminal to approve"
+    static let offTopCaption = "The top of this prompt is off screen, open the terminal to approve"
 
     private typealias G = AgentIslandGeometry
 
@@ -433,8 +434,9 @@ struct AgentCardLayout: Equatable {
         }
         (self.labels, self.details, self.tooWide) = (labels, details, tooWide)
         hidden = p.hasHiddenCharacters
-        // Both apply: the hidden-character reason wins, it is the one to look at first.
-        let why = hidden ? Self.hiddenCaption : (isOverCap || !tooWide.isEmpty) ? Self.tooLongCaption : nil
+        // Several apply: hidden characters win, then the off-screen top, then too long.
+        let why = hidden ? Self.hiddenCaption : !p.topFound ? Self.offTopCaption
+            : (isOverCap || !tooWide.isEmpty) ? Self.tooLongCaption : nil
         caption = why.map { G.wrap($0, G.questionFont, G.cardInner) } ?? []
     }
 
@@ -562,9 +564,17 @@ struct AgentPromptCardView: View {
         ForEach(Array(rows.enumerated()), id: \.offset) { _, r in row(r) }
     }
 
+    /// W1e: every Text the card draws goes through here with the CTFont its
+    /// layout measured it with; `textHook` lets a test see each (text, font).
+    @MainActor static var textHook: ((String, CTFont) -> Void)?
+
+    private func cardText(_ s: String, _ f: CTFont) -> Text {
+        Self.textHook?(s, f)
+        return Text(s).font(Font(f))
+    }
+
     private func line(_ text: String, _ color: Color) -> some View {
-        Text(text)
-            .font(Font(G.questionFont))
+        cardText(text, G.questionFont)
             .foregroundStyle(color)
             .lineLimit(1)
             .frame(height: G.cardQuestion, alignment: .leading)
@@ -575,8 +585,7 @@ struct AgentPromptCardView: View {
         if !lines.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 rows(lines) { l in
-                    Text(l)
-                        .font(Font(G.contextFont))
+                    cardText(l, G.contextFont)
                         .foregroundStyle(Color.white.opacity(0.6))
                         .lineLimit(1)
                         .frame(height: G.cardContextLine, alignment: .leading)
@@ -601,20 +610,17 @@ struct AgentPromptCardView: View {
         return button(action: { onOption(p, o) }, fill: fill,
                       height: row + CGFloat(label.count - 1) * G.cardLabelLine + CGFloat(detail.count) * G.cardDetailLine) {
             HStack(alignment: .top, spacing: G.cardSpacing) {
-                Text("\(o.digit)")
-                    .font(Font(G.digitFont))
+                cardText("\(o.digit)", G.digitFont)
                     .foregroundStyle(text.opacity(0.7))
                     .frame(height: row)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: G.cardSpacing) {
-                        Text(label[0])
-                            .font(Font(G.labelFont))
+                        cardText(label[0], G.labelFont)
                             .foregroundStyle(text)
                             .lineLimit(1)
                         Spacer(minLength: G.cardSpacerMin)
                         if let hint = o.hint {
-                            Text(hint)
-                                .font(Font(G.hintFont))
+                            cardText(hint, G.hintFont)
                                 .foregroundStyle(text.opacity(0.6))
                                 .padding(.horizontal, G.hintInset).padding(.vertical, 1)
                                 .background(Capsule().fill(Color.white.opacity(0.1)))
@@ -624,16 +630,14 @@ struct AgentPromptCardView: View {
                     .frame(height: row)
                     // A too-wide label's rest (the option is off), shown in full.
                     rows(Array(label.dropFirst())) { r in
-                        Text(r)
-                            .font(Font(G.labelFont))
+                        cardText(r, G.labelFont)
                             .foregroundStyle(text)
                             .lineLimit(1)
                             .frame(height: G.cardLabelLine, alignment: .top)
                     }
                     // Continuation or description: dim, under the label.
                     rows(detail) { d in
-                        Text(d)
-                            .font(Font(G.detailFont))
+                        cardText(d, G.detailFont)
                             .foregroundStyle(text.opacity(0.55))
                             .lineLimit(1)
                             .frame(height: G.cardDetailLine, alignment: .top)
@@ -650,7 +654,7 @@ struct AgentPromptCardView: View {
     private var jump: some View {
         button(action: onJump, fill: Color.white.opacity(0.08)) {
             Image(systemName: "arrow.up.forward.app").font(.system(size: 11))
-            Text(Self.jumpText).font(Font(G.labelFont))
+            cardText(Self.jumpText, G.labelFont)
             Spacer(minLength: 0)
         }
         .foregroundStyle(Color.white.opacity(0.7))

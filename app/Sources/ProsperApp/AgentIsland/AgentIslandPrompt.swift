@@ -33,8 +33,10 @@ struct AgentPromptOption: Hashable {
 struct AgentPrompt: Hashable {
     /// The line right above option 1: "Do you want to proceed?", the question text.
     let question: String
-    /// Every non-blank line above the question, inside the dialog, untruncated:
-    /// the click guard compares all of it (a long command can differ in its head).
+    /// Every line above the question, inside the dialog, untruncated: the click
+    /// guard compares all of it (a long command can differ in its head). Blank
+    /// lines are dropped except inside a command (between two lines at column 2
+    /// or more), where they are kept as "" (a heredoc body can depend on one).
     let context: [String]
     let options: [AgentPromptOption]
     /// False when the context walk ran off the screen top: every Claude Code
@@ -50,19 +52,20 @@ struct AgentPrompt: Hashable {
     }
 
     /// What the card renders literally: every printable character, wide glyphs
-    /// (CJK, emoji), combining marks, variation selectors. Escaped as ⟨U+XXXX⟩:
-    /// C0 controls (tab included), DEL, C1 controls, the bidi embeddings and
-    /// overrides U+202A-202E, the isolates U+2066-2069, the marks U+200E/200F
-    /// and U+061C, zero-width U+200B-200D (ZWJ too, so a ZWJ emoji shows split),
-    /// word joiner U+2060, invisible operators U+2061-2064, soft hyphen U+00AD,
-    /// the line and paragraph separators U+2028/2029 (near zero width, they
-    /// break a one-line row and cut what follows) and U+FEFF. Display only: the
-    /// compared identity stays the raw text.
+    /// (CJK, emoji), combining marks, the variation selectors U+FE00-FE0F (an
+    /// emoji's U+FE0F stays approvable). Escaped as ⟨U+XXXX⟩, by Unicode property
+    /// rather than a hand list: every Default_Ignorable_Code_Point (zero-width
+    /// and joiners, ZWJ too so a ZWJ emoji shows split, bidi marks, Hangul
+    /// fillers, tag characters, U+034F, unassigned ones like U+2065) and every
+    /// control, format, line or paragraph separator (C0/C1 with tab and CR,
+    /// U+2028/2029, which break a one-line row and cut what follows; U+FFF9-FFFB,
+    /// U+1D173-1D17A). Display only: the compared identity stays the raw text.
     static func isHidden(_ u: Unicode.Scalar) -> Bool {
-        switch u.value {
-        case 0x00...0x1F, 0x7F...0x9F, 0xAD, 0x61C, 0x200B...0x200F, 0x2028...0x2029, 0x202A...0x202E,
-             0x2060...0x2064, 0x2066...0x2069, 0xFEFF: true
-        default: false
+        let p = u.properties
+        if p.isDefaultIgnorableCodePoint, !(0xFE00...0xFE0F).contains(u.value) { return true }
+        switch p.generalCategory {
+        case .control, .format, .lineSeparator, .paragraphSeparator: return true
+        default: return false
         }
     }
 
@@ -116,13 +119,21 @@ extension AgentPrompt {
     /// toggles, it does not answer); a non-blank question line above option 1.
     /// Every non-blank, non-rule line below an option, up to the next option (or,
     /// after the last one, the first blank or rule line), is that option's detail.
+    /// The dialog must be the last thing on the screen (a static copy printed
+    /// above a shell prompt is not a live dialog): below the last option and its
+    /// detail only blank lines, rules and, last, one footer line ("Esc to
+    /// cancel …"); a last option with detail lines needs that rule or footer
+    /// under it (else the detail could be a shell prompt).
     static func parse(_ screen: String) -> AgentPrompt? {
-        let raw = screen.split(separator: "\n", omittingEmptySubsequences: false), lines = raw.map(unframe)
+        let raw = screen.split(separator: "\n", omittingEmptySubsequences: false), lines = unframe(raw)
         guard let last = lines.lastIndex(where: { option($0) != nil }) else { return nil }
         var found: [(digit: Int, label: String, caret: Bool, detail: [String])] = []
         // Lines below the option the walk reaches next: the last option's tail first.
         var below = Array(lines[(last + 1)...].prefix(while: { !isBlankOrRule($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) })
+        let after = lines[(last + 1 + below.count)...].filter { !isBlank($0) }
+        guard after.dropLast().allSatisfy(isRule),
+              after.last.map({ isRule($0) || isFooter($0) }) ?? below.isEmpty else { return nil }
         var i = last, gap = 0
         while i >= 0, found.last?.digit != 1 {
             if let o = option(lines[i]) {
@@ -140,27 +151,50 @@ extension AgentPrompt {
         guard found.last?.digit == 1, found.count >= 2, found.filter(\.caret).count == 1,
               !found.contains(where: { isCheckbox($0.label) }) else { return nil }
         // i is now the line above option 1.
-        while i >= 0, isBlankOrRule(lines[i]) { i -= 1 }
+        // A frame: Claude Code draws its frames (top rule, dashed command or diff
+        // frame, 1.x box) at screen column 0 or 1, everything they frame from
+        // column 2, and full screen width. So a rule further in (a heredoc,
+        // printed output) or a short one (an autowrap tail, a CR overprint) is
+        // the dialog's own text. Columns count on the raw line, box bars
+        // included. Width: the rule's raw extent (where it ends) against the
+        // widest rule above option 1, any column (the top frame is the screen
+        // width; a rule in the command can only widen it, which fails safe);
+        // `frameSlack` cells short still count. Not the widest line: screen
+        // lines in the fixtures run past their frames.
+        let extent = { (r: Substring) in r.reversed().drop(while: \.isWhitespace).count }
+        let width = (0..<(i + 1)).filter { isRule(lines[$0]) }.map { extent(raw[$0]) }.max() ?? 0
+        func isFrame(_ k: Int) -> Bool {
+            isRule(lines[k]) && raw[k].prefix(while: { $0.isWhitespace || $0 == "│" }).count <= 1
+                && extent(raw[k]) + frameSlack >= width
+        }
+        while i >= 0, isBlank(lines[i]) || isFrame(i) { i -= 1 }
         guard i >= 0 else { return nil }
         let question = lines[i].trimmingCharacters(in: .whitespaces)
         var context: [String] = []
         var j = i - 1
-        // Up to the dialog's top rule. Claude Code draws its frames (top rule,
-        // dashed command or diff frame, 1.x box) at screen column 0 or 1 and
-        // everything they frame from column 2, so a rule further in (a heredoc,
-        // printed output) is the command's own line and stays in the context.
-        // Columns count on the raw line, box bars included. A frame right under
-        // the question (Edit's dashed diff frame) is skipped.
+        // Up to the dialog's top frame. A frame right under the question (Edit's
+        // dashed diff frame) is skipped.
         while j >= 0 {
-            if isRule(lines[j]), raw[j].prefix(while: { $0.isWhitespace || $0 == "│" }).count <= 1 {
-                if !context.isEmpty { break }
-            } else if !lines[j].trimmingCharacters(in: .whitespaces).isEmpty {
+            if isFrame(j) {
+                if context.contains(where: { !isBlank($0) }) { break }
+            } else {
                 context.insert(lines[j], at: 0)
             }
             j -= 1
         }
+        // Blank lines: kept inside a command (both neighbours at column 2 or
+        // more: command, diff and box content), dropped between the dialog's
+        // own sections (header, description, question at column 0 or 1).
+        let indent = { (s: String) in s.prefix(while: { $0 == " " }).count }
+        let kept = context.indices.compactMap { k -> String? in
+            guard isBlank(context[k]) else { return context[k] }
+            guard let up = context[..<k].last(where: { !isBlank($0) }),
+                  let down = context[(k + 1)...].first(where: { !isBlank($0) }),
+                  indent(up) >= 2, indent(down) >= 2 else { return nil }
+            return ""
+        }
         return AgentPrompt(
-            question: question, context: dedent(context),
+            question: question, context: dedent(kept),
             options: found.reversed().map { o in
                 let (label, hint) = splitHint(o.label)
                 return AgentPromptOption(digit: o.digit, label: label, hint: hint, detail: o.detail)
@@ -171,9 +205,16 @@ extension AgentPrompt {
 
     /// The last `maxContext` non-blank, non-rule lines.
     static func tail(_ screen: String) -> [String] {
-        let lines = screen.split(separator: "\n", omittingEmptySubsequences: false).map(unframe)
+        let lines = unframe(screen.split(separator: "\n", omittingEmptySubsequences: false))
         return dedent(Array(lines.filter { !isBlankOrRule($0) }.suffix(maxContext)))
     }
+
+    /// A frame rule may end this many cells before the widest rule above
+    /// option 1. Every fixture and QA probe frame ends at the same column
+    /// (top rule 90 at column 0, dashed frames 89 at column 1; 48 in the narrow
+    /// fixtures); 2 leaves one cell for a frame drawn one short. A
+    /// width-disagreement autowrap tail is at most ~40 cells on a 90-cell screen.
+    static let frameSlack = 2
 
     /// "  ❯ 2. Yes, and …" -> (2, "Yes, and …", caret). Single digit 1-9 only.
     static func option(_ line: String) -> (digit: Int, label: String, caret: Bool)? {
@@ -188,15 +229,33 @@ extension AgentPrompt {
         return label.isEmpty ? nil : (digit, label, caret)
     }
 
-    /// One screen line without an old-style box frame ("│ … │") or trailing blanks;
-    /// leading indent stays for the context block.
-    static func unframe(_ raw: Substring) -> String {
-        var s = String(raw)
-        while let c = s.last, c.isWhitespace || c == "│" { s.removeLast() }
-        if let bar = s.firstIndex(of: "│"), s[..<bar].allSatisfy(\.isWhitespace) {
-            s = String(s[s.index(after: bar)...])
-            if s.first == " " { s.removeFirst() }
+    /// Screen lines without an old-style box frame ("│ … │") or trailing blanks;
+    /// leading indent stays for the context block. A line loses its bars only
+    /// when it is a box row: its left bar sits at the column (0 or 1) of a box
+    /// corner rule ("╭──╮", "╰──╯") on the screen and it ends in a right bar.
+    /// Any other "│" (a command that starts or ends with one) is text.
+    static func unframe(_ raw: [Substring]) -> [String] {
+        let edges = Set(raw.compactMap { r -> Int? in
+            let col = r.prefix(while: \.isWhitespace).count
+            guard col <= 1, let c = r.dropFirst(col).first, "╭╰┌└".contains(c), isRule(String(r)) else { return nil }
+            return col
+        })
+        return raw.map { r in
+            var s = trimmedEnd(String(r))
+            let col = s.prefix(while: { $0 == " " }).count
+            if edges.contains(col), s.dropFirst(col).first == "│", s.count > col + 1, s.last == "│" {
+                s = trimmedEnd(String(s.dropFirst(col + 1).dropLast()))
+                if s.first == " " { s.removeFirst() }
+            }
+            return s
         }
+    }
+
+    /// Trailing blanks off; a hidden one (CR, a line separator, tab) stays, so
+    /// the card shows it and goes deny-only.
+    private static func trimmedEnd(_ s: String) -> String {
+        var s = s
+        while let c = s.last, c.isWhitespace, !c.unicodeScalars.contains(where: isHidden) { s.removeLast() }
         return s
     }
 
@@ -205,8 +264,15 @@ extension AgentPrompt {
         return !t.isEmpty && t.allSatisfy { "─━═╌┄╭╮╰╯┌┐└┘".contains($0) }
     }
 
-    static func isBlankOrRule(_ line: String) -> Bool {
-        line.trimmingCharacters(in: .whitespaces).isEmpty || isRule(line)
+    static func isBlank(_ line: String) -> Bool { line.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    static func isBlankOrRule(_ line: String) -> Bool { isBlank(line) || isRule(line) }
+
+    /// Claude Code's dialog footer: "Esc to cancel · Tab to amend", "Enter to
+    /// select · ↑/↓ to navigate · Esc to cancel". A short line, like dch's rule.
+    static func isFooter(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return t.count <= 64 && t.lowercased().contains("esc to cancel")
     }
 
     /// "[ ] Staging", "[✔] Prod", "☐ Local": a multi-select row.
@@ -230,9 +296,9 @@ extension AgentPrompt {
         return (label[..<open].trimmingCharacters(in: .whitespaces), inner)
     }
 
-    /// Drop the indent every line shares, keep the rest (code, diff gutters).
+    /// Drop the indent every non-blank line shares, keep the rest (code, diff gutters).
     static func dedent(_ lines: [String]) -> [String] {
-        let n = lines.map { $0.prefix(while: { $0 == " " }).count }.min() ?? 0
+        let n = lines.filter { !isBlank($0) }.map { $0.prefix(while: { $0 == " " }).count }.min() ?? 0
         return lines.map { String($0.dropFirst(n)) }
     }
 
