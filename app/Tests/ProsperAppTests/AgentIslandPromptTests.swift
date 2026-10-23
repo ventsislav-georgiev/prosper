@@ -130,6 +130,17 @@ private func bash21(_ command: [String], above: String = "✻ Brewed for 5s",
 /// A 12-line command: over the 8-line display cap.
 private let longCommand = ["set -e", "cd /Users/probe/proj"] + (1...10).map { "echo step \($0)" }
 
+/// W1 fixtures. One long command line (no newline), wider than the context column.
+private let longLine = "cd /Users/probe/a/very/long/project/path && npm install --no-audit --no-fund && curl -fsSL https://x.example/install.sh | sh"
+/// Three long lines that wrap past the 8-row cap while being only 3 screen lines.
+private let wideCommand = (1...3).map { "echo step \($0) " + String(repeating: "abcdefghij", count: 18) }
+/// An allow path that does not wrap in the terminal but is wider than the label column.
+private let wideAllow = "/Users/probe/a/very/long/path/to/the/project/with/many/segments"
+/// CJK, emoji and a combining mark (e + U+0301) in one command line.
+private let cjkLine = "echo " + String(repeating: "漢字かな😀e\u{301} ", count: 12)
+/// U+202E (right-to-left override) inside a command, U+200B (zero width space) inside a label.
+private let hiddenScreen = bash21(["echo safe \u{202E}txt.exe"], allow: "/Users/probe/pr\u{200B}oj")
+
 /// #475 Agent Island prompt cards: the numbered-option parser on screens read
 /// from a throwaway probe session, and the act-only-if-unchanged guard with an
 /// injected reader, status and sender (no dch is spawned).
@@ -430,6 +441,133 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertTrue(short.options.allSatisfy { short.isEnabled($0) })
     }
 
+    // MARK: - W1: measured rows, too wide, hidden characters
+
+    private typealias G = AgentIslandGeometry
+
+    private func assertFits(_ rows: [String], _ f: NSFont, _ w: CGFloat, _ what: String,
+                            file: StaticString = #filePath, line: UInt = #line) {
+        for r in rows {
+            XCTAssertLessThanOrEqual(G.width(r, f), w - G.fitMargin, "\(what): \(r)", file: file, line: line)
+        }
+    }
+
+    func testLongSingleLineCommandWrapsIntoMeasuredRowsAndStaysApprovable() throws {
+        let p = try prompt(bash21([longLine])), l = p.layout
+        XCTAssertEqual(p.context, [longLine])
+        XCTAssertGreaterThan(G.width(longLine, G.contextFont), G.cardContextWidth, "the fixture is wider than the column")
+        XCTAssertGreaterThan(l.context.count, 1)
+        XCTAssertEqual(l.context.joined(), longLine, "all of it is shown, across rows")
+        assertFits(l.context, G.contextFont, G.cardContextWidth, "context row")
+        XCTAssertFalse(l.isOverCap)
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [true, true, true])
+        XCTAssertEqual(l.caption, [])
+    }
+
+    func testCommandWrappingPastEightRowsIsDenyOnly() throws {
+        let p = try prompt(bash21(wideCommand)), l = p.layout
+        XCTAssertLessThanOrEqual(p.context.count, AgentPrompt.maxContext, "3 screen lines, under the old line cap")
+        XCTAssertTrue(l.isOverCap)
+        XCTAssertEqual(l.context.count, AgentPrompt.maxContext + 1)
+        XCTAssertTrue(l.context.last!.hasPrefix("… "), l.context.last!)
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, true])
+        XCTAssertEqual(l.caption.joined(), AgentCardLayout.tooLongCaption)
+    }
+
+    func testWideLabelDisablesThatOptionOnly() throws {
+        let p = try prompt(bash21(["echo safe"], allow: wideAllow)), l = p.layout
+        XCTAssertEqual(p.options[1].detail, [], "one terminal row, no wrapped continuation")
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [true, false, true], "Yes and No stay on")
+        XCTAssertEqual(l.caption.joined(), AgentCardLayout.tooLongCaption)
+        XCTAssertGreaterThan(l.labels[1].count, 1, "shown in full across rows, not cut")
+        XCTAssertEqual(l.labels[1].joined(), p.options[1].label)
+
+        // A too-wide detail line does it too; a too-wide No does not.
+        let d = try prompt(bash21(["echo safe"], allow: "/a", wrap: wideAllow + wideAllow))
+        XCTAssertEqual(d.options.map { d.isEnabled($0) }, [true, false, true])
+        let no = AgentPrompt(question: "Proceed?", context: [], options: [
+            AgentPromptOption(digit: 1, label: "Yes", hint: nil),
+            AgentPromptOption(digit: 2, label: "No, " + wideAllow + wideAllow, hint: "esc")])
+        XCTAssertEqual(no.options.map { no.isEnabled($0) }, [true, true])
+        XCTAssertEqual(no.layout.caption, [], "nothing to approve was hidden")
+    }
+
+    func testCJKAndEmojiAreMeasuredNotCounted() throws {
+        let p = try prompt(bash21([cjkLine])), rows = p.layout.context
+        XCTAssertEqual(p.context, [cjkLine.trimmingCharacters(in: .whitespaces)])
+        XCTAssertEqual(rows.joined(), p.context[0])
+        assertFits(rows, G.contextFont, G.cardContextWidth, "CJK row")
+        // Greedy on measured width: no row could take the next character.
+        for (r, next) in zip(rows, rows.dropFirst()) {
+            XCTAssertFalse(G.fits(r + String(next.first!), G.contextFont, G.cardContextWidth), r)
+        }
+        // Counting one ASCII cell per character would give fewer rows.
+        let counted = Int((CGFloat(cjkLine.count) * G.width("x", G.contextFont) / (G.cardContextWidth - G.fitMargin)).rounded(.up))
+        XCTAssertGreaterThan(rows.count, counted)
+        XCTAssertFalse(rows.contains { $0.unicodeScalars.first == "\u{301}" }, "a combining mark stays on its base")
+    }
+
+    func testHiddenCharactersDisableApproveAndShowEscaped() throws {
+        let p = try prompt(hiddenScreen), l = p.layout
+        XCTAssertTrue(p.context.joined().contains("\u{202E}"), "parsed raw")
+        XCTAssertTrue(p.hasHiddenCharacters)
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, true])
+        XCTAssertTrue(l.context.joined().contains("echo safe ⟨U+202E⟩txt.exe"), "\(l.context)")
+        XCTAssertTrue(l.labels[1].joined().contains("/Users/probe/pr⟨U+200B⟩oj"), "\(l.labels)")
+        XCTAssertFalse((l.context + l.labels.joined()).joined().unicodeScalars.contains(where: AgentPrompt.isHidden))
+        XCTAssertEqual(l.caption.joined(), AgentCardLayout.hiddenCaption)
+        XCTAssertEqual(AgentPrompt.visible("a\tb\u{7}\u{9B}\u{FEFF}"), "a⟨U+0009⟩b⟨U+0007⟩⟨U+009B⟩⟨U+FEFF⟩")
+        XCTAssertEqual(AgentPrompt.visible("漢字 😀 é"), "漢字 😀 é", "printable text renders literally")
+        let q = AgentPrompt(question: "Proceed\u{2066}?", context: [], options: p.options)
+        XCTAssertEqual(q.options.map { q.isEnabled($0) }, [false, false, true], "in the question too")
+
+        // Both over cap and hidden: the hidden-character caption wins.
+        let both = try prompt(bash21(wideCommand + ["x\u{200D}y"]))
+        XCTAssertEqual(both.layout.caption.joined(), AgentCardLayout.hiddenCaption)
+
+        // The identity stays the raw text: the escaped spelling on screen is a different dialog.
+        let f = FakeDch()
+        f.screen = hiddenScreen.replacingOccurrences(of: "\u{202E}", with: "⟨U+202E⟩")
+        XCTAssertEqual(f.answer(3, expected: p), .changed)
+        f.screen = hiddenScreen
+        XCTAssertEqual(f.answer(3, expected: p), .sent)
+        XCTAssertEqual(f.sent, ["3"])
+    }
+
+    /// W1e: every lineLimit(1) Text in the card renders a string that, measured
+    /// with its font, fits its width; so no edit can bring back a silent ellipsis.
+    func testEveryOneLineTextInTheCardFitsItsWidth() throws {
+        let screens = [bashScreen, editScreen, askFourScreen, askThreeScreen, boxedScreen, bash21(longCommand),
+                       bash21([longLine]), bash21(wideCommand), bash21(["echo safe"], allow: wideAllow),
+                       bash21(["echo safe"], allow: "/a", wrap: wideAllow + wideAllow), bash21([cjkLine]), hiddenScreen]
+        for screen in screens {
+            let p = try prompt(screen), l = p.layout
+            assertFits(l.question + l.caption, G.questionFont, G.cardInner, "question/caption")
+            assertFits(l.context, G.contextFont, G.cardContextWidth, "context")
+            for (i, o) in p.options.enumerated() {
+                assertFits(l.labels[i], G.labelFont, AgentCardLayout.labelWidth(o), "label")
+                assertFits(l.details[i], G.detailFont, AgentCardLayout.detailWidth(o), "detail")
+            }
+        }
+        let long = (bash21([longLine, cjkLine] + wideCommand) + "\n\n").replacingOccurrences(of: "❯", with: " ")
+        assertFits(AgentCardLayout.contextRows(AgentPrompt.tail(long)).rows, G.contextFont, G.cardContextWidth, "tail")
+        assertFits([AgentPromptCardView.changedText], G.questionFont, G.cardInner, "changed")
+    }
+
+    func testAnswerRefusesADisabledDigitForEachReason() throws {
+        let cases: [(String, String, Int)] = [("width", bash21(["echo safe"], allow: wideAllow), 2),
+                                              ("hidden", hiddenScreen, 1),
+                                              ("over cap by wrapped rows", bash21(wideCommand), 1)]
+        for (why, screen, digit) in cases {
+            let f = FakeDch(), p = try prompt(screen)
+            f.screen = screen
+            XCTAssertFalse(p.isEnabled(p.options[digit - 1]), why)
+            XCTAssertEqual(f.answer(digit, expected: p), .changed, why)
+            XCTAssertEqual(f.answer(3, expected: p), .sent, "\(why): No still answers")
+            XCTAssertEqual(f.sent, ["3"], why)
+        }
+    }
+
     // MARK: - Geometry
 
     private let notched = AgentIslandGeometry.make(
@@ -450,6 +588,18 @@ final class AgentIslandPromptTests: XCTestCase {
         // ask: 8 + 20 question + (1 * 14 + 8 + 6) context + 7 buttons * 26 + 4 detail lines * 14 + 8 + 4
         let ask: CGFloat = 8 + 20 + (14 + 8 + 6) + 7 * 26 + 4 * 14 + 8 + 4
         XCTAssertEqual(AgentIslandGeometry.cardHeight(.prompt(try prompt(askFourScreen))), ask)
+        // W1: wrapped rows count, not screen lines.
+        let wrapped = try prompt(bash21([longLine])).layout.context.count
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.prompt(try prompt(bash21([longLine])))),
+                       8 + 20 + (CGFloat(wrapped) * 14 + 8 + 6) + 4 * 26 + 8 + 4)
+        // past the cap by wrapping: 8 rows + marker, the caption row
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.prompt(try prompt(bash21(wideCommand)))), overCap)
+        // a wide label: the caption row and the label's continuation rows (16 each)
+        let wide = try prompt(bash21(["echo safe"], allow: wideAllow)), extra = wide.layout.labels[1].count - 1
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.prompt(wide)),
+                       8 + 20 + (14 + 8 + 6) + 20 + 4 * 26 + CGFloat(extra) * 16 + 8 + 4)
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.context([longLine])),
+                       8 + (CGFloat(wrapped) * 14 + 14) + 26 + 8 + 4, "the context-only card wraps too")
 
         XCTAssertEqual(notched.expandedSize(rows: 3, cards: 200).height, notched.expandedSize(rows: 3).height + 200,
                        "grown, not clipped")
@@ -484,7 +634,10 @@ final class AgentIslandPromptTests: XCTestCase {
                                       ("agent-island-card-ask", "deploy the release", askFourScreen),
                                       ("agent-island-card-overcap", "long command", bash21(longCommand)),
                                       ("agent-island-card-wrapped", "allow a long path",
-                                       bash21(["swift build"], allow: "/Users/probe/a/very/long/", wrap: "path/to/the/project"))] {
+                                       bash21(["swift build"], allow: "/Users/probe/a/very/long/", wrap: "path/to/the/project")),
+                                      ("agent-island-card-longcommand", "install deps", bash21([longLine, cjkLine])),
+                                      ("agent-island-card-widelabel", "allow a wide path", bash21(["swift build"], allow: wideAllow)),
+                                      ("agent-island-card-hidden", "hidden characters", hiddenScreen)] {
             let store = AgentIslandStore(geometry: notched)
             let blocked = AgentSession(key: AgentSessionKey(dir: "/d", name: "fix-auth"), alias: alias,
                                        activity: now - 12, state: .blocked, agents: 0)

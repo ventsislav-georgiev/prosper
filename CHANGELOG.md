@@ -32,10 +32,11 @@ tag from the now-released section and put it on the new top draft.
   permission prompt or a question, the island shows what it asks under that session, with
   one button per option. A click types the option's number into the session, and only if
   the same prompt, with the same command or question and the same options, is still on
-  screen; otherwise nothing is sent and the island says the prompt changed. A command too
-  long to show in full can only be denied from the island; approve it in the terminal.
-  Prompts without numbered options (codex, cursor, opencode) show their last lines and an
-  Open terminal button (#475).
+  screen; otherwise nothing is sent and the island says the prompt changed. Long commands
+  wrap and are shown in full. A command too long for the card, or a prompt with hidden or
+  direction-changing characters, can only be denied from the island; approve it in the
+  terminal. Prompts without numbered options (codex, cursor, opencode) show their last
+  lines and an Open terminal button (#475).
 - **Beta testers: 2.159.0-beta.1 quit as soon as Agent Island was turned on.** Fixed in
   beta.2; turn it on again after updating (#478).
 

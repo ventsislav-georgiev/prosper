@@ -4,7 +4,8 @@
 // each option becomes a button. A click re-reads the screen and types the
 // option's digit (`dch --send <name> <digit>`, raw bytes, no Enter) only if the
 // whole dialog (question, full context block, options) is unchanged and dch
-// still says blocked. Foundation only, with
+// still says blocked. Foundation only (the measured enable rule, `isEnabled`,
+// lives in AgentIslandView.swift), with
 // every dch call injected, so tests (and a probe) drive it without the app.
 
 import Foundation
@@ -37,24 +38,40 @@ struct AgentPrompt: Equatable {
     let context: [String]
     let options: [AgentPromptOption]
 
-    /// More context than the card shows: a hidden line could be the part that
-    /// matters (`curl … | sh;`), so the card says so and only deny stays clickable.
-    var isOverCap: Bool { context.count > Self.maxContext }
-
-    /// What the card shows and measures: the context, or past the cap its first
-    /// `maxContext` lines plus a "… N more lines" marker.
-    var shownContext: [String] {
-        guard isOverCap else { return context }
-        return context.prefix(Self.maxContext) + ["… \(context.count - Self.maxContext) more lines"]
+    /// Any hidden or reordering character anywhere the card shows (Trojan
+    /// Source): only a "No…" option answers such a dialog.
+    var hasHiddenCharacters: Bool {
+        ([question] + context + options.flatMap { [$0.label] + $0.detail })
+            .contains { $0.unicodeScalars.contains(where: Self.isHidden) }
     }
 
-    /// An over-cap dialog was not fully shown, so only a "No…" option answers it.
-    func isEnabled(_ o: AgentPromptOption) -> Bool {
-        !isOverCap || o.style(first: false) == .deny
+    /// What the card renders literally: every printable character, wide glyphs
+    /// (CJK, emoji), combining marks, variation selectors. Escaped as ⟨U+XXXX⟩:
+    /// C0 controls (tab included), DEL, C1 controls, the bidi embeddings and
+    /// overrides U+202A-202E, the isolates U+2066-2069, the marks U+200E/200F
+    /// and U+061C, zero-width U+200B-200D (ZWJ too, so a ZWJ emoji shows split),
+    /// word joiner U+2060, invisible operators U+2061-2064, soft hyphen U+00AD
+    /// and U+FEFF. Display only: the compared identity stays the raw text.
+    static func isHidden(_ u: Unicode.Scalar) -> Bool {
+        switch u.value {
+        case 0x00...0x1F, 0x7F...0x9F, 0xAD, 0x61C, 0x200B...0x200F, 0x202A...0x202E,
+             0x2060...0x2064, 0x2066...0x2069, 0xFEFF: true
+        default: false
+        }
     }
 
-    static let overCapCaption = "Command too long to show, open the terminal to approve"
+    /// `s` with every hidden character escaped as ⟨U+202E⟩.
+    static func visible(_ s: String) -> String {
+        guard s.unicodeScalars.contains(where: isHidden) else { return s }
+        var out = ""
+        for u in s.unicodeScalars {
+            if isHidden(u) { out += "⟨U+\(String(format: "%04X", u.value))⟩" } else { out.unicodeScalars.append(u) }
+        }
+        return out
+    }
 
+    /// Context rows the card shows (measured rows, after wrapping); also the
+    /// screen lines a context-only card takes (`tail`).
     static let maxContext = 8
     /// Non-option lines allowed between two options (descriptions, a rule).
     static let maxGap = 4
@@ -210,6 +227,8 @@ extension AgentPrompt {
     /// for every Bash command) and options with their detail lines; the caret
     /// position does not count —
     /// and dch says blocked. One keystroke, never Enter, else nothing.
+    /// `isEnabled` is the card's own rule (AgentIslandView.swift, it measures
+    /// with AppKit): a button drawn disabled can never send from here either.
     static func answer(_ key: AgentSessionKey, digit: Int, expected: AgentPrompt,
                        io: AgentPromptIO) -> AgentPromptAnswer {
         guard (1...9).contains(digit),

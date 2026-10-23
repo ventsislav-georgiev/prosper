@@ -68,15 +68,60 @@ struct AgentIslandGeometry: Equatable {
                height: barHeight + Self.listTop + listHeight(rows: rows, cards: cards) + Self.listBottom)
     }
 
-    // Card layout (#475): every part has a fixed height, so this is exact.
+    // Card layout (#475): every row has a fixed height and every row's text is
+    // measured to fit its width (AgentCardLayout), so this is exact.
     static let cardPad: CGFloat = 8
     static let cardGap: CGFloat = 4          // below the card, before the next row
-    static let cardQuestion: CGFloat = 20
+    static let cardQuestion: CGFloat = 20    // a question or caption row
     static let cardContextLine: CGFloat = 14
     static let cardContextPad: CGFloat = 4   // inside the context block, top and bottom
     static let cardContextGap: CGFloat = 6   // below the context block
     static let cardButton: CGFloat = 26      // 22 pt button + 4 pt spacing
+    static let cardLabelLine: CGFloat = 16   // a too-wide label's continuation row
     static let cardDetailLine: CGFloat = 14  // an option's detail line, inside its button
+
+    // Card widths (W1). The view lays out with these, AgentCardLayout measures
+    // against them. The island is `expandedWidth` wide (wider only if the
+    // collapsed island is, narrower only on a screen under 480 pt), so a row
+    // measured to fit here fits on screen.
+    static let listInset: CGFloat = openRadii.top + 2   // inside the shape's straight sides
+    static let contextInset: CGFloat = 6
+    static let buttonInset: CGFloat = 8
+    static let cardSpacing: CGFloat = 8                 // digit | label | spacer | hint
+    static let cardSpacerMin: CGFloat = 4
+    static let hintInset: CGFloat = 5
+    static let cardInner = expandedWidth - 2 * listInset - 2 * cardPad   // question, caption rows
+    static let cardContextWidth = cardInner - 2 * contextInset
+    static let cardButtonInner = cardInner - 2 * buttonInset
+    /// Measured width must leave this much room: SwiftUI rounds glyph runs up.
+    static let fitMargin: CGFloat = 2
+
+    // Card fonts: drawn with `Font(… as CTFont)`, measured with the same NSFont.
+    // Fixed sizes: nothing in the island follows ThemeRuntime.scale / sz().
+    static var questionFont: NSFont { .systemFont(ofSize: 13, weight: .medium) }
+    static var contextFont: NSFont { .monospacedSystemFont(ofSize: 11, weight: .regular) }
+    static var digitFont: NSFont { .monospacedSystemFont(ofSize: 11, weight: .semibold) }
+    static var labelFont: NSFont { .systemFont(ofSize: 12, weight: .medium) }
+    static var hintFont: NSFont { .monospacedSystemFont(ofSize: 10, weight: .regular) }
+    static var detailFont: NSFont { .systemFont(ofSize: 11) }
+
+    static func width(_ s: String, _ f: NSFont) -> CGFloat {
+        (s as NSString).size(withAttributes: [.font: f]).width
+    }
+
+    static func fits(_ s: String, _ f: NSFont, _ w: CGFloat) -> Bool { width(s, f) <= w - fitMargin }
+
+    /// `s` hard-wrapped at character boundaries into rows that each measure as
+    /// fitting `w`. Measured, never counted: CJK, emoji and combining marks
+    /// take their real width; one Character is never split.
+    static func wrap(_ s: String, _ f: NSFont, _ w: CGFloat) -> [String] {
+        var rows: [String] = [], row = ""
+        for c in s {
+            if !row.isEmpty, !fits(row + String(c), f, w) { rows.append(row); row = "" }
+            row.append(c)
+        }
+        return rows + [row]
+    }
 
     static func cardHeight(_ card: AgentCard) -> CGFloat {
         func context(_ n: Int) -> CGFloat {
@@ -85,11 +130,13 @@ struct AgentIslandGeometry: Equatable {
         let body: CGFloat
         switch card {
         case .prompt(let p):
-            body = cardQuestion + context(p.shownContext.count) + (p.isOverCap ? cardQuestion : 0)
+            let l = AgentCardLayout(p)
+            body = CGFloat(l.question.count + l.caption.count) * cardQuestion + context(l.context.count)
                 + CGFloat(p.options.count + 1) * cardButton
-                + CGFloat(p.options.reduce(0) { $0 + $1.detail.count }) * cardDetailLine
+                + CGFloat(l.labels.reduce(0) { $0 + $1.count - 1 }) * cardLabelLine
+                + CGFloat(l.details.reduce(0) { $0 + $1.count }) * cardDetailLine
         case .context(let lines):
-            body = context(lines.count) + cardButton
+            body = context(AgentCardLayout.contextRows(lines).rows.count) + cardButton
         case .changed:
             body = cardQuestion + cardButton
         }
@@ -205,7 +252,7 @@ struct AgentIslandView: View {
             .frame(height: g.listHeight(rows: store.sessions.count, cards: store.cardsHeight), alignment: .top)
             .padding(.top, AgentIslandGeometry.listTop)
             // Inside the shape's straight sides (the top corners curve in by `top`).
-            .padding(.horizontal, AgentIslandGeometry.openRadii.top + 2)
+            .padding(.horizontal, AgentIslandGeometry.listInset)
             Spacer(minLength: 0)
         }
     }
@@ -314,9 +361,85 @@ struct AgentIslandRow: View {
     }
 }
 
-/// #475: what a blocked session asks, under its row. Every part has the fixed
-/// height `AgentIslandGeometry.cardHeight` counts, so the island grows by
-/// exactly the card.
+/// #475 W1: the card's rows as drawn — hidden characters escaped, every row
+/// measured with the card's font against its width — and the one rule for which
+/// options may answer. The user may only approve what the card showed in full.
+struct AgentCardLayout: Equatable {
+    /// Question rows, wrapped.
+    let question: [String]
+    /// Context rows shown: all of them, or past `maxContext` the head plus "… N more lines".
+    let context: [String]
+    let isOverCap: Bool
+    /// Per option: its label rows (more than one = it did not fit one row) and detail rows.
+    let labels: [[String]]
+    let details: [[String]]
+    /// Non-deny options whose label or a detail line does not fit one row.
+    let tooWide: Set<Int>
+    let hidden: Bool
+    /// Why approve is off, wrapped; empty when nothing is.
+    let caption: [String]
+
+    static let tooLongCaption = "Too long to show in full, open the terminal to approve"
+    static let hiddenCaption = "Hidden characters in this prompt, open the terminal to approve"
+
+    private typealias G = AgentIslandGeometry
+
+    init(_ p: AgentPrompt) {
+        question = G.wrap(AgentPrompt.visible(p.question), G.questionFont, G.cardInner)
+        (context, isOverCap) = Self.contextRows(p.context)
+        var labels: [[String]] = [], details: [[String]] = [], tooWide: Set<Int> = []
+        for o in p.options {
+            let label = AgentPrompt.visible(o.label), detail = o.detail.map(AgentPrompt.visible)
+            let lw = Self.labelWidth(o), dw = Self.detailWidth(o)
+            labels.append(G.wrap(label, G.labelFont, lw))
+            details.append(detail.flatMap { G.wrap($0, G.detailFont, dw) })
+            let fits = G.fits(label, G.labelFont, lw) && detail.allSatisfy { G.fits($0, G.detailFont, dw) }
+            if !fits, o.style(first: false) != .deny { tooWide.insert(o.digit) }
+        }
+        (self.labels, self.details, self.tooWide) = (labels, details, tooWide)
+        hidden = p.hasHiddenCharacters
+        // Both apply: the hidden-character reason wins, it is the one to look at first.
+        let why = hidden ? Self.hiddenCaption : (isOverCap || !tooWide.isEmpty) ? Self.tooLongCaption : nil
+        caption = why.map { G.wrap($0, G.questionFont, G.cardInner) } ?? []
+    }
+
+    /// The one rule (W1 item 6): the card's buttons and `AgentPrompt.answer` both
+    /// ask this. A "No…" option is always on.
+    func isEnabled(_ o: AgentPromptOption) -> Bool {
+        o.style(first: false) == .deny || !(isOverCap || hidden || tooWide.contains(o.digit))
+    }
+
+    /// Lines wrapped into measured rows, then capped at `maxContext` rows.
+    static func contextRows(_ lines: [String]) -> (rows: [String], overCap: Bool) {
+        let rows = lines.flatMap { G.wrap(AgentPrompt.visible($0), G.contextFont, G.cardContextWidth) }
+        let cap = AgentPrompt.maxContext
+        guard rows.count > cap else { return (rows, false) }
+        return (Array(rows.prefix(cap)) + ["… \(rows.count - cap) more lines"], true)
+    }
+
+    /// What is left for the label beside the digit, the minimum spacer and the hint capsule.
+    static func labelWidth(_ o: AgentPromptOption) -> CGFloat {
+        detailWidth(o) - G.cardSpacing - G.cardSpacerMin
+            - (o.hint.map { G.cardSpacing + G.width($0, G.hintFont) + 2 * G.hintInset } ?? 0)
+    }
+
+    /// The column right of the digit.
+    static func detailWidth(_ o: AgentPromptOption) -> CGFloat {
+        G.cardButtonInner - G.width("\(o.digit)", G.digitFont) - G.cardSpacing
+    }
+}
+
+extension AgentPrompt {
+    var layout: AgentCardLayout { AgentCardLayout(self) }
+    var isOverCap: Bool { layout.isOverCap }
+    var shownContext: [String] { layout.context }
+    /// The card's rule; `answer` checks it too, so a disabled option never sends.
+    func isEnabled(_ o: AgentPromptOption) -> Bool { layout.isEnabled(o) }
+}
+
+/// #475: what a blocked session asks, under its row. Every row has the fixed
+/// height `AgentIslandGeometry.cardHeight` counts and text measured to fit its
+/// width, so the island grows by exactly the card and nothing is cut off.
 struct AgentPromptCardView: View {
     let card: AgentCard
     var onOption: (AgentPrompt, AgentPromptOption) -> Void = { _, _ in }
@@ -330,18 +453,20 @@ struct AgentPromptCardView: View {
         VStack(alignment: .leading, spacing: 0) {
             switch card {
             case .prompt(let p):
-                line(p.question, Color.white)
-                context(p.shownContext)
-                if p.isOverCap { line(AgentPrompt.overCapCaption, AgentState.blocked.color) }
+                let l = p.layout
+                rows(l.question) { line($0, Color.white) }
+                context(l.context)
+                rows(l.caption) { line($0, AgentState.blocked.color) }
                 ForEach(Array(p.options.enumerated()), id: \.offset) { i, o in
-                    option(p, o, style: o.style(first: i == 0))
+                    option(p, o, label: l.labels[i], detail: l.details[i], enabled: l.isEnabled(o),
+                           style: o.style(first: i == 0))
                 }
                 jump
             case .context(let lines):
-                context(lines)
+                context(AgentCardLayout.contextRows(lines).rows)
                 jump
             case .changed:
-                line("Prompt changed, open the terminal", AgentState.blocked.color)
+                line(Self.changedText, AgentState.blocked.color)
                 jump
             }
         }
@@ -352,9 +477,16 @@ struct AgentPromptCardView: View {
         .padding(.bottom, G.cardGap)
     }
 
+    static let changedText = "Prompt changed, open the terminal"
+    static let jumpText = "Open terminal"
+
+    private func rows<V: View>(_ rows: [String], @ViewBuilder _ row: @escaping (String) -> V) -> some View {
+        ForEach(Array(rows.enumerated()), id: \.offset) { _, r in row(r) }
+    }
+
     private func line(_ text: String, _ color: Color) -> some View {
         Text(text)
-            .font(.system(size: 13, weight: .medium))
+            .font(Font(G.questionFont as CTFont))
             .foregroundStyle(color)
             .lineLimit(1)
             .frame(height: G.cardQuestion, alignment: .leading)
@@ -364,58 +496,66 @@ struct AgentPromptCardView: View {
     private func context(_ lines: [String]) -> some View {
         if !lines.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                rows(lines) { l in
                     Text(l)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(Font(G.contextFont as CTFont))
                         .foregroundStyle(Color.white.opacity(0.6))
                         .lineLimit(1)
                         .frame(height: G.cardContextLine, alignment: .leading)
                 }
             }
             .padding(.vertical, G.cardContextPad)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, G.contextInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.04)))
             .padding(.bottom, G.cardContextGap)
         }
     }
 
-    private func option(_ p: AgentPrompt, _ o: AgentPromptOption, style: AgentPromptOption.Style) -> some View {
+    private func option(_ p: AgentPrompt, _ o: AgentPromptOption, label: [String], detail: [String],
+                        enabled: Bool, style: AgentPromptOption.Style) -> some View {
         let (fill, text): (Color, Color) = switch style {
         case .accent: (Self.accent, Color.white)
         case .deny: (Self.deny.opacity(0.18), Self.deny)
         case .plain: (Color.white.opacity(0.08), Color.white.opacity(0.9))
         }
-        let enabled = p.isEnabled(o)
         let row = G.cardButton - 4
         return button(action: { onOption(p, o) }, fill: fill,
-                      height: row + CGFloat(o.detail.count) * G.cardDetailLine) {
-            HStack(alignment: .top, spacing: 8) {
+                      height: row + CGFloat(label.count - 1) * G.cardLabelLine + CGFloat(detail.count) * G.cardDetailLine) {
+            HStack(alignment: .top, spacing: G.cardSpacing) {
                 Text("\(o.digit)")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(Font(G.digitFont as CTFont))
                     .foregroundStyle(text.opacity(0.7))
                     .frame(height: row)
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 8) {
-                        Text(o.label)
-                            .font(.system(size: 12, weight: .medium))
+                    HStack(spacing: G.cardSpacing) {
+                        Text(label[0])
+                            .font(Font(G.labelFont as CTFont))
                             .foregroundStyle(text)
                             .lineLimit(1)
-                        Spacer(minLength: 4)
+                        Spacer(minLength: G.cardSpacerMin)
                         if let hint = o.hint {
                             Text(hint)
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(Font(G.hintFont as CTFont))
                                 .foregroundStyle(text.opacity(0.6))
-                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .padding(.horizontal, G.hintInset).padding(.vertical, 1)
                                 .background(Capsule().fill(Color.white.opacity(0.1)))
                                 .fixedSize()
                         }
                     }
                     .frame(height: row)
+                    // A too-wide label's rest (the option is off), shown in full.
+                    rows(Array(label.dropFirst())) { r in
+                        Text(r)
+                            .font(Font(G.labelFont as CTFont))
+                            .foregroundStyle(text)
+                            .lineLimit(1)
+                            .frame(height: G.cardLabelLine, alignment: .top)
+                    }
                     // Continuation or description: dim, under the label.
-                    ForEach(Array(o.detail.enumerated()), id: \.offset) { _, d in
+                    rows(detail) { d in
                         Text(d)
-                            .font(.system(size: 11))
+                            .font(Font(G.detailFont as CTFont))
                             .foregroundStyle(text.opacity(0.55))
                             .lineLimit(1)
                             .frame(height: G.cardDetailLine, alignment: .top)
@@ -425,13 +565,14 @@ struct AgentPromptCardView: View {
         }
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
-        .accessibilityLabel((["Answer \(o.digit), \(o.label)"] + o.detail).joined(separator: " "))
+        .accessibilityLabel((["Answer \(o.digit), \(AgentPrompt.visible(o.label))"] + o.detail.map(AgentPrompt.visible))
+            .joined(separator: " "))
     }
 
     private var jump: some View {
         button(action: onJump, fill: Color.white.opacity(0.08)) {
             Image(systemName: "arrow.up.forward.app").font(.system(size: 11))
-            Text("Open terminal").font(.system(size: 12, weight: .medium))
+            Text(Self.jumpText).font(Font(G.labelFont as CTFont))
             Spacer(minLength: 0)
         }
         .foregroundStyle(Color.white.opacity(0.7))
@@ -440,8 +581,8 @@ struct AgentPromptCardView: View {
     private func button<L: View>(action: @escaping () -> Void, fill: Color, height: CGFloat = G.cardButton - 4,
                                  @ViewBuilder label: () -> L) -> some View {
         Button(action: action) {
-            HStack(spacing: 8) { label() }
-                .padding(.horizontal, 8)
+            HStack(spacing: G.cardSpacing) { label() }
+                .padding(.horizontal, G.buttonInset)
                 .frame(height: height)
                 .background(RoundedRectangle(cornerRadius: 6).fill(fill))
                 .contentShape(Rectangle())
