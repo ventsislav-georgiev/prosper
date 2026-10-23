@@ -434,6 +434,7 @@ final class AgentIslandTests: XCTestCase {
     // MARK: - Answer lock, card generations, live IO (#475 K2, N9, N4)
 
     private static let bashScreen = """
+    ──────────────────────────────────────────────────────────────────────────────────────────
      Bash command
 
        rm -rf .build

@@ -647,7 +647,7 @@ final class AgentIslandPromptTests: XCTestCase {
     func testHintWithAHiddenCharacterStaysInTheLabel() throws {
         for bad in ["(esc\u{202E})", "(shift+\u{200B}tab)"] {
             XCTAssertNil(AgentPrompt.splitHint("Yes " + bad).1, bad)
-            let screen = "Do you want to proceed?\n❯ 1. Yes \(bad)\n  2. No (esc)\n"
+            let screen = "────\nDo you want to proceed?\n❯ 1. Yes \(bad)\n  2. No (esc)\n"
             let p = try prompt(screen)
             XCTAssertNil(p.options[0].hint)
             XCTAssertTrue(p.hasHiddenCharacters, bad)
@@ -683,6 +683,24 @@ final class AgentIslandPromptTests: XCTestCase {
         }
     }
 
+    /// The column edges of the frame test: a command rule at raw column 2 (the
+    /// Edit/Write preview column) and one inside a 1.x box, where only counting
+    /// the box bar keeps it past column 1.
+    func testCommandRuleAtColumnTwoOrInsideAnOldBoxIsContent() throws {
+        let rule40 = String(repeating: "─", count: 40)
+        let col2 = try prompt(bash21(p8Command).replacingOccurrences(of: "   " + rule40, with: "  " + rule40))
+        XCTAssertEqual(col2.context.map { $0.trimmingCharacters(in: .whitespaces) }, p8Command, "column 2 is content")
+        XCTAssertTrue(col2.topFound)
+
+        let boxRule = "│   " + String(repeating: "─", count: 10) + String(repeating: " ", count: 33) + "│"
+        let boxed = try prompt(boxedScreen.replacingOccurrences(of: "│   Push the release commit",
+                                                                with: boxRule + "\n│   Push the release commit"))
+        XCTAssertEqual(boxed.context, ["Bash command", "  git push origin main", "  " + String(repeating: "─", count: 10),
+                                       "  Push the release commit"], "the head above the rule is shown")
+        XCTAssertTrue(boxed.topFound)
+        XCTAssertEqual(boxed.options.map { boxed.isEnabled($0) }, [true, true])
+    }
+
     /// The dialog's top is off screen (or the screen has none) and a rule sits in
     /// the command: what is above the rule can not be known, so only No answers.
     func testRuleInsideACommandWithNoDialogTopIsDenyOnly() throws {
@@ -704,6 +722,25 @@ final class AgentIslandPromptTests: XCTestCase {
         }
         XCTAssertTrue(try prompt(bashScreen).topFound)
         XCTAssertTrue(try prompt(boxedScreen).topFound)
+    }
+
+    /// A small pane: the head scrolled off, no rule anywhere in the command and
+    /// under the row cap, so only the missing top rule says the head is gone.
+    func testHeadAboveTheScreenWithNoRuleInTheCommandIsDenyOnly() throws {
+        let screen = bash21(["rm -rf ~/x &&", "echo tidy", "echo done"]).split(separator: "\n", omittingEmptySubsequences: false)
+            .drop(while: { !$0.contains("echo tidy") }).joined(separator: "\n")
+        let p = try prompt(screen)
+        XCTAssertEqual(p.context, ["echo tidy", "echo done"], "a harmless tail")
+        XCTAssertFalse(p.layout.context.count > AgentPrompt.maxContext, "not over the row cap")
+        XCTAssertFalse(p.topFound)
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, true])
+        XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.tooLongCaption)
+        let f = FakeDch()
+        f.screen = screen
+        XCTAssertEqual(f.answer(1, expected: p), .changed)
+        XCTAssertEqual(f.sent, [])
+        XCTAssertEqual(f.answer(3, expected: p), .sent, "No still answers")
+        XCTAssertEqual(f.sent, ["3"])
     }
 
     func testEveryMandatoryLineBreakIsHidden() {

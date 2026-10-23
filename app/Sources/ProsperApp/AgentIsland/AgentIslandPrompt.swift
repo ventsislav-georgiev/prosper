@@ -37,9 +37,9 @@ struct AgentPrompt: Hashable {
     /// the click guard compares all of it (a long command can differ in its head).
     let context: [String]
     let options: [AgentPromptOption]
-    /// False when the context walk passed a rule that is part of the command and
-    /// then ran off the screen top: the dialog's top was never seen, so the head
-    /// may be missing. Only a "No…" option answers such a dialog.
+    /// False when the context walk ran off the screen top: every Claude Code
+    /// dialog and question form has a top rule, so not seeing it means the head
+    /// may be above the screen. Only a "No…" option answers such a dialog.
     var topFound = true
 
     /// Any hidden or reordering character anywhere the card shows (Trojan
@@ -165,8 +165,8 @@ extension AgentPrompt {
                 let (label, hint) = splitHint(o.label)
                 return AgentPromptOption(digit: o.digit, label: label, hint: hint, detail: o.detail)
             },
-            // A screen with no rule at all reads as the dialog, as before.
-            topFound: j >= 0 || !context.contains(where: isRule))
+            // Off the screen top: the dialog's own top rule is not on screen.
+            topFound: j >= 0)
     }
 
     /// The last `maxContext` non-blank, non-rule lines.
