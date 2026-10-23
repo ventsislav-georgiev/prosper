@@ -33,8 +33,10 @@ struct AgentPromptOption: Hashable {
 struct AgentPrompt: Hashable {
     /// The line right above option 1: "Do you want to proceed?", the question text.
     let question: String
-    /// Every line above the question, inside the dialog, untruncated: the click
-    /// guard compares all of it (a long command can differ in its head). Blank
+    /// Every line between the dialog's top rule and the question, untruncated:
+    /// title, description, command or diff (dashed frames left out), a Bash
+    /// dialog's reason line. The click guard compares all of it (a long command
+    /// can differ in its head). Blank
     /// lines are dropped except inside a command (between two lines at column 2
     /// or more), where they are kept as "" (a heredoc body can depend on one).
     let context: [String]
@@ -157,12 +159,15 @@ extension AgentPrompt {
         // printed output) or a short one (an autowrap tail, a CR overprint) is
         // the dialog's own text. Columns count on the raw line, box bars
         // included. Width: the rule's raw extent (where it ends) against the
-        // widest rule above option 1, any column (the top frame is the screen
-        // width; a rule in the command can only widen it, which fails safe);
-        // `frameSlack` cells short still count. Not the widest line: screen
-        // lines in the fixtures run past their frames.
+        // widest rule anywhere on the screen, any column (the top frame is the
+        // screen width; any other rule can only widen it, which fails safe);
+        // `frameSlack` cells short still count. The whole screen, not only above
+        // option 1 (QA #310 F1): an Ask form whose top rule scrolled off still
+        // has its full-width rule above "Chat about this", so a short rule in
+        // its question is never the widest. Not the widest line: screen lines in
+        // the fixtures run past their frames.
         let extent = { (r: Substring) in r.reversed().drop(while: \.isWhitespace).count }
-        let width = (0..<(i + 1)).filter { isRule(lines[$0]) }.map { extent(raw[$0]) }.max() ?? 0
+        let width = raw.indices.filter { isRule(lines[$0]) }.map { extent(raw[$0]) }.max() ?? 0
         func isFrame(_ k: Int) -> Bool {
             isRule(lines[k]) && raw[k].prefix(while: { $0.isWhitespace || $0 == "│" }).count <= 1
                 && extent(raw[k]) + frameSlack >= width
@@ -172,11 +177,18 @@ extension AgentPrompt {
         let question = lines[i].trimmingCharacters(in: .whitespaces)
         var context: [String] = []
         var j = i - 1
-        // Up to the dialog's top frame. A frame right under the question (Edit's
-        // dashed diff frame) is skipped.
+        // Up to the dialog's top: the first solid frame (top rule, 1.x box
+        // corner) with a non-blank line under it. Dashed frames ("╌": Claude
+        // Code's command, diff and file-content frames) are inner frames, passed
+        // and not kept. Claude Code 2.1.309 draws "This command requires
+        // approval" under a Bash dialog's lower dashed frame, so stopping at the
+        // first frame of any kind kept only that line: no command shown, none
+        // compared (QA #310 F0). Everything from the top rule down (title, tip,
+        // description, command rows with their gutter, a Write's path and
+        // content, the reason line) is the dialog, so all of it is compared.
         while j >= 0 {
             if isFrame(j) {
-                if context.contains(where: { !isBlank($0) }) { break }
+                if !isDashed(lines[j]), context.contains(where: { !isBlank($0) }) { break }
             } else {
                 context.insert(lines[j], at: 0)
             }
@@ -262,6 +274,12 @@ extension AgentPrompt {
     static func isRule(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
         return !t.isEmpty && t.allSatisfy { "─━═╌┄╭╮╰╯┌┐└┘".contains($0) }
+    }
+
+    /// A dashed rule ("╌╌╌"): an inner frame, never the dialog's top.
+    static func isDashed(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && t.allSatisfy { "╌┄".contains($0) }
     }
 
     static func isBlank(_ line: String) -> Bool { line.trimmingCharacters(in: .whitespaces).isEmpty }
