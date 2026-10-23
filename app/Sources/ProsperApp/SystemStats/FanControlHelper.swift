@@ -573,9 +573,11 @@ enum FanControlHelper {
         reclaimGeneration &+= 1
         guard sleepResetNeeded(), let c = connection else { return }
         let sem = DispatchSemaphore(value: 0)
-        let proxy = c.remoteObjectProxyWithErrorHandler { _ in sem.signal() } as? ProsperHelperProtocol
+        // @Sendable on both: XPC runs them on its own queue, and an inferred
+        // MainActor closure traps there on its executor check (#479).
+        let proxy = c.remoteObjectProxyWithErrorHandler { @Sendable _ in sem.signal() } as? ProsperHelperProtocol
         guard let proxy else { return }
-        proxy.resetAllFans { _ in sem.signal() }
+        proxy.resetAllFans { @Sendable _ in sem.signal() }
         _ = sem.wait(timeout: .now() + 2)
     }
 

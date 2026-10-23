@@ -398,6 +398,27 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertTrue(FanControlHelper.connection == nil, "the loop's release did not tear down")
     }
 
+    /// #479: with a pin set, an XPC error during willSleep runs the error handler on
+    /// XPC's own queue. Without @Sendable that closure is inferred MainActor and traps
+    /// on its executor check; with it, willSleep returns at once, not at the 2 s bound.
+    @MainActor
+    func testWillSleepSurvivesAnXPCErrorOffMain() {
+        let previousManualIntent = Preferences.fanManualEnabled
+        let fake = FakeHelperConnection()
+        fake.failOffMain = true
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
+        }
+        Preferences.fanManualEnabled = true
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        XCTAssertTrue(FanControlHelper.sleepResetNeeded())
+        let start = Date()
+        FanControlHelper.willSleep()
+        XCTAssertEqual(fake.proxy.resets, 1)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1.5, "only the off-main error handler can end the wait")
+    }
+
     /// #345: the popup's FIRST engage waits in registration when willSleep fires; willSleep
     /// resets (the engage is in flight), the wake follows, then the engage replies. The flow
     /// (as in StatsPopupView.confirmManualAll, generation captured before the first engage)
@@ -851,6 +872,7 @@ private final class LockedBox: @unchecked Sendable {
 private final class FakeHelperConnection: NSXPCConnection, @unchecked Sendable {
     final class Proxy: NSObject, ProsperHelperProtocol, @unchecked Sendable {
         var resets = 0
+        var replies = true
         func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
@@ -858,9 +880,18 @@ private final class FakeHelperConnection: NSXPCConnection, @unchecked Sendable {
         func sleepNow(withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
-        func resetAllFans(withReply reply: @escaping (Bool) -> Void) { resets += 1; reply(true) }
+        func resetAllFans(withReply reply: @escaping (Bool) -> Void) { resets += 1; if replies { reply(true) } }
     }
     let proxy = Proxy()
-    override func remoteObjectProxyWithErrorHandler(_ handler: @escaping (Error) -> Void) -> Any { proxy }
+    /// Set: replies are dropped and the error handler fires on a background queue,
+    /// as XPC does for a helper that is gone (#479).
+    var failOffMain = false
+    override func remoteObjectProxyWithErrorHandler(_ handler: @escaping (Error) -> Void) -> Any {
+        if failOffMain {
+            proxy.replies = false
+            DispatchQueue.global().async { handler(CocoaError(.xpcConnectionInterrupted)) }
+        }
+        return proxy
+    }
     override func invalidate() {}
 }
