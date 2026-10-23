@@ -57,6 +57,12 @@ tag from the now-released section and put it on the new top draft.
 - **Beta testers: 2.159.0-beta.1 quit as soon as Agent Island was turned on.** Fixed in
   beta.2. If beta.1 now quits right after it starts, download beta.2 from the releases
   page; Agent Island stays on (#478).
+<!-- Drop the next bullet before promoting v2.159.0 to stable (#483). -->
+- **Beta testers: Agent Island's Bash and Write cards in beta.1 and beta.2 left out the
+  command and the file path.** A Bash card showed only "This command requires approval",
+  and a click did not check that the command on screen was still the one it was raised
+  for. From beta.3 a card shows and compares every line of the prompt, from its title
+  through the command or file to the last line above the question (#483).
 
 ## v2.158.1
 
