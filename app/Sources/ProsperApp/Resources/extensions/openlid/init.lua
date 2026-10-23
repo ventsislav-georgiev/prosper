@@ -232,6 +232,19 @@ local DURATIONS = {
 
 -- Toggle and duration rows carry `stay`: the handler re-renders this menu in place
 -- and it stays open. Until... (a modal prompt) and Settings close it as usual.
+-- Each block keeps the same rows in the same order in every state (only titles
+-- and enabled change), so a quick second click never lands on a row that moved
+-- under the pointer; while a block is on, its duration rows are inert.
+local function duration_rows(items, handler, on)
+    for _, d in ipairs(DURATIONS) do
+        if on then
+            items[#items + 1] = { title = "   " .. d.title, enabled = false }
+        else
+            items[#items + 1] = { title = "   " .. d.title, handler = handler, payload = { secs = d.secs }, stay = true }
+        end
+    end
+end
+
 local function build_menu(s)
     local items = {}
 
@@ -242,10 +255,8 @@ local function build_menu(s)
     else
         items[#items + 1] = { title = "Display sleeps normally", enabled = false }
         items[#items + 1] = { title = "Keep display awake", handler = "on_caff_on", stay = true }
-        for _, d in ipairs(DURATIONS) do
-            items[#items + 1] = { title = "   " .. d.title, handler = "on_caff_on", payload = { secs = d.secs }, stay = true }
-        end
     end
+    duration_rows(items, "on_caff_on", s.caffeine)
 
     items[#items + 1] = { separator = true }
 
@@ -263,9 +274,11 @@ local function build_menu(s)
     else
         items[#items + 1] = { title = "Mac sleeps on lid close", enabled = false }
         items[#items + 1] = { title = "Keep Mac awake with lid closed", handler = "on_menu_on", stay = true }
-        for _, d in ipairs(DURATIONS) do
-            items[#items + 1] = { title = "   " .. d.title, handler = "on_menu_on", payload = { secs = d.secs }, stay = true }
-        end
+    end
+    duration_rows(items, "on_menu_on", s.active)
+    if s.active then
+        items[#items + 1] = { title = "   Until\u{2026}", enabled = false }
+    else
         items[#items + 1] = { title = "   Until\u{2026}", handler = "on_menu_until" }
     end
 

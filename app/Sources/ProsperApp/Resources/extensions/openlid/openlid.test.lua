@@ -453,6 +453,48 @@ do
     h.eq(icon(), "\u{1F513}", "timed session shows the bare glyph, no countdown text")
 end
 
+-- ── Menu rows (#482): stay = toggles + durations only; every state has the same
+--    rows in the same order, so no row moves under the pointer on a re-render ──
+do
+    -- One code per row: S = stay row, P = plain clickable row, - = inert, | = separator.
+    local function rows(env)
+        local out = {}
+        for _, r in ipairs(env.menu.menu) do
+            if r.separator then out[#out + 1] = "|"
+            elseif r.handler and r.enabled ~= false then
+                out[#out + 1] = (r.stay == true and "S:" or "P:") .. r.handler
+            else
+                assert(r.stay == nil, "an inert row is not a stay row: " .. r.title)
+                out[#out + 1] = "-"
+            end
+        end
+        return table.concat(out, " ")
+    end
+    local tail = " | - - | P:on_open_settings"
+    local dispOff = "- S:on_caff_on S:on_caff_on S:on_caff_on S:on_caff_on S:on_caff_on |"
+    local dispOn  = "- S:on_caff_off - - - - |"
+    local macOff  = " - S:on_menu_on S:on_menu_on S:on_menu_on S:on_menu_on S:on_menu_on P:on_menu_until"
+    local macOn   = " - S:on_menu_off - - - - -"
+    local macRule = " - - - - - - -"
+
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.on_tick("")
+    h.eq(rows(env), dispOff .. macOff .. tail, "all off")
+    G.on_caff_on(host.json.encode { secs = 7200 })           -- display "For 2 hours"
+    h.eq(rows(env), dispOn .. macOff .. tail, "display on: same rows, its durations inert")
+    G.on_menu_on("")                                         -- Mac awake, no limit
+    h.eq(rows(env), dispOn .. macOn .. tail, "both on")
+    G.on_caff_off("")
+    h.eq(rows(env), dispOff .. macOn .. tail, "Mac on only")
+
+    local host2, env2 = h.makeHost { power = "AC Power" }    -- rule_on_ac defaults true
+    local G2 = h.load(INIT, host2)
+    G2.on_launch(host2.json.encode { powerSource = "AC Power" })
+    G2.on_tick("")
+    h.eq(rows(env2), dispOff .. macRule .. tail, "plugged-in rule: Mac block inert, same rows")
+end
+
 -- ── Lock on lid close: checked = always, awake session or not ────────────────
 do
     local host, env = h.makeHost { power = "Battery Power" }

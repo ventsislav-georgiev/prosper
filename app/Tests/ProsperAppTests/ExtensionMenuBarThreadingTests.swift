@@ -14,7 +14,10 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
         // QA OQ-6: a private bar, restored after removeAll (defers run in reverse).
         let savedBar = ExtensionMenuBar.shared.statusBar
         ExtensionMenuBar.shared.statusBar = NSStatusBar()
-        defer { ExtensionMenuBar.shared.statusBar = savedBar }
+        // L-3: restore .system only once the set hop has landed; one that missed the
+        // deadline still lands later, and must find the private bar, not the real one.
+        var added = false
+        defer { if added { ExtensionMenuBar.shared.statusBar = savedBar } }
         defer { ExtensionMenuBar.shared.removeAll(extensionID: extID) }
         let services = LiveExtensionHostServices.shared
         let json = #"{"title":"T","menu":[{"title":"A","handler":"h"},{"separator":true}]}"#
@@ -23,7 +26,7 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
             XCTAssertFalse(Thread.isMainThread)
             services.menubarSet(extensionID: extID, id: "x", json: json)
         }.value
-        let added = await waitFor { self.ownsItem(extID) }
+        added = await waitFor { self.ownsItem(extID) }
         XCTAssertTrue(added, "menubarSet from a background thread never reached main")
         let item = try XCTUnwrap(ExtensionMenuBar.shared.items.first { $0.key.hasPrefix(extID) }?.value)
         XCTAssertEqual(item.menu?.items.count, 2)

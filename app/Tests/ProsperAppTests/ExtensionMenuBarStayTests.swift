@@ -15,6 +15,11 @@ final class ExtensionMenuBarStayTests: XCTestCase {
     private var savedBar: NSStatusBar?
     private var savedInvoke: ((String, String, String) -> Void)?
     private var calls: [String] = []
+    private var shown: [String] = []
+    private var routed: [String] = []
+    /// L-3: set while a main-queue hop of this test may still land; tearDown then keeps
+    /// the private bar installed, so a late job can never reach NSStatusBar.system.
+    private var hopPending = false
 
     override func setUp() async throws {
         extID = "test.stay.\(UUID().uuidString)"
@@ -26,7 +31,7 @@ final class ExtensionMenuBarStayTests: XCTestCase {
 
     override func tearDown() async throws {
         bar.removeAll(extensionID: extID)
-        if let savedBar { bar.statusBar = savedBar }
+        if let savedBar, !hopPending { bar.statusBar = savedBar }
         bar.invoke = savedInvoke
     }
 
@@ -87,6 +92,7 @@ final class ExtensionMenuBarStayTests: XCTestCase {
         let view = try XCTUnwrap(menu.items.first?.view)
         view.mouseUp(with: mouseUp())
         XCTAssertFalse(view.isAccessibilityEnabled())
+        XCTAssertFalse(view.accessibilityPerformPress(), "VoiceOver press reported success on a dimmed row")
         XCTAssertTrue(calls.isEmpty)
     }
 
@@ -108,6 +114,7 @@ final class ExtensionMenuBarStayTests: XCTestCase {
         _ = set(#"[{"title":"Old","handler":"h"}]"#)
         let services = LiveExtensionHostServices.shared
         let id = extID
+        hopPending = true
         DispatchQueue.global().async {
             services.menubarSet(extensionID: id, id: "main", json: #"{"title":"T","menu":[{"title":"New","handler":"h"}]}"#)
         }
@@ -117,6 +124,88 @@ final class ExtensionMenuBarStayTests: XCTestCase {
             RunLoop.current.run(mode: .eventTracking, before: Date().addingTimeInterval(0.02))
         }
         XCTAssertEqual(bar.items.first { $0.key.hasPrefix(extID) }?.value.menu?.items.first?.title, "New")
+        hopPending = bar.items.first { $0.key.hasPrefix(extID) }?.value.menu?.items.first?.title != "New"
+    }
+
+    // MARK: - Round 2 (QA #306)
+
+    /// L-1: after a re-render the old view still reaches its detached item (menu nil);
+    /// a press on it (a cached VoiceOver element) must not run the old handler.
+    func testStaleStayViewAfterRerenderIsInert() throws {
+        let menu = try XCTUnwrap(set(#"[{"title":"Turn on","handler":"on","stay":true}]"#))
+        let stale = try XCTUnwrap(menu.items.first?.view)
+        _ = set(#"[{"title":"Turn off","handler":"off","stay":true}]"#)
+        XCTAssertNotNil(stale.enclosingMenuItem, "precondition: the detached item is still reachable")
+        stale.mouseUp(with: mouseUp())
+        XCTAssertFalse(stale.accessibilityPerformPress())
+        XCTAssertTrue(calls.isEmpty, "a stale stay view ran a handler")
+    }
+
+    /// INFO: only JSON booleans count; Lua's 1 and 0 (both truthy there) change nothing.
+    func testOnlyBooleansSetStayAndEnabled() throws {
+        let menu = try XCTUnwrap(set(#"[{"title":"A","handler":"h","stay":1,"enabled":0},{"title":"B","handler":"h","stay":true,"enabled":true}]"#))
+        XCTAssertEqual(menu.items.map(\.isEnabled), [true, true])
+        XCTAssertEqual(menu.items.map { $0.view != nil }, [false, true])
+    }
+
+    /// MEDIUM-1: a stay row (OpenLid "Keep Mac awake") can reach the helper-approval
+    /// modal with its menu open. The menu is asked to close and the modal waits for a
+    /// default-mode turn: tracking runs in .eventTracking and unwinds only after the
+    /// calling job returns, so a modal run in that job would nest inside the menu.
+    func testApprovalModalWaitsUntilTheOpenMenuHasClosed() throws {
+        let menu = try XCTUnwrap(set(#"[{"title":"Keep Mac awake","handler":"on","stay":true}]"#))
+        XCTAssertTrue(menu.delegate === bar)
+        let saved = HelperApproval.present
+        HelperApproval.lastShown = .distantPast
+        HelperApproval.present = { [weak self] in self?.shown.append($0) }
+        defer { HelperApproval.present = saved; HelperApproval.lastShown = .distantPast; bar.menuDidClose(menu) }
+        bar.menuWillOpen(menu) // what AppKit calls as the status menu opens; no real tracking
+        CancelTrackingSpy.install()
+        defer { CancelTrackingSpy.uninstall() }
+
+        HelperApproval.presentNeedsApproval(feature: "Lid")
+        HelperApproval.presentNeedsApproval(feature: "Fan") // a second caller while the hop is pending
+        XCTAssertEqual(CancelTrackingSpy.count, 1, "the open menu was not asked to close")
+        pump(.eventTracking, for: 0.3)
+        XCTAssertEqual(shown, [], "the modal ran inside the menu's tracking loop")
+        pump(.default) { !self.shown.isEmpty }
+        XCTAssertEqual(shown, ["Lid"])
+        pump(.default, for: 0.1) // room for a second hop, if "Fan" had scheduled one
+        XCTAssertEqual(shown, ["Lid"], "two callers, one modal")
+    }
+
+    /// With no extension menu open (closed again, or never opened) the modal shows at once.
+    func testApprovalModalPresentsAtOnceWithNoMenuOpen() throws {
+        let menu = try XCTUnwrap(set(#"[{"title":"Keep Mac awake","handler":"on","stay":true}]"#))
+        let saved = HelperApproval.present
+        HelperApproval.lastShown = .distantPast
+        HelperApproval.present = { [weak self] in self?.shown.append($0) }
+        defer { HelperApproval.present = saved; HelperApproval.lastShown = .distantPast }
+        bar.menuWillOpen(menu)
+        bar.menuDidClose(menu)
+        CancelTrackingSpy.install()
+        defer { CancelTrackingSpy.uninstall() }
+        HelperApproval.presentNeedsApproval(feature: "Fan")
+        XCTAssertEqual(shown, ["Fan"])
+        XCTAssertEqual(CancelTrackingSpy.count, 0)
+    }
+
+    /// L-4: the app wires clicks through `route` (AppDelegate); the hop to the
+    /// extension runtime must land while the run loop tracks the menu.
+    func testRoutedClickLandsWhileRunLoopTracksMenu() throws {
+        bar.route { [weak self] _, handler, payload in self?.routed.append("\(handler) \(payload)") }
+        let menu = try XCTUnwrap(set(#"[{"title":"Keep awake","handler":"on","payload":{"secs":60},"stay":true}]"#))
+        try XCTUnwrap(menu.items.first?.view).mouseUp(with: mouseUp())
+        XCTAssertEqual(routed, [], "route delivered synchronously, not as a hop")
+        pump(.eventTracking) { !self.routed.isEmpty }
+        XCTAssertEqual(routed, [#"on {"secs":60}"#])
+    }
+
+    private func pump(_ mode: RunLoop.Mode, for seconds: TimeInterval = 2, until done: () -> Bool = { false }) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !done(), Date() < deadline {
+            RunLoop.current.run(mode: mode, before: Date().addingTimeInterval(0.02))
+        }
     }
 }
 

@@ -47,7 +47,9 @@ tag from the now-released section and put it on the new top draft.
   since v2.123.0 (#479).
 - **OpenLid's menu stays open while you switch it.** Keep display awake, Let display
   sleep, the Mac-awake switches and their durations change state and update the menu in
-  place. Until… and OpenLid Settings still close it, as does a click outside or on its icon.
+  place, and no row moves: while a switch is on, its durations (and Until… for the Mac)
+  stay listed but dimmed. Until… and OpenLid Settings still close the menu, as does a
+  click outside or on its icon.
   The status rows (display and Mac state, External display, Battery) no longer look
   clickable. For extension authors: a menu row with no handler or `enabled = false` now
   shows disabled, and `stay = true` keeps the menu open when the row is clicked (#482).

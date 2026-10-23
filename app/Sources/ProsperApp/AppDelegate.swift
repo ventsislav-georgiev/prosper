@@ -275,11 +275,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // A host-rendered menubar item's menu click re-invokes the extension's
         // named Lua handler on its serialized lane (stateless, like timers/events).
-        ExtensionMenuBar.shared.invoke = { [weak self] extID, handler, payload in
-            Task { @MainActor in
-                await self?.extensions.deliverEvent(
-                    extensionID: extID, handler: handler, payloadJSON: payload)
-            }
+        ExtensionMenuBar.shared.route { [weak self] extID, handler, payload in
+            await self?.extensions.deliverEvent(
+                extensionID: extID, handler: handler, payloadJSON: payload)
         }
         // A filesystem watch (§Q) re-invokes its named handler the same way.
         ExtensionFSWatch.shared.invoke = { [weak self] extID, handler, payload in

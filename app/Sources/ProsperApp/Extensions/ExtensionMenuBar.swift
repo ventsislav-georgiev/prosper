@@ -10,13 +10,35 @@ import Foundation
 ///
 /// See .omc/plans/hammerspoon-parity-host-api.md §M (menubar) and §N (dialog/alert).
 @MainActor
-final class ExtensionMenuBar {
+final class ExtensionMenuBar: NSObject, NSMenuDelegate {
 
     static let shared = ExtensionMenuBar()
 
     /// Re-invoke an extension's named Lua handler with a JSON payload. Wired by
-    /// the app to `ExtensionRegistry.deliverEvent`. nil before wiring (tests).
+    /// the app to `ExtensionRegistry.deliverEvent` through `route`. nil before wiring (tests).
     var invoke: ((_ extensionID: String, _ handler: String, _ payloadJSON: String) -> Void)?
+
+    /// Wire `invoke` to `deliver` as a MainActor job. A stay row's handler runs while
+    /// its menu tracks (.eventTracking), so the hop must not wait for the default mode.
+    func route(_ deliver: @escaping @MainActor @Sendable (_ extensionID: String, _ handler: String, _ payloadJSON: String) async -> Void) {
+        invoke = { extID, handler, payload in
+            Task { @MainActor in await deliver(extID, handler, payload) }
+        }
+    }
+
+    /// The extension status menu being tracked now, if any (one menu tracks at a time).
+    private weak var openMenu: NSMenu?
+    func menuWillOpen(_ menu: NSMenu) { openMenu = menu }
+    func menuDidClose(_ menu: NSMenu) { if openMenu === menu { openMenu = nil } }
+
+    /// Ask the open extension menu to close. Tracking unwinds only after the caller's
+    /// main-thread job returns, so whatever must run outside the menu (a modal) has to
+    /// hop to the default run-loop mode. Returns false when no menu was open.
+    func cancelOpenMenu() -> Bool {
+        guard let menu = openMenu else { return false }
+        menu.cancelTracking()
+        return true
+    }
 
     /// Live status items keyed by "extID\u{1}id". Readable for tests.
     private(set) var items: [String: NSStatusItem] = [:]
@@ -48,9 +70,9 @@ final class ExtensionMenuBar {
 
     /// Upsert a status item. `json` = { title, icon (SF symbol name), menu:[ {title,
     /// handler, payload, enabled, checked, stay} | {separator:true} ] }. A row with no
-    /// handler or enabled:false is disabled; stay:true runs the handler without
-    /// closing the menu. Re-rendered on every call so the extension just re-sets it
-    /// whenever its state changes.
+    /// handler or enabled:false is disabled; stay:true runs the handler on a click
+    /// without closing the menu (Return still closes it). Re-rendered on every
+    /// call so the extension just re-sets it whenever its state changes.
     func set(extensionID: String, id: String, json: String) {
         // Debug guard for #199: status items and menus are AppKit state; every
         // caller must already be on main (LiveExtensionHostServices hops there).
@@ -89,6 +111,7 @@ final class ExtensionMenuBar {
             // Autoenable turned on every row (all share one target/action), so
             // `enabled = false` was ignored and status rows looked clickable.
             menu.autoenablesItems = false
+            menu.delegate = self
             menu.removeAllItems()
             let stateColumn = entries.contains { ($0["checked"] as? Bool) == true }
             for e in entries {
@@ -103,9 +126,9 @@ final class ExtensionMenuBar {
                 mi.representedObject = MenuAction(
                     extID: extensionID, handler: handler, payload: Self.encode(e["payload"]))
                 // A row with nothing to run is inert, not a dead clickable row.
-                mi.isEnabled = !handler.isEmpty && (e["enabled"] as? Bool) != false
+                mi.isEnabled = !handler.isEmpty && Self.bool(e["enabled"]) != false
                 if (e["checked"] as? Bool) == true { mi.state = .on }
-                if (e["stay"] as? Bool) == true { mi.view = StayItemView(title: mi.title, stateColumn: stateColumn) }
+                if Self.bool(e["stay"]) == true { mi.view = StayItemView(title: mi.title, stateColumn: stateColumn) }
                 menu.addItem(mi)
             }
             item.menu = menu
@@ -133,6 +156,13 @@ final class ExtensionMenuBar {
         init(extID: String, handler: String, payload: String) {
             self.extID = extID; self.handler = handler; self.payload = payload
         }
+    }
+
+    /// A JSON boolean only: `as? Bool` also takes the numbers 0 and 1, so a Lua
+    /// `enabled = 0` (truthy in Lua) would disable a row and `stay = 1` would stick.
+    private static func bool(_ v: Any?) -> Bool? {
+        guard let n = v as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return nil }
+        return n.boolValue
     }
 
     @objc private func menuClicked(_ sender: NSMenuItem) {
@@ -177,10 +207,13 @@ final class ExtensionMenuBar {
 
         override func mouseUp(with event: NSEvent) { press() }
 
-        /// Same path as a click on a plain row, minus the end of tracking.
-        private func press() {
-            guard let mi = enclosingMenuItem, mi.isEnabled else { return }
+        /// Same path as a click on a plain row, minus the end of tracking. A view left
+        /// over from before a re-render keeps its detached item (menu nil): inert.
+        @discardableResult
+        private func press() -> Bool {
+            guard let mi = enclosingMenuItem, mi.menu != nil, mi.isEnabled else { return false }
             (mi.target as? ExtensionMenuBar)?.menuClicked(mi)
+            return true
         }
 
         // VoiceOver: a pressable menu item whose press behaves like the click.
@@ -188,7 +221,7 @@ final class ExtensionMenuBar {
         override func accessibilityRole() -> NSAccessibility.Role? { .menuItem }
         override func accessibilityTitle() -> String? { enclosingMenuItem?.title }
         override func isAccessibilityEnabled() -> Bool { enclosingMenuItem?.isEnabled ?? false }
-        override func accessibilityPerformPress() -> Bool { press(); return true }
+        override func accessibilityPerformPress() -> Bool { press() }
     }
 
     // MARK: - Dialogs (§N) — modal, main-thread

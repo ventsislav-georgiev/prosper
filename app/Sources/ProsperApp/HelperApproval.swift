@@ -19,7 +19,10 @@ enum HelperApproval {
     // to ONE modal. Both guards are load-bearing — don't drop either.
     // ponytail: 3s window — a deliberate toggle seconds later still informs.
     private static var presenting = false
-    private static var lastShown: Date = .distantPast
+    /// Internal so tests can reset the 3 s gate.
+    static var lastShown: Date = .distantPast
+    /// Test seam: shows the modal for a feature. Tests swap in a recorder (no real modal).
+    static var present: @MainActor @Sendable (String) -> Void = { runAlert(feature: $0) }
 
     /// Show the approval modal for `feature` (a human label like "Manual fan
     /// control"). "Open System Settings" jumps to the Login Items pane where the
@@ -27,8 +30,26 @@ enum HelperApproval {
     static func presentNeedsApproval(feature: String) {
         guard !presenting, Date().timeIntervalSince(lastShown) > 3 else { return }
         presenting = true
-        defer { presenting = false; lastShown = Date() }
+        let present = present
+        // #482: an OpenLid stay row (Keep Mac awake) gets here with its menu still open.
+        // cancelTracking only asks; the tracking loop unwinds after this job returns, so
+        // a modal run now would nest inside it. Present on the next default-mode turn
+        // (tracking runs in .eventTracking); `presenting` holds the de-dupe meanwhile.
+        if ExtensionMenuBar.shared.cancelOpenMenu() {
+            RunLoop.main.perform(inModes: [.default]) {
+                MainActor.assumeIsolated { show(feature, present) }
+            }
+        } else {
+            show(feature, present)
+        }
+    }
 
+    private static func show(_ feature: String, _ present: @MainActor (String) -> Void) {
+        defer { presenting = false; lastShown = Date() }
+        present(feature)
+    }
+
+    private static func runAlert(feature: String) {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "\(feature) needs Prosper's background helper"
