@@ -10,7 +10,7 @@
 
 import Foundation
 
-struct AgentPromptOption: Equatable {
+struct AgentPromptOption: Hashable {
     /// 1-9: the one key a click sends.
     let digit: Int
     let label: String
@@ -30,7 +30,7 @@ struct AgentPromptOption: Equatable {
     }
 }
 
-struct AgentPrompt: Equatable {
+struct AgentPrompt: Hashable {
     /// The line right above option 1: "Do you want to proceed?", the question text.
     let question: String
     /// Every non-blank line above the question, inside the dialog, untruncated:

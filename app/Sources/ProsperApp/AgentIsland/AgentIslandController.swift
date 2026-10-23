@@ -172,6 +172,7 @@ final class AgentIslandController {
             let key = s.key, gen = bump(key), io = io
             queue.async { [weak self] in
                 let card = AgentPrompt.card(screen: io.read(key))
+                _ = AgentIslandGeometry.cardHeight(card)   // measure here, main only hashes
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.setCard(card, key, gen) } }
             }
         }

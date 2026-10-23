@@ -568,6 +568,77 @@ final class AgentIslandPromptTests: XCTestCase {
         }
     }
 
+    // MARK: - W1-perf: the layout cache
+
+    private func measures() -> Int { G.measures.withLock { $0 } }
+
+    func testASecondLayoutOfAnEqualPromptMeasuresNothing() throws {
+        AgentCardLayoutCache.shared.removeAll()   // no eviction mid-test
+        let p = try prompt(bash21([longLine + " cache-a", cjkLine]))
+        let lines = [longLine + " cache-b", cjkLine]
+        _ = p.layout
+        _ = AgentIslandGeometry.cardHeight(.context(lines))
+        let before = measures()
+        let q = try prompt(bash21([longLine + " cache-a", cjkLine]))   // equal, not the same value
+        _ = q.layout
+        _ = q.isEnabled(q.options[0])
+        _ = AgentIslandGeometry.cardHeight(.prompt(q))
+        _ = AgentIslandGeometry.cardHeight(.context(lines))
+        XCTAssertEqual(measures(), before, "an equal prompt or context hashes, it does not measure")
+    }
+
+    func testTheCacheStaysBounded() throws {
+        let c = AgentCardLayoutCache.shared
+        c.removeAll()
+        for i in 0..<(AgentCardLayoutCache.bound + 8) { _ = try prompt(bash21(["echo bound \(i)"])).layout }
+        XCTAssertLessThanOrEqual(c.count, 2 * AgentCardLayoutCache.bound, "two tables, each bounded")
+        XCTAssertLessThan(c.count, 2 * (AgentCardLayoutCache.bound + 8), "cleared past the bound")
+    }
+
+    func testCachedAndFreshLayoutsAgree() throws {
+        for screen in [bash21(wideCommand), hiddenScreen, bash21(["echo safe"], allow: wideAllow)] {
+            let p = try prompt(screen), cached = p.layout
+            AgentCardLayoutCache.shared.removeAll()
+            let fresh = AgentCardLayout(p)
+            XCTAssertEqual(cached, fresh)
+            XCTAssertEqual(p.options.map(cached.isEnabled), p.options.map(fresh.isEnabled))
+            XCTAssertEqual(cached.caption, fresh.caption)
+            XCTAssertFalse(fresh.caption.isEmpty, "each fixture blocks approve")
+        }
+    }
+
+    /// The #478 class: the warm call and answer run on a real background queue.
+    func testWarmAndAnswerRunOffMain() throws {
+        let screen = bash21([longLine + " off-main"]), p = try prompt(screen), f = FakeDch()
+        f.screen = screen
+        AgentCardLayoutCache.shared.removeAll()
+        let done = expectation(description: "background")
+        nonisolated(unsafe) var result: (main: Bool, height: CGFloat, answer: AgentPromptAnswer)?
+        DispatchQueue(label: "agent-island-test").async {
+            let h = AgentIslandGeometry.cardHeight(AgentPrompt.card(screen: screen))
+            result = (Thread.isMainThread, h, AgentPrompt.answer(f.key, digit: 1, expected: p, io: f.io))
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 30)
+        XCTAssertEqual(result?.main, false)
+        XCTAssertEqual(result?.height, AgentIslandGeometry.cardHeight(.prompt(p)))
+        XCTAssertEqual(result?.answer, .sent)
+        XCTAssertEqual(f.sent, ["1"])
+    }
+
+    /// A hint carrying a hidden character is not a key hint: it stays in the label,
+    /// so the prompt is deny-only. Hints are never checked separately.
+    func testHintWithAHiddenCharacterStaysInTheLabel() throws {
+        for bad in ["(esc\u{202E})", "(shift+\u{200B}tab)"] {
+            XCTAssertNil(AgentPrompt.splitHint("Yes " + bad).1, bad)
+            let screen = "Do you want to proceed?\n❯ 1. Yes \(bad)\n  2. No (esc)\n"
+            let p = try prompt(screen)
+            XCTAssertNil(p.options[0].hint)
+            XCTAssertTrue(p.hasHiddenCharacters, bad)
+            XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, true], bad)
+        }
+    }
+
     // MARK: - Geometry
 
     private let notched = AgentIslandGeometry.make(

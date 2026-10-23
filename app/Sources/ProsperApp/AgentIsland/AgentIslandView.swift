@@ -5,6 +5,7 @@
 // no spinner (the standing no-new-animation rule).
 
 import AppKit
+import os
 import SwiftUI
 
 /// The notch outline: top corners curve outward into the screen edge, bottom
@@ -105,22 +106,43 @@ struct AgentIslandGeometry: Equatable {
     static var hintFont: NSFont { .monospacedSystemFont(ofSize: 10, weight: .regular) }
     static var detailFont: NSFont { .systemFont(ofSize: 11) }
 
+    /// The one width function, for the card's layout on main and the warmer on
+    /// the controller queue. CoreText, not NSString drawing: CoreText is
+    /// documented thread-safe, the AppKit headers say nothing for sizeWithAttributes.
     static func width(_ s: String, _ f: NSFont) -> CGFloat {
-        (s as NSString).size(withAttributes: [.font: f]).width
+        measures.withLock { $0 += 1 }
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: s, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): f as CTFont]))
+        return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
     }
+
+    /// Every `width` call, counted: the tests prove a cached layout measures nothing.
+    static let measures = OSAllocatedUnfairLock(initialState: 0)
 
     static func fits(_ s: String, _ f: NSFont, _ w: CGFloat) -> Bool { width(s, f) <= w - fitMargin }
 
     /// `s` hard-wrapped at character boundaries into rows that each measure as
     /// fitting `w`. Measured, never counted: CJK, emoji and combining marks
-    /// take their real width; one Character is never split.
+    /// take their real width; one Character is never split. Greedy: each row is
+    /// the longest prefix that fits (at least one Character), found by binary
+    /// search over measured prefixes, so a row costs ~log2(n) measures, not n.
     static func wrap(_ s: String, _ f: NSFont, _ w: CGFloat) -> [String] {
-        var rows: [String] = [], row = ""
-        for c in s {
-            if !row.isEmpty, !fits(row + String(c), f, w) { rows.append(row); row = "" }
-            row.append(c)
-        }
-        return rows + [row]
+        let cs = Array(s)
+        var rows: [String] = [], i = 0
+        repeat {
+            // cs[i..<lo] fits (or is the one forced Character), cs[i..<hi] does not.
+            var lo = cs.count, hi = cs.count
+            if !fits(String(cs[i...]), f, w) {
+                lo = i + 1
+                while hi - lo > 1 {
+                    let m = (lo + hi) / 2
+                    if fits(String(cs[i..<m]), f, w) { lo = m } else { hi = m }
+                }
+            }
+            rows.append(String(cs[i..<lo]))
+            i = lo
+        } while i < cs.count
+        return rows
     }
 
     static func cardHeight(_ card: AgentCard) -> CGFloat {
@@ -130,7 +152,7 @@ struct AgentIslandGeometry: Equatable {
         let body: CGFloat
         switch card {
         case .prompt(let p):
-            let l = AgentCardLayout(p)
+            let l = p.layout
             body = CGFloat(l.question.count + l.caption.count) * cardQuestion + context(l.context.count)
                 + CGFloat(p.options.count + 1) * cardButton
                 + CGFloat(l.labels.reduce(0) { $0 + $1.count - 1 }) * cardLabelLine
@@ -409,8 +431,12 @@ struct AgentCardLayout: Equatable {
         o.style(first: false) == .deny || !(isOverCap || hidden || tooWide.contains(o.digit))
     }
 
-    /// Lines wrapped into measured rows, then capped at `maxContext` rows.
+    /// Lines wrapped into measured rows, then capped at `maxContext` rows (cached).
     static func contextRows(_ lines: [String]) -> (rows: [String], overCap: Bool) {
+        AgentCardLayoutCache.shared.get(\.contexts, lines) { measuredContextRows(lines) }
+    }
+
+    private static func measuredContextRows(_ lines: [String]) -> (rows: [String], overCap: Bool) {
         let rows = lines.flatMap { G.wrap(AgentPrompt.visible($0), G.contextFont, G.cardContextWidth) }
         let cap = AgentPrompt.maxContext
         guard rows.count > cap else { return (rows, false) }
@@ -429,8 +455,40 @@ struct AgentCardLayout: Equatable {
     }
 }
 
+/// W1-perf: measured layouts by content. The island re-renders every second and
+/// asks for a card's layout ~5 times per render; measuring costs ms, hashing µs.
+/// The controller queue warms it and main reads it, so it is lock-protected.
+/// Keyed on the content alone: every width and font the layout uses is a
+/// compile-time constant, so nothing goes stale inside one process. A constant
+/// that becomes runtime-variable (a UI scale, a user font) must join the key.
+/// Bound: `bound` entries per table, then cleared whole (no LRU; a screen holds a
+/// few prompts). Lookup under the lock, measure without it, store under it.
+final class AgentCardLayoutCache: @unchecked Sendable {
+    static let shared = AgentCardLayoutCache()
+    static let bound = 32
+
+    private let lock = NSLock()
+    fileprivate var layouts: [AgentPrompt: AgentCardLayout] = [:]
+    fileprivate var contexts: [[String]: (rows: [String], overCap: Bool)] = [:]
+
+    var count: Int { lock.withLock { layouts.count + contexts.count } }
+    func removeAll() { lock.withLock { layouts.removeAll(); contexts.removeAll() } }
+
+    /// Measured outside the lock: two threads missing at once both measure, same result.
+    fileprivate func get<K: Hashable, V>(_ table: ReferenceWritableKeyPath<AgentCardLayoutCache, [K: V]>,
+                                         _ key: K, _ make: () -> V) -> V {
+        if let v = lock.withLock({ self[keyPath: table][key] }) { return v }
+        let v = make()
+        lock.withLock {
+            if self[keyPath: table].count >= Self.bound { self[keyPath: table].removeAll() }
+            self[keyPath: table][key] = v
+        }
+        return v
+    }
+}
+
 extension AgentPrompt {
-    var layout: AgentCardLayout { AgentCardLayout(self) }
+    var layout: AgentCardLayout { AgentCardLayoutCache.shared.get(\.layouts, self) { AgentCardLayout(self) } }
     var isOverCap: Bool { layout.isOverCap }
     var shownContext: [String] { layout.context }
     /// The card's rule; `answer` checks it too, so a disabled option never sends.
