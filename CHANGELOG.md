@@ -35,10 +35,12 @@ tag from the now-released section and put it on the new top draft.
   one button per option. A click types the option's number into the session, and only if
   the same prompt, with the same command or question and the same options, is still on
   screen; otherwise nothing is sent and the island says the prompt changed. Long commands
-  wrap and are shown in full. A command too long for the card, or a prompt with hidden or
-  direction-changing characters, can only be denied from the island; approve it in the
-  terminal. Prompts without numbered options (codex, cursor, opencode) show their last
-  lines and an Open terminal button (#475).
+  wrap and are shown in full. A command too long for the card, a prompt with hidden or
+  direction-changing characters, or one whose top has scrolled out of the terminal can
+  only be denied from the island, and an option too long for the card is shown but
+  cannot be picked there; approve those in the terminal. Prompts without numbered
+  options (codex, cursor, opencode) show their last lines and an Open terminal button
+  (#475).
 - **Prosper no longer quits when the Mac goes to sleep with a manual fan speed set and
   the fan helper gone or unreachable.** The error path of the sleep-time fan reset ran
   on the helper connection's queue and stopped the app there; it has been possible
