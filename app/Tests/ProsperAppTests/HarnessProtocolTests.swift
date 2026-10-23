@@ -46,7 +46,7 @@ final class HarnessProtocolTests: XCTestCase {
     /// Error-level messages this process logged under com.prosper.app after `mark`. A closing
     /// canary logged here proves the store has caught up; until it reads back, the read is
     /// retried (failure path only), and a store that never returns it skips the test.
-    static func errorLogs(since mark: LogMark, timeout: TimeInterval = 3) throws -> [String] {
+    static func errorLogs(since mark: LogMark, timeout: TimeInterval = 10) throws -> [String] {
         let end = logMark()
         return try poll(timeout: timeout) {
             let store = try OSLogStore(scope: .currentProcessIdentifier)
