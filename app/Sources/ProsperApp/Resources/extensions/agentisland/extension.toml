@@ -1,0 +1,34 @@
+# Agent Island — every dch session and its agent state (working, needs input,
+# done, idle) in a notch overlay at the top of the screen, modeled on Vibe Island
+# / vibe-notch. Click the island for the session list; click a session to jump to
+# the terminal it is attached in. Implemented natively (AgentIslandController);
+# this extension is the enable/disable gate and the declarative Settings header.
+[extension]
+id          = "com.prosper.agentisland"
+name        = "agentisland"
+title       = "Agent Island"
+description = "Your dch agent sessions and their state in a notch overlay; click one to jump to its terminal."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "sparkles"
+system      = true
+# Opt-in: enabling this puts a panel over the notch and polls the dch socket
+# directory, so it ships OFF. The user turns it on in Settings › Extensions.
+default_disabled = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Declarative (Tier-A) settings header only; the "Show sessions" picker renders
+# natively as the footer pane (AgentIslandPane).
+[[contributes.settings_sections]]
+id        = "agentisland"
+title     = "Agent Island"
+icon      = "sparkles"
+accent    = "Island"
+subtitle  = "dch agent sessions and their state over the notch"

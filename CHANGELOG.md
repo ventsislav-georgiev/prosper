@@ -18,6 +18,17 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.159.0 *(unreleased)*
+
+- **Agent Island: every agent session and its state, over the notch.** A new opt-in
+  extension (Settings › Extensions › Agent Island) shows your dch sessions in a black
+  island at the top of the screen, modeled on Vibe Island. Beside the notch it shows the
+  most urgent state and how many agents are working or need input. Click it for the list:
+  each session with its state (working, needs input, done, idle), its live subagent count
+  and the time since its last output. Click a session to bring its terminal to the front;
+  one with no terminal attached copies its attach command instead. While Remote Terminal
+  keeps its sessions separate, a setting picks which sessions to show (#474).
+
 ## v2.158.1
 
 - **Remote Terminal starts again on macOS 15 through 26, and now also on macOS 14.** The

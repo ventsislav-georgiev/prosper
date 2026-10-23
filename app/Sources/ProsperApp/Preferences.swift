@@ -361,6 +361,8 @@ enum Preferences {
         // Remote Terminal (DchTerm): serve dch sessions over Tailscale.
         static let remoteTerminalEnabled = "remoteTerminalEnabled"
         static let isolateRemoteSessions = "isolateRemoteSessions"
+        // Agent Island (#474): which socket dirs it lists while isolation is on.
+        static let agentIslandSessions = "agentIslandSessions"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1002,6 +1004,13 @@ enum Preferences {
     static var isolateRemoteSessions: Bool {
         get { defaults.bool(forKey: Keys.isolateRemoteSessions) }
         set { defaults.set(newValue, forKey: Keys.isolateRemoteSessions) }
+    }
+
+    /// Agent Island's "Show sessions" raw value (`AgentIslandSource`); unset or
+    /// unknown reads as all sessions. Only matters while isolation is on.
+    static var agentIslandSessions: String? {
+        get { defaults.string(forKey: Keys.agentIslandSessions) }
+        set { defaults.set(newValue, forKey: Keys.agentIslandSessions) }
     }
 
     /// MCP servers configured for the coding agent. Stored JSON-encoded; an unreadable

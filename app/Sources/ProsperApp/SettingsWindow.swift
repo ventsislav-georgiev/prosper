@@ -850,6 +850,8 @@ private struct SettingsRootView: View {
         // manifest's Permissions row — the TOML control kinds have no app-list
         // kind, so the picker has to be native.
         case "com.prosper.mouse": footer = AnyView(MousePane())
+        // Agent Island: the "Show sessions" picker (Remote Terminal isolation on).
+        case "com.prosper.agentisland": footer = AnyView(AgentIslandPane())
         default: break
         }
         return ExtensionSettingsPane(registry: registry, record: record, section: section,

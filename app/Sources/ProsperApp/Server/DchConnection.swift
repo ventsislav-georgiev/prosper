@@ -371,7 +371,7 @@ enum DchCommand {
         env.removeValue(forKey: "DCH_SESSION")
         if Preferences.isolateRemoteSessions {
             // Private socket dir so app sessions don't intermix with standalone dch.
-            env["DCH_SOCKET_DIR"] = "\(NSHomeDirectory())/.config/prosper/dch-isolated"
+            env["DCH_SOCKET_DIR"] = isolatedSocketDir
         }
         return env
     }
@@ -451,8 +451,16 @@ enum DchCommand {
     /// dch's `compute_sock_dir` does from the SAME env we hand it: `$DCH_SOCKET_DIR`,
     /// else `$XDG_RUNTIME_DIR/dch-$UID`, else `/tmp/dch-$UID`. Authoritative in every
     /// isolation mode (no guessing, no subprocess).
-    static var socketDir: String {
-        let env = childEnv()
+    static var socketDir: String { socketDir(env: childEnv()) }
+
+    /// #474: the dir a terminal-started `dch` uses — Prosper's own env, no isolation
+    /// override. Agent Island lists it whatever Remote Terminal does.
+    static var defaultSocketDir: String { socketDir(env: ProcessInfo.processInfo.environment) }
+
+    /// Remote Terminal's private dir while `isolateRemoteSessions` is on.
+    static var isolatedSocketDir: String { "\(NSHomeDirectory())/.config/prosper/dch-isolated" }
+
+    static func socketDir(env: [String: String]) -> String {
         if let d = env["DCH_SOCKET_DIR"], !d.isEmpty { return d }
         if let x = env["XDG_RUNTIME_DIR"], !x.isEmpty { return "\(x)/dch-\(getuid())" }
         return "/tmp/dch-\(getuid())"
@@ -543,14 +551,20 @@ enum DchCommand {
     /// Same as `runCapturingData`, plus stderr as text — `--read --cursor` reports the
     /// caret there so it can't corrupt the screen on stdout.
     private static func runCapturingBoth(args: [String]) -> (out: Data, err: String) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: dchPath)
-        p.arguments = args
         var env = ProcessInfo.processInfo.environment
         env.removeValue(forKey: "DCH_SESSION")
         if Preferences.isolateRemoteSessions {
-            env["DCH_SOCKET_DIR"] = "\(NSHomeDirectory())/.config/prosper/dch-isolated"
+            env["DCH_SOCKET_DIR"] = isolatedSocketDir
         }
+        return runCapturingBoth(args: args, env: env)
+    }
+
+    /// Run dch with exactly `env` — #474 lists each socket dir with its own
+    /// DCH_SOCKET_DIR, whatever the isolation preference says.
+    static func runCapturingBoth(args: [String], env: [String: String]) -> (out: Data, err: String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: dchPath)
+        p.arguments = args
         p.environment = env
         let pipe = Pipe()
         let errPipe = Pipe()

@@ -154,6 +154,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         CalendarBarController.shared.extLive = calendarExtLive
         CalendarBarController.shared.reload()
+        // Agent Island: opt-in notch overlay of dch sessions; no panel, no poll timer
+        // and no dch fork until the user enables it.
+        AgentIslandController.shared.extLive = agentIslandExtLive
+        AgentIslandController.shared.reload()
 
         // Per-app volume mixer: opt-in, so no status item and no audio taps
         // until the preference is on (the controller re-checks it on reload).
@@ -344,6 +348,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // tears everything down.
             CalendarBarController.shared.extLive = self.calendarExtLive
             CalendarBarController.shared.reload()
+            AgentIslandController.shared.extLive = self.agentIslandExtLive
+            AgentIslandController.shared.reload()
             self.reconcileMouse()
         }
 
@@ -1099,6 +1105,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (status item + EventKit access) only runs while it is live.
     private var calendarExtLive: Bool {
         extensions.record(id: "com.prosper.calendar")?.isLive ?? false
+    }
+
+    /// Whether the Agent Island extension is enabled + trusted (#474).
+    private var agentIslandExtLive: Bool {
+        extensions.record(id: "com.prosper.agentisland")?.isLive ?? false
     }
 
     /// Whether the Mouse extension is enabled + trusted. Every mouse service (scroll
