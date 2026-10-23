@@ -609,7 +609,7 @@ final class CodexHarnessE2ETests: XCTestCase {
         await harness.setReplyTimeoutForTesting(0.3)
         try "thread/start".write(to: exe.deletingLastPathComponent().appendingPathComponent("late-on"),
                                  atomically: true, encoding: .utf8)
-        let since = Date()
+        let since = HarnessProtocolTests.logMark()
         let opts = SessionOptions(cwd: home.path, model: "test-model",
                                   approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false))
 
@@ -639,7 +639,7 @@ final class CodexHarnessE2ETests: XCTestCase {
         let session = try await harness.newSession(SessionOptions(
             cwd: home.path, model: "test-model",
             approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false)))
-        let since = Date()
+        let since = HarnessProtocolTests.logMark()
         async let eventsTask = Self.collect(from: harness, timeout: 10) {
             if case .turnCompleted = $0 { return true }; return false
         }

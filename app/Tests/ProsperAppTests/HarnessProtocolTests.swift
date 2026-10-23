@@ -29,16 +29,56 @@ final class HarnessProtocolTests: XCTestCase {
         XCTAssertEqual(objs[0]["ok"] as? Bool, true)
     }
 
-    /// Error-level messages this process logged under com.prosper.app since `date`.
-    /// `position(date:)` is only a coarse start, so entries are filtered by date too, with
-    /// slack: entry dates run a few ms behind `Date()` (probed: ~16 ms).
-    static func errorLogs(since date: Date) throws -> [String] {
-        let from = date.addingTimeInterval(-0.25)
-        let store = try OSLogStore(scope: .currentProcessIdentifier)
-        let entries = try store.getEntries(at: store.position(date: from), matching: errorLogsPredicate())
-            .compactMap { $0 as? OSLogEntryLog }
-            .map { (level: $0.level, date: $0.date, message: $0.composedMessage) }
-        return selectErrorMessages(entries, from: from)
+    /// A canary error line logged under com.prosper.app; `errorLogs(since:)` cuts its window at
+    /// the canary's own store date. #488: on the CI runner entry dates ran over 0.25 s behind
+    /// `Date()` in some runs, so a `Date()` cut hid every line logged right after it.
+    struct LogMark {
+        let canary = "errorLogs-mark-\(UUID().uuidString)"
+        let date = Date()
+    }
+
+    static func logMark() -> LogMark {
+        let mark = LogMark()
+        Logger(subsystem: "com.prosper.app", category: "test").error("\(mark.canary, privacy: .public)")
+        return mark
+    }
+
+    /// Error-level messages this process logged under com.prosper.app after `mark`. A closing
+    /// canary logged here proves the store has caught up; until it reads back, the read is
+    /// retried (failure path only), and a store that never returns it skips the test.
+    static func errorLogs(since mark: LogMark, timeout: TimeInterval = 3) throws -> [String] {
+        let end = logMark()
+        return try poll(timeout: timeout) {
+            let store = try OSLogStore(scope: .currentProcessIdentifier)
+            // ponytail: 30 s of slack for the wall-vs-store clock skew; the canary does the exact cut.
+            let entries = try store.getEntries(at: store.position(date: mark.date.addingTimeInterval(-30)),
+                                               matching: errorLogsPredicate())
+                .compactMap { $0 as? OSLogEntryLog }
+                .map { (level: $0.level, date: $0.date, message: $0.composedMessage) }
+            return selectErrorMessages(entries, after: mark.canary, through: end.canary)
+        }
+    }
+
+    /// Calls `read` until it returns non-nil; past `timeout` the test is skipped, not failed or
+    /// passed blind: the host's log store can't read back a line this process just logged.
+    static func poll<T>(timeout: TimeInterval, _ read: () throws -> T?) throws -> T {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            if let value = try read() { return value }
+            guard Date() < deadline else {
+                throw XCTSkip("OSLogStore did not return a canary this process logged within \(timeout) s: log read-back can't be checked on this host (#488)")
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
+    /// Messages after the `start` canary (by its store date), canaries dropped; nil until both
+    /// canaries are in `entries`.
+    static func selectErrorMessages(_ entries: [(level: OSLogEntryLog.Level, date: Date, message: String)],
+                                    after start: String, through end: String) -> [String]? {
+        guard let from = entries.first(where: { $0.message == start })?.date,
+              entries.contains(where: { $0.message == end }) else { return nil }
+        return selectErrorMessages(entries.filter { $0.message != start && $0.message != end }, from: from)
     }
 
     static func errorLogsPredicate() -> NSPredicate {
@@ -64,7 +104,7 @@ final class HarnessProtocolTests: XCTestCase {
     }
 
     func testErrorLogsReturnsALineLoggedHere() throws {
-        let since = Date()
+        let since = Self.logMark()
         let marker = "errorLogs-probe-\(UUID().uuidString)"
         Logger(subsystem: "com.prosper.app", category: "test").error("\(marker, privacy: .public)")
         let logs = try Self.errorLogs(since: since)
@@ -102,9 +142,35 @@ final class HarnessProtocolTests: XCTestCase {
                                                  (level: .error, date: t, message: "y")], from: t), ["x", "y"])
     }
 
+    /// #488: the cut is the start canary's store date, however far behind the wall clock it runs.
+    func testCanaryWindowCutsAtTheStartCanarysDate() {
+        let t = Date() - 0.5   // store clock 0.5 s behind: a Date()-0.25 cut would drop "mid"
+        XCTAssertEqual(Self.selectErrorMessages([(level: .error, date: t - 0.1, message: "before"),
+                                                 (level: .error, date: t, message: "S"),
+                                                 (level: .error, date: t + 0.01, message: "mid"),
+                                                 (level: .error, date: t + 0.02, message: "E")],
+                                                after: "S", through: "E"), ["mid"])
+    }
+
+    func testCanaryWindowIsNilUntilBothCanariesReadBack() {
+        let t = Date()
+        XCTAssertTrue(Self.selectErrorMessages([(level: .error, date: t, message: "E")], after: "S", through: "E") == nil)
+        XCTAssertTrue(Self.selectErrorMessages([(level: .error, date: t, message: "S")], after: "S", through: "E") == nil)
+    }
+
+    func testPollRetriesUntilARead() throws {
+        var reads = 0
+        XCTAssertEqual(try Self.poll(timeout: 3) { () -> Int? in reads += 1; return reads == 3 ? 7 : nil }, 7)
+        XCTAssertEqual(reads, 3)
+    }
+
+    func testPollSkipsWhenNothingReadsBack() {
+        XCTAssertThrowsError(try Self.poll(timeout: 0.2) { () -> Int? in nil }) { XCTAssertTrue($0 is XCTSkip, "\($0)") }
+    }
+
     /// #174: a stdout line that isn't a JSON object is logged (cut to 256 bytes) and skipped.
     func testFramerLogsNonObjectLines() throws {
-        let since = Date()
+        let since = Self.logMark()
         var framer = JSONLineFramer()
         let long = "not json " + String(repeating: "x", count: 1000)
         let objs = framer.append(Data((long + "\n[1,2]\n" + #"{"ok":true}"# + "\n").utf8))
@@ -119,7 +185,7 @@ final class HarnessProtocolTests: XCTestCase {
     /// #174: a line over `maxLineBytes` is dropped with an error log, whether it arrives in one
     /// read or streams in; streaming, it is dropped (and the buffer freed) before its newline.
     func testFramerDropsOverCapLineAndKeepsReading() throws {
-        let since = Date()
+        let since = Self.logMark()
         let huge = Data((#"{"a":""# + String(repeating: "x", count: JSONLineFramer.maxLineBytes + (1 << 20)) + #""}"#).utf8)
         let next = Data(("\n" + #"{"ok":true}"# + "\n").utf8)
         let dropped = { try Self.errorLogs(since: since).filter { $0.contains("over \(JSONLineFramer.maxLineBytes) bytes") }.count }
@@ -129,7 +195,8 @@ final class HarnessProtocolTests: XCTestCase {
         for start in stride(from: 0, to: huge.count, by: 1 << 20) {
             objs += framer.append(huge.subdata(in: start..<min(start + (1 << 20), huge.count)))
         }
-        XCTAssertEqual(try dropped(), 1, "dropped once over the cap, before its newline arrives")
+        let droppedStreaming = try dropped()   // outside XCTAssert: its XCTSkip must skip, not fail
+        XCTAssertEqual(droppedStreaming, 1, "dropped once over the cap, before its newline arrives")
         objs += framer.append(next)
         XCTAssertEqual(objs.count, 1)
         XCTAssertEqual(objs.first?["ok"] as? Bool, true)
@@ -138,7 +205,8 @@ final class HarnessProtocolTests: XCTestCase {
         objs = framer.append(huge + next)
         XCTAssertEqual(objs.count, 1)
         XCTAssertEqual(objs.first?["ok"] as? Bool, true)
-        XCTAssertEqual(try dropped(), 2, "the streamed line once, the one-read line once")
+        let droppedBoth = try dropped()
+        XCTAssertEqual(droppedBoth, 2, "the streamed line once, the one-read line once")
     }
 
     // MARK: Frame classification
