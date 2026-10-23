@@ -28,8 +28,8 @@ tag from the now-released section and put it on the new top draft.
   and the time since its last output. Click a session to bring its terminal to the front;
   one with no terminal attached copies its attach command instead. While Remote Terminal
   keeps its sessions separate, a setting picks which sessions to show (#474).
-- Ships dch 1.21.0. Agent Island now shows Claude Code's Write and Edit permission
-  prompts as needing input; dch 1.19 did not recognize them (#474).
+- Ships dch 1.21.0, which recognizes Claude Code's Write and Edit permission prompts, so
+  Agent Island shows those sessions as needing input (#474).
 - **Agent Island answers a waiting agent.** When a Claude Code session stops on a
   permission prompt or a question, the island shows what it asks under that session, with
   one button per option. A click types the option's number into the session, and only if
@@ -39,6 +39,7 @@ tag from the now-released section and put it on the new top draft.
   direction-changing characters, can only be denied from the island; approve it in the
   terminal. Prompts without numbered options (codex, cursor, opencode) show their last
   lines and an Open terminal button (#475).
+<!-- Drop the next bullet before promoting v2.159.0 to stable (#478). -->
 - **Beta testers: 2.159.0-beta.1 quit as soon as Agent Island was turned on.** Fixed in
   beta.2. If beta.1 now quits right after it starts, download beta.2 from the releases
   page; Agent Island stays on (#478).
