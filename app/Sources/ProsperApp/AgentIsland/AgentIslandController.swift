@@ -57,6 +57,7 @@ final class AgentIslandController {
 
     /// Idempotent — launch and every extension toggle.
     func reload() {
+        _ = AgentIslandGeometry.cardFonts   // build the card fonts on main, before any queue work
         guard extLive else { teardown(); return }
         guard timer == nil, let geometry = AgentIslandGeometry.current() else { return }
         store = AgentIslandStore(geometry: geometry)

@@ -145,6 +145,23 @@ private let hiddenScreen = bash21(["echo safe \u{202E}txt.exe"], allow: "/Users/
 /// from a throwaway probe session, and the act-only-if-unchanged guard with an
 /// injected reader, status and sender (no dch is spawned).
 final class AgentIslandPromptTests: XCTestCase {
+    /// E1. XCTest runs a class's tests by name, so this one runs first here: it
+    /// touches the card fonts first from a background queue and must not trap.
+    /// A shared xctest process may already have initialised the statics (another
+    /// class touched them first), so it only proves the no-trap property when it
+    /// is the first toucher; run it alone (--filter …/test0…) for a fresh process.
+    func test0CardFontsFirstTouchedOffMainDoNotTrap() {
+        let done = expectation(description: "fonts")
+        nonisolated(unsafe) var sizes: [CGFloat] = []
+        DispatchQueue(label: "agent-island-fonts").async {
+            let f = AgentIslandGeometry.cardFonts
+            sizes = [f.question, f.context, f.digit, f.label, f.hint, f.detail].map { CTFontGetSize($0) }
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 30)
+        XCTAssertEqual(sizes, [13, 11, 11, 12, 10, 11])
+    }
+
     private func prompt(_ screen: String, file: StaticString = #filePath, line: UInt = #line) throws -> AgentPrompt {
         try XCTUnwrap(AgentPrompt.parse(screen), file: file, line: line)
     }
@@ -445,7 +462,7 @@ final class AgentIslandPromptTests: XCTestCase {
 
     private typealias G = AgentIslandGeometry
 
-    private func assertFits(_ rows: [String], _ f: NSFont, _ w: CGFloat, _ what: String,
+    private func assertFits(_ rows: [String], _ f: CTFont, _ w: CGFloat, _ what: String,
                             file: StaticString = #filePath, line: UInt = #line) {
         for r in rows {
             XCTAssertLessThanOrEqual(G.width(r, f), w - G.fitMargin, "\(what): \(r)", file: file, line: line)
@@ -570,36 +587,35 @@ final class AgentIslandPromptTests: XCTestCase {
 
     // MARK: - W1-perf: the layout cache
 
-    private func measures() -> Int { G.measures.withLock { $0 } }
-
+    /// Each test owns its cache (E2): no other test, and no warm block an earlier
+    /// controller test left on its queue, can touch these counts.
     func testASecondLayoutOfAnEqualPromptMeasuresNothing() throws {
-        AgentCardLayoutCache.shared.removeAll()   // no eviction mid-test
-        let p = try prompt(bash21([longLine + " cache-a", cjkLine]))
-        let lines = [longLine + " cache-b", cjkLine]
-        _ = p.layout
-        _ = AgentIslandGeometry.cardHeight(.context(lines))
-        let before = measures()
-        let q = try prompt(bash21([longLine + " cache-a", cjkLine]))   // equal, not the same value
-        _ = q.layout
-        _ = q.isEnabled(q.options[0])
-        _ = AgentIslandGeometry.cardHeight(.prompt(q))
-        _ = AgentIslandGeometry.cardHeight(.context(lines))
-        XCTAssertEqual(measures(), before, "an equal prompt or context hashes, it does not measure")
+        let c = AgentCardLayoutCache()
+        let p = try prompt(bash21([longLine, cjkLine])), lines = [longLine + " context-only", cjkLine]
+        _ = p.layout(in: c)
+        XCTAssertEqual(c.builds, 2, "the layout and its context rows, each measured once")
+        _ = AgentIslandGeometry.cardHeight(.context(lines), in: c)
+        let before = c.builds
+        let q = try prompt(bash21([longLine, cjkLine]))   // equal, not the same value
+        _ = q.layout(in: c)
+        _ = AgentIslandGeometry.cardHeight(.prompt(q), in: c)
+        _ = AgentIslandGeometry.cardHeight(.context(lines), in: c)
+        XCTAssertEqual(c.builds, before, "an equal prompt or context hashes, it does not measure")
     }
 
     func testTheCacheStaysBounded() throws {
-        let c = AgentCardLayoutCache.shared
-        c.removeAll()
-        for i in 0..<(AgentCardLayoutCache.bound + 8) { _ = try prompt(bash21(["echo bound \(i)"])).layout }
+        let c = AgentCardLayoutCache()
+        for i in 0..<(AgentCardLayoutCache.bound + 8) { _ = try prompt(bash21(["echo bound \(i)"])).layout(in: c) }
         XCTAssertLessThanOrEqual(c.count, 2 * AgentCardLayoutCache.bound, "two tables, each bounded")
         XCTAssertLessThan(c.count, 2 * (AgentCardLayoutCache.bound + 8), "cleared past the bound")
     }
 
     func testCachedAndFreshLayoutsAgree() throws {
         for screen in [bash21(wideCommand), hiddenScreen, bash21(["echo safe"], allow: wideAllow)] {
-            let p = try prompt(screen), cached = p.layout
-            AgentCardLayoutCache.shared.removeAll()
-            let fresh = AgentCardLayout(p)
+            let c = AgentCardLayoutCache(), p = try prompt(screen)
+            _ = p.layout(in: c)
+            let cached = p.layout(in: c), fresh = AgentCardLayout(p, cache: AgentCardLayoutCache())
+            XCTAssertEqual(c.builds, 2, "the second read was a hit")
             XCTAssertEqual(cached, fresh)
             XCTAssertEqual(p.options.map(cached.isEnabled), p.options.map(fresh.isEnabled))
             XCTAssertEqual(cached.caption, fresh.caption)
