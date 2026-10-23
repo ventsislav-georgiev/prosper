@@ -566,10 +566,12 @@ enum DchCommand {
 
     /// Run dch with exactly `env` — #474 lists each socket dir with its own
     /// DCH_SOCKET_DIR, whatever the isolation preference says.
-    static func runCapturingBoth(args: [String], env: [String: String],
+    /// `path` defaults to dchPath read here; a bounded caller resolves it on its own
+    /// thread instead (#486 r2), so a late-starting body never reads a reset override.
+    static func runCapturingBoth(args: [String], env: [String: String], path: String = dchPath,
                                  onPid: (pid_t) -> Void = { _ in }) -> (out: Data, err: String) {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: dchPath)
+        p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
         p.environment = env
         let pipe = Pipe()
@@ -594,7 +596,8 @@ enum DchCommand {
 
     /// stdout of one island call; nil when it timed out (#486: list keeps the last sessions).
     static func runIsland(args: [String], env: [String: String]) -> Data? {
-        bounded(islandTimeout) { onPid in runCapturingBoth(args: args, env: env, onPid: onPid).out }
+        let path = dchPath   // on the caller's thread, not the body's
+        return bounded(islandTimeout) { onPid in runCapturingBoth(args: args, env: env, path: path, onPid: onPid).out }
     }
 
     private final class BoundedCall: @unchecked Sendable {

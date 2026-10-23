@@ -876,6 +876,16 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(dch.calls, 5)
     }
 
+    /// #486 r2: --ls-json timing out is not the -lj answer; the -lj rows replace the kept ones.
+    func testListJSONTimeoutFallsBackToTheLJRows() {
+        let last = [session("s", .blocked, dir: "/d")]
+        let rows = AgentIsland.list(dirs: ["/d"], keeping: last) { args, _ in
+            args == ["-lj"] ? Data("t\tT\t5\n".utf8) : nil
+        }
+        XCTAssertEqual(rows, [AgentSession(key: AgentSessionKey(dir: "/d", name: "t"), alias: "T", activity: 5,
+                                           state: .idle, agents: 0)])
+    }
+
     // MARK: - Geometry
 
     /// 14" MacBook Pro: 1512 x 982, notch 185 x 32 between two auxiliary areas.
