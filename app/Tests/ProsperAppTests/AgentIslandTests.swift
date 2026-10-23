@@ -408,8 +408,11 @@ final class AgentIslandTests: XCTestCase {
         touch(dir, "s.sock")
         f.rows = [session("s", .idle, dir: dir.path)]
         let got = expectation(description: "sessions")
-        let t = AgentIslandController.makePollTimer(poller([dir.path], f), queue: DispatchQueue(label: "t", qos: .utility)) {
+        let label = "agentisland.test.poll"
+        let t = AgentIslandController.makePollTimer(poller([dir.path], f), queue: DispatchQueue(label: label, qos: .utility)) {
             XCTAssertEqual($0.map(\.name), ["s"])
+            XCTAssertEqual(String(cString: __dispatch_queue_get_label(nil)), label, "ran on the poll queue")
+            XCTAssertFalse(Thread.isMainThread)
             got.fulfill()
         }
         t.resume()
@@ -424,7 +427,8 @@ final class AgentIslandTests: XCTestCase {
         let ticked = expectation(description: "tick")
         ticked.assertForOverFulfill = false
         c.makePoller = { AgentIslandPoller(dirs: { ticked.fulfill(); return [] }, list: { _ in [] }) }
-        defer { c.extLive = false; c.reload(); c.makePoller = { AgentIslandPoller() } }
+        let wasLive = c.extLive
+        defer { c.extLive = wasLive; c.reload(); c.makePoller = { AgentIslandPoller() } }
         c.extLive = true
         c.reload()
         try XCTSkipIf(AgentIslandGeometry.current() == nil, "no screen geometry: reload() starts no timer")
@@ -531,6 +535,253 @@ final class AgentIslandTests: XCTestCase {
             XCTAssertEqual(env["DCH_SOCKET_DIR"], "/x/dch dir")
             XCTAssertNil(env["DCH_SESSION"])
         }
+    }
+
+    // MARK: - Lifecycle, jump, outside click (#477 L2, L4, QE2)
+
+    /// Records what reload() did, in order; the island never gets a panel or a real screen.
+    private final class Lifecycle: @unchecked Sendable {
+        var log: [String] = []
+        var geometry: AgentIslandGeometry?
+        var fontsOnMain: [Bool] = []
+    }
+
+    @MainActor private func lifecycleController(_ l: Lifecycle) -> AgentIslandController {
+        let c = AgentIslandController()
+        c.showsPanel = false
+        c.center = NotificationCenter()   // private: posting here reaches only this controller
+        c.io = FakeIO().io
+        c.touchFonts = { l.log.append("fonts"); l.fontsOnMain.append(Thread.isMainThread) }
+        c.currentGeometry = { l.log.append("geometry"); return l.geometry }
+        c.makePoller = { l.log.append("poller"); return AgentIslandPoller(dirs: { [] }, list: { _ in [] }) }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        return c
+    }
+
+    @MainActor private func postScreenChange(_ c: AgentIslandController) {
+        c.center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        let hop = expectation(description: "main")
+        DispatchQueue.main.async { hop.fulfill() }
+        wait(for: [hop], timeout: 5)
+    }
+
+    @MainActor func testDisablingCancelsTheTimerAndRemovesTheScreenObserver() throws {
+        let l = Lifecycle(), c = lifecycleController(l)
+        l.geometry = notched
+        c.extLive = true
+        c.reload()
+        let t = try XCTUnwrap(c.timer)
+        XCTAssertNotNil(c.screenObserver)
+        c.extLive = false
+        c.reload()
+        XCTAssertTrue(t.isCancelled)
+        XCTAssertNil(c.timer)
+        XCTAssertNil(c.screenObserver)
+        XCTAssertNil(c.store)
+        let reloads = l.log.filter { $0 == "fonts" }.count
+        postScreenChange(c)
+        XCTAssertEqual(l.log.filter { $0 == "fonts" }.count, reloads, "the observer is gone: a screen change runs nothing")
+    }
+
+    @MainActor func testDisabledReloadBuildsNothing() {
+        let l = Lifecycle(), c = lifecycleController(l)
+        l.geometry = notched
+        c.reload()
+        XCTAssertNil(c.timer)
+        XCTAssertNil(c.screenObserver)
+        XCTAssertNil(c.store)
+        XCTAssertEqual(l.log, ["fonts"], "no geometry read, no poller, so no dch fork")
+    }
+
+    /// L4: no screen at reload, one later: the screen-change observer builds the island.
+    @MainActor func testScreenlessReloadBuildsTheIslandWhenAScreenAppears() {
+        let l = Lifecycle(), c = lifecycleController(l)
+        c.extLive = true
+        c.reload()
+        XCTAssertNil(c.timer, "no screen: nothing to poll for yet")
+        XCTAssertNotNil(c.screenObserver, "but a screen change is watched")
+        XCTAssertFalse(l.log.contains("poller"))
+        l.geometry = notched
+        postScreenChange(c)
+        XCTAssertNotNil(c.timer)
+        XCTAssertEqual(c.store?.geometry, notched)
+        XCTAssertEqual(l.log.filter { $0 == "poller" }.count, 1)
+        postScreenChange(c)
+        XCTAssertEqual(l.log.filter { $0 == "poller" }.count, 1, "idempotent: one timer")
+    }
+
+    /// QE2: the fonts are built on main before the geometry read and the poller.
+    @MainActor func testReloadTouchesTheCardFontsOnMainFirst() {
+        let l = Lifecycle(), c = lifecycleController(l)
+        l.geometry = notched
+        c.extLive = true
+        c.reload()
+        XCTAssertEqual(l.log, ["fonts", "geometry", "poller"])
+        XCTAssertEqual(l.fontsOnMain, [true])
+    }
+
+    @MainActor func testAttachedElsewhereNoticesFirstAndCopiesOnTheSecondClick() {
+        let c = AgentIslandController(), s = session("s", .idle, dir: "/x/other dir")
+        c.showsPanel = false
+        c.store = AgentIslandStore(geometry: notched)
+        c.store?.sessions = [s]
+        c.jumpTarget = { _ in .attachedElsewhere }
+        let pb = Pasteboard.general
+        pb.clearContents()
+        let before = pb.changeCount
+        c.jump(s)
+        XCTAssertEqual(c.store?.notices[s.key], "Attached in tmux/ssh, click to copy attach command")
+        XCTAssertEqual(pb.changeCount, before, "the first click copies nothing")
+        XCTAssertNil(pb.string(forType: .string))
+        c.jump(s)
+        XCTAssertEqual(pb.string(forType: .string), AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir))
+        XCTAssertEqual(c.store?.notices[s.key], "Attach command copied")
+    }
+
+    @MainActor func testOutsideClickMonitorIsInstalledOnExpandAndRemovedOnCollapse() {
+        final class Monitors: @unchecked Sendable { var installed = 0; var removed: [String] = [] }
+        let m = Monitors(), c = AgentIslandController()
+        c.showsPanel = false
+        c.io = FakeIO().io
+        c.store = AgentIslandStore(geometry: notched)
+        c.store?.sessions = [session("s", .idle)]
+        c.monitorClicks = { _ in m.installed += 1; return "monitor-\(m.installed)" }
+        c.removeMonitor = { m.removed.append($0 as? String ?? "?") }
+        c.setExpanded(true)
+        XCTAssertEqual(m.installed, 1)
+        XCTAssertNotNil(c.outsideClick)
+        c.setExpanded(true)
+        XCTAssertEqual(m.installed, 1, "already expanded: no second monitor")
+        c.setExpanded(false)
+        XCTAssertEqual(m.removed, ["monitor-1"])
+        XCTAssertNil(c.outsideClick)
+        c.setExpanded(true)
+        c.reload()   // extLive is false: teardown removes the live monitor
+        XCTAssertEqual(m.removed, ["monitor-1", "monitor-2"])
+        XCTAssertNil(c.outsideClick)
+    }
+
+    // MARK: - Scanner and procargs (#477 L2)
+
+    func testScannerReadsTheDirOnlyWhenItsMtimeMoves() throws {
+        final class Count: @unchecked Sendable { var n = 0 }
+        let dir = tempDir(), reads = Count(), fm = FileManager.default
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: 100)
+        try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000)], ofItemAtPath: dir.path)
+        let scanner = AgentDirScanner(readDir: { reads.n += 1; return (try? fm.contentsOfDirectory(atPath: $0)) ?? [] })
+        let key = AgentSessionKey(dir: dir.path, name: "s")
+        XCTAssertEqual(scanner.scan([dir.path])[key]?.act, 100)
+        XCTAssertEqual(reads.n, 1)
+        try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: 200)],
+                             ofItemAtPath: dir.appendingPathComponent("s.sock.act").path)
+        XCTAssertEqual(scanner.scan([dir.path])[key]?.act, 200, "a sidecar is stat'd every tick")
+        XCTAssertEqual(reads.n, 1, "the dir mtime held: no readdir")
+        touch(dir, "t.sock")
+        XCTAssertEqual(Set(scanner.scan([dir.path]).keys.map(\.name)), ["s", "t"])
+        XCTAssertEqual(reads.n, 2, "a new entry moved the dir mtime")
+        _ = scanner.scan([dir.path])
+        XCTAssertEqual(reads.n, 2)
+    }
+
+    func testParseProcArgsOnTruncatedBuffersNeverTraps() {
+        func words(_ argc: Int32, _ rest: String) -> [UInt8] {
+            withUnsafeBytes(of: argc) { Array($0) } + Array(rest.utf8)
+        }
+        XCTAssertEqual(AgentIsland.parseProcArgs([]), [], "zero length")
+        XCTAssertEqual(AgentIsland.parseProcArgs([3, 0, 0]), [], "shorter than the argc word")
+        XCTAssertEqual(AgentIsland.parseProcArgs(words(3, "")), [], "argc alone")
+        XCTAssertEqual(AgentIsland.parseProcArgs(words(3, "/opt/bin/dch")), [], "exec path with no terminator")
+        XCTAssertEqual(AgentIsland.parseProcArgs(words(3, "/opt/bin/dch\0\0\0")), [], "padding, then nothing")
+        XCTAssertEqual(AgentIsland.parseProcArgs(words(3, "/opt/bin/dch\0\0dch\0-n")), ["dch", "-n"],
+                       "fewer args than argc, the last one unterminated")
+        XCTAssertEqual(AgentIsland.parseProcArgs(words(.max, "/x\0a\0")), ["a"], "a huge argc stops at the end")
+        XCTAssertEqual(AgentIsland.parseProcArgs(words(-1, "/x\0a\0")), [], "a negative argc is no argv")
+    }
+
+    func testShowSessionsPaneObservesTheIsolationPreferenceKey() {
+        let was = Preferences.isolateRemoteSessions
+        defer { Preferences.isolateRemoteSessions = was }
+        Preferences.isolateRemoteSessions = !was
+        XCTAssertEqual(Preferences.defaults.bool(forKey: AgentIslandPane.isolateKey), !was)
+    }
+
+    // MARK: - dch call timeout (#477)
+
+    /// A dch call that never returns on its own: only killing its pid releases it.
+    private final class Wedge: @unchecked Sendable {
+        let lock = NSLock(), released = DispatchSemaphore(value: 0), timeout: TimeInterval
+        var killed: [pid_t] = [], args: [[String]] = []
+        init(timeout: TimeInterval) { self.timeout = timeout }
+        func terminate(_ pid: pid_t) { lock.withLock { killed.append(pid) }; released.signal() }
+        var io: AgentPromptIO {
+            AgentPromptIO.live { args, _ in
+                self.lock.withLock { self.args.append(args) }
+                return DchCommand.bounded(self.timeout, terminate: self.terminate) { onPid in
+                    onPid(4242)
+                    self.released.wait()
+                    return Data("late".utf8)
+                }
+            }
+        }
+    }
+
+    @MainActor func testWedgedDchReadTimesOutKillsTheChildByPidAndLeavesMainFree() {
+        let w = Wedge(timeout: 2), (c, s) = cardController(FakeIO())
+        c.io = w.io
+        let start = Date()
+        c.refreshCards()   // the read wedges on the island queue for 2 s
+        let hop = expectation(description: "main turns while the queue is stuck")
+        DispatchQueue.main.async { hop.fulfill() }
+        wait(for: [hop], timeout: 1)
+        XCTAssertTrue(w.lock.withLock { w.killed.isEmpty }, "main turned before the timeout")
+        drain(c)
+        XCTAssertEqual(w.lock.withLock { w.killed }, [4242], "killed by its recorded pid")
+        XCTAssertEqual(c.store?.cards[s.key], AgentPrompt.card(screen: ""), "a timed-out read is an empty screen")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+    }
+
+    @MainActor func testWedgedDchAnswerTimesOutAsChangedAndFreesTheSession() throws {
+        let w = Wedge(timeout: 0.3), (c, s) = cardController(FakeIO())
+        c.io = w.io
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.bashScreen))
+        c.answer(s, p, p.options[0])
+        drain(c)
+        XCTAssertEqual(w.lock.withLock { w.args }, [["--read", "s"]], "the guard read timed out: no status, no send")
+        XCTAssertEqual(c.store?.cards[s.key], .changed)
+        c.answer(s, p, p.options[0])   // no longer in flight
+        drain(c)
+        XCTAssertEqual(w.lock.withLock { w.args.count }, 2)
+    }
+
+    func testBoundedCallReturnsTheOutputAndNeverKillsAFinishedChild() {
+        let out = DchCommand.bounded(5, terminate: { _ in XCTFail("finished in time") }) { onPid in
+            onPid(4242)
+            return Data("ok".utf8)
+        }
+        XCTAssertEqual(out, Data("ok".utf8))
+    }
+
+    /// The default terminate is a real SIGKILL to the pid the body reported.
+    func testBoundedCallKillsARealChildByItsPid() throws {
+        final class Child: @unchecked Sendable { var p: Process? }
+        let child = Child(), start = Date()
+        let out = DchCommand.bounded(0.3) { onPid in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/sleep")
+            p.arguments = ["30"]
+            guard (try? p.run()) != nil else { return Data("no child".utf8) }
+            child.p = p
+            onPid(p.processIdentifier)
+            p.waitUntilExit()
+            return Data("late".utf8)
+        }
+        XCTAssertEqual(out, Data())
+        let p = try XCTUnwrap(child.p)
+        p.waitUntilExit()
+        XCTAssertEqual(p.terminationReason, .uncaughtSignal)
+        XCTAssertEqual(p.terminationStatus, SIGKILL)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
     }
 
     // MARK: - Geometry

@@ -358,7 +358,10 @@ enum LidSleepHelper {
     private static func makeConnection() -> NSXPCConnection {
         let c = NSXPCConnection(machServiceName: helperMachServiceName, options: .privileged)
         c.remoteObjectInterface = NSXPCInterface(with: ProsperHelperProtocol.self)
-        let clear: () -> Void = { Task { @MainActor in if connection === c { connection = nil } } }
+        // @Sendable: XPC calls it on its own queue, never inferred MainActor (#477).
+        // c is only compared by identity, on main.
+        nonisolated(unsafe) let conn = c
+        let clear: @Sendable () -> Void = { Task { @MainActor in if connection === conn { connection = nil } } }
         c.invalidationHandler = clear
         c.interruptionHandler = clear
         c.resume()

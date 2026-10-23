@@ -36,9 +36,9 @@ final class AgentIslandController {
 
     var store: AgentIslandStore?
     private var panel: AgentIslandPanel?
-    private var timer: DispatchSourceTimer?
-    private var outsideClick: Any?
-    private var screenObserver: NSObjectProtocol?
+    private(set) var timer: DispatchSourceTimer?
+    private(set) var outsideClick: Any?
+    private(set) var screenObserver: NSObjectProtocol?
     /// #475: the activity each blocked session's screen was last read at, and a
     /// per-session generation (never reset) so a late read never revives an
     /// answered card.
@@ -52,19 +52,41 @@ final class AgentIslandController {
     var makePoller: () -> AgentIslandPoller = { AgentIslandPoller() }
     var io = AgentPromptIO.live
     var showsPanel = true
+    /// More seams (#477): the screen geometry, the center the screen observer
+    /// lives on, the outside-click monitor (tests never install a real global
+    /// one), the row-click walk, and the main-thread font warm-up.
+    var currentGeometry: @MainActor () -> AgentIslandGeometry? = { AgentIslandGeometry.current() }
+    var center = NotificationCenter.default
+    var monitorClicks: (@escaping @MainActor () -> Void) -> Any? = { onClick in
+        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { _ in
+            MainActor.assumeIsolated { onClick() }
+        }
+    }
+    var removeMonitor: (Any) -> Void = { NSEvent.removeMonitor($0) }
+    var jumpTarget: @MainActor (AgentSessionKey) -> AgentJumpTarget = { key in
+        AgentIsland.jumpTarget(
+            clients: AgentIsland.clientPIDs(key), info: AgentIsland.procInfo,
+            isRegularApp: { NSRunningApplication(processIdentifier: $0)?.activationPolicy == .regular },
+            ourPID: getpid())
+    }
+    var touchFonts: @MainActor () -> Void = { _ = AgentIslandGeometry.cardFonts }
 
     init() {}
 
-    /// Idempotent — launch and every extension toggle.
+    /// Idempotent — launch, every extension toggle and every screen change.
     func reload() {
-        _ = AgentIslandGeometry.cardFonts   // build the card fonts on main, before any queue work
+        touchFonts()   // build the card fonts on main, before any queue work
         guard extLive else { teardown(); return }
-        guard timer == nil, let geometry = AgentIslandGeometry.current() else { return }
-        store = AgentIslandStore(geometry: geometry)
-        screenObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.layout() }
+        // #477 L4: observe before the geometry guard, so a screen that appears
+        // after a screenless reload still builds the island.
+        if screenObserver == nil {
+            screenObserver = center.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reload(); self?.layout() }
+            }
         }
+        guard timer == nil, let geometry = currentGeometry() else { return }
+        store = AgentIslandStore(geometry: geometry)
         let t = Self.makePollTimer(makePoller(), queue: queue) { [weak self] sessions in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions) } }
         }
@@ -100,7 +122,7 @@ final class AgentIslandController {
     /// with no sessions.
     private func layout() {
         guard showsPanel, let store else { return }
-        if let g = AgentIslandGeometry.current(), g != store.geometry { store.geometry = g }
+        if let g = currentGeometry(), g != store.geometry { store.geometry = g }
         guard !store.sessions.isEmpty else { panel?.orderOut(nil); return }
         let panel = self.panel ?? makePanel(store)
         panel.setFrame(store.geometry.frame(store.size), display: true)
@@ -132,27 +154,26 @@ final class AgentIslandController {
         return p
     }
 
-    private func setExpanded(_ on: Bool) {
-        guard let store, let panel, store.expanded != on else { return }
+    /// Only the panel's own view expands it, so a nil panel (tests) just skips the window work.
+    func setExpanded(_ on: Bool) {
+        guard let store, store.expanded != on else { return }
         store.expanded = on
         if !on { store.notices = [:]; store.cards = [:]; readAt = [:] }
         refreshCards()
-        panel.keyable = on
+        panel?.keyable = on
         layout()
         if on {
-            panel.makeKey()
-            outsideClick = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    // macOS 27 reports clicks on our own windows here too: keep those.
-                    guard let self, let f = self.panel?.frame, !f.contains(NSEvent.mouseLocation) else { return }
-                    self.setExpanded(false)
-                }
+            panel?.makeKey()
+            outsideClick = monitorClicks { [weak self] in
+                // macOS 27 reports clicks on our own windows here too: keep those.
+                guard let self, let f = self.panel?.frame, !f.contains(NSEvent.mouseLocation) else { return }
+                self.setExpanded(false)
             }
         } else {
-            if let m = outsideClick { NSEvent.removeMonitor(m) }
+            if let m = outsideClick { removeMonitor(m) }
             outsideClick = nil
             // Hand key focus back: out and straight back in, no animation.
-            if panel.isKeyWindow { panel.orderOut(nil); layout() }
+            if let panel, panel.isKeyWindow { panel.orderOut(nil); layout() }
         }
     }
 
@@ -211,13 +232,9 @@ final class AgentIslandController {
 
     // MARK: - Jump
 
-    private func jump(_ s: AgentSession) {
+    func jump(_ s: AgentSession) {
         guard let store else { return }
-        let target = AgentIsland.jumpTarget(
-            clients: AgentIsland.clientPIDs(s.key), info: AgentIsland.procInfo,
-            isRegularApp: { NSRunningApplication(processIdentifier: $0)?.activationPolicy == .regular },
-            ourPID: getpid())
-        switch target {
+        switch jumpTarget(s.key) {
         case .app(let pid):
             setExpanded(false)
             raiseWindow(pid: pid, matching: [s.title, s.name])
@@ -256,8 +273,13 @@ final class AgentIslandController {
               let windows = ref as? [AXUIElement] else { return }
         let lowered = needles.filter { !$0.isEmpty }.map { $0.lowercased() }
         for w in windows {
+            // #477 L1: the timeout is per element (the app's does not carry over to
+            // its windows), and a timed-out read means a hung app: stop asking it.
+            AXUIElementSetMessagingTimeout(w, 0.25)
             var t: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &t) == .success,
+            let read = AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &t)
+            if read == .cannotComplete { return }
+            guard read == .success,
                   let title = (t as? String)?.lowercased(),
                   lowered.contains(where: title.contains) else { continue }
             AXUIElementPerformAction(w, kAXRaiseAction as CFString)
@@ -268,9 +290,9 @@ final class AgentIslandController {
 
     private func teardown() {
         timer?.cancel(); timer = nil
-        if let m = outsideClick { NSEvent.removeMonitor(m) }
+        if let m = outsideClick { removeMonitor(m) }
         outsideClick = nil
-        if let o = screenObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = screenObserver { center.removeObserver(o) }
         screenObserver = nil
         panel?.orderOut(nil)
         panel?.contentView = nil
@@ -282,8 +304,9 @@ final class AgentIslandController {
 extension AgentPromptIO {
     /// Every call runs with DCH_SOCKET_DIR = the session's own dir, never the
     /// Remote Terminal env. `--read` is the plain visible screen; `--send` types
-    /// its text as raw bytes with no Enter.
-    static let live = live { DchCommand.runCapturingBoth(args: $0, env: $1).out }
+    /// its text as raw bytes with no Enter. Each call is bounded (#477): a timed-out
+    /// read or status is empty, so a card reads as changed and nothing is sent.
+    static let live = live { DchCommand.runIsland(args: $0, env: $1) }
 
     /// `run` gets the argv and env; tests pass a recorder.
     static func live(run: @escaping @Sendable ([String], [String: String]) -> Data) -> AgentPromptIO {

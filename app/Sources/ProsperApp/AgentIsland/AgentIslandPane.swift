@@ -1,13 +1,16 @@
 // Native settings footer for Agent Island (#474), merged below the manifest's
 // header like CalendarPane. One setting: which socket dirs the island lists
 // while Remote Terminal isolates its sessions. The poller reads the preference
-// every tick, so a change shows on the next poll with no reload.
+// every tick, so a change shows on the next poll with no reload. The isolation
+// toggle is observed (#477), so the picker follows it while Settings stays open.
 
 import SwiftUI
 
 struct AgentIslandPane: View {
     @State private var source = AgentIslandSource(raw: Preferences.agentIslandSessions)
-    private let isolate = Preferences.isolateRemoteSessions
+    /// Preferences.Keys.isolateRemoteSessions (private there); a test pins the match.
+    nonisolated static let isolateKey = "isolateRemoteSessions"
+    @AppStorage(AgentIslandPane.isolateKey, store: Preferences.defaults) private var isolate = false
 
     var body: some View {
         NeonSection("Sessions") {

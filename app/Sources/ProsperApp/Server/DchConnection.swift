@@ -561,7 +561,8 @@ enum DchCommand {
 
     /// Run dch with exactly `env` — #474 lists each socket dir with its own
     /// DCH_SOCKET_DIR, whatever the isolation preference says.
-    static func runCapturingBoth(args: [String], env: [String: String]) -> (out: Data, err: String) {
+    static func runCapturingBoth(args: [String], env: [String: String],
+                                 onPid: (pid_t) -> Void = { _ in }) -> (out: Data, err: String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: dchPath)
         p.arguments = args
@@ -571,11 +572,46 @@ enum DchCommand {
         p.standardOutput = pipe
         p.standardError = errPipe
         do { try p.run() } catch { return (Data(), "") }
+        onPid(p.processIdentifier)
         // Screen first (it can be tens of KB), then stderr (one line at most, so it
         // fits the pipe buffer while we drain stdout — no deadlock).
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let err = errPipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         return (data, String(data: err, encoding: .utf8) ?? "")
+    }
+
+    /// #477: every Agent Island dch call (--ls-json, -lj, --read, --status, --send)
+    /// gives up after this, so a wedged dch never parks the island queue, which
+    /// also carries the poll. Remote Terminal's calls stay unbounded.
+    static let islandTimeout: TimeInterval = 4
+
+    /// stdout of one island call; a timeout reads as empty output.
+    static func runIsland(args: [String], env: [String: String]) -> Data {
+        bounded(islandTimeout) { onPid in runCapturingBoth(args: args, env: env, onPid: onPid).out }
+    }
+
+    private final class BoundedCall: @unchecked Sendable {
+        let lock = NSLock(), done = DispatchSemaphore(value: 0)
+        var pid: pid_t?, out: Data?
+    }
+
+    /// Runs `body` on its own thread and waits at most `timeout`. On expiry the
+    /// child `body` reported through `onPid` is killed by that pid and empty Data
+    /// comes back at once; a body that still never returns strands only its own
+    /// thread, never the caller.
+    static func bounded(_ timeout: TimeInterval,
+                        terminate: @escaping @Sendable (pid_t) -> Void = { _ = Darwin.kill($0, SIGKILL) },
+                        _ body: @escaping @Sendable (_ onPid: (pid_t) -> Void) -> Data) -> Data {
+        let call = BoundedCall()
+        DispatchQueue.global(qos: .utility).async {
+            let out = body { pid in call.lock.withLock { call.pid = pid } }
+            call.lock.withLock { call.out = out }
+            call.done.signal()
+        }
+        if call.done.wait(timeout: .now() + timeout) == .success { return call.lock.withLock { call.out ?? Data() } }
+        // A body that has returned has reaped its child: never signal a pid that may be reused.
+        if let pid = call.lock.withLock({ call.out == nil ? call.pid : nil }) { terminate(pid) }
+        return Data()
     }
 }

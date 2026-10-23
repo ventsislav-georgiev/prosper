@@ -185,7 +185,7 @@ enum AgentIsland {
     typealias Runner = (_ args: [String], _ env: [String: String]) -> Data
 
     /// Every session of `dirs`, one dch fork per dir; `--ls-json`, else `-lj` (old dch).
-    static func list(dirs: [String], run: Runner = { DchCommand.runCapturingBoth(args: $0, env: $1).out })
+    static func list(dirs: [String], run: Runner = { DchCommand.runIsland(args: $0, env: $1) })
         -> [AgentSession] {
         dirs.flatMap { dir -> [AgentSession] in
             let env = listEnv(dir: dir)
@@ -233,6 +233,12 @@ typealias AgentDirSnapshot = [AgentSessionKey: AgentSidecarStamp]
 /// every tick — about 3 stats per session per second, no fork.
 final class AgentDirScanner {
     private var cache: [String: (mtime: TimeInterval, names: [String])] = [:]
+    /// The readdir; tests count it.
+    private let readDir: (String) -> [String]
+
+    init(readDir: @escaping (String) -> [String] = { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] }) {
+        self.readDir = readDir
+    }
 
     func scan(_ dirs: [String]) -> AgentDirSnapshot {
         var snap: AgentDirSnapshot = [:]
@@ -240,7 +246,7 @@ final class AgentDirScanner {
             // A dir that does not exist yet (isolation never used) is no sessions.
             guard let m = Self.mtime(dir) else { cache[dir] = nil; continue }
             if cache[dir]?.mtime != m {
-                let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+                let names = readDir(dir)
                 cache[dir] = (m, names.filter { $0.hasSuffix(".sock") }.map { String($0.dropLast(5)) })
             }
             for name in cache[dir]?.names ?? [] {
