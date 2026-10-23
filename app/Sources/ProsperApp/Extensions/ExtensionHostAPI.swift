@@ -1408,7 +1408,8 @@ struct ExtensionHost {
     -- no-op stubs otherwise). The host owns the NSStatusItem; a menu item's
     -- `handler` is a named global re-invoked with `payload` (JSON) on click — the
     -- same stateless event model as timers.
-    --   host.menubar.set{ id=, title=, icon=, menu={ {title=, handler=, payload=} | {separator=true} } }
+    --   host.menubar.set{ id=, title=, icon=, menu={ {title=, handler=, payload=, enabled=, checked=, stay=} | {separator=true} } }
+    --     (a row with no handler, or enabled=false, is disabled; stay=true runs the handler and keeps the menu open)
     --   host.menubar.remove(id)
     --   host.dialog.prompt{ title=, message=, default=, ok=, cancel= } -> string | nil(cancel)
     --   host.dialog.confirm{ title=, message=, ok=, cancel= }          -> boolean

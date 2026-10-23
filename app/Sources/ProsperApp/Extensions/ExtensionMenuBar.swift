@@ -47,8 +47,10 @@ final class ExtensionMenuBar {
     // MARK: - Menubar (§M)
 
     /// Upsert a status item. `json` = { title, icon (SF symbol name), menu:[ {title,
-    /// handler, payload} | {separator:true} ] }. Re-rendered on every call so the
-    /// extension just re-sets it whenever its state changes.
+    /// handler, payload, enabled, checked, stay} | {separator:true} ] }. A row with no
+    /// handler or enabled:false is disabled; stay:true runs the handler without
+    /// closing the menu. Re-rendered on every call so the extension just re-sets it
+    /// whenever its state changes.
     func set(extensionID: String, id: String, json: String) {
         // Debug guard for #199: status items and menus are AppKit state; every
         // caller must already be on main (LiveExtensionHostServices hops there).
@@ -81,21 +83,29 @@ final class ExtensionMenuBar {
         if entries.isEmpty {
             item.menu = nil
         } else {
-            let menu = NSMenu()
+            // #482: refill the existing menu in place, so a re-render from a `stay`
+            // row's handler reaches the menu the user still has open.
+            let menu = item.menu ?? NSMenu()
+            // Autoenable turned on every row (all share one target/action), so
+            // `enabled = false` was ignored and status rows looked clickable.
+            menu.autoenablesItems = false
+            menu.removeAllItems()
+            let stateColumn = entries.contains { ($0["checked"] as? Bool) == true }
             for e in entries {
                 if (e["separator"] as? Bool) == true {
                     menu.addItem(.separator())
                     continue
                 }
+                let handler = (e["handler"] as? String) ?? ""
                 let mi = NSMenuItem(title: (e["title"] as? String) ?? "",
                                     action: #selector(menuClicked(_:)), keyEquivalent: "")
                 mi.target = self
                 mi.representedObject = MenuAction(
-                    extID: extensionID,
-                    handler: (e["handler"] as? String) ?? "",
-                    payload: Self.encode(e["payload"]))
-                if (e["enabled"] as? Bool) == false { mi.isEnabled = false }
+                    extID: extensionID, handler: handler, payload: Self.encode(e["payload"]))
+                // A row with nothing to run is inert, not a dead clickable row.
+                mi.isEnabled = !handler.isEmpty && (e["enabled"] as? Bool) != false
                 if (e["checked"] as? Bool) == true { mi.state = .on }
+                if (e["stay"] as? Bool) == true { mi.view = StayItemView(title: mi.title, stateColumn: stateColumn) }
                 menu.addItem(mi)
             }
             item.menu = menu
@@ -128,6 +138,57 @@ final class ExtensionMenuBar {
     @objc private func menuClicked(_ sender: NSMenuItem) {
         guard let a = sender.representedObject as? MenuAction, !a.handler.isEmpty else { return }
         invoke?(a.extID, a.handler, a.payload)
+    }
+
+    /// #482: a `stay` row. A plain NSMenuItem always ends menu tracking on click; a
+    /// click on an item's view does not, so the handler runs and the menu stays
+    /// open. Drawn like a native row (menu font, 24 pt high, same paddings as
+    /// measured from `NSMenu.size`, accent highlight while hovered or arrowed to).
+    /// The item keeps its target/action, so Return still runs it through AppKit.
+    private final class StayItemView: NSView {
+        static let height: CGFloat = 24, leading: CGFloat = 14, trailing: CGFloat = 19, check: CGFloat = 14
+        private let stateColumn: Bool
+
+        init(title: String, stateColumn: Bool) {
+            self.stateColumn = stateColumn
+            let w = (title as NSString).size(withAttributes: [.font: NSFont.menuFont(ofSize: 0)]).width
+            super.init(frame: NSRect(x: 0, y: 0, width: ceil(w) + Self.leading + Self.trailing
+                                     + (stateColumn ? Self.check : 0), height: Self.height))
+            autoresizingMask = .width
+        }
+        required init?(coder: NSCoder) { nil }
+
+        override func draw(_ dirtyRect: NSRect) {
+            guard let mi = enclosingMenuItem else { return }
+            let lit = mi.isHighlighted && mi.isEnabled
+            if lit {
+                NSColor.selectedContentBackgroundColor.setFill()
+                NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: 4, yRadius: 4).fill()
+            }
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.menuFont(ofSize: 0),
+                .foregroundColor: !mi.isEnabled ? NSColor.disabledControlTextColor
+                    : lit ? .selectedMenuItemTextColor : .labelColor]
+            let title = mi.title as NSString
+            let y = (bounds.height - title.size(withAttributes: attrs).height) / 2
+            if mi.state == .on { ("\u{2713}" as NSString).draw(at: NSPoint(x: Self.leading - 2, y: y), withAttributes: attrs) }
+            title.draw(at: NSPoint(x: Self.leading + (stateColumn ? Self.check : 0), y: y), withAttributes: attrs)
+        }
+
+        override func mouseUp(with event: NSEvent) { press() }
+
+        /// Same path as a click on a plain row, minus the end of tracking.
+        private func press() {
+            guard let mi = enclosingMenuItem, mi.isEnabled else { return }
+            (mi.target as? ExtensionMenuBar)?.menuClicked(mi)
+        }
+
+        // VoiceOver: a pressable menu item whose press behaves like the click.
+        override func isAccessibilityElement() -> Bool { true }
+        override func accessibilityRole() -> NSAccessibility.Role? { .menuItem }
+        override func accessibilityTitle() -> String? { enclosingMenuItem?.title }
+        override func isAccessibilityEnabled() -> Bool { enclosingMenuItem?.isEnabled ?? false }
+        override func accessibilityPerformPress() -> Bool { press(); return true }
     }
 
     // MARK: - Dialogs (§N) — modal, main-thread

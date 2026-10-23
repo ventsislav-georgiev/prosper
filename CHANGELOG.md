@@ -45,6 +45,12 @@ tag from the now-released section and put it on the new top draft.
   the fan helper gone or unreachable.** The error path of the sleep-time fan reset ran
   on the helper connection's queue and stopped the app there; it has been possible
   since v2.123.0 (#479).
+- **OpenLid's menu stays open while you switch it.** Keep display awake, Let display
+  sleep, the Mac-awake switches and their durations change state and update the menu in
+  place. Until… and OpenLid Settings still close it, as does a click outside or on its icon.
+  The status rows (display and Mac state, External display, Battery) no longer look
+  clickable. For extension authors: a menu row with no handler or `enabled = false` now
+  shows disabled, and `stay = true` keeps the menu open when the row is clicked (#482).
 <!-- Drop the next bullet before promoting v2.159.0 to stable (#478). -->
 - **Beta testers: 2.159.0-beta.1 quit as soon as Agent Island was turned on.** Fixed in
   beta.2. If beta.1 now quits right after it starts, download beta.2 from the releases

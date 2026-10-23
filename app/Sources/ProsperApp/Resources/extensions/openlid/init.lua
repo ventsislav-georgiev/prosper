@@ -230,18 +230,20 @@ local DURATIONS = {
     { title = "For 5 hours", secs = 5 * 3600 },
 }
 
+-- Toggle and duration rows carry `stay`: the handler re-renders this menu in place
+-- and it stays open. Until... (a modal prompt) and Settings close it as usual.
 local function build_menu(s)
     local items = {}
 
     -- ── ☕ Display awake — screen + screensaver stay off while the lid is OPEN ──
     if s.caffeine then
         items[#items + 1] = { title = "\u{2615} Display awake" .. (s.caffeineEnd and (" \u{00B7} " .. fmt_remaining(s.caffeineEnd)) or " \u{00B7} no limit"), enabled = false }
-        items[#items + 1] = { title = "Let display sleep", handler = "on_caff_off" }
+        items[#items + 1] = { title = "Let display sleep", handler = "on_caff_off", stay = true }
     else
         items[#items + 1] = { title = "Display sleeps normally", enabled = false }
-        items[#items + 1] = { title = "Keep display awake", handler = "on_caff_on" }
+        items[#items + 1] = { title = "Keep display awake", handler = "on_caff_on", stay = true }
         for _, d in ipairs(DURATIONS) do
-            items[#items + 1] = { title = "   " .. d.title, handler = "on_caff_on", payload = { secs = d.secs } }
+            items[#items + 1] = { title = "   " .. d.title, handler = "on_caff_on", payload = { secs = d.secs }, stay = true }
         end
     end
 
@@ -256,13 +258,13 @@ local function build_menu(s)
             items[#items + 1] = { title = "Unplug to let it sleep", enabled = false }
         else
             items[#items + 1] = { title = "\u{1F513} Mac awake with lid closed" .. (s.endTime and (" \u{00B7} " .. fmt_remaining(s.endTime)) or " \u{00B7} no limit"), enabled = false }
-            items[#items + 1] = { title = "Let Mac sleep on lid close", handler = "on_menu_off" }
+            items[#items + 1] = { title = "Let Mac sleep on lid close", handler = "on_menu_off", stay = true }
         end
     else
         items[#items + 1] = { title = "Mac sleeps on lid close", enabled = false }
-        items[#items + 1] = { title = "Keep Mac awake with lid closed", handler = "on_menu_on" }
+        items[#items + 1] = { title = "Keep Mac awake with lid closed", handler = "on_menu_on", stay = true }
         for _, d in ipairs(DURATIONS) do
-            items[#items + 1] = { title = "   " .. d.title, handler = "on_menu_on", payload = { secs = d.secs } }
+            items[#items + 1] = { title = "   " .. d.title, handler = "on_menu_on", payload = { secs = d.secs }, stay = true }
         end
         items[#items + 1] = { title = "   Until\u{2026}", handler = "on_menu_until" }
     end
