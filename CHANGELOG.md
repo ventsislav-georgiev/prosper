@@ -40,7 +40,8 @@ tag from the now-released section and put it on the new top draft.
   terminal. Prompts without numbered options (codex, cursor, opencode) show their last
   lines and an Open terminal button (#475).
 - **Beta testers: 2.159.0-beta.1 quit as soon as Agent Island was turned on.** Fixed in
-  beta.2; turn it on again after updating (#478).
+  beta.2. If beta.1 now quits right after it starts, download beta.2 from the releases
+  page; Agent Island stays on (#478).
 
 ## v2.158.1
 
