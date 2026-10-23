@@ -400,6 +400,37 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(f.calls.count, 1)
     }
 
+    // MARK: - Poll timer off main (#478)
+
+    /// The handler fires on the poll queue; a main-actor-inferred one traps there.
+    @MainActor func testPollTimerFiresOnABackgroundQueue() {
+        let dir = tempDir(), f = Fake()
+        touch(dir, "s.sock")
+        f.rows = [session("s", .idle, dir: dir.path)]
+        let got = expectation(description: "sessions")
+        let t = AgentIslandController.makePollTimer(poller([dir.path], f), queue: DispatchQueue(label: "t", qos: .utility)) {
+            XCTAssertEqual($0.map(\.name), ["s"])
+            got.fulfill()
+        }
+        t.resume()
+        wait(for: [got], timeout: 5)
+        t.cancel()
+    }
+
+    /// The controller's own reload() and queue, so re-inlining the handler into a
+    /// @MainActor method fails here too. No sessions: no panel is ever built.
+    @MainActor func testReloadPollTimerTicksOnTheControllerQueue() throws {
+        let c = AgentIslandController.shared
+        let ticked = expectation(description: "tick")
+        ticked.assertForOverFulfill = false
+        c.makePoller = { AgentIslandPoller(dirs: { ticked.fulfill(); return [] }, list: { _ in [] }) }
+        defer { c.extLive = false; c.reload(); c.makePoller = { AgentIslandPoller() } }
+        c.extLive = true
+        c.reload()
+        try XCTSkipIf(AgentIslandGeometry.current() == nil, "no screen geometry: reload() starts no timer")
+        wait(for: [ticked], timeout: 5)
+    }
+
     // MARK: - Geometry
 
     /// 14" MacBook Pro: 1512 x 982, notch 185 x 32 between two auxiliary areas.

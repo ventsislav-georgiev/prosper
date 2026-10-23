@@ -45,6 +45,8 @@ final class AgentIslandController {
     private var readAt: [AgentSessionKey: TimeInterval] = [:]
     private var cardGen: [AgentSessionKey: Int] = [:]
     private let queue = DispatchQueue(label: "eu.illegible.prosper.agentisland", qos: .utility)
+    /// Test seam (#478): the poller reload() starts.
+    var makePoller: () -> AgentIslandPoller = { AgentIslandPoller() }
 
     private init() {}
 
@@ -57,15 +59,25 @@ final class AgentIslandController {
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.layout() }
         }
-        let poller = AgentIslandPoller()
-        let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(250))
-        t.setEventHandler { [weak self] in
-            guard let sessions = poller.tick() else { return }
+        let t = Self.makePollTimer(makePoller(), queue: queue) { [weak self] sessions in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions) } }
         }
         t.resume()
         timer = t
+    }
+
+    /// #478: nonisolated so the handler is too. Built in reload() it was inferred
+    /// @MainActor (setEventHandler is not @Sendable) and its executor check
+    /// trapped on the poll queue.
+    nonisolated static func makePollTimer(_ poller: AgentIslandPoller, queue: DispatchQueue,
+                                          onSessions: @escaping @Sendable ([AgentSession]) -> Void) -> DispatchSourceTimer {
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(250))
+        t.setEventHandler {
+            guard let sessions = poller.tick() else { return }
+            onSessions(sessions)
+        }
+        return t
     }
 
     private func apply(_ sessions: [AgentSession]) {
