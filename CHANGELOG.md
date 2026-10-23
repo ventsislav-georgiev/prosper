@@ -40,9 +40,9 @@ tag from the now-released section and put it on the new top draft.
   terminal. Prompts without numbered options (codex, cursor, opencode) show their last
   lines and an Open terminal button (#475).
 - **Prosper no longer quits when the Mac goes to sleep with a manual fan speed set and
-  the fan helper not answering.** The error path of the sleep-time fan reset ran on the
-  helper connection's queue and stopped the app there; it has been possible since
-  v2.156.0 (#479).
+  the fan helper gone or unreachable.** The error path of the sleep-time fan reset ran
+  on the helper connection's queue and stopped the app there; it has been possible
+  since v2.123.0 (#479).
 <!-- Drop the next bullet before promoting v2.159.0 to stable (#478). -->
 - **Beta testers: 2.159.0-beta.1 quit as soon as Agent Island was turned on.** Fixed in
   beta.2. If beta.1 now quits right after it starts, download beta.2 from the releases
