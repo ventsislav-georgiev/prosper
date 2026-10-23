@@ -299,6 +299,7 @@ enum DchCommand {
     /// then the dev clone, then PATH. ponytail: bundling into Resources is a
     /// build.sh step (TODO) — until then the dev clone path keeps it working.
     static var dchPath: String {
+        if let dchPathOverride { return dchPathOverride }
         let candidates = [
             Bundle.main.resourceURL?.appendingPathComponent("dch").path,
             "/opt/homebrew/bin/dch",
@@ -307,6 +308,10 @@ enum DchCommand {
         ].compactMap { $0 }
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "dch"
     }
+
+    /// Test seam (#486): the executable every dch call runs. Tests point it at
+    /// /bin/sh or a sleeping script, never at dch.
+    nonisolated(unsafe) static var dchPathOverride: String?
 
     /// `-E` disables dch's in-band detach escape (Ctrl-\) so it passes through to the
     /// inner app (Claude Code); the app detaches by closing the TCP connection.
@@ -583,11 +588,12 @@ enum DchCommand {
 
     /// #477: every Agent Island dch call (--ls-json, -lj, --read, --status, --send)
     /// gives up after this, so a wedged dch never parks the island queue, which
-    /// also carries the poll. Remote Terminal's calls stay unbounded.
-    static let islandTimeout: TimeInterval = 4
+    /// also carries the poll. Remote Terminal's calls stay unbounded. A var only
+    /// so tests can shorten it (#486); a test pins the 4.
+    nonisolated(unsafe) static var islandTimeout: TimeInterval = 4
 
-    /// stdout of one island call; a timeout reads as empty output.
-    static func runIsland(args: [String], env: [String: String]) -> Data {
+    /// stdout of one island call; nil when it timed out (#486: list keeps the last sessions).
+    static func runIsland(args: [String], env: [String: String]) -> Data? {
         bounded(islandTimeout) { onPid in runCapturingBoth(args: args, env: env, onPid: onPid).out }
     }
 
@@ -597,12 +603,12 @@ enum DchCommand {
     }
 
     /// Runs `body` on its own thread and waits at most `timeout`. On expiry the
-    /// child `body` reported through `onPid` is killed by that pid and empty Data
+    /// child `body` reported through `onPid` is killed by that pid and nil
     /// comes back at once; a body that still never returns strands only its own
     /// thread, never the caller.
     static func bounded(_ timeout: TimeInterval,
                         terminate: @escaping @Sendable (pid_t) -> Void = { _ = Darwin.kill($0, SIGKILL) },
-                        _ body: @escaping @Sendable (_ onPid: (pid_t) -> Void) -> Data) -> Data {
+                        _ body: @escaping @Sendable (_ onPid: (pid_t) -> Void) -> Data) -> Data? {
         let call = BoundedCall()
         DispatchQueue.global(qos: .utility).async {
             let out = body { pid in call.lock.withLock { call.pid = pid } }
@@ -612,6 +618,6 @@ enum DchCommand {
         if call.done.wait(timeout: .now() + timeout) == .success { return call.lock.withLock { call.out ?? Data() } }
         // A body that has returned has reaped its child: never signal a pid that may be reused.
         if let pid = call.lock.withLock({ call.out == nil ? call.pid : nil }) { terminate(pid) }
-        return Data()
+        return nil
     }
 }

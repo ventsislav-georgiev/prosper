@@ -306,7 +306,7 @@ extension AgentPromptIO {
     /// Remote Terminal env. `--read` is the plain visible screen; `--send` types
     /// its text as raw bytes with no Enter. Each call is bounded (#477): a timed-out
     /// read or status is empty, so a card reads as changed and nothing is sent.
-    static let live = live { DchCommand.runIsland(args: $0, env: $1) }
+    static let live = live { DchCommand.runIsland(args: $0, env: $1) ?? Data() }
 
     /// `run` gets the argv and env; tests pass a recorder.
     static func live(run: @escaping @Sendable ([String], [String: String]) -> Data) -> AgentPromptIO {

@@ -182,16 +182,20 @@ enum AgentIsland {
         return env
     }
 
-    typealias Runner = (_ args: [String], _ env: [String: String]) -> Data
+    /// stdout of one dch call; nil when it timed out.
+    typealias Runner = (_ args: [String], _ env: [String: String]) -> Data?
 
     /// Every session of `dirs`, one dch fork per dir; `--ls-json`, else `-lj` (old dch).
-    static func list(dirs: [String], run: Runner = { DchCommand.runIsland(args: $0, env: $1) })
-        -> [AgentSession] {
+    /// #486: a dir whose `-lj` timed out keeps its rows from `previous`, so a wedged
+    /// dch does not read as "no sessions" and collapse the island.
+    static func list(dirs: [String], keeping previous: [AgentSession] = [],
+                     run: Runner = { DchCommand.runIsland(args: $0, env: $1) }) -> [AgentSession] {
         dirs.flatMap { dir -> [AgentSession] in
             let env = listEnv(dir: dir)
-            var rows = DchCommand.parseListJSON(run(["--ls-json"], env))
+            var rows = DchCommand.parseListJSON(run(["--ls-json"], env) ?? Data())
             if rows.isEmpty {
-                rows = DchCommand.parseListTSV(String(decoding: run(["-lj"], env), as: UTF8.self))
+                guard let tsv = run(["-lj"], env) else { return previous.filter { $0.key.dir == dir } }
+                rows = DchCommand.parseListTSV(String(decoding: tsv, as: UTF8.self))
             }
             return rows.map {
                 AgentSession(key: AgentSessionKey(dir: dir, name: $0.name), alias: $0.alias,
@@ -306,7 +310,8 @@ struct AgentPollGate {
 final class AgentIslandPoller: @unchecked Sendable {
     private let now: () -> TimeInterval
     private let dirs: () -> [String]
-    private let list: ([String]) -> [AgentSession]
+    /// The dirs to list and the last fetched sessions (kept for a dir whose list timed out).
+    private let list: ([String], [AgentSession]) -> [AgentSession]
     private let scanner = AgentDirScanner()
     private var gate = AgentPollGate()
     private var fetched: [AgentSession] = []
@@ -314,7 +319,7 @@ final class AgentIslandPoller: @unchecked Sendable {
 
     init(now: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 },
          dirs: @escaping () -> [String] = AgentIsland.liveSocketDirs,
-         list: @escaping ([String]) -> [AgentSession] = { AgentIsland.list(dirs: $0) }) {
+         list: @escaping ([String], [AgentSession]) -> [AgentSession] = { AgentIsland.list(dirs: $0, keeping: $1) }) {
         self.now = now
         self.dirs = dirs
         self.list = list
@@ -331,7 +336,7 @@ final class AgentIslandPoller: @unchecked Sendable {
             gate = AgentPollGate()
         } else if gate.shouldFetch(snap, now: t) {
             let live = Set(snap.keys.map(\.dir))
-            fetched = list(dirs.filter(live.contains))
+            fetched = list(dirs.filter(live.contains), fetched)
             gate.didFetch(snap, sessions: fetched, now: t)
         }
         // A session whose socket is gone drops at once; ages come from the stat.

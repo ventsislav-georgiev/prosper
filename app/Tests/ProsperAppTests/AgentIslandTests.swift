@@ -263,7 +263,7 @@ final class AgentIslandTests: XCTestCase {
     }
 
     private func poller(_ dirs: [String], _ f: Fake) -> AgentIslandPoller {
-        AgentIslandPoller(now: { f.now }, dirs: { dirs }, list: { d in
+        AgentIslandPoller(now: { f.now }, dirs: { dirs }, list: { d, _ in
             f.calls.append(d)
             return f.rows.filter { d.contains($0.key.dir) }
         })
@@ -426,7 +426,7 @@ final class AgentIslandTests: XCTestCase {
         let c = AgentIslandController.shared
         let ticked = expectation(description: "tick")
         ticked.assertForOverFulfill = false
-        c.makePoller = { AgentIslandPoller(dirs: { ticked.fulfill(); return [] }, list: { _ in [] }) }
+        c.makePoller = { AgentIslandPoller(dirs: { ticked.fulfill(); return [] }, list: { _, _ in [] }) }
         let wasLive = c.extLive
         defer { c.extLive = wasLive; c.reload(); c.makePoller = { AgentIslandPoller() } }
         c.extLive = true
@@ -553,7 +553,7 @@ final class AgentIslandTests: XCTestCase {
         c.io = FakeIO().io
         c.touchFonts = { l.log.append("fonts"); l.fontsOnMain.append(Thread.isMainThread) }
         c.currentGeometry = { l.log.append("geometry"); return l.geometry }
-        c.makePoller = { l.log.append("poller"); return AgentIslandPoller(dirs: { [] }, list: { _ in [] }) }
+        c.makePoller = { l.log.append("poller"); return AgentIslandPoller(dirs: { [] }, list: { _, _ in [] }) }
         addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
         return c
     }
@@ -608,6 +608,19 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(l.log.filter { $0 == "poller" }.count, 1)
         postScreenChange(c)
         XCTAssertEqual(l.log.filter { $0 == "poller" }.count, 1, "idempotent: one timer")
+    }
+
+    /// #486 B12: a second enable keeps the one screen observer; a change reloads once.
+    @MainActor func testSecondEnableInstallsNoSecondScreenObserver() throws {
+        let l = Lifecycle(), c = lifecycleController(l)
+        c.extLive = true
+        c.reload()
+        let first = try XCTUnwrap(c.screenObserver)
+        c.reload()   // still screenless: the guard returns before the timer, every time
+        XCTAssertTrue(c.screenObserver === first)
+        let reloads = l.log.filter { $0 == "fonts" }.count
+        postScreenChange(c)
+        XCTAssertEqual(l.log.filter { $0 == "fonts" }.count, reloads + 1, "one observer, one reload")
     }
 
     /// QE2: the fonts are built on main before the geometry read and the poller.
@@ -706,6 +719,16 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(Preferences.defaults.bool(forKey: AgentIslandPane.isolateKey), !was)
     }
 
+    /// #486 B8: the picker reads the app's store, not .standard (the xctest domain here).
+    @MainActor func testShowSessionsPaneReadsThePreferencesStore() {
+        let was = Preferences.isolateRemoteSessions
+        defer { Preferences.isolateRemoteSessions = was }
+        let standard = UserDefaults.standard.bool(forKey: AgentIslandPane.isolateKey)
+        Preferences.isolateRemoteSessions = !standard
+        let isolate = AgentIslandPane().isolate
+        XCTAssertEqual(isolate, !standard)
+    }
+
     // MARK: - dch call timeout (#477)
 
     /// A dch call that never returns on its own: only killing its pid releases it.
@@ -721,7 +744,7 @@ final class AgentIslandTests: XCTestCase {
                     onPid(4242)
                     self.released.wait()
                     return Data("late".utf8)
-                }
+                } ?? Data()
             }
         }
     }
@@ -762,26 +785,95 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(out, Data("ok".utf8))
     }
 
-    /// The default terminate is a real SIGKILL to the pid the body reported.
+    /// The default terminate is a real SIGKILL to the pid the body reported. 2 s
+    /// leaves Process.run() room under load (#486: 0.3 s passed at 0.33 s).
     func testBoundedCallKillsARealChildByItsPid() throws {
-        final class Child: @unchecked Sendable { var p: Process? }
+        final class Child: @unchecked Sendable { let lock = NSLock(); var p: Process? }
         let child = Child(), start = Date()
-        let out = DchCommand.bounded(0.3) { onPid in
+        let out = DchCommand.bounded(2) { onPid in
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/sleep")
             p.arguments = ["30"]
             guard (try? p.run()) != nil else { return Data("no child".utf8) }
-            child.p = p
+            child.lock.withLock { child.p = p }
             onPid(p.processIdentifier)
             p.waitUntilExit()
             return Data("late".utf8)
         }
-        XCTAssertEqual(out, Data())
-        let p = try XCTUnwrap(child.p)
+        XCTAssertTrue(out == nil, "timed out")
+        let p = try XCTUnwrap(child.lock.withLock { child.p })
         p.waitUntilExit()
         XCTAssertEqual(p.terminationReason, .uncaughtSignal)
         XCTAssertEqual(p.terminationStatus, SIGKILL)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 10, "killed, not slept out (30 s)")
+    }
+
+    // MARK: - Production routing into the bound (#486)
+
+    /// Every dch call runs `dch` (a script that sleeps 10 s) with the island timeout
+    /// at 0.3 s; both restored at teardown. Never a real dch, even under a mutant
+    /// that skips runIsland: the seam is the executable itself.
+    private func wedgedDch() throws {
+        let dir = tempDir(), script = dir.appendingPathComponent("dch").path
+        try "#!/bin/sh\nexec /bin/sleep 10\n".write(toFile: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
+        let timeout = DchCommand.islandTimeout
+        DchCommand.dchPathOverride = script
+        DchCommand.islandTimeout = 0.3
+        addTeardownBlock { DchCommand.dchPathOverride = nil; DchCommand.islandTimeout = timeout }
+    }
+
+    /// B11.
+    func testIslandTimeoutIsFourSeconds() {
+        XCTAssertEqual(DchCommand.islandTimeout, 4)
+    }
+
+    /// B9: list's default runner is bounded, and a timed-out dir keeps its last sessions.
+    func testListDefaultRunnerIsBoundedAndKeepsTheLastSessions() throws {
+        try wedgedDch()
+        let dir = tempDir(), start = Date()
+        let last = [session("s", .blocked, dir: dir.path), session("t", .idle, dir: "/other")]
+        XCTAssertEqual(AgentIsland.list(dirs: [dir.path], keeping: last), [last[0]],
+                       "--ls-json and -lj both timed out: this dir's last rows stand")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "two 0.3 s bounds, not two 10 s sleeps")
+    }
+
+    /// B9b: the prompt IO the controller uses by default is bounded too.
+    func testLivePromptIOIsBounded() throws {
+        try wedgedDch()
+        let start = Date()
+        XCTAssertEqual(AgentPromptIO.live.read(AgentSessionKey(dir: tempDir().path, name: "s")), "")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "one 0.3 s bound, not a 10 s sleep")
+    }
+
+    /// B14: the production launcher reports the real child pid, the one bounded kills.
+    func testRunCapturingBothReportsTheChildPid() {
+        DchCommand.dchPathOverride = "/bin/sh"
+        defer { DchCommand.dchPathOverride = nil }
+        var reported: [pid_t] = []
+        let r = DchCommand.runCapturingBoth(args: ["-c", "echo $$"], env: [:], onPid: { reported.append($0) })
+        let printed = String(decoding: r.out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(reported.map(String.init), [printed])
+    }
+
+    /// #486 item 2: a timed-out list keeps the island up; dch answering "none" clears it.
+    func testTimedOutListKeepsTheSessionsButAnEmptyAnswerClearsThem() {
+        final class Dch: @unchecked Sendable { var out: Data?; var calls = 0 }
+        let dir = tempDir(), f = Fake(), dch = Dch()
+        touch(dir, "s.sock")
+        dch.out = Data(#"[{"name":"s","alias":"","activity_epoch":1,"state":"blocked","agents":0}]"#.utf8)
+        let p = AgentIslandPoller(now: { f.now }, dirs: { [dir.path] }, list: {
+            AgentIsland.list(dirs: $0, keeping: $1) { _, _ in dch.calls += 1; return dch.out }
+        })
+        XCTAssertEqual(p.tick()?.map(\.state), [.blocked])
+        dch.out = nil
+        f.now += AgentPollGate.backstop
+        XCTAssertNil(p.tick(), "both calls timed out: no change, the blocked row stays")
+        XCTAssertEqual(dch.calls, 3, "it did list: --ls-json, then --ls-json and -lj")
+        dch.out = Data()
+        f.now += AgentPollGate.backstop
+        XCTAssertEqual(p.tick(), [], "dch answered with no rows: gone")
+        XCTAssertEqual(dch.calls, 5)
     }
 
     // MARK: - Geometry

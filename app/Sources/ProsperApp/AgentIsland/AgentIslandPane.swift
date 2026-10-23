@@ -10,7 +10,8 @@ struct AgentIslandPane: View {
     @State private var source = AgentIslandSource(raw: Preferences.agentIslandSessions)
     /// Preferences.Keys.isolateRemoteSessions (private there); a test pins the match.
     nonisolated static let isolateKey = "isolateRemoteSessions"
-    @AppStorage(AgentIslandPane.isolateKey, store: Preferences.defaults) private var isolate = false
+    /// Internal so a test can read it through the app's store (#486 B8).
+    @AppStorage(AgentIslandPane.isolateKey, store: Preferences.defaults) var isolate = false
 
     var body: some View {
         NeonSection("Sessions") {
