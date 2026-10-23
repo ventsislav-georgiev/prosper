@@ -49,11 +49,48 @@ struct AgentIslandGeometry: Equatable {
 
     var collapsedSize: CGSize { CGSize(width: notchWidth + 2 * earWidth, height: barHeight) }
 
-    func listHeight(rows: Int) -> CGFloat { CGFloat(min(max(rows, 1), Self.maxVisibleRows)) * Self.rowHeight }
+    /// Rows (up to 6) plus the prompt cards under blocked rows (`cards`, their
+    /// summed `cardHeight`): the island grows for a card instead of clipping it,
+    /// up to `maxListHeight`, then the list scrolls.
+    func listHeight(rows: Int, cards: CGFloat = 0) -> CGFloat {
+        min(CGFloat(min(max(rows, 1), Self.maxVisibleRows)) * Self.rowHeight + cards, maxListHeight)
+    }
 
-    func expandedSize(rows: Int) -> CGSize {
+    func listScrolls(rows: Int, cards: CGFloat = 0) -> Bool {
+        rows > Self.maxVisibleRows || CGFloat(rows) * Self.rowHeight + cards > maxListHeight
+    }
+
+    /// Leaves 40 pt of the screen below the island.
+    var maxListHeight: CGFloat { max(Self.rowHeight, screen.height - barHeight - Self.listTop - Self.listBottom - 40) }
+
+    func expandedSize(rows: Int, cards: CGFloat = 0) -> CGSize {
         CGSize(width: min(screen.width, max(Self.expandedWidth, collapsedSize.width)),
-               height: barHeight + Self.listTop + listHeight(rows: rows) + Self.listBottom)
+               height: barHeight + Self.listTop + listHeight(rows: rows, cards: cards) + Self.listBottom)
+    }
+
+    // Card layout (#475): every part has a fixed height, so this is exact.
+    static let cardPad: CGFloat = 8
+    static let cardGap: CGFloat = 4          // below the card, before the next row
+    static let cardQuestion: CGFloat = 20
+    static let cardContextLine: CGFloat = 14
+    static let cardContextPad: CGFloat = 4   // inside the context block, top and bottom
+    static let cardContextGap: CGFloat = 6   // below the context block
+    static let cardButton: CGFloat = 26      // 22 pt button + 4 pt spacing
+
+    static func cardHeight(_ card: AgentCard) -> CGFloat {
+        func context(_ n: Int) -> CGFloat {
+            n == 0 ? 0 : CGFloat(n) * cardContextLine + 2 * cardContextPad + cardContextGap
+        }
+        let body: CGFloat
+        switch card {
+        case .prompt(let p):
+            body = cardQuestion + context(p.context.count) + CGFloat(p.options.count + 1) * cardButton
+        case .context(let lines):
+            body = context(lines.count) + cardButton
+        case .changed:
+            body = cardQuestion + cardButton
+        }
+        return 2 * cardPad + body + cardGap
     }
 
     /// Hanging from the top edge, centred on the screen (and so on the notch).
@@ -90,11 +127,20 @@ final class AgentIslandStore: ObservableObject {
     @Published var geometry: AgentIslandGeometry
     /// Inline row notes: "Attach command copied", "Attached in tmux/ssh …".
     @Published var notices: [AgentSessionKey: String] = [:]
+    /// #475: the prompt card under a blocked row, from its last screen read.
+    @Published var cards: [AgentSessionKey: AgentCard] = [:]
 
     init(geometry: AgentIslandGeometry) { self.geometry = geometry }
 
+    /// Cards show under blocked rows only.
+    func card(for s: AgentSession) -> AgentCard? { s.state == .blocked ? cards[s.key] : nil }
+
+    var cardsHeight: CGFloat {
+        sessions.compactMap(card(for:)).reduce(0) { $0 + AgentIslandGeometry.cardHeight($1) }
+    }
+
     var size: CGSize {
-        expanded ? geometry.expandedSize(rows: sessions.count) : geometry.collapsedSize
+        expanded ? geometry.expandedSize(rows: sessions.count, cards: cardsHeight) : geometry.collapsedSize
     }
 }
 
@@ -102,6 +148,7 @@ struct AgentIslandView: View {
     @ObservedObject var store: AgentIslandStore
     var onToggle: () -> Void = {}
     var onRow: (AgentSession) -> Void = { _ in }
+    var onAnswer: (AgentSession, AgentPrompt, AgentPromptOption) -> Void = { _, _, _ in }
 
     private var g: AgentIslandGeometry { store.geometry }
 
@@ -146,13 +193,13 @@ struct AgentIslandView: View {
         VStack(spacing: 0) {
             header.frame(height: g.barHeight)
             Group {
-                if store.sessions.count > AgentIslandGeometry.maxVisibleRows {
+                if g.listScrolls(rows: store.sessions.count, cards: store.cardsHeight) {
                     ScrollView(.vertical, showsIndicators: false) { rows }
                 } else {
                     rows
                 }
             }
-            .frame(height: g.listHeight(rows: store.sessions.count), alignment: .top)
+            .frame(height: g.listHeight(rows: store.sessions.count, cards: store.cardsHeight), alignment: .top)
             .padding(.top, AgentIslandGeometry.listTop)
             // Inside the shape's straight sides (the top corners curve in by `top`).
             .padding(.horizontal, AgentIslandGeometry.openRadii.top + 2)
@@ -167,6 +214,9 @@ struct AgentIslandView: View {
                 ForEach(store.sessions) { s in
                     AgentIslandRow(session: s, now: ctx.date.timeIntervalSince1970,
                                    notice: store.notices[s.key]) { onRow(s) }
+                    if let card = store.card(for: s) {
+                        AgentPromptCardView(card: card, onOption: { onAnswer(s, $0, $1) }, onJump: { onRow(s) })
+                    }
                 }
             }
         }
@@ -258,5 +308,120 @@ struct AgentIslandRow: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .accessibilityLabel(AgentIsland.rowAccessibilityLabel(session, now: now))
+    }
+}
+
+/// #475: what a blocked session asks, under its row. Every part has the fixed
+/// height `AgentIslandGeometry.cardHeight` counts, so the island grows by
+/// exactly the card.
+struct AgentPromptCardView: View {
+    let card: AgentCard
+    var onOption: (AgentPrompt, AgentPromptOption) -> Void = { _, _ in }
+    var onJump: () -> Void = {}
+
+    private typealias G = AgentIslandGeometry
+    private static let accent = AgentState.working.color
+    private static let deny = Color(red: 0.95, green: 0.4, blue: 0.4)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            switch card {
+            case .prompt(let p):
+                line(p.question, Color.white)
+                context(p.context)
+                ForEach(Array(p.options.enumerated()), id: \.offset) { i, o in
+                    option(p, o, style: o.style(first: i == 0))
+                }
+                jump
+            case .context(let lines):
+                context(lines)
+                jump
+            case .changed:
+                line("Prompt changed, open the terminal", AgentState.blocked.color)
+                jump
+            }
+        }
+        .padding(G.cardPad)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(height: G.cardHeight(card) - G.cardGap, alignment: .top)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))
+        .padding(.bottom, G.cardGap)
+    }
+
+    private func line(_ text: String, _ color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .frame(height: G.cardQuestion, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func context(_ lines: [String]) -> some View {
+        if !lines.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                    Text(l)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.6))
+                        .lineLimit(1)
+                        .frame(height: G.cardContextLine, alignment: .leading)
+                }
+            }
+            .padding(.vertical, G.cardContextPad)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.04)))
+            .padding(.bottom, G.cardContextGap)
+        }
+    }
+
+    private func option(_ p: AgentPrompt, _ o: AgentPromptOption, style: AgentPromptOption.Style) -> some View {
+        let (fill, text): (Color, Color) = switch style {
+        case .accent: (Self.accent, Color.white)
+        case .deny: (Self.deny.opacity(0.18), Self.deny)
+        case .plain: (Color.white.opacity(0.08), Color.white.opacity(0.9))
+        }
+        return button(action: { onOption(p, o) }, fill: fill) {
+            Text("\(o.digit)")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(text.opacity(0.7))
+            Text(o.label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(text)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if let hint = o.hint {
+                Text(hint)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(text.opacity(0.6))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.white.opacity(0.1)))
+                    .fixedSize()
+            }
+        }
+        .accessibilityLabel("Answer \(o.digit), \(o.label)")
+    }
+
+    private var jump: some View {
+        button(action: onJump, fill: Color.white.opacity(0.08)) {
+            Image(systemName: "arrow.up.forward.app").font(.system(size: 11))
+            Text("Open terminal").font(.system(size: 12, weight: .medium))
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Color.white.opacity(0.7))
+    }
+
+    private func button<L: View>(action: @escaping () -> Void, fill: Color,
+                                 @ViewBuilder label: () -> L) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) { label() }
+                .padding(.horizontal, 8)
+                .frame(height: G.cardButton - 4)
+                .background(RoundedRectangle(cornerRadius: 6).fill(fill))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 4)
     }
 }

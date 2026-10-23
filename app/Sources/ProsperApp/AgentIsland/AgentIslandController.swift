@@ -1,6 +1,7 @@
 // Owns Agent Island (#474) end to end: the borderless non-activating panel over
 // the notch, the 1 s stat poll on a utility queue (dch is forked only when the
-// gate in AgentIslandModel says so), expand/collapse, and the row-click jump.
+// gate in AgentIslandModel says so), expand/collapse, the row-click jump, and
+// (#475) the prompt cards of blocked sessions and their answer clicks.
 // Gated by the com.prosper.agentisland system extension (ships default-disabled)
 // exactly like CalendarBarController: AppDelegate sets `extLive` at launch and
 // on every extension toggle, and `reload()` builds or tears everything down — a
@@ -38,6 +39,11 @@ final class AgentIslandController {
     private var timer: DispatchSourceTimer?
     private var outsideClick: Any?
     private var screenObserver: NSObjectProtocol?
+    /// #475: the activity each blocked session's screen was last read at, and a
+    /// per-session generation (never reset) so a late read never revives an
+    /// answered card.
+    private var readAt: [AgentSessionKey: TimeInterval] = [:]
+    private var cardGen: [AgentSessionKey: Int] = [:]
     private let queue = DispatchQueue(label: "eu.illegible.prosper.agentisland", qos: .utility)
 
     private init() {}
@@ -68,6 +74,7 @@ final class AgentIslandController {
         let live = Set(sessions.map(\.key))
         store.notices = store.notices.filter { live.contains($0.key) }
         if sessions.isEmpty { setExpanded(false) }
+        refreshCards()
         layout()
     }
 
@@ -99,7 +106,8 @@ final class AgentIslandController {
         let host = FirstClickHostingView(rootView: AgentIslandView(
             store: store,
             onToggle: { [weak self] in self?.setExpanded(!(self?.store?.expanded ?? true)) },
-            onRow: { [weak self] in self?.jump($0) }))
+            onRow: { [weak self] in self?.jump($0) },
+            onAnswer: { [weak self] in self?.answer($0, $1, $2) }))
         host.sizingOptions = []
         p.contentView = host
         panel = p
@@ -109,7 +117,8 @@ final class AgentIslandController {
     private func setExpanded(_ on: Bool) {
         guard let store, let panel, store.expanded != on else { return }
         store.expanded = on
-        if !on { store.notices = [:] }
+        if !on { store.notices = [:]; store.cards = [:]; readAt = [:] }
+        refreshCards()
         panel.keyable = on
         layout()
         if on {
@@ -127,6 +136,52 @@ final class AgentIslandController {
             // Hand key focus back: out and straight back in, no animation.
             if panel.isKeyWindow { panel.orderOut(nil); layout() }
         }
+    }
+
+    // MARK: - Prompt cards (#475)
+
+    /// While expanded, re-read a blocked session's screen whenever its output
+    /// moved since the last read (activity is the .act mtime); drop the cards of
+    /// rows that are no longer blocked.
+    private func refreshCards() {
+        guard let store, store.expanded else { return }
+        let blocked = store.sessions.filter { $0.state == .blocked }
+        let keys = Set(blocked.map(\.key))
+        store.cards = store.cards.filter { keys.contains($0.key) }
+        readAt = readAt.filter { keys.contains($0.key) }
+        for s in blocked where readAt[s.key] != s.activity {
+            readAt[s.key] = s.activity
+            let key = s.key, gen = bump(key)
+            queue.async { [weak self] in
+                let card = AgentPrompt.card(screen: AgentPromptIO.live.read(key))
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.setCard(card, key, gen) } }
+            }
+        }
+    }
+
+    /// The buttons go at once, so a second click can never queue a second key;
+    /// the guard re-reads and sends at most the one digit.
+    private func answer(_ s: AgentSession, _ p: AgentPrompt, _ o: AgentPromptOption) {
+        guard let store else { return }
+        store.cards[s.key] = nil
+        let key = s.key, gen = bump(key)
+        layout()
+        queue.async { [weak self] in
+            let r = AgentPrompt.answer(key, digit: o.digit, expected: p, io: .live)
+            guard r == .changed else { return }   // sent: the next poll shows the new state
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.setCard(.changed, key, gen) } }
+        }
+    }
+
+    private func setCard(_ card: AgentCard, _ key: AgentSessionKey, _ gen: Int) {
+        guard cardGen[key] == gen, let store, store.expanded else { return }
+        store.cards[key] = card
+        layout()
+    }
+
+    private func bump(_ key: AgentSessionKey) -> Int {
+        cardGen[key, default: 0] += 1
+        return cardGen[key]!
     }
 
     // MARK: - Jump
@@ -196,5 +251,20 @@ final class AgentIslandController {
         panel?.contentView = nil
         panel = nil
         store = nil
+    }
+}
+
+extension AgentPromptIO {
+    /// Every call runs with DCH_SOCKET_DIR = the session's own dir, never the
+    /// Remote Terminal env. `--read` is the plain visible screen; `--send` types
+    /// its text as raw bytes with no Enter.
+    static let live = AgentPromptIO(
+        read: { dch(["--read", $0.name], $0) },
+        status: { dch(["--status", $0.name], $0) },
+        send: { _ = dch(["--send", $0.name, $1], $0) })
+
+    private static func dch(_ args: [String], _ key: AgentSessionKey) -> String {
+        String(decoding: DchCommand.runCapturingBoth(args: args, env: AgentIsland.listEnv(dir: key.dir)).out,
+               as: UTF8.self)
     }
 }
