@@ -37,6 +37,10 @@ struct AgentPrompt: Hashable {
     /// the click guard compares all of it (a long command can differ in its head).
     let context: [String]
     let options: [AgentPromptOption]
+    /// False when the context walk passed a rule that is part of the command and
+    /// then ran off the screen top: the dialog's top was never seen, so the head
+    /// may be missing. Only a "No…" option answers such a dialog.
+    var topFound = true
 
     /// Any hidden or reordering character anywhere the card shows (Trojan
     /// Source): only a "No…" option answers such a dialog.
@@ -50,11 +54,13 @@ struct AgentPrompt: Hashable {
     /// C0 controls (tab included), DEL, C1 controls, the bidi embeddings and
     /// overrides U+202A-202E, the isolates U+2066-2069, the marks U+200E/200F
     /// and U+061C, zero-width U+200B-200D (ZWJ too, so a ZWJ emoji shows split),
-    /// word joiner U+2060, invisible operators U+2061-2064, soft hyphen U+00AD
-    /// and U+FEFF. Display only: the compared identity stays the raw text.
+    /// word joiner U+2060, invisible operators U+2061-2064, soft hyphen U+00AD,
+    /// the line and paragraph separators U+2028/2029 (near zero width, they
+    /// break a one-line row and cut what follows) and U+FEFF. Display only: the
+    /// compared identity stays the raw text.
     static func isHidden(_ u: Unicode.Scalar) -> Bool {
         switch u.value {
-        case 0x00...0x1F, 0x7F...0x9F, 0xAD, 0x61C, 0x200B...0x200F, 0x202A...0x202E,
+        case 0x00...0x1F, 0x7F...0x9F, 0xAD, 0x61C, 0x200B...0x200F, 0x2028...0x2029, 0x202A...0x202E,
              0x2060...0x2064, 0x2066...0x2069, 0xFEFF: true
         default: false
         }
@@ -111,7 +117,7 @@ extension AgentPrompt {
     /// Every non-blank, non-rule line below an option, up to the next option (or,
     /// after the last one, the first blank or rule line), is that option's detail.
     static func parse(_ screen: String) -> AgentPrompt? {
-        let lines = screen.split(separator: "\n", omittingEmptySubsequences: false).map(unframe)
+        let raw = screen.split(separator: "\n", omittingEmptySubsequences: false), lines = raw.map(unframe)
         guard let last = lines.lastIndex(where: { option($0) != nil }) else { return nil }
         var found: [(digit: Int, label: String, caret: Bool, detail: [String])] = []
         // Lines below the option the walk reaches next: the last option's tail first.
@@ -139,10 +145,18 @@ extension AgentPrompt {
         let question = lines[i].trimmingCharacters(in: .whitespaces)
         var context: [String] = []
         var j = i - 1
-        // Up to the dialog's top rule; a rule right under the question (Edit's
-        // dashed diff frame) is skipped.
-        while j >= 0, !(isRule(lines[j]) && !context.isEmpty) {
-            if !isBlankOrRule(lines[j]) { context.insert(lines[j], at: 0) }
+        // Up to the dialog's top rule. Claude Code draws its frames (top rule,
+        // dashed command or diff frame, 1.x box) at screen column 0 or 1 and
+        // everything they frame from column 2, so a rule further in (a heredoc,
+        // printed output) is the command's own line and stays in the context.
+        // Columns count on the raw line, box bars included. A frame right under
+        // the question (Edit's dashed diff frame) is skipped.
+        while j >= 0 {
+            if isRule(lines[j]), raw[j].prefix(while: { $0.isWhitespace || $0 == "│" }).count <= 1 {
+                if !context.isEmpty { break }
+            } else if !lines[j].trimmingCharacters(in: .whitespaces).isEmpty {
+                context.insert(lines[j], at: 0)
+            }
             j -= 1
         }
         return AgentPrompt(
@@ -150,7 +164,9 @@ extension AgentPrompt {
             options: found.reversed().map { o in
                 let (label, hint) = splitHint(o.label)
                 return AgentPromptOption(digit: o.digit, label: label, hint: hint, detail: o.detail)
-            })
+            },
+            // A screen with no rule at all reads as the dialog, as before.
+            topFound: j >= 0 || !context.contains(where: isRule))
     }
 
     /// The last `maxContext` non-blank, non-rule lines.

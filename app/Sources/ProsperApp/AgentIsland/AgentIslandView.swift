@@ -419,7 +419,9 @@ struct AgentCardLayout: Equatable {
 
     init(_ p: AgentPrompt, cache: AgentCardLayoutCache = .shared) {
         question = G.wrap(AgentPrompt.visible(p.question), G.questionFont, G.cardInner)
-        (context, isOverCap) = Self.contextRows(p.context, in: cache)
+        let (rows, overCap) = Self.contextRows(p.context, in: cache)
+        // No dialog top found: the head may be off screen, so not shown in full either.
+        (context, isOverCap) = (rows, overCap || !p.topFound)
         var labels: [[String]] = [], details: [[String]] = [], tooWide: Set<Int> = []
         for o in p.options {
             let label = AgentPrompt.visible(o.label), detail = o.detail.map(AgentPrompt.visible)
