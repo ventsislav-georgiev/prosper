@@ -493,7 +493,8 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertLessThanOrEqual(p.context.count, AgentPrompt.maxContext, "3 screen lines, under the old line cap")
         XCTAssertTrue(l.isOverCap)
         XCTAssertEqual(l.context.count, AgentPrompt.maxContext + 1)
-        XCTAssertTrue(l.context.last!.hasPrefix("… "), l.context.last!)
+        // No force-unwrap (QA #310 D1): an empty context fails here instead of trapping xctest.
+        XCTAssertEqual(l.context.last?.hasPrefix("… "), true, "\(l.context)")
         XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, true])
         XCTAssertEqual(l.caption.joined(), AgentCardLayout.tooLongCaption)
     }
@@ -523,7 +524,7 @@ final class AgentIslandPromptTests: XCTestCase {
         assertFits(rows, G.contextFont, G.cardContextWidth, "CJK row")
         // Greedy on measured width: no row could take the next character.
         for (r, next) in zip(rows, rows.dropFirst()) {
-            XCTAssertFalse(G.fits(r + String(next.first!), G.contextFont, G.cardContextWidth), r)
+            XCTAssertFalse(G.fits(r + String(next.prefix(1)), G.contextFont, G.cardContextWidth), r)
         }
         // Counting one ASCII cell per character would give fewer rows.
         let counted = Int((CGFloat(cjkLine.count) * G.width("x", G.contextFont) / (G.cardContextWidth - G.fitMargin)).rounded(.up))
@@ -699,6 +700,13 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertEqual(col2.context.map { $0.trimmingCharacters(in: .whitespaces) }, bash21Context(p8Command).map {
             $0.trimmingCharacters(in: .whitespaces) }, "column 2 is content")
         XCTAssertTrue(col2.topFound)
+        // QA #310 D11: full width at column 2 (ends at 90, the frame width), so only the column keeps it content.
+        let rule88 = String(repeating: "─", count: 88)
+        let wide = try prompt(bash21(p8Command).replacingOccurrences(of: "   " + rule40, with: "  " + rule88))
+        XCTAssertEqual(wide.context.map { $0.trimmingCharacters(in: .whitespaces) },
+                       bash21Context(p8Command.map { $0 == rule40 ? rule88 : $0 }).map {
+                           $0.trimmingCharacters(in: .whitespaces) }, "a full-width rule at column 2 is content")
+        XCTAssertTrue(wide.topFound)
 
         let boxRule = "│   " + String(repeating: "─", count: 10) + String(repeating: " ", count: 33) + "│"
         let boxed = try prompt(boxedScreen.replacingOccurrences(of: "│   Push the release commit",
@@ -1196,7 +1204,8 @@ final class AgentIslandPromptTests: XCTestCase {
                                    "This command requires approval"], "every command row with its gutter")
         XCTAssertEqual(p.options.map(\.label), ["Yes", "Yes, and switch to auto mode · auto mode handles these prompts for you", "No"])
         XCTAssertTrue(p.topFound)
-        XCTAssertTrue(p.isOverCap, "9 rows: over the cap, deny-only (fail safe)")
+        XCTAssertTrue(p.isOverCap, "10 rows: over the cap, deny-only (fail safe)")
+        XCTAssertEqual(p.layout.context.last, "… 2 more lines", "10 measured rows: the tip and the long printf row wrap")
         XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, true])
 
         for (why, from, to) in [("title", " Bash command\n", " Bash command (sandbox off)\n"),
@@ -1311,6 +1320,65 @@ final class AgentIslandPromptTests: XCTestCase {
                        "C16: the bottom corner unframes the rows")
         XCTAssertFalse(p.topFound)
         XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, true])
+    }
+
+    /// D2: a dotted inner frame (┄) is passed like a dashed one (╌), not taken
+    /// for the dialog's top.
+    func testDottedInnerFramesArePassedLikeDashedOnes() throws {
+        let p = try prompt(bash21(["echo safe"]).replacingOccurrences(of: "╌", with: "┄"))
+        XCTAssertEqual(p.context, bash21Context(["echo safe"]), "the title and description above the frames stay")
+        XCTAssertTrue(p.topFound)
+    }
+
+    /// D3, D4: a solid frame ends the walk only once a non-blank line is
+    /// collected. An Ask form with no tab bar has its top rule right above the
+    /// question (or one blank line above it): the walk passes that rule into the
+    /// transcript and runs off the screen top, so every option is off (fail
+    /// safe) rather than approvable with nothing shown.
+    func testASolidFrameWithOnlyBlanksUnderItDoesNotEndTheWalk() throws {
+        for (why, tabBar) in [("D3: rule right above the question", " ☐ Color\n\n"),
+                              ("D4: a blank line between", " ☐ Color\n")] {
+            let screen = altered(run7Screen, tabBar, "")
+            let p = try prompt(screen)
+            XCTAssertEqual(p.question, "Which color?", why)
+            XCTAssertEqual(p.context, ["❯ Use the AskUserQuestion tool to ask me 'Which color?' with options Red, Green, Blue"],
+                           "\(why): the transcript line above the rule")
+            XCTAssertFalse(p.topFound, why)
+            XCTAssertEqual(p.options.map { p.isEnabled($0) }, Array(repeating: false, count: 5), why)
+            let f = FakeDch()
+            f.screen = screen
+            for d in 1...5 { XCTAssertEqual(f.answer(d, expected: p), .changed, "\(why) \(d)") }
+            XCTAssertEqual(f.sent, [], why)
+        }
+    }
+
+    // MARK: - #483 item 8 for Bash, Write and Edit (QA #310 D13)
+
+    /// The real Bash and Write dialogs and the Edit dialog with their top rule
+    /// scrolled off, cut just below it or at the upper dashed frame: only No
+    /// answers, under the off-top caption.
+    func testBashWriteAndEditWithTheirTopRuleOffScreenAreDenyOnly() throws {
+        for (name, screen) in [("Bash", run2Screen), ("Write", run12Screen), ("Edit", editScreen)] {
+            let full = try prompt(screen), rows = screen.split(separator: "\n", omittingEmptySubsequences: false)
+            XCTAssertTrue(full.topFound, name)
+            let top = try XCTUnwrap(rows.firstIndex { $0.hasPrefix("─") }, name)
+            let dash = try XCTUnwrap(rows.firstIndex { $0.contains("╌") }, name)
+            for (cut, from) in [("below the top rule", top + 1), ("at the upper dashed frame", dash)] {
+                let why = "\(name), \(cut)", s = rows[from...].joined(separator: "\n"), p = try prompt(s)
+                XCTAssertEqual(p.question, full.question, why)
+                XCTAssertEqual(p.options, full.options, why)
+                if from == top + 1 { XCTAssertEqual(p.context, full.context, "\(why): the same lines, only the top is missing") }
+                XCTAssertFalse(p.topFound, why)
+                XCTAssertEqual(p.options.map { p.isEnabled($0) }, p.options.map { $0.digit == p.options.count }, why)
+                XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.offTopCaption, why)
+                let f = FakeDch()
+                f.screen = s
+                for o in p.options.dropLast() { XCTAssertEqual(f.answer(o.digit, expected: p), .changed, "\(why) \(o.digit)") }
+                XCTAssertEqual(f.sent, [], "\(why): no approve click sends")
+                XCTAssertEqual(f.answer(p.options.count, expected: p), .sent, "\(why): No still answers")
+                XCTAssertEqual(f.sent, ["\(p.options.count)"], why)
+            }
+        }
     }
 }
 

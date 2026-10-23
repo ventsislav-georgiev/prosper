@@ -221,8 +221,8 @@ extension AgentPrompt {
         return dedent(Array(lines.filter { !isBlankOrRule($0) }.suffix(maxContext)))
     }
 
-    /// A frame rule may end this many cells before the widest rule above
-    /// option 1. Every fixture and QA probe frame ends at the same column
+    /// A frame rule may end this many cells before the widest rule on the
+    /// screen. Every fixture and QA probe frame ends at the same column
     /// (top rule 90 at column 0, dashed frames 89 at column 1; 48 in the narrow
     /// fixtures); 2 leaves one cell for a frame drawn one short. A
     /// width-disagreement autowrap tail is at most ~40 cells on a 90-cell screen.
