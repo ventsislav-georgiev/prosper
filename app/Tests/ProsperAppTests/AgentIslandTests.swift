@@ -431,6 +431,107 @@ final class AgentIslandTests: XCTestCase {
         wait(for: [ticked], timeout: 5)
     }
 
+    // MARK: - Answer lock, card generations, live IO (#475 K2, N9, N4)
+
+    private static let bashScreen = """
+     Bash command
+
+       rm -rf .build
+       Clean the build tree
+
+     Do you want to proceed?
+     ❯ 1. Yes
+       2. No, and tell Claude what to do differently (esc)
+    """
+
+    /// Counts dch calls; the screen and status never change.
+    private final class FakeIO: @unchecked Sendable {
+        let lock = NSLock()
+        var reads = 0, sends: [String] = []
+        var io: AgentPromptIO {
+            AgentPromptIO(read: { _ in self.lock.withLock { self.reads += 1 }; return AgentIslandTests.bashScreen },
+                          status: { _ in "blocked" },
+                          send: { _, d in self.lock.withLock { self.sends.append(d) } })
+        }
+    }
+
+    /// A fresh controller with no panel, expanded over one blocked session.
+    @MainActor private func cardController(_ f: FakeIO) -> (AgentIslandController, AgentSession) {
+        let c = AgentIslandController(), s = session("s", .blocked, activity: 1)
+        c.io = f.io
+        c.showsPanel = false
+        c.store = AgentIslandStore(geometry: notched)
+        c.store?.sessions = [s]
+        c.store?.expanded = true
+        return (c, s)
+    }
+
+    /// Runs the queued dch work, then the main hops it posted.
+    @MainActor private func drain(_ c: AgentIslandController) {
+        c.queue.sync {}
+        let hopped = expectation(description: "main hops")
+        DispatchQueue.main.async { hopped.fulfill() }
+        wait(for: [hopped], timeout: 5)
+    }
+
+    @MainActor func testTwoAnswersWhileTheFirstIsInFlightSendOnce() throws {
+        let f = FakeIO(), (c, s) = cardController(f)
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.bashScreen)), o = p.options[0]
+        c.answer(s, p, o)
+        c.answer(s, p, o)   // the main hop that ends the first has not run yet
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"])
+        c.answer(s, p, o)   // released on the hop
+        drain(c)
+        XCTAssertEqual(f.sends, ["1", "1"])
+    }
+
+    @MainActor func testInFlightAnswerBlocksReAddingTheCard() throws {
+        let f = FakeIO(), (c, s) = cardController(f)
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.bashScreen))
+        c.answer(s, p, p.options[0])
+        c.store?.sessions = [session("s", .blocked, activity: 2)]   // output moved
+        c.refreshCards()
+        drain(c)
+        XCTAssertEqual(f.reads, 1, "only the answer's guard read")
+        XCTAssertNil(c.store?.cards[s.key])
+    }
+
+    @MainActor func testLateReadNeverRevivesAnAnsweredCard() throws {
+        let f = FakeIO(), (c, s) = cardController(f)
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.bashScreen))
+        c.refreshCards()                 // read queued at generation 1
+        c.answer(s, p, p.options[0])     // generation 2, card removed
+        drain(c)
+        XCTAssertEqual(f.reads, 2)
+        XCTAssertEqual(f.sends, ["1"])
+        XCTAssertNil(c.store?.cards[s.key], "the generation-1 read result is dropped")
+    }
+
+    @MainActor func testLateReadNeverRevivesARemovedCard() {
+        let f = FakeIO(), (c, s) = cardController(f)
+        c.refreshCards()                                        // read queued
+        c.store?.sessions = [session("s", .working, activity: 2)]
+        c.refreshCards()                                        // no longer blocked
+        drain(c)
+        XCTAssertEqual(f.reads, 1)
+        XCTAssertNil(c.store?.cards[s.key], "the read queued while blocked is dropped")
+    }
+
+    func testLiveIOPassesTheSessionDirAndExactArgv() {
+        final class Rec: @unchecked Sendable { var calls: [([String], [String: String])] = [] }
+        let r = Rec(), key = AgentSessionKey(dir: "/x/dch dir", name: "my sess")
+        let io = AgentPromptIO.live { args, env in r.calls.append((args, env)); return Data("out".utf8) }
+        XCTAssertEqual(io.read(key), "out")
+        XCTAssertEqual(io.status(key), "out")
+        io.send(key, "2")
+        XCTAssertEqual(r.calls.map(\.0), [["--read", "my sess"], ["--status", "my sess"], ["--send", "my sess", "2"]])
+        for (_, env) in r.calls {
+            XCTAssertEqual(env["DCH_SOCKET_DIR"], "/x/dch dir")
+            XCTAssertNil(env["DCH_SESSION"])
+        }
+    }
+
     // MARK: - Geometry
 
     /// 14" MacBook Pro: 1512 x 982, notch 185 x 32 between two auxiliary areas.

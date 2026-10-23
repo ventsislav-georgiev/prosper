@@ -34,7 +34,7 @@ final class AgentIslandController {
     /// Whether the extension is enabled + trusted. Set by AppDelegate.
     var extLive = false
 
-    private var store: AgentIslandStore?
+    var store: AgentIslandStore?
     private var panel: AgentIslandPanel?
     private var timer: DispatchSourceTimer?
     private var outsideClick: Any?
@@ -44,11 +44,16 @@ final class AgentIslandController {
     /// answered card.
     private var readAt: [AgentSessionKey: TimeInterval] = [:]
     private var cardGen: [AgentSessionKey: Int] = [:]
-    private let queue = DispatchQueue(label: "eu.illegible.prosper.agentisland", qos: .utility)
-    /// Test seam (#478): the poller reload() starts.
+    /// Keys whose answer is still on the queue: no second send, no re-added card.
+    private var inFlight: Set<AgentSessionKey> = []
+    let queue = DispatchQueue(label: "eu.illegible.prosper.agentisland", qos: .utility)
+    /// Test seams (#478, #475): the poller reload() starts, the dch IO, and
+    /// showsPanel = false so layout() never builds or orders the panel.
     var makePoller: () -> AgentIslandPoller = { AgentIslandPoller() }
+    var io = AgentPromptIO.live
+    var showsPanel = true
 
-    private init() {}
+    init() {}
 
     /// Idempotent — launch and every extension toggle.
     func reload() {
@@ -93,7 +98,7 @@ final class AgentIslandController {
     /// Size the panel to the island so nothing outside it eats clicks; hide it
     /// with no sessions.
     private func layout() {
-        guard let store else { return }
+        guard showsPanel, let store else { return }
         if let g = AgentIslandGeometry.current(), g != store.geometry { store.geometry = g }
         guard !store.sessions.isEmpty else { panel?.orderOut(nil); return }
         let panel = self.panel ?? makePanel(store)
@@ -155,33 +160,39 @@ final class AgentIslandController {
     /// While expanded, re-read a blocked session's screen whenever its output
     /// moved since the last read (activity is the .act mtime); drop the cards of
     /// rows that are no longer blocked.
-    private func refreshCards() {
+    func refreshCards() {
         guard let store, store.expanded else { return }
         let blocked = store.sessions.filter { $0.state == .blocked }
         let keys = Set(blocked.map(\.key))
         store.cards = store.cards.filter { keys.contains($0.key) }
+        for k in readAt.keys where !keys.contains(k) { _ = bump(k) }   // a read still queued is stale
         readAt = readAt.filter { keys.contains($0.key) }
-        for s in blocked where readAt[s.key] != s.activity {
+        for s in blocked where readAt[s.key] != s.activity && !inFlight.contains(s.key) {
             readAt[s.key] = s.activity
-            let key = s.key, gen = bump(key)
+            let key = s.key, gen = bump(key), io = io
             queue.async { [weak self] in
-                let card = AgentPrompt.card(screen: AgentPromptIO.live.read(key))
+                let card = AgentPrompt.card(screen: io.read(key))
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.setCard(card, key, gen) } }
             }
         }
     }
 
     /// The buttons go at once, so a second click can never queue a second key;
-    /// the guard re-reads and sends at most the one digit.
-    private func answer(_ s: AgentSession, _ p: AgentPrompt, _ o: AgentPromptOption) {
-        guard let store else { return }
+    /// the guard re-reads and sends at most the one digit; a key in flight sends nothing.
+    func answer(_ s: AgentSession, _ p: AgentPrompt, _ o: AgentPromptOption) {
+        guard let store, inFlight.insert(s.key).inserted else { return }
         store.cards[s.key] = nil
-        let key = s.key, gen = bump(key)
+        let key = s.key, gen = bump(key), io = io
         layout()
         queue.async { [weak self] in
-            let r = AgentPrompt.answer(key, digit: o.digit, expected: p, io: .live)
-            guard r == .changed else { return }   // sent: the next poll shows the new state
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.setCard(.changed, key, gen) } }
+            let r = AgentPrompt.answer(key, digit: o.digit, expected: p, io: io)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.inFlight.remove(key)
+                    // sent: the next poll shows the new state
+                    if r == .changed { self?.setCard(.changed, key, gen) }
+                }
+            }
         }
     }
 
@@ -270,13 +281,16 @@ extension AgentPromptIO {
     /// Every call runs with DCH_SOCKET_DIR = the session's own dir, never the
     /// Remote Terminal env. `--read` is the plain visible screen; `--send` types
     /// its text as raw bytes with no Enter.
-    static let live = AgentPromptIO(
-        read: { dch(["--read", $0.name], $0) },
-        status: { dch(["--status", $0.name], $0) },
-        send: { _ = dch(["--send", $0.name, $1], $0) })
+    static let live = live { DchCommand.runCapturingBoth(args: $0, env: $1).out }
 
-    private static func dch(_ args: [String], _ key: AgentSessionKey) -> String {
-        String(decoding: DchCommand.runCapturingBoth(args: args, env: AgentIsland.listEnv(dir: key.dir)).out,
-               as: UTF8.self)
+    /// `run` gets the argv and env; tests pass a recorder.
+    static func live(run: @escaping @Sendable ([String], [String: String]) -> Data) -> AgentPromptIO {
+        @Sendable func dch(_ args: [String], _ key: AgentSessionKey) -> String {
+            String(decoding: run(args, AgentIsland.listEnv(dir: key.dir)), as: UTF8.self)
+        }
+        return AgentPromptIO(
+            read: { dch(["--read", $0.name], $0) },
+            status: { dch(["--status", $0.name], $0) },
+            send: { _ = dch(["--send", $0.name, $1], $0) })
     }
 }
