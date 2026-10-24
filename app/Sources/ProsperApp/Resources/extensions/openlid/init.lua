@@ -530,7 +530,15 @@ end
 -- Only a timed session expires: a stale fire (delivered after a click replaced the
 -- timed session with an indefinite one) must not end the new session.
 function on_expiry(payload)
-    if not load_state().endTime then return end
+    local s = load_state()
+    if not s.endTime then return end
+    -- A stale fire (old "expiry" racing a new duration click) or an early one
+    -- (wall-clock step) re-arms for the remainder instead of ending the session.
+    local left = s.endTime - host.time()
+    if left > 1 then
+        host.timer.schedule { id = "expiry", after = left, handler = "on_expiry" }
+        return
+    end
     deactivate("timer expired")
 end
 function on_tick(payload) render(load_state()) end

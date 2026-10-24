@@ -69,7 +69,7 @@ tag from the now-released section and put it on the new top draft.
   the lid that it will sleep when you unplug; 🔓 and ⚡ now mean it stays awake (#502).
   Three things no longer end a keep-awake on their own:
   - a Wi-Fi drop while charging (the 2-minute no-network guard now runs on battery only);
-  - a late timer from an earlier timed session;
+  - a late timer from an earlier timed session, even while a newer timed one runs (#503);
   - a plugged-in hold restored on battery after Prosper restarted, which used to stay
     locked "while plugged in".
   Every automatic on and off is now logged with its reason (#499).

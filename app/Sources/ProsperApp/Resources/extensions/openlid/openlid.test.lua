@@ -297,6 +297,7 @@ do
     G.on_menu_on(host.json.encode { secs = 1800 })        -- timed ON
     assert(env.timers["tick"], "timed session schedules the countdown tick")
     assert(env.timers["expiry"], "timed session schedules expiry")
+    env.now = env.now + 1800                              -- due (#503: early fires re-arm)
     G.on_expiry("")                                       -- fire expiry
     h.eq(state(host).active, false, "expired session is off")
     h.eq(env.timers["tick"], nil, "ticker cancelled once nothing counts down")
@@ -465,6 +466,25 @@ do
     -- No countdown suffix even with a timed session (width must not vary).
     G.on_menu_on(host.json.encode { secs = 1800 })
     h.eq(icon(), "\u{1F513}", "timed session shows the bare glyph, no countdown text")
+end
+
+-- ── #503 on_expiry ends the session only when due; early fires re-arm ────────
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.on_menu_on(host.json.encode { secs = 1800 })
+    env.now = env.now + 600                                  -- 1200 s left, not 1800
+    env.timers["expiry"] = nil
+    G.on_expiry("")                                          -- early/stale fire
+    h.eq(state(host).active, true, "early fire keeps the session")
+    local t = env.timers["expiry"]
+    assert(t, "early fire re-arms expiry")
+    h.eq(t.handler, "on_expiry", "re-armed with the same handler")
+    h.eq(t.after, 1200, "re-armed for the remainder, not the full duration")
+    env.now = env.now + 1200                                 -- now due
+    G.on_expiry("")
+    h.eq(state(host).active, false, "due fire ends the session")
+    -- nil endTime (indefinite) is pinned by the #499 (d) stale-expiry block.
 end
 
 -- ── #502 Plugged-in hold shows 🔌 (sleeps on unplug), apart from manual 🔓/⚡ ──
@@ -641,6 +661,7 @@ do
     local host, env, G = manualOnAC()
     G.on_menu_on(host.json.encode { secs = 1800 })
     h.eq(state(host).autoActivated, false, "timed manual")
+    env.now = env.now + 1800
     G.on_expiry("")
     isRuleHold(host, env, "expiry on AC")
     h.eq(env.timers["tick"], nil, "no countdown left")
@@ -673,6 +694,7 @@ do
     local hostB, envB = h.makeHost { power = "Battery Power" }
     local GB = h.load(INIT, hostB)
     GB.on_menu_on(hostB.json.encode { secs = 1800 })
+    envB.now = envB.now + 1800
     GB.on_expiry("")
     h.eq(state(hostB).active, false, "expiry on battery is off")
 end
@@ -801,6 +823,7 @@ do
     env.power = "AC Power"; batt(G, host, "AC Power")
     assert(lastLog(env):find("^openlid: on %(plugged in%)"), "rule activation logged: " .. lastLog(env))
     G.on_menu_on(host.json.encode { secs = 600 })
+    env.now = env.now + 600
     G.on_expiry("")
     assert(lastLog(env):find("timer expired") and lastLog(env):find("plugged%-in hold"),
         "back-to-rule logged with its reason: " .. lastLog(env))
