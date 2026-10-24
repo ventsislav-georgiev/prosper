@@ -95,6 +95,23 @@ enum AgentIslandSource: String, CaseIterable {
     }
 }
 
+/// #534: which of a row's details the island draws (Settings › Agent Island ›
+/// Row details). Per Mac, never synced. prosper-ios (#533) has the same six
+/// labels and defaults: Agents, Open PRs and Merged on; Tasks done, In progress
+/// and Queued off, so a fresh install draws no task summary on line 2.
+/// The pure functions below take it as a parameter and never read defaults.
+struct AgentIslandRowDetails: Equatable {
+    var agents = true
+    var openPRs = true
+    var merged = true
+    var tasksDone = false
+    var inProgress = false
+    var queued = false
+
+    static let all = AgentIslandRowDetails(agents: true, openPRs: true, merged: true,
+                                           tasksDone: true, inProgress: true, queued: true)
+}
+
 enum AgentIsland {
     // MARK: - Display
 
@@ -150,11 +167,11 @@ enum AgentIsland {
         return (["Agent Island"] + (parts.isEmpty ? ["no sessions"] : parts)).joined(separator: ", ")
     }
 
-    static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval) -> String {
+    static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval, show d: AgentIslandRowDetails = .all) -> String {
         let age = age(of: s, now: now)
-        let (chips, more) = prChips(s.meta, budget: .infinity)
+        let (chips, more) = prChips(s.meta, show: d, budget: .infinity)
         let prs = chips.map(\.fullName).joined(separator: ", ") + (more > 0 ? " and \(more) more pending PR\(more == 1 ? "" : "s")" : "")
-        return [s.title, s.state.label, age.isEmpty ? nil : "\(age) ago", metaSummary(s.meta), mergedLabel(s.meta),
+        return [s.title, s.state.label, age.isEmpty ? nil : "\(age) ago", metaSummary(s.meta, show: d), mergedLabel(s.meta, show: d),
                 chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
     }
@@ -166,26 +183,28 @@ enum AgentIsland {
     static func count(_ n: Int) -> String { n > 99_999 ? "99999+" : "\(n)" }
 
     /// The second line's "22/26 done · 2 in progress · 2 queued": zero and
-    /// unknown parts left out, nil when nothing is left (the row looks as before).
-    static func metaSummary(_ m: DchSessionMeta?) -> String? {
+    /// unknown parts left out, and (#534) the parts toggled off; nil when nothing
+    /// is left (the row looks as before).
+    static func metaSummary(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all) -> String? {
         guard let t = m?.tasks else { return nil }
         var parts: [String] = []
-        if let total = t.total, total > 0 { parts.append("\(count(t.done ?? 0))/\(count(total)) done") }
-        if let n = t.inProgress, n > 0 { parts.append("\(count(n)) in progress") }
-        if let n = t.queued, n > 0 { parts.append("\(count(n)) queued") }
+        if d.tasksDone, let total = t.total, total > 0 { parts.append("\(count(t.done ?? 0))/\(count(total)) done") }
+        if d.inProgress, let n = t.inProgress, n > 0 { parts.append("\(count(n)) in progress") }
+        if d.queued, let n = t.queued, n > 0 { parts.append("\(count(n)) queued") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// "18 merged", right-aligned on the PR line; nil for none.
-    static func mergedLabel(_ m: DchSessionMeta?) -> String? {
-        guard let n = m?.merged, n > 0 else { return nil }
+    /// "18 merged", right-aligned on the PR line; nil for none or Merged off.
+    static func mergedLabel(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all) -> String? {
+        guard d.merged, let n = m?.merged, n > 0 else { return nil }
         return "\(count(n)) merged"
     }
 
     /// #525: a row draws a third line, the PR line, only for open PRs with a
     /// label or a merged count; `prChips` and the row height agree through this.
-    static func hasPRLine(_ m: DchSessionMeta?) -> Bool {
-        (m?.openPRs.contains { $0.label != nil } ?? false) || mergedLabel(m) != nil
+    /// #534: only the ones toggled on count, so a row with neither is 48 pt again.
+    static func hasPRLine(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all) -> Bool {
+        (d.openPRs && (m?.openPRs.contains { $0.label != nil } ?? false)) || mergedLabel(m, show: d) != nil
     }
 
     /// One open PR as the row draws it. `url` is set only when it passed the
@@ -228,9 +247,12 @@ enum AgentIsland {
     /// measure within `budget` less the merged count and its gap (at most
     /// `maxPRChips`); `more` is M. More chips win over uncut repos: each count
     /// is tried with full labels, then with repos cut to `maxRepoChars`. PRs with
-    /// no label are skipped.
-    static func prChips(_ m: DchSessionMeta?, budget: CGFloat = prChipBudget) -> (chips: [PRChip], more: Int) {
-        let budget = budget - (mergedLabel(m).map { chipWidth($0) - 2 * chipInset + mergedGap } ?? 0)
+    /// no label are skipped. #534: none with Open PRs off; Merged off leaves the
+    /// chips the whole budget.
+    static func prChips(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all,
+                        budget: CGFloat = prChipBudget) -> (chips: [PRChip], more: Int) {
+        guard d.openPRs else { return ([], 0) }
+        let budget = budget - (mergedLabel(m, show: d).map { chipWidth($0) - 2 * chipInset + mergedGap } ?? 0)
         let all = (m?.openPRs ?? []).compactMap { pr -> (full: PRChip, cut: PRChip)? in
             guard let label = pr.label, let hash = label.lastIndex(of: "#") else { return nil }
             let repo = label[..<hash], num = label[hash...]

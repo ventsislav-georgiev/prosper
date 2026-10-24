@@ -109,7 +109,7 @@ final class AgentIslandController {
             }
         }
         guard timer == nil, let geometry = currentGeometry() else { return }
-        store = AgentIslandStore(geometry: geometry)
+        store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails)
         let t = Self.makePollTimer(makePoller(), queue: queue) { [weak self] sessions in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions) } }
         }
@@ -139,6 +139,14 @@ final class AgentIslandController {
         store.notices = store.notices.filter { live.contains($0.key) }
         if sessions.isEmpty { setExpanded(false) }
         refreshCards()
+        layout()
+    }
+
+    /// #534: a Settings row-detail toggle. Redraws the island and resizes the
+    /// panel at once (a row losing its PR line is 48 pt again); no animation.
+    func rowDetailsChanged() {
+        guard let store else { return }
+        store.details = Preferences.agentIslandRowDetails
         layout()
     }
 

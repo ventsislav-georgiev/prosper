@@ -372,6 +372,14 @@ enum Preferences {
         // #500: what a row click does (AgentIslandClick) and the terminal it opens (AgentTerminal).
         static let agentIslandClick = "agentIslandClick"
         static let agentIslandTerminal = "agentIslandTerminal"
+        // #534: the row details the island draws (AgentIslandRowDetails); per Mac,
+        // so not in SyncedKeys.
+        static let agentIslandShowAgents = "agentIslandShowAgents"
+        static let agentIslandShowOpenPRs = "agentIslandShowOpenPRs"
+        static let agentIslandShowMerged = "agentIslandShowMerged"
+        static let agentIslandShowTasksDone = "agentIslandShowTasksDone"
+        static let agentIslandShowInProgress = "agentIslandShowInProgress"
+        static let agentIslandShowQueued = "agentIslandShowQueued"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1055,6 +1063,33 @@ enum Preferences {
     static var agentIslandTerminal: String? {
         get { defaults.string(forKey: Keys.agentIslandTerminal) }
         set { defaults.set(newValue, forKey: Keys.agentIslandTerminal) }
+    }
+
+    /// #534: Agent Island's row details. An unset key reads as
+    /// `AgentIslandRowDetails()`'s default; a set writes only the keys that
+    /// changed, so an untouched toggle keeps following the default.
+    static var agentIslandRowDetails: AgentIslandRowDetails {
+        get {
+            let d = AgentIslandRowDetails()
+            func on(_ key: String, _ fallback: Bool) -> Bool { defaults.object(forKey: key) as? Bool ?? fallback }
+            return AgentIslandRowDetails(
+                agents: on(Keys.agentIslandShowAgents, d.agents),
+                openPRs: on(Keys.agentIslandShowOpenPRs, d.openPRs),
+                merged: on(Keys.agentIslandShowMerged, d.merged),
+                tasksDone: on(Keys.agentIslandShowTasksDone, d.tasksDone),
+                inProgress: on(Keys.agentIslandShowInProgress, d.inProgress),
+                queued: on(Keys.agentIslandShowQueued, d.queued))
+        }
+        set {
+            let old = agentIslandRowDetails
+            func put(_ new: Bool, _ was: Bool, _ key: String) { if new != was { defaults.set(new, forKey: key) } }
+            put(newValue.agents, old.agents, Keys.agentIslandShowAgents)
+            put(newValue.openPRs, old.openPRs, Keys.agentIslandShowOpenPRs)
+            put(newValue.merged, old.merged, Keys.agentIslandShowMerged)
+            put(newValue.tasksDone, old.tasksDone, Keys.agentIslandShowTasksDone)
+            put(newValue.inProgress, old.inProgress, Keys.agentIslandShowInProgress)
+            put(newValue.queued, old.queued, Keys.agentIslandShowQueued)
+        }
     }
 
     /// MCP servers configured for the coding agent. Stored JSON-encoded; an unreadable

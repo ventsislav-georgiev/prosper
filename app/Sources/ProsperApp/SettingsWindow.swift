@@ -858,8 +858,10 @@ private struct SettingsRootView: View {
         // manifest's Permissions row — the TOML control kinds have no app-list
         // kind, so the picker has to be native.
         case "com.prosper.mouse": footer = AnyView(MousePane())
-        // Agent Island: the "Show sessions" picker (Remote Terminal isolation on).
-        case "com.prosper.agentisland": footer = AnyView(AgentIslandPane())
+        // Agent Island: the "Show sessions" picker (Remote Terminal isolation on),
+        // then (#534) the row-detail toggles.
+        case "com.prosper.agentisland":
+            footer = AnyView(Group { AgentIslandPane(); AgentIslandRowDetailsSection() })
         default: break
         }
         return ExtensionSettingsPane(registry: registry, record: record, section: section,
@@ -952,6 +954,34 @@ private struct SettingsRootView: View {
             } else {
                 GeneralPane(model: model)
             }
+        }
+    }
+}
+
+/// #534: Agent Island › Row details, one toggle per detail a session row can
+/// draw. Per Mac (not in SyncedKeys); prosper-ios (#533) has the same labels and
+/// defaults. A toggle redraws the open island at once, with no animation.
+struct AgentIslandRowDetailsSection: View {
+    @State private var show = Preferences.agentIslandRowDetails
+
+    var body: some View {
+        // NeonRow + a trailing toggle, as the manifest's own toggle rows above.
+        NeonSection("Row details", footer: "What each session row shows besides its title, age and state.") {
+            NeonRow("Agents") { Toggle("", isOn: $show.agents).labelsHidden() }
+            NeonDivider()
+            NeonRow("Open PRs") { Toggle("", isOn: $show.openPRs).labelsHidden() }
+            NeonDivider()
+            NeonRow("Merged") { Toggle("", isOn: $show.merged).labelsHidden() }
+            NeonDivider()
+            NeonRow("Tasks done") { Toggle("", isOn: $show.tasksDone).labelsHidden() }
+            NeonDivider()
+            NeonRow("In progress") { Toggle("", isOn: $show.inProgress).labelsHidden() }
+            NeonDivider()
+            NeonRow("Queued") { Toggle("", isOn: $show.queued).labelsHidden() }
+        }
+        .onChange(of: show) { _, v in
+            Preferences.agentIslandRowDetails = v
+            AgentIslandController.shared.rowDetailsChanged()
         }
     }
 }

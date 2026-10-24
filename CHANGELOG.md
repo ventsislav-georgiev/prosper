@@ -41,7 +41,9 @@ tag from the now-released section and put it on the new top draft.
   buttons that open in your browser, how many it
   has merged, and its tasks done, in progress and queued (#506). The pull requests get a
   line of their own under the session: up to three, then how many more are pending, with
-  the merged count at the right (#525). Remote
+  the merged count at the right (#525). Row details in the Agent Island settings turn
+  each of these on or off: the subagent count, open pull requests, the merged count,
+  tasks done, in progress and queued. The three task counts start off (#534). Remote
   Terminal sends the same to the phone's session list (#507).
   While Remote Terminal keeps its sessions separate, a setting picks which sessions to
   show (#474).

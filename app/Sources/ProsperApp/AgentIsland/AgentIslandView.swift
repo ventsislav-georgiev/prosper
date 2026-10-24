@@ -58,8 +58,10 @@ struct AgentIslandGeometry: Equatable {
 
     var collapsedSize: CGSize { CGSize(width: notchWidth + 2 * earWidth, height: barHeight) }
 
-    /// One row's height: three lines when it has a PR line.
-    static func height(of s: AgentSession) -> CGFloat { AgentIsland.hasPRLine(s.meta) ? prRowHeight : rowHeight }
+    /// One row's height: three lines when it has a PR line (#534: after the toggles).
+    static func height(of s: AgentSession, show d: AgentIslandRowDetails = .all) -> CGFloat {
+        AgentIsland.hasPRLine(s.meta, show: d) ? prRowHeight : rowHeight
+    }
 
     /// The first 6 rows (`rows`, their heights in order) plus the prompt cards
     /// under blocked rows (`cards`, their summed `cardHeight`): the island grows
@@ -242,8 +244,14 @@ final class AgentIslandStore: ObservableObject {
     @Published var notices: [AgentSessionKey: String] = [:]
     /// #475: the prompt card under a blocked row, from its last screen read.
     @Published var cards: [AgentSessionKey: AgentCard] = [:]
+    /// #534: the row details shown. The controller sets it from Preferences at
+    /// build and on every Settings toggle; the tests set it outright.
+    @Published var details: AgentIslandRowDetails
 
-    init(geometry: AgentIslandGeometry) { self.geometry = geometry }
+    init(geometry: AgentIslandGeometry, details: AgentIslandRowDetails = .all) {
+        self.geometry = geometry
+        self.details = details
+    }
 
     /// Cards show under blocked rows only.
     func card(for s: AgentSession) -> AgentCard? { s.state == .blocked ? cards[s.key] : nil }
@@ -253,7 +261,7 @@ final class AgentIslandStore: ObservableObject {
     }
 
     /// #525: per row, two or three lines.
-    var rowHeights: [CGFloat] { sessions.map(AgentIslandGeometry.height(of:)) }
+    var rowHeights: [CGFloat] { sessions.map { AgentIslandGeometry.height(of: $0, show: details) } }
 
     var size: CGSize {
         expanded ? geometry.expandedSize(rows: rowHeights, cards: cardsHeight) : geometry.collapsedSize
@@ -329,7 +337,7 @@ struct AgentIslandView: View {
             VStack(spacing: 0) {
                 ForEach(store.sessions) { s in
                     AgentIslandRow(session: s, now: ctx.date.timeIntervalSince1970,
-                                   notice: store.notices[s.key]) { onRow(s) }
+                                   notice: store.notices[s.key], show: store.details) { onRow(s) }
                     if let card = store.card(for: s) {
                         AgentPromptCardView(card: card, onOption: { onAnswer(s, $0, $1) }, onJump: { onRow(s) })
                     }
@@ -368,12 +376,14 @@ struct AgentIslandRow: View {
     let session: AgentSession
     let now: TimeInterval
     let notice: String?
+    /// #534: the row details toggled on.
+    var show: AgentIslandRowDetails = .all
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
-        let prs = AgentIsland.prChips(session.meta)   // once per body
-        let prLine = AgentIsland.hasPRLine(session.meta)
+        let prs = AgentIsland.prChips(session.meta, show: show)   // once per body
+        let prLine = AgentIsland.hasPRLine(session.meta, show: show)
         Button(action: action) {
             // #525: line 1 title, agents, age; line 2 state, branch, tasks; line 3
             // PRs, merged. Every line spans the text column, so the right-hand
@@ -389,7 +399,7 @@ struct AgentIslandRow: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(Color.white)
                             .lineLimit(1)
-                        if session.agents > 0 {
+                        if show.agents, session.agents > 0 {
                             Text("+\(session.agents) agent\(session.agents == 1 ? "" : "s")")
                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                                 .foregroundStyle(Color.white.opacity(0.5))
@@ -413,7 +423,7 @@ struct AgentIslandRow: View {
                                     .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(Color.white.opacity(0.35))
                             }
-                            if let summary = AgentIsland.metaSummary(session.meta) {
+                            if let summary = AgentIsland.metaSummary(session.meta, show: show) {
                                 Spacer(minLength: 6)
                                 Text(verbatim: summary)
                                     .font(.system(size: 10).monospacedDigit())
@@ -431,7 +441,7 @@ struct AgentIslandRow: View {
             }
             .padding(.leading, AgentIslandGeometry.rowLead)
             .padding(.trailing, AgentIslandGeometry.rowTrail)
-            .frame(height: AgentIslandGeometry.height(of: session) - 4)
+            .frame(height: AgentIslandGeometry.height(of: session, show: show) - 4)
             .background(RoundedRectangle(cornerRadius: 12)
                 .fill(Color.white.opacity(hover ? 0.10 : 0.05)))
             .contentShape(Rectangle())
@@ -439,7 +449,7 @@ struct AgentIslandRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .accessibilityLabel(AgentIsland.rowAccessibilityLabel(session, now: now))
+        .accessibilityLabel(AgentIsland.rowAccessibilityLabel(session, now: now, show: show))
         .accessibilityActions {
             ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
                 if chip.url != nil {
@@ -474,7 +484,7 @@ struct AgentIslandRow: View {
             }
             .fixedSize()
             Spacer(minLength: AgentIsland.mergedGap)
-            if let merged = AgentIsland.mergedLabel(session.meta) {
+            if let merged = AgentIsland.mergedLabel(session.meta, show: show) {
                 Text(verbatim: merged)
                     .font(Font(AgentIslandGeometry.chipFont))
                     .foregroundStyle(Color.white.opacity(0.5))
