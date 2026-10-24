@@ -406,7 +406,8 @@ struct AgentCardLayout: Equatable {
     /// Per option: its label rows (more than one = it did not fit one row) and detail rows.
     let labels: [[String]]
     let details: [[String]]
-    /// Non-deny options whose label or a detail line does not fit one row.
+    /// Non-deny options whose label or a detail line does not fit one row; a mode
+    /// change is off anyway (`isModeChange`), so never here.
     let tooWide: Set<Int>
     let hidden: Bool
     /// Why approve is off, wrapped; empty when nothing is.
@@ -415,6 +416,7 @@ struct AgentCardLayout: Equatable {
     static let tooLongCaption = "Too long to show in full, open the terminal to approve"
     static let hiddenCaption = "Hidden characters in this prompt, open the terminal to approve"
     static let offTopCaption = "The top of this prompt is off screen, open the terminal to approve"
+    static let modeCaption = "Mode changes are made in the terminal"
 
     private typealias G = AgentIslandGeometry
 
@@ -430,20 +432,21 @@ struct AgentCardLayout: Equatable {
             labels.append(G.wrap(label, G.labelFont, lw))
             details.append(detail.flatMap { G.wrap($0, G.detailFont, dw) })
             let fits = G.fits(label, G.labelFont, lw) && detail.allSatisfy { G.fits($0, G.detailFont, dw) }
-            if !fits, o.style(first: false) != .deny { tooWide.insert(o.digit) }
+            if !fits, o.style(first: false) != .deny, !o.isModeChange { tooWide.insert(o.digit) }
         }
         (self.labels, self.details, self.tooWide) = (labels, details, tooWide)
         hidden = p.hasHiddenCharacters
-        // Several apply: hidden characters win, then the off-screen top, then too long.
+        // Several apply: hidden characters win, then the off-screen top, then too long, then a mode change.
         let why = hidden ? Self.hiddenCaption : !p.topFound ? Self.offTopCaption
-            : (isOverCap || !tooWide.isEmpty) ? Self.tooLongCaption : nil
+            : (isOverCap || !tooWide.isEmpty) ? Self.tooLongCaption
+            : p.options.contains(where: \.isModeChange) ? Self.modeCaption : nil
         caption = why.map { G.wrap($0, G.questionFont, G.cardInner) } ?? []
     }
 
     /// The one rule (W1 item 6): the card's buttons and `AgentPrompt.answer` both
-    /// ask this. A "No…" option is always on.
+    /// ask this. A "No…" option is always on, a mode change always off (OQ-45).
     func isEnabled(_ o: AgentPromptOption) -> Bool {
-        o.style(first: false) == .deny || !(isOverCap || hidden || tooWide.contains(o.digit))
+        o.style(first: false) == .deny || !(isOverCap || hidden || tooWide.contains(o.digit) || o.isModeChange)
     }
 
     /// Lines wrapped into measured rows, then capped at `maxContext` rows (cached).

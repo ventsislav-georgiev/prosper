@@ -39,9 +39,10 @@ tag from the now-released section and put it on the new top draft.
   wrap and are shown in full. A command too long for the card, a prompt with hidden or
   direction-changing characters, or one whose top has scrolled out of the terminal can
   only be denied from the island, and an option too long for the card is shown but
-  cannot be picked there; approve those in the terminal. Prompts without numbered
-  options (codex, cursor, opencode) show their last lines and an Open terminal button
-  (#475).
+  cannot be picked there; approve those in the terminal. An option that changes the
+  session's permission mode (switch to auto mode, accept edits) is never one click on the
+  island; change modes in the terminal (#491). Prompts without numbered options (codex,
+  cursor, opencode) show their last lines and an Open terminal button (#475).
 - **Prosper no longer quits when the Mac goes to sleep with a manual fan speed set and
   the fan helper gone or unreachable.** The error path of the sleep-time fan reset ran
   on the helper connection's queue and stopped the app there; it has been possible

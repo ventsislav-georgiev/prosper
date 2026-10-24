@@ -28,6 +28,12 @@ struct AgentPromptOption: Hashable {
         if label == "No" || label.hasPrefix("No,") || label.hasPrefix("No ") { return .deny }
         return first ? .accent : .plain
     }
+
+    /// Switches the session's permission mode (OQ-45): "Yes, and switch to auto
+    /// mode …" / "… accept edits …", or an option on shift+tab, Claude Code's
+    /// mode-cycle key ("Yes, allow all edits during this session"). Never
+    /// one-click on the island. A "don't ask again" rule is not a mode change.
+    var isModeChange: Bool { label.hasPrefix("Yes, and switch to ") || hint == "shift+tab" }
 }
 
 struct AgentPrompt: Hashable {
@@ -83,7 +89,7 @@ struct AgentPrompt: Hashable {
 
     /// Context rows the card shows (measured rows, after wrapping); also the
     /// screen lines a context-only card takes (`tail`).
-    static let maxContext = 8
+    static let maxContext = 10
     /// Non-option lines allowed between two options (descriptions, a rule).
     static let maxGap = 4
 }
