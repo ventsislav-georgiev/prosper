@@ -43,14 +43,21 @@ enum DefaultsProbe {
     /// No app key lives under `prosper.test.`; the probe removes it again after the read-back.
     static let key = "prosper.test.defaultsProbe"
 
-    /// nil when a fresh value written to `defaults` syncs and reads back; else one line of evidence.
+    /// nil when a fresh value written to `defaults` syncs and reads back, and its removal reads back
+    /// too (the CI reds lost both halves); else one line of evidence.
     static func failure(_ defaults: UserDefaults, path: String, previousTest: String? = nil) -> String? {
         let value = UUID().uuidString
+        // Set and remove each post didChangeNotification: under LoRATrainer.swift:148, 2 syncScheduler runs per test (benign).
         defaults.set(value, forKey: key)
         let synced = defaults.synchronize()
         let back = defaults.string(forKey: key)
-        defer { defaults.removeObject(forKey: key) }
-        if synced && back == value { return nil }
+        let setHeld = synced && back == value
+        if setHeld {
+            defaults.removeObject(forKey: key)
+            if defaults.object(forKey: key) == nil { return nil }
+        }
+        // A failed set keeps the probe until the diagnostics below have read the store.
+        defer { if !setHeld { defaults.removeObject(forKey: key) } }
         // Failure path only from here: nothing below runs on a healthy store.
         let fm = FileManager.default
         func describe(_ p: String) -> String {
@@ -63,7 +70,9 @@ enum DefaultsProbe {
         let onDisk = (try? Data(contentsOf: URL(fileURLWithPath: path + ".plist")))
             .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
         let keys = (defaults.persistentDomain(forName: path) ?? [:]).keys.filter { $0 != key }.sorted()
-        return "Preferences.defaults stopped taking writes (#528): synchronize()=\(synced), "
+        return "Preferences.defaults stopped taking writes (#528): "
+            + (setHeld ? "the remove did not read back (the probe key is still set); " : "the set did not sync or read back; ")
+            + "synchronize()=\(synced), "
             + "read back \(back.map { "\"\($0)\"" } ?? "nil") for \"\(value)\", "
             + "plist on disk has it: \(onDisk?[key] as? String == value); "
             + "suite \(path); dir \(describe(dir)); plist \(describe(path + ".plist")); free \(free) bytes; "
@@ -104,8 +113,8 @@ final class DefaultsProbeObserver: NSObject, XCTestObservation {
     func check(_ testCase: XCTestCase, _ defaults: UserDefaults, path: String, previousTest: String?) {
         guard !reported, let message = DefaultsProbe.failure(defaults, path: path, previousTest: previousTest) else { return }
         reported = true
-        // An explicit location: a captured call stack costs ~6 s of symbolication on this bundle.
-        let here = XCTSourceCodeContext(location: XCTSourceCodeLocation(filePath: #filePath, lineNumber: #line))
+        // An explicit location and no call stack: capturing one cost 11 s of symbolication on this bundle.
+        let here = XCTSourceCodeContext(callStackAddresses: [], location: XCTSourceCodeLocation(filePath: #filePath, lineNumber: #line))
         testCase.record(XCTIssue(type: .assertionFailure, compactDescription: message + "; later tests are not probed",
                                  sourceCodeContext: here))
     }
@@ -128,6 +137,10 @@ final class DefaultsProbeTests: XCTestCase {
     /// A store whose writes never land: the in-memory read-back the CI flake shows.
     private final class WriteDroppingDefaults: UserDefaults, @unchecked Sendable {
         override func set(_ value: Any?, forKey defaultName: String) {}
+    }
+    /// A store whose removes never land: the other half of the CI reds.
+    private final class RemoveDroppingDefaults: UserDefaults, @unchecked Sendable {
+        override func removeObject(forKey defaultName: String) {}
     }
 
     private func privateSuite() -> String {
@@ -170,7 +183,16 @@ final class DefaultsProbeTests: XCTestCase {
         let path = privateSuite()
         let d = try XCTUnwrap(WriteDroppingDefaults(suiteName: path))
         let message = try XCTUnwrap(DefaultsProbe.failure(d, path: path))
-        XCTAssertTrue(message.contains("synchronize()=true, read back nil"), message)
+        XCTAssertTrue(message.contains("the set did not sync or read back; synchronize()=true, read back nil"), message)
+    }
+
+    /// A removes-only freeze fires too, and says which half failed.
+    func testRemovesThatDoNotReadBackFire() throws {
+        let path = privateSuite()
+        let d = try XCTUnwrap(RemoveDroppingDefaults(suiteName: path))
+        let message = try XCTUnwrap(DefaultsProbe.failure(d, path: path))
+        XCTAssertTrue(message.contains("the remove did not read back"), message)
+        XCTAssertTrue(message.contains("synchronize()=true, read back \""), message)
     }
 
     /// Catches the issues recorded on it (XCTExpectFailure works too, but costs ~4 s per use here).
