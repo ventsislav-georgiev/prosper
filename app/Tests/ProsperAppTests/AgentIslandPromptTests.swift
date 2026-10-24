@@ -834,9 +834,7 @@ final class AgentIslandPromptTests: XCTestCase {
 
     @MainActor
     func testRendersBashAndAskCardsOffscreen() throws {
-        let now = Date().timeIntervalSince1970
         let out = tempDir()
-        let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
         for (name, alias, screen) in [("agent-island-card-bash", "clean rebuild", bashScreen),
                                       ("agent-island-card-ask", "deploy the release", askFourScreen),
                                       ("agent-island-card-overcap", "long command", bash21(longCommand)),
@@ -845,25 +843,34 @@ final class AgentIslandPromptTests: XCTestCase {
                                       ("agent-island-card-longcommand", "install deps", bash21([longLine, cjkLine])),
                                       ("agent-island-card-widelabel", "allow a wide path", bash21(["swift build"], allow: wideAllow)),
                                       ("agent-island-card-hidden", "hidden characters", hiddenScreen)] {
-            let store = AgentIslandStore(geometry: notched)
-            let blocked = AgentSession(key: AgentSessionKey(dir: "/d", name: "fix-auth"), alias: alias,
-                                       activity: now - 12, state: .blocked, agents: 0)
-            store.sessions = [blocked,
-                              AgentSession(key: AgentSessionKey(dir: "/d", name: "prosper-ios"), alias: "",
-                                           activity: now - 240, state: .working, agents: 2),
-                              AgentSession(key: AgentSessionKey(dir: "/d", name: "payhawk-apps"),
-                                           alias: "ship release notes", activity: now - 7200, state: .done, agents: 0)]
-            store.cards[blocked.key] = AgentPrompt.card(screen: screen)
-            store.expanded = true
-            let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
-            r.scale = 2
-            let cg = try XCTUnwrap(r.cgImage, name)
-            XCTAssertEqual(CGFloat(cg.width), (store.size.width + 40) * 2, name)
-            XCTAssertEqual(CGFloat(cg.height), (store.size.height + 40) * 2, name)
-            let png = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]))
-            try png.write(to: out.appendingPathComponent("\(name).png"))
-            if let extra { try png.write(to: extra.appendingPathComponent("\(name).png")) }
+            try render(name, alias: alias, card: AgentPrompt.card(screen: screen), to: out)
         }
+    }
+
+    /// The island with one blocked row showing `card`, offscreen, as
+    /// `<name>.png` in `out` (and in `PROSPER_RENDER_DIR` when set).
+    @MainActor
+    private func render(_ name: String, alias: String, card: AgentCard?, to out: URL) throws {
+        let now = Date().timeIntervalSince1970
+        let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
+        let store = AgentIslandStore(geometry: notched)
+        let blocked = AgentSession(key: AgentSessionKey(dir: "/d", name: "fix-auth"), alias: alias,
+                                   activity: now - 12, state: .blocked, agents: 0)
+        store.sessions = [blocked,
+                          AgentSession(key: AgentSessionKey(dir: "/d", name: "prosper-ios"), alias: "",
+                                       activity: now - 240, state: .working, agents: 2),
+                          AgentSession(key: AgentSessionKey(dir: "/d", name: "payhawk-apps"),
+                                       alias: "ship release notes", activity: now - 7200, state: .done, agents: 0)]
+        store.cards[blocked.key] = card
+        store.expanded = true
+        let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
+        r.scale = 2
+        let cg = try XCTUnwrap(r.cgImage, name)
+        XCTAssertEqual(CGFloat(cg.width), (store.size.width + 40) * 2, name)
+        XCTAssertEqual(CGFloat(cg.height), (store.size.height + 40) * 2, name)
+        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]))
+        try png.write(to: out.appendingPathComponent("\(name).png"))
+        if let extra { try png.write(to: extra.appendingPathComponent("\(name).png")) }
     }
 
     // MARK: - #483 item 1: only a dialog at the bottom of the screen is live
@@ -1027,17 +1034,17 @@ final class AgentIslandPromptTests: XCTestCase {
                 .joined(separator: "\n")
         }
         let p = try prompt(ask(["Deploy the release?", short, "This wipes the cache."]))
-        XCTAssertEqual(p.question, "This wipes the cache.")
-        XCTAssertEqual(p.context, [" ←  ☐ Target  ✔ Submit  →", "Deploy the release?", short], "the head above the rule stays")
+        XCTAssertEqual(p.question, "Deploy the release? \(short) This wipes the cache.", "#526: every line under the chips")
+        XCTAssertEqual(p.context, ["←  ☐ Target  ✔ Submit  →"])
         XCTAssertTrue(p.topFound)
         let f = FakeDch()
         f.screen = ask(["Wipe production?", short, "This wipes the cache."])
         XCTAssertEqual(f.answer(1, expected: p), .changed)
         XCTAssertEqual(f.sent, [])
-        // The rule as the question line itself: it is the question, the line above it context.
+        // The rule as the question's last line: still part of the question.
         let q = try prompt(ask(["Deploy the release?", short]))
-        XCTAssertEqual(q.question, short)
-        XCTAssertEqual(q.context, [" ←  ☐ Target  ✔ Submit  →", "Deploy the release?"])
+        XCTAssertEqual(q.question, "Deploy the release? \(short)")
+        XCTAssertEqual(q.context, ["←  ☐ Target  ✔ Submit  →"])
         XCTAssertTrue(q.topFound)
     }
 
@@ -1118,12 +1125,13 @@ final class AgentIslandPromptTests: XCTestCase {
         }
         let screens = [bashScreen, askFourScreen, bash21(longCommand), bash21([longLine, cjkLine]),
                        bash21(["echo safe"], allow: wideAllow), bash21(["swift build"], allow: "/Users/probe/", wrap: "proj"),
-                       hiddenScreen, editScreen]
+                       hiddenScreen, editScreen, rowLayoutScreen]
         for screen in screens {
             let p = try prompt(screen), l = p.layout
             try draw(.prompt(p))
             expect(l.question + l.caption, G.questionFont, "question/caption")
             expect(l.context, G.contextFont, "context")
+            expect(l.preview, l.previewFont, "preview")
             expect(l.labels.joined().map { $0 }, G.labelFont, "label")
             expect(l.details.joined().map { $0 }, G.detailFont, "detail")
             expect(p.options.map { "\($0.digit)" }, G.digitFont, "digit")
@@ -1458,7 +1466,8 @@ final class AgentIslandPromptTests: XCTestCase {
         }
     }
 
-    func testRealAskFormsAreApprovableAndMultiSelectAndPreviewsAreContextOnly() throws {
+    /// run-10 (previews) is a prompt since #526: testPreviewFormSplitsTheBoxOffTheOptions.
+    func testRealAskFormsAreApprovableAndMultiSelectIsContextOnly() throws {
         for (why, screen, head) in [("run-7 one question", run7Screen, "☐ Color"),
                                     ("run-9 two questions", run9Screen, "←  ☐ Color  ☐ Size  ✔ Submit  →")] {
             let p = try prompt(screen)
@@ -1472,7 +1481,7 @@ final class AgentIslandPromptTests: XCTestCase {
             f.screen = screen
             XCTAssertEqual(f.answer(2, expected: p), .sent, why)
         }
-        for (why, screen) in [("run-8 multiSelect", run8Screen), ("run-10 previews", run10Screen)] {
+        for (why, screen) in [("run-8 multiSelect", run8Screen)] {
             XCTAssertNil(AgentPrompt.parse(screen), why)
             guard case .context = AgentPrompt.card(screen: screen) else { return XCTFail(why) }
         }
@@ -1584,6 +1593,300 @@ final class AgentIslandPromptTests: XCTestCase {
                 XCTAssertEqual(f.sent, ["\(p.options.count)"], why)
             }
         }
+    }
+
+    // MARK: - #526: the AskUserQuestion preview form
+
+    private let rowLayoutQuestion = "Which Agent Island row layout should the PR change use? "
+        + #"Both show up to 3 PR chips (without the org name) before "+N pending PRs"."#
+
+    private let rowLayoutPreview = [
+        "✳  sec-1  [+3 agents]                              0s",
+        "   Working  sec-branch…   39/64 done · 3 in progress · 22 queued",
+        "   [cde-codebase#370] [solution#20399] [+2 pending PRs]  66 merged",
+        "",
+        "●  perf-1                                          15s",
+        "   Idle  solution-mast…   74/81 done · 2 in progress · 5 queued",
+        "   [account-data-service#13509] [solution#20399]   63 merged",
+    ]
+
+    /// Labels hold only the left column, the box is split out with its frame
+    /// and "│ " padding off, "Notes:" is its own field, the "☐" tab header is
+    /// context (not a checkbox option), and "Chat about this" plus the 66-char
+    /// footer end the dialog.
+    func testPreviewFormSplitsTheBoxOffTheOptions() throws {
+        let p = try prompt(rowLayoutScreen)
+        XCTAssertEqual(p.question, rowLayoutQuestion, "a wrapped question: every line under the chips, joined")
+        XCTAssertEqual(p.context, ["☐ Row layout"], "the chip line only")
+        XCTAssertEqual(p.options.map(\.digit), [1, 2])
+        XCTAssertEqual(p.options.map(\.label), ["PR line (Recommended)", "Two lines, swapped"])
+        XCTAssertEqual(p.options.map(\.detail), [[], []])
+        XCTAssertEqual(p.preview, rowLayoutPreview)
+        XCTAssertEqual(p.notes, ["Notes: press n to add notes"])
+        XCTAssertTrue(p.topFound)
+        XCTAssertFalse(p.hasHiddenCharacters)
+        guard case .prompt(let c) = AgentPrompt.card(screen: rowLayoutScreen) else { return XCTFail("a prompt card") }
+        XCTAssertEqual(c, p)
+
+        let q = try prompt(run10Screen)
+        XCTAssertEqual(q.question, "Which layout?")
+        XCTAssertEqual(q.context, ["☐ Layout"])
+        XCTAssertEqual(q.options.map(\.label), ["Grid", "List", "Cards"])
+        XCTAssertEqual(q.options.map(\.detail), [[], [], []])
+        XCTAssertEqual(q.preview, ["+------+------+------+", "| item | item | item |", "+------+------+------+"])
+        XCTAssertEqual(q.notes, ["Notes: press n to add notes"])
+    }
+
+    /// `screen` with `n` blank cells inserted at the preview box's column (34)
+    /// on every row of the two-column block: the box and "Notes:" move right.
+    private func boxShifted(_ screen: String, by n: Int) -> String {
+        screen.split(separator: "\n", omittingEmptySubsequences: false).map { r -> String in
+            let cs = Array(r)
+            guard cs.count > 34, cs[33] == " ", "┌│├└N".contains(cs[34]) else { return String(r) }
+            return String(cs[..<34]) + String(repeating: " ", count: n) + String(cs[34...])
+        }.joined(separator: "\n")
+    }
+
+    /// The cut follows the box's top-left corner, in cells: a box further right
+    /// parses the same, and wide glyphs (an emoji, ideographs) in a label shift
+    /// the corner's character index but not its cell column.
+    func testPreviewSplitFollowsTheBoxCornerInCells() throws {
+        let p = try prompt(rowLayoutScreen)
+        for n in [1, 5, 12] {
+            let s = boxShifted(rowLayoutScreen, by: n)
+            XCTAssertTrue(s.contains(String(repeating: " ", count: 34 + n) + "└"), "\(n)")
+            XCTAssertEqual(try prompt(s), p, "box at column \(34 + n)")
+        }
+        let pad = { (n: Int) in String(repeating: " ", count: n) }
+        let wide = rowLayoutScreen  // 29 + 5 and 13 + 21 cells: the corner stays at cell 34
+            .replacingOccurrences(of: "❯ 1. PR line (Recommended)" + pad(8) + "┌", with: "❯ 1. 🚀 PR line (Recommended)" + pad(5) + "┌")
+            .replacingOccurrences(of: "  2. Two lines, swapped" + pad(11) + "│", with: "  2. 两行交换" + pad(21) + "│")
+        XCTAssertNotEqual(wide, rowLayoutScreen)
+        let w = try prompt(wide)
+        XCTAssertEqual(w.options.map(\.label), ["🚀 PR line (Recommended)", "两行交换"])
+        XCTAssertEqual(w.preview, rowLayoutPreview)
+        XCTAssertEqual(AgentPrompt.cells("🚀"), 2)
+        XCTAssertEqual(AgentPrompt.cells("两"), 2)
+        XCTAssertEqual(AgentPrompt.cells("✳"), 1)
+        XCTAssertEqual(AgentPrompt.cells("·"), 1)
+    }
+
+    /// The click guard compares the preview and the notes: a focus move (the
+    /// caret and the preview both change) or one changed preview character is a
+    /// different prompt, and so is a different notes line.
+    func testPreviewAndNotesArePartOfTheComparedIdentity() throws {
+        let p = try prompt(rowLayoutScreen)
+        let moved = try prompt(rowLayoutScreen
+            .replacingOccurrences(of: "❯ 1. PR line", with: "  1. PR line")
+            .replacingOccurrences(of: "  2. Two lines", with: "❯ 2. Two lines")
+            .replacingOccurrences(of: "[+2 pending PRs]  66", with: "[+2 pending PR]   66"))
+        let char = try prompt(rowLayoutScreen.replacingOccurrences(of: "[+3 agents]", with: "[+4 agents]"))
+        let notes = try prompt(rowLayoutScreen.replacingOccurrences(of: "press n to add notes", with: "prefer the grid"))
+        for (why, q) in [("focus moved", moved), ("one preview character", char), ("notes", notes)] {
+            XCTAssertEqual(q.options.map(\.label), p.options.map(\.label), why)
+            XCTAssertEqual(q.question, p.question, why)
+            XCTAssertEqual(q.context, p.context, why)
+            XCTAssertNotEqual(q, p, why)
+            XCTAssertEqual(Set([p, q]).count, 2, why)
+        }
+        XCTAssertEqual(moved.preview[2], "   [cde-codebase#370] [solution#20399] [+2 pending PR]   66 merged")
+        XCTAssertEqual(notes.notes, ["Notes: prefer the grid"])
+    }
+
+    /// Preview and notes text go through the hidden-character rule like
+    /// everything else the card shows.
+    func testHiddenCharacterInAPreviewOrNotesIsCaught() throws {
+        for (why, from, to) in [("preview", "sec-1  [+3", "sec-1\u{202E}  [+3"),
+                                ("notes", "press n to", "press\u{200B} n to")] {
+            let p = try prompt(rowLayoutScreen.replacingOccurrences(of: from, with: to))
+            XCTAssertTrue(p.hasHiddenCharacters, why)
+            XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.hiddenCaption, why)
+        }
+    }
+
+    /// In the preview form a digit only moves the focus; Enter answers, and the
+    /// island never sends Enter. So no click sends there, unchanged screen or not.
+    func testPreviewFormSendsNothing() throws {
+        let p = try prompt(rowLayoutScreen), f = FakeDch()
+        f.screen = rowLayoutScreen
+        for d in [1, 2] { XCTAssertEqual(f.answer(d, expected: p), .changed, "\(d)") }
+        XCTAssertEqual(f.sent, [])
+    }
+
+    /// The preview form must still be the last thing on the screen, its box
+    /// whole, and only it may end in "Chat about this" and the long footer.
+    func testPreviewFormMustBeWholeAndLast() {
+        let footer = "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel"
+        let rows = rowLayoutScreen.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let bottom = rows.firstIndex { $0.hasSuffix("┘") }!, perf = rows.firstIndex { $0.contains("perf-1") }!
+        let without = { (k: Int, row: String) in
+            rows.enumerated().map { $0.offset == k ? row : $0.element }.joined(separator: "\n")
+        }
+        for (why, screen) in [
+            ("a shell prompt under the footer", rowLayoutScreen + "\n$ "),
+            ("no Chat about this", rowLayoutScreen.replacingOccurrences(of: "  Chat about this\n", with: "")),
+            ("a short footer", rowLayoutScreen.replacingOccurrences(of: footer, with: "Esc to cancel")),
+            ("a line between the notes and the rule",
+             rowLayoutScreen.replacingOccurrences(of: "Notes: press n to add notes\n", with: "Notes: press n to add notes\nstray\n")),
+            ("no box bottom", without(bottom, "")),
+            ("a box row without its right bar", without(perf, String(rows[perf].dropLast()))),
+            ("a label running into the box", rowLayoutScreen.replacingOccurrences(
+                of: "  2. Two lines, swapped" + String(repeating: " ", count: 11) + "│",
+                with: "  2. " + String(repeating: "x", count: 29) + "│")),
+            ("a normal form ending like a preview form", askFourScreen
+                .replacingOccurrences(of: "  6. Chat about this", with: "  Chat about this")
+                .replacingOccurrences(of: "Enter to select · ↑/↓ to navigate · Esc to cancel", with: footer)),
+        ] {
+            XCTAssertNil(AgentPrompt.parse(screen), why)
+        }
+    }
+
+    // MARK: - #526 phase 2: the preview block on the card
+
+    private func size(_ l: AgentCardLayout) -> CGFloat { CTFontGetSize(l.previewFont) }
+
+    /// One size for the whole block: the context size when every row fits,
+    /// else the largest 0.25 pt step that fits the widest row, never under
+    /// 7 pt; there a row too wide is cut and ends in "…", one row each.
+    func testPreviewBlockStepsDownToFitAndClipsAtTheFloor() throws {
+        let w = G.cardContextWidth
+        var p = try prompt(rowLayoutScreen)
+        XCTAssertEqual(size(p.layout), 10.0, "the operator's case: 66 SF Mono cells fit at 10 pt in 410 pt")
+        XCTAssertEqual(p.layout.preview, rowLayoutPreview)
+        for r in p.layout.preview { XCTAssertTrue(G.fits(r, p.layout.previewFont, w), r) }
+        let widest = try XCTUnwrap(rowLayoutPreview.max { G.width($0, G.contextFont) < G.width($1, G.contextFont) })
+        XCTAssertFalse(G.fits(widest, CTFontCreateCopyWithAttributes(G.contextFont, 10.25, nil, nil), w), "the largest step")
+        XCTAssertEqual(p.layout.previewLine, 12)
+
+        p.preview = ["short", "rows"]
+        XCTAssertEqual(size(p.layout), CTFontGetSize(G.contextFont), "fits: the context size")
+        XCTAssertEqual(p.layout.previewLine, 13, "the font's own line, 11 pt SF Mono")
+
+        for extra in [3, 9, 17] {
+            p.preview = rowLayoutPreview + [widest + String(repeating: "x", count: extra)]
+            let l = p.layout, s = size(l), bigger = CTFontCreateCopyWithAttributes(G.contextFont, s + 0.25, nil, nil)
+            XCTAssertLessThan(s, 10, "\(extra)")
+            XCTAssertGreaterThan(s, AgentCardLayout.previewFloor, "\(extra)")
+            XCTAssertEqual(s.truncatingRemainder(dividingBy: 0.25), 0, "0.25 pt steps: \(extra)")
+            XCTAssertTrue(G.fits(l.preview.last!, l.previewFont, w), "\(extra)")
+            XCTAssertFalse(G.fits(l.preview.last!, bigger, w), "the largest step that fits: \(extra)")
+            XCTAssertEqual(l.preview, p.preview, "nothing clipped above the floor: \(extra)")
+        }
+
+        let long = String(repeating: "0123456789", count: 15)
+        p.preview = ["head", long, "tail"]
+        let l = p.layout
+        XCTAssertEqual(size(l), AgentCardLayout.previewFloor, "never under the floor")
+        XCTAssertEqual(l.preview.count, 3, "clipped, not wrapped")
+        XCTAssertEqual(l.preview[0], "head")
+        XCTAssertEqual(l.preview[2], "tail")
+        XCTAssertTrue(l.preview[1].hasSuffix("…"))
+        XCTAssertTrue(long.hasPrefix(l.preview[1].dropLast()))
+        XCTAssertGreaterThan(l.preview[1].count, 80, "cut where the width ends, not short of it")
+        for r in l.preview { XCTAssertTrue(G.fits(r, l.previewFont, w), r) }
+    }
+
+    /// More rows than the context cap: the head and "… N more lines", as for context.
+    func testPreviewBlockIsCappedWithAMarker() throws {
+        var p = try prompt(rowLayoutScreen)
+        p.preview = (1...14).map { "row \($0)" }
+        XCTAssertEqual(p.layout.preview, (1...10).map { "row \($0)" } + ["… 4 more lines"])
+        p.preview = (1...10).map { "row \($0)" }
+        XCTAssertEqual(p.layout.preview, p.preview, "ten rows: no marker")
+    }
+
+    /// Exact height: the preview block counts as drawn, in its own line height.
+    func testCardHeightCountsThePreviewBlock() throws {
+        let p = try prompt(rowLayoutScreen), l = p.layout
+        XCTAssertEqual(l.question.count, 3, "the whole question, wrapped")
+        XCTAssertEqual(l.question.joined(separator: " "), rowLayoutQuestion, "broken at spaces, no word split")
+        for r in l.question { XCTAssertTrue(G.fits(r, G.questionFont, G.cardInner), r) }
+        XCTAssertEqual(l.caption.count, 1)
+        XCTAssertEqual(l.context, ["☐ Row layout"])
+        // 8 + 3 * 20 question + 20 caption + (14 + 8 + 6) chips + (7 * 12 + 8 + 6) preview + (2 options + jump) * 26 + 8 + 4
+        let h: CGFloat = 8 + 3 * 20 + 20 + (14 + 8 + 6) + (7 * 12 + 8 + 6) + 3 * 26 + 8 + 4
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.prompt(p)), h)
+        XCTAssertFalse(notched.listScrolls(rows: 3, cards: h), "a 3-row heading still fits the island with 3 rows")
+        var none = p
+        none.preview = []
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.prompt(p)) - AgentIslandGeometry.cardHeight(.prompt(none)),
+                       7 * 12 + 8 + 6 + 20, "the block in its own line height, and the caption row")
+    }
+
+    /// A digit in a preview form only moves the focus, so every option is off,
+    /// "No…" too, with the preview caption; hidden characters still win.
+    func testPreviewFormHasEveryOptionOffWithItsCaption() throws {
+        var p = try prompt(rowLayoutScreen.replacingOccurrences(of: "2. Two lines, swapped", with: "2. No, two lines     "))
+        XCTAssertEqual(p.options[1].style(first: false), .deny)
+        let l = p.layout
+        for o in p.options { XCTAssertFalse(l.isEnabled(o), o.label) }
+        XCTAssertEqual(l.caption, [AgentCardLayout.previewCaption])
+        p.preview = []
+        XCTAssertTrue(p.layout.isEnabled(p.options[1]), "the same deny option without a preview")
+    }
+
+    // MARK: - #526 round 3: an Ask form's heading is its whole question
+
+    /// An Ask form without a preview whose question wraps over 2 lines: both
+    /// lines are the question, the chip line alone is context; the card wraps it.
+    func testAskQuestionWrappedOverTwoLinesIsTheWholeHeading() throws {
+        let screen = run7Screen.replacingOccurrences(of: "\nWhich color?\n",
+                                                     with: "\nWhich color should the release banner use on the\n  dark theme?\n")
+        let p = try prompt(screen)
+        XCTAssertEqual(p.question, "Which color should the release banner use on the dark theme?")
+        XCTAssertEqual(p.context, ["☐ Color"])
+        XCTAssertEqual(p.layout.question.joined(separator: " "), p.question, "wrapped at a space")
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, Array(repeating: true, count: 5))
+        let f = FakeDch()
+        f.screen = screen
+        XCTAssertEqual(f.answer(2, expected: p), .sent)
+    }
+
+    /// No chip line, no join: a Bash form's line right above its question stays context.
+    func testBashLineRightAboveTheQuestionStaysContext() throws {
+        let screen = bashScreen.replacingOccurrences(of: "products\n\n Do you", with: "products\n Do you")
+        XCTAssertNotEqual(screen, bashScreen)
+        let p = try prompt(screen)
+        XCTAssertEqual(p.question, "Do you want to proceed?")
+        XCTAssertEqual(p.context, ["Bash command", "  rm -rf .build && swift build -c release",
+                                   "  Clean and rebuild the release products"])
+    }
+
+    /// Lines moved from context into the question stay compared: two Ask forms
+    /// differing only in the question's first wrapped line are different dialogs.
+    func testAskFormsDifferingInTheFirstQuestionLineSendNothing() throws {
+        let p = try prompt(rowLayoutScreen)
+        let other = rowLayoutScreen.replacingOccurrences(of: "Which Agent Island row layout", with: "Which Agent Island bar layout")
+        XCTAssertNotEqual(try prompt(other), p)
+        let f = FakeDch()
+        // Without a preview a digit would answer: a changed first line sends nothing.
+        f.screen = run7Screen.replacingOccurrences(of: "\nWhich color?\n", with: "\nWhich color for\n  the banner?\n")
+        let q = try prompt(f.screen)
+        f.screen = run7Screen.replacingOccurrences(of: "\nWhich color?\n", with: "\nWhich shade for\n  the banner?\n")
+        XCTAssertEqual(f.answer(1, expected: q), .changed)
+        XCTAssertEqual(f.sent, [])
+    }
+
+    /// The operator's screenshot content (the row-layout question) on the
+    /// island at UI scale 0.7, 0.85 and 1.0. The island is fixed-size, so the
+    /// three must come out the same.
+    @MainActor
+    func testRendersThePreviewFormAtEachUIScale() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let out = tempDir()
+        var sizes: [CGSize] = []
+        for scale in [0.7, 0.85, 1.0] as [CGFloat] {
+            ThemeRuntime.scale = scale
+            let name = "agent-island-card-preview-\(scale)"
+            try render(name, alias: "row layout", card: AgentPrompt.card(screen: rowLayoutScreen), to: out)
+            let image = try XCTUnwrap(NSImage(contentsOf: out.appendingPathComponent("\(name).png")))
+            sizes.append(image.size)
+        }
+        XCTAssertEqual(Set(sizes.map { "\($0)" }).count, 1, "fixed-size island: \(sizes)")
+        var wide = try prompt(rowLayoutScreen)
+        wide.preview[2] += String(repeating: " [solution#20400]", count: 3)
+        try render("agent-island-card-preview-clipped", alias: "wide preview", card: .prompt(wide), to: out)
     }
 }
 
@@ -1747,6 +2050,39 @@ Which layout?
                                   Notes: press n to add notes
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
+  Chat about this
+
+Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel
+"""#
+
+/// #526: the operator's AskUserQuestion with option previews, laid out as Claude
+/// Code 2.1.309 draws its preview form (component c9 in its bundle): options
+/// in a 30-cell column, a 4-cell gap, the focused option's preview boxed
+/// (top-left corner on option 1's row, rows padded to one width), "Notes:" one
+/// row under the box, the rule, an unnumbered "Chat about this", its own footer.
+/// Box content from the operator's report; 110 columns.
+private let rowLayoutScreen = #"""
+⏺ Both layouts keep the PR chips; pick one.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Row layout
+
+Which Agent Island row layout should the PR change use? Both show up to 3 PR chips (without the org name)
+before "+N pending PRs".
+
+❯ 1. PR line (Recommended)        ┌────────────────────────────────────────────────────────────────────┐
+  2. Two lines, swapped           │ ✳  sec-1  [+3 agents]                              0s              │
+                                  │    Working  sec-branch…   39/64 done · 3 in progress · 22 queued   │
+                                  │    [cde-codebase#370] [solution#20399] [+2 pending PRs]  66 merged │
+                                  │                                                                    │
+                                  │ ●  perf-1                                          15s             │
+                                  │    Idle  solution-mast…   74/81 done · 2 in progress · 5 queued    │
+                                  │    [account-data-service#13509] [solution#20399]   63 merged       │
+                                  └────────────────────────────────────────────────────────────────────┘
+
+                                  Notes: press n to add notes
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
   Chat about this
 
 Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel

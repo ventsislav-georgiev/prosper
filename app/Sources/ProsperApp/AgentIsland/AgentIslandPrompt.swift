@@ -64,7 +64,9 @@ struct AgentPromptOption: Hashable {
 }
 
 struct AgentPrompt: Hashable {
-    /// The line right above option 1: "Do you want to proceed?", the question text.
+    /// The line right above option 1: "Do you want to proceed?", the question
+    /// text. An AskUserQuestion's whole question instead: every line under its
+    /// header-chip line, trimmed and joined with single spaces (#526).
     let question: String
     /// Every line between the dialog's top rule and the question, untruncated:
     /// title, description, command or diff (dashed frames left out), a Bash
@@ -74,6 +76,13 @@ struct AgentPrompt: Hashable {
     /// or more), where they are kept as "" (a heredoc body can depend on one).
     let context: [String]
     let options: [AgentPromptOption]
+    /// #526: Claude Code's preview form (an AskUserQuestion whose options carry
+    /// previews) draws the focused option's preview in a box right of the
+    /// options, on the same screen rows. The box's lines, frame and its "│ "
+    /// padding off; empty for every other dialog. Compared and hidden-checked.
+    var preview: [String] = []
+    /// The preview form's "Notes:" lines under the box: the hint or typed notes.
+    var notes: [String] = []
     /// False when the context walk ran off the screen top: every Claude Code
     /// dialog and question form has a top rule, so not seeing it means the head
     /// may be above the screen. Only a "No…" option answers such a dialog.
@@ -82,7 +91,7 @@ struct AgentPrompt: Hashable {
     /// Any hidden or reordering character anywhere the card shows (Trojan
     /// Source): only a "No…" option answers such a dialog.
     var hasHiddenCharacters: Bool {
-        ([question] + context + options.flatMap { [$0.label] + $0.detail })
+        ([question] + context + preview + notes + options.flatMap { [$0.label] + $0.detail })
             .contains { $0.unicodeScalars.contains(where: Self.isHidden) }
     }
 
@@ -158,17 +167,32 @@ extension AgentPrompt {
     /// above a shell prompt is not a live dialog): below the last option and its
     /// detail only blank lines, rules and, last, one footer line ("Esc to
     /// cancel …"); a last option with detail lines needs that rule or footer
-    /// under it (else the detail could be a shell prompt).
+    /// under it (else the detail could be a shell prompt). A preview form
+    /// (`splitPreview`) is parsed on its left column; it ends in a rule, an
+    /// unnumbered "Chat about this" and its own footer (`isPreviewFooter`).
     static func parse(_ screen: String) -> AgentPrompt? {
-        let raw = screen.split(separator: "\n", omittingEmptySubsequences: false), lines = unframe(raw)
+        var raw = screen.split(separator: "\n", omittingEmptySubsequences: false)
+        var preview: [String] = [], notes: [String] = []
+        let top = previewTop(raw)
+        if let top {
+            guard let s = splitPreview(raw, top) else { return nil }
+            (raw, preview, notes) = s
+        }
+        let lines = unframe(raw)
         guard let last = lines.lastIndex(where: { option($0) != nil }) else { return nil }
         var found: [(digit: Int, label: String, caret: Bool, detail: [String])] = []
         // Lines below the option the walk reaches next: the last option's tail first.
         var below = Array(lines[(last + 1)...].prefix(while: { !isBlankOrRule($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) })
         let after = lines[(last + 1 + below.count)...].filter { !isBlank($0) }
-        guard after.dropLast().allSatisfy(isRule),
-              after.last.map({ isRule($0) || isFooter($0) }) ?? below.isEmpty else { return nil }
+        if top == nil {
+            guard after.dropLast().allSatisfy(isRule),
+                  after.last.map({ isRule($0) || isFooter($0) }) ?? below.isEmpty else { return nil }
+        } else {
+            guard after.count >= 2, after.dropLast(2).allSatisfy(isRule),
+                  after[after.count - 2].trimmingCharacters(in: .whitespaces) == "Chat about this",
+                  isPreviewFooter(after[after.count - 1]) else { return nil }
+        }
         var i = last, gap = 0
         while i >= 0, found.last?.digit != 1 {
             if let o = option(lines[i]) {
@@ -207,7 +231,7 @@ extension AgentPrompt {
         }
         while i >= 0, isBlank(lines[i]) || isFrame(i) { i -= 1 }
         guard i >= 0 else { return nil }
-        let question = lines[i].trimmingCharacters(in: .whitespaces)
+        var question = lines[i].trimmingCharacters(in: .whitespaces)
         var context: [String] = []
         var j = i - 1
         // Up to the dialog's top: the first solid frame (top rule, 1.x box
@@ -227,6 +251,14 @@ extension AgentPrompt {
             }
             j -= 1
         }
+        // #526: an AskUserQuestion's question wraps over several lines under its
+        // header-chip line; all of them are the question, joined. The chip line
+        // and anything above it stay context. Other dialogs: the last line only.
+        if let c = context.lastIndex(where: isChipLine) {
+            question = (context[(c + 1)...] + [lines[i]]).filter { !isBlank($0) }
+                .map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " ")
+            context = Array(context[...c])
+        }
         // Blank lines: kept inside a command (both neighbours at column 2 or
         // more: command, diff and box content), dropped between the dialog's
         // own sections (header, description, question at column 0 or 1).
@@ -244,6 +276,7 @@ extension AgentPrompt {
                 let (label, hint) = splitHint(o.label)
                 return AgentPromptOption(digit: o.digit, label: label, hint: hint, detail: o.detail)
             },
+            preview: preview, notes: notes,
             // Off the screen top: the dialog's own top rule is not on screen.
             topFound: j >= 0)
     }
@@ -252,6 +285,99 @@ extension AgentPrompt {
     static func tail(_ screen: String) -> [String] {
         let lines = unframe(screen.split(separator: "\n", omittingEmptySubsequences: false))
         return dedent(Array(lines.filter { !isBlankOrRule($0) }.suffix(maxContext)))
+    }
+
+    // MARK: - Preview form (#526)
+
+    // Claude Code 2.1.309 draws an AskUserQuestion whose options carry previews
+    // as two columns: the options (30 cells, no descriptions) and, 4 cells
+    // right, the focused option's preview in a box ("┌─┐", "│ … │", "└─┘",
+    // "├ ✂ N lines hidden ┤" when cut) whose top-left corner sits on option 1's
+    // row, then "Notes: …" one row under the box. Every row from the box top
+    // down to the next full rule is cut at the corner's cell column.
+
+    /// The preview box's top: the bottom-most option row holding a "┌─…─┐" rule
+    /// to its end, after a space. Its row and the corner's cell column.
+    static func previewTop(_ raw: [Substring]) -> (row: Int, col: Int)? {
+        for k in raw.indices.reversed() {
+            let r = raw[k]
+            guard let q = r.firstIndex(of: "┌"), q > r.startIndex, r[r.index(before: q)] == " ",
+                  option(String(r[..<q])) != nil else { continue }
+            let box = trimmedEnd(String(r[q...]))
+            guard isRule(box), box.last == "┐" else { continue }
+            return (k, r[..<q].reduce(0) { $0 + cells($1) })
+        }
+        return nil
+    }
+
+    /// The screen with every row from the box top down cut to its left column,
+    /// the box's lines and the notes. nil when the box is not one: a row with
+    /// no frame at the corner's column, a glyph across it, no bottom, nothing in it.
+    static func splitPreview(_ raw: [Substring], _ top: (row: Int, col: Int))
+        -> (left: [Substring], preview: [String], notes: [String])? {
+        var left = raw, preview: [String] = [], notes: [String] = [], k = top.row, closed = false
+        while k < raw.count, !closed {
+            guard let (l, r) = cut(raw[k], at: top.col) else { return nil }
+            let box = trimmedEnd(String(r))
+            switch (k == top.row, box.first, box.last) {
+            case (true, "┌"?, "┐"?): break  // checked by previewTop
+            case (false, "│"?, "│"?) where box.count >= 2:
+                var s = String(box.dropFirst().dropLast())
+                if s.first == " " { s.removeFirst() }
+                preview.append(trimmedEnd(s))
+            case (false, "├"?, "┤"?): preview.append(String(box.dropFirst().dropLast()))
+            case (false, "└"?, "┘"?) where isRule(box): closed = true
+            default: return nil
+            }
+            left[k] = l
+            k += 1
+        }
+        guard closed, !preview.isEmpty else { return nil }
+        // Under the box, up to the rule above "Chat about this": the notes.
+        while k < raw.count, !isRule(String(raw[k])) {
+            guard let (l, r) = cut(raw[k], at: top.col) else { return nil }
+            let n = r.trimmingCharacters(in: .whitespaces)
+            if !n.isEmpty { notes.append(n) }
+            left[k] = l
+            k += 1
+        }
+        return (left, preview, notes)
+    }
+
+    /// `row` cut at cell column `col`; nil when a wide glyph straddles it or
+    /// text runs into it (the left part must end in a blank).
+    static func cut(_ row: Substring, at col: Int) -> (Substring, Substring)? {
+        var n = 0, i = row.startIndex
+        while i < row.endIndex, n < col { n += cells(row[i]); i = row.index(after: i) }
+        let (l, r) = (row[..<i], row[i...])
+        guard n <= col, r.allSatisfy(\.isWhitespace) || l.isEmpty || l.last == " " else { return nil }
+        return (l, r)
+    }
+
+    /// Terminal cells of one glyph: 2 for emoji presentation and East Asian wide
+    /// (ideographs, Hangul, kana, fullwidth forms), else 1.
+    /// ponytail: a hand-listed East Asian Width; a miss lands the cut off the
+    /// frame, so the parse fails to the context card (fails safe).
+    static func cells(_ c: Character) -> Int {
+        let s = c.unicodeScalars
+        guard let u = s.first else { return 1 }
+        if u.properties.isIdeographic || s.contains(where: { $0.properties.isEmojiPresentation || $0.value == 0xFE0F }) {
+            return 2
+        }
+        switch u.value {
+        case 0x1100...0x115F, 0x2E80...0x303E, 0x3041...0x33FF, 0xAC00...0xD7A3,
+             0xFE30...0xFE4F, 0xFF00...0xFF60, 0xFFE0...0xFFE6: return 2
+        default: return 1
+        }
+    }
+
+    /// The preview form's footer, 66 characters for one question (over
+    /// `isFooter`'s 64): "Enter to select · ↑/↓ to navigate · n to add notes
+    /// · Esc to cancel", with "tab to switch questions" or "ctrl+g to edit in …"
+    /// before the last part when they apply.
+    static func isPreviewFooter(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces).lowercased()
+        return t.hasPrefix("enter to select · ") && t.contains(" · n to add notes · ") && t.hasSuffix(" · esc to cancel")
     }
 
     /// A frame rule may end this many cells before the widest rule on the
@@ -315,6 +441,14 @@ extension AgentPrompt {
         return !t.isEmpty && t.allSatisfy { "╌┄".contains($0) }
     }
 
+    /// An AskUserQuestion header-chip line at column 0 or 1: " ☐ Color", or
+    /// the multi-question tab strip "←  ☐ Color  ☐ Size  ✔ Submit  →".
+    static func isChipLine(_ line: String) -> Bool {
+        let col = line.prefix(while: { $0 == " " }).count, chips = "☐☒✔"
+        guard col <= 1, let c = line.dropFirst(col).first else { return false }
+        return chips.contains(c) || (c == "←" && line.contains(where: { chips.contains($0) }))
+    }
+
     static func isBlank(_ line: String) -> Bool { line.trimmingCharacters(in: .whitespaces).isEmpty }
 
     static func isBlankOrRule(_ line: String) -> Bool { isBlank(line) || isRule(line) }
@@ -357,14 +491,16 @@ extension AgentPrompt {
 
     /// Re-read; type `digit` only if the whole dialog is unchanged — question,
     /// full context block (Claude asks the same question with the same options
-    /// for every Bash command) and options with their detail lines; the caret
-    /// position does not count —
+    /// for every Bash command), options with their detail lines, a preview
+    /// form's preview and notes; the caret position does not count —
     /// and dch says blocked. One keystroke, never Enter, else nothing.
     /// `isEnabled` is the card's own rule (AgentIslandView.swift, it measures
     /// with AppKit): a button drawn disabled can never send from here either.
+    /// Never on a preview form (#526): there a digit only moves the focus (and
+    /// the preview); Enter answers, and the island never sends Enter.
     static func answer(_ key: AgentSessionKey, digit: Int, expected: AgentPrompt,
                        io: AgentPromptIO) -> AgentPromptAnswer {
-        guard (1...9).contains(digit),
+        guard (1...9).contains(digit), expected.preview.isEmpty,
               expected.options.contains(where: { $0.digit == digit && expected.isEnabled($0) }),
               let now = parse(io.read(key)), now == expected,
               io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) == "blocked"

@@ -158,7 +158,9 @@ struct AgentIslandGeometry: Equatable {
     /// take their real width; one Character is never split. Greedy: each row is
     /// the longest prefix that fits (at least one Character), found by binary
     /// search over measured prefixes, so a row costs ~log2(n) measures, not n.
-    static func wrap(_ s: String, _ f: CTFont, _ w: CGFloat) -> [String] {
+    /// `words`: prose (the question) breaks at the last space that
+    /// fits instead, the space dropped; a word wider than the row still splits.
+    static func wrap(_ s: String, _ f: CTFont, _ w: CGFloat, words: Bool = false) -> [String] {
         let cs = Array(s)
         var rows: [String] = [], i = 0
         repeat {
@@ -171,22 +173,28 @@ struct AgentIslandGeometry: Equatable {
                     if fits(String(cs[i..<m]), f, w) { lo = m } else { hi = m }
                 }
             }
-            rows.append(String(cs[i..<lo]))
-            i = lo
+            if words, lo < cs.count, let k = cs[(i + 1)...lo].lastIndex(of: " ") {
+                rows.append(String(cs[i..<k]))
+                i = k + 1
+            } else {
+                rows.append(String(cs[i..<lo]))
+                i = lo
+            }
         } while i < cs.count
         return rows
     }
 
     /// `cache`: a test seam (W1-perf); the app always uses `.shared`.
     static func cardHeight(_ card: AgentCard, in cache: AgentCardLayoutCache = .shared) -> CGFloat {
-        func context(_ n: Int) -> CGFloat {
-            n == 0 ? 0 : CGFloat(n) * cardContextLine + 2 * cardContextPad + cardContextGap
+        func context(_ n: Int, _ line: CGFloat = cardContextLine) -> CGFloat {
+            n == 0 ? 0 : CGFloat(n) * line + 2 * cardContextPad + cardContextGap
         }
         let body: CGFloat
         switch card {
         case .prompt(let p):
             let l = p.layout(in: cache)
             body = CGFloat(l.question.count + l.caption.count) * cardQuestion + context(l.context.count)
+                + context(l.preview.count, l.previewLine)
                 + CGFloat(p.options.count + 1) * cardButton
                 + CGFloat(l.labels.reduce(0) { $0 + $1.count - 1 }) * cardLabelLine
                 + CGFloat(l.details.reduce(0) { $0 + $1.count }) * cardDetailLine
@@ -502,9 +510,21 @@ struct AgentCardLayout: Equatable {
     /// change is off anyway (`isModeChange`), so never here.
     let tooWide: Set<Int>
     let hidden: Bool
+    /// #526: a preview form's preview rows as drawn (hidden characters escaped,
+    /// clipped with "…" below the floor, capped at `maxContext` plus "… N more
+    /// lines"), all in `previewFont`, `previewLine` tall each. Empty without one.
+    let preview: [String]
+    let previewFont: CTFont
+    let previewLine: CGFloat
     /// Why approve is off, wrapped; empty when nothing is.
     let caption: [String]
 
+    /// The preview's font size: the context size when the widest row fits,
+    /// else smaller in `previewStep` steps down to `previewFloor`.
+    static let previewStep: CGFloat = 0.25
+    static let previewFloor: CGFloat = 7
+
+    static let previewCaption = "Previews are answered in the terminal"
     static let tooLongCaption = "Too long to show in full, open the terminal to approve"
     static let hiddenCaption = "Hidden characters in this prompt, open the terminal to approve"
     static let offTopCaption = "The top of this prompt is off screen, open the terminal to approve"
@@ -513,7 +533,7 @@ struct AgentCardLayout: Equatable {
     private typealias G = AgentIslandGeometry
 
     init(_ p: AgentPrompt, cache: AgentCardLayoutCache = .shared) {
-        question = G.wrap(AgentPrompt.visible(p.question), G.questionFont, G.cardInner)
+        question = G.wrap(AgentPrompt.visible(p.question), G.questionFont, G.cardInner, words: true)
         let (rows, overCap) = Self.contextRows(p.context, in: cache)
         // No dialog top found: the head may be off screen, so not shown in full either.
         (context, isOverCap) = (rows, overCap || !p.topFound)
@@ -528,8 +548,13 @@ struct AgentCardLayout: Equatable {
         }
         (self.labels, self.details, self.tooWide) = (labels, details, tooWide)
         hidden = p.hasHiddenCharacters
-        // Several apply: hidden characters win, then the off-screen top, then too long, then a mode change.
+        (preview, previewFont) = Self.previewRows(p.preview)
+        previewLine = (CTFontGetAscent(previewFont) + CTFontGetDescent(previewFont) + CTFontGetLeading(previewFont))
+            .rounded(.up)
+        // Several apply: hidden characters win, then the off-screen top, then a
+        // preview form, then too long, then a mode change.
         let why = hidden ? Self.hiddenCaption : !p.topFound ? Self.offTopCaption
+            : !p.preview.isEmpty ? Self.previewCaption
             : (isOverCap || !tooWide.isEmpty) ? Self.tooLongCaption
             : p.options.contains(where: { $0.isModeChange && $0.style(first: false) != .deny }) ? Self.modeCaption : nil
         caption = why.map { G.wrap($0, G.questionFont, G.cardInner) } ?? []
@@ -537,8 +562,28 @@ struct AgentCardLayout: Equatable {
 
     /// The one rule (W1 item 6): the card's buttons and `AgentPrompt.answer` both
     /// ask this. A "No…" option is always on, a mode change always off (OQ-45).
+    /// A preview form is all off, "No…" too: there a digit only moves the focus (#526).
     func isEnabled(_ o: AgentPromptOption) -> Bool {
-        o.style(first: false) == .deny || !(isOverCap || hidden || tooWide.contains(o.digit) || o.isModeChange)
+        preview.isEmpty
+            && (o.style(first: false) == .deny || !(isOverCap || hidden || tooWide.contains(o.digit) || o.isModeChange))
+    }
+
+    /// One font for the whole preview: `contextFont` when the widest row fits
+    /// the context width, else the largest `previewStep` size that fits, never
+    /// under `previewFloor`; a row still too wide there ends in "…" (never
+    /// wraps). A CoreText copy, so the controller queue may build it.
+    static func previewRows(_ lines: [String]) -> (rows: [String], font: CTFont) {
+        let rows = lines.map(AgentPrompt.visible), w = G.cardContextWidth
+        let widest = rows.max { G.width($0, G.contextFont) < G.width($1, G.contextFont) } ?? ""
+        var size = CTFontGetSize(G.contextFont)
+        let font = { (s: CGFloat) in CTFontCreateCopyWithAttributes(G.contextFont, s, nil, nil) }
+        while size > previewFloor, !G.fits(widest, font(size), w) { size -= previewStep }
+        let f = size == CTFontGetSize(G.contextFont) ? G.contextFont : font(size)
+        let dots = G.width("…", f)
+        let clipped = rows.map { G.fits($0, f, w) ? $0 : G.wrap($0, f, w - dots)[0] + "…" }
+        let cap = AgentPrompt.maxContext
+        guard clipped.count > cap else { return (clipped, f) }
+        return (Array(clipped.prefix(cap)) + ["… \(clipped.count - cap) more lines"], f)
     }
 
     /// Lines wrapped into measured rows, then capped at `maxContext` rows (cached).
@@ -631,6 +676,7 @@ struct AgentPromptCardView: View {
                 let l = p.layout
                 rows(l.question) { line($0, Color.white) }
                 context(l.context)
+                context(l.preview, l.previewFont, l.previewLine)
                 rows(l.caption) { line($0, AgentState.blocked.color) }
                 ForEach(Array(p.options.enumerated()), id: \.offset) { i, o in
                     option(p, o, label: l.labels[i], detail: l.details[i], enabled: l.isEnabled(o),
@@ -676,14 +722,15 @@ struct AgentPromptCardView: View {
     }
 
     @ViewBuilder
-    private func context(_ lines: [String]) -> some View {
+    private func context(_ lines: [String], _ f: CTFont = G.contextFont,
+                         _ height: CGFloat = G.cardContextLine) -> some View {
         if !lines.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 rows(lines) { l in
-                    cardText(l, G.contextFont)
+                    cardText(l, f)
                         .foregroundStyle(Color.white.opacity(0.6))
                         .lineLimit(1)
-                        .frame(height: G.cardContextLine, alignment: .leading)
+                        .frame(height: height, alignment: .leading)
                 }
             }
             .padding(.vertical, G.cardContextPad)

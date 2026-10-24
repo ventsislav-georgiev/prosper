@@ -64,6 +64,11 @@ tag from the now-released section and put it on the new top draft.
   access to a folder ("always allow access to …") is a rule, not a mode change (#508).
   Prompts without numbered options (codex, cursor, opencode) show their last lines and an
   Open terminal button (#475).
+  A question with previews shows its whole question, its options and the preview box,
+  shrunk to fit (down to 7 pt, then cut with "…"); its options stay greyed out with
+  "Previews are answered in the terminal", since that form is answered with Enter.
+  A question that wraps over several terminal lines is now its whole sentence on the
+  card, not just its last line (#526).
 - **Live status on iPhone.** While you are signed in and Agent Island is on, Prosper
   sends your terminal sessions' names and states (never terminal text) to your Prosper
   account, so the Prosper iPhone app can show them as a Live Activity and tell you when a
