@@ -22,6 +22,7 @@ final class PtyChild: @unchecked Sendable {
     enum PtyError: Error { case forkFailed }
 
     init(exe: String, args: [String], env: [String: String], cols: Int, rows: Int,
+         cwd: String = NSHomeDirectory(),
          onOutput: @escaping ([UInt8]) -> Void, onExit: @escaping (Int32) -> Void) throws {
         self.onOutput = onOutput
         self.onExit = onExit
@@ -30,7 +31,10 @@ final class PtyChild: @unchecked Sendable {
         // allocate or call non-async-signal-safe functions, so everything is ready.
         let argv = ([exe] + args).map { strdup($0) } + [nil]
         let envp = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        // Prosper.app's own cwd is "/", so without a chdir every session started there.
+        let dir = strdup(cwd)
         defer {
+            free(dir)
             argv.forEach { if let p = $0 { free(p) } }
             envp.forEach { if let p = $0 { free(p) } }
         }
@@ -51,6 +55,8 @@ final class PtyChild: @unchecked Sendable {
             var none = sigset_t()
             sigemptyset(&none)
             sigprocmask(SIG_SETMASK, &none, nil)
+            // chdir is async-signal-safe. A missing dir must not cost the session: fall back to "/".
+            if dir == nil || chdir(dir!) != 0 { _ = chdir("/") }
             execve(exe, argv, envp)
             _exit(127)  // exec failed
         }

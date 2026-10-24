@@ -56,6 +56,8 @@ tag from the now-released section and put it on the new top draft.
   access to a folder ("always allow access to …") is a rule, not a mode change (#508).
   Prompts without numbered options (codex, cursor, opencode) show their last lines and an
   Open terminal button (#475).
+- **A terminal session started from the phone opens in your home folder.** It used to
+  start in the root of the disk ("/"), Prosper's own working folder (#517).
 - **Prosper no longer quits when the Mac goes to sleep with a manual fan speed set and
   the fan helper gone or unreachable.** The error path of the sleep-time fan reset ran
   on the helper connection's queue and stopped the app there; it has been possible
