@@ -15,15 +15,27 @@ export const OFFLINE_DISMISS_S = 600; // an offline card stays 10 min, then goes
 export const START_GAP_S = 60; // no second push-to-start while the first is landing
 export const RATE_PER_MIN = 60; // POST /push/sessions per Mac per minute
 export const LA_MAX_AGE_S = 8 * 3600; // iOS ends any Live Activity after 8 h
+export const MAX_PHONES = 10; // install ids per account; an 11th evicts the least recently updated
+// Free plan: 50 subrequests per invocation, APNs fetches and D1 queries together.
+// The cron spends 2 up front (the 8 h purge, the SELECT), so 44 leaves 4 of margin.
+export const CRON_BUDGET = 44; // subrequests per cron run for the steps
+export const STEP_D1 = 3; // D1 queries per cron step: the guarded UPDATE, the card SELECT, one drop batch
+export const SEQ_AHEAD_MS = 3600 * 1000; // a seq more than 1 h past the Worker's clock is a 400
+export const MAX_BODY = 32768; // bytes; a larger push route body is a 413
 export const ATTRIBUTES_TYPE = "ProsperSessionsAttributes";
 
 const RANK = { blocked: 0, working: 1, done: 2, idle: 3 }; // Agent Island urgency
+const byUrgency = (a, b) => RANK[a.state] - RANK[b.state] || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 const KINDS = ["alert", "la_start", "la_update"];
 const ENVS = ["production", "sandbox"];
 const PHONE_ID_RE = /^[A-Za-z0-9-]{8,64}$/; // phone install id (a UUID is 36)
 const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/; // mac_id (64 hex today), activity_id
 const TOKEN_RE = /^[0-9A-Fa-f]{16,512}$/;
-const CTRL_RE = /[\u0000-\u001f\u007f]/;
+// C0, DEL, C1, the bidi marks/embeddings/overrides/isolates (U+200E, U+200F,
+// U+202A..U+202E, U+2066..U+2069), the line/paragraph separators and the BOM: none
+// belongs in a name, and the bidi ones can reorder the lock-screen text.
+const CTRL_RE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029\ufeff]/;
+const CTRL_ALL = new RegExp(CTRL_RE.source, "g");
 // Printable, well-formed text: a lone surrogate would re-escape to 6 bytes in the
 // payload and break the 4 KB budget; a control character has no business in a name.
 const isText = (s, max, min = 0) =>
@@ -82,11 +94,15 @@ function parseSession(s) {
   return out;
 }
 
-/** POST /push/sessions body -> {value: {mac_id, seq, offline, sessions|null}} or {error}. */
-export function parseSessionsBody(b) {
+/**
+ * POST /push/sessions body -> {value: {mac_id, seq, offline, sessions|null}} or {error}.
+ * nowS = the Worker's clock (unix seconds): a seq over an hour ahead of it would lock
+ * the Mac out until its devices row is deleted, so it is a 400.
+ */
+export function parseSessionsBody(b, nowS) {
   if (!isObj(b)) return bad("invalid_body");
   if (!isId(b.mac_id)) return bad("invalid_mac_id");
-  if (!Number.isSafeInteger(b.seq) || b.seq <= 0) return bad("invalid_seq");
+  if (!Number.isSafeInteger(b.seq) || b.seq <= 0 || !(b.seq <= nowS * 1000 + SEQ_AHEAD_MS)) return bad("invalid_seq");
   if (!absent(b.offline) && typeof b.offline !== "boolean") return bad("invalid_offline");
   if (!absent(b.sessions) && !Array.isArray(b.sessions)) return bad("invalid_sessions");
   if (b.offline === true && !absent(b.sessions)) return bad("offline_with_sessions");
@@ -106,6 +122,26 @@ export function parseSessionsBody(b) {
   return { value: { mac_id: b.mac_id, seq: b.seq, offline: b.offline === true, sessions } };
 }
 
+/** The Mac's devices.name for a payload: the CTRL class stripped, not rejected; cut to 64. */
+export function cleanMacName(raw) {
+  return cut(String(raw || "").toWellFormed().replace(CTRL_ALL, ""), 64) || "Mac";
+}
+
+/**
+ * The body of a push route, capped before JSON parse. req = a fetch Request (or
+ * {headers, arrayBuffer}). -> {tooLarge: true} | {value} (null when not JSON).
+ */
+export async function readBody(req) {
+  if (Number(req.headers.get("content-length")) > MAX_BODY) return { tooLarge: true };
+  const buf = await req.arrayBuffer(); // a chunked body has no content-length
+  if (buf.byteLength > MAX_BODY) return { tooLarge: true };
+  try {
+    return { value: JSON.parse(new TextDecoder().decode(buf)) };
+  } catch {
+    return { value: null };
+  }
+}
+
 /** First `n` code points (never splits a surrogate pair). */
 export function cut(s, n = CUT) {
   const cps = [...s];
@@ -119,7 +155,7 @@ export function contentState(sessions, online = true) {
   const counts = { blocked: 0, working: 0, idle: 0, done: 0 };
   for (const s of sessions) counts[s.state]++;
   const top = [...sessions]
-    .sort((a, b) => RANK[a.state] - RANK[b.state] || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .sort(byUrgency)
     .slice(0, CARD_SESSIONS)
     .map((s) => {
       const o = { name: cut(s.name) };
@@ -140,6 +176,7 @@ export const emptyMac = () => ({
   last_alert: {},
   idle_since: null,
   started_at: null,
+  blocked: [],
 });
 
 const noPush = () => ({ start: false, update: false, priority: 5, end: null, alerts: [] });
@@ -165,7 +202,7 @@ export function reduceSessions(prev, input, now) {
     // Heartbeat: liveness only. After a lapse the snapshot is empty until the next
     // sessions post (absent, never stale).
     mac.online = true;
-    if (!base.online) mac.idle_since = isActive(mac.sessions) ? null : now;
+    if (!base.online) mac.idle_since = now; // a Mac that is not online holds no sessions
     return { mac, push };
   }
 
@@ -173,10 +210,16 @@ export function reduceSessions(prev, input, now) {
   const after = input.sessions;
   const prevState = new Map(before.map((s) => [s.name, s.state]));
   const entered = after.filter((s) => s.state === "blocked" && prevState.get(s.name) !== "blocked");
+  // The alert edge compares with the last sessions post, not with the card: a session
+  // blocked before a lapse or an offline and still blocked on return was never seen
+  // out of blocked, so it does not alert again (the push-to-start still goes).
+  const wasBlocked = new Set(base.blocked);
+  // In the card's order, so the first one names an aggregate alert (see alertPayload).
+  const alertable = after.filter((s) => s.state === "blocked" && !wasBlocked.has(s.name)).sort(byUrgency);
 
   const lastAlert = {};
   for (const [name, t] of Object.entries(base.last_alert)) if (now - t < ALERT_LIMIT_S) lastAlert[name] = t;
-  for (const s of entered) {
+  for (const s of alertable) {
     if (lastAlert[s.name] !== undefined) continue; // alerted under 120 s ago
     lastAlert[s.name] = now;
     push.alerts.push({ name: s.name, label: s.alias || s.name });
@@ -191,6 +234,7 @@ export function reduceSessions(prev, input, now) {
   mac.online = true;
   mac.sessions = after;
   mac.last_alert = lastAlert;
+  mac.blocked = after.filter((s) => s.state === "blocked").map((s) => s.name);
   mac.idle_since = isActive(after) ? null : base.online && base.idle_since !== null ? base.idle_since : now;
   if (push.start) mac.started_at = now;
   if (push.start || push.update) mac.last_push_at = now;
@@ -223,6 +267,35 @@ export function cronStep(mac, hasCard, now) {
   return null;
 }
 
+const KIND_ORDER = { lapse: 0, end: 1, repush: 2 };
+const dueAt = ({ kind, row: { mac } }) =>
+  kind === "lapse" ? mac.last_seen : kind === "end" ? mac.idle_since : (mac.last_push_at ?? 0);
+
+/**
+ * One cron run over every online Mac: rows = [{mac, cards, ...}] where cards = the
+ * phones holding a card for it. A step costs its APNs sends (cards) plus STEP_D1
+ * queries. Lapses go first, then ends, then re-pushes, each oldest due first; a step
+ * that no longer fits the budget waits for the next minute (its row is untouched, so
+ * it is due again). -> [{kind, mac, push, row}] in send order.
+ */
+export function planCron(rows, now, budget = CRON_BUDGET) {
+  const steps = [];
+  for (const row of rows) {
+    const r = cronStep(row.mac, row.cards > 0, now);
+    if (r) steps.push({ ...r, row });
+  }
+  steps.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || dueAt(a) - dueAt(b));
+  const out = [];
+  let left = budget;
+  for (const s of steps) {
+    const cost = s.row.cards + STEP_D1;
+    if (cost > left) continue;
+    left -= cost;
+    out.push(s);
+  }
+  return out;
+}
+
 /** A Live Activity payload: every one carries aps.timestamp and stale-date. */
 export function laPayload(event, cs, now, extra = {}) {
   return { aps: { timestamp: now, event, "content-state": cs, "stale-date": now + STALE_S, ...extra } };
@@ -236,17 +309,27 @@ export function startPayload(cs, now, macId, macName) {
   });
 }
 
-export function alertPayload(macId, macName, alert) {
+/**
+ * The "needs you" alert. A post sends at most one per phone: alerts = every session
+ * alertable in it, in card order. Two or more read "<first> and N more need you".
+ */
+export function alertPayload(macId, macName, alerts) {
+  const [alert] = alerts;
+  const body = alerts.length > 1 ? `${alert.label} and ${alerts.length - 1} more need you` : `${alert.label} needs you`;
   return {
-    aps: { alert: { title: macName, body: `${alert.label} needs you` }, sound: "default", "thread-id": macId },
+    aps: { alert: { title: macName, body }, sound: "default", "thread-id": macId },
     mac_id: macId,
     session: alert.name,
   };
 }
 
-/** apns-collapse-id: a hash of mac_id + session name (32 hex, under the 64-byte cap). */
+/**
+ * apns-collapse-id (32 hex, under the 64-byte cap): a hash of mac_id + session name for
+ * one session; of mac_id alone for an aggregate, so a later aggregate replaces it.
+ */
 export async function collapseId(macId, name) {
-  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${macId}\n${name}`));
+  const key = name === undefined ? macId : `${macId}\n${name}`;
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
 }
 

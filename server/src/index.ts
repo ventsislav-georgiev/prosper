@@ -10,6 +10,7 @@ import { listSupporters } from "./supporters";
 import { market } from "./market";
 import { wake } from "./wake";
 import { push, pushCron } from "./push";
+import { sessionCleanupStatements } from "./pushStore.mjs";
 import { nowSec } from "./util";
 
 const app = new Hono<Env>();
@@ -49,15 +50,10 @@ export default {
   fetch: app.fetch,
 
   // "* * * * *": live-status cron (lapse, idle end, re-push). Any other trigger
-  // ("0 3 * * *") is the daily cleanup of expired sessions.
+  // ("0 3 * * *") is the daily cleanup of expired sessions and of the push tokens
+  // whose session is gone.
   async scheduled(event: ScheduledController, env: Bindings, ctx: ExecutionContext) {
     if (event.cron === "* * * * *") return pushCron(env, ctx);
-    ctx.waitUntil(
-      env.DB.prepare(
-        `DELETE FROM sessions WHERE expires_at IS NOT NULL AND expires_at < ?1`,
-      )
-        .bind(nowSec())
-        .run(),
-    );
+    ctx.waitUntil(env.DB.batch(sessionCleanupStatements(env.DB, nowSec())));
   },
 };

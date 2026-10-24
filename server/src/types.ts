@@ -24,10 +24,12 @@ export type Bindings = {
   SYNC_MAX_BYTES?: string;
   MARKET_MAX_BYTES?: string;
   APNS_TOPIC?: string; // bundle id; falls back to "eu.illegible.prosperios"
+  PUSH_CRON_BUDGET?: string; // subrequests (APNs + D1) per live-status cron run; default 44
 };
 
 export type Variables = {
   email: string;
+  tokenHash: string; // sha256 of the session Bearer (sessions.token_hash)
 };
 
 export type Env = { Bindings: Bindings; Variables: Variables };

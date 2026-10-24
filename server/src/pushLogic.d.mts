@@ -23,6 +23,7 @@ export type MacState = {
   last_alert: Record<string, number>;
   idle_since: number | null;
   started_at: number | null;
+  blocked: string[]; // blocked in the last sessions post; kept across a lapse/offline
 };
 export type PushIntents = {
   start: boolean;
@@ -62,10 +63,20 @@ export const START_GAP_S: number;
 export const RATE_PER_MIN: number;
 export const LA_MAX_AGE_S: number;
 export const ATTRIBUTES_TYPE: string;
+export const MAX_PHONES: number;
+export const CRON_BUDGET: number;
+export const STEP_D1: number;
+export const SEQ_AHEAD_MS: number;
+export const MAX_BODY: number;
 
 export function parseTokenBody(b: unknown): Parsed<TokenBody>;
 export function parseDeleteBody(b: unknown): Parsed<DeleteBody>;
-export function parseSessionsBody(b: unknown): Parsed<SessionsBody>;
+export function parseSessionsBody(b: unknown, nowS: number): Parsed<SessionsBody>;
+export function cleanMacName(raw: unknown): string;
+export function readBody(req: {
+  headers: { get(name: string): string | null };
+  arrayBuffer(): Promise<ArrayBuffer>;
+}): Promise<{ tooLarge: true; value?: undefined } | { value: unknown; tooLarge?: undefined }>;
 export function cut(s: string, n?: number): string;
 export function isActive(sessions: Session[]): boolean;
 export function contentState(sessions: Session[], online?: boolean): ContentState;
@@ -80,10 +91,15 @@ export function cronStep(
   hasCard: boolean,
   now: number,
 ): { kind: "lapse" | "end" | "repush"; mac: MacState; push: PushIntents } | null;
+export function planCron<R extends { mac: MacState; cards: number }>(
+  rows: R[],
+  now: number,
+  budget?: number,
+): { kind: "lapse" | "end" | "repush"; mac: MacState; push: PushIntents; row: R }[];
 export function laPayload(event: string, cs: ContentState, now: number, extra?: Record<string, unknown>): unknown;
 export function startPayload(cs: ContentState, now: number, macId: string, macName: string): unknown;
-export function alertPayload(macId: string, macName: string, alert: { name: string; label: string }): unknown;
-export function collapseId(macId: string, name: string): Promise<string>;
+export function alertPayload(macId: string, macName: string, alerts: { name: string; label: string }[]): unknown;
+export function collapseId(macId: string, name?: string): Promise<string>;
 export function classifyApns(status: number, reason: string): ApnsResult;
 export function apnsHost(env: ApnsEnv): string;
 export function sendApns(fetchFn: FetchFn, auth: { jwt: string; topic: string }, p: ApnsPush): Promise<ApnsResult>;

@@ -23,6 +23,7 @@ export const requireSession: Middleware = async (c, next) => {
   }
 
   c.set("email", row.email);
+  c.set("tokenHash", hash);
   c.executionCtx.waitUntil(
     c.env.DB.prepare(`UPDATE sessions SET last_seen = ?1 WHERE token_hash = ?2`)
       .bind(now, hash)

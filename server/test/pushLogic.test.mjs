@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseTokenBody,
   parseDeleteBody,
-  parseSessionsBody,
+  parseSessionsBody as parseSessionsBodyAt,
   contentState,
   cut,
   reduceSessions,
@@ -17,12 +17,17 @@ import {
   sendApns,
   importP8,
   signApnsJwt,
+  cleanMacName,
+  readBody,
+  planCron,
 } from "../src/pushLogic.mjs";
 
 const S = (name, state, extra = {}) => ({ name, state, ...extra });
 const bytes = (o) => new TextEncoder().encode(JSON.stringify(o)).length;
 const HEX = "ab".repeat(32);
 const PHONE = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
+const NOW_S = 2_000_000_000; // the Worker's clock for the seq bound
+const parseSessionsBody = (b, now = NOW_S) => parseSessionsBodyAt(b, now);
 
 // ---- validation -------------------------------------------------------------
 
@@ -91,6 +96,66 @@ test("parseSessionsBody: cap 20, lengths, enums, duplicates, offline", () => {
   assert.equal(parseSessionsBody({ mac_id: HEX, seq: 1, sessions: {} }).error, "invalid_sessions");
 });
 
+test("seq: over 1 h ahead of the Worker's clock is a 400 (a far-future seq would lock the Mac out)", () => {
+  const at = (seq, now = NOW_S) => parseSessionsBodyAt({ mac_id: HEX, seq }, now);
+  const edge = NOW_S * 1000 + 3600 * 1000;
+  assert.equal(at(edge).value.seq, edge, "exactly 1 h ahead is fine");
+  assert.equal(at(edge + 1).error, "invalid_seq");
+  assert.equal(at(9_000_000_000_000).error, "invalid_seq", "QA probe: 9e12");
+  assert.equal(parseSessionsBodyAt({ mac_id: HEX, seq: 1 }).error, "invalid_seq", "no clock: fails closed");
+});
+
+// Every code point of each class range, one by one, in a name and in an alias.
+const RANGES = [
+  [0x00, 0x1f], [0x7f, 0x7f], [0x80, 0x9f], [0x200e, 0x200f], [0x202a, 0x202e],
+  [0x2066, 0x2069], [0x2028, 0x2029], [0xfeff, 0xfeff],
+];
+const NEIGHBOURS = [0x20, 0x7e, 0xa0, 0x200d, 0x2010, 0x2027, 0x202f, 0x2065, 0x206a, 0xfefe, 0xff01];
+
+test("names and aliases: C0, DEL, C1, bidi marks/overrides/isolates, LS/PS and BOM are a 400", () => {
+  const ok = (sessions) => parseSessionsBody({ mac_id: HEX, seq: 1, sessions });
+  for (const [lo, hi] of RANGES) {
+    for (let c = lo; c <= hi; c++) {
+      const ch = String.fromCharCode(c);
+      const hex = c.toString(16);
+      assert.equal(ok([S(`ab${ch}cd`, "idle")]).error, "invalid_session", `name U+${hex}`);
+      assert.equal(ok([S("a", "idle", { alias: `x${ch}` })]).error, "invalid_session", `alias U+${hex}`);
+    }
+  }
+  for (const c of NEIGHBOURS) {
+    const ch = String.fromCharCode(c);
+    assert.ok(ok([S(`ab${ch}cd`, "idle", { alias: `x${ch}` })]).value, `U+${c.toString(16)} is text`);
+  }
+  assert.ok(ok([S("👩‍💻 dev", "idle")]).value, "a ZWJ emoji sequence passes");
+});
+
+test("cleanMacName: the same class is stripped from devices.name, never rejected", () => {
+  for (const [lo, hi] of RANGES) {
+    for (let c = lo; c <= hi; c++) assert.equal(cleanMacName(`St${String.fromCharCode(c)}udio`), "Studio", c.toString(16));
+  }
+  assert.equal(cleanMacName("\u202eoidutS\u2066"), "oidutS");
+  assert.equal(cleanMacName("Studio\u00a0Mac"), "Studio\u00a0Mac");
+  assert.equal(cleanMacName("\u202e\u0085"), "Mac", "nothing left: the default");
+  assert.equal(cleanMacName(null), "Mac");
+  assert.equal(cleanMacName("x".repeat(70)), "x".repeat(64));
+  assert.equal(cleanMacName("a\ud800b"), "a\ufffdb", "well-formed");
+});
+
+test("readBody: a body over 32768 bytes is too large, by content-length or by its bytes", async () => {
+  const req = (body, headers = {}) => new Request("https://w/push/sessions", { method: "POST", body, headers });
+  assert.deepEqual(await readBody(req('{"a":1}')), { value: { a: 1 } });
+  assert.deepEqual(await readBody(req("not json")), { value: null });
+  const unread = { headers: new Headers({ "content-length": "32769" }), arrayBuffer: () => assert.fail("read past the cap") };
+  assert.deepEqual(await readBody(unread), { tooLarge: true });
+  const exact = JSON.stringify({ p: "x".repeat(32768 - 8) });
+  assert.equal(new TextEncoder().encode(exact).length, 32768);
+  assert.ok((await readBody(req(exact))).value, "32768 bytes is fine");
+  const declared = { headers: new Headers({ "content-length": "32768" }), arrayBuffer: async () => new TextEncoder().encode(exact).buffer };
+  assert.ok((await readBody(declared)).value, "content-length 32768 is fine");
+  const over = { headers: new Headers(), arrayBuffer: async () => new TextEncoder().encode(exact + " ").buffer };
+  assert.deepEqual(await readBody(over), { tooLarge: true }, "no content-length (chunked): counted after the read");
+});
+
 // ---- content-state ----------------------------------------------------------
 
 test("contentState: urgency order then name, cap 6, more, counts", () => {
@@ -150,7 +215,7 @@ test("worst-case start/update/alert payloads stay under 4 KB", () => {
   const start = bytes(startPayload(cs, now, mac, name));
   assert.ok(start > 2000 && start < 4096, `start ${start}`);
   assert.ok(bytes(laPayload("end", cs, now, { "dismissal-date": now + 600 })) < 4096);
-  assert.ok(bytes(alertPayload(mac, name, { name: sessions[0].name, label: sessions[0].alias })) < 4096);
+  assert.ok(bytes(alertPayload(mac, name, [{ name: sessions[0].name, label: sessions[0].alias }])) < 4096);
 });
 
 // ---- edges ------------------------------------------------------------------
@@ -296,6 +361,92 @@ test("cron re-pushes a live card whose last push is over 10 min old", () => {
   assert.equal(cronStep(m, false, 1600), null);
 });
 
+test("lapse: a session blocked throughout never alerts again on return; the start still goes", () => {
+  // QA probe: blocked before the lapse, still blocked after it.
+  const a = step(null, post(1, [S("s", "blocked")]), 1000);
+  assert.equal(a.push.alerts.length, 1);
+  const lapsed = cronStep(a.mac, true, 1200).mac;
+  const b = step(lapsed, post(2, [S("s", "blocked")]), 1260);
+  assert.deepEqual(b.push.alerts, [], "no second alert");
+  assert.equal(b.push.start, true, "push-to-start on return stays");
+  assert.equal(b.push.priority, 10, "the start of a blocked card is urgent");
+  // The same through an offline post (sleep), and a heartbeat on return.
+  const off = step(a.mac, { mac_id: HEX, seq: 3, offline: true, sessions: null }, 1300);
+  const hb = step(off.mac, beat(4), 1400);
+  assert.deepEqual(step(hb.mac, post(5, [S("s", "blocked")]), 1410).push.alerts, []);
+  // Seen out of blocked (or absent) in a sessions post re-arms it.
+  const c = step(b.mac, post(6, [S("s", "working")]), 1270);
+  assert.deepEqual(step(c.mac, post(7, [S("s", "blocked")]), 1280).push.alerts, [{ name: "s", label: "s" }]);
+  const gone = step(b.mac, post(6, []), 1270);
+  assert.deepEqual(step(gone.mac, post(7, [S("s", "blocked")]), 1280).push.alerts, [{ name: "s", label: "s" }]);
+  // A different session entering blocked on return still alerts.
+  assert.deepEqual(step(lapsed, post(2, [S("s", "blocked"), S("t", "blocked")]), 1260).push.alerts, [{ name: "t", label: "t" }]);
+});
+
+test("offline and back: flapping is still limited to one alert per 120 s", () => {
+  // A lapse always spans 180 s, so the 120 s window is checked across an offline post.
+  const a = step(null, post(1, [S("s", "blocked")]), 1000); // alert at 1000
+  const off = step(a.mac, { mac_id: HEX, seq: 2, offline: true, sessions: null }, 1010);
+  const back = step(off.mac, post(3, [S("s", "working")]), 1020);
+  const flap = step(back.mac, post(4, [S("s", "blocked")]), 1119);
+  assert.deepEqual(flap.push.alerts, [], "119 s after the alert");
+  const out = step(flap.mac, post(5, [S("s", "working")]), 1119);
+  assert.deepEqual(step(out.mac, post(6, [S("s", "blocked")]), 1120).push.alerts, [{ name: "s", label: "s" }], "120 s");
+});
+
+test("alerts: the sessions entering blocked are in card order; 120 s and the blocked set still apply per session", () => {
+  const a = step(null, post(1, [S("z", "working"), S("a", "working"), S("m", "working")]), 1000);
+  const b = step(a.mac, post(2, [S("z", "blocked"), S("a", "blocked", { alias: "Fix" }), S("m", "blocked")]), 1010);
+  assert.deepEqual(b.push.alerts.map((x) => x.name), ["a", "m", "z"]);
+  // a flaps within 120 s and n enters: only n is alertable; m and z stay blocked.
+  const c = step(b.mac, post(3, [S("z", "blocked"), S("a", "working"), S("m", "blocked")]), 1020);
+  const d = step(c.mac, post(4, [S("z", "blocked"), S("a", "blocked"), S("m", "blocked"), S("n", "blocked")]), 1030);
+  assert.deepEqual(d.push.alerts, [{ name: "n", label: "n" }]);
+});
+
+test("alertPayload: one session as before; two or more aggregate under the first, collapsed per Mac", async () => {
+  const one = alertPayload(HEX, "Studio", [{ name: "a", label: "Fix it" }]);
+  assert.equal(one.aps.alert.body, "Fix it needs you");
+  const many = alertPayload(HEX, "Studio", [{ name: "a", label: "Fix it" }, { name: "m", label: "m" }, { name: "z", label: "z" }]);
+  assert.deepEqual(many, {
+    aps: { alert: { title: "Studio", body: "Fix it and 2 more need you" }, sound: "default", "thread-id": HEX },
+    mac_id: HEX,
+    session: "a",
+  });
+  const perMac = await collapseId(HEX);
+  assert.match(perMac, /^[0-9a-f]{32}$/);
+  assert.notEqual(perMac, await collapseId(HEX, "a"));
+  assert.notEqual(perMac, await collapseId(HEX, ""));
+  assert.notEqual(perMac, await collapseId("f".repeat(64)));
+});
+
+// ---- cron budget --------------------------------------------------------------
+
+test("planCron: lapses first, then ends, then re-pushes, oldest due first; a step costs cards + 3 D1 queries", () => {
+  const now = 10_000;
+  const lapse = (id, last_seen, cards) => ({ id, cards, mac: live({ last_seen, last_push_at: last_seen }) });
+  const end = (id, idle_since, cards) => ({
+    id, cards, mac: live({ sessions: [S("a", "idle")], idle_since, last_seen: now - 10, last_push_at: now - 10 }),
+  });
+  const repush = (id, last_push_at, cards) => ({ id, cards, mac: live({ last_seen: now - 10, last_push_at }) });
+  const rows = [
+    repush("r-new", now - 700, 3), repush("r-old", now - 900, 3),
+    end("e-new", now - 650, 4), end("e-old", now - 800, 4),
+    lapse("l-new", now - 200, 5), lapse("l-old", now - 400, 5), lapse("l-free", now - 190, 0),
+  ];
+  // Costs: l-old 8, l-new 8, l-free 3, e-old 7, e-new 7, r-old 6, r-new 6 = 45.
+  const ids = (plan) => plan.map((s) => s.row.id);
+  assert.deepEqual(ids(planCron(rows, now, 100)), ["l-old", "l-new", "l-free", "e-old", "e-new", "r-old", "r-new"]);
+  assert.deepEqual(ids(planCron(rows, now)), ["l-old", "l-new", "l-free", "e-old", "e-new", "r-old"], "45 is over the default 44");
+  assert.deepEqual(ids(planCron(rows, now, 32)), ["l-old", "l-new", "l-free", "e-old", "r-old"], "a step that no longer fits waits");
+  assert.deepEqual(ids(planCron(rows, now, 11)), ["l-old", "l-free"]);
+  assert.deepEqual(ids(planCron(rows, now, 2)), [], "a lapse with no card still costs its queries");
+  assert.equal(planCron(rows, now, 100)[0].kind, "lapse");
+  assert.deepEqual(planCron([repush("x", now - 100, 1)], now, 40), [], "not due");
+  const nine = Array.from({ length: 9 }, (_, i) => lapse(`m${i}`, now - 300 + i, 5));
+  assert.equal(planCron(nine, now).length, 5, "default budget: 44 subrequests at 8 a step");
+});
+
 // ---- payloads ---------------------------------------------------------------
 
 test("Live Activity payloads carry timestamp + stale-date; start carries attributes and a silent alert", () => {
@@ -309,7 +460,7 @@ test("Live Activity payloads carry timestamp + stale-date; start carries attribu
   assert.deepEqual(s.aps.alert, { title: "Studio", body: "Agents are working" });
   assert.equal(s.aps.sound, undefined);
   assert.equal(s.aps["stale-date"], 1900);
-  const a = alertPayload(HEX, "Studio", { name: "a", label: "Fix it" });
+  const a = alertPayload(HEX, "Studio", [{ name: "a", label: "Fix it" }]);
   assert.deepEqual(a, {
     aps: { alert: { title: "Studio", body: "Fix it needs you" }, sound: "default", "thread-id": HEX },
     mac_id: HEX,

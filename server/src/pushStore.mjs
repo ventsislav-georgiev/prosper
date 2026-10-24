@@ -1,30 +1,39 @@
 // D1 side of live session status (#521): the bodies of POST/DELETE /push/tokens,
 // POST /push/sessions and the every-minute cron, plus the push-row purges used by
-// account.ts. Plain .mjs so `node --test` drives it against node:sqlite with a fake
-// APNs. deps = {db: D1Database, send(push) -> "ok"|"drop"|"auth"|"error",
-// now() -> unix seconds, defer(promise)}. Every query is scoped by the session email.
+// account.ts, auth.ts (logout) and the daily cleanup. Plain .mjs so `node --test`
+// drives it against node:sqlite with a fake APNs. deps = {db: D1Database,
+// send(push) -> "ok"|"drop"|"auth"|"error", now() -> unix seconds, defer(promise),
+// budget?: subrequests per cron run, APNs + D1}. Every query is scoped by the session email.
+//
+// Free plan: 50 subrequests per invocation, D1 queries (a batch is one) and APNs
+// fetches alike. A post spends at most 2 (requireSession) + 9 D1 (device, 2 x load and
+// upsert, card/start/alert SELECTs, one drop batch) + 20 sends (per phone: one card
+// update or start, one alert); a cron run, 2 + its budget.
 
 import {
   parseTokenBody,
   parseDeleteBody,
   parseSessionsBody,
   reduceSessions,
-  cronStep,
   contentState,
   laPayload,
   startPayload,
   alertPayload,
   collapseId,
-  cut,
+  cleanMacName,
   emptyMac,
+  planCron,
   RATE_PER_MIN,
   LA_MAX_AGE_S,
   OFFLINE_DISMISS_S,
+  MAX_PHONES,
+  CRON_BUDGET,
 } from "./pushLogic.mjs";
 
 const NO_CONTENT = { status: 204 };
 const TOKEN_COLS = "email, device_id, kind, activity_id, token, env";
-const MAC_COLS = "m.seq, m.last_seen, m.online, m.snapshot, m.last_push_at, m.last_alert, m.idle_since, m.started_at";
+const MAC_COLS =
+  "m.seq, m.last_seen, m.online, m.snapshot, m.last_push_at, m.last_alert, m.idle_since, m.started_at, m.blocked, m.rev";
 
 /** The Mac's display name, or null when mac_id is not an activated device of `email`. */
 async function macName(db, email, macId) {
@@ -32,7 +41,7 @@ async function macName(db, email, macId) {
     .prepare(`SELECT name FROM devices WHERE email = ?1 AND device_id = ?2`)
     .bind(email, macId)
     .first();
-  return row ? cut(String(row.name || "Mac").toWellFormed(), 64) : null;
+  return row ? cleanMacName(row.name) : null;
 }
 
 const fromRow = (r) => ({
@@ -44,6 +53,7 @@ const fromRow = (r) => ({
   last_alert: JSON.parse(r.last_alert),
   idle_since: r.idle_since,
   started_at: r.started_at,
+  blocked: JSON.parse(r.blocked),
 });
 
 async function loadMac(db, email, macId) {
@@ -51,7 +61,7 @@ async function loadMac(db, email, macId) {
     .prepare(`SELECT ${MAC_COLS}, m.rl_window, m.rl_count FROM push_macs m WHERE m.email = ?1 AND m.mac_id = ?2`)
     .bind(email, macId)
     .first();
-  return row ? { mac: fromRow(row), rl_window: row.rl_window, rl_count: row.rl_count } : null;
+  return row ? { mac: fromRow(row), rev: row.rev, rl_window: row.rl_window, rl_count: row.rl_count } : null;
 }
 
 async function tokens(db, where, ...binds) {
@@ -89,13 +99,14 @@ async function dropTokens(db, rows) {
   );
 }
 
-/** Send every push; tokens APNs calls dead (410, BadDeviceToken, DeviceTokenNotForTopic) are deleted. */
-export async function deliver(deps, pushes) {
+/**
+ * Send every push; tokens APNs calls dead (410, BadDeviceToken, DeviceTokenNotForTopic)
+ * are deleted, together with `alsoDrop`, in one batch (one subrequest).
+ */
+export async function deliver(deps, pushes, alsoDrop = []) {
   const results = await Promise.all(pushes.map((p) => deps.send(p)));
-  await dropTokens(
-    deps.db,
-    pushes.filter((_, i) => results[i] === "drop").map((p) => p.row),
-  );
+  const dead = pushes.filter((_, i) => results[i] === "drop").map((p) => p.row);
+  await dropTokens(deps.db, [...alsoDrop, ...dead]); // a row twice is deleted once
   return results;
 }
 
@@ -120,20 +131,18 @@ async function dispatch(deps, email, macId, name, mac, push, now) {
     }
   }
   if (push.alerts.length) {
-    const rows = await tokens(db, `kind = 'alert'`, email);
-    for (const a of push.alerts) {
-      const id = await collapseId(macId, a.name);
-      for (const row of rows) {
-        pushes.push({ row, pushType: "alert", priority: 10, payload: alertPayload(macId, name, a), collapseId: id });
-      }
+    // One alert per phone per post, whatever the number of sessions entering blocked.
+    const payload = alertPayload(macId, name, push.alerts);
+    const id = await collapseId(macId, push.alerts.length > 1 ? undefined : push.alerts[0].name);
+    for (const row of await tokens(db, `kind = 'alert'`, email)) {
+      pushes.push({ row, pushType: "alert", priority: 10, payload, collapseId: id });
     }
   }
-  await deliver(deps, pushes);
-  if (push.end) await dropTokens(db, la); // an ended activity takes no more updates
+  await deliver(deps, pushes, push.end ? la : []); // an ended activity takes no more updates
 }
 
-/** POST /push/tokens */
-export async function putToken(deps, email, body) {
+/** POST /push/tokens. tokenHash = the session's token_hash: logout and expiry take the row. */
+export async function putToken(deps, email, body, tokenHash) {
   const p = parseTokenBody(body);
   if (p.error) return { status: 400, error: p.error };
   const v = p.value;
@@ -147,12 +156,24 @@ export async function putToken(deps, email, body) {
   const stmts = [
     db
       .prepare(
-        `INSERT INTO push_tokens (email, device_id, kind, activity_id, mac_id, token, env, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+        `INSERT INTO push_tokens (email, device_id, kind, activity_id, mac_id, token, env, created_at, updated_at, token_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
          ON CONFLICT(email, device_id, kind, activity_id) DO UPDATE SET
-           mac_id = excluded.mac_id, token = excluded.token, env = excluded.env, updated_at = excluded.updated_at`,
+           mac_id = excluded.mac_id, token = excluded.token, env = excluded.env,
+           updated_at = excluded.updated_at, token_hash = excluded.token_hash`,
       )
-      .bind(email, v.device_id, v.kind, v.activity_id, v.mac_id, v.token, v.env, now),
+      .bind(email, v.device_id, v.kind, v.activity_id, v.mac_id, v.token, v.env, now, tokenHash),
+    // At most MAX_PHONES install ids per account: past that, the least recently
+    // updated phones go with all their rows, so a reinstalled phone always gets in.
+    // max(0, ...): a negative LIMIT is no limit in SQLite.
+    db
+      .prepare(
+        `DELETE FROM push_tokens WHERE email = ?1 AND device_id IN (
+           SELECT device_id FROM push_tokens WHERE email = ?1 AND device_id != ?2
+           GROUP BY device_id ORDER BY MAX(updated_at), device_id
+           LIMIT max(0, (SELECT COUNT(DISTINCT device_id) FROM push_tokens WHERE email = ?1) - ?3))`,
+      )
+      .bind(email, v.device_id, MAX_PHONES),
   ];
   if (v.kind === "la_update") {
     // One card per phone per Mac: a newer activity replaces any older one's token.
@@ -182,8 +203,7 @@ async function catchUp(deps, email, v, name, now) {
     await deliver(deps, [laPush(row, 5, laPayload("update", contentState(mac.sessions), now))]);
   } else {
     const cs = contentState([], false);
-    await deliver(deps, [laPush(row, 5, laPayload("end", cs, now, { "dismissal-date": now + OFFLINE_DISMISS_S }))]);
-    await dropTokens(deps.db, [row]);
+    await deliver(deps, [laPush(row, 5, laPayload("end", cs, now, { "dismissal-date": now + OFFLINE_DISMISS_S }))], [row]);
   }
 }
 
@@ -202,61 +222,74 @@ export async function deleteTokens(deps, email, body) {
   return NO_CONTENT;
 }
 
-/** POST /push/sessions */
+/**
+ * POST /push/sessions. The upsert is conditional on the rev it loaded: when the cron
+ * (a lapse) or another post wrote the row in between, this post reloads and reduces
+ * once more, so it never overwrites a write it did not see.
+ */
 export async function postSessions(deps, email, body) {
-  const p = parseSessionsBody(body);
+  const now = deps.now();
+  const p = parseSessionsBody(body, now);
   if (p.error) return { status: 400, error: p.error };
   const v = p.value;
   const { db } = deps;
   const name = await macName(db, email, v.mac_id);
   if (name === null) return { status: 403, error: "forbidden" };
 
-  const now = deps.now();
-  const stored = await loadMac(db, email, v.mac_id);
   const win = Math.floor(now / 60);
-  const count = stored && stored.rl_window === win ? stored.rl_count : 0;
-  if (count >= RATE_PER_MIN) return { status: 429, error: "rate_limited" };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const stored = await loadMac(db, email, v.mac_id);
+    const count = stored && stored.rl_window === win ? stored.rl_count : 0;
+    if (count >= RATE_PER_MIN) return { status: 429, error: "rate_limited" };
 
-  const r = reduceSessions(stored?.mac ?? null, v, now);
-  if (!r) {
-    // Stale seq: ignored, but it still counts against the rate limit.
-    await db
-      .prepare(`UPDATE push_macs SET rl_window = ?3, rl_count = ?4 WHERE email = ?1 AND mac_id = ?2`)
-      .bind(email, v.mac_id, win, count + 1)
+    const r = reduceSessions(stored?.mac ?? null, v, now);
+    if (!r) {
+      // Stale seq: ignored, but it still counts against the rate limit. The counter
+      // alone is not rev-guarded: a lost increment is harmless, and bumping rev here
+      // would let a stream of stale posts starve the cron's lapse of this Mac.
+      await db
+        .prepare(`UPDATE push_macs SET rl_window = ?3, rl_count = ?4 WHERE email = ?1 AND mac_id = ?2`)
+        .bind(email, v.mac_id, win, count + 1)
+        .run();
+      return NO_CONTENT;
+    }
+    const m = r.mac;
+    const res = await db
+      .prepare(
+        `INSERT INTO push_macs (email, mac_id, seq, last_seen, online, snapshot, last_push_at,
+           last_alert, idle_since, started_at, rl_window, rl_count, blocked, rev)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1)
+         ON CONFLICT(email, mac_id) DO UPDATE SET
+           seq = excluded.seq, last_seen = excluded.last_seen, online = excluded.online,
+           snapshot = excluded.snapshot, last_push_at = excluded.last_push_at,
+           last_alert = excluded.last_alert, idle_since = excluded.idle_since,
+           started_at = excluded.started_at, rl_window = excluded.rl_window, rl_count = excluded.rl_count,
+           blocked = excluded.blocked, rev = push_macs.rev + 1
+         WHERE push_macs.rev = ?14`,
+      )
+      .bind(
+        email,
+        v.mac_id,
+        m.seq,
+        m.last_seen,
+        m.online ? 1 : 0,
+        JSON.stringify(m.sessions),
+        m.last_push_at,
+        JSON.stringify(m.last_alert),
+        m.idle_since,
+        m.started_at,
+        win,
+        count + 1,
+        JSON.stringify(m.blocked),
+        stored ? stored.rev : -1, // no row loaded: a row inserted meanwhile never matches
+      )
       .run();
-    return NO_CONTENT;
+    if (res.meta.changes) {
+      deps.defer(dispatch(deps, email, v.mac_id, name, m, r.push, now));
+      return NO_CONTENT;
+    }
   }
-  const m = r.mac;
-  const res = await db
-    .prepare(
-      `INSERT INTO push_macs (email, mac_id, seq, last_seen, online, snapshot, last_push_at,
-         last_alert, idle_since, started_at, rl_window, rl_count)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-       ON CONFLICT(email, mac_id) DO UPDATE SET
-         seq = excluded.seq, last_seen = excluded.last_seen, online = excluded.online,
-         snapshot = excluded.snapshot, last_push_at = excluded.last_push_at,
-         last_alert = excluded.last_alert, idle_since = excluded.idle_since,
-         started_at = excluded.started_at, rl_window = excluded.rl_window, rl_count = excluded.rl_count
-       WHERE excluded.seq > push_macs.seq`,
-    )
-    .bind(
-      email,
-      v.mac_id,
-      m.seq,
-      m.last_seen,
-      m.online ? 1 : 0,
-      JSON.stringify(m.sessions),
-      m.last_push_at,
-      JSON.stringify(m.last_alert),
-      m.idle_since,
-      m.started_at,
-      win,
-      count + 1,
-    )
-    .run();
-  if (!res.meta.changes) return NO_CONTENT; // a newer seq landed first
-  deps.defer(dispatch(deps, email, v.mac_id, name, m, r.push, now));
-  return NO_CONTENT;
+  return NO_CONTENT; // lost twice: the Mac's next post (60 s at most) carries the state
 }
 
 /** The every-minute cron: lapse silent Macs, end idle cards, re-push old ones. */
@@ -272,25 +305,30 @@ export async function runCron(deps) {
   const { results } = await db
     .prepare(
       `SELECT m.email, m.mac_id, ${MAC_COLS}, d.name AS mac_name,
-         EXISTS (SELECT 1 FROM push_tokens t WHERE t.email = m.email
-           AND t.kind = 'la_update' AND t.mac_id = m.mac_id) AS has_card
+         (SELECT COUNT(*) FROM push_tokens t WHERE t.email = m.email
+           AND t.kind = 'la_update' AND t.mac_id = m.mac_id) AS cards
        FROM push_macs m LEFT JOIN devices d ON d.email = m.email AND d.device_id = m.mac_id
        WHERE m.online = 1`,
     )
     .all();
+  // One invocation serves every account, so its subrequests are budgeted (a run past
+  // the cap would fail everyone's pushes); what does not fit runs next minute.
+  const plan = planCron(
+    results.map((row) => ({ ...row, mac: fromRow(row) })),
+    now,
+    deps.budget ?? CRON_BUDGET,
+  );
   await Promise.allSettled(
-    results.map(async (row) => {
-      const r = cronStep(fromRow(row), !!row.has_card, now);
-      if (!r) return;
+    plan.map(async ({ row, mac, push }) => {
       const res = await db
         .prepare(
-          `UPDATE push_macs SET online = ?3, snapshot = ?4, idle_since = ?5, last_push_at = ?6
-           WHERE email = ?1 AND mac_id = ?2 AND seq = ?7`,
+          `UPDATE push_macs SET online = ?3, snapshot = ?4, idle_since = ?5, last_push_at = ?6, rev = rev + 1
+           WHERE email = ?1 AND mac_id = ?2 AND rev = ?7`,
         )
-        .bind(row.email, row.mac_id, r.mac.online ? 1 : 0, JSON.stringify(r.mac.sessions), r.mac.idle_since, r.mac.last_push_at, row.seq)
+        .bind(row.email, row.mac_id, mac.online ? 1 : 0, JSON.stringify(mac.sessions), mac.idle_since, mac.last_push_at, row.rev)
         .run();
       if (!res.meta.changes) return; // the Mac posted meanwhile; its post decides
-      await dispatch(deps, row.email, row.mac_id, cut(String(row.mac_name || "Mac").toWellFormed(), 64), r.mac, r.push, now);
+      await dispatch(deps, row.email, row.mac_id, cleanMacName(row.mac_name), mac, push, now);
     }),
   );
 }
@@ -308,5 +346,23 @@ export function purgeAccountStatements(db, email) {
   return [
     db.prepare(`DELETE FROM push_macs WHERE email = ?1`).bind(email),
     db.prepare(`DELETE FROM push_tokens WHERE email = ?1`).bind(email),
+  ];
+}
+
+/** POST /auth/logout: the session and every push token it registered. */
+export function logoutStatements(db, tokenHash) {
+  return [
+    db.prepare(`DELETE FROM sessions WHERE token_hash = ?1`).bind(tokenHash),
+    db.prepare(`DELETE FROM push_tokens WHERE token_hash = ?1`).bind(tokenHash),
+  ];
+}
+
+/** The daily cleanup: expired sessions, then push tokens whose session is gone. */
+export function sessionCleanupStatements(db, now) {
+  return [
+    db.prepare(`DELETE FROM sessions WHERE expires_at IS NOT NULL AND expires_at < ?1`).bind(now),
+    db.prepare(
+      `DELETE FROM push_tokens WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.token_hash = push_tokens.token_hash)`,
+    ),
   ];
 }
