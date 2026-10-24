@@ -467,6 +467,31 @@ do
     h.eq(icon(), "\u{1F513}", "timed session shows the bare glyph, no countdown text")
 end
 
+-- ── #502 Plugged-in hold shows 🔌 (sleeps on unplug), apart from manual 🔓/⚡ ──
+-- Reads env.menu.title straight after each action: the existing render() calls
+-- must already repaint the icon, no on_tick nudge.
+do
+    local host, env = h.makeHost { power = "AC Power" }      -- rule_on_ac defaults true
+    local G = h.load(INIT, host)
+    G.on_launch(host.json.encode { powerSource = "AC Power" })
+    h.eq(state(host).autoActivated, true, "precondition: plugged-in hold")
+    h.eq(env.menu.title, "\u{1F50C}", "rule hold alone = plug glyph")
+    assert(env.menu.menu[8].title:find("^\u{1F50C}"), "hold status row starts with plug: " .. env.menu.menu[8].title)
+    G.openlid_caffeine("")                                   -- + display awake
+    h.eq(env.menu.title, "\u{1F50C}", "rule hold + caffeine = still plug glyph")
+    G.openlid_caffeine("")                                   -- display off again
+    G.on_menu_on("")                                         -- "Keep awake after unplugging" row
+    h.eq(state(host).autoActivated, false, "precondition: now manual")
+    h.eq(env.menu.title, "\u{1F513}", "keep after unplugging flips to unlock glyph")
+    G.on_menu_off("")                                        -- manual ends on AC, rule on
+    h.eq(state(host).autoActivated, true, "precondition: back to the hold")
+    h.eq(env.menu.title, "\u{1F50C}", "manual session ending on AC flips back to plug")
+    assert(h.lastAlert(env):find("^\u{1F50C}"), "back-to-hold alert starts with plug: " .. h.lastAlert(env))
+    G.on_menu_on(host.json.encode { secs = 1800 })           -- duration row: manual on AC
+    h.eq(state(host).autoActivated, false, "precondition: manual on AC")
+    h.eq(env.menu.title, "\u{1F513}", "manual session on AC keeps unlock glyph")
+end
+
 -- ── Menu rows (#482): stay = toggles + durations only; every state has the same
 --    rows in the same order, so no row moves under the pointer on a re-render ──
 do

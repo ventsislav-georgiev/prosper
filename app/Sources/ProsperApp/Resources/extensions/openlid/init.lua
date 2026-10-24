@@ -156,6 +156,7 @@ local function format_remaining(s) return s.endTime and fmt_remaining(s.endTime)
 -- the thing it keeps awake so they read apart at a glance:
 --   🔓 "Mac awake": the whole Mac stays awake when the lid is CLOSED.
 --   ☕ "Display awake": the screen + screensaver stay off while the lid is OPEN.
+--   🔌 menu-bar icon for the plugged-in hold: awake only on AC, sleeps when you unplug.
 local function awake_line(s)
     if s.endTime then return "\u{1F513} Mac awake for " .. fmt_remaining(s.endTime) .. " \u{2014} lid can close" end
     return "\u{1F513} Mac awake \u{2014} closing the lid won't sleep"
@@ -272,7 +273,7 @@ local function build_menu(s)
     -- manual session (indefinite, timed or Until…) that survives the unplug.
     local rule = rule_lock_active(s)
     if rule then
-        items[#items + 1] = { title = "\u{1F513} Mac awake \u{00B7} while plugged in, sleeps on unplug", enabled = false }
+        items[#items + 1] = { title = "\u{1F50C} Mac awake \u{00B7} while plugged in, sleeps on unplug", enabled = false }
         items[#items + 1] = { title = "Keep awake after unplugging", handler = "on_menu_on", stay = true }
     elseif s.active then
         items[#items + 1] = { title = "\u{1F513} Mac awake with lid closed" .. (s.endTime and (" \u{00B7} " .. fmt_remaining(s.endTime)) or " \u{00B7} no limit"), enabled = false }
@@ -309,7 +310,9 @@ local function render(s)
     -- Always exactly ONE glyph (no countdown suffix, no icon pairs) so the
     -- status item never changes width and the menu bar doesn't reflow.
     local title
-    if s.active and s.caffeine then
+    if rule_lock_active(s) then
+        title = "\u{1F50C}" -- 🔌 plugged-in hold: awake only on AC, sleeps when you unplug
+    elseif s.active and s.caffeine then
         title = "\u{26A1}" -- ⚡ both: Mac + display awake
     elseif s.active then
         title = "\u{1F513}" -- 🔓 Mac awake (lid closed)
@@ -386,7 +389,7 @@ local function deactivate(reason)
         save_state(s)
         render(s)
         log("manual session ended (" .. tostring(reason) .. "), back to the plugged-in hold")
-        host.alert.show("\u{1F513} Kept awake while plugged in \u{2014} sleeps when you unplug")
+        host.alert.show("\u{1F50C} Kept awake while plugged in \u{2014} sleeps when you unplug")
         return
     end
     log(string.format("off (%s): was %s", tostring(reason),
@@ -482,8 +485,8 @@ function openlid_toggle(query)
     local s = load_state()
     if s.active then
         if rule_lock_active(s) then
-            host.alert.show("\u{1F513} Kept awake while plugged in \u{2014} unplug, or turn off the rule in Settings, to allow sleep")
-            return "\u{1F513} Mac awake \u{2014} kept awake while plugged in"
+            host.alert.show("\u{1F50C} Kept awake while plugged in \u{2014} unplug, or turn off the rule in Settings, to allow sleep")
+            return "\u{1F50C} Mac awake \u{2014} kept awake while plugged in"
         end
         deactivate("manual")
     else
@@ -544,7 +547,7 @@ function on_caffeine_expiry(payload) caffeine_off("timer expired") end
 function on_menu_off(payload)
     -- Guard a stale menu (plugged in between render and click): respect the lock.
     if rule_lock_active() then
-        host.alert.show("\u{1F513} Kept awake while plugged in \u{2014} unplug, or turn off the rule in Settings, to allow sleep")
+        host.alert.show("\u{1F50C} Kept awake while plugged in \u{2014} unplug, or turn off the rule in Settings, to allow sleep")
         return
     end
     deactivate("menu")
@@ -786,6 +789,7 @@ function settings_render(section_id, state)
         footer = "🔓 Mac awake keeps the whole Mac running when the lid is CLOSED. "
             .. "☕ Display awake keeps the screen and screensaver off while the lid is OPEN. "
             .. "Independent — use either or both. "
+            .. "🔌 means awake only while plugged in: the Mac sleeps when you unplug. "
             .. "Mac awake turned on here stays on after you unplug. With “Keep awake while plugged in” on, "
             .. "turning it off, or a timed session ending, while charging goes back to the plugged-in hold, "
             .. "which lets the Mac sleep when you unplug.",

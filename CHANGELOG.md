@@ -64,8 +64,10 @@ tag from the now-released section and put it on the new top draft.
   Now "Keep awake after unplugging", the durations and Until… stay available and turn the
   plugged-in hold into a keep-awake that survives the unplug. A keep-awake that times out,
   or that you turn off, while charging goes back to the plugged-in hold instead of letting
-  the Mac sleep, and the menu says so ("Let it sleep on unplug"). Three things no longer
-  end a keep-awake on their own:
+  the Mac sleep, and the menu says so ("Let it sleep on unplug"). The menu-bar icon shows
+  🔌 while the Mac is awake only because it is plugged in, so you can tell before closing
+  the lid that it will sleep when you unplug; 🔓 and ⚡ now mean it stays awake (#502).
+  Three things no longer end a keep-awake on their own:
   - a Wi-Fi drop while charging (the 2-minute no-network guard now runs on battery only);
   - a late timer from an earlier timed session;
   - a plugged-in hold restored on battery after Prosper restarted, which used to stay
