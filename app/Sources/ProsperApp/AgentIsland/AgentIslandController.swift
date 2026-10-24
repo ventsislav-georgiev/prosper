@@ -90,6 +90,9 @@ final class AgentIslandController {
     private(set) var ghosttyDenied = false
     /// Sessions whose terminal is still launching: a double click opens one window.
     private var opening: Set<AgentSessionKey> = []
+    /// #523: every published list, on main, and nil when the island stops.
+    /// LiveStatusPublisher listens (set by AppDelegate; tests leave it nil).
+    var onSessions: (@MainActor ([AgentSession]?) -> Void)?
 
     init() {}
 
@@ -131,6 +134,7 @@ final class AgentIslandController {
     private func apply(_ sessions: [AgentSession]) {
         guard timer != nil, let store else { return }   // a tick that raced teardown
         store.sessions = sessions
+        onSessions?(sessions)
         let live = Set(sessions.map(\.key))
         store.notices = store.notices.filter { live.contains($0.key) }
         if sessions.isEmpty { setExpanded(false) }
@@ -349,6 +353,7 @@ final class AgentIslandController {
     }
 
     private func teardown() {
+        if timer != nil { onSessions?(nil) }
         timer?.cancel(); timer = nil
         if let m = outsideClick { removeMonitor(m) }
         outsideClick = nil

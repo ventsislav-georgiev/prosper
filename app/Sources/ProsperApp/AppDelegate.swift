@@ -157,6 +157,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Agent Island: opt-in notch overlay of dch sessions; no panel, no poll timer
         // and no dch fork until the user enables it.
         AgentIslandController.shared.extLive = agentIslandExtLive
+        // #523: Live status on iPhone reads the island's list (no second dch poll).
+        AgentIslandController.shared.onSessions = { LiveStatusPublisher.shared.sessionsChanged($0) }
+        LiveStatusPublisher.shared.start()
         AgentIslandController.shared.reload()
 
         // Per-app volume mixer: opt-in, so no status item and no audio taps
@@ -1015,6 +1018,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // #523: the phone's card goes offline (waited on up to 1.5 s).
+        LiveStatusPublisher.shared.pause()
         // Before the atexit shortcut below — a hyper remap must never outlive the app.
         HyperKey.shared.clearMapping()
         autocomplete.stop()

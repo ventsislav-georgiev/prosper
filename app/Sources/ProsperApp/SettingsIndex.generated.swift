@@ -15,7 +15,7 @@ let nativeSettingsIndex: [SettingsIndexEntry] = [
     SettingsIndexEntry(paneID: "general", paneTitle: "General", section: "Quick-select",
                        keywords: ["Quick-select modifier"]),
     SettingsIndexEntry(paneID: "general", paneTitle: "General", section: "Remote Terminal",
-                       keywords: ["Serve sessions over Tailscale", "Isolate sessions", "Prosper Remote"]),
+                       keywords: ["Serve sessions over Tailscale", "Isolate sessions", "Live status on iPhone", "Prosper Remote"]),
     SettingsIndexEntry(paneID: "general", paneTitle: "General", section: "Local AI",
                        keywords: ["Inline autocomplete", "Coding agent"]),
     SettingsIndexEntry(paneID: "shortcuts", paneTitle: "Shortcuts", section: ""),

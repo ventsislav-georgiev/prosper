@@ -361,6 +361,10 @@ enum Preferences {
         // Remote Terminal (DchTerm): serve dch sessions over Tailscale.
         static let remoteTerminalEnabled = "remoteTerminalEnabled"
         static let isolateRemoteSessions = "isolateRemoteSessions"
+        // #523: post dch session states to the Worker for the iPhone Live Activity.
+        static let liveStatusEnabled = "liveStatusEnabled"
+        // #523: POST /activate succeeded for this Mac on the signed-in account.
+        static let liveStatusActivated = "liveStatusActivated"
         // Agent Island (#474): which socket dirs it lists while isolation is on.
         static let agentIslandSessions = "agentIslandSessions"
         // #500: what a row click does (AgentIslandClick) and the terminal it opens (AgentTerminal).
@@ -1007,6 +1011,21 @@ enum Preferences {
     static var isolateRemoteSessions: Bool {
         get { defaults.bool(forKey: Keys.isolateRemoteSessions) }
         set { defaults.set(newValue, forKey: Keys.isolateRemoteSessions) }
+    }
+
+    /// #523 "Live status on iPhone". Absent key = on: it only posts while signed in
+    /// and activated, and the operator asked for it on by default.
+    static var liveStatusEnabled: Bool {
+        get { defaults.object(forKey: Keys.liveStatusEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.liveStatusEnabled) }
+    }
+
+    /// #523: this Mac is an activated device of the signed-in account. Set by a
+    /// successful POST /activate or a device list holding it; cleared by sign-out and
+    /// by a device list without it. Persisted so a launch with no network still knows.
+    static var liveStatusActivated: Bool {
+        get { defaults.bool(forKey: Keys.liveStatusActivated) }
+        set { defaults.set(newValue, forKey: Keys.liveStatusActivated) }
     }
 
     /// Agent Island's "Show sessions" raw value (`AgentIslandSource`); unset or

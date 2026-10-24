@@ -341,6 +341,13 @@ final class SettingsModel: ObservableObject {
         isolateRemoteSessions = on
         Preferences.isolateRemoteSessions = on
     }
+    /// #523 "Live status on iPhone": off posts offline and stops, on posts the list.
+    @Published var liveStatusEnabled: Bool
+    func setLiveStatus(_ on: Bool) {
+        liveStatusEnabled = on
+        Preferences.liveStatusEnabled = on
+        LiveStatusPublisher.shared.refresh()
+    }
 
     /// MCP servers for the coding agent. Persisted on every mutation; rendered into
     /// codex config.toml on the next harness spawn (changes apply to new runs).
@@ -476,6 +483,7 @@ final class SettingsModel: ObservableObject {
         agentModel = Preferences.agentModel
         remoteTerminalEnabled = Preferences.remoteTerminalEnabled
         isolateRemoteSessions = Preferences.isolateRemoteSessions
+        liveStatusEnabled = Preferences.liveStatusEnabled
         mcpServers = Preferences.mcpServers
         hooks = Preferences.hooks
         collectTypingHistory = Preferences.collectTypingHistory
@@ -1046,6 +1054,15 @@ private struct GeneralPane: View {
     // and returns. There's no first-run wizard, so this is the only nudge.
     @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
 
+    /// #523: the "Live status on iPhone" footnote. On by default, but only while
+    /// signed in; it reads Agent Island's session list, so it says so while the island is off.
+    private var liveStatusNote: String {
+        var note = "Sends session names and states, never terminal text, to your Prosper account for the iPhone app's Live Activity."
+        if !SupporterClient.shared.isSignedIn { note = "Sign in under Account to use it. " + note }
+        if !AgentIslandController.shared.extLive { note += " Needs Agent Island turned on." }
+        return note
+    }
+
     /// The Prosper Remote companion app — the only client for the Remote Terminal
     /// feature, so the settings row links straight to it.
     static let remoteAppStoreURL = URL(string: "https://apps.apple.com/app/prosper-remote/id6782528095")!
@@ -1171,6 +1188,14 @@ private struct GeneralPane: View {
                     get: { model.isolateRemoteSessions },
                     set: { model.setIsolateRemoteSessions($0) }))
                     .disabled(!model.remoteTerminalEnabled)
+                NeonDivider()
+                NeonRow("Live status on iPhone", subtitle: liveStatusNote) {
+                    Toggle("", isOn: Binding(
+                        get: { SupporterClient.shared.isSignedIn && model.liveStatusEnabled },
+                        set: { model.setLiveStatus($0) }))
+                        .labelsHidden()
+                }
+                .disabled(!SupporterClient.shared.isSignedIn)
                 NeonDivider()
                 NeonRow("Prosper Remote",
                         subtitle: "There's nothing to connect with on the Mac — the sessions are served to the free Prosper Remote app on your iPhone or iPad.") {

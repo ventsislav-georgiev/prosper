@@ -34,7 +34,8 @@ final class SupporterClient: ObservableObject {
     func startup() {
         Entitlements.shared.refreshFromCache()
         guard SupporterStore.load() != nil else { return }
-        Task { await refreshStatus() }
+        // loadDevices: #523 learns whether this Mac is still activated.
+        Task { await refreshStatus(); await loadDevices() }
     }
 
     var isSignedIn: Bool { SupporterStore.load() != nil }
@@ -103,7 +104,9 @@ final class SupporterClient: ObservableObject {
     func activateDevice() async {
         guard let creds = SupporterStore.load() else { return }
         let body: [String: Any] = ["device_id": SupporterStore.deviceID(), "name": SupporterStore.deviceName()]
-        _ = try? await post("/activate", session: creds.session, json: body)
+        guard (try? await post("/activate", session: creds.session, json: body)) != nil else { return }
+        Preferences.liveStatusActivated = true
+        LiveStatusPublisher.shared.deviceActivated()
     }
 
     func loadDevices() async {
@@ -111,6 +114,9 @@ final class SupporterClient: ObservableObject {
               let data = try? await get("/devices", session: creds.session),
               let resp = try? JSONDecoder().decode(DevicesResponse.self, from: data) else { return }
         devices = resp.devices
+        let me = SupporterStore.deviceID()
+        Preferences.liveStatusActivated = resp.devices.contains { $0.device_id == me }
+        LiveStatusPublisher.shared.refresh()
     }
 
     func deactivate(deviceID: String) async {
@@ -128,6 +134,8 @@ final class SupporterClient: ObservableObject {
 
     func signOut() {
         pollTask?.cancel()
+        // #523: the phone's card goes offline first, while the session still works.
+        let offline = LiveStatusPublisher.shared.signOut()
         // Clear the server-side wake ETA before dropping creds: we're disarming the
         // daemon below, so the machine must stop advertising a wake time, or a paired
         // device shows a wakeable ETA for a Mac that won't wake. Snapshot the session
@@ -142,6 +150,7 @@ final class SupporterClient: ObservableObject {
             // (a leaked 365-day token must die at sign-out, not live to TTL) and clear the
             // wake ETA (paired device shouldn't show a wakeable Mac that just disarmed).
             Task.detached {
+                if let offline { _ = await SupporterClient.postSessions(offline, bearer: session) }
                 if let logoutURL {
                     var req = URLRequest(url: logoutURL)
                     req.httpMethod = "POST"
@@ -160,6 +169,7 @@ final class SupporterClient: ObservableObject {
         }
         Preferences.defaults.removeObject(forKey: LiveExtensionHostServices.wakeMetaURLKey)
         SupporterStore.clear()
+        Preferences.liveStatusActivated = false
         Entitlements.shared.reset()
         devices = []
         loginState = .idle
@@ -234,6 +244,11 @@ final class SupporterClient: ObservableObject {
     }
 
     private func requestRaw(_ method: String, _ path: String, session: String?, body: Data?) async throws -> (Data, Int) {
+        try await Self.send(method, path, session: session, body: body)
+    }
+
+    /// The one request helper; nonisolated so #523's quit/sleep post runs off a blocked main.
+    nonisolated static func send(_ method: String, _ path: String, session: String?, body: Data?) async throws -> (Data, Int) {
         var req = URLRequest(url: ProsperServer.baseURL.appending(path: path))
         req.httpMethod = method
         req.timeoutInterval = 30
@@ -244,6 +259,24 @@ final class SupporterClient: ObservableObject {
         if let session { req.setValue("Bearer \(session)", forHTTPHeaderField: "Authorization") }
         let (data, resp) = try await URLSession.shared.data(for: req)
         return (data, (resp as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    // MARK: - Live status (#523)
+
+    /// POST /push/sessions: the HTTP status, nil on a network error.
+    nonisolated static func postSessions(_ body: Data, bearer: String) async -> Int? {
+        try? await send("POST", "/push/sessions", session: bearer, body: body).1
+    }
+
+    /// Sleep and quit: the same POST, waited on up to 1.5 s, since the Mac or the
+    /// process stops right after. Off main, so a blocked main thread is no deadlock.
+    nonisolated static func postSessionsAndWait(_ body: Data, bearer: String) {
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            _ = await postSessions(body, bearer: bearer)
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 1.5)
     }
 
     private func jsonBody(_ json: [String: Any]) -> Data? {

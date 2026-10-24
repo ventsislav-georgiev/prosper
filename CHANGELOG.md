@@ -57,6 +57,11 @@ tag from the now-released section and put it on the new top draft.
   access to a folder ("always allow access to …") is a rule, not a mode change (#508).
   Prompts without numbered options (codex, cursor, opencode) show their last lines and an
   Open terminal button (#475).
+- **Live status on iPhone.** While you are signed in and Agent Island is on, Prosper
+  sends your terminal sessions' names and states (never terminal text) to your Prosper
+  account, so the Prosper iPhone app can show them as a Live Activity and tell you when a
+  session needs you. The card goes offline when the Mac sleeps, Prosper quits or you sign
+  out. It is on by default; turn it off in Settings › General › Remote Terminal (#523).
 - **A terminal session started from the phone opens in your home folder.** It used to
   start in the root of the disk ("/"), Prosper's own working folder (#517).
 - **Prosper no longer quits when the Mac goes to sleep with a manual fan speed set and
