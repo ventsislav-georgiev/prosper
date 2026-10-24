@@ -335,54 +335,6 @@ jobs:
           mkdir -p sparkle-tools
           tar -xf sparkle.tar.xz -C sparkle-tools
 
-      - name: Sign update + generate appcast
-        env:
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          VERSION: ${{ steps.ver.outputs.version }}
-          TAG: ${{ steps.ver.outputs.tag }}
-          IS_PRERELEASE: ${{ steps.ver.outputs.is_prerelease }}
-        run: |
-          BIN=$(find sparkle-tools -name sign_update -type f | head -n1)
-          GEN=$(find sparkle-tools -name generate_appcast -type f | head -n1)
-          # Enclosure URLs point at THIS release's own asset (releases/download/<tag>/)
-          # rather than the moving "latest" path. ${GITHUB_REPOSITORY} is this repo,
-          # so update URLs resolve here.
-          DL_PREFIX="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/"
-          CHANNEL_ARGS=()
-          if [[ "${IS_PRERELEASE}" == "true" ]]; then CHANNEL_ARGS=(--channel beta); fi
-          if [[ -n "${SPARKLE_PRIVATE_KEY}" && -n "${GEN}" ]]; then
-            printf '%s' "${SPARKLE_PRIVATE_KEY}" > eddsa_priv.pem
-            "${GEN}" --ed-key-file eddsa_priv.pem \
-              --download-url-prefix "${DL_PREFIX}" \
-              "${CHANNEL_ARGS[@]}" \
-              dist/
-            rm -f eddsa_priv.pem
-          else
-            echo "::warning::SPARKLE_PRIVATE_KEY not set or tools missing — publishing unsigned appcast."
-            CHANNEL_TAG=""
-            if [[ "${IS_PRERELEASE}" == "true" ]]; then CHANNEL_TAG="<sparkle:channel>beta</sparkle:channel>"; fi
-            cat > dist/appcast.xml <<XML
-          <?xml version="1.0" encoding="utf-8"?>
-          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-            <channel>
-              <title>Prosper</title>
-              <item>
-                <title>${VERSION}</title>
-                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-                ${CHANNEL_TAG}
-                <enclosure url="${DL_PREFIX}Prosper-${VERSION}.zip" sparkle:os="macos" type="application/octet-stream"/>
-              </item>
-            </channel>
-          </rss>
-          XML
-          fi
-          # Fold this build into the canonical feed (the appcast GitHub serves as
-          # "latest") so it keeps BOTH the newest stable and newest beta item.
-          curl -fsSL -o canonical.xml \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml" || true
-          python3 scripts/merge_appcast.py canonical.xml dist/appcast.xml dist/appcast.xml
-          echo "Final appcast:"; cat dist/appcast.xml
-
       - name: Compose release notes from CHANGELOG
         # CHANGELOG.md only ever carries the BASE version heading (`## vX.Y.Z`) — the
         # one draft for the next version. Beta tags (`vX.Y.Z-beta.N`) are never written
@@ -419,6 +371,64 @@ jobs:
             echo "::warning::No CHANGELOG.md section for v${BASE} — using auto-generated notes only."
           fi
           echo "file=$NOTES" >> "$GITHUB_OUTPUT"
+
+      - name: Sign update + generate appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          IS_PRERELEASE: ${{ steps.ver.outputs.is_prerelease }}
+          NOTES_FILE: ${{ steps.notes.outputs.file }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BIN=$(find sparkle-tools -name sign_update -type f | head -n1)
+          GEN=$(find sparkle-tools -name generate_appcast -type f | head -n1)
+          # Enclosure URLs point at THIS release's own asset (releases/download/<tag>/)
+          # rather than the moving "latest" path. ${GITHUB_REPOSITORY} is this repo,
+          # so update URLs resolve here.
+          DL_PREFIX="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/"
+          CHANNEL_ARGS=()
+          if [[ "${IS_PRERELEASE}" == "true" ]]; then CHANNEL_ARGS=(--channel beta); fi
+          # Sparkle's update window shows this version's CHANGELOG section: an .html
+          # file named like the archive, with no DOCTYPE or body, is embedded as the
+          # item's description. Best effort: a failed render publishes without notes.
+          if [[ -s "${NOTES_FILE}" ]] && ! gh api markdown -f text="$(cat "${NOTES_FILE}")" \
+              -f mode=markdown > "dist/Prosper-${VERSION}.html"; then
+            echo "::warning::Could not render the release notes for Sparkle; publishing without them."
+            rm -f "dist/Prosper-${VERSION}.html"
+          fi
+          if [[ -n "${SPARKLE_PRIVATE_KEY}" && -n "${GEN}" ]]; then
+            printf '%s' "${SPARKLE_PRIVATE_KEY}" > eddsa_priv.pem
+            "${GEN}" --ed-key-file eddsa_priv.pem \
+              --download-url-prefix "${DL_PREFIX}" \
+              "${CHANNEL_ARGS[@]}" \
+              dist/
+            rm -f eddsa_priv.pem
+          else
+            echo "::warning::SPARKLE_PRIVATE_KEY not set or tools missing — publishing unsigned appcast."
+            CHANNEL_TAG=""
+            if [[ "${IS_PRERELEASE}" == "true" ]]; then CHANNEL_TAG="<sparkle:channel>beta</sparkle:channel>"; fi
+            cat > dist/appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Prosper</title>
+              <item>
+                <title>${VERSION}</title>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                ${CHANNEL_TAG}
+                <enclosure url="${DL_PREFIX}Prosper-${VERSION}.zip" sparkle:os="macos" type="application/octet-stream"/>
+              </item>
+            </channel>
+          </rss>
+          XML
+          fi
+          # Fold this build into the canonical feed (the appcast GitHub serves as
+          # "latest") so it keeps BOTH the newest stable and newest beta item.
+          curl -fsSL -o canonical.xml \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml" || true
+          python3 scripts/merge_appcast.py canonical.xml dist/appcast.xml dist/appcast.xml
+          echo "Final appcast:"; cat dist/appcast.xml
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0

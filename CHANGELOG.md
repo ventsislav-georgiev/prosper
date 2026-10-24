@@ -53,6 +53,8 @@ tag from the now-released section and put it on the new top draft.
   The status rows (display and Mac state, External display, Battery) no longer look
   clickable. For extension authors: a menu row with no handler or `enabled = false` now
   shows disabled, and `stay = true` keeps the menu open when the row is clicked (#482).
+- **The update window shows what changed.** Sparkle now lists the release notes for the
+  version it offers, from this changelog (#485).
 <!-- Drop the next bullet before promoting v2.159.0 to stable (#478). -->
 - **Beta testers: 2.159.0-beta.1 quit as soon as Agent Island was turned on.** Fixed in
   beta.2. If beta.1 now quits right after it starts, download beta.2 from the releases
