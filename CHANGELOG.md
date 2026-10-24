@@ -127,6 +127,7 @@ tag from the now-released section and put it on the new top draft.
   and a click did not check that the command on screen was still the one it was raised
   for. From beta.3 a card shows and compares every line of the prompt, from its title
   through the command or file to the last line above the question (#483).
+<!-- Drop the next bullet before promoting v2.159.0 to stable (#536). -->
 - **Beta testers: in beta.6 some waiting sessions showed no answer card.** A box drawn
   above the dialog, in a Bash command or in an option label was taken for a preview box,
   and the card was dropped; you could still answer in the terminal. From beta.7 such a

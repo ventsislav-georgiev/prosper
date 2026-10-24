@@ -1412,8 +1412,11 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertTrue(mode(dir + "Yes, and enable turbo for this session (shift+tab)"))
         // QA #343 D8: any "; Yes," clause, not only "; Yes, and".
         XCTAssertTrue(mode(dir + "Yes, enable turbo (shift+tab)"))
-        // QA #343 F2: off only for the cycle key; without it the combined row is one click.
-        XCTAssertFalse(mode(dir + "Yes, enable turbo"))
+        // QA #377 W3: a dir-first row that loses the exemption is off with or without the cycle key.
+        XCTAssertTrue(mode(dir + "Yes, enable turbo"))
+        XCTAssertTrue(mode("Yes, and always allow access to tmp/ for this session, Yes, and switch to plan mode"))
+        // A folder name holding a mode clause turns a single-clause row off too.
+        XCTAssertTrue(mode("Yes, and always allow access to auto mode/ for this session"))
         // The clause check alone, with separators other than "; ".
         let bare = "Yes, and always allow access to tmp/ for this session"
         for sep in [", ", " · ", " and "] {
@@ -1984,6 +1987,55 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertEqual(try prompt(run7Screen).context, ["☐ Color"], "a real chip line still leads")
         XCTAssertEqual(try prompt(run9Screen).context, ["←  ☐ Color  ☐ Size  ✔ Submit  →"])
     }
+
+    // MARK: - QA #377 (#536 round 2)
+
+    /// R1: a whole box right above the dialog's top rule (a plan in
+    /// scrollback) splits cleanly but fails the preview tail; the card came
+    /// back nil at c8a585a. The plain parse of the rows gives a0fe800's card.
+    func testWholeBoxInScrollbackKeepsTheCard() throws {
+        let ask = try prompt(scrollboxRun7Screen)
+        XCTAssertEqual(ask, try prompt(run7Screen))
+        XCTAssertEqual(ask.question, "Which color?")
+        XCTAssertEqual(ask.context, ["☐ Color"])
+        XCTAssertEqual(ask.options.map(\.label), ["Red", "Green", "Blue", "Type something.", "Chat about this"])
+        XCTAssertEqual(ask.preview, [])
+
+        let bash = try prompt(scrollboxBashScreen)
+        XCTAssertEqual(bash, try prompt(bashScreen))
+        XCTAssertEqual(bash.question, "Do you want to proceed?")
+        let f = FakeDch()
+        f.screen = scrollboxBashScreen
+        XCTAssertEqual(f.answer(1, expected: bash), .sent)
+        XCTAssertEqual(f.sent, ["1"])
+
+        XCTAssertEqual(try prompt(rowLayoutScreen).preview, rowLayoutPreview, "a real preview form still splits")
+    }
+
+    /// R1: the retry runs only on rows that failed the preview parse, and the
+    /// plain parse rejects a real preview form whose tail is broken: its
+    /// unnumbered "Chat about this" sits above the footer. Context card.
+    func testPreviewFormWithABrokenTailIsNeverAnswerable() {
+        let footer = "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel"
+        XCTAssertNil(AgentPrompt.parse(altered(rowLayoutScreen, footer,
+                                               "Enter to select · ↑/↓ to navigate · Esc to cancel")),
+                     "ordinary footer under a kept Chat about this")
+        XCTAssertNil(AgentPrompt.parse(altered(rowLayoutScreen, "\n\n" + footer, "")), "footer removed")
+    }
+
+    /// I5: a preview form whose box is empty ("┌─┐" over "└─┘") is no preview
+    /// form; the plain parse rejects it ("Chat about this"), so parse is nil and
+    /// no digit is ever sent. The same box with one line still splits.
+    func testEmptyPreviewBoxIsNeverAnswerable() throws {
+        let rows = rowLayoutScreen.components(separatedBy: "\n")
+        let pad = String(repeating: " ", count: 34) + "│"
+        let bottom = try XCTUnwrap(rows.first { $0.contains("└") })
+        let oneLine = rows.filter { !$0.hasPrefix(pad) }.joined(separator: "\n")
+        XCTAssertEqual(try prompt(oneLine).preview, [rowLayoutPreview[0]])
+        let empty = rows.filter { !$0.hasPrefix(pad) && !$0.contains("└") }
+            .map { $0.hasPrefix("  2. ") ? String($0.prefix(34)) + bottom.dropFirst(34) : $0 }
+        XCTAssertNil(AgentPrompt.parse(empty.joined(separator: "\n")))
+    }
 }
 
 // MARK: - Real Claude Code 2.1.309 screens (QA #310 live pty probe)
@@ -2242,4 +2294,49 @@ private let run6Screen = #"""
    3. Nossion (shift+tab)
 
  Esc to cancel · Tab to amend
+"""#
+
+/// QA #377 c-scrollbox-run7: run 7's Ask form under a plan whose whole box
+/// sits right above the top rule.
+private let scrollboxRun7Screen = #"""
+⏺ Plan:
+  1. Draw the frame ┌──────────┐
+                    │ x        │
+                    └──────────┘
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color?
+
+❯ 1. Red
+     Choose red
+  2. Green
+     Choose green
+  3. Blue
+     Choose blue
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+"""#
+
+/// QA #377 c-scrollbox-bash: the Bash dialog under the same plan.
+private let scrollboxBashScreen = #"""
+⏺ Plan:
+  1. Draw the frame ┌──────────┐
+                    │ x        │
+                    └──────────┘
+
+──────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   rm -rf .build && swift build -c release
+   Clean and rebuild the release products
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for rm commands in /Users/probe/proj
+   3. No, and tell Claude what to do differently (esc)
 """#

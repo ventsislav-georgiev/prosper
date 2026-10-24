@@ -45,14 +45,14 @@ struct AgentPromptOption: Hashable {
     /// "; Yes," anywhere (Claude Code joins a combined row's clauses with "; ")
     /// and no mode clause (a mode prefix, "accept edits", "allow all edits",
     /// "auto mode") anywhere either. A dir-first row that loses the exemption
-    /// this way is off only because it carries the cycle key: without
-    /// "(shift+tab)" it is one click, whatever its second clause says (QA #343
-    /// F2; Claude Code puts the key on every such row). A folder name holding
-    /// one of them turns the row off: fails safe.
+    /// this way is a mode change whatever its second clause says, with or
+    /// without the cycle key (QA #377 W3: every combined row stays off). A
+    /// folder name holding one of them turns the row off: fails safe.
     var isModeChange: Bool {
         let text = ([label] + detail).joined().filter { !$0.isWhitespace }
-        if text.hasPrefix(Self.dirRulePrefix), !text.contains(";Yes,"),
-           !Self.modeClauses.contains(where: text.contains) { return false }
+        if text.hasPrefix(Self.dirRulePrefix) {
+            return text.contains(";Yes,") || Self.modeClauses.contains(where: text.contains)
+        }
         if hint == "shift+tab" { return true }
         return text.contains("(shift+tab)") || Self.modePrefixes.contains { text.hasPrefix($0) }
     }
@@ -174,15 +174,21 @@ extension AgentPrompt {
     /// (`splitPreview`) is parsed on its left column; it ends in a rule, an
     /// unnumbered "Chat about this" and its own footer (`isPreviewFooter`).
     static func parse(_ screen: String) -> AgentPrompt? {
-        var raw = screen.split(separator: "\n", omittingEmptySubsequences: false)
-        var preview: [String] = [], notes: [String] = []
-        // QA #370 F1: a "N. … ┌──┐" row that is no box top (scrollback, a
-        // command, an option label) is parsed as before #526, rows unchanged;
-        // that parse still rejects a real preview form ("Chat about this").
-        var top = previewTop(raw)
-        if let t = top {
-            if let s = splitPreview(raw, t) { (raw, preview, notes) = s } else { top = nil }
-        }
+        let raw = screen.split(separator: "\n", omittingEmptySubsequences: false)
+        // QA #370 F1, QA #377 R1: a "N. … ┌──┐" row that is no box top
+        // (scrollback, a command, an option label) is parsed as before #526,
+        // rows unchanged, whether the split fails or the split rows fail the
+        // preview parse (a whole box just above the top rule splits cleanly).
+        // Only a nil preview parse retries, once; the plain parse still
+        // rejects a real preview form ("Chat about this" above the footer).
+        if let t = previewTop(raw), let s = splitPreview(raw, t),
+           let p = parse(s.left, form: (s.preview, s.notes)) { return p }
+        return parse(raw, form: nil)
+    }
+
+    /// `parse` on screen rows; `form` is a split preview form's box lines and
+    /// notes, its rows `raw` already cut to the left column.
+    private static func parse(_ raw: [Substring], form: (preview: [String], notes: [String])?) -> AgentPrompt? {
         let lines = unframe(raw)
         guard let last = lines.lastIndex(where: { option($0) != nil }) else { return nil }
         var found: [(digit: Int, label: String, caret: Bool, detail: [String])] = []
@@ -190,7 +196,7 @@ extension AgentPrompt {
         var below = Array(lines[(last + 1)...].prefix(while: { !isBlankOrRule($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) })
         let after = lines[(last + 1 + below.count)...].filter { !isBlank($0) }
-        if top == nil {
+        if form == nil {
             guard after.dropLast().allSatisfy(isRule),
                   after.last.map({ isRule($0) || isFooter($0) }) ?? below.isEmpty else { return nil }
         } else {
@@ -283,7 +289,7 @@ extension AgentPrompt {
                 let (label, hint) = splitHint(o.label)
                 return AgentPromptOption(digit: o.digit, label: label, hint: hint, detail: o.detail)
             },
-            preview: preview, notes: notes,
+            preview: form?.preview ?? [], notes: form?.notes ?? [],
             // Off the screen top: the dialog's own top rule is not on screen.
             topFound: j >= 0)
     }
