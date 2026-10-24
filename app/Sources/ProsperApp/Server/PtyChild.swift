@@ -33,8 +33,11 @@ final class PtyChild: @unchecked Sendable {
         let envp = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
         // Prosper.app's own cwd is "/", so without a chdir every session started there.
         let dir = strdup(cwd)
+        // The fallback too: a Swift literal passed to chdir bridges (and may allocate) in the child.
+        let root = strdup("/")
         defer {
             free(dir)
+            free(root)
             argv.forEach { if let p = $0 { free(p) } }
             envp.forEach { if let p = $0 { free(p) } }
         }
@@ -56,8 +59,9 @@ final class PtyChild: @unchecked Sendable {
             sigemptyset(&none)
             sigprocmask(SIG_SETMASK, &none, nil)
             // chdir is async-signal-safe. A missing dir must not cost the session: fall back to "/".
-            if dir == nil || chdir(dir!) != 0 { _ = chdir("/") }
-            execve(exe, argv, envp)
+            if dir == nil || chdir(dir!) != 0, let root { _ = chdir(root) }
+            // argv[0] is exe's pre-fork strdup: passing exe would bridge a Swift String here.
+            execve(argv[0], argv, envp)
             _exit(127)  // exec failed
         }
         masterFD = amaster

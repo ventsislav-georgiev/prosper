@@ -306,8 +306,9 @@ struct DchListRow: Equatable, Sendable {
     var metaEpoch: Int = 0
 
     /// The phone's `meta`/`meta_epoch` row keys, re-encoded from the decoded fields
-    /// (never dch's raw JSON); empty when there is no meta. The phone is a second
-    /// untrusted-text consumer: only allowlisted PR URLs go out, repo/title truncated.
+    /// (never dch's raw JSON); empty when there is no meta or nothing survives the
+    /// filter. The phone is a second untrusted-text consumer: only allowlisted PR URLs
+    /// go out, repo/title truncated.
     var metaWire: [String: Any] {
         guard let meta else { return [:] }
         var m: [String: Any] = [:]
@@ -317,18 +318,21 @@ struct DchListRow: Equatable, Sendable {
             if let v = t.total { o["total"] = v }
             if let v = t.inProgress { o["in_progress"] = v }
             if let v = t.queued { o["queued"] = v }
-            m["tasks"] = o
+            if !o.isEmpty { m["tasks"] = o }
         }
         var prs: [String: Any] = [:]
-        prs["open"] = meta.openPRs.compactMap { pr -> [String: Any]? in
+        let open = meta.openPRs.compactMap { pr -> [String: Any]? in
             // repo/num come from the URL, not dch's fields, so the chip names what opens.
             guard let u = pr.pullURL else { return nil }
             let p = u.path.split(separator: "/")   // owner, repo, "pull", digits
             var o: [String: Any] = ["url": u.absoluteString, "repo": String("\(p[0])/\(p[1])".prefix(Self.maxRepoChars)),
-                                    "title": String(pr.title.prefix(Self.maxTitleChars))]
+                                    "title": String(String.UnicodeScalarView(pr.title.unicodeScalars.prefix(Self.maxTitleChars)))]
             if let n = Int(p[3]) { o["num"] = n }
             return o
         }
+        // Nothing left after filtering: no meta key at all, as with no meta.
+        guard m["tasks"] != nil || !open.isEmpty || meta.merged != nil else { return [:] }
+        prs["open"] = open
         if let v = meta.merged { prs["merged"] = v }
         m["prs"] = prs
         var w: [String: Any] = ["meta": m]
@@ -337,6 +341,7 @@ struct DchListRow: Equatable, Sendable {
     }
 
     static let maxRepoChars = 100
+    /// Unicode scalars, not Characters: combining marks cannot grow a "200" title.
     static let maxTitleChars = 200
 }
 
@@ -356,7 +361,8 @@ struct DchSessionMeta: Equatable, Sendable {
         let title: String
 
         /// `url` only when it is exactly `https://github.com/<owner>/<repo>/pull/<digits>`:
-        /// no userinfo, port, query or fragment, owner/repo in GitHub's name charset.
+        /// no userinfo, port, query or fragment, owner/repo in GitHub's name charset
+        /// and within GitHub's lengths (owner 39, repo 100), so the forwarded url is bounded.
         /// Anything else is a label, never opened.
         var pullURL: URL? {
             guard let c = URLComponents(string: url), c.scheme == "https", c.host == "github.com",
@@ -367,7 +373,7 @@ struct DchSessionMeta: Equatable, Sendable {
                 !s.isEmpty && s != "." && s != ".."
                     && s.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)) }
             }
-            guard p.count == 5, p[0].isEmpty, name(p[1]), name(p[2]), p[3] == "pull",
+            guard p.count == 5, p[0].isEmpty, name(p[1]), name(p[2]), p[1].count <= 39, p[2].count <= 100, p[3] == "pull",
                   (1...9).contains(p[4].count), p[4].allSatisfy({ $0.isASCII && $0.isNumber })
             else { return nil }
             return c.url

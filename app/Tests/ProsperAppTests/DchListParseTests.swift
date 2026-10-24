@@ -134,6 +134,8 @@ final class DchListParseTests: XCTestCase {
         func url(_ s: String) -> URL? { DchSessionMeta.PR(url: s, repo: "", num: nil, title: "").pullURL }
         XCTAssertEqual(url("https://github.com/o/r/pull/12"), URL(string: "https://github.com/o/r/pull/12"))
         XCTAssertNotNil(url("https://github.com/payhawk/solution.cdv2-x_y/pull/12794"))
+        XCTAssertNotNil(url("https://github.com/\(String(repeating: "o", count: 39))/\(String(repeating: "r", count: 100))/pull/1"),
+                        "GitHub's own limits: owner 39, repo 100")
         for bad in ["http://github.com/o/r/pull/12",            // scheme
                     "HTTPS://github.com/o/r/pull/12",
                     "https://github.com.evil.com/o/r/pull/12",  // lookalike host
@@ -159,6 +161,8 @@ final class DchListParseTests: XCTestCase {
                     "https://github.com/o/r/pull/%31",
                     "https://github.com/o/r/pull/١٢",
                     "https://github.com/o/r/pull/1234567890",   // longer than any real PR number
+                    "https://github.com/\(String(repeating: "o", count: 40))/r/pull/1",   // owner over 39
+                    "https://github.com/o/\(String(repeating: "r", count: 101))/pull/1",  // repo over 100
                     "https://github.com/o/../pull/12",
                     "https://github.com/o/r%2Fx/pull/12",
                     "javascript:alert(1)", "file:///etc/passwd", "", "github.com/o/r/pull/12"] {
@@ -213,7 +217,21 @@ final class DchListParseTests: XCTestCase {
         XCTAssertTrue(r.metaWire.isEmpty)
         r.metaEpoch = 0
         r.meta = DchSessionMeta()
-        XCTAssertEqual(wire(r), #"{"meta":{"prs":{"open":[]}}}"#)   // no epoch at 0
+        XCTAssertTrue(r.metaWire.isEmpty, "an empty meta sends no keys")
+    }
+
+    /// #522: nothing left after filtering (no task fields, no allowlisted PR, no
+    /// merged count) means no meta and no meta_epoch, as with no meta at all.
+    func testMetaWireAbsentWhenNothingSurvives() {
+        let r = row("""
+        [{"name":"a","meta_epoch":9,"meta":{"tasks":{"total":"7"},"prs":{"open":[{"url":"javascript:alert(1)","num":1}]}}}]
+        """)
+        XCTAssertNotNil(r.meta)
+        XCTAssertTrue(r.metaWire.isEmpty)
+        XCTAssertEqual(wire(row(#"[{"name":"a","meta":{"prs":{"merged":0}}}]"#)), #"{"meta":{"prs":{"merged":0,"open":[]}}}"#)
+        XCTAssertEqual(wire(row(#"[{"name":"a","meta":{"tasks":{"queued":0}}}]"#)), #"{"meta":{"prs":{"open":[]},"tasks":{"queued":0}}}"#)
+        XCTAssertEqual(wire(row(#"[{"name":"a","meta":{"tasks":{},"prs":{"open":[{"url":"https://github.com/o/r/pull/1"}]}}}]"#)),
+                       #"{"meta":{"prs":{"open":[{"num":1,"repo":"o\/r","title":"","url":"https:\/\/github.com\/o\/r\/pull\/1"}]}}}"#)
     }
 
     func testMetaWireDropsNonAllowlistedPRs() {
@@ -231,16 +249,28 @@ final class DchListParseTests: XCTestCase {
         let r = row(#"[{"name":"a","meta":{"tasks":{"done":2,"total":"7"}}}]"#)
         XCTAssertEqual(wire(r), #"{"meta":{"prs":{"open":[]},"tasks":{"done":2}}}"#)
         let empty = row(#"[{"name":"a","meta":{"tasks":{}}}]"#)
-        XCTAssertEqual(wire(empty), #"{"meta":{"prs":{"open":[]},"tasks":{}}}"#)
+        XCTAssertTrue(empty.metaWire.isEmpty, "a fieldless tasks object is nothing")
     }
 
     func testMetaWireTruncatesRepoAndTitle() {
-        let repo = String(repeating: "r", count: 150), title = String(repeating: "t", count: 300)
+        let repo = String(repeating: "r", count: 100), title = String(repeating: "t", count: 300)
         var r = DchListRow(name: "a", alias: "", activityEpoch: 0, state: "", agents: 0)
         r.meta = DchSessionMeta(openPRs: [.init(url: "https://github.com/o/\(repo)/pull/1", repo: "o/r", num: 1, title: title)])
         let pr = ((r.metaWire["meta"] as? [String: Any])?["prs"] as? [String: Any])?["open"] as? [[String: Any]]
         XCTAssertEqual(pr?.first?["repo"] as? String, "o/" + String(repeating: "r", count: 98))
         XCTAssertEqual(pr?.first?["title"] as? String, String(repeating: "t", count: 200))
+    }
+
+    /// #522: the title cap counts unicode scalars, so combining marks cannot grow it:
+    /// 300 "e" + U+0301 pairs are 300 Characters but 600 scalars; 200 scalars go out.
+    func testMetaWireTitleCapCountsScalars() {
+        var r = DchListRow(name: "a", alias: "", activityEpoch: 0, state: "", agents: 0)
+        let title = String(repeating: "e\u{301}", count: 300)
+        r.meta = DchSessionMeta(openPRs: [.init(url: "https://github.com/o/r/pull/1", repo: "o/r", num: 1, title: title)])
+        let pr = ((r.metaWire["meta"] as? [String: Any])?["prs"] as? [String: Any])?["open"] as? [[String: Any]]
+        let sent = try? XCTUnwrap(pr?.first?["title"] as? String)
+        XCTAssertEqual(sent?.unicodeScalars.count, 200)
+        XCTAssertEqual(sent, String(repeating: "e\u{301}", count: 100))
     }
 
     /// dch's repo/num are untrusted: a chip reading "o/safe#1" must not open evil/x#9.

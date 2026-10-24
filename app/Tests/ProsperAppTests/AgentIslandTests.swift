@@ -1392,6 +1392,10 @@ final class AgentIslandTests: XCTestCase {
         let chips = AgentIsland.prChips(meta).chips
         XCTAssertEqual(chips.map(\.label), ["r#12", "r#13", "r#14"], "a rejected URL still shows, as a label")
         XCTAssertEqual(chips.map { $0.url != nil }, [true, false, false])
+        // #522: owner over 39 characters.
+        let long = AgentIsland.prChips(DchSessionMeta(openPRs: [pr("o/r", 15, url: "https://github.com/\(String(repeating: "o", count: 40))/r/pull/15")])).chips
+        XCTAssertEqual(long.map(\.label), ["r#15"])
+        XCTAssertNil(long.first?.url, "an over-long owner is a label, never opened")
         chips.forEach(AgentIsland.open)
         XCTAssertEqual(opened, [URL(string: "https://github.com/o/r/pull/12")!])
         AgentIsland.open(AgentIsland.PRChip(label: "x#1", title: "", url: nil))

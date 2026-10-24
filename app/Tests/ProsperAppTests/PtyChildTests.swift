@@ -58,4 +58,23 @@ final class PtyChildTests: XCTestCase {
         let missing = tempDir().appendingPathComponent("gone").path
         XCTAssertEqual(try pwd(cwd: missing), "/")
     }
+
+    /// #522, a scan by necessity: a Swift String bridged to a C string in the forked
+    /// child behaves the same when it happens not to deadlock, so no run can catch it.
+    /// The child block's code (comments stripped) holds no string literal and never
+    /// names the Swift exe; its "/" fallback and execve path are pre-fork C strings.
+    func testForkedChildBridgesNoSwiftString() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Server/PtyChild.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "if child == 0 {"))
+        let end = try XCTUnwrap(source.range(of: "_exit(127)", range: start.upperBound..<source.endIndex))
+        let code = source[start.upperBound..<end.lowerBound].split(separator: "\n")
+            .map { $0.components(separatedBy: "//")[0] }
+        XCTAssertTrue(code.contains { $0.contains("execve(") }, "child block not found")
+        for line in code {
+            XCTAssertFalse(line.contains("\""), "string literal in the forked child: \(line)")
+            XCTAssertNil(line.range(of: #"\bexe\b"#, options: .regularExpression), "Swift exe bridged in the child: \(line)")
+        }
+    }
 }
