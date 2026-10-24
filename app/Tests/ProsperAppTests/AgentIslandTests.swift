@@ -1278,6 +1278,101 @@ final class AgentIslandTests: XCTestCase {
                                            state: .idle, agents: 0)])
     }
 
+    // MARK: - Session meta (#506)
+
+    private func pr(_ repo: String, _ num: Int, url: String? = nil, title: String = "") -> DchSessionMeta.PR {
+        .init(url: url ?? "https://github.com/\(repo)/pull/\(num)", repo: repo, num: num, title: title)
+    }
+
+    func testListCarriesMetaIntoTheSession() {
+        let json = #"[{"name":"x","state":"working","meta":{"prs":{"open":[],"merged":4}}},{"name":"y","state":"idle"}]"#
+        let rows = AgentIsland.list(dirs: ["/d"]) { _, _ in Data(json.utf8) }
+        XCTAssertEqual(rows.map(\.meta), [DchSessionMeta(merged: 4), nil])
+    }
+
+    func testMetaSummary() {
+        XCTAssertEqual(AgentIsland.metaSummary(DchSessionMeta(
+            tasks: .init(done: 22, total: 26, inProgress: 2, queued: 2), merged: 18)),
+            "22/26 done · 2 in progress · 2 queued")
+        XCTAssertEqual(AgentIsland.mergedLabel(DchSessionMeta(merged: 18)), "18 merged")
+        XCTAssertNil(AgentIsland.mergedLabel(DchSessionMeta(merged: 0)))
+        XCTAssertNil(AgentIsland.metaSummary(DchSessionMeta(merged: 18)), "merged is the title line's")
+        XCTAssertEqual(AgentIsland.metaSummary(DchSessionMeta(tasks: .init(done: 485, total: 503, inProgress: 5,
+                                                                           queued: 13), merged: 0)),
+                       "485/503 done · 5 in progress · 13 queued")
+        XCTAssertNil(AgentIsland.metaSummary(nil))
+        XCTAssertNil(AgentIsland.metaSummary(DchSessionMeta(tasks: .init(done: 0, total: 0, inProgress: 0, queued: 0),
+                                                            merged: 0)), "all zero: the row looks as before")
+        let s = session("s", .working, activity: 100, alias: "T")
+        var m = s; m.meta = DchSessionMeta(tasks: .init(done: 1, total: 2), openPRs: [pr("o/r", 12)], merged: 3)
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 12s ago", "no meta: unchanged")
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
+                       "T, Working, 12s ago, 1/2 done, 3 merged, open pull requests r#12")
+    }
+
+    func testPRChipsCapWithPlusMAndFitTheBudget() {
+        let many = DchSessionMeta(openPRs: (1...10).map { pr("o/r", $0) })
+        let (chips, more) = AgentIsland.prChips(many)
+        XCTAssertEqual(chips.map(\.label), ["r#1", "r#2", "r#3"])
+        XCTAssertEqual(more, 7)
+        XCTAssertEqual(AgentIsland.prChips(DchSessionMeta(openPRs: [pr("o/r", 1)])).more, 0)
+        XCTAssertEqual(AgentIsland.prChips(nil).chips, [])
+        let merged = AgentIsland.prChips(DchSessionMeta(openPRs: many.openPRs, merged: 999_999_999))
+        XCTAssertLessThan(merged.chips.count, 3, "the merged label takes its width out of the chips' budget")
+        XCTAssertEqual(merged.chips.count + merged.more, 10)
+
+        // Long names and numbers: fewer chips, all measured inside the budget with the "+M".
+        let wide = DchSessionMeta(openPRs: (1...50).map { pr("o/a-very-long-repository-name-\($0)", 123_456_780 + $0) })
+        let w = AgentIsland.prChips(wide)
+        XCTAssertLessThan(w.chips.count, AgentIsland.maxPRChips)
+        XCTAssertEqual(w.chips.count + w.more, 50)
+        XCTAssertEqual(w.chips.first?.label, "a-very-long…#123456781", "repo name part truncated to 12")
+        let width = w.chips.reduce(0) { $0 + AgentIsland.chipWidth($1.label) }
+            + CGFloat(w.chips.count) * AgentIsland.chipSpacing + AgentIsland.chipWidth("+\(w.more)")
+        XCTAssertLessThanOrEqual(width, AgentIsland.prChipBudget)
+        XCTAssertEqual(AgentIsland.prChips(wide, budget: 0).chips, [], "nothing fits: only the +M")
+
+        let titled = AgentIsland.prChips(DchSessionMeta(openPRs: [pr("o/r", 1, title: String(repeating: "x", count: 500))]))
+        XCTAssertEqual(titled.chips.first?.title.count, AgentIsland.maxTitleChars)
+    }
+
+    @MainActor
+    func testPRClickOpensOnlyAnAllowlistedURLThroughTheSeam() {
+        var opened: [URL] = []
+        let saved = AgentIsland.openURL
+        AgentIsland.openURL = { opened.append($0) }
+        defer { AgentIsland.openURL = saved }
+        let meta = DchSessionMeta(openPRs: [
+            pr("o/r", 12),
+            pr("o/r", 13, url: "https://github.com.evil.com/o/r/pull/13"),
+            pr("o/r", 14, url: "http://github.com/o/r/pull/14"),
+        ])
+        let chips = AgentIsland.prChips(meta).chips
+        XCTAssertEqual(chips.map(\.label), ["r#12", "r#13", "r#14"], "a rejected URL still shows, as a label")
+        XCTAssertEqual(chips.map { $0.url != nil }, [true, false, false])
+        chips.forEach(AgentIsland.open)
+        XCTAssertEqual(opened, [URL(string: "https://github.com/o/r/pull/12")!])
+        AgentIsland.open(AgentIsland.PRChip(label: "x#1", title: "", url: nil))
+        XCTAssertEqual(opened.count, 1, "a label chip opens nothing")
+    }
+
+    /// QA I1: `dch --meta` writes only .sock.meta; the stamp must see it or PRs
+    /// and tasks wait for the 10 s backstop.
+    func testMetaSidecarAloneTriggersAFetch() {
+        let dir = tempDir(), f = Fake()
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: 9_000)
+        touch(dir, "s.sock.meta", mtime: 9_000)
+        let p = poller([dir.path], f)
+        _ = p.tick(); f.now += 2; _ = p.tick()
+        f.now += 5; _ = p.tick()
+        XCTAssertEqual(f.calls.count, 2)
+        touch(dir, "s.sock.meta", mtime: 10_007)
+        f.now += 1; _ = p.tick()
+        XCTAssertEqual(f.calls.count, 3, ".meta only")
+        XCTAssertEqual(AgentDirScanner().scan([dir.path])[AgentSessionKey(dir: dir.path, name: "s")]?.meta, 10_007)
+    }
+
     // MARK: - Geometry
 
     /// 14" MacBook Pro: 1512 x 982, notch 185 x 32 between two auxiliary areas.
@@ -1338,6 +1433,75 @@ final class AgentIslandTests: XCTestCase {
             let png = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]))
             try png.write(to: out.appendingPathComponent("\(name).png"))
             if let extra { try png.write(to: extra.appendingPathComponent("\(name).png")) }
+        }
+    }
+
+    /// #506 (c): rows with PR chips and task counts, worst cases included, stay
+    /// inside the island at every audited UI scale. The island's sizes are fixed
+    /// (nothing follows ThemeRuntime.scale), so every scale renders the same
+    /// bitmap (to the rasterizer's ±1 antialiasing noise); and left and right of the rows' inset nothing but the shape's black
+    /// or the backdrop is ever drawn, so no row overflows its width.
+    @MainActor
+    func testMetaRowsStayInsideTheIslandAtEveryScale() throws {
+        let now = Date().timeIntervalSince1970, old = now - 50 * 86400
+        func m(_ prs: [DchSessionMeta.PR], tasks: DchSessionMeta.Tasks? = nil, merged: Int? = nil) -> DchSessionMeta {
+            DchSessionMeta(tasks: tasks, openPRs: prs, merged: merged)
+        }
+        let big = 999_999_999
+        var rows = [
+            session("prosper-main", .working, activity: old, alias: "prosper", agents: 2),
+            session("sec-1", .blocked, activity: old, alias: "a very long session title that has to truncate somewhere", agents: 12),
+            session("solution-master", .done, activity: old),
+            session("dobby-main", .idle, activity: old, alias: "dobby"),
+            session("plain", .idle, activity: old, alias: "no meta, as before"),
+        ]
+        rows[0].meta = m([pr("o/prosper", 12, title: "Fix the thing"), pr("o/prosper", 13)],
+                         tasks: .init(done: 22, total: 26, inProgress: 2, queued: 2), merged: 18)
+        rows[1].meta = m((1...50).map { pr("o/a-very-long-repository-name", 123_456_780 + $0) },
+                         tasks: .init(done: big, total: big, inProgress: big, queued: big), merged: big)
+        rows[2].meta = m([pr("payhawk/solution", 12794), pr("o/r", 7, url: "http://evil.example/o/r/pull/7"),
+                          pr("o/s", 8), pr("o/t", 9)], tasks: .init(done: 485, total: 503, inProgress: 5, queued: 13))
+        rows[3].meta = m([], merged: 3)
+        let store = AgentIslandStore(geometry: notched)
+        store.sessions = rows
+        store.expanded = true
+        let out = tempDir()
+        let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        var pixels: [CGFloat: [UInt8]] = [:]
+        func near(_ a: Int, _ b: Int) -> Bool { abs(a - b) <= 2 }
+        for scale: CGFloat in [0.7, 0.85, 1.0, 1.25] {
+            ThemeRuntime.scale = scale
+            let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
+            r.scale = 2
+            let cg = try XCTUnwrap(r.cgImage)
+            let rep = NSBitmapImageRep(cgImage: cg)
+            let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+            pixels[scale] = Array(UnsafeBufferPointer(start: rep.bitmapData, count: rep.bytesPerRow * rep.pixelsHigh))
+            try png.write(to: out.appendingPathComponent("agent-island-meta-\(scale).png"))
+            if let extra { try png.write(to: extra.appendingPathComponent("agent-island-meta-\(scale).png")) }
+            // Rows area, in pixels: below the header, above the bottom corners.
+            let g = notched, px = 2.0, pad = 20.0
+            let top = Int((pad + g.barHeight + AgentIslandGeometry.listTop) * px)
+            let bottom = Int((pad + store.size.height - AgentIslandGeometry.openRadii.bottom) * px)
+            let band = Int((pad + AgentIslandGeometry.listInset) * px)
+            var bg = [Int](repeating: 0, count: 4)
+            rep.getPixel(&bg, atX: 0, y: 0)
+            var stray = 0
+            for y in top..<bottom {
+                for x in Array(0..<band) + Array((rep.pixelsWide - band)..<rep.pixelsWide) {
+                    var p = [Int](repeating: 0, count: 4)
+                    rep.getPixel(&p, atX: x, y: y)
+                    if !zip(p, bg).allSatisfy(near) && p.prefix(3).contains(where: { $0 > 2 }) { stray += 1 }
+                }
+            }
+            XCTAssertEqual(stray, 0, "scale \(scale): row pixels outside the rows' inset")
+        }
+        let base = try XCTUnwrap(pixels[1.0])
+        for (scale, px) in pixels {
+            XCTAssertTrue(px.count == base.count && zip(px, base).allSatisfy { near(Int($0), Int($1)) },
+                          "scale \(scale): the island does not follow the UI scale")
         }
     }
 }

@@ -71,6 +71,8 @@ struct AgentSession: Equatable, Identifiable {
     var activity: TimeInterval
     let state: AgentState
     let agents: Int
+    /// #506: dch 1.22's `meta` (open PRs, task counts); nil from older dch or none set.
+    var meta: DchSessionMeta? = nil
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -150,7 +152,80 @@ enum AgentIsland {
 
     static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval) -> String {
         let age = age(of: s, now: now)
-        return [s.title, s.state.label, age.isEmpty ? nil : "\(age) ago"].compactMap { $0 }.joined(separator: ", ")
+        let prs = prChips(s.meta, budget: .infinity).chips.map(\.label)
+        return [s.title, s.state.label, age.isEmpty ? nil : "\(age) ago", metaSummary(s.meta), mergedLabel(s.meta),
+                prs.isEmpty ? nil : "open pull requests " + prs.joined(separator: ", ")]
+            .compactMap { $0 }.joined(separator: ", ")
+    }
+
+    // MARK: - Session meta (#506)
+
+    /// The second line's "22/26 done · 2 in progress · 2 queued": zero and
+    /// unknown parts left out, nil when nothing is left (the row looks as before).
+    static func metaSummary(_ m: DchSessionMeta?) -> String? {
+        guard let t = m?.tasks else { return nil }
+        var parts: [String] = []
+        if let total = t.total, total > 0 { parts.append("\(t.done ?? 0)/\(total) done") }
+        if let n = t.inProgress, n > 0 { parts.append("\(n) in progress") }
+        if let n = t.queued, n > 0 { parts.append("\(n) queued") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "18 merged", after the PR chips on the title line; nil for none.
+    static func mergedLabel(_ m: DchSessionMeta?) -> String? {
+        guard let n = m?.merged, n > 0 else { return nil }
+        return "\(n) merged"
+    }
+
+    /// One open PR as the row draws it. `url` is set only when it passed the
+    /// allowlist (`DchSessionMeta.PR.pullURL`); without one the chip is a label.
+    struct PRChip: Equatable {
+        let label: String
+        let title: String
+        let url: URL?
+    }
+
+    static let maxPRChips = 3
+    static let maxRepoChars = 12
+    static let maxTitleChars = 200
+    /// The chips' share of the title line; the title truncates in the rest.
+    static let prChipBudget: CGFloat = 190
+    static let chipInset: CGFloat = 5
+    static let chipSpacing: CGFloat = 4
+
+    static func chipWidth(_ s: String) -> CGFloat {
+        AgentIslandGeometry.width(s, AgentIslandGeometry.chipFont) + 2 * chipInset
+    }
+
+    /// The first PRs whose chips, plus a "+M" chip for the rest, measure within
+    /// `budget` less the merged label (at most `maxPRChips`); `more` is M. PRs
+    /// with no label are skipped.
+    static func prChips(_ m: DchSessionMeta?, budget: CGFloat = prChipBudget) -> (chips: [PRChip], more: Int) {
+        let budget = budget - (mergedLabel(m).map { chipWidth($0) - 2 * chipInset + chipSpacing } ?? 0)
+        let all = (m?.openPRs ?? []).compactMap { pr -> PRChip? in
+            guard let label = pr.label, let hash = label.lastIndex(of: "#") else { return nil }
+            let repo = label[..<hash]
+            let short = repo.count > maxRepoChars ? String(repo.prefix(maxRepoChars - 1)) + "…" : String(repo)
+            return PRChip(label: short + String(label[hash...]), title: String(pr.title.prefix(maxTitleChars)), url: pr.pullURL)
+        }
+        var k = min(all.count, maxPRChips)
+        while k > 0 {
+            let more = all.count - k
+            let w = all.prefix(k).reduce(0) { $0 + chipWidth($1.label) } + CGFloat(k - 1) * chipSpacing
+                + (more > 0 ? chipSpacing + chipWidth("+\(more)") : 0)
+            if w <= budget { break }
+            k -= 1
+        }
+        return (Array(all.prefix(k)), all.count - k)
+    }
+
+    /// A PR click's only way out of the app; tests replace it and never open a real URL.
+    @MainActor static var openURL: (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
+
+    /// Opens an allowlisted chip; a label chip opens nothing.
+    @MainActor static func open(_ chip: PRChip) {
+        guard let url = chip.url else { return }
+        openURL(url)
     }
 
     // MARK: - Socket dirs and listing
@@ -200,7 +275,7 @@ enum AgentIsland {
             return rows.map {
                 AgentSession(key: AgentSessionKey(dir: dir, name: $0.name), alias: $0.alias,
                              activity: TimeInterval($0.activityEpoch), state: AgentState(dch: $0.state),
-                             agents: $0.agents)
+                             agents: $0.agents, meta: $0.meta)
             }
         }
     }
@@ -334,11 +409,13 @@ enum AgentTerminal: String, CaseIterable {
 // MARK: - Poll gate
 
 /// Mtimes of one session's sidecars: output (.act), a hook's reported state
-/// (.state, where "done" always wins) and the alias (.alias, the title).
+/// (.state, where "done" always wins), the alias (.alias, the title) and
+/// `dch --meta`'s PRs and tasks (.meta, #506).
 struct AgentSidecarStamp: Equatable {
     var act: TimeInterval?
     var state: TimeInterval?
     var alias: TimeInterval?
+    var meta: TimeInterval?
 }
 
 typealias AgentDirSnapshot = [AgentSessionKey: AgentSidecarStamp]
@@ -346,7 +423,7 @@ typealias AgentDirSnapshot = [AgentSessionKey: AgentSidecarStamp]
 /// stat-only view of the socket dirs. readdir runs only when a dir's own mtime
 /// moved (create/unlink: a session, a client, a new sidecar); a sidecar's
 /// futimens leaves the dir alone, so the sidecars of known sessions are stat'd
-/// every tick — about 3 stats per session per second, no fork.
+/// every tick — about 4 stats per session per second, no fork.
 final class AgentDirScanner {
     private var cache: [String: (mtime: TimeInterval, names: [String])] = [:]
     /// The readdir; tests count it.
@@ -369,7 +446,7 @@ final class AgentDirScanner {
                 let base = "\(dir)/\(name).sock"
                 snap[AgentSessionKey(dir: dir, name: name)] = AgentSidecarStamp(
                     act: Self.mtime(base + ".act"), state: Self.mtime(base + ".state"),
-                    alias: Self.mtime(base + ".alias"))
+                    alias: Self.mtime(base + ".alias"), meta: Self.mtime(base + ".meta"))
             }
         }
         cache = cache.filter { dirs.contains($0.key) }

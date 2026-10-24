@@ -32,12 +32,15 @@ tag from the now-released section and put it on the new top draft.
   Ghostty opens the session through its scripting interface: macOS asks once whether
   Prosper may control Ghostty, instead of Ghostty asking to run a script on every click.
   If Ghostty is not running it is started first, and if you decline, the island falls
-  back to the script (#505).
+  back to the script (#505). A session that publishes its work through dch also shows
+  its open pull requests as repo#number buttons that open in your browser, how many it
+  has merged, and its tasks done, in progress and queued (#506).
   While Remote Terminal keeps its sessions separate, a setting picks which sessions to
   show (#474).
 - Ships dch 1.22.0, which recognizes Claude Code's Write and Edit permission prompts, so
-  Agent Island shows those sessions as needing input, and reads a session as waiting on a
-  permission only from the prompt's own footer line (#474, #494).
+  Agent Island shows those sessions as needing input, reads a session as waiting on a
+  permission only from the prompt's own footer line, and carries each session's pull
+  requests and task counts (#474, #494, #506).
 - **Agent Island answers a waiting agent.** When a Claude Code session stops on a
   permission prompt or a question, the island shows what it asks under that session, with
   one button per option. A click types the option's number into the session, and only if

@@ -112,13 +112,16 @@ struct AgentIslandGeometry: Equatable {
         digit: NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold) as CTFont,
         label: NSFont.systemFont(ofSize: 12, weight: .medium) as CTFont,
         hint: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular) as CTFont,
-        detail: NSFont.systemFont(ofSize: 11) as CTFont)
+        detail: NSFont.systemFont(ofSize: 11) as CTFont,
+        chip: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium) as CTFont)
     static var questionFont: CTFont { cardFonts.question }
     static var contextFont: CTFont { cardFonts.context }
     static var digitFont: CTFont { cardFonts.digit }
     static var labelFont: CTFont { cardFonts.label }
     static var hintFont: CTFont { cardFonts.hint }
     static var detailFont: CTFont { cardFonts.detail }
+    /// #506: a row's PR chips and "+M", drawn and measured (AgentIsland.prChips) with it.
+    static var chipFont: CTFont { cardFonts.chip }
 
     /// The one width function, for the card's layout on main and the warmer on
     /// the controller queue. CoreText, not NSString drawing: CoreText is
@@ -359,6 +362,10 @@ struct AgentIslandRow: View {
                                 .background(Capsule().fill(Color.white.opacity(0.1)))
                                 .fixedSize()
                         }
+                        if !prs.chips.isEmpty || prs.more > 0 || AgentIsland.mergedLabel(session.meta) != nil {
+                            Spacer(minLength: 6)
+                            prChips
+                        }
                     }
                     HStack(spacing: 6) {
                         if let notice {
@@ -369,6 +376,14 @@ struct AgentIslandRow: View {
                                 Text(session.name)
                                     .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(Color.white.opacity(0.35))
+                            }
+                            if let summary = AgentIsland.metaSummary(session.meta) {
+                                Spacer(minLength: 6)
+                                Text(verbatim: summary)
+                                    .font(.system(size: 10).monospacedDigit())
+                                    .foregroundStyle(Color.white.opacity(0.5))
+                                    .frame(maxWidth: Self.summaryMaxWidth, alignment: .trailing)
+                                    .layoutPriority(1)
                             }
                         }
                     }
@@ -391,6 +406,54 @@ struct AgentIslandRow: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .accessibilityLabel(AgentIsland.rowAccessibilityLabel(session, now: now))
+        .accessibilityActions {
+            ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
+                if chip.url != nil {
+                    Button { AgentIsland.open(chip) } label: { Text(verbatim: "Open \(chip.label)") }
+                }
+            }
+        }
+    }
+
+    /// #506: the task summary never takes more than this of the second
+    /// line, so the state label keeps its room whatever the numbers are.
+    static let summaryMaxWidth: CGFloat = 220
+
+    private var prs: (chips: [AgentIsland.PRChip], more: Int) { AgentIsland.prChips(session.meta) }
+
+    /// Open PRs as "repo#12" chips in the agents capsule's style: a button when
+    /// the URL passed the allowlist, else a dimmer label; then "18 merged".
+    /// Static, no animation.
+    private var prChips: some View {
+        HStack(spacing: AgentIsland.chipSpacing) {
+            ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
+                if chip.url != nil {
+                    Button { AgentIsland.open(chip) } label: { chipText(chip.label, Color.white.opacity(0.8)) }
+                        .buttonStyle(.plain)
+                        .help(Text(verbatim: chip.title))
+                } else {
+                    chipText(chip.label, Color.white.opacity(0.4))
+                        .help(Text(verbatim: chip.title))
+                }
+            }
+            if prs.more > 0 { chipText("+\(prs.more)", Color.white.opacity(0.5)) }
+            if let merged = AgentIsland.mergedLabel(session.meta) {
+                Text(verbatim: merged)
+                    .font(Font(AgentIslandGeometry.chipFont))
+                    .foregroundStyle(Color.white.opacity(0.5))
+            }
+        }
+        .fixedSize()
+    }
+
+    private func chipText(_ s: String, _ color: Color) -> some View {
+        Text(verbatim: s)
+            .font(Font(AgentIslandGeometry.chipFont))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .padding(.horizontal, AgentIsland.chipInset).padding(.vertical, 1)
+            .background(Capsule().fill(Color.white.opacity(0.1)))
+            .contentShape(Capsule())
     }
 }
 

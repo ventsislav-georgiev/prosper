@@ -290,6 +290,102 @@ final class DchConnection: @unchecked Sendable {
     }
 }
 
+// MARK: - Session list rows
+
+/// One `dch --ls-json` (or `-lj`) row: the one decode Agent Island and Remote
+/// Terminal share. `meta`/`metaEpoch` are dch 1.22+; older dch omits them (nil, 0).
+struct DchListRow: Equatable, Sendable {
+    let name: String
+    let alias: String
+    let activityEpoch: Int
+    let state: String
+    let agents: Int
+    var meta: DchSessionMeta? = nil
+    /// When the meta's content last changed (not liveness); 0 = unknown.
+    var metaEpoch: Int = 0
+}
+
+/// dch 1.22's per-session `meta`, written by `dch --meta` from ANY program in the
+/// session, so untrusted: every key is optional and decoded on its own, a wrong
+/// type drops that key only, counts clamp to >= 0, unknown keys are ignored.
+struct DchSessionMeta: Equatable, Sendable {
+    struct Tasks: Equatable, Sendable {
+        var done: Int?, total: Int?, inProgress: Int?, queued: Int?
+    }
+
+    struct PR: Equatable, Sendable {
+        let url: String
+        let repo: String
+        let num: Int?
+        /// Plain text for a tooltip or accessibility label, never markup or a link.
+        let title: String
+
+        /// `url` only when it is exactly `https://github.com/<owner>/<repo>/pull/<digits>`:
+        /// no userinfo, port, query or fragment, owner/repo in GitHub's name charset.
+        /// Anything else is a label, never opened.
+        var pullURL: URL? {
+            guard let c = URLComponents(string: url), c.scheme == "https", c.host == "github.com",
+                  c.user == nil, c.password == nil, c.port == nil, c.query == nil, c.fragment == nil
+            else { return nil }
+            let p = c.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: false)
+            func name(_ s: Substring) -> Bool {
+                !s.isEmpty && s != "." && s != ".."
+                    && s.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)) }
+            }
+            guard p.count == 5, p[0].isEmpty, name(p[1]), name(p[2]), p[3] == "pull",
+                  (1...9).contains(p[4].count), p[4].allSatisfy({ $0.isASCII && $0.isNumber })
+            else { return nil }
+            return c.url
+        }
+
+        /// "prosper#12": the repo's name part and the number. From the URL when it
+        /// is clickable, so the label names what opens; else from `repo`/`num`.
+        var label: String? {
+            if let u = pullURL {
+                let p = u.path.split(separator: "/")
+                return "\(p[1])#\(p[3])"
+            }
+            guard let num, let repoName = repo.split(separator: "/").last else { return nil }
+            return "\(repoName)#\(num)"
+        }
+    }
+
+    var tasks: Tasks?
+    var openPRs: [PR] = []
+    var merged: Int?
+
+    /// dch caps `prs.open` at 50; so does the decode, whatever the writer sent.
+    static let maxOpenPRs = 50
+
+    /// A JSON integer clamped to >= 0; nil for anything else (bools included:
+    /// JSONSerialization hands them over as NSNumber, and `true as? Int` is 1).
+    static func count(_ v: Any?) -> Int? {
+        guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), let i = v as? Int else { return nil }
+        return max(0, i)
+    }
+
+    /// nil when `json` is not an object (dch's null, a missing key).
+    init?(json: Any?) {
+        guard let o = json as? [String: Any] else { return nil }
+        if let t = o["tasks"] as? [String: Any] {
+            tasks = Tasks(done: Self.count(t["done"]), total: Self.count(t["total"]),
+                          inProgress: Self.count(t["in_progress"]), queued: Self.count(t["queued"]))
+        }
+        if let p = o["prs"] as? [String: Any] {
+            merged = Self.count(p["merged"])
+            openPRs = ((p["open"] as? [Any]) ?? []).prefix(Self.maxOpenPRs).compactMap { e in
+                guard let e = e as? [String: Any] else { return nil }
+                return PR(url: e["url"] as? String ?? "", repo: e["repo"] as? String ?? "",
+                          num: Self.count(e["num"]), title: e["title"] as? String ?? "")
+            }
+        }
+    }
+
+    init(tasks: Tasks? = nil, openPRs: [PR] = [], merged: Int? = nil) {
+        (self.tasks, self.openPRs, self.merged) = (tasks, openPRs, merged)
+    }
+}
+
 // MARK: - dch CLI
 
 /// Resolves the `dch` binary and builds its argument vectors. Centralized so the
@@ -386,7 +482,7 @@ enum DchCommand {
     /// instead of guessing from output timestamps. `--ls-json` arrived in dch 1.4;
     /// against an older binary it prints nothing and we fall back to `-lj`'s
     /// `name\talias\tactivityEpoch` lines (state empty).
-    static func listSessions() -> [(name: String, alias: String, activityEpoch: Int, state: String, agents: Int)] {
+    static func listSessions() -> [DchListRow] {
         let rows = parseListJSON(runCapturingData(args: ["--ls-json"]))
         if !rows.isEmpty { return rows }
         return parseListTSV(runCapturing(args: ["-lj"]))
@@ -399,20 +495,22 @@ enum DchCommand {
     /// 1.9+). `dch -l` shows it whenever no explicit alias exists, so the phone
     /// does the same: an empty alias falls back to it, and the raw socket name is
     /// the last resort. Folding it into `alias` keeps the wire format unchanged.
-    static func parseListJSON(_ data: Data) -> [(name: String, alias: String, activityEpoch: Int, state: String, agents: Int)] {
+    static func parseListJSON(_ data: Data) -> [DchListRow] {
         guard let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
         return rows.compactMap { o in
             guard let name = o["name"] as? String, !name.isEmpty else { return nil }
             var alias = o["alias"] as? String ?? ""
             if alias.isEmpty { alias = o["harness"] as? String ?? "" }
-            return (name, alias,
-                    o["activity_epoch"] as? Int ?? 0, o["state"] as? String ?? "",
-                    o["agents"] as? Int ?? 0)
+            return DchListRow(name: name, alias: alias,
+                              activityEpoch: o["activity_epoch"] as? Int ?? 0, state: o["state"] as? String ?? "",
+                              agents: o["agents"] as? Int ?? 0,
+                              meta: DchSessionMeta(json: o["meta"]),
+                              metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0)
         }
     }
 
     /// `name\talias\tactivityEpoch` lines — every dch's `-lj`, state unknown.
-    static func parseListTSV(_ text: String) -> [(name: String, alias: String, activityEpoch: Int, state: String, agents: Int)] {
+    static func parseListTSV(_ text: String) -> [DchListRow] {
         text
             .split(separator: "\n")
             .compactMap { line in
@@ -420,7 +518,7 @@ enum DchCommand {
                 guard let name = parts.first, !name.isEmpty else { return nil }
                 let alias = parts.count > 1 ? String(parts[1]) : ""
                 let epoch = parts.count > 2 ? Int(parts[2]) ?? 0 : 0
-                return (String(name), alias, epoch, "", 0)
+                return DchListRow(name: String(name), alias: alias, activityEpoch: epoch, state: "", agents: 0)
             }
     }
 
