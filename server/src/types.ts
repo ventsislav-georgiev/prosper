@@ -9,6 +9,10 @@ export type Bindings = {
   SUPPORTER_SIGNING_JWK: string; // Ed25519 private key as a JWK JSON string
   LEMONSQUEEZY_WEBHOOK_SECRET: string;
   GITHUB_WEBHOOK_SECRET: string;
+  // APNs auth key (live session status). Optional: unset = pushes are skipped.
+  APNS_KEY_P8?: string; // the .p8 file contents (PKCS#8 PEM, P-256)
+  APNS_KEY_ID?: string;
+  APNS_TEAM_ID?: string;
 
   // Vars (wrangler.jsonc)
   EMAIL_FROM: string;
@@ -19,6 +23,7 @@ export type Bindings = {
   DEVICE_LIMIT?: string;
   SYNC_MAX_BYTES?: string;
   MARKET_MAX_BYTES?: string;
+  APNS_TOPIC?: string; // bundle id; falls back to "eu.illegible.prosperios"
 };
 
 export type Variables = {

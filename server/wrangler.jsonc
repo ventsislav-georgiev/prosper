@@ -17,7 +17,8 @@
 		"SESSION_TTL_DAYS": "365",
 		"DEVICE_LIMIT": "5",
 		"SYNC_MAX_BYTES": "1048576",
-		"MARKET_MAX_BYTES": "262144"
+		"MARKET_MAX_BYTES": "262144",
+		"APNS_TOPIC": "eu.illegible.prosperios"
 	},
 	"kv_namespaces": [
 		{
@@ -35,7 +36,8 @@
 	],
 	"triggers": {
 		"crons": [
-			"0 3 * * *"
+			"0 3 * * *",
+			"* * * * *"
 		]
 	}
 }

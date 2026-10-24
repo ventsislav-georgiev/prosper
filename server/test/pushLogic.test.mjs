@@ -1,0 +1,409 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  parseTokenBody,
+  parseDeleteBody,
+  parseSessionsBody,
+  contentState,
+  cut,
+  reduceSessions,
+  cronStep,
+  emptyMac,
+  startPayload,
+  alertPayload,
+  laPayload,
+  collapseId,
+  classifyApns,
+  sendApns,
+  importP8,
+  signApnsJwt,
+} from "../src/pushLogic.mjs";
+
+const S = (name, state, extra = {}) => ({ name, state, ...extra });
+const bytes = (o) => new TextEncoder().encode(JSON.stringify(o)).length;
+const HEX = "ab".repeat(32);
+const PHONE = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
+
+// ---- validation -------------------------------------------------------------
+
+test("parseTokenBody: phone install id is format-checked only", () => {
+  for (const device_id of [PHONE, "abcdefgh", "a".repeat(64), "A-1-b-2-c"]) {
+    assert.ok(parseTokenBody({ device_id, kind: "alert", token: HEX, env: "production" }).value, device_id);
+  }
+  for (const device_id of ["abcdefg", "a".repeat(65), "has_underscore", "has space1", 12345678, null]) {
+    assert.equal(parseTokenBody({ device_id, kind: "alert", token: HEX, env: "production" }).error, "invalid_device_id");
+  }
+});
+
+test("parseTokenBody: kind/env enums, token hex, la_update needs activity + mac", () => {
+  const base = { device_id: PHONE, token: HEX, env: "sandbox" };
+  assert.equal(parseTokenBody({ ...base, kind: "voip" }).error, "invalid_kind");
+  assert.equal(parseTokenBody({ ...base, kind: "alert", env: "dev" }).error, "invalid_env");
+  assert.equal(parseTokenBody({ ...base, kind: "alert", token: "xyz" }).error, "invalid_token");
+  assert.equal(parseTokenBody({ ...base, kind: "la_update", mac_id: HEX }).error, "invalid_activity_id");
+  assert.equal(parseTokenBody({ ...base, kind: "la_update", activity_id: "act-1" }).error, "invalid_mac_id");
+  assert.equal(parseTokenBody({ ...base, kind: "alert", activity_id: "act-1" }).error, "unexpected_field");
+  assert.equal(parseTokenBody({ ...base, kind: "la_start", mac_id: HEX }).error, "unexpected_field");
+  assert.deepEqual(parseTokenBody({ ...base, kind: "la_update", activity_id: "act-1", mac_id: HEX }).value, {
+    ...base,
+    kind: "la_update",
+    activity_id: "act-1",
+    mac_id: HEX,
+  });
+  assert.deepEqual(parseTokenBody({ ...base, kind: "alert", activity_id: null }).value.activity_id, "");
+  for (const b of [null, [], "x", 1]) assert.equal(parseTokenBody(b).error, "invalid_body");
+});
+
+test("parseDeleteBody: device required, kind/activity optional", () => {
+  assert.deepEqual(parseDeleteBody({ device_id: PHONE }).value, { device_id: PHONE, kind: null, activity_id: null });
+  assert.equal(parseDeleteBody({ device_id: "short" }).error, "invalid_device_id");
+  assert.equal(parseDeleteBody({ device_id: PHONE, kind: "x" }).error, "invalid_kind");
+  assert.equal(parseDeleteBody({ device_id: PHONE, kind: "alert", activity_id: "a" }).error, "unexpected_field");
+  assert.ok(parseDeleteBody({ device_id: PHONE, kind: "la_update", activity_id: "a" }).value);
+});
+
+test("parseSessionsBody: cap 20, lengths, enums, duplicates, offline", () => {
+  const ok = (sessions, extra = {}) => parseSessionsBody({ mac_id: HEX, seq: 1, sessions, ...extra });
+  const many = (n) => Array.from({ length: n }, (_, i) => S(`s${i}`, "idle"));
+  assert.equal(ok(many(20)).value.sessions.length, 20);
+  assert.equal(ok(many(21)).error, "too_many_sessions");
+  assert.ok(ok([S("😀".repeat(64), "idle", { alias: "é".repeat(64) })]).value, "64 code points is fine");
+  assert.equal(ok([S("x".repeat(65), "idle")]).error, "invalid_session");
+  assert.equal(ok([S("a", "idle", { alias: "x".repeat(65) })]).error, "invalid_session");
+  assert.equal(ok([S("", "idle")]).error, "invalid_session");
+  assert.equal(ok([S("a\nb", "idle")]).error, "invalid_session");
+  for (const state of ["running", "toString", "", 1]) assert.equal(ok([S("a", state)]).error, "invalid_session", String(state));
+  assert.equal(ok([S("a", "idle", { agents: -1 })]).error, "invalid_session");
+  assert.equal(ok([S("a", "idle", { agents: 1.5 })]).error, "invalid_session");
+  assert.equal(ok([S("a", "idle"), S("a", "working")]).error, "duplicate_session");
+  assert.deepEqual(ok([S("a", "working", { alias: "", agents: 2 })]).value.sessions, [S("a", "working", { agents: 2 })]);
+  assert.equal(ok([], { offline: true }).error, "offline_with_sessions");
+  assert.deepEqual(parseSessionsBody({ mac_id: HEX, seq: 5, offline: true }).value, {
+    mac_id: HEX,
+    seq: 5,
+    offline: true,
+    sessions: null,
+  });
+  assert.equal(parseSessionsBody({ mac_id: HEX, seq: 5 }).value.sessions, null, "bare = heartbeat");
+  for (const seq of [0, -1, 1.5, "1", null]) assert.equal(parseSessionsBody({ mac_id: HEX, seq }).error, "invalid_seq");
+  assert.equal(parseSessionsBody({ mac_id: "", seq: 1 }).error, "invalid_mac_id");
+  assert.equal(parseSessionsBody({ mac_id: HEX, seq: 1, offline: "yes" }).error, "invalid_offline");
+  assert.equal(parseSessionsBody({ mac_id: HEX, seq: 1, sessions: {} }).error, "invalid_sessions");
+});
+
+// ---- content-state ----------------------------------------------------------
+
+test("contentState: urgency order then name, cap 6, more, counts", () => {
+  const sessions = [
+    S("z", "idle"),
+    S("b", "working"),
+    S("a", "done"),
+    S("c", "blocked", { alias: "Fix it", agents: 2 }),
+    S("a2", "working"),
+    S("y", "idle"),
+    S("x", "idle"),
+    S("d", "blocked"),
+  ];
+  const cs = contentState(sessions);
+  assert.deepEqual(
+    cs.sessions.map((s) => s.name),
+    ["c", "d", "a2", "b", "a", "x"],
+  );
+  assert.equal(cs.more, 2);
+  assert.deepEqual(cs.counts, { blocked: 2, working: 2, idle: 3, done: 1 });
+  assert.deepEqual(cs.sessions[0], { name: "c", alias: "Fix it", state: "blocked", agents: 2 });
+  assert.deepEqual(Object.keys(cs), ["v", "online", "counts", "sessions", "more"], "no timestamps");
+  assert.equal(cs.v, 1);
+  assert.equal(cs.online, true);
+  assert.deepEqual(contentState([], false), {
+    v: 1,
+    online: false,
+    counts: { blocked: 0, working: 0, idle: 0, done: 0 },
+    sessions: [],
+    more: 0,
+  });
+  assert.equal(contentState(sessions.slice(0, 6)).more, 0);
+});
+
+test("contentState: names and aliases cut to 40 characters (code points)", () => {
+  const cs = contentState([S("n".repeat(64), "idle", { alias: "😀".repeat(64) })]);
+  assert.equal(cs.sessions[0].name, "n".repeat(40));
+  assert.equal([...cs.sessions[0].alias].length, 40);
+  assert.equal(cs.sessions[0].alias, "😀".repeat(40), "no split surrogate pair");
+  assert.equal(cut("short"), "short");
+  assert.equal(cut("x".repeat(41)).length, 40);
+});
+
+test("worst-case start/update/alert payloads stay under 4 KB", () => {
+  // A lone surrogate (legal in a JSON body) would re-escape to 6 bytes, so it is a 400;
+  // the worst left is a 4-byte character per code point.
+  assert.equal(parseSessionsBody({ mac_id: HEX, seq: 1, sessions: [S("\ud800", "idle")] }).error, "invalid_session");
+  const fat = "😀".repeat(63);
+  const sessions = Array.from({ length: 20 }, (_, i) =>
+    S(fat + String.fromCharCode(0x41 + i), "blocked", { alias: fat + String.fromCharCode(0x61 + i), agents: 999 }),
+  );
+  assert.ok(parseSessionsBody({ mac_id: HEX, seq: 1, sessions }).value, "the body itself is valid");
+  const cs = contentState(sessions);
+  const name = "😀".repeat(64);
+  const mac = "f".repeat(128);
+  const now = 2_000_000_000;
+  const start = bytes(startPayload(cs, now, mac, name));
+  assert.ok(start > 2000 && start < 4096, `start ${start}`);
+  assert.ok(bytes(laPayload("end", cs, now, { "dismissal-date": now + 600 })) < 4096);
+  assert.ok(bytes(alertPayload(mac, name, { name: sessions[0].name, label: sessions[0].alias })) < 4096);
+});
+
+// ---- edges ------------------------------------------------------------------
+
+const post = (seq, sessions) => ({ mac_id: HEX, seq, offline: false, sessions });
+const beat = (seq) => ({ mac_id: HEX, seq, offline: false, sessions: null });
+const step = (prev, input, now) => reduceSessions(prev, input, now);
+
+test("seq: at or below the stored one is ignored", () => {
+  const a = step(null, post(100, [S("a", "idle")]), 1000);
+  assert.equal(step(a.mac, post(100, [S("a", "working")]), 1001), null);
+  assert.equal(step(a.mac, post(99, [S("a", "working")]), 1001), null);
+  assert.equal(step(a.mac, beat(100), 1001), null);
+  assert.equal(step(a.mac, post(101, [S("a", "working")]), 1001).mac.seq, 101);
+});
+
+test("start edge: none-active -> active, or a session entering blocked; never steady", () => {
+  const idle = step(null, post(1, [S("a", "idle")]), 1000);
+  assert.equal(idle.push.start, false, "idle only: no card");
+  const work = step(idle.mac, post(2, [S("a", "working")]), 1100);
+  assert.equal(work.push.start, true, "idle -> working");
+  assert.equal(work.mac.started_at, 1100);
+  const still = step(work.mac, post(3, [S("a", "working"), S("b", "idle")]), 1200);
+  assert.equal(still.push.start, false, "steady working is not an edge");
+  assert.equal(still.push.update, true, "but the content changed");
+  const blocked = step(still.mac, post(4, [S("a", "working"), S("b", "blocked")]), 1300);
+  assert.equal(blocked.push.start, true, "entering blocked is an edge");
+  const done = step(blocked.mac, post(5, [S("a", "done"), S("b", "done")]), 1400);
+  assert.equal(done.push.start, false);
+  const back = step(done.mac, post(6, [S("a", "blocked"), S("b", "done")]), 1500);
+  assert.equal(back.push.start, true, "done -> blocked");
+  // Mac lapsed/offline: whatever it had is gone, so active again is an edge.
+  const off = step(back.mac, { mac_id: HEX, seq: 7, offline: true, sessions: null }, 1600);
+  assert.equal(step(off.mac, post(8, [S("a", "working")]), 1700).push.start, true);
+});
+
+test("start edge: no second push-to-start within 60 s", () => {
+  const a = step(null, post(1, [S("a", "working")]), 1000);
+  assert.equal(a.push.start, true);
+  const b = step(a.mac, post(2, [S("a", "blocked")]), 1059);
+  assert.equal(b.push.start, false, "the first start is still landing");
+  assert.equal(b.mac.started_at, 1000);
+  const c = step(b.mac, post(3, [S("a", "working")]), 1070);
+  const d = step(c.mac, post(4, [S("a", "blocked")]), 1100);
+  assert.equal(d.push.start, true, "60 s later an edge starts again");
+});
+
+test("alert edge: into blocked from any other state, at most once per 120 s per session", () => {
+  const a = step(null, post(1, [S("a", "working", { alias: "Fix it" }), S("b", "idle")]), 1000);
+  assert.deepEqual(a.push.alerts, []);
+  const b = step(a.mac, post(2, [S("a", "blocked", { alias: "Fix it" }), S("b", "idle")]), 1010);
+  assert.deepEqual(b.push.alerts, [{ name: "a", label: "Fix it" }]);
+  assert.equal(b.push.priority, 10, "entering blocked goes at priority 10");
+  const c = step(b.mac, post(3, [S("a", "blocked", { alias: "Fix it" }), S("b", "blocked")]), 1020);
+  assert.deepEqual(c.push.alerts, [{ name: "b", label: "b" }], "a stays blocked: no alert; b enters");
+  // a flaps: working then blocked again 100 s after its alert -> suppressed.
+  const d = step(c.mac, post(4, [S("a", "working"), S("b", "blocked")]), 1100);
+  assert.equal(d.push.priority, 5);
+  const e = step(d.mac, post(5, [S("a", "blocked"), S("b", "blocked")]), 1129);
+  assert.deepEqual(e.push.alerts, [], "119 s after the last alert");
+  assert.equal(e.push.priority, 10, "still an urgent card update");
+  const f = step(e.mac, post(6, [S("a", "working"), S("b", "blocked")]), 1130);
+  const g = step(f.mac, post(7, [S("a", "blocked"), S("b", "blocked")]), 1130);
+  assert.deepEqual(g.push.alerts, [{ name: "a", label: "a" }], "120 s after the last alert");
+  // A move to done sends nothing loud.
+  const h = step(g.mac, post(8, [S("a", "done"), S("b", "done")]), 1200);
+  assert.deepEqual(h.push.alerts, []);
+  assert.equal(h.push.priority, 5);
+  // A brand-new session that appears blocked counts as entering.
+  const i = step(h.mac, post(9, [S("a", "done"), S("b", "done"), S("c", "blocked")]), 1300);
+  assert.deepEqual(i.push.alerts, [{ name: "c", label: "c" }]);
+});
+
+test("update only when the content-state changes; heartbeat sends nothing", () => {
+  const a = step(null, post(1, [S("a", "working")]), 1000);
+  assert.equal(a.push.update, true, "first post");
+  const same = step(a.mac, post(2, [S("a", "working")]), 1010);
+  assert.equal(same.push.update, false);
+  assert.equal(same.mac.last_push_at, 1000);
+  const hb = step(same.mac, beat(3), 1070);
+  assert.deepEqual(hb.push, { start: false, update: false, priority: 5, end: null, alerts: [] });
+  assert.equal(hb.mac.last_seen, 1070);
+  assert.deepEqual(hb.mac.sessions, [S("a", "working")]);
+  // seventh session beyond the cap still changes counts -> update
+  const six = Array.from({ length: 6 }, (_, i) => S(`s${i}`, "working"));
+  const b = step(hb.mac, post(4, six), 1100);
+  const c = step(b.mac, post(5, [...six, S("z", "idle")]), 1110);
+  assert.equal(c.push.update, true);
+});
+
+test("offline post ends the card: online false, dismissal now+600", () => {
+  const a = step(null, post(1, [S("a", "working")]), 1000);
+  const off = step(a.mac, { mac_id: HEX, seq: 2, offline: true, sessions: null }, 1100);
+  assert.deepEqual(off.push.end, { dismissal: 1700 });
+  assert.equal(off.mac.online, false);
+  assert.deepEqual(off.mac.sessions, []);
+  assert.deepEqual(contentState(off.mac.sessions, off.mac.online).online, false);
+});
+
+test("idle_since: set when nothing is working/blocked, kept, cleared when busy", () => {
+  const a = step(null, post(1, [S("a", "working")]), 1000);
+  assert.equal(a.mac.idle_since, null);
+  const b = step(a.mac, post(2, [S("a", "done")]), 1100);
+  assert.equal(b.mac.idle_since, 1100);
+  const c = step(b.mac, post(3, [S("a", "idle")]), 1200);
+  assert.equal(c.mac.idle_since, 1100, "still idle since the first idle post");
+  assert.equal(step(c.mac, beat(4), 1250).mac.idle_since, 1100);
+  assert.equal(step(c.mac, post(4, [S("a", "blocked")]), 1300).mac.idle_since, null);
+});
+
+// ---- cron -------------------------------------------------------------------
+
+const live = (over = {}) => ({ ...emptyMac(), online: true, seq: 1, last_seen: 1000, last_push_at: 1000, sessions: [S("a", "working")], ...over });
+
+test("cron lapse at 180 s without a heartbeat", () => {
+  assert.equal(cronStep(live(), true, 1179), null);
+  const r = cronStep(live(), true, 1180);
+  assert.equal(r.kind, "lapse");
+  assert.deepEqual(r.push.end, { dismissal: 1780 });
+  assert.equal(r.mac.online, false);
+  assert.deepEqual(r.mac.sessions, [], "absent, never stale");
+  assert.equal(cronStep(live(), false, 1180).kind, "lapse", "lapses with no card too");
+  assert.equal(cronStep(live({ online: false }), true, 5000), null);
+});
+
+test("cron ends a card after 10 min with nothing working/blocked", () => {
+  const idle = live({ sessions: [S("a", "idle")], idle_since: 1000, last_seen: 1590, last_push_at: 1590 });
+  assert.equal(cronStep(idle, true, 1599), null);
+  const r = cronStep(idle, true, 1600);
+  assert.equal(r.kind, "end");
+  assert.deepEqual(r.push.end, { dismissal: 1600 });
+  assert.equal(cronStep(idle, false, 1600), null, "no card, nothing to end");
+});
+
+test("cron re-pushes a live card whose last push is over 10 min old", () => {
+  const m = live({ last_seen: 1590, last_push_at: 1000 });
+  assert.equal(cronStep(m, true, 1599), null);
+  const r = cronStep(m, true, 1600);
+  assert.equal(r.kind, "repush");
+  assert.equal(r.push.update, true);
+  assert.equal(r.push.priority, 5);
+  assert.equal(r.mac.last_push_at, 1600);
+  assert.equal(cronStep(m, false, 1600), null);
+});
+
+// ---- payloads ---------------------------------------------------------------
+
+test("Live Activity payloads carry timestamp + stale-date; start carries attributes and a silent alert", () => {
+  const cs = contentState([S("a", "working")]);
+  const u = laPayload("update", cs, 1000);
+  assert.deepEqual(u, { aps: { timestamp: 1000, event: "update", "content-state": cs, "stale-date": 1900 } });
+  const s = startPayload(cs, 1000, HEX, "Studio");
+  assert.equal(s.aps.event, "start");
+  assert.equal(s.aps["attributes-type"], "ProsperSessionsAttributes");
+  assert.deepEqual(s.aps.attributes, { mac_id: HEX, mac_name: "Studio" });
+  assert.deepEqual(s.aps.alert, { title: "Studio", body: "Agents are working" });
+  assert.equal(s.aps.sound, undefined);
+  assert.equal(s.aps["stale-date"], 1900);
+  const a = alertPayload(HEX, "Studio", { name: "a", label: "Fix it" });
+  assert.deepEqual(a, {
+    aps: { alert: { title: "Studio", body: "Fix it needs you" }, sound: "default", "thread-id": HEX },
+    mac_id: HEX,
+    session: "a",
+  });
+});
+
+test("collapseId: stable per mac+session, 32 hex", async () => {
+  const a = await collapseId(HEX, "a");
+  assert.match(a, /^[0-9a-f]{32}$/);
+  assert.equal(a, await collapseId(HEX, "a"));
+  assert.notEqual(a, await collapseId(HEX, "b"));
+  assert.notEqual(await collapseId("m1", "x"), await collapseId("m", "1x"), "separator");
+});
+
+// ---- APNs -------------------------------------------------------------------
+
+test("classifyApns: 410 and BadDeviceToken/DeviceTokenNotForTopic drop the token", () => {
+  assert.equal(classifyApns(200, ""), "ok");
+  assert.equal(classifyApns(410, "Unregistered"), "drop");
+  assert.equal(classifyApns(410, ""), "drop");
+  assert.equal(classifyApns(400, "BadDeviceToken"), "drop");
+  assert.equal(classifyApns(400, "DeviceTokenNotForTopic"), "drop");
+  assert.equal(classifyApns(400, "BadTopic"), "error");
+  assert.equal(classifyApns(400, "PayloadTooLarge"), "error");
+  assert.equal(classifyApns(403, "ExpiredProviderToken"), "auth");
+  assert.equal(classifyApns(403, "InvalidProviderToken"), "auth");
+  assert.equal(classifyApns(429, "TooManyRequests"), "error");
+  assert.equal(classifyApns(500, "InternalServerError"), "error");
+});
+
+function fakeFetch(respond = () => ({ status: 200 })) {
+  const calls = [];
+  const fn = async (url, init) => {
+    calls.push({ url, init, body: JSON.parse(init.body) });
+    const { status, reason, throws } = respond(url, init);
+    if (throws) throw new Error("network");
+    return new Response(status === 200 ? null : JSON.stringify({ reason }), { status });
+  };
+  return { fn, calls };
+}
+
+test("sendApns: host per env, topic per push type, headers, body; only via the injected fetch", async () => {
+  const f = fakeFetch();
+  const row = { token: HEX, env: "sandbox" };
+  const auth = { jwt: "J", topic: "eu.illegible.prosperios" };
+  assert.equal(await sendApns(f.fn, auth, { row, pushType: "liveactivity", priority: 5, payload: { x: 1 } }), "ok");
+  assert.equal(f.calls[0].url, `https://api.sandbox.push.apple.com/3/device/${HEX}`);
+  assert.equal(f.calls[0].init.method, "POST");
+  assert.deepEqual(f.calls[0].init.headers, {
+    authorization: "bearer J",
+    "apns-topic": "eu.illegible.prosperios.push-type.liveactivity",
+    "apns-push-type": "liveactivity",
+    "apns-priority": "5",
+    "content-type": "application/json",
+  });
+  assert.deepEqual(f.calls[0].body, { x: 1 });
+  await sendApns(f.fn, auth, { row: { ...row, env: "production" }, pushType: "alert", priority: 10, payload: {}, collapseId: "c1" });
+  assert.equal(f.calls[1].url, `https://api.push.apple.com/3/device/${HEX}`);
+  assert.equal(f.calls[1].init.headers["apns-topic"], "eu.illegible.prosperios");
+  assert.equal(f.calls[1].init.headers["apns-push-type"], "alert");
+  assert.equal(f.calls[1].init.headers["apns-priority"], "10");
+  assert.equal(f.calls[1].init.headers["apns-collapse-id"], "c1");
+});
+
+test("sendApns: classifies APNs answers, network errors are errors", async () => {
+  const p = { row: { token: HEX, env: "production" }, pushType: "alert", priority: 10, payload: {} };
+  const auth = { jwt: "J", topic: "t" };
+  const with_ = (r) => fakeFetch(() => r).fn;
+  assert.equal(await sendApns(with_({ status: 410, reason: "Unregistered" }), auth, p), "drop");
+  assert.equal(await sendApns(with_({ status: 400, reason: "BadDeviceToken" }), auth, p), "drop");
+  assert.equal(await sendApns(with_({ status: 400, reason: "DeviceTokenNotForTopic" }), auth, p), "drop");
+  assert.equal(await sendApns(with_({ status: 400, reason: "BadPriority" }), auth, p), "error");
+  assert.equal(await sendApns(with_({ status: 403, reason: "ExpiredProviderToken" }), auth, p), "auth");
+  assert.equal(await sendApns(with_({ throws: true }), auth, p), "error");
+});
+
+// ---- provider JWT -----------------------------------------------------------
+
+const b64urlDecode = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+
+test("signApnsJwt: ES256 header {alg, kid}, claims {iss, iat}, verifies with the public key", async () => {
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const der = new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
+  const b64 = btoa(String.fromCharCode(...der));
+  const pem = `-----BEGIN PRIVATE KEY-----\n${b64.match(/.{1,64}/g).join("\n")}\n-----END PRIVATE KEY-----\n`;
+  const jwt = await signApnsJwt(await importP8(pem), "KEY1234567", "TEAM123456", 1_700_000_000);
+  const [h, c, s] = jwt.split(".");
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(b64urlDecode(h))), { alg: "ES256", kid: "KEY1234567" });
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(b64urlDecode(c))), { iss: "TEAM123456", iat: 1_700_000_000 });
+  const sig = b64urlDecode(s);
+  assert.equal(sig.length, 64, "raw r||s");
+  assert.ok(
+    await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pair.publicKey, sig, new TextEncoder().encode(`${h}.${c}`)),
+  );
+  assert.doesNotMatch(jwt, /[+/=]/, "base64url, unpadded");
+});

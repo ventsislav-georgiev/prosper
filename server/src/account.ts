@@ -1,6 +1,7 @@
 import type { Ctx } from "./types";
 import { intEnv, nowSec } from "./util";
 import { acctTag } from "./wakeId.mjs";
+import { purgeAccountStatements, purgeMacStatements } from "./pushStore.mjs";
 
 /**
  * Delete every wake key in this account's namespace. The remote-wake flag
@@ -88,15 +89,18 @@ export async function listDevices(c: Ctx) {
 
 export async function deleteDevice(c: Ctx) {
   const email = c.get("email");
-  const deviceId = c.req.param("id");
-  await c.env.DB.prepare(`DELETE FROM devices WHERE email = ?1 AND device_id = ?2`)
-    .bind(email, deviceId)
-    .run();
+  const deviceId = c.req.param("id") ?? ""; // always set: the route is /devices/:id
+  // A Mac's live-status row and the cards showing it go with it. Phone push tokens
+  // are keyed by the phone's install id, not a devices row, so they stay.
+  await c.env.DB.batch([
+    c.env.DB.prepare(`DELETE FROM devices WHERE email = ?1 AND device_id = ?2`).bind(email, deviceId),
+    ...purgeMacStatements(c.env.DB, email, deviceId),
+  ]);
   return c.json({ ok: true });
 }
 
 /**
- * GDPR account deletion: remove sessions, devices, and synced settings, and
+ * GDPR account deletion: remove sessions, devices, synced settings and push rows, and
  * tombstone the user. Supporter token rows are retained (financial records) but
  * no longer reference active sessions.
  */
@@ -108,6 +112,7 @@ export async function deleteAccount(c: Ctx) {
     c.env.DB.prepare(`DELETE FROM devices WHERE email = ?1`).bind(email),
     c.env.DB.prepare(`DELETE FROM settings WHERE email = ?1`).bind(email),
     c.env.DB.prepare(`UPDATE users SET deleted_at = ?2 WHERE email = ?1`).bind(email, now),
+    ...purgeAccountStatements(c.env.DB, email),
   ]);
   await sweepWakeKeys(c, email);
   return c.json({ ok: true });
