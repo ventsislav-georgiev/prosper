@@ -226,6 +226,7 @@ do
     G.on_caff_on(host.json.encode { secs = 1800 })
     h.eq(state(host).caffeine, true, "timed caffeine on")
     assert(env.timers["caffexpiry"], "expiry timer scheduled")
+    env.now = env.now + 1800                                  -- due (#504: early fires re-arm)
     G.on_caffeine_expiry("")
     h.eq(state(host).caffeine, false, "caffeine off after expiry")
     h.eq(env.flags.idleDisplay, false, "display released on expiry")
@@ -466,6 +467,40 @@ do
     -- No countdown suffix even with a timed session (width must not vary).
     G.on_menu_on(host.json.encode { secs = 1800 })
     h.eq(icon(), "\u{1F513}", "timed session shows the bare glyph, no countdown text")
+end
+
+-- ── #504 on_caffeine_expiry only when due; toggle result names the hold ──────
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.on_caff_on(host.json.encode { secs = 1800 })
+    env.now = env.now + 600                                  -- 1200 s left, not 1800
+    env.timers["caffexpiry"] = nil
+    G.on_caffeine_expiry("")                                 -- early/stale fire
+    h.eq(state(host).caffeine, true, "early caffeine fire keeps Display awake")
+    local t = env.timers["caffexpiry"]
+    assert(t, "early caffeine fire re-arms caffexpiry")
+    h.eq(t.handler, "on_caffeine_expiry", "re-armed with the same handler")
+    h.eq(t.after, 1200, "caffeine re-armed for the remainder, not the full duration")
+    env.now = env.now + 1200
+    G.on_caffeine_expiry("")
+    h.eq(state(host).caffeine, false, "due caffeine fire turns it off")
+    G.openlid_caffeine("")                                   -- indefinite: nil caffeineEnd
+    G.on_caffeine_expiry("")
+    h.eq(state(host).caffeine, true, "nil caffeineEnd: stale fire is ignored")
+
+    local hostA, envA = h.makeHost { power = "AC Power" }   -- rule_on_ac defaults true
+    local GA = h.load(INIT, hostA)
+    GA.on_launch(hostA.json.encode { powerSource = "AC Power" })
+    GA.on_menu_on("")                                        -- hold -> manual on AC
+    h.eq(state(hostA).autoActivated, false, "precondition: manual on AC")
+    local r = GA.openlid_toggle("")
+    assert(r:find("^\u{1F50C}"), "toggle off on AC with the rule returns plug: " .. r)
+
+    local hostB, envB = h.makeHost { power = "Battery Power" }
+    local GB = h.load(INIT, hostB)
+    GB.openlid_toggle("")                                    -- manual on, battery
+    h.eq(GB.openlid_toggle(""), "\u{1F4A4} Mac sleeps normally", "toggle off on battery returns sleep")
 end
 
 -- ── #503 on_expiry ends the session only when due; early fires re-arm ────────

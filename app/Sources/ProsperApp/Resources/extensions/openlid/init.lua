@@ -486,13 +486,15 @@ function openlid_toggle(query)
     if s.active then
         if rule_lock_active(s) then
             host.alert.show("\u{1F50C} Kept awake while plugged in \u{2014} unplug, or turn off the rule in Settings, to allow sleep")
-            return "\u{1F50C} Mac awake \u{2014} kept awake while plugged in"
+        else
+            deactivate("manual") -- on AC with the rule on, this goes back to the hold
         end
-        deactivate("manual")
     else
         activate(nil, false, "shortcut")
     end
-    return load_state().active and "\u{1F513} Mac awake \u{2014} lid closed" or "\u{1F4A4} Mac sleeps normally"
+    s = load_state()
+    if rule_lock_active(s) then return "\u{1F50C} Mac awake \u{2014} kept awake while plugged in" end
+    return s.active and "\u{1F513} Mac awake \u{2014} lid closed" or "\u{1F4A4} Mac sleeps normally"
 end
 
 -- Toggle display caffeine (☕) — independent of the lid override.
@@ -549,7 +551,17 @@ function on_netoff(payload)
     if host.network.is_reachable() or not running_on_battery() then return end
     deactivate("no network (in transit)")
 end
-function on_caffeine_expiry(payload) caffeine_off("timer expired") end
+function on_caffeine_expiry(payload)
+    local s = load_state()
+    if not s.caffeineEnd then return end
+    -- Same race as on_expiry: a stale or early fire re-arms for the remainder.
+    local left = s.caffeineEnd - host.time()
+    if left > 1 then
+        host.timer.schedule { id = "caffexpiry", after = left, handler = "on_caffeine_expiry" }
+        return
+    end
+    caffeine_off("timer expired")
+end
 
 -- ============ Menu handlers ============
 function on_menu_off(payload)
