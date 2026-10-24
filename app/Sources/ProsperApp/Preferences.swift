@@ -363,6 +363,9 @@ enum Preferences {
         static let isolateRemoteSessions = "isolateRemoteSessions"
         // Agent Island (#474): which socket dirs it lists while isolation is on.
         static let agentIslandSessions = "agentIslandSessions"
+        // #500: what a row click does (AgentIslandClick) and the terminal it opens (AgentTerminal).
+        static let agentIslandClick = "agentIslandClick"
+        static let agentIslandTerminal = "agentIslandTerminal"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1011,6 +1014,19 @@ enum Preferences {
     static var agentIslandSessions: String? {
         get { defaults.string(forKey: Keys.agentIslandSessions) }
         set { defaults.set(newValue, forKey: Keys.agentIslandSessions) }
+    }
+
+    /// Agent Island's row-click raw value (`AgentIslandClick`); unset reads as open.
+    static var agentIslandClick: String? {
+        get { defaults.string(forKey: Keys.agentIslandClick) }
+        set { defaults.set(newValue, forKey: Keys.agentIslandClick) }
+    }
+
+    /// Agent Island's terminal raw value (`AgentTerminal`); unset or uninstalled
+    /// reads as Ghostty when installed, else Terminal.
+    static var agentIslandTerminal: String? {
+        get { defaults.string(forKey: Keys.agentIslandTerminal) }
+        set { defaults.set(newValue, forKey: Keys.agentIslandTerminal) }
     }
 
     /// MCP servers configured for the coding agent. Stored JSON-encoded; an unreadable

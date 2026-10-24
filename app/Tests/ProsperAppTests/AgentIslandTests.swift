@@ -639,6 +639,9 @@ final class AgentIslandTests: XCTestCase {
         c.store = AgentIslandStore(geometry: notched)
         c.store?.sessions = [s]
         c.jumpTarget = { _ in .attachedElsewhere }
+        c.clickAction = { .copy }
+        let l = Launches()
+        c.launchTerminal = { t, launch, _ in l.calls.append((t, launch)) }
         let pb = Pasteboard.general
         pb.clearContents()
         let before = pb.changeCount
@@ -649,6 +652,179 @@ final class AgentIslandTests: XCTestCase {
         c.jump(s)
         XCTAssertEqual(pb.string(forType: .string), AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir))
         XCTAssertEqual(c.store?.notices[s.key], "Attach command copied")
+        XCTAssertTrue(l.calls.isEmpty, "copy never opens a terminal")
+    }
+
+    // MARK: - Click setting and terminal launch (#500)
+
+    private final class Launches: @unchecked Sendable {
+        var calls: [(AgentTerminal, AgentTerminal.Launch)] = []
+        var done: [@Sendable (Bool) -> Void] = []
+        var focused: [pid_t] = []
+    }
+
+    /// A controller with a recording launcher (never a real terminal), Kitty picked
+    /// and a fake dch path; `ok` nil leaves the launch pending.
+    @MainActor private func clickController(_ target: AgentJumpTarget, _ click: AgentIslandClick,
+                                            ok: Bool? = true, _ s: AgentSession) -> (AgentIslandController, Launches) {
+        let c = AgentIslandController(), l = Launches()
+        c.showsPanel = false
+        c.store = AgentIslandStore(geometry: notched)
+        c.store?.sessions = [s]
+        c.store?.expanded = true
+        c.jumpTarget = { _ in target }
+        c.clickAction = { click }
+        c.terminal = { .kitty }
+        c.focusApp = { pid, _ in l.focused.append(pid) }
+        c.launchTerminal = { t, launch, done in
+            l.calls.append((t, launch))
+            if let ok { done(ok) } else { l.done.append(done) }
+        }
+        DchCommand.dchPathOverride = "/opt/fake/dch"
+        addTeardownBlock { DchCommand.dchPathOverride = nil }
+        Pasteboard.general.clearContents()
+        return (c, l)
+    }
+
+    func testClickSettingDefaultsToOpen() {
+        XCTAssertEqual(AgentIslandClick(raw: nil), .open)
+        XCTAssertEqual(AgentIslandClick(raw: "bogus"), .open)
+        XCTAssertEqual(AgentIslandClick(raw: "copy"), .copy)
+        XCTAssertEqual(AgentIslandClick(raw: "open"), .open)
+    }
+
+    /// The controller reads the app's store on every click.
+    @MainActor func testControllerReadsTheClickAndTerminalPreferences() {
+        let was = (Preferences.agentIslandClick, Preferences.agentIslandTerminal)
+        defer { Preferences.agentIslandClick = was.0; Preferences.agentIslandTerminal = was.1 }
+        let c = AgentIslandController()
+        Preferences.agentIslandClick = nil
+        XCTAssertEqual(c.clickAction(), .open)
+        Preferences.agentIslandClick = "copy"
+        XCTAssertEqual(c.clickAction(), .copy)
+        Preferences.agentIslandTerminal = "terminal"
+        XCTAssertEqual(c.terminal(), .terminal)
+        Preferences.agentIslandTerminal = nil
+        XCTAssertEqual(c.terminal(), AgentTerminal.isInstalled(.ghostty) ? .ghostty : .terminal)
+    }
+
+    func testTerminalDefaultIsGhosttyWhenInstalledElseTerminal() {
+        let all: (AgentTerminal) -> Bool = { _ in true }, none: (AgentTerminal) -> Bool = { _ in false }
+        XCTAssertEqual(AgentTerminal.resolve(raw: nil, installed: all), .ghostty)
+        XCTAssertEqual(AgentTerminal.resolve(raw: nil, installed: none), .terminal)
+        XCTAssertEqual(AgentTerminal.resolve(raw: "kitty", installed: all), .kitty)
+        XCTAssertEqual(AgentTerminal.resolve(raw: "kitty", installed: { $0 == .ghostty }), .ghostty,
+                       "an uninstalled pick falls back")
+        XCTAssertEqual(AgentTerminal.resolve(raw: "terminal", installed: all), .terminal)
+        XCTAssertEqual(AgentTerminal.available(installed: none), [.terminal], "Terminal always listed")
+        XCTAssertEqual(AgentTerminal.available(installed: { $0 == .wezterm }), [.terminal, .wezterm])
+        XCTAssertEqual(AgentTerminal.allCases.map(\.bundleID),
+                       ["com.mitchellh.ghostty", "com.apple.Terminal", "com.googlecode.iterm2",
+                        "com.github.wez.wezterm", "net.kovidgoyal.kitty", "org.alacritty"])
+    }
+
+    /// A name with spaces and both quotes, in a non-default dir: argv terminals get
+    /// the words unquoted, script terminals get them shell-quoted.
+    func testLaunchPerTerminalForANameWithSpacesAndQuotes() {
+        let key = AgentSessionKey(dir: "/x/other dir", name: #"my "odd" it's"#)
+        let argv = AgentIsland.attachArgv(key, dch: "/opt/my bin/dch")
+        XCTAssertEqual(argv, ["/usr/bin/env", "DCH_SOCKET_DIR=/x/other dir", "/opt/my bin/dch", "-n", #"my "odd" it's"#])
+        XCTAssertEqual(AgentTerminal.alacritty.launch(argv), .arguments(["-e"] + argv))
+        XCTAssertEqual(AgentTerminal.wezterm.launch(argv), .arguments(["start", "--"] + argv))
+        XCTAssertEqual(AgentTerminal.kitty.launch(argv), .arguments(argv))
+        let want = "#!/bin/sh\n/bin/rm -f \"$0\"\nexec /usr/bin/env 'DCH_SOCKET_DIR=/x/other dir' '/opt/my bin/dch' -n 'my \"odd\" it'\\''s'\n"
+        XCTAssertEqual(AgentTerminal.terminal.launch(argv), .script(want))
+        XCTAssertEqual(AgentTerminal.iterm.launch(argv), .script(want))
+        XCTAssertEqual(AgentTerminal.ghostty.launch(argv), .script(want),
+                       "Ghostty: a window in the running instance, not a new instance per click")
+    }
+
+    /// The script round-trips through a real /bin/sh: a stand-in "dch" prints its
+    /// env dir and argv, and the script deletes itself. No terminal, no dch.
+    func testTerminalScriptRunsTheExactArgvAndDeletesItself() throws {
+        let dir = tempDir()
+        let fake = dir.appendingPathComponent("fake dch")
+        try Data("#!/bin/sh\nprintf '%s\\n' \"$DCH_SOCKET_DIR\" \"$@\"\n".utf8).write(to: fake)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake.path)
+        let key = AgentSessionKey(dir: "/x/other dir", name: #"my "odd" it's $HOME `x`"#)
+        guard case .script(let text) = AgentTerminal.terminal.launch(AgentIsland.attachArgv(key, dch: fake.path)) else {
+            return XCTFail("Terminal runs a script")
+        }
+        let file = dir.appendingPathComponent("a.command")
+        try Data(text.utf8).write(to: file)
+        let p = Process(), out = Pipe()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = [file.path]
+        p.standardOutput = out
+        try p.run()
+        p.waitUntilExit()
+        let got = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        XCTAssertEqual(got, "/x/other dir\n-n\n\(key.name)\n")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "the script deletes itself")
+    }
+
+    @MainActor func testAppTargetJumpsUnderEitherSetting() {
+        for click in AgentIslandClick.allCases {
+            let s = session("s", .idle)
+            let (c, l) = clickController(.app(4242), click, s)
+            c.jump(s)
+            XCTAssertEqual(l.focused, [4242], "\(click)")
+            XCTAssertTrue(l.calls.isEmpty, "\(click): a window to jump to opens nothing")
+            XCTAssertNil(Pasteboard.general.string(forType: .string), "\(click)")
+            XCTAssertEqual(c.store?.expanded, false, "\(click)")
+        }
+    }
+
+    /// Not attached, or only in tmux/ssh: one click opens the chosen terminal with
+    /// the attach argv, with no two-click notice and no copy, then collapses.
+    @MainActor func testOpenSettingLaunchesTheTerminalForUnjumpableTargets() {
+        for target in [AgentJumpTarget.notAttached, .attachedElsewhere] {
+            let s = session(#"my "odd" it's"#, .idle, dir: "/x/other dir")
+            let (c, l) = clickController(target, .open, s)
+            c.jump(s)
+            XCTAssertEqual(l.calls.count, 1, "\(target)")
+            XCTAssertEqual(l.calls.first?.0, .kitty, "\(target)")
+            XCTAssertEqual(l.calls.first?.1, .arguments(AgentIsland.attachArgv(s.key, dch: "/opt/fake/dch")), "\(target)")
+            XCTAssertNil(c.store?.notices[s.key], "\(target): no notice")
+            drain(c)
+            XCTAssertEqual(c.store?.expanded, false, "\(target): collapses once open")
+            XCTAssertNil(Pasteboard.general.string(forType: .string), "\(target): nothing copied")
+            XCTAssertTrue(l.focused.isEmpty)
+        }
+    }
+
+    @MainActor func testCopySettingCopiesANotAttachedSession() {
+        let s = session("s", .idle, dir: "/x/other dir")
+        let (c, l) = clickController(.notAttached, .copy, s)
+        c.jump(s)
+        XCTAssertTrue(l.calls.isEmpty)
+        XCTAssertEqual(Pasteboard.general.string(forType: .string),
+                       AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir))
+        XCTAssertEqual(c.store?.notices[s.key], "Attach command copied")
+    }
+
+    @MainActor func testFailedOpenCopiesAndSaysSo() {
+        let s = session("s", .idle, dir: "/x/other dir")
+        let (c, l) = clickController(.notAttached, .open, ok: false, s)
+        c.jump(s)
+        XCTAssertEqual(l.calls.count, 1)
+        drain(c)
+        XCTAssertEqual(Pasteboard.general.string(forType: .string),
+                       AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir))
+        XCTAssertEqual(c.store?.notices[s.key], "Couldn't open kitty, attach command copied")
+        XCTAssertEqual(c.store?.expanded, true, "the notice stays on screen")
+    }
+
+    @MainActor func testASecondClickWhileLaunchingOpensNothing() {
+        let s = session("s", .idle)
+        let (c, l) = clickController(.notAttached, .open, ok: nil, s)
+        c.jump(s)
+        c.jump(s)
+        XCTAssertEqual(l.calls.count, 1, "one window per launch")
+        l.done.first?(true)
+        drain(c)
+        c.jump(s)
+        XCTAssertEqual(l.calls.count, 2, "the launch finished: a click opens again")
     }
 
     @MainActor func testOutsideClickMonitorIsInstalledOnExpandAndRemovedOnCollapse() {

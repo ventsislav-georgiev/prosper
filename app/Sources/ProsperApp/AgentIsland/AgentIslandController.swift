@@ -70,6 +70,21 @@ final class AgentIslandController {
             ourPID: getpid())
     }
     var touchFonts: @MainActor () -> Void = { _ = AgentIslandGeometry.cardFonts }
+    /// #500 seams: the click setting, the chosen terminal, and the launcher
+    /// (tests record; no test starts a terminal).
+    var clickAction: @MainActor () -> AgentIslandClick = { AgentIslandClick(raw: Preferences.agentIslandClick) }
+    var terminal: @MainActor () -> AgentTerminal = {
+        AgentTerminal.resolve(raw: Preferences.agentIslandTerminal, installed: AgentTerminal.isInstalled)
+    }
+    var launchTerminal: @MainActor (AgentTerminal, AgentTerminal.Launch, @escaping @Sendable (Bool) -> Void) -> Void
+        = { AgentTerminalLauncher.launch($0, $1, done: $2) }
+    /// The .app jump: raise the session's window, activate its app (AX and Launch Services).
+    var focusApp: @MainActor (pid_t, [String]) -> Void = { pid, needles in
+        AgentIslandController.raiseWindow(pid: pid, matching: needles)
+        AgentIslandController.activate(pid)
+    }
+    /// Sessions whose terminal is still launching: a double click opens one window.
+    private var opening: Set<AgentSessionKey> = []
 
     init() {}
 
@@ -237,22 +252,46 @@ final class AgentIslandController {
         switch jumpTarget(s.key) {
         case .app(let pid):
             setExpanded(false)
-            raiseWindow(pid: pid, matching: [s.title, s.name])
-            activate(pid)
+            focusApp(pid, [s.title, s.name])
+        case _ where clickAction() == .open:
+            // #500: no local terminal window, so open one attached to the session.
+            open(s)
         case .attachedElsewhere where store.notices[s.key] == nil:
             // Not jumpable; say so instead of silently copying. A second click copies.
             store.notices[s.key] = "Attached in tmux/ssh, click to copy attach command"
         case .attachedElsewhere, .notAttached:
-            let pb = Pasteboard.general
-            pb.clearContents()
-            pb.setString(AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir), forType: .string)
-            store.notices[s.key] = "Attach command copied"
+            copyAttach(s, notice: "Attach command copied")
+        }
+    }
+
+    private func copyAttach(_ s: AgentSession, notice: String) {
+        let pb = Pasteboard.general
+        pb.clearContents()
+        pb.setString(AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir), forType: .string)
+        store?.notices[s.key] = notice
+    }
+
+    /// Collapses once the terminal is up; a failed open copies instead and says so.
+    private func open(_ s: AgentSession) {
+        guard opening.insert(s.key).inserted else { return }
+        let t = terminal(), key = s.key
+        launchTerminal(t, t.launch(AgentIsland.attachArgv(key, dch: DchCommand.dchPath))) { [weak self] ok in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.opening.remove(key)
+                    guard self.store != nil else { return }   // torn down meanwhile
+                    if ok { self.setExpanded(false) } else {
+                        self.copyAttach(s, notice: "Couldn't open \(t.label), attach command copied")
+                    }
+                }
+            }
         }
     }
 
     /// A non-activating panel's app is never active, and macOS 14+ cooperative
     /// activation ignores `activate()` from it; a Launch Services open does not.
-    private func activate(_ pid: pid_t) {
+    private static func activate(_ pid: pid_t) {
         guard let app = NSRunningApplication(processIdentifier: pid) else { return }
         guard let url = app.bundleURL else { app.activate(); return }
         let cfg = NSWorkspace.OpenConfiguration()
@@ -264,7 +303,7 @@ final class AgentIslandController {
 
     /// Best effort: terminals title windows after the program (Claude sets
     /// "✳ <task>"), so a miss just leaves the app's front window.
-    private func raiseWindow(pid: pid_t, matching needles: [String]) {
+    private static func raiseWindow(pid: pid_t, matching needles: [String]) {
         guard AXIsProcessTrusted() else { return }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.25)
@@ -298,6 +337,41 @@ final class AgentIslandController {
         panel?.contentView = nil
         panel = nil
         store = nil
+    }
+}
+
+/// #500: the live launcher behind AgentIslandController.launchTerminal.
+enum AgentTerminalLauncher {
+    /// `done` runs on any thread. Nonisolated, so its closures are too (a
+    /// main-inferred closure called off main traps under Swift 6).
+    nonisolated static func launch(_ t: AgentTerminal, _ launch: AgentTerminal.Launch,
+                                   done: @escaping @Sendable (Bool) -> Void) {
+        // Belt and braces: a test that forgot the seam never starts a real terminal.
+        guard NSClassFromString("XCTestCase") == nil,
+              let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: t.bundleID) else {
+            done(false); return
+        }
+        let cfg = NSWorkspace.OpenConfiguration()
+        cfg.activates = true
+        switch launch {
+        case .arguments(let args):
+            cfg.createsNewApplicationInstance = true
+            cfg.arguments = args
+            NSWorkspace.shared.openApplication(at: app, configuration: cfg) { @Sendable _, error in done(error == nil) }
+        case .script(let text):
+            // A subdir: the $TMPDIR root is huge and slow to create in.
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("prosper-attach", isDirectory: true)
+            let file = dir.appendingPathComponent("\(UUID().uuidString).command")
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try Data(text.utf8).write(to: file)
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+            } catch { done(false); return }
+            NSWorkspace.shared.open([file], withApplicationAt: app, configuration: cfg) { @Sendable _, error in
+                if error != nil { try? FileManager.default.removeItem(at: file) }
+                done(error == nil)
+            }
+        }
     }
 }
 

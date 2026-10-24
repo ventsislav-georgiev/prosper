@@ -217,6 +217,97 @@ enum AgentIsland {
         let cmd = "dch -n \(shellQuoted(key.name))"
         return key.dir == defaultDir ? cmd : "DCH_SOCKET_DIR=\(shellQuoted(key.dir)) \(cmd)"
     }
+
+    /// #500: what a launched terminal runs — attachCommand as argv, with two
+    /// differences. dch is the path Prosper resolves (a fresh terminal's PATH may
+    /// not have it), and the dir is always explicit: the terminal's env (launchd's,
+    /// or a login shell's rc) is not Prosper's, so an implicit default dir could
+    /// make `dch -n` create a new session instead of attaching.
+    static func attachArgv(_ key: AgentSessionKey, dch: String) -> [String] {
+        ["/usr/bin/env", "DCH_SOCKET_DIR=\(key.dir)", dch, "-n", key.name]
+    }
+}
+
+// MARK: - Click setting (#500)
+
+/// What a row click does with a session that has no local terminal window.
+enum AgentIslandClick: String, CaseIterable {
+    case open, copy
+
+    /// Unset or unknown = open.
+    init(raw: String?) { self = raw.flatMap(Self.init(rawValue:)) ?? .open }
+
+    var label: String {
+        switch self {
+        case .open: "Open in terminal"
+        case .copy: "Copy attach command"
+        }
+    }
+}
+
+/// A terminal Prosper can start with a command. Every path is a Launch Services
+/// open (no AppleScript, so no Automation prompt); the research is in #500's notes.
+enum AgentTerminal: String, CaseIterable {
+    case ghostty, terminal, iterm, wezterm, kitty, alacritty
+
+    var bundleID: String {
+        switch self {
+        case .ghostty: "com.mitchellh.ghostty"
+        case .terminal: "com.apple.Terminal"
+        case .iterm: "com.googlecode.iterm2"
+        case .wezterm: "com.github.wez.wezterm"
+        case .kitty: "net.kovidgoyal.kitty"
+        case .alacritty: "org.alacritty"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .ghostty: "Ghostty"
+        case .terminal: "Terminal"
+        case .iterm: "iTerm2"
+        case .wezterm: "WezTerm"
+        case .kitty: "kitty"
+        case .alacritty: "Alacritty"
+        }
+    }
+
+    enum Launch: Equatable {
+        /// A new instance of the app with these arguments (`open -na <app> --args …`).
+        case arguments([String])
+        /// A `.command` script the running app opens as a document (`open -a <app> x.command`).
+        case script(String)
+    }
+
+    /// Terminal, iTerm2 and Ghostty open a self-deleting script of shell-quoted
+    /// words in a new window of the running app. Ghostty's documented `-e` needs a
+    /// new instance per click (its own Dock icon); it stays the fallback if the
+    /// script path ever breaks. The rest get the argv unsplit and unquoted.
+    func launch(_ argv: [String]) -> Launch {
+        switch self {
+        case .alacritty: .arguments(["-e"] + argv)
+        case .wezterm: .arguments(["start", "--"] + argv)
+        case .kitty: .arguments(argv)
+        case .terminal, .iterm, .ghostty:
+            .script("#!/bin/sh\n/bin/rm -f \"$0\"\nexec \(argv.map(AgentIsland.shellQuoted).joined(separator: " "))\n")
+        }
+    }
+
+    /// Read only: Launch Services knows the bundle id.
+    static func isInstalled(_ t: AgentTerminal) -> Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: t.bundleID) != nil
+    }
+
+    /// The picker: Terminal always, the others when installed.
+    static func available(installed: (AgentTerminal) -> Bool) -> [AgentTerminal] {
+        allCases.filter { $0 == .terminal || installed($0) }
+    }
+
+    /// The stored pick while it is still installed, else Ghostty when installed, else Terminal.
+    static func resolve(raw: String?, installed: (AgentTerminal) -> Bool) -> AgentTerminal {
+        if let t = raw.flatMap(Self.init(rawValue:)), available(installed: installed).contains(t) { return t }
+        return installed(.ghostty) ? .ghostty : .terminal
+    }
 }
 
 // MARK: - Poll gate

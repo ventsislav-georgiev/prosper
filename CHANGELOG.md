@@ -25,9 +25,12 @@ tag from the now-released section and put it on the new top draft.
   island at the top of the screen, modeled on Vibe Island. Beside the notch it shows the
   most urgent state and how many sessions are working or need input. Click it for the list:
   each session with its state (working, needs input, done, idle), its live subagent count
-  and the time since its last output. Click a session to bring its terminal to the front;
-  one with no terminal attached copies its attach command instead. While Remote Terminal
-  keeps its sessions separate, a setting picks which sessions to show (#474).
+  and the time since its last output. Click a session to bring its terminal to the front.
+  A session with no terminal window on this Mac opens in a new window of your terminal
+  (Ghostty when installed, else Terminal, or iTerm2, WezTerm, kitty or Alacritty), or
+  copies its attach command instead, as you pick in the Agent Island settings (#500).
+  While Remote Terminal keeps its sessions separate, a setting picks which sessions to
+  show (#474).
 - Ships dch 1.21.1, which recognizes Claude Code's Write and Edit permission prompts, so
   Agent Island shows those sessions as needing input, and reads a session as waiting on a
   permission only from the prompt's own footer line (#474, #494).
