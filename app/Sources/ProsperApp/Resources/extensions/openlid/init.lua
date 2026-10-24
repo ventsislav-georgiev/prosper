@@ -36,6 +36,11 @@ local STATE_KEY = "state"
 
 local function b2s(v) return v and "true" or "false" end
 
+-- Every deactivation and every rule-driven activation leaves a line in the unified
+-- log, so "it turned off by itself" can be traced afterwards. warn, not info:
+-- Logger.info is not persisted, so `log show` could not read it back later.
+local function log(msg) host.log.warn("openlid: " .. msg) end
+
 local function pref_bool(key, default)
     local v = host.prefs.get(key)
     if v == nil or v == "" then return default end
@@ -196,7 +201,8 @@ local function mac_awake_status(st, real)
 end
 
 -- True when the plugged-in rule currently OWNS the awake state, so manual "off"
--- (settings switch + shortcut) is refused with a reason instead of fighting it.
+-- (settings switch + shortcut) is refused with a reason instead of fighting it,
+-- while "keep awake after unplugging" (menu rows, settings button) turns it manual.
 -- `autoActivated` is set ONLY by the on-AC rule (activate(_, true)) and any unplug
 -- clears it (on_battery demotes to manual or deactivates), so an active auto session
 -- ⟹ the plugged-in rule owns it and we're still on AC. That's the whole lock — pure
@@ -261,22 +267,28 @@ local function build_menu(s)
     items[#items + 1] = { separator = true }
 
     -- ── 🔓 Mac awake — whole Mac stays awake when the lid is CLOSED ──
-    if s.active then
-        if rule_lock_active(s) then
-            -- Plugged-in rule owns the state: match the settings pane + shortcut —
-            -- no "let sleep" action, same reason shown, so the menu can't fight it.
-            items[#items + 1] = { title = "\u{1F513} Mac awake \u{00B7} kept awake while plugged in", enabled = false }
-            items[#items + 1] = { title = "Unplug to let it sleep", enabled = false }
-        else
-            items[#items + 1] = { title = "\u{1F513} Mac awake with lid closed" .. (s.endTime and (" \u{00B7} " .. fmt_remaining(s.endTime)) or " \u{00B7} no limit"), enabled = false }
-            items[#items + 1] = { title = "Let Mac sleep on lid close", handler = "on_menu_off", stay = true }
-        end
+    -- While the plugged-in rule holds it, there is still no "let sleep" (that would
+    -- fight the rule), but every on-row stays live: each turns the rule hold into a
+    -- manual session (indefinite, timed or Until…) that survives the unplug.
+    local rule = rule_lock_active(s)
+    if rule then
+        items[#items + 1] = { title = "\u{1F513} Mac awake \u{00B7} while plugged in, sleeps on unplug", enabled = false }
+        items[#items + 1] = { title = "Keep awake after unplugging", handler = "on_menu_on", stay = true }
+    elseif s.active then
+        items[#items + 1] = { title = "\u{1F513} Mac awake with lid closed" .. (s.endTime and (" \u{00B7} " .. fmt_remaining(s.endTime)) or " \u{00B7} no limit"), enabled = false }
+        -- Manual on the charger with the plugged-in rule on: off goes back to the
+        -- hold (deactivate), so name that. rule_on_ac() with its legacy fallback, the
+        -- same test deactivate uses, so a never-touched default (no key, rule on)
+        -- gets the true label too. Reads only in this branch: up to 3 prefs, at most
+        -- once a minute on the tick.
+        local back = s.lastPowerSource == "AC Power" and rule_on_ac()
+        items[#items + 1] = { title = back and "Let it sleep on unplug" or "Let Mac sleep on lid close", handler = "on_menu_off", stay = true }
     else
         items[#items + 1] = { title = "Mac sleeps on lid close", enabled = false }
         items[#items + 1] = { title = "Keep Mac awake with lid closed", handler = "on_menu_on", stay = true }
     end
-    duration_rows(items, "on_menu_on", s.active)
-    if s.active then
+    duration_rows(items, "on_menu_on", s.active and not rule)
+    if s.active and not rule then
         items[#items + 1] = { title = "   Until\u{2026}", enabled = false }
     else
         items[#items + 1] = { title = "   Until\u{2026}", handler = "on_menu_until" }
@@ -318,21 +330,27 @@ end
 -- the exact "sometimes it does not sleep". Re-scheduling an armed timer resets
 -- the countdown; call sites are one-shot moments (activate/launch/wake/network
 -- event), so that only ever grants a fresh grace period, never starves it.
+-- Battery only: it is the in-transit guard, and a Mac on the charger is not in a
+-- bag. On AC a 2-min Wi-Fi drop at the desk used to end the session by itself.
 local function sync_netoff(s, c)
-    if s.active and c.networkAutoOffSeconds and not host.network.is_reachable() then
+    if s.active and c.networkAutoOffSeconds and running_on_battery() and not host.network.is_reachable() then
         host.timer.schedule { id = "netoff", after = c.networkAutoOffSeconds, handler = "on_netoff" }
     else
         host.timer.cancel("netoff")
     end
 end
 
-local function activate(durationSec, auto)
+-- `why` names the trigger in the log line (a rule, or the surface the user clicked).
+local function activate(durationSec, auto, why)
     local c = cfg()
     local s = load_state()
     if c.batteryThreshold and running_on_battery() and battery_pct() < c.batteryThreshold then
+        log(string.format("on refused (%s): battery < %d%%", why or "manual", c.batteryThreshold))
         host.alert.show(string.format("\u{1F513} Mac stays asleep \u{2014} battery < %d%%", c.batteryThreshold))
         return
     end
+    log(string.format("on (%s): %s", why or "manual",
+        auto and "plugged-in hold" or (durationSec and ("manual for " .. math.floor(durationSec) .. " s") or "manual, no limit")))
     s.active = true
     s.autoActivated = (auto == true)
     host.caffeinate.prevent_idle_sleep("system", true)
@@ -357,6 +375,22 @@ end
 local function deactivate(reason)
     local s = load_state()
     if not s.active then return end
+    -- Back to the rule, not to sleep: a manual session that ends (expiry, or turned
+    -- off) on the charger with the plugged-in rule on returns to the rule hold,
+    -- the state a plug-in would have produced. Only "Sleep now" really means sleep.
+    if reason ~= "sleep now" and not s.autoActivated and rule_on_ac() and host.battery.power_source() == "AC Power" then
+        s.autoActivated = true
+        s.endTime = nil
+        host.timer.cancel("expiry")
+        sync_tick(s)
+        save_state(s)
+        render(s)
+        log("manual session ended (" .. tostring(reason) .. "), back to the plugged-in hold")
+        host.alert.show("\u{1F513} Kept awake while plugged in \u{2014} sleeps when you unplug")
+        return
+    end
+    log(string.format("off (%s): was %s", tostring(reason),
+        s.autoActivated and "plugged-in hold" or (s.endTime and "timed manual" or "manual")))
     s.active = false
     s.endTime = nil
     host.timer.cancel("expiry")
@@ -385,6 +419,18 @@ local function deactivate(reason)
     -- unknown (nil) or display caffeine is deliberately on.
     if host.screen.lid_closed() and not s.caffeine and running_on_battery() then
         host.caffeinate.sleep_now()
+    end
+end
+
+-- The plugged-in rule lets go on unplug: keep awake as a manual session when the
+-- busy command reports work (so it won't auto-off later), else turn off.
+local function release_rule_hold(s, c, reason)
+    if busy_active(c.busyCmd) then
+        s.autoActivated = false; save_state(s)  -- now manual; survives unplug
+        log("unplugged: busy command reports work, plugged-in hold kept as manual")
+        host.alert.show("\u{1F513} Mac awake \u{2014} active sessions")
+    else
+        deactivate(reason)
     end
 end
 
@@ -428,7 +474,7 @@ local function activate_until(hhmm)
     local now_secs = (d.hour or 0) * 3600 + (d.min or 0) * 60 + (d.sec or 0)
     local delta = (h * 3600 + m * 60) - now_secs
     if delta <= 0 then delta = delta + 86400 end -- next day
-    activate(delta, false)
+    activate(delta, false, "menu until")
 end
 
 -- ============ Command ============
@@ -441,7 +487,7 @@ function openlid_toggle(query)
         end
         deactivate("manual")
     else
-        activate(nil, false)
+        activate(nil, false, "shortcut")
     end
     return load_state().active and "\u{1F513} Mac awake \u{2014} lid closed" or "\u{1F4A4} Mac sleeps normally"
 end
@@ -478,12 +524,18 @@ function openlid_status(query)
 end
 
 -- ============ Timer handlers ============
-function on_expiry(payload) deactivate("timer expired") end
+-- Only a timed session expires: a stale fire (delivered after a click replaced the
+-- timed session with an indefinite one) must not end the new session.
+function on_expiry(payload)
+    if not load_state().endTime then return end
+    deactivate("timer expired")
+end
 function on_tick(payload) render(load_state()) end
 -- Re-verify at fire time: a cancel event missed across a sleep/wake must not
--- become a forced sleep under a user whose network is actually fine.
+-- become a forced sleep under a user whose network is actually fine, and a Mac
+-- plugged in since the timer armed is not in transit.
 function on_netoff(payload)
-    if host.network.is_reachable() then return end
+    if host.network.is_reachable() or not running_on_battery() then return end
     deactivate("no network (in transit)")
 end
 function on_caffeine_expiry(payload) caffeine_off("timer expired") end
@@ -507,9 +559,11 @@ end
 -- Open this extension's pane in the Prosper Settings window.
 function on_open_settings(payload) host.settings.open("openlid") end
 
+-- Also the "keep awake after unplugging" path: from a plugged-in hold it re-arms
+-- the session as manual (autoActivated false), so the unplug no longer ends it.
 function on_menu_on(payload)
     local p = host.json.decode(payload) or {}
-    activate(p.secs, false) -- secs nil => indefinite
+    activate(p.secs, false, "menu") -- secs nil => indefinite
 end
 
 function on_menu_until(payload)
@@ -538,11 +592,18 @@ function on_launch(payload)
     save_state(s)
     render(s)
     local c = cfg()
+    -- A plugged-in hold restored on battery was unplugged while Prosper was not
+    -- running. Overwriting lastPowerSource above hides that edge from on_battery,
+    -- so release it here, or it stays locked "while plugged in" on battery.
+    if s.active and s.autoActivated and src == "Battery Power" then
+        release_rule_hold(s, c, "unplugged while Prosper was not running")
+        s = load_state()
+    end
     if not s.active then
         if c.ruleAtLaunch then
-            activate(nil, false)              -- manual; survives unplug
+            activate(nil, false, "turn on at every launch") -- manual; survives unplug
         elseif c.ruleOnAc and src == "AC Power" then
-            activate(nil, true)               -- auto; releases on unplug
+            activate(nil, true, "plugged in at launch")     -- auto; releases on unplug
         end
     end
     if not s.caffeine and c.caffeineAtLaunch then caffeine_on(nil) end
@@ -569,7 +630,7 @@ function on_battery(payload)
 
     -- AC plugged in -> auto-enable (marked auto, so the unplug below turns it off)
     if changed and c.ruleOnAc and src == "AC Power" and not s.active then
-        activate(nil, true); return
+        activate(nil, true, "plugged in"); return
     end
     -- Battery threshold ALWAYS wins (runaway-with-lid-closed protection): check it
     -- before the session-hold so a critically low unplug just sleeps — no "stay
@@ -585,13 +646,11 @@ function on_battery(payload)
     -- AC unplugged while auto-on: keep awake if the busy command reports sessions
     -- (demote to manual so it won't auto-off later); else turn off.
     if changed and src == "Battery Power" and s.active and s.autoActivated then
-        if busy_active(c.busyCmd) then
-            s.autoActivated = false; save_state(s)  -- now manual; survives unplug
-            host.alert.show("\u{1F513} Mac awake \u{2014} active sessions")
-        else
-            deactivate("unplugged")
-        end
+        release_rule_hold(s, c, "unplugged")
     end
+    -- The no-network guard is battery-only: an unplug arms it from reality (the
+    -- network may already be gone), a plug-in cancels it.
+    if changed then sync_netoff(load_state(), c) end
 end
 
 function on_network(payload)
@@ -708,22 +767,28 @@ function settings_render(section_id, state)
         } },
     }
     -- ── CONTROLS — the manual on/off switches. When the plugged-in rule owns the
-    -- state, the Mac-awake switch becomes a locked info row (turning it off would
-    -- just fight the rule), naming exactly how to release it. ──────────────────
+    -- state, the Mac-awake switch becomes a button (turning it off would just fight
+    -- the rule) that turns the hold into a manual session surviving the unplug. ──
     local lid_control
     if rule_lock_active(st) then
-        lid_control = s.row{ kind = "info", title = "Mac awake (lid closed)",
-            subtitle = "Locked on \u{2014} kept awake while plugged in. Unplug, or turn off "
-                .. "\u{201C}Keep awake while plugged in\u{201D} below, to allow sleep." }
+        lid_control = s.row{ kind = "button", key = "lid_keep", title = "Keep awake after unplugging",
+            subtitle = "On now because the charger is connected; it sleeps when you unplug. "
+                .. "Press to keep it awake after unplugging too, until you turn it off." }
     else
         lid_control = s.row{ kind = "toggle", key = "lid_now", title = "Mac awake (lid closed)",
-            subtitle = "Keep the whole Mac running with the lid shut", value = b2s(st.active) }
+            subtitle = (st.active and on_ac and c.ruleOnAc)
+                and "Turning it off goes back to the plugged-in hold, which sleeps when you unplug"
+                or "Keep the whole Mac running with the lid shut",
+            value = b2s(st.active) }
     end
     local controls = s.section{
         id = "controls", title = "Controls",
         footer = "🔓 Mac awake keeps the whole Mac running when the lid is CLOSED. "
             .. "☕ Display awake keeps the screen and screensaver off while the lid is OPEN. "
-            .. "Independent — use either or both.",
+            .. "Independent — use either or both. "
+            .. "Mac awake turned on here stays on after you unplug. With “Keep awake while plugged in” on, "
+            .. "turning it off, or a timed session ending, while charging goes back to the plugged-in hold, "
+            .. "which lets the Mac sleep when you unplug.",
         rows = {
             lid_control,
             s.row{ kind = "toggle", key = "caffeine_now", title = "Display awake (no screensaver)",
@@ -741,7 +806,8 @@ function settings_render(section_id, state)
         id = "general", title = "Turn on automatically",
         footer = "Both off = nothing automatic; the last state is restored at launch. "
             .. "“Keep awake while plugged in” turns off when you unplug (unless the Sessions command "
-            .. "below still reports work) and locks the manual switch while charging. "
+            .. "below still reports work); while it holds, “Keep awake after unplugging” in Controls "
+            .. "or the menu keeps it on past the unplug. "
             .. "“Turn on at every launch” arms it each start and keeps it on until you turn it off.",
         rows = {
             s.row{ kind = "toggle", key = "rule_on_ac", title = "Keep awake while plugged in",
@@ -875,16 +941,19 @@ function settings_action(section_id, action, value, form_json)
         -- a nil settings_action result makes the pane KEEP the stale pre-click tree
         -- ("Mac awake: on") — visible whenever the sleep doesn't take instantly.
     end
+    if action == "lid_keep" then
+        activate(nil, false, "settings, keep after unplug") -- plugged-in hold -> manual, no limit
+    end
     local key = action:match("^set:(.+)$")
     if key == "lid_now" then
-        if value == "true" then activate(nil, false) else deactivate("manual") end
+        if value == "true" then activate(nil, false, "settings") else deactivate("manual") end
     elseif key == "caffeine_now" then
         if value == "true" then caffeine_on(nil) else caffeine_off("manual") end
     elseif key == "rule_on_ac" then
         host.prefs.set(key, value)
         local st = load_state()
         if value == "true" and not running_on_battery() and not st.active then
-            activate(nil, true)                  -- begin the plugged-in hold immediately
+            activate(nil, true, "plugged-in rule turned on") -- begin the hold immediately
         elseif value ~= "true" and st.active and st.autoActivated then
             deactivate("plugged-in rule off")    -- release the rule-held session
         else

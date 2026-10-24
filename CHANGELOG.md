@@ -59,6 +59,18 @@ tag from the now-released section and put it on the new top draft.
   The status rows (display and Mac state, External display, Battery) no longer look
   clickable. For extension authors: a menu row with no handler or `enabled = false` now
   shows disabled, and `stay = true` keeps the menu open when the row is clicked (#482).
+- **OpenLid: keep the Mac awake after unplugging, even while charging.** With "Keep awake
+  while plugged in" on, the menu and settings used to lock while the charger was connected.
+  Now "Keep awake after unplugging", the durations and Until… stay available and turn the
+  plugged-in hold into a keep-awake that survives the unplug. A keep-awake that times out,
+  or that you turn off, while charging goes back to the plugged-in hold instead of letting
+  the Mac sleep, and the menu says so ("Let it sleep on unplug"). Three things no longer
+  end a keep-awake on their own:
+  - a Wi-Fi drop while charging (the 2-minute no-network guard now runs on battery only);
+  - a late timer from an earlier timed session;
+  - a plugged-in hold restored on battery after Prosper restarted, which used to stay
+    locked "while plugged in".
+  Every automatic on and off is now logged with its reason (#499).
 - **The update window shows what changed.** Sparkle now lists the release notes for the
   version it offers, from this changelog (#485).
 <!-- Drop the next bullet before promoting v2.159.0 to stable (#478). -->

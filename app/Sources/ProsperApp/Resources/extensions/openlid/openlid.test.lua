@@ -4,6 +4,18 @@
 
 local h = require("harness")
 local INIT = h.dir() .. "init.lua"
+-- The shared harness has no host.log; capture it per host into env.logs.
+do
+    local makeHost = h.makeHost
+    h.makeHost = function(opts)
+        local host, env = makeHost(opts)
+        env.logs = {}
+        local function rec(m) env.logs[#env.logs + 1] = m end
+        host.log = { info = rec, warn = rec, error = rec }
+        return host, env
+    end
+end
+local function lastLog(env) return env.logs[#env.logs] or "" end
 local function state(host) return host.json.decode(host.prefs.get("state") or "{}") end
 local function batt(G, host, src)
     G.on_battery(host.json.encode { powerSource = src, percentage = 90 })
@@ -82,7 +94,7 @@ end
 
 -- ── Toast wording is state-first and human ────────────────────────────────────
 do
-    local host, env = h.makeHost {}
+    local host, env = h.makeHost { power = "Battery Power" }
     local G = h.load(INIT, host)
     G.openlid_toggle("")                        -- turn on (indefinite)
     assert(h.lastAlert(env):find("Mac awake"), "ON toast says 'Mac awake'")
@@ -160,6 +172,7 @@ do
     -- Lid closed on AC is clamshell mode: macOS keeps a docked Mac awake by
     -- design, so a manual off must not put it down under the user.
     local hostAC, envAC = h.makeHost { lidClosed = true, power = "AC Power" }
+    hostAC.prefs.set("rule_on_ac", "false")              -- a real off, not back to the rule
     local GAC = h.load(INIT, hostAC)
     GAC.openlid_toggle("")
     GAC.openlid_toggle("")
@@ -178,7 +191,7 @@ end
 
 -- ── Display caffeine: independent of the lid override ─────────────────────────
 do
-    local host, env = h.makeHost {}
+    local host, env = h.makeHost { power = "Battery Power" }
     local G = h.load(INIT, host)
 
     -- Toggle display caffeine on -> only the display assertion engages.
@@ -279,7 +292,7 @@ end
 
 -- ── Timed session DOES tick; expiry tears the ticker down ─────────────────────
 do
-    local host, env = h.makeHost {}
+    local host, env = h.makeHost { power = "Battery Power" }
     local G = h.load(INIT, host)
     G.on_menu_on(host.json.encode { secs = 1800 })        -- timed ON
     assert(env.timers["tick"], "timed session schedules the countdown tick")
@@ -413,6 +426,7 @@ end
 -- ── on_wake reconciles the lid override both ways ──────────────────────────────
 do
     local host, env = h.makeHost { power = "AC Power" }
+    host.prefs.set("rule_on_ac", "false")                  -- off means off (no rule hold)
     local G = h.load(INIT, host)
 
     -- Active session: a daemon crash while asleep reset disablesleep; the full
@@ -475,7 +489,9 @@ do
     local dispOn  = "- S:on_caff_off - - - - |"
     local macOff  = " - S:on_menu_on S:on_menu_on S:on_menu_on S:on_menu_on S:on_menu_on P:on_menu_until"
     local macOn   = " - S:on_menu_off - - - - -"
-    local macRule = " - - - - - - -"
+    -- #499: the plugged-in hold keeps every on-row live (they make it manual), so
+    -- its rows are the off rows; only the titles differ.
+    local macRule = macOff
 
     local host, env = h.makeHost { power = "Battery Power" }
     local G = h.load(INIT, host)
@@ -492,7 +508,282 @@ do
     local G2 = h.load(INIT, host2)
     G2.on_launch(host2.json.encode { powerSource = "AC Power" })
     G2.on_tick("")
-    h.eq(rows(env2), dispOff .. macRule .. tail, "plugged-in rule: Mac block inert, same rows")
+    h.eq(rows(env2), dispOff .. macRule .. tail, "plugged-in rule: same rows, on-rows live")
+end
+
+-- ── #499 (a) Menu: a plugged-in hold can become a manual session that survives
+--    unplug — indefinite, each duration, and Until… ─────────────────────────────
+do
+    -- Mac block rows sit after the 6 display rows + separator: 8 status, 9 toggle,
+    -- 10..13 durations, 14 Until…  Click the row the menu actually rendered.
+    local function menuRow(env, i) return env.menu.menu[i] end
+    local function click(G, host, env, i)
+        local r = menuRow(env, i)
+        assert(r.handler and r.enabled ~= false, "row " .. i .. " is clickable: " .. tostring(r.title))
+        G[r.handler](host.json.encode(r.payload or {}))
+    end
+    local function ruleHeld()
+        local host, env = h.makeHost { power = "AC Power" }   -- rule_on_ac defaults true
+        local G = h.load(INIT, host)
+        G.on_launch(host.json.encode { powerSource = "AC Power" })
+        h.eq(state(host).autoActivated, true, "precondition: plugged-in hold")
+        return host, env, G
+    end
+
+    -- Indefinite: the toggle row.
+    local host, env, G = ruleHeld()
+    assert(menuRow(env, 8).title:find("plugged in"), "status row names the plugged-in hold")
+    h.eq(menuRow(env, 8).enabled, false, "status row stays inert")
+    h.eq(menuRow(env, 9).title, "Keep awake after unplugging", "toggle row offers the manual keep")
+    h.eq(menuRow(env, 9).stay, true, "toggle row keeps stay")
+    click(G, host, env, 9)
+    h.eq(state(host).active, true, "still awake")
+    h.eq(state(host).autoActivated, false, "now manual")
+    h.eq(state(host).endTime, nil, "no limit")
+    env.power = "Battery Power"; batt(G, host, "Battery Power")
+    h.eq(state(host).active, true, "manual keep survives the unplug")
+    h.eq(env.flags.lidDisabled, true, "lid override still held on battery")
+
+    -- Each duration row.
+    for i, secs in ipairs { 1800, 3600, 7200, 18000 } do
+        local hostD, envD, GD = ruleHeld()
+        h.eq(menuRow(envD, 9 + i).stay, true, "duration row keeps stay")
+        click(GD, hostD, envD, 9 + i)
+        h.eq(state(hostD).autoActivated, false, "duration makes it manual")
+        h.eq(state(hostD).endTime, 1000 + secs, "duration sets the end time")
+        assert(envD.timers["expiry"], "duration arms expiry")
+        envD.power = "Battery Power"; batt(GD, hostD, "Battery Power")
+        h.eq(state(hostD).active, true, "timed manual keep survives the unplug")
+    end
+
+    -- Until…
+    local hostU, envU, GU = ruleHeld()
+    envU.dialogReply = "13:30"                                -- harness date is 12:00
+    click(GU, hostU, envU, 14)
+    h.eq(state(hostU).autoActivated, false, "Until… makes it manual")
+    h.eq(state(hostU).endTime, 1000 + 5400, "Until… sets the end time")
+    envU.power = "Battery Power"; batt(GU, hostU, "Battery Power")
+    h.eq(state(hostU).active, true, "Until… keep survives the unplug")
+
+    -- Off from the plugged-in hold is still refused (the menu has no off row there).
+    local hostR, envR, GR = ruleHeld()
+    GR.on_menu_off("")
+    h.eq(state(hostR).autoActivated, true, "stale off click still respects the hold")
+end
+
+-- ── #499 (b) Settings: the locked row is a button that makes the hold manual ──
+do
+    local function controls(ui)
+        for _, sec in ipairs(ui.sections) do if sec.id == "controls" then return sec end end
+    end
+    local host, env = h.makeHost { power = "AC Power" }
+    local G = h.load(INIT, host)
+    G.on_launch(host.json.encode { powerSource = "AC Power" })
+    local c = controls(G.settings_render("openlid", "{}"))
+    local row = c.rows[1]
+    h.eq(row.key, "lid_keep", "plugged-in hold: the Mac-awake row is the keep button")
+    assert(row.subtitle:find("unplug"), "its copy says what happens on unplug")
+    assert(c.footer:find("unplug"), "the Controls footer says what happens on unplug")
+    local ui = G.settings_action("openlid", "lid_keep", nil, "{}")
+    h.eq(state(host).active, true, "still awake")
+    h.eq(state(host).autoActivated, false, "button makes it manual")
+    h.eq(state(host).endTime, nil, "no limit")
+    h.eq(controls(ui).rows[1].key, "lid_now", "pane re-renders with the manual switch")
+    h.eq(controls(ui).rows[1].value, "true", "switch shows on")
+    env.power = "Battery Power"; batt(G, host, "Battery Power")
+    h.eq(state(host).active, true, "settings keep survives the unplug")
+end
+
+-- ── #499 (c) Back to the rule, not to sleep, while plugged in ─────────────────
+do
+    local function manualOnAC()
+        local host, env = h.makeHost { power = "AC Power" }
+        local G = h.load(INIT, host)
+        G.on_launch(host.json.encode { powerSource = "AC Power" })
+        return host, env, G
+    end
+    local function isRuleHold(host, env, what)
+        local s = state(host)
+        h.eq(s.active, true, what .. ": still awake")
+        h.eq(s.autoActivated, true, what .. ": back to the plugged-in hold")
+        h.eq(s.endTime, nil, what .. ": no end time")
+        h.eq(env.flags.lidDisabled, true, what .. ": lid override held")
+        h.eq(env.flags.idleSystem, true, what .. ": system assertion held")
+        h.eq(env.timers["expiry"], nil, what .. ": no expiry left")
+    end
+
+    -- Expiry of a timed manual session.
+    local host, env, G = manualOnAC()
+    G.on_menu_on(host.json.encode { secs = 1800 })
+    h.eq(state(host).autoActivated, false, "timed manual")
+    G.on_expiry("")
+    isRuleHold(host, env, "expiry on AC")
+    h.eq(env.timers["tick"], nil, "no countdown left")
+    -- ...and the hold it fell back to still lets go on unplug.
+    env.power = "Battery Power"; batt(G, host, "Battery Power")
+    h.eq(state(host).active, false, "the restored hold releases on unplug")
+
+    -- Turned off by each surface.
+    local offs = {
+        shortcut = function(G) G.openlid_toggle("") end,
+        menu     = function(G) G.on_menu_off("") end,
+        settings = function(G) G.settings_action("openlid", "set:lid_now", "false", "{}") end,
+    }
+    for name, off in pairs(offs) do
+        local hostO, envO, GO = manualOnAC()
+        GO.on_menu_on("")
+        h.eq(state(hostO).autoActivated, false, name .. ": manual")
+        off(GO)
+        isRuleHold(hostO, envO, name .. " off on AC")
+    end
+
+    -- Sleep now means sleep, rule or not.
+    local hostS, envS, GS = manualOnAC()
+    GS.on_menu_on("")
+    GS.settings_action("openlid", "sleep_now", "", "{}")
+    h.eq(state(hostS).active, false, "sleep now really turns it off")
+    h.eq(envS.flags.lidDisabled, false, "sleep now releases the override")
+
+    -- Rule off, or on battery: off is off.
+    local hostB, envB = h.makeHost { power = "Battery Power" }
+    local GB = h.load(INIT, hostB)
+    GB.on_menu_on(hostB.json.encode { secs = 1800 })
+    GB.on_expiry("")
+    h.eq(state(hostB).active, false, "expiry on battery is off")
+end
+
+-- ── #499 review: manual on AC with the rule on, the off row says what it does ─
+do
+    local host, env = h.makeHost { power = "AC Power" }
+    host.prefs.set("rule_on_ac", "true")
+    local G = h.load(INIT, host)
+    G.on_launch(host.json.encode { powerSource = "AC Power" })
+    G.on_menu_on("")                                         -- hold -> manual
+    h.resetCalls(env)
+    G.on_tick("")
+    h.eq(env.calls.prefsGet, 3, "manual-on-AC render with the key: state + menu icon + rule_on_ac")
+    local r = env.menu.menu[9]
+    h.eq(r.title, "Let it sleep on unplug", "off row names the return to the hold")
+    h.eq(r.handler, "on_menu_off", "same handler")
+    h.eq(r.stay, true, "still a stay row")
+    local function controls(ui)
+        for _, sec in ipairs(ui.sections) do if sec.id == "controls" then return sec end end
+    end
+    local row = controls(G.settings_render("openlid", "{}")).rows[1]
+    h.eq(row.key, "lid_now", "manual switch")
+    assert(row.subtitle:find("plugged%-in hold"), "switch copy says off goes back to the hold")
+    G[r.handler]("{}")
+    h.eq(state(host).autoActivated, true, "and it does go back to the hold")
+
+    -- No rule_on_ac key (a never-touched install, rule on by default): the same
+    -- true label, since deactivate goes back to the hold there too.
+    local hostD, envD = h.makeHost { power = "AC Power" }
+    local GD = h.load(INIT, hostD)
+    GD.on_launch(hostD.json.encode { powerSource = "AC Power" })
+    GD.on_menu_on("")
+    h.resetCalls(envD)
+    GD.on_tick("")
+    h.eq(envD.menu.menu[9].title, "Let it sleep on unplug", "no key, default rule on: true label")
+    h.eq(envD.calls.prefsGet, 5, "no-key render: state + menu icon + rule_on_ac, mac_awake_mode, auto_on_ac")
+    GD.on_menu_off("{}")
+    h.eq(state(hostD).autoActivated, true, "no key: off does go back to the hold")
+
+    -- On battery, or the legacy key says the rule is off: the old label.
+    local hostB, envB = h.makeHost { power = "Battery Power" }
+    hostB.prefs.set("rule_on_ac", "true")
+    local GB = h.load(INIT, hostB)
+    GB.on_launch(hostB.json.encode { powerSource = "Battery Power" })
+    GB.on_menu_on("")
+    h.eq(envB.menu.menu[9].title, "Let Mac sleep on lid close", "battery: plain off label")
+    assert(not controls(GB.settings_render("openlid", "{}")).rows[1].subtitle:find("hold"), "battery: plain switch copy")
+    local hostL, envL = h.makeHost { power = "AC Power" }
+    hostL.prefs.set("mac_awake_mode", "restore")             -- legacy only, rule off
+    local GL = h.load(INIT, hostL)
+    GL.on_launch(hostL.json.encode { powerSource = "AC Power" })
+    GL.on_menu_on("")
+    h.eq(envL.menu.menu[9].title, "Let Mac sleep on lid close", "legacy restore (rule off): old label")
+    GL.on_menu_off("{}")
+    h.eq(state(hostL).active, false, "legacy restore: off is really off")
+end
+
+-- ── #499 (d) No-network guard is battery-only (in transit), armed on unplug ───
+do
+    local host, env = h.makeHost { power = "AC Power" }
+    host.prefs.set("rule_on_ac", "false")
+    host.prefs.set("network_timeout_min", "2")
+    local G = h.load(INIT, host)
+    G.openlid_toggle("")                                     -- manual, on AC
+    env.reachable = false
+    G.on_network(host.json.encode { reachable = false })
+    h.eq(env.timers["netoff"], nil, "no netoff on AC")
+    G.on_netoff("")                                          -- a stale fire on AC
+    h.eq(state(host).active, true, "netoff fire on AC is ignored")
+
+    env.power = "Battery Power"; batt(G, host, "Battery Power")
+    assert(env.timers["netoff"], "unplug with the network gone arms netoff")
+    env.power = "AC Power"; batt(G, host, "AC Power")
+    h.eq(env.timers["netoff"], nil, "plug-in cancels netoff")
+    env.power = "Battery Power"; batt(G, host, "Battery Power")
+    G.on_netoff("")
+    h.eq(state(host).active, false, "on battery the guard still turns it off")
+end
+
+-- ── #499 (d) A plugged-in hold restored on battery is released at launch ──────
+do
+    local held = '{"active":true,"autoActivated":true,"lidSleepDisabled":true,"lastPowerSource":"AC Power"}'
+    local host, env = h.makeHost { power = "Battery Power" }
+    host.prefs.set("state", held)
+    local G = h.load(INIT, host)
+    G.on_launch(host.json.encode { powerSource = "Battery Power" })
+    h.eq(state(host).active, false, "hold unplugged while quit is released at launch")
+    h.eq(env.flags.lidDisabled, false, "lid override released")
+    assert(lastLog(env):find("unplugged while Prosper was not running"), "release logged with its reason")
+    G.openlid_toggle("")
+    h.eq(state(host).autoActivated, false, "the shortcut is not locked on battery")
+
+    -- Busy command reports work: kept, as manual (same as a live unplug).
+    local host2, env2 = h.makeHost { power = "Battery Power", shellOut = "s1\n" }
+    host2.prefs.set("state", held)
+    host2.prefs.set("busy_cmd", "dch -ls")
+    local G2 = h.load(INIT, host2)
+    G2.on_launch(host2.json.encode { powerSource = "Battery Power" })
+    h.eq(state(host2).active, true, "busy: kept at launch")
+    h.eq(state(host2).autoActivated, false, "busy: kept as manual")
+
+    -- Still on AC at launch: the hold stays.
+    local host3 = h.makeHost { power = "AC Power" }
+    host3.prefs.set("state", held)
+    local G3 = h.load(INIT, host3)
+    G3.on_launch(host3.json.encode { powerSource = "AC Power" })
+    h.eq(state(host3).autoActivated, true, "on AC the restored hold stays")
+end
+
+-- ── #499 (d) A stale expiry never ends an indefinite session ──────────────────
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.on_menu_on(host.json.encode { secs = 1800 })
+    G.on_menu_off("")
+    G.on_menu_on("")                                         -- indefinite now
+    G.on_expiry("")                                          -- the old timer's late delivery
+    h.eq(state(host).active, true, "stale expiry ignored")
+end
+
+-- ── #499 (d) Every deactivation and rule-driven activation is logged ──────────
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    env.power = "AC Power"; batt(G, host, "AC Power")
+    assert(lastLog(env):find("^openlid: on %(plugged in%)"), "rule activation logged: " .. lastLog(env))
+    G.on_menu_on(host.json.encode { secs = 600 })
+    G.on_expiry("")
+    assert(lastLog(env):find("timer expired") and lastLog(env):find("plugged%-in hold"),
+        "back-to-rule logged with its reason: " .. lastLog(env))
+    env.power = "Battery Power"; batt(G, host, "Battery Power")
+    assert(lastLog(env):find("^openlid: off %(unplugged%)"), "deactivation logged: " .. lastLog(env))
+    G.openlid_toggle("")
+    G.openlid_toggle("")
+    assert(lastLog(env):find("^openlid: off %(manual%)"), "manual off logged: " .. lastLog(env))
 end
 
 -- ── Lock on lid close: checked = always, awake session or not ────────────────
