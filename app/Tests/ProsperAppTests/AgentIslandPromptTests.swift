@@ -1410,6 +1410,10 @@ final class AgentIslandPromptTests: XCTestCase {
                            + " to tmp/ for this session (shift+tab)"))
         // QA #343: "; Yes," keeps every combined row off, even one naming no known clause.
         XCTAssertTrue(mode(dir + "Yes, and enable turbo for this session (shift+tab)"))
+        // QA #343 D8: any "; Yes," clause, not only "; Yes, and".
+        XCTAssertTrue(mode(dir + "Yes, enable turbo (shift+tab)"))
+        // QA #343 F2: off only for the cycle key; without it the combined row is one click.
+        XCTAssertFalse(mode(dir + "Yes, enable turbo"))
         // The clause check alone, with separators other than "; ".
         let bare = "Yes, and always allow access to tmp/ for this session"
         for sep in [", ", " · ", " and "] {
@@ -1887,6 +1891,98 @@ final class AgentIslandPromptTests: XCTestCase {
         var wide = try prompt(rowLayoutScreen)
         wide.preview[2] += String(repeating: " [solution#20400]", count: 3)
         try render("agent-island-card-preview-clipped", alias: "wide preview", card: .prompt(wide), to: out)
+    }
+
+    // MARK: - QA #370 (#526 follow-ups)
+
+    /// F1: a "N. … ┌──┐" row that is no preview box top (scrollback above an
+    /// Ask form, a Bash command row, an option label) dropped the whole card at
+    /// ba57ab1. Each parses to the card it gave at a0fe800 (before #526); the
+    /// operator's preview form still splits.
+    func testBoxCornerOutsideAPreviewFormKeepsTheCard() throws {
+        let scrollback = "⏺ Plan:\n  1. Draw the frame ┌──────────┐\n\n" + run7Screen
+        let p = try prompt(scrollback)
+        XCTAssertEqual(p, try prompt(run7Screen), "scrollback above the top rule is no part of the dialog")
+        XCTAssertEqual(p.question, "Which color?")
+        XCTAssertEqual(p.context, ["☐ Color"])
+        XCTAssertEqual(p.preview, [])
+
+        let command = altered(bashScreen, "   rm -rf .build && swift build -c release\n",
+                              "   rm -rf .build && swift build -c release\n   1. step ┌──────┐\n")
+        let b = try prompt(command)
+        XCTAssertEqual(b.question, "Do you want to proceed?")
+        XCTAssertEqual(b.context, ["Bash command", "  rm -rf .build && swift build -c release", "  1. step ┌──────┐",
+                                   "  Clean and rebuild the release products"])
+        XCTAssertEqual(b.options.map(\.label), ["Yes", "Yes, and don't ask again for rm commands in /Users/probe/proj",
+                                                "No, and tell Claude what to do differently"])
+        XCTAssertEqual(b.preview, [])
+        let f = FakeDch()
+        f.screen = command
+        XCTAssertEqual(f.answer(1, expected: b), .sent, "answerable again")
+        XCTAssertEqual(f.sent, ["1"])
+
+        let label = try prompt(altered(run7Screen, "  2. Green\n", "  2. Green ┌─┐\n"))
+        XCTAssertEqual(label.question, "Which color?")
+        XCTAssertEqual(label.options.map(\.label), ["Red", "Green ┌─┐", "Blue", "Type something.", "Chat about this"])
+        XCTAssertEqual(label.options.map(\.detail), [["Choose red"], ["Choose green"], ["Choose blue"], [], []])
+        XCTAssertEqual(label.preview, [])
+
+        XCTAssertEqual(try prompt(rowLayoutScreen).preview, rowLayoutPreview)
+        XCTAssertEqual(try prompt(scrollback.replacingOccurrences(of: run7Screen, with: rowLayoutScreen)).preview,
+                       rowLayoutPreview, "a box in the scrollback above a real preview form")
+    }
+
+    /// F2: Yi (and Hangul Jamo Ext-A, U+FE50-FE6F, U+1F200) are 2 cells, so a
+    /// Yi label no longer pulls the preview's "│ a" into the label.
+    func testYiLabelInAPreviewFormStaysClean() throws {
+        let screen = altered(rowLayoutScreen,
+                             "  2. Two lines, swapped           │ ✳  sec-1  [+3 agents]                              0s              │",
+                             "  2. ꀀꀀꀀꀀ swapped             │ a │ x │                                                            │")
+        let p = try prompt(screen)
+        XCTAssertEqual(p.options.map(\.label), ["PR line (Recommended)", "ꀀꀀꀀꀀ swapped"])
+        XCTAssertEqual(p.preview.first, "a │ x │")
+        XCTAssertEqual(Array(p.preview.dropFirst()), Array(rowLayoutPreview.dropFirst()))
+        for c: Character in ["ꀀ", "\u{A4C6}", "\u{A960}", "\u{FE50}", "\u{FE6B}", "\u{1F200}"] {
+            XCTAssertEqual(AgentPrompt.cells(c), 2, "U+\(String(c.unicodeScalars.first!.value, radix: 16))")
+        }
+    }
+
+    /// F2: wide glyphs `cells` still under-counts (U+1B000, Kana Supplement,
+    /// East Asian Wide), 2 cells short, land the cut past the box's "│ "; a "│"
+    /// in the preview there kept the row a clean split and leaked into the
+    /// label. A box-drawing character in the left part rejects the split, so
+    /// no card shows a mixed label.
+    func testBoxCharacterLeftOfTheCutRejectsTheSplit() {
+        let screen = altered(rowLayoutScreen,
+                             "  2. Two lines, swapped           │ ✳  sec-1  [+3 agents]                              0s              │",
+                             "  2. \u{1B000}\u{1B000} swapped                 │ │ x                                                              │")
+        XCTAssertEqual(AgentPrompt.cells("\u{1B000}"), 1, "the fixture needs a glyph the table misses")
+        XCTAssertNil(AgentPrompt.parse(screen))
+        XCTAssertNil(AgentPrompt.cut("  2. \u{1B000}\u{1B000} swapped                 │ │ x │", at: 34))
+        XCTAssertNotNil(AgentPrompt.cut("  2. Two lines, swapped           │ x │", at: 34))
+    }
+
+    /// F3: the "├ ✂ N lines hidden ┤" row loses its padding and rule like a
+    /// "│" row does, plain or drawn across a rule.
+    func testScissorsRowIsTrimmed() throws {
+        let last = "                                  │    [account-data-service#13509] [solution#20399]   63 merged       │"
+        for row in ["├ ✂ 12 lines hidden                                                  ┤",
+                    "├──────────────────────── ✂ 12 lines hidden ─────────────────────────┤"] {
+            let p = try prompt(altered(rowLayoutScreen, last, String(repeating: " ", count: 34) + row))
+            XCTAssertEqual(p.preview, Array(rowLayoutPreview.dropLast()) + ["✂ 12 lines hidden"], row)
+        }
+    }
+
+    /// F4: a Write dialog's " ✔notes.txt" path line at column 1 is no chip
+    /// line: the chip line is the first non-blank line under the top rule, so
+    /// the heading stays the last line and the file content stays context.
+    func testCheckMarkedPathLineIsNotAChipLine() throws {
+        let screen = altered(run12Screen, "\n notes.txt\n", "\n ✔notes.txt\n")
+        let p = try prompt(screen)
+        XCTAssertEqual(p.question, "Do you want to create notes.txt?")
+        XCTAssertEqual(p.context, ["Create file", "✔notes.txt", " 1 hello qa310"])
+        XCTAssertEqual(try prompt(run7Screen).context, ["☐ Color"], "a real chip line still leads")
+        XCTAssertEqual(try prompt(run9Screen).context, ["←  ☐ Color  ☐ Size  ✔ Submit  →"])
     }
 }
 

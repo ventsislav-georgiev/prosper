@@ -42,10 +42,13 @@ struct AgentPromptOption: Hashable {
     /// Code appends the cycle key to every file-dialog yes-session row, but draws
     /// this wording only when acceptEdits is not offered, so the row only adds a
     /// directory: a rule, one click (OQ-45 b). Only a single-clause row: no
-    /// "; Yes," anywhere (Claude Code joins a combined row's clauses with "; ", so
-    /// every combined row is off whatever it says) and no mode clause (a mode
-    /// prefix, "accept edits", "allow all edits", "auto mode") anywhere either. A
-    /// folder name holding one of them turns the row off: fails safe.
+    /// "; Yes," anywhere (Claude Code joins a combined row's clauses with "; ")
+    /// and no mode clause (a mode prefix, "accept edits", "allow all edits",
+    /// "auto mode") anywhere either. A dir-first row that loses the exemption
+    /// this way is off only because it carries the cycle key: without
+    /// "(shift+tab)" it is one click, whatever its second clause says (QA #343
+    /// F2; Claude Code puts the key on every such row). A folder name holding
+    /// one of them turns the row off: fails safe.
     var isModeChange: Bool {
         let text = ([label] + detail).joined().filter { !$0.isWhitespace }
         if text.hasPrefix(Self.dirRulePrefix), !text.contains(";Yes,"),
@@ -173,10 +176,12 @@ extension AgentPrompt {
     static func parse(_ screen: String) -> AgentPrompt? {
         var raw = screen.split(separator: "\n", omittingEmptySubsequences: false)
         var preview: [String] = [], notes: [String] = []
-        let top = previewTop(raw)
-        if let top {
-            guard let s = splitPreview(raw, top) else { return nil }
-            (raw, preview, notes) = s
+        // QA #370 F1: a "N. … ┌──┐" row that is no box top (scrollback, a
+        // command, an option label) is parsed as before #526, rows unchanged;
+        // that parse still rejects a real preview form ("Chat about this").
+        var top = previewTop(raw)
+        if let t = top {
+            if let s = splitPreview(raw, t) { (raw, preview, notes) = s } else { top = nil }
         }
         let lines = unframe(raw)
         guard let last = lines.lastIndex(where: { option($0) != nil }) else { return nil }
@@ -254,7 +259,9 @@ extension AgentPrompt {
         // #526: an AskUserQuestion's question wraps over several lines under its
         // header-chip line; all of them are the question, joined. The chip line
         // and anything above it stay context. Other dialogs: the last line only.
-        if let c = context.lastIndex(where: isChipLine) {
+        // The chip line is the first non-blank line under the top rule (QA #370
+        // F4: a Write dialog's " ✔notes.txt" path line further down is not).
+        if j >= 0, let c = context.firstIndex(where: { !isBlank($0) }), isChipLine(context[c]) {
             question = (context[(c + 1)...] + [lines[i]]).filter { !isBlank($0) }
                 .map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " ")
             context = Array(context[...c])
@@ -325,7 +332,8 @@ extension AgentPrompt {
                 var s = String(box.dropFirst().dropLast())
                 if s.first == " " { s.removeFirst() }
                 preview.append(trimmedEnd(s))
-            case (false, "├"?, "┤"?): preview.append(String(box.dropFirst().dropLast()))
+            case (false, "├"?, "┤"?):  // "✂ N lines hidden", its padding and rule off (QA #370 F3)
+                preview.append(box.dropFirst().dropLast().trimmingCharacters(in: CharacterSet(charactersIn: " ─")))
             case (false, "└"?, "┘"?) where isRule(box): closed = true
             default: return nil
             }
@@ -344,20 +352,24 @@ extension AgentPrompt {
         return (left, preview, notes)
     }
 
-    /// `row` cut at cell column `col`; nil when a wide glyph straddles it or
-    /// text runs into it (the left part must end in a blank).
+    /// `row` cut at cell column `col`; nil when a wide glyph straddles it, text
+    /// runs into it (the left part must end in a blank), or the left part holds
+    /// a box-drawing character (QA #370 F2: a wide glyph `cells` under-counts by
+    /// 2 or more lands the cut inside the box, past its "│ ").
     static func cut(_ row: Substring, at col: Int) -> (Substring, Substring)? {
         var n = 0, i = row.startIndex
         while i < row.endIndex, n < col { n += cells(row[i]); i = row.index(after: i) }
         let (l, r) = (row[..<i], row[i...])
-        guard n <= col, r.allSatisfy(\.isWhitespace) || l.isEmpty || l.last == " " else { return nil }
+        guard n <= col, r.allSatisfy(\.isWhitespace) || l.isEmpty || l.last == " ",
+              !l.unicodeScalars.contains(where: { (0x2500...0x257F).contains($0.value) }) else { return nil }
         return (l, r)
     }
 
     /// Terminal cells of one glyph: 2 for emoji presentation and East Asian wide
-    /// (ideographs, Hangul, kana, fullwidth forms), else 1.
+    /// (ideographs, Hangul, kana, Yi, fullwidth forms), else 1.
     /// ponytail: a hand-listed East Asian Width; a miss lands the cut off the
-    /// frame, so the parse fails to the context card (fails safe).
+    /// frame, where `cut` rejects the row, so the parse fails to the context
+    /// card (fails safe).
     static func cells(_ c: Character) -> Int {
         let s = c.unicodeScalars
         guard let u = s.first else { return 1 }
@@ -365,8 +377,8 @@ extension AgentPrompt {
             return 2
         }
         switch u.value {
-        case 0x1100...0x115F, 0x2E80...0x303E, 0x3041...0x33FF, 0xAC00...0xD7A3,
-             0xFE30...0xFE4F, 0xFF00...0xFF60, 0xFFE0...0xFFE6: return 2
+        case 0x1100...0x115F, 0x2E80...0x303E, 0x3041...0x33FF, 0xA000...0xA4CF, 0xA960...0xA97F,
+             0xAC00...0xD7A3, 0xFE30...0xFE6F, 0xFF00...0xFF60, 0xFFE0...0xFFE6, 0x1F200: return 2
         default: return 1
         }
     }
