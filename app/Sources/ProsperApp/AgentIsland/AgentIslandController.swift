@@ -83,6 +83,11 @@ final class AgentIslandController {
         AgentIslandController.raiseWindow(pid: pid, matching: needles)
         AgentIslandController.activate(pid)
     }
+    /// #505 seam: send Ghostty's new-window event; `done` gets noErr or the AE error.
+    var sendGhostty: @MainActor (NSAppleEventDescriptor, @escaping @Sendable (OSStatus) -> Void) -> Void
+        = { GhosttyEventSender.send($0, done: $1) }
+    /// Automation denied (-1743): the rest of the run opens Ghostty by script.
+    private(set) var ghosttyDenied = false
     /// Sessions whose terminal is still launching: a double click opens one window.
     private var opening: Set<AgentSessionKey> = []
 
@@ -272,20 +277,36 @@ final class AgentIslandController {
     }
 
     /// Collapses once the terminal is up; a failed open copies instead and says so.
+    /// #505: Ghostty first gets its Apple Event (one Automation consent, no
+    /// per-click prompt); any failure falls back to the script, which shows
+    /// Ghostty's own prompt.
     private func open(_ s: AgentSession) {
         guard opening.insert(s.key).inserted else { return }
-        let t = terminal(), key = s.key
-        launchTerminal(t, t.launch(AgentIsland.attachArgv(key, dch: DchCommand.dchPath))) { [weak self] ok in
+        let t = terminal()
+        guard t == .ghostty, !ghosttyDenied else { return launch(s, t) }
+        sendGhostty(AgentIsland.ghosttyNewWindow(s.key, dch: DchCommand.dchPath)) { [weak self] status in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.opening.remove(key)
-                    guard self.store != nil else { return }   // torn down meanwhile
-                    if ok { self.setExpanded(false) } else {
-                        self.copyAttach(s, notice: "Couldn't open \(t.label), attach command copied")
-                    }
+                    if status == noErr { return self.opened(s, t, ok: true) }
+                    if status == errAEEventNotPermitted { self.ghosttyDenied = true }
+                    self.launch(s, t)
                 }
             }
+        }
+    }
+
+    private func launch(_ s: AgentSession, _ t: AgentTerminal) {
+        launchTerminal(t, t.launch(AgentIsland.attachArgv(s.key, dch: DchCommand.dchPath))) { [weak self] ok in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.opened(s, t, ok: ok) } }
+        }
+    }
+
+    private func opened(_ s: AgentSession, _ t: AgentTerminal, ok: Bool) {
+        opening.remove(s.key)
+        guard store != nil else { return }   // torn down meanwhile
+        if ok { setExpanded(false) } else {
+            copyAttach(s, notice: "Couldn't open \(t.label), attach command copied")
         }
     }
 
@@ -372,6 +393,61 @@ enum AgentTerminalLauncher {
                 done(error == nil)
             }
         }
+    }
+}
+
+/// #505: the live sender behind AgentIslandController.sendGhostty.
+enum GhosttyEventSender {
+    /// `done` runs on a background queue: noErr once the window is up, else the
+    /// AE error (-600 not running, -1743 denied, -1708 no dictionary, -1712 timeout).
+    nonisolated static func send(_ event: NSAppleEventDescriptor, done: @escaping @Sendable (OSStatus) -> Void) {
+        // Belt and braces: a test that forgot the seam never sends a real Apple Event.
+        guard NSClassFromString("XCTestCase") == nil else { done(OSStatus(procNotFound)); return }
+        nonisolated(unsafe) let event = event   // built for this send, touched only on the queue
+        DispatchQueue.global(qos: .userInitiated).async {
+            let status = deliver(attempt: { attempt(event) }, launch: activateGhostty,
+                                 sleep: { Thread.sleep(forTimeInterval: $0) })
+            // Cooperative activation may ignore Ghostty's own activate: bring it
+            // forward through Launch Services, as the script path does.
+            if status == noErr { activateGhostty() }
+            done(status)
+        }
+    }
+
+    /// Ghostty not running (-600): launch it once, then retry every 0.5 s for up
+    /// to 8 s while it is still starting (-600) or its handler is not ready (-1708).
+    /// Any other status ends it. Pure over its seams (tests drive it).
+    nonisolated static func deliver(attempt: () -> OSStatus, launch: () -> Void,
+                                    sleep: (TimeInterval) -> Void) -> OSStatus {
+        var status = attempt()
+        guard status == procNotFound else { return status }
+        launch()
+        for _ in 0..<16 where status == procNotFound || status == errAEEventNotHandled {
+            sleep(0.5)
+            status = attempt()
+        }
+        return status
+    }
+
+    /// The one-time Automation consent alert blocks this queue (never main) until
+    /// answered; the send itself is bounded.
+    private nonisolated static func attempt(_ event: NSAppleEventDescriptor) -> OSStatus {
+        let target = event.attributeDescriptor(forKeyword: keyAddressAttr)
+        let status = AEDeterminePermissionToAutomateTarget(target?.aeDesc, event.eventClass, event.eventID, true)
+        guard status == noErr else { return status }
+        do {
+            let reply = try event.sendEvent(options: [.waitForReply, .neverInteract], timeout: 5)
+            return reply.paramDescriptor(forKeyword: keyErrorNumber)?.int32Value ?? noErr
+        } catch { return OSStatus((error as NSError).code) }
+    }
+
+    /// Launches Ghostty (its own startup window included) or brings it forward:
+    /// the running instance, no arguments, never `-e`.
+    private nonisolated static func activateGhostty() {
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: AgentTerminal.ghostty.bundleID) else { return }
+        let cfg = NSWorkspace.OpenConfiguration()
+        cfg.activates = true
+        NSWorkspace.shared.openApplication(at: app, configuration: cfg, completionHandler: nil)
     }
 }
 

@@ -661,12 +661,14 @@ final class AgentIslandTests: XCTestCase {
         var calls: [(AgentTerminal, AgentTerminal.Launch)] = []
         var done: [@Sendable (Bool) -> Void] = []
         var focused: [pid_t] = []
+        var events: [NSAppleEventDescriptor] = []
     }
 
     /// A controller with a recording launcher (never a real terminal), Kitty picked
     /// and a fake dch path; `ok` nil leaves the launch pending.
     @MainActor private func clickController(_ target: AgentJumpTarget, _ click: AgentIslandClick,
-                                            ok: Bool? = true, _ s: AgentSession) -> (AgentIslandController, Launches) {
+                                            ok: Bool? = true, event: OSStatus = noErr,
+                                            _ s: AgentSession) -> (AgentIslandController, Launches) {
         let c = AgentIslandController(), l = Launches()
         c.showsPanel = false
         c.store = AgentIslandStore(geometry: notched)
@@ -680,6 +682,7 @@ final class AgentIslandTests: XCTestCase {
             l.calls.append((t, launch))
             if let ok { done(ok) } else { l.done.append(done) }
         }
+        c.sendGhostty = { e, done in l.events.append(e); done(event) }
         DchCommand.dchPathOverride = "/opt/fake/dch"
         addTeardownBlock { DchCommand.dchPathOverride = nil }
         Pasteboard.general.clearContents()
@@ -790,6 +793,7 @@ final class AgentIslandTests: XCTestCase {
             XCTAssertEqual(c.store?.expanded, false, "\(target): collapses once open")
             XCTAssertNil(Pasteboard.general.string(forType: .string), "\(target): nothing copied")
             XCTAssertTrue(l.focused.isEmpty)
+            XCTAssertTrue(l.events.isEmpty, "\(target): only Ghostty gets an Apple Event")
         }
     }
 
@@ -825,6 +829,218 @@ final class AgentIslandTests: XCTestCase {
         drain(c)
         c.jump(s)
         XCTAssertEqual(l.calls.count, 2, "the launch finished: a click opens again")
+    }
+
+    // MARK: - Ghostty Apple Event (#505)
+
+    private func code(_ s: String) -> FourCharCode { s.utf8.reduce(0) { $0 << 8 | FourCharCode($1) } }
+
+    /// The configuration record's command, its env list, and its key count.
+    private func ghosttyConfig(_ e: NSAppleEventDescriptor) -> (command: String?, env: [String], keys: Int) {
+        let cfg = e.paramDescriptor(forKeyword: code("GNwS"))
+        let env = cfg?.forKeyword(code("GScE"))
+        return (cfg?.forKeyword(code("GScC"))?.stringValue,
+                (0..<(env?.numberOfItems ?? 0)).compactMap { env?.atIndex($0 + 1)?.stringValue },
+                cfg?.numberOfItems ?? 0)
+    }
+
+    func testGhosttyEventForAPlainName() {
+        let e = AgentIsland.ghosttyNewWindow(AgentSessionKey(dir: "/d", name: "s"), dch: "/opt/fake/dch")
+        XCTAssertEqual(e.eventClass, code("Ghst"))
+        XCTAssertEqual(e.eventID, code("NWin"))
+        let target = e.attributeDescriptor(forKeyword: keyAddressAttr)
+        XCTAssertEqual(target?.descriptorType, typeApplicationBundleID)
+        XCTAssertEqual(target.map { String(decoding: $0.data, as: UTF8.self) }, "com.mitchellh.ghostty")
+        let cfg = ghosttyConfig(e)
+        XCTAssertEqual(cfg.command, "/usr/bin/env DCH_SOCKET_DIR=/d /opt/fake/dch -n s",
+                       "the env lead, no direct:/shell: prefix, no exec")
+        XCTAssertEqual(cfg.keys, 1, "the command only; the dir rides in env's argument")
+    }
+
+    /// Quotes, backslashes, $ and backticks in the name, the dir and the dch path
+    /// reach dch as one argv word each, through the wrapper Ghostty's binary runs a
+    /// shell-mode command with (bash --noprofile --norc -c "exec -l <command>"),
+    /// and dch's own argv[0] carries no login "-" (it re-execs itself from it).
+    func testGhosttyEventCommandRoundTripsThroughGhosttysShell() throws {
+        let dir = tempDir()
+        // A real binary: a #! script's $0 is its path whatever argv[0] was.
+        let fake = dir.appendingPathComponent(#"fake "dch" $x"#)
+        let src = dir.appendingPathComponent("fake.c")
+        try Data(#"""
+            #include <stdio.h>
+            #include <stdlib.h>
+            int main(int argc, char **argv) {
+                const char *d = getenv("DCH_SOCKET_DIR");
+                printf("%s\n%s\n", argv[0], d ? d : "");
+                for (int i = 1; i < argc; i++) printf("%s\n", argv[i]);
+                return 0;
+            }
+            """#.utf8).write(to: src)
+        let cc = Process()
+        cc.executableURL = URL(fileURLWithPath: "/usr/bin/cc")
+        cc.arguments = ["-o", fake.path, src.path]
+        try cc.run()
+        cc.waitUntilExit()
+        XCTAssertEqual(cc.terminationStatus, 0, "the stand-in dch compiles")
+        let key = AgentSessionKey(dir: #"/x/other dir "q" it's $HOME \b=c"#, name: #"my "odd" it's $HOME `x` \n \"#)
+        let cfg = ghosttyConfig(AgentIsland.ghosttyNewWindow(key, dch: fake.path))
+        XCTAssertEqual(cfg.command, AgentIsland.attachArgv(key, dch: fake.path).map(AgentIsland.shellQuoted).joined(separator: " "))
+        let p = Process(), out = Pipe()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = ["--noprofile", "--norc", "-c", "exec -l \(cfg.command ?? "")"]
+        var env = ["PATH": "/usr/bin:/bin"]
+        for kv in cfg.env { let pair = kv.split(separator: "=", maxSplits: 1).map(String.init); env[pair[0]] = pair[1] }
+        p.environment = env   // whatever list the event carries, as Ghostty would apply it
+        p.standardOutput = out
+        try p.run()
+        p.waitUntilExit()
+        let got = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let argv0 = got.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init)
+        XCTAssertEqual(argv0, fake.path, "dch's argv[0] is its path, no leading -")
+        XCTAssertEqual(got, "\(fake.path)\n\(key.dir)\n-n\n\(key.name)\n")
+    }
+
+    /// Ghostty: the event goes, no script, no copy, and the island collapses.
+    @MainActor func testGhosttyOpensByAppleEventAndCollapses() {
+        let s = session(#"my "odd" it's"#, .idle, dir: "/x/other dir")
+        let (c, l) = clickController(.notAttached, .open, s)
+        c.terminal = { .ghostty }
+        c.jump(s)
+        XCTAssertEqual(l.events.count, 1)
+        XCTAssertEqual(l.events.first.map(ghosttyConfig)?.command,
+                       ghosttyConfig(AgentIsland.ghosttyNewWindow(s.key, dch: "/opt/fake/dch")).command)
+        drain(c)
+        XCTAssertTrue(l.calls.isEmpty, "no .command script, so no Ghostty prompt")
+        XCTAssertEqual(c.store?.expanded, false)
+        XCTAssertNil(Pasteboard.general.string(forType: .string))
+        XCTAssertNil(c.store?.notices[s.key])
+        c.jump(s)
+        XCTAssertEqual(l.events.count, 2, "the open finished: a click opens again")
+    }
+
+    /// Not running, no dictionary or AppleScript off, timed out: the script path,
+    /// and the next click tries the event again.
+    @MainActor func testGhosttyFallsBackToTheScriptWhenTheEventFails() {
+        for status in [procNotFound, errAEEventNotHandled, errAETimeout].map(OSStatus.init) {
+            let s = session("s", .idle, dir: "/x/other dir")
+            let (c, l) = clickController(.notAttached, .open, event: status, s)
+            c.terminal = { .ghostty }
+            c.jump(s)
+            drain(c); drain(c)
+            XCTAssertEqual(l.events.count, 1, "\(status)")
+            XCTAssertEqual(l.calls.count, 1, "\(status)")
+            XCTAssertEqual(l.calls.first?.0, .ghostty, "\(status)")
+            XCTAssertEqual(l.calls.first?.1, AgentTerminal.ghostty.launch(AgentIsland.attachArgv(s.key, dch: "/opt/fake/dch")))
+            XCTAssertEqual(c.store?.expanded, false, "\(status): the script opened")
+            XCTAssertFalse(c.ghosttyDenied, "\(status)")
+            c.jump(s)
+            XCTAssertEqual(l.events.count, 2, "\(status): not a denial, so the event is tried again")
+        }
+    }
+
+    /// -1743: the script this time, and no event for the rest of the run.
+    @MainActor func testDeniedGhosttyStopsSendingEvents() {
+        let s = session("s", .idle)
+        let (c, l) = clickController(.notAttached, .open, event: OSStatus(errAEEventNotPermitted), s)
+        c.terminal = { .ghostty }
+        c.jump(s)
+        drain(c); drain(c)
+        XCTAssertEqual(l.events.count, 1)
+        XCTAssertEqual(l.calls.count, 1, "the denied click still opens by script")
+        XCTAssertTrue(c.ghosttyDenied)
+        c.jump(s)
+        drain(c)
+        XCTAssertEqual(l.events.count, 1, "denied: no second event")
+        XCTAssertEqual(l.calls.count, 2)
+    }
+
+    /// The event and then the script fail: copy with the existing notice.
+    @MainActor func testGhosttyEventAndScriptBothFailCopies() {
+        let s = session("s", .idle, dir: "/x/other dir")
+        let (c, l) = clickController(.notAttached, .open, ok: false, event: OSStatus(errAETimeout), s)
+        c.terminal = { .ghostty }
+        c.jump(s)
+        drain(c); drain(c)
+        XCTAssertEqual(l.events.count, 1)
+        XCTAssertEqual(l.calls.count, 1)
+        XCTAssertEqual(Pasteboard.general.string(forType: .string),
+                       AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir))
+        XCTAssertEqual(c.store?.notices[s.key], "Couldn't open Ghostty, attach command copied")
+        XCTAssertEqual(c.store?.expanded, true)
+    }
+
+    /// A scripted cold start: the statuses each attempt returns, and what it did.
+    private final class ColdStart: @unchecked Sendable {
+        var statuses: [OSStatus]
+        var attempts = 0, launches = 0, slept: [TimeInterval] = []
+        init(_ s: [OSStatus]) { statuses = s }
+        func deliver() -> OSStatus {
+            GhosttyEventSender.deliver(
+                attempt: { attempts += 1; return statuses.count > 1 ? statuses.removeFirst() : statuses[0] },
+                launch: { launches += 1 }, sleep: { slept.append($0) })
+        }
+    }
+
+    func testGhosttyColdStartLaunchesOnceAndRetriesUntilTheEventLands() {
+        let r = ColdStart([OSStatus(procNotFound), OSStatus(procNotFound), OSStatus(errAEEventNotHandled), noErr])
+        XCTAssertEqual(r.deliver(), noErr)
+        XCTAssertEqual(r.launches, 1, "launched once, no arguments")
+        XCTAssertEqual(r.attempts, 4, "-600 while starting, -1708 while its handler loads")
+        XCTAssertEqual(r.slept, [0.5, 0.5, 0.5])
+    }
+
+    func testGhosttyColdStartGivesUpAfterEightSeconds() {
+        let r = ColdStart([OSStatus(procNotFound)])
+        XCTAssertEqual(r.deliver(), OSStatus(procNotFound))
+        XCTAssertEqual(r.launches, 1)
+        XCTAssertEqual(r.attempts, 17)
+        XCTAssertEqual(r.slept.reduce(0, +), 8, accuracy: 0.001)
+    }
+
+    /// Running, or a status that is not "still starting": no launch, no retry.
+    func testGhosttyEventOnlyRetriesAfterLaunchingIt() {
+        for first in [noErr, OSStatus(errAEEventNotHandled), OSStatus(errAETimeout), OSStatus(errAEEventNotPermitted)] {
+            let r = ColdStart([first, noErr])
+            XCTAssertEqual(r.deliver(), first, "\(first)")
+            XCTAssertEqual(r.launches, 0, "\(first): running Ghostty is never relaunched")
+            XCTAssertEqual(r.attempts, 1, "\(first)")
+        }
+        let r = ColdStart([OSStatus(procNotFound), OSStatus(errAEEventNotPermitted), noErr])
+        XCTAssertEqual(r.deliver(), OSStatus(errAEEventNotPermitted), "a denial mid-retry ends it")
+        XCTAssertEqual(r.attempts, 2)
+    }
+
+    /// Through the controller: -600 then noErr opens with no script.
+    @MainActor func testGhosttyColdStartOpensWithNoScript() {
+        let s = session("s", .idle)
+        let (c, l) = clickController(.notAttached, .open, s)
+        let r = ColdStart([OSStatus(procNotFound), noErr])
+        c.terminal = { .ghostty }
+        c.sendGhostty = { _, done in done(r.deliver()) }
+        c.jump(s)
+        drain(c); drain(c)
+        XCTAssertEqual(r.launches, 1)
+        XCTAssertTrue(l.calls.isEmpty, "no script, so no Ghostty prompt")
+        XCTAssertEqual(c.store?.expanded, false)
+    }
+
+    /// Through the controller: -600 for the whole budget opens by script; a
+    /// -1743 during the retries still latches.
+    @MainActor func testGhosttyColdStartFallsBackAndLatchesADenial() {
+        for (statuses, denied) in [([procNotFound], false), ([procNotFound, errAEEventNotPermitted], true)] {
+            let s = session("s", .idle)
+            let (c, l) = clickController(.notAttached, .open, s)
+            let r = ColdStart(statuses.map(OSStatus.init))
+            c.terminal = { .ghostty }
+            c.sendGhostty = { e, done in l.events.append(e); done(r.deliver()) }
+            c.jump(s)
+            drain(c); drain(c)
+            XCTAssertEqual(l.calls.count, 1, "\(statuses): the script")
+            XCTAssertEqual(c.ghosttyDenied, denied, "\(statuses)")
+            c.jump(s)
+            drain(c); drain(c)
+            XCTAssertEqual(l.events.count, denied ? 1 : 2, "\(statuses)")
+        }
     }
 
     @MainActor func testOutsideClickMonitorIsInstalledOnExpandAndRemovedOnCollapse() {

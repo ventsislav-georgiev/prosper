@@ -226,6 +226,25 @@ enum AgentIsland {
     static func attachArgv(_ key: AgentSessionKey, dch: String) -> [String] {
         ["/usr/bin/env", "DCH_SOCKET_DIR=\(key.dir)", dch, "-n", key.name]
     }
+
+    /// #505: Ghostty's `new window with configuration {command}` (Ghostty.sdef),
+    /// built from four-char codes so no AppleScript source is compiled or escaped.
+    /// Ghostty hands the command to one shell (`bash -c "exec -l <command>"`), so
+    /// it is attachArgv shell-quoted, no `direct:`/`shell:` prefix. The env lead
+    /// takes exec -l's "-" on its argv[0]; dch keeps a clean one (it re-execs
+    /// itself from argv[0]).
+    static func ghosttyNewWindow(_ key: AgentSessionKey, dch: String) -> NSAppleEventDescriptor {
+        func code(_ s: String) -> FourCharCode { s.utf8.reduce(0) { $0 << 8 | FourCharCode($1) } }
+        let cfg = NSAppleEventDescriptor.record()
+        cfg.setDescriptor(NSAppleEventDescriptor(string: attachArgv(key, dch: dch).map(shellQuoted).joined(separator: " ")),
+                          forKeyword: code("GScC"))
+        let event = NSAppleEventDescriptor(
+            eventClass: code("Ghst"), eventID: code("NWin"),
+            targetDescriptor: NSAppleEventDescriptor(bundleIdentifier: AgentTerminal.ghostty.bundleID),
+            returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+        event.setParam(cfg, forKeyword: code("GNwS"))
+        return event
+    }
 }
 
 // MARK: - Click setting (#500)
@@ -247,6 +266,8 @@ enum AgentIslandClick: String, CaseIterable {
 
 /// A terminal Prosper can start with a command. Every path is a Launch Services
 /// open (no AppleScript, so no Automation prompt); the research is in #500's notes.
+/// Ghostty tries its Apple Event first (#505, AgentIslandController.open) and
+/// keeps the script as the fallback.
 enum AgentTerminal: String, CaseIterable {
     case ghostty, terminal, iterm, wezterm, kitty, alacritty
 
