@@ -61,8 +61,10 @@ final class PtyChildTests: XCTestCase {
 
     /// #522, a scan by necessity: a Swift String bridged to a C string in the forked
     /// child behaves the same when it happens not to deadlock, so no run can catch it.
-    /// The child block's code (comments stripped) holds no string literal and never
-    /// names the Swift exe; its "/" fallback and execve path are pre-fork C strings.
+    /// The child block's code (comments stripped) holds no string literal, and every
+    /// identifier in it is on an allowlist: pre-fork C strings and async-signal-safe
+    /// calls. Any other name (cwd, exe, print, String) fails, named with its line;
+    /// and the source before forkpty( must still declare dir, root, argv and envp via strdup.
     func testForkedChildBridgesNoSwiftString() throws {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -72,9 +74,22 @@ final class PtyChildTests: XCTestCase {
         let code = source[start.upperBound..<end.lowerBound].split(separator: "\n")
             .map { $0.components(separatedBy: "//")[0] }
         XCTAssertTrue(code.contains { $0.contains("execve(") }, "child block not found")
+        let fork = try XCTUnwrap(source.range(of: "forkpty("), "forkpty( not found")
+        let prefork = source[..<fork.lowerBound]
+        for (name, decl) in [("dir", #"let dir = strdup\(cwd\)"#), ("root", #"let root = strdup\("/"\)"#),
+                             ("argv", #"let argv = [^\n]*\.map \{ strdup\("#),
+                             ("envp", #"let envp = [^\n]*\.map \{ strdup\("#)] {
+            XCTAssertNotNil(prefork.range(of: decl, options: .regularExpression),
+                            "pre-fork C-string declaration of \(name) missing: \(decl)")
+        }
+        let allowed: Set = ["none", "sigset_t", "sigemptyset", "sigprocmask", "SIG_SETMASK",
+                            "dir", "chdir", "root", "argv", "envp", "execve",
+                            "if", "let", "var", "nil", "_"]
         for line in code {
             XCTAssertFalse(line.contains("\""), "string literal in the forked child: \(line)")
-            XCTAssertNil(line.range(of: #"\bexe\b"#, options: .regularExpression), "Swift exe bridged in the child: \(line)")
+            for m in line.matches(of: /[\p{L}_][\p{L}\p{N}_]*/) where !allowed.contains(String(m.output)) {
+                XCTFail("identifier \(m.output) not allowed in the forked child: \(line)")
+            }
         }
     }
 }
