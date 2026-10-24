@@ -31,7 +31,7 @@ tag from the now-released section and put it on the new top draft.
   copies its attach command instead, as you pick in the Agent Island settings (#500).
   While Remote Terminal keeps its sessions separate, a setting picks which sessions to
   show (#474).
-- Ships dch 1.21.1, which recognizes Claude Code's Write and Edit permission prompts, so
+- Ships dch 1.22.0, which recognizes Claude Code's Write and Edit permission prompts, so
   Agent Island shows those sessions as needing input, and reads a session as waiting on a
   permission only from the prompt's own footer line (#474, #494).
 - **Agent Island answers a waiting agent.** When a Claude Code session stops on a
