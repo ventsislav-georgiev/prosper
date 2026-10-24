@@ -1360,7 +1360,8 @@ final class AgentIslandPromptTests: XCTestCase {
     /// QA #331 L1: Claude Code puts "(shift+tab)" on every file-dialog yes-session
     /// row; "always allow access to <dir>" only adds a directory, so it stays one
     /// click, unwrapped or wrapped mid-word. Every other "(shift+tab)" row, and any
-    /// other "Yes, and always allow" wording on it, stays a mode change.
+    /// other "Yes, and always allow" wording on it, stays a mode change, and so does
+    /// a dir row carrying any mode clause, whichever clause leads (QA #343).
     func testDirRuleOnShiftTabIsNotAModeChange() throws {
         func mode(_ label: String, _ detail: [String] = [], hint: String? = nil) -> Bool {
             AgentPromptOption(digit: 2, label: label, hint: hint, detail: detail).isModeChange
@@ -1372,6 +1373,7 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertTrue(mode("Yes, allow all edits during this session (shift+tab)"))
         XCTAssertTrue(mode("Yes, and always allow all edits (shift+tab)"))
         XCTAssertTrue(mode("Yes, and always allow", ["all edits"], hint: "shift+tab"))
+        XCTAssertTrue(mode("Yes, and always allow reads of tmp/ for this session (shift+tab)"))
         // 2.1.309 joins setMode acceptEdits and the dir grant with "; ", mode row first.
         let combined = "Yes, and switch to accept edits (auto-approve file edits and common file commands)"
             + " for this session; Yes, and always allow access to tmp/ for this session (shift+tab)"
@@ -1379,6 +1381,22 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertTrue(mode("Yes, and switch to accept edits (auto-approve file edits and com",
                            ["mon file commands) for this session; Yes, and always al",
                             "low access to tmp/ for this session (shift+tab)"]))
+        // Dir clause first: any mode clause anywhere still makes it a mode change.
+        let dir = "Yes, and always allow access to tmp/ for this session; "
+        XCTAssertTrue(mode(dir + "Yes, and switch to accept edits (auto-approve file edits and common"
+                           + " file commands) for this session (shift+tab)"))
+        XCTAssertTrue(mode("Yes, and always al", ["low access to tmp/ for this session; Yes, and swi",
+                                                  "tch to accept ed", "its for this session (shift+tab)"]))
+        XCTAssertTrue(mode(dir + "Yes, allow all edits during this session (shift+tab)"))
+        XCTAssertTrue(mode(dir + "Yes, auto-accept edits (shift+tab)"))
+        XCTAssertTrue(mode(dir + "Yes, and use auto mode (shift+tab)"))
+        XCTAssertTrue(mode(dir + "Yes, manually approve edits (shift+tab)"))
+        XCTAssertTrue(mode(dir + "Yes, clear context (42% used) (shift+tab)"))
+        XCTAssertTrue(mode(dir + "accept edits", hint: "shift+tab"))
+        XCTAssertTrue(mode(dir + "allow all edits", hint: "shift+tab"))
+        XCTAssertTrue(mode(dir + "auto mode", hint: "shift+tab"))
+        // Only a leading dir clause is exempt: one further in stays a mode change.
+        XCTAssertTrue(mode("Yes, allow reading from src/ during this session; " + dir + "(shift+tab)"))
 
         let screen = altered(run2Screen, "2. Yes, and don’t ask again for: /usr/bin/true qa310 *",
                              "2. Yes, and always allow access to tmp/ for this session (shift+tab)")
