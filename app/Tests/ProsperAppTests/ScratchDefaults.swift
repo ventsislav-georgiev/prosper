@@ -35,6 +35,177 @@ extension XCTestCase {
     }
 }
 
+/// #528: on some CI runs `Preferences.defaults` stops taking writes mid-run (sets and removes no
+/// longer read back, the last value before that point stays), and every later test that reads a
+/// leaked value fails far from the cause. This probe runs before EVERY test in the bundle and fails
+/// the first victim with the store's state, so one red run names the cause.
+enum DefaultsProbe {
+    /// No app key lives under `prosper.test.`; the probe removes it again after the read-back.
+    static let key = "prosper.test.defaultsProbe"
+
+    /// nil when a fresh value written to `defaults` syncs and reads back; else one line of evidence.
+    static func failure(_ defaults: UserDefaults, path: String, previousTest: String? = nil) -> String? {
+        let value = UUID().uuidString
+        defaults.set(value, forKey: key)
+        let synced = defaults.synchronize()
+        let back = defaults.string(forKey: key)
+        defer { defaults.removeObject(forKey: key) }
+        if synced && back == value { return nil }
+        // Failure path only from here: nothing below runs on a healthy store.
+        let fm = FileManager.default
+        func describe(_ p: String) -> String {
+            guard let a = try? fm.attributesOfItem(atPath: p) else { return "missing" }
+            let mode = String((a[.posixPermissions] as? NSNumber)?.intValue ?? -1, radix: 8)
+            return "mode \(mode) owner \(a[.ownerAccountName] ?? "?") size \(a[.size] ?? "?")"
+        }
+        let dir = (path as NSString).deletingLastPathComponent
+        let free = (try? fm.attributesOfFileSystem(forPath: dir))?[.systemFreeSize] ?? "?"
+        let onDisk = (try? Data(contentsOf: URL(fileURLWithPath: path + ".plist")))
+            .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+        let keys = (defaults.persistentDomain(forName: path) ?? [:]).keys.filter { $0 != key }.sorted()
+        return "Preferences.defaults stopped taking writes (#528): synchronize()=\(synced), "
+            + "read back \(back.map { "\"\($0)\"" } ?? "nil") for \"\(value)\", "
+            + "plist on disk has it: \(onDisk?[key] as? String == value); "
+            + "suite \(path); dir \(describe(dir)); plist \(describe(path + ".plist")); free \(free) bytes; "
+            + "pid \(getpid()); cfprefsd \(cfprefsdPIDs()) (at first probe \(firstCfprefsd ?? "?")); "
+            + "previous test \(previousTest ?? "none"); \(keys.count) app keys held: "
+            + keys.prefix(40).joined(separator: ",")
+    }
+
+    /// The user's cfprefsd pids. A different value than at the first probe means cfprefsd restarted
+    /// mid-run, the lead the QA read points at (a path suite frozen at its last good state).
+    static func cfprefsdPIDs() -> String {
+        let p = Process(), out = Pipe()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-U", "\(getuid())", "-x", "cfprefsd"]
+        p.standardOutput = out
+        guard (try? p.run()) != nil else { return "?" }
+        p.waitUntilExit()
+        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        return text.split(separator: "\n").joined(separator: "+")
+    }
+    nonisolated(unsafe) static var firstCfprefsd: String?
+}
+
+/// Registered once at bundle load (below); probes `Preferences.defaults` before each test starts.
+final class DefaultsProbeObserver: NSObject, XCTestObservation {
+    nonisolated(unsafe) static let shared = DefaultsProbeObserver()
+    /// The test the probe last ran before: a test reading its own name here proves the observer ran.
+    private(set) var lastProbed: String?
+    /// One report per run: a frozen store stays frozen, and ~1000 copies of the line bury the log.
+    private(set) var reported = false
+
+    func testCaseWillStart(_ testCase: XCTestCase) {
+        if DefaultsProbe.firstCfprefsd == nil { DefaultsProbe.firstCfprefsd = DefaultsProbe.cfprefsdPIDs() }
+        check(testCase, Preferences.defaults, path: Preferences.scratchSuitePath, previousTest: lastProbed)
+        lastProbed = testCase.name
+    }
+
+    func check(_ testCase: XCTestCase, _ defaults: UserDefaults, path: String, previousTest: String?) {
+        guard !reported, let message = DefaultsProbe.failure(defaults, path: path, previousTest: previousTest) else { return }
+        reported = true
+        // An explicit location: a captured call stack costs ~6 s of symbolication on this bundle.
+        let here = XCTSourceCodeContext(location: XCTSourceCodeLocation(filePath: #filePath, lineNumber: #line))
+        testCase.record(XCTIssue(type: .assertionFailure, compactDescription: message + "; later tests are not probed",
+                                 sourceCodeContext: here))
+    }
+}
+
+// A SwiftPM test bundle has no Info.plist principal class, so the observer registers from a
+// module initializer (SE-0492 `@section`/`@used`): it runs when xctest loads the bundle, on the
+// main thread, before any test, under any --filter. `hasAttribute(section)` reads false on 6.4 even
+// though the attribute compiles, hence the compiler gate (6.4 = local and CI). An older compiler
+// leaves the observer unregistered and testObserverProbedBeforeThisTest fails.
+#if compiler(>=6.4)
+@used @section("__DATA,__mod_init_func")
+private let registerDefaultsProbe: @convention(c) () -> Void = {
+    MainActor.assumeIsolated { XCTestObservationCenter.shared.addTestObserver(DefaultsProbeObserver.shared) }
+}
+#endif
+
+/// #528: the probe itself, driven on private suites under tempDir(), never on Preferences.defaults.
+final class DefaultsProbeTests: XCTestCase {
+    /// A store whose writes never land: the in-memory read-back the CI flake shows.
+    private final class WriteDroppingDefaults: UserDefaults, @unchecked Sendable {
+        override func set(_ value: Any?, forKey defaultName: String) {}
+    }
+
+    private func privateSuite() -> String {
+        let path = tempDir().appendingPathComponent("suite").path
+        addTeardownBlock { UserDefaults(suiteName: path)?.removePersistentDomain(forName: path) }
+        return path
+    }
+
+    /// The observer probed before THIS test started, so it is registered bundle-wide, not per class.
+    func testObserverProbedBeforeThisTest() {
+        XCTAssertEqual(DefaultsProbeObserver.shared.lastProbed, name)
+    }
+
+    func testHealthyStorePassesAndTheProbeKeyIsRemoved() throws {
+        let path = privateSuite()
+        let d = try XCTUnwrap(UserDefaults(suiteName: path))
+        XCTAssertNil(DefaultsProbe.failure(d, path: path))
+        XCTAssertNil(d.object(forKey: DefaultsProbe.key))
+        XCTAssertNil(d.persistentDomain(forName: path)?[DefaultsProbe.key])
+    }
+
+    /// A read-only suite dir: the write fails on disk (synchronize() is false) and the message names it.
+    func testReadOnlySuiteDirFiresWithTheStoreState() throws {
+        let path = privateSuite()
+        let dir = (path as NSString).deletingLastPathComponent
+        let d = try XCTUnwrap(UserDefaults(suiteName: path))
+        d.set("leaked", forKey: "userName")
+        XCTAssertTrue(d.synchronize())
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir) }
+        let message = try XCTUnwrap(DefaultsProbe.failure(d, path: path, previousTest: "-[X testBefore]"))
+        for part in ["synchronize()=false", "suite \(path);", "dir mode 555 owner \(NSUserName())", "plist mode ",
+                     "free ", "pid \(getpid());", "cfprefsd ", "previous test -[X testBefore]", "1 app keys held: userName"] {
+            XCTAssertTrue(message.contains(part), "missing \"\(part)\" in: \(message)")
+        }
+    }
+
+    /// Writes that never read back fire even when synchronize() reports success.
+    func testWritesThatDoNotReadBackFire() throws {
+        let path = privateSuite()
+        let d = try XCTUnwrap(WriteDroppingDefaults(suiteName: path))
+        let message = try XCTUnwrap(DefaultsProbe.failure(d, path: path))
+        XCTAssertTrue(message.contains("synchronize()=true, read back nil"), message)
+    }
+
+    /// Catches the issues recorded on it (XCTExpectFailure works too, but costs ~4 s per use here).
+    private final class IssueSpy: XCTestCase {
+        var issues: [XCTIssue] = []
+        override func record(_ issue: XCTIssue) { issues.append(issue) }
+    }
+
+    /// The observer turns a probe failure into a failure of the test that is starting.
+    /// A private observer: tripping the shared one would silence the real probe for the run.
+    func testObserverFailsTheStartingTest() throws {
+        let path = privateSuite()
+        let d = try XCTUnwrap(WriteDroppingDefaults(suiteName: path))
+        let spy = IssueSpy()
+        DefaultsProbeObserver().check(spy, d, path: path, previousTest: nil)
+        XCTAssertEqual(spy.issues.count, 1)
+        XCTAssertEqual(spy.issues.first?.type, .assertionFailure)
+        XCTAssertTrue(spy.issues.first?.compactDescription.contains("stopped taking writes") == true)
+        XCTAssertTrue(spy.issues.first?.compactDescription.contains(path) == true)
+    }
+
+    /// Once per run: after the first report, a still-frozen store fails no further test.
+    func testObserverReportsOnlyTheFirstFailure() throws {
+        let path = privateSuite()
+        let d = try XCTUnwrap(WriteDroppingDefaults(suiteName: path))
+        let observer = DefaultsProbeObserver(), first = IssueSpy(), second = IssueSpy()
+        observer.check(first, d, path: path, previousTest: nil)
+        observer.check(second, d, path: path, previousTest: nil)
+        XCTAssertEqual(first.issues.count, 1)
+        XCTAssertEqual(second.issues.count, 0)
+        XCTAssertTrue(observer.reported)
+        XCTAssertFalse(DefaultsProbeObserver.shared.reported, "the real probe already fired this run")
+    }
+}
+
 /// #305: under XCTest the app's one store is a per-process scratch suite, never the real
 /// `com.apple.dt.xctest.tool` domain that `.standard` resolves to here.
 final class PreferencesScratchStoreTests: XCTestCase {

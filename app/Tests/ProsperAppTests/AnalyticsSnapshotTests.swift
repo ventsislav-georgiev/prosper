@@ -67,9 +67,47 @@ final class AnalyticsSnapshotTests: XCTestCase {
 
     // MARK: - PII
 
+    private struct PII: Equatable {
+        var name = Preferences.userName, custom = Preferences.customInstructions
+        var perApp = Preferences.perAppCustomInstructions, domains = Preferences.disabledDomains
+        func restore() {
+            Preferences.userName = name
+            Preferences.customInstructions = custom
+            Preferences.perAppCustomInstructions = perApp
+            Preferences.disabledDomains = domains
+        }
+    }
+    private var piiBefore: PII?
+    nonisolated(unsafe) private var domainBefore: [String: Any] = [:]
+    nonisolated private static func domain() -> [String: Any] {
+        Preferences.defaults.persistentDomain(forName: Preferences.scratchSuitePath) ?? [:]
+    }
+
+    override func setUp() {
+        super.setUp()
+        piiBefore = PII()
+        domainBefore = Self.domain()
+    }
+
+    /// #528: a PII pref left behind spread SECRET_NAME_ZZ into CompletionPersonaTests on CI, and the
+    /// rows here set loraEnabled, agentEnabled, clipboardHistoryEnabled... that LoRAWS6Tests and
+    /// MenuBarTests read. PII is asserted explicitly; then every key goes back to its setUp value.
+    override func tearDown() {
+        XCTAssertEqual(PII(), piiBefore, "a test left PII prefs changed")
+        let now = Self.domain()
+        for key in now.keys where domainBefore[key] == nil { Preferences.defaults.removeObject(forKey: key) }
+        for (key, value) in domainBefore where !((now[key] as AnyObject?)?.isEqual(value) ?? false) {
+            Preferences.defaults.set(value, forKey: key)
+        }
+        XCTAssertEqual(Self.domain() as NSDictionary, domainBefore as NSDictionary, "Preferences.defaults not restored")
+        super.tearDown()
+    }
+
     /// The snapshot must NEVER contain free-text / PII, even when prefs are full of it.
     func testNoPIILeaks() {
         let secrets = ["SECRET_NAME_ZZ", "SECRET_PROMPT_ZZ", "SECRET_PERAPP_ZZ", "secret-domain-zz.example"]
+        let saved = PII()
+        defer { saved.restore() }
         Preferences.userName = secrets[0]
         Preferences.customInstructions = secrets[1]
         Preferences.perAppCustomInstructions = ["com.zz.app": secrets[2]]
