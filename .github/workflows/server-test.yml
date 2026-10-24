@@ -1,0 +1,37 @@
+# The Cloudflare Worker's tests (server/): node --test (D1 logic over node:sqlite,
+# APNs faked) and tsc --noEmit. test.yml runs only the Swift suite, so before this a
+# server regression was caught only by local runs and QA exports (QA note on #524).
+# --ignore-scripts: no workerd binary download; neither step runs wrangler.
+name: server-test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - ".github/workflows/server-test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24 # node:sqlite, as local runs
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run typecheck
