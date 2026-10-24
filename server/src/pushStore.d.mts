@@ -8,7 +8,7 @@ export type PushDeps = {
   defer: (p: Promise<unknown>) => void;
   budget?: number; // subrequests per cron run (APNs + D1), default 44
 };
-export type RouteResult = { status: 204 } | { status: 400 | 403 | 429; error: string };
+export type RouteResult = { status: 204 } | { status: 400 | 403 | 429 | 503; error: string };
 
 export function deliver(deps: PushDeps, pushes: ApnsPush[], alsoDrop?: TokenRow[]): Promise<ApnsResult[]>;
 export function putToken(deps: PushDeps, email: string, body: unknown, tokenHash: string): Promise<RouteResult>;

@@ -19,6 +19,7 @@ import {
   signApnsJwt,
   cleanMacName,
   readBody,
+  cronBudget,
   planCron,
 } from "../src/pushLogic.mjs";
 
@@ -105,55 +106,112 @@ test("seq: over 1 h ahead of the Worker's clock is a 400 (a far-future seq would
   assert.equal(parseSessionsBodyAt({ mac_id: HEX, seq: 1 }).error, "invalid_seq", "no clock: fails closed");
 });
 
-// Every code point of each class range, one by one, in a name and in an alias.
+// Every code point of each class range, one by one, in a name and in an alias:
+// Cc, Zl, Zp and a sample of Cf (the bidi controls, U+061C, U+00AD, the Arabic
+// number signs, U+200B, U+2060..U+2064, U+206A..U+206F, U+FFF9..U+FFFB, U+E0001).
 const RANGES = [
   [0x00, 0x1f], [0x7f, 0x7f], [0x80, 0x9f], [0x200e, 0x200f], [0x202a, 0x202e],
   [0x2066, 0x2069], [0x2028, 0x2029], [0xfeff, 0xfeff],
+  [0x061c, 0x061c], [0x00ad, 0x00ad], [0x0600, 0x0605], [0x200b, 0x200b], [0x2060, 0x2064],
+  [0x206a, 0x206f], [0xfff9, 0xfffb], [0xe0001, 0xe0001],
 ];
-const NEIGHBOURS = [0x20, 0x7e, 0xa0, 0x200d, 0x2010, 0x2027, 0x202f, 0x2065, 0x206a, 0xfefe, 0xff01];
+// Text, including the two Cf exceptions (ZWJ, the tags) and U+FE0F (Mn).
+const NEIGHBOURS = [0x20, 0x7e, 0xa0, 0x200d, 0x2010, 0x2027, 0x202f, 0x2065, 0xfe0f, 0xfefe, 0xff01, 0xe0020, 0xe0067, 0xe007f];
+const ENGLAND = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
+const FAMILY = "\u{1F468}‍\u{1F469}‍\u{1F467}";
 
-test("names and aliases: C0, DEL, C1, bidi marks/overrides/isolates, LS/PS and BOM are a 400", () => {
+test("names and aliases: Cc, Cf (but ZWJ and the tags), Zl and Zp are a 400", () => {
   const ok = (sessions) => parseSessionsBody({ mac_id: HEX, seq: 1, sessions });
   for (const [lo, hi] of RANGES) {
     for (let c = lo; c <= hi; c++) {
-      const ch = String.fromCharCode(c);
+      const ch = String.fromCodePoint(c);
       const hex = c.toString(16);
       assert.equal(ok([S(`ab${ch}cd`, "idle")]).error, "invalid_session", `name U+${hex}`);
       assert.equal(ok([S("a", "idle", { alias: `x${ch}` })]).error, "invalid_session", `alias U+${hex}`);
     }
   }
   for (const c of NEIGHBOURS) {
-    const ch = String.fromCharCode(c);
+    const ch = String.fromCodePoint(c);
     assert.ok(ok([S(`ab${ch}cd`, "idle", { alias: `x${ch}` })]).value, `U+${c.toString(16)} is text`);
   }
   assert.ok(ok([S("👩‍💻 dev", "idle")]).value, "a ZWJ emoji sequence passes");
+  assert.ok(ok([S(`${FAMILY} home`, "idle")]).value, "a ZWJ family emoji passes");
+  assert.ok(ok([S(`${ENGLAND} deploy`, "idle", { alias: ENGLAND })]).value, "a subdivision flag passes");
+  assert.ok(ok([S("❤️ ship", "idle")]).value, "U+FE0F passes");
+  for (const ch of ["­", "؀", "￹", "؜"]) assert.equal(ok([S(`a${ch}b`, "idle")]).error, "invalid_session");
 });
 
 test("cleanMacName: the same class is stripped from devices.name, never rejected", () => {
   for (const [lo, hi] of RANGES) {
-    for (let c = lo; c <= hi; c++) assert.equal(cleanMacName(`St${String.fromCharCode(c)}udio`), "Studio", c.toString(16));
+    for (let c = lo; c <= hi; c++) assert.equal(cleanMacName(`St${String.fromCodePoint(c)}udio`), "Studio", c.toString(16));
   }
-  assert.equal(cleanMacName("\u202eoidutS\u2066"), "oidutS");
-  assert.equal(cleanMacName("Studio\u00a0Mac"), "Studio\u00a0Mac");
-  assert.equal(cleanMacName("\u202e\u0085"), "Mac", "nothing left: the default");
+  assert.equal(cleanMacName("‮oidutS⁦"), "oidutS");
+  assert.equal(cleanMacName("Studio Mac"), "Studio Mac");
+  assert.equal(cleanMacName(`${ENGLAND} ${FAMILY}❤️`), `${ENGLAND} ${FAMILY}❤️`, "flag, family, FE0F kept");
+  assert.equal(cleanMacName("‮\u0085"), "Mac", "nothing left: the default");
   assert.equal(cleanMacName(null), "Mac");
   assert.equal(cleanMacName("x".repeat(70)), "x".repeat(64));
-  assert.equal(cleanMacName("a\ud800b"), "a\ufffdb", "well-formed");
+  assert.equal(cleanMacName("a\ud800b"), "a�b", "well-formed");
 });
 
-test("readBody: a body over 32768 bytes is too large, by content-length or by its bytes", async () => {
-  const req = (body, headers = {}) => new Request("https://w/push/sessions", { method: "POST", body, headers });
+// A body stream that counts its pulls: chunk(i) -> Uint8Array, or null to close.
+function counted(chunk) {
+  const s = { pulls: 0, cancelled: false };
+  s.body = new ReadableStream(
+    {
+      pull(c) {
+        const x = chunk(s.pulls++);
+        x ? c.enqueue(x) : c.close();
+      },
+      cancel() {
+        s.cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return s;
+}
+
+test("readBody: a body over 32768 bytes is too large, by content-length or as it streams", async () => {
+  const enc = (t) => new TextEncoder().encode(t);
+  const req = (body, cl) => ({ headers: new Headers(cl === undefined ? {} : { "content-length": String(cl) }), body: counted((i) => (i === 0 ? enc(body) : null)).body });
   assert.deepEqual(await readBody(req('{"a":1}')), { value: { a: 1 } });
   assert.deepEqual(await readBody(req("not json")), { value: null });
-  const unread = { headers: new Headers({ "content-length": "32769" }), arrayBuffer: () => assert.fail("read past the cap") };
+  assert.deepEqual(await readBody({ headers: new Headers(), body: null }), { value: null }, "no body");
+  assert.deepEqual(await readBody(new Request("https://w/p", { method: "POST", body: '{"r":2}' })), { value: { r: 2 } }, "a real Request");
+  const unread = { headers: new Headers({ "content-length": "32769" }), body: { getReader: () => assert.fail("read past the cap") } };
   assert.deepEqual(await readBody(unread), { tooLarge: true });
   const exact = JSON.stringify({ p: "x".repeat(32768 - 8) });
-  assert.equal(new TextEncoder().encode(exact).length, 32768);
+  assert.equal(enc(exact).length, 32768);
   assert.ok((await readBody(req(exact))).value, "32768 bytes is fine");
-  const declared = { headers: new Headers({ "content-length": "32768" }), arrayBuffer: async () => new TextEncoder().encode(exact).buffer };
-  assert.ok((await readBody(declared)).value, "content-length 32768 is fine");
-  const over = { headers: new Headers(), arrayBuffer: async () => new TextEncoder().encode(exact + " ").buffer };
-  assert.deepEqual(await readBody(over), { tooLarge: true }, "no content-length (chunked): counted after the read");
+  assert.ok((await readBody(req(exact, 32768))).value, "content-length 32768 is fine");
+  assert.deepEqual(await readBody(req(exact + " ")), { tooLarge: true }, "no content-length: counted as it streams");
+
+  // QA probe: a chunked 4 MiB body. The read stops just past 32 KB and is cancelled.
+  const big = counted((i) => (i < 512 ? new Uint8Array(8192).fill(0x20) : null));
+  assert.deepEqual(await readBody({ headers: new Headers(), body: big.body }), { tooLarge: true });
+  assert.ok(big.pulls <= 6, `${big.pulls} chunks pulled of 512`);
+  assert.equal(big.cancelled, true);
+  // Under the cap, in several chunks: parsed whole.
+  const parts = ['{"sessions":[', '"a",', '"b"]}'].map(enc);
+  const small = counted((i) => parts[i] ?? null);
+  assert.deepEqual(await readBody({ headers: new Headers(), body: small.body }), { value: { sessions: ["a", "b"] } });
+  assert.equal(small.cancelled, false);
+});
+
+test("cronBudget: PUSH_CRON_BUDGET clamped to [13, 48]; unset or junk is 44", () => {
+  assert.equal(cronBudget(undefined), 44);
+  assert.equal(cronBudget("junk"), 44);
+  assert.equal(cronBudget(""), 44);
+  assert.equal(cronBudget("44"), 44);
+  assert.equal(cronBudget("30"), 30);
+  assert.equal(cronBudget("13"), 13);
+  assert.equal(cronBudget("12"), 13, "the largest step (10 cards + 3) always fits");
+  assert.equal(cronBudget("0"), 13);
+  assert.equal(cronBudget("-5"), 13);
+  assert.equal(cronBudget("48"), 48);
+  assert.equal(cronBudget("49"), 48, "2 up front + 48 = 50");
+  assert.equal(cronBudget("100000"), 48);
 });
 
 // ---- content-state ----------------------------------------------------------

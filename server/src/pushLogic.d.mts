@@ -75,8 +75,9 @@ export function parseSessionsBody(b: unknown, nowS: number): Parsed<SessionsBody
 export function cleanMacName(raw: unknown): string;
 export function readBody(req: {
   headers: { get(name: string): string | null };
-  arrayBuffer(): Promise<ArrayBuffer>;
+  body: ReadableStream<Uint8Array> | null;
 }): Promise<{ tooLarge: true; value?: undefined } | { value: unknown; tooLarge?: undefined }>;
+export function cronBudget(raw: string | undefined): number;
 export function cut(s: string, n?: number): string;
 export function isActive(sessions: Session[]): boolean;
 export function contentState(sessions: Session[], online?: boolean): ContentState;

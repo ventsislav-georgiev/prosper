@@ -3,8 +3,8 @@ import type { Bindings, Ctx, Env } from "./types";
 import { requireSession } from "./middleware";
 import { apnsSender } from "./apns";
 import { deleteTokens, postSessions, putToken, runCron, type PushDeps, type RouteResult } from "./pushStore.mjs";
-import { CRON_BUDGET, readBody } from "./pushLogic.mjs";
-import { intEnv, nowSec } from "./util";
+import { cronBudget, readBody } from "./pushLogic.mjs";
+import { nowSec } from "./util";
 
 // Live session status on the phone (#521, contract v1). The phone registers APNs
 // tokens; the Mac posts its Remote Terminal sessions; the Worker turns edges into
@@ -16,7 +16,7 @@ const deps = (env: Bindings, defer: PushDeps["defer"]): PushDeps => ({
   send: apnsSender(env),
   now: nowSec,
   defer,
-  budget: intEnv(env.PUSH_CRON_BUDGET, CRON_BUDGET),
+  budget: cronBudget(env.PUSH_CRON_BUDGET),
 });
 
 type Handler = (deps: PushDeps, email: string, body: unknown, tokenHash: string) => Promise<RouteResult>;

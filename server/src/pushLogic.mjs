@@ -31,11 +31,15 @@ const ENVS = ["production", "sandbox"];
 const PHONE_ID_RE = /^[A-Za-z0-9-]{8,64}$/; // phone install id (a UUID is 36)
 const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/; // mac_id (64 hex today), activity_id
 const TOKEN_RE = /^[0-9A-Fa-f]{16,512}$/;
-// C0, DEL, C1, the bidi marks/embeddings/overrides/isolates (U+200E, U+200F,
-// U+202A..U+202E, U+2066..U+2069), the line/paragraph separators and the BOM: none
-// belongs in a name, and the bidi ones can reorder the lock-screen text.
-const CTRL_RE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029\ufeff]/;
-const CTRL_ALL = new RegExp(CTRL_RE.source, "g");
+// Controls (Cc: C0, DEL, C1), format characters (Cf: the bidi marks, embeddings,
+// overrides and isolates, U+061C, zero-width and invisible operators, the soft hyphen,
+// the BOM, the Arabic number signs, interlinear annotations, U+E0001) and the
+// line/paragraph separators (Zl, Zp). Mirrors the Mac's AgentPrompt.isHidden. Two Cf
+// exceptions, which build emoji and cannot reorder text: U+200D ZWJ (emoji sequences)
+// and the tags U+E0020..U+E007F (subdivision flags: U+1F3F4, tags, U+E007F).
+// None of the rest belongs in a name; the bidi ones can reorder the lock-screen text.
+const CTRL_RE = /(?![\u200d\u{e0020}-\u{e007f}])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+const CTRL_ALL = new RegExp(CTRL_RE.source, "gu");
 // Printable, well-formed text: a lone surrogate would re-escape to 6 bytes in the
 // payload and break the 4 KB budget; a control character has no business in a name.
 const isText = (s, max, min = 0) =>
@@ -129,17 +133,36 @@ export function cleanMacName(raw) {
 
 /**
  * The body of a push route, capped before JSON parse. req = a fetch Request (or
- * {headers, arrayBuffer}). -> {tooLarge: true} | {value} (null when not JSON).
+ * {headers, body}). -> {tooLarge: true} | {value} (null when not JSON). A body
+ * without content-length (chunked) is counted as it streams and cancelled past the
+ * cap, so at most MAX_BODY plus one chunk is ever held.
  */
 export async function readBody(req) {
   if (Number(req.headers.get("content-length")) > MAX_BODY) return { tooLarge: true };
-  const buf = await req.arrayBuffer(); // a chunked body has no content-length
-  if (buf.byteLength > MAX_BODY) return { tooLarge: true };
+  const chunks = [];
+  let size = 0;
+  const reader = req.body?.getReader();
+  for (let r; reader && !(r = await reader.read()).done; ) {
+    size += r.value.byteLength;
+    if (size > MAX_BODY) {
+      reader.cancel().catch(() => {});
+      return { tooLarge: true };
+    }
+    chunks.push(r.value);
+  }
   try {
-    return { value: JSON.parse(new TextDecoder().decode(buf)) };
+    return { value: JSON.parse(await new Blob(chunks).text()) };
   } catch {
     return { value: null };
   }
+}
+
+/** PUSH_CRON_BUDGET -> subrequests per cron run: unset or junk is the default; any
+ *  number is clamped to [MAX_PHONES + STEP_D1, 48], so the largest step always fits
+ *  and a run stays under the free plan's 50 with the 2 up front. */
+export function cronBudget(raw) {
+  const n = parseInt(raw ?? "", 10);
+  return Number.isFinite(n) ? Math.min(48, Math.max(MAX_PHONES + STEP_D1, n)) : CRON_BUDGET;
 }
 
 /** First `n` code points (never splits a surrogate pair). */

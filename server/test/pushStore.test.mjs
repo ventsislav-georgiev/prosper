@@ -578,23 +578,23 @@ test("L4 (QA probe): blocked across a lapse alerts once; the return pushes a sta
   assert.equal(t.rows(`SELECT blocked FROM push_macs`)[0].blocked, `["s"]`);
 });
 
-// Lands `hook` between a statement's load and its write: the first statement whose
-// SQL contains `marker` awaits hook() before it runs.
-function interpose(t, marker, hook) {
+// Lands `hook` between a statement's load and its write: the first `times` statements
+// whose SQL contains `marker` await hook() before they run.
+function interpose(t, marker, hook, times = 1) {
   const db = t.deps.db;
-  let fired = false;
+  let left = times;
   const wrap = (st) => ({
     ...st,
     bind: (...a) => wrap(st.bind(...a)),
     run: async () => {
-      if (!fired) {
-        fired = true;
+      if (left > 0) {
+        left--;
         await hook();
       }
       return st.run();
     },
   });
-  t.deps.db = { ...db, prepare: (sql) => (!fired && sql.includes(marker) ? wrap(db.prepare(sql)) : db.prepare(sql)) };
+  t.deps.db = { ...db, prepare: (sql) => (left > 0 && sql.includes(marker) ? wrap(db.prepare(sql)) : db.prepare(sql)) };
 }
 
 test("L5: a lapse landing between a post's load and its upsert is not overwritten; the post re-reduces", async () => {
@@ -641,6 +641,24 @@ test("L5: a newer seq landing between a post's load and its upsert is not overwr
   await t.settle();
   assert.deepEqual(t.rows(`SELECT seq, snapshot FROM push_macs`), [{ seq: 3, snapshot: JSON.stringify([S("a", "blocked")]) }]);
   assert.equal(t.takeCalls().filter((c) => c.headers["apns-push-type"] === "alert").length, 1, "only the seq 3 post pushed");
+});
+
+test("L5: a post that loses the rev race twice is a 503 busy, writes and sends nothing", async () => {
+  const t = setup();
+  await registerPhone(t);
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await t.settle();
+  t.takeCalls();
+  const bump = async () => t.raw.prepare(`UPDATE push_macs SET rev = rev + 1 WHERE mac_id = ?`).run(MAC);
+  interpose(t, "INSERT INTO push_macs", bump, 2); // a concurrent writer before each upsert
+  assert.deepEqual(await postSessions(t.deps, ALICE, sessions(2, [S("a", "blocked")])), { status: 503, error: "busy" });
+  await t.settle();
+  assert.deepEqual(t.takeCalls(), []);
+  assert.deepEqual(t.rows(`SELECT seq, rev FROM push_macs`), [{ seq: 1, rev: 3 }]);
+  // The Mac's retry goes through.
+  assert.equal((await postSessions(t.deps, ALICE, sessions(3, [S("a", "blocked")]))).status, 204);
+  await t.settle();
+  assert.equal(t.takeCalls().filter((c) => c.headers["apns-push-type"] === "alert").length, 1);
 });
 
 // ---- #524 round 2: the free plan's 50 subrequests per invocation -------------
