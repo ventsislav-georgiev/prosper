@@ -153,7 +153,7 @@ enum AgentIsland {
     static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval) -> String {
         let age = age(of: s, now: now)
         let (chips, more) = prChips(s.meta, budget: .infinity)
-        let prs = chips.map(\.label).joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
+        let prs = chips.map(\.fullName).joined(separator: ", ") + (more > 0 ? " and \(more) more pending PR\(more == 1 ? "" : "s")" : "")
         return [s.title, s.state.label, age.isEmpty ? nil : "\(age) ago", metaSummary(s.meta), mergedLabel(s.meta),
                 chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
@@ -176,52 +176,83 @@ enum AgentIsland {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// "18 merged", after the PR chips on the title line; nil for none.
+    /// "18 merged", right-aligned on the PR line; nil for none.
     static func mergedLabel(_ m: DchSessionMeta?) -> String? {
         guard let n = m?.merged, n > 0 else { return nil }
         return "\(count(n)) merged"
     }
 
+    /// #525: a row draws a third line, the PR line, only for open PRs with a
+    /// label or a merged count; `prChips` and the row height agree through this.
+    static func hasPRLine(_ m: DchSessionMeta?) -> Bool {
+        (m?.openPRs.contains { $0.label != nil } ?? false) || mergedLabel(m) != nil
+    }
+
     /// One open PR as the row draws it. `url` is set only when it passed the
     /// allowlist (`DchSessionMeta.PR.pullURL`); without one the chip is a label.
+    /// `label` is "repo#num" (no owner), `fullName` "owner/repo#num" for the
+    /// tooltip and the accessibility label.
     struct PRChip: Equatable {
         let label: String
         let title: String
         let url: URL?
+        var fullName: String = ""
+
+        /// "owner/repo#num — title", or the parts that are there.
+        var help: String { [fullName.isEmpty ? label : fullName, title].filter { !$0.isEmpty }.joined(separator: " — ") }
     }
 
     static let maxPRChips = 3
-    static let maxRepoChars = 12
+    /// The repo is cut to this many characters (with "…") only when the chips do
+    /// not fit uncut. Set so one cut chip with a 10-digit number fits the PR line
+    /// next to the worst "+NN pending PRs" and "99999+ merged" (tested).
+    static let maxRepoChars = 18
     static let maxTitleChars = 200
-    /// The chips' share of the title line; the title truncates in the rest.
-    static let prChipBudget: CGFloat = 190
+    /// The PR line's width: the row's text column.
+    static let prChipBudget: CGFloat = AgentIslandGeometry.rowTextWidth
+    /// The least gap between the chips and the right-aligned merged count.
+    static let mergedGap: CGFloat = 8
     static let chipInset: CGFloat = 5
     static let chipSpacing: CGFloat = 4
 
+    /// Rounded up to whole points: SwiftUI rounds each text's width up, and the
+    /// line holds up to five of them.
     static func chipWidth(_ s: String) -> CGFloat {
-        AgentIslandGeometry.width(s, AgentIslandGeometry.chipFont) + 2 * chipInset
+        AgentIslandGeometry.width(s, AgentIslandGeometry.chipFont).rounded(.up) + 2 * chipInset
     }
 
-    /// The first PRs whose chips, plus a "+M" chip for the rest, measure within
-    /// `budget` less the merged label (at most `maxPRChips`); `more` is M. PRs
-    /// with no label are skipped.
+    /// The overflow chip: "+2 pending PRs", "+1 pending PR"; never read as "+N agents".
+    static func moreLabel(_ n: Int) -> String { "+\(n) pending PR\(n == 1 ? "" : "s")" }
+
+    /// The first PRs whose chips, plus a "+M pending PRs" chip for the rest,
+    /// measure within `budget` less the merged count and its gap (at most
+    /// `maxPRChips`); `more` is M. More chips win over uncut repos: each count
+    /// is tried with full labels, then with repos cut to `maxRepoChars`. PRs with
+    /// no label are skipped.
     static func prChips(_ m: DchSessionMeta?, budget: CGFloat = prChipBudget) -> (chips: [PRChip], more: Int) {
-        let budget = budget - (mergedLabel(m).map { chipWidth($0) - 2 * chipInset + chipSpacing } ?? 0)
-        let all = (m?.openPRs ?? []).compactMap { pr -> PRChip? in
+        let budget = budget - (mergedLabel(m).map { chipWidth($0) - 2 * chipInset + mergedGap } ?? 0)
+        let all = (m?.openPRs ?? []).compactMap { pr -> (full: PRChip, cut: PRChip)? in
             guard let label = pr.label, let hash = label.lastIndex(of: "#") else { return nil }
-            let repo = label[..<hash]
+            let repo = label[..<hash], num = label[hash...]
+            let owner = pr.pullURL.map { String($0.path.split(separator: "/")[0]) }
+                ?? pr.repo.split(separator: "/").dropLast().joined(separator: "/")
+            let fullName = owner.isEmpty ? label : "\(owner)/\(label)"
+            let title = String(pr.title.prefix(maxTitleChars))
             let short = repo.count > maxRepoChars ? String(repo.prefix(maxRepoChars - 1)) + "…" : String(repo)
-            return PRChip(label: short + String(label[hash...]), title: String(pr.title.prefix(maxTitleChars)), url: pr.pullURL)
+            return (PRChip(label: label, title: title, url: pr.pullURL, fullName: fullName),
+                    PRChip(label: short + num, title: title, url: pr.pullURL, fullName: fullName))
         }
         var k = min(all.count, maxPRChips)
         while k > 0 {
             let more = all.count - k
-            let w = all.prefix(k).reduce(0) { $0 + chipWidth($1.label) } + CGFloat(k - 1) * chipSpacing
-                + (more > 0 ? chipSpacing + chipWidth("+\(more)") : 0)
-            if w <= budget { break }
+            for chips in [all.prefix(k).map(\.full), all.prefix(k).map(\.cut)] {
+                let w = chips.reduce(0) { $0 + chipWidth($1.label) } + CGFloat(k - 1) * chipSpacing
+                    + (more > 0 ? chipSpacing + chipWidth(moreLabel(more)) : 0)
+                if w <= budget { return (chips, more) }
+            }
             k -= 1
         }
-        return (Array(all.prefix(k)), all.count - k)
+        return ([], all.count)
     }
 
     /// A PR click's only way out of the app; tests replace it and never open a real URL.

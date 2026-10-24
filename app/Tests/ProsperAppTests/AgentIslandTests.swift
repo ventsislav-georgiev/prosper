@@ -1307,13 +1307,13 @@ final class AgentIslandTests: XCTestCase {
         var m = s; m.meta = DchSessionMeta(tasks: .init(done: 1, total: 2), openPRs: [pr("o/r", 12)], merged: 3)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 12s ago", "no meta: unchanged")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 12s ago, 1/2 done, 3 merged, open pull requests r#12")
+                       "T, Working, 12s ago, 1/2 done, 3 merged, open pull requests o/r#12", "#525: owner kept here")
         m.meta = DchSessionMeta(openPRs: (1...5).map { pr("o/r", $0) })
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 12s ago, open pull requests r#1, r#2, r#3 and 2 more", "QA #347 L-e")
+                       "T, Working, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 2 more pending PRs", "QA #347 L-e")
         m.meta = DchSessionMeta(openPRs: (1...4).map { pr("o/r", $0) })
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 12s ago, open pull requests r#1, r#2, r#3 and 1 more")
+                       "T, Working, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 1 more pending PR")
     }
 
     /// QA #347 L-d: every drawn count caps at "99999+"; done > total stays as drawn.
@@ -1338,18 +1338,83 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(AgentIsland.prChips(DchSessionMeta(openPRs: three, merged: Int.max)).chips.count, 3)
     }
 
-    /// QA #347 L-c: the worst case (Int.max merged, 50 long PRs with 10-digit
-    /// numbers) measures within the budget, "+M" and merged label included.
+    /// The width of `chips` plus a "+M pending PRs" chip and the merged count,
+    /// as the PR line lays them out.
+    private func lineWidth(_ meta: DchSessionMeta, _ chips: [AgentIsland.PRChip], _ more: Int) -> CGFloat {
+        let parts = chips.map { AgentIsland.chipWidth($0.label) } + (more > 0 ? [AgentIsland.chipWidth(AgentIsland.moreLabel(more))] : [])
+        let merged = AgentIsland.mergedLabel(meta).map { AgentIsland.chipWidth($0) - 2 * AgentIsland.chipInset + AgentIsland.mergedGap } ?? 0
+        return parts.reduce(0, +) + CGFloat(max(parts.count - 1, 0)) * AgentIsland.chipSpacing + merged
+    }
+
+    /// QA #347 L-c, #525: the worst case (Int.max merged, 50 long PRs with
+    /// 10-digit numbers) still shows one cut chip and measures within the PR
+    /// line, "+M pending PRs" and merged count included.
     func testWorstCaseChipLineFitsTheBudget() {
-        let meta = DchSessionMeta(openPRs: (1...50).map { pr("o/a-very-long-repository-name-\($0)", 1_234_567_890 + $0) },
+        let meta = DchSessionMeta(openPRs: (1...50).map { pr("o/\(String(repeating: "a", count: 100))", 1_234_567_890 + $0) },
                                   merged: Int.max)
         let (chips, more) = AgentIsland.prChips(meta)
-        XCTAssertEqual(chips, [], "k == 0: not one chip fits, only the +M is drawn")
-        XCTAssertEqual(more, 50)
-        let parts = chips.map { AgentIsland.chipWidth($0.label) } + (more > 0 ? [AgentIsland.chipWidth("+\(more)")] : [])
-            + [AgentIslandGeometry.width(AgentIsland.mergedLabel(meta)!, AgentIslandGeometry.chipFont)]
-        let width = parts.reduce(0, +) + CGFloat(parts.count - 1) * AgentIsland.chipSpacing
-        XCTAssertLessThanOrEqual(width, AgentIsland.prChipBudget)
+        XCTAssertEqual(chips.map(\.label), [String(repeating: "a", count: AgentIsland.maxRepoChars - 1) + "…#1234567891"],
+                       "one chip, its repo cut at maxRepoChars")
+        XCTAssertEqual(more, 49)
+        XCTAssertLessThanOrEqual(lineWidth(meta, chips, more), AgentIsland.prChipBudget)
+        XCTAssertEqual(AgentIsland.prChipBudget, AgentIslandGeometry.rowTextWidth)
+        XCTAssertEqual(AgentIslandGeometry.rowTextWidth, CGFloat(392), "480 - 2 * 21 list inset - 8 - 14 - 10 - 14")
+    }
+
+    /// #525: the operator's preview, and 1, 2, 3 chips then the overflow chip.
+    func testPRLineChipsAtTheLineBudget() {
+        func labels(_ prs: [DchSessionMeta.PR], merged: Int? = nil) -> ([String], Int) {
+            let r = AgentIsland.prChips(DchSessionMeta(openPRs: prs, merged: merged))
+            return (r.chips.map(\.label), r.more)
+        }
+        let cde = pr("payhawk/cde-codebase", 370), sol = pr("payhawk/solution", 20399)
+        let ads = pr("payhawk/account-data-service", 13509)
+        XCTAssertEqual(labels([cde]).0, ["cde-codebase#370"], "owner dropped")
+        XCTAssertEqual(labels([cde, sol], merged: 66).0, ["cde-codebase#370", "solution#20399"])
+        XCTAssertEqual(labels([ads, sol], merged: 63).0, ["account-data-service#13509", "solution#20399"],
+                       "perf-1: both fit, the long repo uncut")
+        XCTAssertEqual(labels([cde, sol, pr("o/r", 1)], merged: 66).0, ["cde-codebase#370", "solution#20399", "r#1"])
+        let sec = labels([cde, sol, pr("o/r", 1), pr("o/s", 2)], merged: 66)
+        XCTAssertEqual(sec.0, ["cde-codebase#370", "solution#20399"], "sec-1: a third chip and +1 do not fit")
+        XCTAssertEqual(sec.1, 2)
+        let wide = labels([cde, sol, ads], merged: 99_999)
+        XCTAssertEqual(wide.0, ["cde-codebase#370", "solution#20399"], "three wide chips do not fit")
+        XCTAssertEqual(wide.1, 1)
+        let four = labels((1...4).map { pr("o/r", $0) }, merged: 66)
+        XCTAssertEqual(four.0, ["r#1", "r#2", "r#3"], "the cap is 3 chips")
+        XCTAssertEqual(four.1, 1)
+        let ten = labels((1...10).map { pr("o/r", $0) })
+        XCTAssertEqual(ten.0, ["r#1", "r#2", "r#3"])
+        XCTAssertEqual(ten.1, 7)
+        XCTAssertEqual(AgentIsland.moreLabel(1), "+1 pending PR")
+        XCTAssertEqual(AgentIsland.moreLabel(2), "+2 pending PRs")
+        XCTAssertEqual(AgentIsland.moreLabel(49), "+49 pending PRs")
+    }
+
+    /// #525: a long repo stays whole while it fits; cut with "…" only when the
+    /// chips cannot otherwise fit, more chips before uncut names.
+    func testLongReposAreCutOnlyWhenTheChipsDoNotFitOtherwise() {
+        let long = String(repeating: "r", count: 40)
+        let one = AgentIsland.prChips(DchSessionMeta(openPRs: [pr("o/\(long)", 1)]))
+        XCTAssertEqual(one.chips.map(\.label), ["\(long)#1"], "one long chip fits whole")
+        let meta = DchSessionMeta(openPRs: (1...3).map { pr("o/\(long)", $0) })
+        let (chips, more) = AgentIsland.prChips(meta)
+        let cut = String(repeating: "r", count: AgentIsland.maxRepoChars - 1) + "…"
+        XCTAssertEqual(chips.map(\.label), ["\(cut)#1", "\(cut)#2"], "two cut chips beat one whole one")
+        XCTAssertEqual(more, 1)
+        XCTAssertLessThanOrEqual(lineWidth(meta, chips, more), AgentIsland.prChipBudget)
+        XCTAssertEqual(chips.map(\.fullName), ["o/\(long)#1", "o/\(long)#2"])
+        XCTAssertEqual(chips.first?.help, "o/\(long)#1", "no title: the full name alone")
+        let titled = AgentIsland.prChips(DchSessionMeta(openPRs: [pr("payhawk/solution", 7, title: "Fix it")])).chips
+        XCTAssertEqual(titled.first?.help, "payhawk/solution#7 — Fix it")
+        // At exactly the cap a repo is never cut.
+        let capped = String(repeating: "c", count: AgentIsland.maxRepoChars)
+        let atCap = AgentIsland.prChips(DchSessionMeta(openPRs: (1...3).map { pr("o/\(capped)", 1_000_000_000 + $0) }))
+        XCTAssertFalse(atCap.chips.isEmpty)
+        XCTAssertTrue(atCap.chips.allSatisfy { $0.label.hasPrefix(capped + "#") }, "\(atCap.chips.map(\.label))")
+        let none = AgentIsland.prChips(meta, budget: 0)
+        XCTAssertEqual(none.chips, [])
+        XCTAssertEqual(none.more, 3, "nothing fits: only the overflow chip")
     }
 
     func testPRChipsCapWithPlusMAndFitTheBudget() {
@@ -1359,19 +1424,26 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(more, 7)
         XCTAssertEqual(AgentIsland.prChips(DchSessionMeta(openPRs: [pr("o/r", 1)])).more, 0)
         XCTAssertEqual(AgentIsland.prChips(nil).chips, [])
-        let merged = AgentIsland.prChips(DchSessionMeta(openPRs: many.openPRs, merged: 999_999_999))
-        XCTAssertLessThan(merged.chips.count, 3, "the merged label takes its width out of the chips' budget")
+        // The merged count takes its width and gap out of the chips' budget.
+        let three = AgentIsland.prChips(many).chips
+        let tight = AgentIsland.chipWidth("r#1") + AgentIsland.chipSpacing + AgentIsland.chipWidth(AgentIsland.moreLabel(9))
+        XCTAssertEqual(AgentIsland.prChips(many, budget: tight).chips.count, 1)
+        let mergedMeta = DchSessionMeta(openPRs: many.openPRs, merged: 999_999_999)
+        let merged = AgentIsland.prChips(mergedMeta, budget: tight + AgentIsland.chipWidth("99999+ merged") - 2 * AgentIsland.chipInset + AgentIsland.mergedGap)
+        XCTAssertEqual(merged.chips.count, 1, "budget less merged and gap is exactly one chip")
+        XCTAssertEqual(AgentIsland.prChips(mergedMeta, budget: tight).chips.count, 0)
+        let short = tight + AgentIsland.chipWidth("99999+ merged") - 2 * AgentIsland.chipInset + AgentIsland.mergedGap - 0.5
+        XCTAssertEqual(AgentIsland.prChips(mergedMeta, budget: short).chips.count, 0, "the full gap, not a chip spacing")
         XCTAssertEqual(merged.chips.count + merged.more, 10)
+        XCTAssertEqual(three.count, 3)
 
         // Long names and numbers: fewer chips, all measured inside the budget with the "+M".
         let wide = DchSessionMeta(openPRs: (1...50).map { pr("o/a-very-long-repository-name-\($0)", 123_456_780 + $0) })
         let w = AgentIsland.prChips(wide)
         XCTAssertLessThan(w.chips.count, AgentIsland.maxPRChips)
         XCTAssertEqual(w.chips.count + w.more, 50)
-        XCTAssertEqual(w.chips.first?.label, "a-very-long…#123456781", "repo name part truncated to 12")
-        let width = w.chips.reduce(0) { $0 + AgentIsland.chipWidth($1.label) }
-            + CGFloat(w.chips.count) * AgentIsland.chipSpacing + AgentIsland.chipWidth("+\(w.more)")
-        XCTAssertLessThanOrEqual(width, AgentIsland.prChipBudget)
+        XCTAssertEqual(w.chips.first?.label.hasPrefix("a-very-long-"), true)
+        XCTAssertLessThanOrEqual(lineWidth(wide, w.chips, w.more), AgentIsland.prChipBudget)
         XCTAssertEqual(AgentIsland.prChips(wide, budget: 0).chips, [], "nothing fits: only the +M")
 
         let titled = AgentIsland.prChips(DchSessionMeta(openPRs: [pr("o/r", 1, title: String(repeating: "x", count: 500))]))
@@ -1464,6 +1536,88 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(hidden.expandedSize(rows: 1).width, 480)
     }
 
+    /// #525: two lines without PR meta, three with a PR line.
+    func testRowHeightsPerRow() {
+        var s = session("s", .working)
+        XCTAssertEqual(AgentIslandGeometry.height(of: s), 48, "no meta: two lines, as before")
+        s.meta = DchSessionMeta(tasks: .init(done: 1, total: 2))
+        XCTAssertEqual(AgentIslandGeometry.height(of: s), 48, "tasks ride on line 2")
+        s.meta = DchSessionMeta(openPRs: [.init(url: "x", repo: "o/r", num: nil, title: "")])
+        XCTAssertEqual(AgentIslandGeometry.height(of: s), 48, "a PR with no label draws nothing")
+        s.meta = DchSessionMeta(merged: 0)
+        XCTAssertEqual(AgentIslandGeometry.height(of: s), 48)
+        s.meta = DchSessionMeta(merged: 3)
+        XCTAssertEqual(AgentIslandGeometry.height(of: s), AgentIslandGeometry.prRowHeight, "merged alone")
+        s.meta = DchSessionMeta(openPRs: [pr("o/r", 1)])
+        XCTAssertEqual(AgentIslandGeometry.height(of: s), AgentIslandGeometry.prRowHeight, "one open PR")
+        XCTAssertEqual(AgentIslandGeometry.prRowHeight, 64)
+    }
+
+    /// #525: the list sums per-row heights; 6 rows show, then it scrolls, and
+    /// a short screen scrolls on the summed height.
+    @MainActor
+    func testListHeightSumsMixedRows() {
+        let g = notched, two = AgentIslandGeometry.rowHeight, three = AgentIslandGeometry.prRowHeight
+        XCTAssertEqual(g.listHeight(rows: [two, three, two]), 2 * two + three)
+        XCTAssertEqual(g.listHeight(rows: []), two, "empty: one row's room")
+        XCTAssertEqual(g.listHeight(rows: [three, three], cards: 100), 2 * three + 100)
+        let seven = [three, two, three, two, three, two, three]
+        XCTAssertEqual(g.listHeight(rows: seven), 3 * three + 3 * two, "the first 6 rows")
+        XCTAssertTrue(g.listScrolls(rows: seven))
+        XCTAssertFalse(g.listScrolls(rows: Array(seven.prefix(6))))
+        XCTAssertEqual(g.listHeight(rows: 3), g.listHeight(rows: [two, two, two]), "Int: two-line rows")
+        XCTAssertEqual(g.expandedSize(rows: [three]).height, g.expandedSize(rows: 1).height + three - two)
+        // 800 x 300, hidden bar: maxListHeight = 300 - 24 - 4 - 12 - 40 = 220.
+        let short = AgentIslandGeometry.make(frame: CGRect(x: 0, y: 0, width: 800, height: 300),
+                                             visibleFrame: CGRect(x: 0, y: 0, width: 800, height: 300),
+                                             topLeft: nil, topRight: nil, safeTop: 0)
+        XCTAssertEqual(short.maxListHeight, 220)
+        XCTAssertFalse(short.listScrolls(rows: [three, three, three]), "192")
+        XCTAssertFalse(short.listScrolls(rows: 4), "4 two-line rows: 192")
+        XCTAssertTrue(short.listScrolls(rows: [three, three, three, two]), "240 > 220")
+        XCTAssertEqual(short.listHeight(rows: [three, three, three, two]), 220, "capped")
+        XCTAssertEqual(short.listHeight(rows: [three, three, three]), 192)
+        // The store hands the view and the panel the per-row heights.
+        let store = AgentIslandStore(geometry: g)
+        var a = session("a", .working), b = session("b", .idle)
+        a.meta = DchSessionMeta(merged: 2)
+        b.meta = DchSessionMeta(tasks: .init(done: 1, total: 2))
+        store.sessions = [a, b]
+        store.expanded = true
+        XCTAssertEqual(store.rowHeights, [three, two])
+        XCTAssertEqual(store.size, g.expandedSize(rows: [three, two]))
+        XCTAssertEqual(store.size.height, 32 + 4 + three + two + 12)
+    }
+
+    /// #525: the PR line as SwiftUI lays it out (chips, overflow chip, the gap
+    /// and the merged count at their ideal widths) fits the text column for the
+    /// preview rows and the worst case, so the right-aligned merged count is never
+    /// clipped.
+    @MainActor
+    func testPRLineLaysOutInsideTheTextColumn() {
+        let big = Int.max
+        let metas = [
+            DchSessionMeta(openPRs: [pr("payhawk/cde-codebase", 370), pr("payhawk/solution", 20399),
+                                     pr("o/r", 1), pr("o/s", 2)], merged: 66),
+            DchSessionMeta(openPRs: [pr("payhawk/account-data-service", 13509), pr("payhawk/solution", 20399)], merged: 63),
+            DchSessionMeta(openPRs: (1...50).map { pr("o/\(String(repeating: "a", count: 100))", 1_234_567_890 + $0) }, merged: big),
+            DchSessionMeta(openPRs: (1...50).map { pr("o/r", 1_234_567_890 + $0) }, merged: big),
+            DchSessionMeta(openPRs: (1...3).map { pr("o/\(String(repeating: "r", count: 40))", $0) }, merged: 99_999),
+            DchSessionMeta(merged: big),
+        ]
+        for meta in metas {
+            var s = session("s", .working); s.meta = meta
+            let row = AgentIslandRow(session: s, now: 0, notice: nil) {}
+            let host = NSHostingView(rootView: row.prLineView(AgentIsland.prChips(meta)).fixedSize())
+            let w = host.fittingSize.width
+            XCTAssertGreaterThan(w, 0)
+            XCTAssertLessThanOrEqual(w, AgentIslandGeometry.rowTextWidth, "\(AgentIsland.prChips(meta).chips.map(\.label))")
+            let model = lineWidth(meta, AgentIsland.prChips(meta).chips, AgentIsland.prChips(meta).more)
+            XCTAssertLessThanOrEqual(w, model + 0.01, "SwiftUI never draws wider than the model measured")
+            XCTAssertLessThanOrEqual(model - w, 4, "the model is SwiftUI's width, rounded up per text")
+        }
+    }
+
     // MARK: - Render (visual evidence, no window)
 
     @MainActor
@@ -1477,6 +1631,18 @@ final class AgentIslandTests: XCTestCase {
             session("payhawk-apps", .done, activity: now - 7200, alias: "ship release notes"),
             session("infra-stats-main-3", .idle, activity: now - 3 * 86400),
         ])
+        // #525: the operator's preview rows, sec-1 and perf-1.
+        var sec = session("sec-branch-name", .working, activity: now, alias: "sec-1", agents: 3)
+        sec.meta = DchSessionMeta(tasks: .init(done: 39, total: 64, inProgress: 3, queued: 22),
+                                  openPRs: [pr("payhawk/cde-codebase", 370), pr("payhawk/solution", 20399),
+                                            pr("o/r", 1), pr("o/s", 2)], merged: 66)
+        var perf = session("solution-master-perf", .idle, activity: now - 15, alias: "perf-1")
+        perf.meta = DchSessionMeta(tasks: .init(done: 74, total: 81, inProgress: 2, queued: 5),
+                                   openPRs: [pr("payhawk/account-data-service", 13509), pr("payhawk/solution", 20399)],
+                                   merged: 63)
+        store.sessions[1] = sec
+        store.sessions[2] = perf
+        XCTAssertEqual(store.rowHeights.filter { $0 == AgentIslandGeometry.prRowHeight }.count, 2)
         store.notices[AgentSessionKey(dir: "/d", name: "payhawk-apps")] = "Attach command copied"
         let out = tempDir()
         let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }

@@ -29,12 +29,17 @@ tag from the now-released section and put it on the new top draft.
   A session with no terminal window on this Mac opens in a new window of your terminal
   (Ghostty when installed, else Terminal, or iTerm2, WezTerm, kitty or Alacritty), or
   copies its attach command instead, as you pick in the Agent Island settings (#500).
+  A session already attached in tmux or over ssh opens as a second, mirrored view; with
+  the copy setting, the first click says so and a second click copies. If the terminal
+  fails to open, the attach command is copied and the island says so.
   Ghostty opens the session through its scripting interface: macOS asks once whether
   Prosper may control Ghostty, instead of Ghostty asking to run a script on every click.
   If Ghostty is not running it is started first, and if you decline, the island falls
   back to the script (#505). A session that publishes its work through dch also shows
   its open pull requests as repo#number buttons that open in your browser, how many it
-  has merged, and its tasks done, in progress and queued (#506). Remote
+  has merged, and its tasks done, in progress and queued (#506). The pull requests get a
+  line of their own under the session: up to three, then how many more are pending, with
+  the merged count at the right (#525). Remote
   Terminal sends the same to the phone's session list (#507).
   While Remote Terminal keeps its sessions separate, a setting picks which sessions to
   show (#474).

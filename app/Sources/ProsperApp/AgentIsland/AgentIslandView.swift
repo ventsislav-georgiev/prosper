@@ -37,7 +37,16 @@ struct AgentIslandGeometry: Equatable {
     let barHeight: CGFloat
 
     static let expandedWidth: CGFloat = 480
+    /// A two-line row (title, state); `prRowHeight` adds the PR line (#525).
     static let rowHeight: CGFloat = 48
+    static let prRowHeight: CGFloat = 64
+    // The row's insets (AgentIslandRow): leading, glyph column, gap, trailing.
+    static let rowLead: CGFloat = 8
+    static let glyphWidth: CGFloat = 14
+    static let glyphGap: CGFloat = 10
+    static let rowTrail: CGFloat = 14
+    /// The text column every line of a row lays out in; the PR line's budget.
+    static let rowTextWidth = expandedWidth - 2 * listInset - rowLead - glyphWidth - glyphGap - rowTrail
     static let maxVisibleRows = 6
     static let listTop: CGFloat = 4
     static let listBottom: CGFloat = 12
@@ -49,24 +58,34 @@ struct AgentIslandGeometry: Equatable {
 
     var collapsedSize: CGSize { CGSize(width: notchWidth + 2 * earWidth, height: barHeight) }
 
-    /// Rows (up to 6) plus the prompt cards under blocked rows (`cards`, their
-    /// summed `cardHeight`): the island grows for a card instead of clipping it,
-    /// up to `maxListHeight`, then the list scrolls.
-    func listHeight(rows: Int, cards: CGFloat = 0) -> CGFloat {
-        min(CGFloat(min(max(rows, 1), Self.maxVisibleRows)) * Self.rowHeight + cards, maxListHeight)
+    /// One row's height: three lines when it has a PR line.
+    static func height(of s: AgentSession) -> CGFloat { AgentIsland.hasPRLine(s.meta) ? prRowHeight : rowHeight }
+
+    /// The first 6 rows (`rows`, their heights in order) plus the prompt cards
+    /// under blocked rows (`cards`, their summed `cardHeight`): the island grows
+    /// for a card instead of clipping it, up to `maxListHeight`, then the list scrolls.
+    func listHeight(rows: [CGFloat], cards: CGFloat = 0) -> CGFloat {
+        min((rows.isEmpty ? Self.rowHeight : rows.prefix(Self.maxVisibleRows).reduce(0, +)) + cards, maxListHeight)
     }
 
-    func listScrolls(rows: Int, cards: CGFloat = 0) -> Bool {
-        rows > Self.maxVisibleRows || CGFloat(rows) * Self.rowHeight + cards > maxListHeight
+    func listScrolls(rows: [CGFloat], cards: CGFloat = 0) -> Bool {
+        rows.count > Self.maxVisibleRows || rows.reduce(0, +) + cards > maxListHeight
     }
+
+    /// `rows` two-line rows.
+    func listHeight(rows: Int, cards: CGFloat = 0) -> CGFloat { listHeight(rows: Self.twoLine(rows), cards: cards) }
+    func listScrolls(rows: Int, cards: CGFloat = 0) -> Bool { listScrolls(rows: Self.twoLine(rows), cards: cards) }
+    private static func twoLine(_ n: Int) -> [CGFloat] { Array(repeating: rowHeight, count: max(n, 0)) }
 
     /// Leaves 40 pt of the screen below the island.
     var maxListHeight: CGFloat { max(Self.rowHeight, screen.height - barHeight - Self.listTop - Self.listBottom - 40) }
 
-    func expandedSize(rows: Int, cards: CGFloat = 0) -> CGSize {
+    func expandedSize(rows: [CGFloat], cards: CGFloat = 0) -> CGSize {
         CGSize(width: min(screen.width, max(Self.expandedWidth, collapsedSize.width)),
                height: barHeight + Self.listTop + listHeight(rows: rows, cards: cards) + Self.listBottom)
     }
+
+    func expandedSize(rows: Int, cards: CGFloat = 0) -> CGSize { expandedSize(rows: Self.twoLine(rows), cards: cards) }
 
     // Card layout (#475): every row has a fixed height and every row's text is
     // measured to fit its width (AgentCardLayout), so this is exact.
@@ -225,8 +244,11 @@ final class AgentIslandStore: ObservableObject {
         sessions.compactMap(card(for:)).reduce(0) { $0 + AgentIslandGeometry.cardHeight($1) }
     }
 
+    /// #525: per row, two or three lines.
+    var rowHeights: [CGFloat] { sessions.map(AgentIslandGeometry.height(of:)) }
+
     var size: CGSize {
-        expanded ? geometry.expandedSize(rows: sessions.count, cards: cardsHeight) : geometry.collapsedSize
+        expanded ? geometry.expandedSize(rows: rowHeights, cards: cardsHeight) : geometry.collapsedSize
     }
 }
 
@@ -279,13 +301,13 @@ struct AgentIslandView: View {
         VStack(spacing: 0) {
             header.frame(height: g.barHeight)
             Group {
-                if g.listScrolls(rows: store.sessions.count, cards: store.cardsHeight) {
+                if g.listScrolls(rows: store.rowHeights, cards: store.cardsHeight) {
                     ScrollView(.vertical, showsIndicators: false) { rows }
                 } else {
                     rows
                 }
             }
-            .frame(height: g.listHeight(rows: store.sessions.count, cards: store.cardsHeight), alignment: .top)
+            .frame(height: g.listHeight(rows: store.rowHeights, cards: store.cardsHeight), alignment: .top)
             .padding(.top, AgentIslandGeometry.listTop)
             // Inside the shape's straight sides (the top corners curve in by `top`).
             .padding(.horizontal, AgentIslandGeometry.listInset)
@@ -343,12 +365,16 @@ struct AgentIslandRow: View {
 
     var body: some View {
         let prs = AgentIsland.prChips(session.meta)   // once per body
+        let prLine = AgentIsland.hasPRLine(session.meta)
         Button(action: action) {
-            HStack(alignment: .center, spacing: 10) {
+            // #525: line 1 title, agents, age; line 2 state, branch, tasks; line 3
+            // PRs, merged. Every line spans the text column, so the right-hand
+            // columns (age, tasks, merged) line up across rows.
+            HStack(alignment: .firstTextBaseline, spacing: AgentIslandGeometry.glyphGap) {
                 Text(session.state.glyph)
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(session.state.color)
-                    .frame(width: 14)
+                    .frame(width: AgentIslandGeometry.glyphWidth)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(session.title)
@@ -363,10 +389,11 @@ struct AgentIslandRow: View {
                                 .background(Capsule().fill(Color.white.opacity(0.1)))
                                 .fixedSize()
                         }
-                        if !prs.chips.isEmpty || prs.more > 0 || AgentIsland.mergedLabel(session.meta) != nil {
-                            Spacer(minLength: 6)
-                            prChips(prs)
-                        }
+                        Spacer(minLength: 6)
+                        Text(AgentIsland.age(of: session, now: now))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                            .fixedSize()
                     }
                     HStack(spacing: 6) {
                         if let notice {
@@ -390,15 +417,13 @@ struct AgentIslandRow: View {
                     }
                     .font(.system(size: 11))
                     .lineLimit(1)
+                    if prLine { prLineView(prs) }
                 }
-                Spacer(minLength: 0)
-                Text(AgentIsland.age(of: session, now: now))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.4))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.leading, 8)
-            .padding(.trailing, 14)
-            .frame(height: AgentIslandGeometry.rowHeight - 4)
+            .padding(.leading, AgentIslandGeometry.rowLead)
+            .padding(.trailing, AgentIslandGeometry.rowTrail)
+            .frame(height: AgentIslandGeometry.height(of: session) - 4)
             .background(RoundedRectangle(cornerRadius: 12)
                 .fill(Color.white.opacity(hover ? 0.10 : 0.05)))
             .contentShape(Rectangle())
@@ -420,29 +445,34 @@ struct AgentIslandRow: View {
     /// line, so the state label keeps its room whatever the numbers are.
     static let summaryMaxWidth: CGFloat = 220
 
-    /// Open PRs as "repo#12" chips in the agents capsule's style: a button when
-    /// the URL passed the allowlist, else a dimmer label; then "18 merged".
-    /// Static, no animation.
-    private func prChips(_ prs: (chips: [AgentIsland.PRChip], more: Int)) -> some View {
-        HStack(spacing: AgentIsland.chipSpacing) {
-            ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
-                if chip.url != nil {
-                    Button { AgentIsland.open(chip) } label: { chipText(chip.label, Color.white.opacity(0.8)) }
-                        .buttonStyle(.plain)
-                        .help(Text(verbatim: chip.title))
-                } else {
-                    chipText(chip.label, Color.white.opacity(0.4))
-                        .help(Text(verbatim: chip.title))
+    /// #525: the PR line. Open PRs as "repo#12" chips in the agents capsule's
+    /// style (a button when the URL passed the allowlist, else a dimmer label),
+    /// "+N pending PRs", then "18 merged" right-aligned. `AgentIsland.prChips`
+    /// measured it all to fit `rowTextWidth`. Static, no animation.
+    func prLineView(_ prs: (chips: [AgentIsland.PRChip], more: Int)) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: AgentIsland.chipSpacing) {
+                ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
+                    if chip.url != nil {
+                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, Color.white.opacity(0.8)) }
+                            .buttonStyle(.plain)
+                            .help(Text(verbatim: chip.help))
+                    } else {
+                        chipText(chip.label, Color.white.opacity(0.4))
+                            .help(Text(verbatim: chip.help))
+                    }
                 }
+                if prs.more > 0 { chipText(AgentIsland.moreLabel(prs.more), Color.white.opacity(0.5)) }
             }
-            if prs.more > 0 { chipText("+\(prs.more)", Color.white.opacity(0.5)) }
+            .fixedSize()
+            Spacer(minLength: AgentIsland.mergedGap)
             if let merged = AgentIsland.mergedLabel(session.meta) {
                 Text(verbatim: merged)
                     .font(Font(AgentIslandGeometry.chipFont))
                     .foregroundStyle(Color.white.opacity(0.5))
+                    .fixedSize()
             }
         }
-        .fixedSize()
     }
 
     private func chipText(_ s: String, _ color: Color) -> some View {
