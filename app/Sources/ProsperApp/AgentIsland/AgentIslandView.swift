@@ -59,7 +59,7 @@ struct AgentIslandGeometry: Equatable {
     var collapsedSize: CGSize { CGSize(width: notchWidth + 2 * earWidth, height: barHeight) }
 
     /// One row's height: three lines when it has a PR line (#534: after the toggles).
-    static func height(of s: AgentSession, show d: AgentIslandRowDetails = .all) -> CGFloat {
+    static func height(of s: AgentSession, show d: AgentIslandRowDetails) -> CGFloat {
         AgentIsland.hasPRLine(s.meta, show: d) ? prRowHeight : rowHeight
     }
 
@@ -591,8 +591,10 @@ struct AgentCardLayout: Equatable {
         let f = size == CTFontGetSize(G.contextFont) ? G.contextFont : font(size)
         let dots = G.width("…", f)
         let clipped = rows.map { G.fits($0, f, w) ? $0 : G.wrap($0, f, w - dots)[0] + "…" }
+        // #529: one row over draws in the marker's place (a preview approves
+        // nothing, so no cap ruling applies), so a marker hides 2 or more.
         let cap = AgentPrompt.maxContext
-        guard clipped.count > cap else { return (clipped, f) }
+        guard clipped.count > cap + 1 else { return (clipped, f) }
         return (Array(clipped.prefix(cap)) + ["… \(clipped.count - cap) more lines"], f)
     }
 
@@ -603,9 +605,10 @@ struct AgentCardLayout: Equatable {
 
     private static func measuredContextRows(_ lines: [String]) -> (rows: [String], overCap: Bool) {
         let rows = lines.flatMap { G.wrap(AgentPrompt.visible($0), G.contextFont, G.cardContextWidth) }
-        let cap = AgentPrompt.maxContext
-        guard rows.count > cap else { return (rows, false) }
-        return (Array(rows.prefix(cap)) + ["… \(rows.count - cap) more lines"], true)
+        // The cap stays at 10 rows (OQ-46): an 11th row is over it, so deny-only.
+        let cap = AgentPrompt.maxContext, n = rows.count - cap
+        guard n > 0 else { return (rows, false) }
+        return (Array(rows.prefix(cap)) + ["… \(n) more line\(n == 1 ? "" : "s")"], true)
     }
 
     /// What is left for the label beside the digit, the minimum spacer and the hint capsule.

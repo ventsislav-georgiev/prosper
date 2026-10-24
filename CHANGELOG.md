@@ -29,6 +29,8 @@ tag from the now-released section and put it on the new top draft.
   A session with no terminal window on this Mac opens in a new window of your terminal
   (Ghostty when installed, else Terminal, or iTerm2, WezTerm, kitty or Alacritty), or
   copies its attach command instead, as you pick in the Agent Island settings (#500).
+  If the terminal you picked is uninstalled, the settings show the one used instead,
+  and picking that one keeps it (#529).
   A session already attached in tmux or over ssh opens as a second, mirrored view; with
   the copy setting, the first click says so and a second click copies. If the terminal
   fails to open, the attach command is copied and the island says so.
@@ -36,7 +38,9 @@ tag from the now-released section and put it on the new top draft.
   Prosper may control Ghostty, instead of Ghostty asking to run a script on every click.
   If Ghostty is not running it is started first, and if you decline, the island falls
   back to the script (#505). In Ghostty the session opens as a new tab of the open
-  Ghostty window, and in a new window only when Ghostty has none (#527). A session that
+  Ghostty window, and in a new window only when Ghostty has none (#527). If Ghostty
+  does not answer in time, the attach command is copied instead, so the session never
+  opens twice (#529). A session that
   publishes its work through dch also shows its open pull requests as repo#number
   buttons that open in your browser, how many it
   has merged, and its tasks done, in progress and queued (#506). The pull requests get a

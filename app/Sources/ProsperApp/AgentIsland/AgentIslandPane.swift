@@ -19,6 +19,13 @@ struct AgentIslandPane: View {
     /// Internal so a test can read it through the app's store (#486 B8).
     @AppStorage(AgentIslandPane.isolateKey, store: Preferences.defaults) var isolate = false
 
+    /// #529 (QA #333 L-3): saved on every pick, not on change. With the stored
+    /// terminal uninstalled the picker shows the fallback, and picking that same
+    /// one must stick, or reinstalling the old terminal switches clicks back.
+    var terminalPick: Binding<AgentTerminal> {
+        Binding(get: { terminal }, set: { terminal = $0; Preferences.agentIslandTerminal = $0.rawValue })
+    }
+
     var body: some View {
         NeonSection("Sessions") {
             NeonRow("Show sessions",
@@ -42,12 +49,11 @@ struct AgentIslandPane: View {
             }
             NeonDivider()
             NeonRow("Terminal") {
-                Picker("", selection: $terminal) {
+                Picker("", selection: terminalPick) {
                     ForEach(terminals, id: \.self) { Text($0.label).tag($0) }
                 }
                 .labelsHidden().pickerStyle(.menu).fixedSize()
                 .disabled(click != .open)
-                .onChange(of: terminal) { _, v in Preferences.agentIslandTerminal = v.rawValue }
             }
         }
     }

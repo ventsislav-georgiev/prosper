@@ -901,21 +901,26 @@ final class AgentIslandTests: XCTestCase {
         cc.waitUntilExit()
         XCTAssertEqual(cc.terminationStatus, 0, "the stand-in dch compiles")
         let key = AgentSessionKey(dir: #"/x/other dir "q" it's $HOME \b=c"#, name: #"my "odd" it's $HOME `x` \n \"#)
-        let cfg = ghosttyConfig(AgentIsland.ghosttyNewWindow(key, dch: fake.path))
-        XCTAssertEqual(cfg.command, AgentIsland.attachArgv(key, dch: fake.path).map(AgentIsland.shellQuoted).joined(separator: " "))
-        let p = Process(), out = Pipe()
-        p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = ["--noprofile", "--norc", "-c", "exec -l \(cfg.command ?? "")"]
-        var env = ["PATH": "/usr/bin:/bin"]
-        for kv in cfg.env { let pair = kv.split(separator: "=", maxSplits: 1).map(String.init); env[pair[0]] = pair[1] }
-        p.environment = env   // whatever list the event carries, as Ghostty would apply it
-        p.standardOutput = out
-        try p.run()
-        p.waitUntilExit()
-        let got = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        let argv0 = got.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init)
-        XCTAssertEqual(argv0, fake.path, "dch's argv[0] is its path, no leading -")
-        XCTAssertEqual(got, "\(fake.path)\n\(key.dir)\n-n\n\(key.name)\n")
+        // #529: and a dch path with "=", which env alone would read as an assignment.
+        let equals = dir.appendingPathComponent(#"fake "dch" $x=y"#)
+        try FileManager.default.copyItem(at: fake, to: equals)
+        for dch in [fake.path, equals.path] {
+            let cfg = ghosttyConfig(AgentIsland.ghosttyNewWindow(key, dch: dch))
+            XCTAssertEqual(cfg.command, AgentIsland.attachArgv(key, dch: dch).map(AgentIsland.shellQuoted).joined(separator: " "))
+            let p = Process(), out = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/bin/bash")
+            p.arguments = ["--noprofile", "--norc", "-c", "exec -l \(cfg.command ?? "")"]
+            var env = ["PATH": "/usr/bin:/bin"]
+            for kv in cfg.env { let pair = kv.split(separator: "=", maxSplits: 1).map(String.init); env[pair[0]] = pair[1] }
+            p.environment = env   // whatever list the event carries, as Ghostty would apply it
+            p.standardOutput = out
+            try p.run()
+            p.waitUntilExit()
+            let got = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let argv0 = got.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init)
+            XCTAssertEqual(argv0, dch, "dch's argv[0] is its path, no leading -")
+            XCTAssertEqual(got, "\(dch)\n\(key.dir)\n-n\n\(key.name)\n")
+        }
     }
 
     /// Ghostty: the event goes, no script, no copy, and the island collapses.
@@ -936,10 +941,10 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(l.events.count, 2, "the open finished: a click opens again")
     }
 
-    /// Not running, no dictionary or AppleScript off, timed out: the script path,
-    /// and the next click tries the event again.
+    /// Not running, no dictionary or AppleScript off: the script path, and the
+    /// next click tries the event again. (#529: a timeout copies instead.)
     @MainActor func testGhosttyFallsBackToTheScriptWhenTheEventFails() {
-        for status in [procNotFound, errAEEventNotHandled, errAETimeout].map(OSStatus.init) {
+        for status in [procNotFound, errAEEventNotHandled].map(OSStatus.init) {
             let s = session("s", .idle, dir: "/x/other dir")
             let (c, l) = clickController(.notAttached, .open, event: status, s)
             c.terminal = { .ghostty }
@@ -1027,7 +1032,7 @@ final class AgentIslandTests: XCTestCase {
     /// The event and then the script fail: copy with the existing notice.
     @MainActor func testGhosttyEventAndScriptBothFailCopies() {
         let s = session("s", .idle, dir: "/x/other dir")
-        let (c, l) = clickController(.notAttached, .open, ok: false, event: OSStatus(errAETimeout), s)
+        let (c, l) = clickController(.notAttached, .open, ok: false, event: OSStatus(procNotFound), s)
         c.terminal = { .ghostty }
         c.jump(s)
         drain(c); drain(c)
@@ -1037,6 +1042,89 @@ final class AgentIslandTests: XCTestCase {
                        AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir))
         XCTAssertEqual(c.store?.notices[s.key], "Couldn't open Ghostty, attach command copied")
         XCTAssertEqual(c.store?.expanded, true)
+    }
+
+    /// #529 (QA L1): a timeout (-1712) may still have opened the tab or window, so
+    /// nothing else opens; the attach command is copied and the notice says why.
+    @MainActor func testGhosttyTimeoutCopiesAndOpensNothingMore() {
+        let failed = OSStatus(errAEEventFailed), timeout = OSStatus(errAETimeout)
+        for statuses in [[timeout], [failed, timeout]] {
+            let s = session("s", .idle, dir: "/x/other dir")
+            let (c, l) = clickController(.notAttached, .open, s)
+            var queue = statuses
+            c.terminal = { .ghostty }
+            c.sendGhostty = { e, done in l.events.append(e); done(queue.isEmpty ? noErr : queue.removeFirst()) }
+            c.jump(s)
+            drain(c); drain(c); drain(c)
+            XCTAssertEqual(l.events.map(\.eventID), Array([code("NTab"), code("NWin")].prefix(statuses.count)),
+                           "\(statuses): no further event")
+            XCTAssertTrue(l.calls.isEmpty, "\(statuses): no script")
+            XCTAssertEqual(Pasteboard.general.string(forType: .string),
+                           AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir), "\(statuses)")
+            XCTAssertEqual(c.store?.notices[s.key], "Ghostty didn't answer, attach command copied", "\(statuses)")
+            XCTAssertEqual(c.store?.expanded, true, "\(statuses): the notice stays on screen")
+            XCTAssertFalse(c.ghosttyDenied, "\(statuses)")
+            c.jump(s)
+            XCTAssertEqual(l.events.count, statuses.count + 1, "\(statuses): the open finished, a click opens again")
+        }
+    }
+
+    /// QA #333 L-1: a terminal launch that fails after teardown writes nothing to
+    /// the pasteboard (the store guard in opened()).
+    @MainActor func testLateLaunchFailureAfterTeardownCopiesNothing() {
+        let s = session("s", .idle, dir: "/x/other dir")
+        let (c, l) = clickController(.notAttached, .open, ok: nil, s)
+        c.jump(s)
+        XCTAssertEqual(l.calls.count, 1)
+        c.reload()   // extLive is false: teardown
+        XCTAssertNil(c.store)
+        let before = Pasteboard.general.changeCount
+        l.done.first?(false)
+        drain(c)
+        XCTAssertEqual(Pasteboard.general.changeCount, before, "no pasteboard write after teardown")
+        XCTAssertNil(Pasteboard.general.string(forType: .string))
+    }
+
+    /// QA #333 L-2: a dch path with "=" reaches dch, not env's assignment list, for
+    /// an argv terminal (kitty) and a script one (Terminal). A stand-in "dch".
+    func testDchPathWithAnEqualsSignStillRunsDch() throws {
+        let dir = tempDir().appendingPathComponent("a=b", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fake = dir.appendingPathComponent("fake=dch")
+        try Data("#!/bin/sh\nprintf '%s\\n' \"$DCH_SOCKET_DIR\" \"$@\"\n".utf8).write(to: fake)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake.path)
+        let key = AgentSessionKey(dir: "/x/other dir", name: "s=1")
+        let argv = AgentIsland.attachArgv(key, dch: fake.path)
+        XCTAssertEqual(AgentIsland.attachArgv(key, dch: "/opt/fake/dch"),
+                       ["/usr/bin/env", "DCH_SOCKET_DIR=/x/other dir", "/opt/fake/dch", "-n", "s=1"], "no = in the path: as before")
+        guard case .arguments(let args) = AgentTerminal.kitty.launch(argv),
+              case .script(let text) = AgentTerminal.terminal.launch(argv) else { return XCTFail("kitty argv, Terminal script") }
+        let file = dir.appendingPathComponent("a.command")
+        try Data(text.utf8).write(to: file)
+        for (exe, rest) in [(args[0], Array(args.dropFirst())), ("/bin/sh", [file.path])] {
+            let p = Process(), out = Pipe()
+            p.executableURL = URL(fileURLWithPath: exe)
+            p.arguments = rest
+            p.standardOutput = out
+            try p.run()
+            p.waitUntilExit()
+            XCTAssertEqual(p.terminationStatus, 0, exe)
+            XCTAssertEqual(String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
+                           "/x/other dir\n-n\ns=1\n", exe)
+        }
+    }
+
+    /// QA #333 L-3: with the stored terminal gone the picker shows the fallback;
+    /// picking that same one saves it (scratch Preferences domain).
+    @MainActor func testPickingTheShownFallbackTerminalSavesIt() {
+        let was = Preferences.agentIslandTerminal
+        defer { Preferences.agentIslandTerminal = was }
+        Preferences.agentIslandTerminal = "uninstalled"
+        let pane = AgentIslandPane()
+        let shown = pane.terminalPick.wrappedValue
+        XCTAssertEqual(shown, AgentTerminal.resolve(raw: nil, installed: AgentTerminal.isInstalled), "the fallback shows")
+        pane.terminalPick.wrappedValue = shown
+        XCTAssertEqual(Preferences.agentIslandTerminal, shown.rawValue, "picking the shown fallback saves it")
     }
 
     /// A scripted cold start: the statuses each attempt returns, and what it did.
@@ -1520,6 +1608,30 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(titled.chips.first?.title.count, AgentIsland.maxTitleChars)
     }
 
+    /// QA #347 Q1: the k-loop counts the "+M" chip. One point short of 3 chips
+    /// plus "+1 pending PR": without that term 3 chips would draw past the budget.
+    func testPRChipsCountThePlusMChipWidth() {
+        let four = DchSessionMeta(openPRs: (1...4).map { pr("o/r", $0) })
+        let three = (1...3).reduce(0) { $0 + AgentIsland.chipWidth("r#\($1)") } + 2 * AgentIsland.chipSpacing
+        let budget = three + AgentIsland.chipSpacing + AgentIsland.chipWidth(AgentIsland.moreLabel(1)) - 1
+        let r = AgentIsland.prChips(four, budget: budget)
+        XCTAssertEqual(r.chips.map(\.label), ["r#1", "r#2"], "two chips and +2 fit, three and +1 do not")
+        XCTAssertEqual(r.more, 2)
+        XCTAssertLessThanOrEqual(lineWidth(four, r.chips, r.more), budget)
+    }
+
+    /// QA #363 a: the cut pass leaves a repo of exactly `maxRepoChars` whole
+    /// (`>`, not `>=`), even when the cut pass is the one that fits.
+    func testCutPassLeavesARepoAtTheCapWhole() {
+        let c18 = String(repeating: "c", count: AgentIsland.maxRepoChars)
+        let meta = DchSessionMeta(openPRs: [pr("o/" + c18, 1), pr("o/" + String(repeating: "a", count: 30), 2),
+                                            pr("o/" + String(repeating: "b", count: 30), 3)])
+        let chips = AgentIsland.prChips(meta).chips
+        XCTAssertEqual(chips.first?.label, c18 + "#1")
+        XCTAssertEqual(chips.dropFirst().first?.label, String(repeating: "a", count: AgentIsland.maxRepoChars - 1) + "…#2",
+                       "the cut pass is the one that fit")
+    }
+
     @MainActor
     func testPRClickOpensOnlyAnAllowlistedURLThroughTheSeam() {
         var opened: [URL] = []
@@ -1609,18 +1721,64 @@ final class AgentIslandTests: XCTestCase {
     /// #525: two lines without PR meta, three with a PR line.
     func testRowHeightsPerRow() {
         var s = session("s", .working)
-        XCTAssertEqual(AgentIslandGeometry.height(of: s), 48, "no meta: two lines, as before")
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "no meta: two lines, as before")
         s.meta = DchSessionMeta(tasks: .init(done: 1, total: 2))
-        XCTAssertEqual(AgentIslandGeometry.height(of: s), 48, "tasks ride on line 2")
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "tasks ride on line 2")
         s.meta = DchSessionMeta(openPRs: [.init(url: "x", repo: "o/r", num: nil, title: "")])
-        XCTAssertEqual(AgentIslandGeometry.height(of: s), 48, "a PR with no label draws nothing")
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "a PR with no label draws nothing")
         s.meta = DchSessionMeta(merged: 0)
-        XCTAssertEqual(AgentIslandGeometry.height(of: s), 48)
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48)
         s.meta = DchSessionMeta(merged: 3)
-        XCTAssertEqual(AgentIslandGeometry.height(of: s), AgentIslandGeometry.prRowHeight, "merged alone")
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), AgentIslandGeometry.prRowHeight, "merged alone")
         s.meta = DchSessionMeta(openPRs: [pr("o/r", 1)])
-        XCTAssertEqual(AgentIslandGeometry.height(of: s), AgentIslandGeometry.prRowHeight, "one open PR")
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), AgentIslandGeometry.prRowHeight, "one open PR")
         XCTAssertEqual(AgentIslandGeometry.prRowHeight, 64)
+    }
+
+    /// QA #363 b: a whole AgentIslandRow, laid out offscreen (ImageRenderer, no
+    /// window), is 48 pt without a PR line and 64 pt with one, as the model says.
+    @MainActor
+    func testWholeRowMeasures48Or64Offscreen() throws {
+        var s = session("s", .working, activity: 100, alias: "a title", agents: 2)
+        let cases: [(DchSessionMeta?, AgentIslandRowDetails, CGFloat)] = [
+            (nil, .all, 48), (DchSessionMeta(openPRs: [pr("o/r", 1)], merged: 3), .all, 64),
+            (DchSessionMeta(merged: 3), .all, 64),
+            (DchSessionMeta(openPRs: [pr("o/r", 1)], merged: 3), AgentIslandRowDetails(openPRs: false, merged: false), 48)]
+        for (meta, show, want) in cases {
+            s.meta = meta
+            XCTAssertEqual(AgentIslandGeometry.height(of: s, show: show), want)
+            let r = ImageRenderer(content: AgentIslandRow(session: s, now: 112, notice: nil, show: show) {}
+                .frame(width: AgentIslandGeometry.rowTextWidth + 60))
+            r.scale = 1
+            let cg = try XCTUnwrap(r.cgImage)
+            XCTAssertEqual(CGFloat(cg.height), want, "\(String(describing: meta)) \(show)")
+        }
+    }
+
+    /// QA #370 F6: a preview one row over the cap draws that row in the marker's
+    /// place (11 rows as 11), and two or more over end in "… N more lines". Context
+    /// keeps the 10-row cap (OQ-46: an 11th row is deny-only) and says "… 1 more
+    /// line". The card height counts what is drawn.
+    func testOneRowOverTheCapReadsAsOneRow() throws {
+        let cap = AgentPrompt.maxContext
+        let eleven = (1...cap + 1).map { "line \($0)" }, twelve = (1...cap + 2).map { "line \($0)" }
+        XCTAssertEqual(AgentCardLayout.previewRows(eleven).rows, eleven)
+        XCTAssertEqual(AgentCardLayout.previewRows(twelve).rows, Array(twelve.prefix(cap)) + ["… 2 more lines"])
+        XCTAssertEqual(AgentCardLayout.contextRows(eleven).rows, Array(eleven.prefix(cap)) + ["… 1 more line"])
+        XCTAssertTrue(AgentCardLayout.contextRows(eleven).overCap)
+        XCTAssertEqual(AgentCardLayout.contextRows(twelve).rows, Array(twelve.prefix(cap)) + ["… 2 more lines"])
+        // 8 + (11 rows * 14 + 8 + 6) + 26 jump + 8 + 4: 11 rows drawn either way.
+        let h: CGFloat = 8 + (CGFloat(cap + 1) * 14 + 8 + 6) + 26 + 8 + 4
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.context(eleven)), h)
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.context(twelve)), h)
+        // A preview card counts its rows as drawn: 11 preview rows add 11 lines.
+        let p = AgentPrompt(question: "Q?", context: [], options: [AgentPromptOption(digit: 1, label: "Yes", hint: nil)])
+        var ten = p, more = p
+        ten.preview = Array(eleven.prefix(cap))
+        more.preview = eleven
+        XCTAssertEqual(more.layout.preview, eleven)
+        XCTAssertEqual(AgentIslandGeometry.cardHeight(.prompt(more)) - AgentIslandGeometry.cardHeight(.prompt(ten)),
+                       more.layout.previewLine, "one more preview line, no marker")
     }
 
     /// #525: the list sums per-row heights; 6 rows show, then it scrolls, and

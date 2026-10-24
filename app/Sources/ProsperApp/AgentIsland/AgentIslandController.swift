@@ -290,8 +290,8 @@ final class AgentIslandController {
 
     /// Collapses once the terminal is up; a failed open copies instead and says so.
     /// #505: Ghostty first gets its Apple Event (one Automation consent, no
-    /// per-click prompt); any failure falls back to the script, which shows
-    /// Ghostty's own prompt.
+    /// per-click prompt); a failure falls back to the script, which shows
+    /// Ghostty's own prompt (a timeout copies, see openInGhostty).
     private func open(_ s: AgentSession) {
         guard opening.insert(s.key).inserted else { return }
         let t = terminal()
@@ -301,9 +301,9 @@ final class AgentIslandController {
 
     /// #527: a new tab first (Ghostty makes a window when it has none). Ghostty
     /// refusing the tab (non-native fullscreen: -10000) tries a new window. Not up
-    /// in time (-600), no handler (-1708) or a timeout (-1712, the tab may exist)
-    /// go to the script as before: a second event would wait again, fail the
-    /// same way, or open the session twice.
+    /// in time (-600) or no handler (-1708) go to the script as before: a second
+    /// event would wait again or fail the same way. #529: a timeout (-1712) may
+    /// still have opened the tab, so it opens nothing more and copies instead.
     private func openInGhostty(_ s: AgentSession, tab: Bool) {
         let dch = DchCommand.dchPath
         let event = tab ? AgentIsland.ghosttyNewTab(s.key, dch: dch) : AgentIsland.ghosttyNewWindow(s.key, dch: dch)
@@ -315,7 +315,11 @@ final class AgentIslandController {
                     if status == errAEEventNotPermitted { self.ghosttyDenied = true }
                     // Torn down meanwhile: no fallback opens anything; opened() only clears `opening`.
                     guard self.store != nil else { return self.opened(s, .ghostty, ok: false) }
-                    let toScript = [errAEEventNotPermitted, procNotFound, errAEEventNotHandled, errAETimeout]
+                    if status == errAETimeout {
+                        self.opening.remove(s.key)
+                        return self.copyAttach(s, notice: "Ghostty didn't answer, attach command copied")
+                    }
+                    let toScript = [errAEEventNotPermitted, procNotFound, errAEEventNotHandled]
                     if tab, !toScript.map(OSStatus.init).contains(status) { return self.openInGhostty(s, tab: false) }
                     self.launch(s, .ghostty)
                 }

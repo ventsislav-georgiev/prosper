@@ -203,7 +203,7 @@ enum AgentIsland {
     /// #525: a row draws a third line, the PR line, only for open PRs with a
     /// label or a merged count; `prChips` and the row height agree through this.
     /// #534: only the ones toggled on count, so a row with neither is 48 pt again.
-    static func hasPRLine(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all) -> Bool {
+    static func hasPRLine(_ m: DchSessionMeta?, show d: AgentIslandRowDetails) -> Bool {
         (d.openPRs && (m?.openPRs.contains { $0.label != nil } ?? false)) || mergedLabel(m, show: d) != nil
     }
 
@@ -362,8 +362,13 @@ enum AgentIsland {
     /// not have it), and the dir is always explicit: the terminal's env (launchd's,
     /// or a login shell's rc) is not Prosper's, so an implicit default dir could
     /// make `dch -n` create a new session instead of attaching.
+    /// #529 (QA #333 L-2): env reads any word with "=" as an assignment and
+    /// documents no "--" (env(1) suggests interposing a utility), so a dch path
+    /// with "=" goes through `sh -c 'exec "$0" "$@"'`, which keeps dch's argv[0]
+    /// its path.
     static func attachArgv(_ key: AgentSessionKey, dch: String) -> [String] {
-        ["/usr/bin/env", "DCH_SOCKET_DIR=\(key.dir)", dch, "-n", key.name]
+        ["/usr/bin/env", "DCH_SOCKET_DIR=\(key.dir)"] + (dch.contains("=") ? ["/bin/sh", "-c", #"exec "$0" "$@""#] : [])
+            + [dch, "-n", key.name]
     }
 
     /// #505: Ghostty's `new window with configuration {command}` (Ghostty.sdef),
