@@ -74,6 +74,9 @@ tag from the now-released section and put it on the new top draft.
   account, so the Prosper iPhone app can show them as a Live Activity and tell you when a
   session needs you. The card goes offline when the Mac sleeps, Prosper quits or you sign
   out. It is on by default; turn it off in Settings › General › Remote Terminal (#523).
+  Signing out and back in no longer leaves it stopped, it keeps updating after the Mac's
+  clock is corrected, and Settings says when this Mac is not activated on your account
+  (#532).
 - **A terminal session started from the phone opens in your home folder.** It used to
   start in the root of the disk ("/"), Prosper's own working folder (#517).
 - **Prosper no longer quits when the Mac goes to sleep with a manual fan speed set and

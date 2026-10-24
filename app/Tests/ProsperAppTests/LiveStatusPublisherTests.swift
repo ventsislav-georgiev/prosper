@@ -18,6 +18,12 @@ final class LiveStatusPublisherTests: XCTestCase {
         var nextID = 0
         var posts: [Post] = []
         var reply: Int? = 204
+        /// Holding: posts stay in flight until the test answers them through `pending`.
+        var hold = false
+        var pending: [@MainActor (Int?) -> Void] = []
+        /// The persisted seq (Preferences.liveStatusSeq stand-in); a new Rig given the
+        /// old one's value is a relaunch.
+        var savedSeq: Int64 = 0
         var bearer: String? = "tok"
         var activated = true
         var enabled = true
@@ -32,7 +38,7 @@ final class LiveStatusPublisherTests: XCTestCase {
             }
             p.post = { [unowned self] body, bearer, done in
                 self.posts.append(Post(json: String(decoding: body, as: UTF8.self), bearer: bearer, waited: false))
-                done(self.reply)
+                if self.hold { self.pending.append(done) } else { done(self.reply) }
             }
             p.postAndWait = { [unowned self] body, bearer in
                 self.posts.append(Post(json: String(decoding: body, as: UTF8.self), bearer: bearer, waited: true))
@@ -41,6 +47,8 @@ final class LiveStatusPublisherTests: XCTestCase {
             p.isActivated = { [unowned self] in self.activated }
             p.enabled = { [unowned self] in self.enabled }
             p.macID = { "mac1" }
+            p.loadSeq = { [unowned self] in self.savedSeq }
+            p.saveSeq = { [unowned self] in self.savedSeq = $0 }
             p.center = center
             p.start()
         }
@@ -62,6 +70,7 @@ final class LiveStatusPublisherTests: XCTestCase {
         }
         var names: [String] { (last["sessions"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String } }
         var isOffline: Bool { last["offline"] as? Bool == true }
+        var seq: Int64? { last["seq"] as? Int64 }
     }
 
     private func s(_ name: String, _ state: AgentState = .idle, alias: String = "", agents: Int = 0) -> AgentSession {
@@ -351,6 +360,67 @@ final class LiveStatusPublisherTests: XCTestCase {
         XCTAssertEqual(r.last["seq"] as? Int64, ms + 3_600_000, "back on the wall clock, never ahead of it")
     }
 
+    /// QA #363 L-2: a clock under 1 h fast is accepted, so the Worker stores its seq;
+    /// fixed, then relaunched, the Mac must still post above it (the Worker drops a
+    /// lower seq with a bare 204 and the phone's card lapses).
+    func testAFastClockFixedWithinAnHourDoesNotRegressSeqAcrossARelaunch() {
+        let fast = Rig()
+        fast.clock += 1800
+        fast.p.sessionsChanged([s("a")])
+        XCTAssertEqual(fast.seq, ms + 1_800_000)
+        XCTAssertEqual(fast.savedSeq, ms + 1_800_000, "persisted as it goes out")
+        fast.clock -= 1800   // the clock is fixed (the fake timers keep their fast due times)
+        fast.p.sessionsChanged([s("b")])
+        fast.advance(2)
+        XCTAssertEqual(fast.posts.count, 2)
+        XCTAssertEqual(fast.seq, ms + 1_800_001, "same process: never below the last seq")
+        let relaunched = Rig()
+        relaunched.savedSeq = fast.savedSeq
+        relaunched.clock = fast.clock
+        relaunched.p.sessionsChanged([s("a")])
+        XCTAssertEqual(relaunched.seq, ms + 1_800_002, "relaunched: above the persisted seq, not on the fixed clock")
+    }
+
+    func testAPersistedSeqIsHonouredByANewPublisher() {
+        let r = Rig()
+        r.savedSeq = ms + 5000
+        r.p.sessionsChanged([s("a")])
+        XCTAssertEqual(r.seq, ms + 5001)
+        r.clock += 10
+        r.enabled = false; r.p.refresh()
+        XCTAssertEqual(r.seq, ms + 10_000, "back on the wall clock once it passes")
+        XCTAssertEqual(r.savedSeq, ms + 10_000)
+    }
+
+    /// QA #363 L-2: a clock over 1 h fast gets 400 invalid_seq; once it is fixed, the
+    /// next post must go out on wall time, not stay ahead (and rejected) for hours.
+    func testA400ResetsSeqSoTheNextPostIsWallTime() {
+        let r = Rig()
+        r.clock += 7200
+        r.reply = 400
+        r.p.sessionsChanged([s("a")])
+        XCTAssertEqual(r.seq, ms + 7_200_000)
+        XCTAssertEqual(r.savedSeq, 0, "the reset is persisted too")
+        r.clock -= 7200   // the clock is fixed (the fake timers keep their fast due times)
+        r.reply = 204
+        r.p.sessionsChanged([s("b")])
+        r.advance(2)
+        XCTAssertEqual(r.posts.count, 2)
+        XCTAssertEqual(r.seq, ms + 2000, "the next post goes out on wall time")
+        XCTAssertEqual(r.savedSeq, ms + 2000)
+    }
+
+    func testA400BeforeARelaunchStillPostsOnWallTime() {
+        let r = Rig()
+        r.clock += 7200
+        r.reply = 400
+        r.p.sessionsChanged([s("a")])
+        let relaunched = Rig()
+        relaunched.savedSeq = r.savedSeq
+        relaunched.p.sessionsChanged([s("a")])
+        XCTAssertEqual(relaunched.seq, ms)
+    }
+
     // MARK: - Responses
 
     func testBackoffOn429And5xx400AndNetworkError() {
@@ -389,6 +459,48 @@ final class LiveStatusPublisherTests: XCTestCase {
         }
     }
 
+    /// QA #363 L-1: a post in flight at sign-out answers 401 (its session was revoked)
+    /// only after the next sign-in activated: the new session keeps posting.
+    func testA401FromBeforeSignOutDoesNotHaltTheNextSession() {
+        let r = Rig()
+        r.hold = true
+        r.p.sessionsChanged([s("a")])
+        XCTAssertNotNil(r.p.signOut())
+        r.bearer = nil; r.activated = false
+        r.p.refresh()
+        r.bearer = "tok2"; r.activated = true
+        r.p.deviceActivated()   // the next sign-in
+        XCTAssertEqual(r.posts.count, 2)
+        XCTAssertEqual(r.posts[1].bearer, "tok2")
+        r.pending[0](401)   // the old session's answer lands late
+        r.pending[1](204)
+        XCTAssertFalse(r.p.halted)
+        XCTAssertTrue(r.p.isLive)
+        r.hold = false
+        r.p.sessionsChanged([s("b")])
+        r.advance(2)
+        XCTAssertEqual(r.posts.count, 3, "the change still posts")
+        XCTAssertEqual(r.names, ["b"])
+        r.advance(60)
+        XCTAssertEqual(r.posts.count, 4, "and the heartbeat")
+    }
+
+    /// The same late answer across an activation alone (a 401 lifted by re-activating).
+    func testAResponseFromBeforeAnActivationIsIgnoredButACurrentOneIsNot() {
+        let r = Rig()
+        r.hold = true
+        r.p.sessionsChanged([s("a")])
+        r.p.deviceActivated()
+        r.pending[0](403)
+        XCTAssertFalse(r.p.halted, "sent before the activation")
+        r.p.sessionsChanged([s("b")])
+        r.advance(2)
+        XCTAssertEqual(r.pending.count, 2, "the change posted")
+        guard r.pending.count == 2 else { return }
+        r.pending[1](403)
+        XCTAssertTrue(r.p.halted, "sent after it: stops as before")
+    }
+
     func testSignOutLiftsTheStopForTheNextSignIn() {
         let r = Rig()
         r.reply = 403
@@ -398,6 +510,27 @@ final class LiveStatusPublisherTests: XCTestCase {
     }
 
     // MARK: - Setting, real queue
+
+    func testSettingsNoteSaysWhyNothingPosts() {
+        let base = "Sends session names and states, never terminal text, to your Prosper account for the iPhone app's Live Activity."
+        XCTAssertEqual(LiveStatusPublisher.settingsNote(signedIn: true, activated: true, islandOn: true), base)
+        XCTAssertEqual(LiveStatusPublisher.settingsNote(signedIn: true, activated: false, islandOn: true),
+                       "This Mac is not activated on your account, so nothing is sent. " + base)
+        XCTAssertEqual(LiveStatusPublisher.settingsNote(signedIn: false, activated: false, islandOn: false),
+                       "Sign in under Account to use it. " + base + " Needs Agent Island turned on.",
+                       "signed out says sign in, not activation")
+    }
+
+    func testSeqKeyRoundTripsAndIsNotSynced() {
+        let key = "liveStatusSeq"
+        let saved = Preferences.defaults.object(forKey: key)
+        defer { Preferences.defaults.set(saved, forKey: key) }
+        Preferences.defaults.removeObject(forKey: key)
+        XCTAssertEqual(Preferences.liveStatusSeq, 0)
+        Preferences.liveStatusSeq = 1_800_000_000_123
+        XCTAssertEqual(Preferences.liveStatusSeq, 1_800_000_000_123)
+        XCTAssertFalse(SyncedKeys.isSynced(key), "per Mac")
+    }
 
     func testSettingDefaultsOn() {
         let key = "liveStatusEnabled"

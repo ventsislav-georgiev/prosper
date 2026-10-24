@@ -7,7 +7,8 @@
 // goes out on a change (coalesced over 2 s) and as the heartbeat, 60 s after the
 // last post. Offline goes out on sleep, quit, sign-out, toggle-off and when the
 // island stops. Posts only while signed in, activated and switched on; a 401/403
-// stops posting until the next activation (sign-in activates).
+// stops posting until the next activation (sign-in activates). A response to a post
+// sent before the last sign-out or activation is ignored (#532).
 
 import AppKit
 import os.log
@@ -57,6 +58,8 @@ final class LiveStatusPublisher {
     var isActivated: @MainActor () -> Bool = { Preferences.liveStatusActivated }
     var enabled: @MainActor () -> Bool = { Preferences.liveStatusEnabled }
     var macID: @MainActor () -> String = { SupporterStore.deviceID() }
+    var loadSeq: @MainActor () -> Int64 = { Preferences.liveStatusSeq }
+    var saveSeq: @MainActor (Int64) -> Void = { Preferences.liveStatusSeq = $0 }
     var center = NSWorkspace.shared.notificationCenter
 
     // MARK: - State
@@ -69,7 +72,13 @@ final class LiveStatusPublisher {
     private(set) var halted = false
     /// Asleep or quitting.
     private var paused = false
-    private var lastSeq: Int64 = 0
+    /// The last seq sent, persisted (#532): a relaunch after a fast clock is fixed still
+    /// posts above what the Worker stored, which drops a lower seq with a bare 204.
+    /// Read on first use, after the seams are set.
+    private lazy var lastSeq: Int64 = loadSeq()
+    /// Bumped by sign-out and activation; each post carries the one it went out under,
+    /// so a 401 sent before a sign-out cannot halt the next session (#532).
+    private var generation = 0
     private var cancelDebounce: (() -> Void)?
     private var cancelHeartbeat: (() -> Void)?
     private var observers: [NSObjectProtocol] = []
@@ -113,7 +122,7 @@ final class LiveStatusPublisher {
             postList(bearer)
         } else if bearer == nil, isLive {
             goQuiet()
-            if let bearer = offlineBearer() { post(body(nil), bearer) { [weak self] in self?.handle($0) } }
+            if let bearer = offlineBearer() { send(body(nil), bearer) }
         }
     }
 
@@ -135,6 +144,7 @@ final class LiveStatusPublisher {
     /// send ahead of the session revoke, nil when nothing was live. Posts nothing itself.
     func signOut() -> Data? {
         halted = false   // the next sign-in starts clean
+        generation += 1
         guard isLive else { return nil }
         goQuiet()
         return offlineBearer() == nil ? nil : body(nil)
@@ -143,6 +153,7 @@ final class LiveStatusPublisher {
     /// A successful POST /activate (every sign-in does one): a 401/403 stop lifts.
     func deviceActivated() {
         halted = false
+        generation += 1
         refresh()
     }
 
@@ -172,17 +183,30 @@ final class LiveStatusPublisher {
         guard let bearer = checked ?? gatedBearer() else { refresh(); return }   // a gate closed unseen
         cancelHeartbeat?()
         cancelHeartbeat = after(Self.heartbeat) { [weak self] in self?.postList() }
-        post(body(latest), bearer) { [weak self] in self?.handle($0) }
+        send(body(latest), bearer)
+    }
+
+    private func send(_ data: Data, _ bearer: String) {
+        let gen = generation
+        post(data, bearer) { [weak self] in self?.handle($0, gen) }
     }
 
     /// 2xx: fine. 401/403: stop until activation. 429, 5xx, 400, 413 and network errors:
     /// no retry of our own; the next change or heartbeat sends the full list again.
-    private func handle(_ code: Int?) {
+    /// A post from before the last sign-out or activation: ignored, whatever it got.
+    private func handle(_ code: Int?, _ gen: Int) {
+        guard gen == generation else { return }
         switch code {
         case 401, 403:
             halted = true
             goQuiet()
-        case 400, 413:   // a bug on our side: logged once, then treated like a 5xx
+        case 400, 413:   // a clock or a bug on our side: logged once, then treated like a 5xx
+            if code == 400 {
+                // Most likely invalid_seq: a seq over 1 h ahead of the Worker, from a
+                // clock that ran fast and was fixed. The next post goes out on wall time.
+                lastSeq = 0
+                saveSeq(0)
+            }
             if !loggedBadRequest {
                 loggedBadRequest = true
                 Self.log.error("live status: the Worker answered \(code ?? 0, privacy: .public) to a sessions post")
@@ -193,14 +217,27 @@ final class LiveStatusPublisher {
     }
 
     /// `{mac_id, seq, sessions}`, or `{mac_id, seq, offline: true}` for nil. seq is
-    /// wall-clock ms, strictly increasing: max(now, last + 1).
+    /// wall-clock ms, strictly increasing across relaunches: max(now, last + 1).
     func body(_ sessions: [Session]?) -> Data {
         let ms = Int64((now().timeIntervalSince1970 * 1000).rounded(.down))
         lastSeq = max(ms, lastSeq + 1)
+        saveSeq(lastSeq)
         let b = Body(mac_id: macID(), seq: lastSeq, sessions: sessions, offline: sessions == nil ? true : nil)
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return (try? enc.encode(b)) ?? Data()
+    }
+
+    /// The Settings row's footnote (GeneralPane). On by default, but only while signed
+    /// in and activated; it reads Agent Island's session list, so it says so while the
+    /// island is off. A refused /activate (device_limit) leaves the toggle on: say why
+    /// nothing posts (#532).
+    nonisolated static func settingsNote(signedIn: Bool, activated: Bool, islandOn: Bool) -> String {
+        var note = "Sends session names and states, never terminal text, to your Prosper account for the iPhone app's Live Activity."
+        if !signedIn { note = "Sign in under Account to use it. " + note }
+        else if !activated { note = "This Mac is not activated on your account, so nothing is sent. " + note }
+        if !islandOn { note += " Needs Agent Island turned on." }
+        return note
     }
 
     // MARK: - Wire list

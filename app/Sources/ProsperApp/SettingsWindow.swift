@@ -1054,13 +1054,11 @@ private struct GeneralPane: View {
     // and returns. There's no first-run wizard, so this is the only nudge.
     @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
 
-    /// #523: the "Live status on iPhone" footnote. On by default, but only while
-    /// signed in; it reads Agent Island's session list, so it says so while the island is off.
+    /// #523: the "Live status on iPhone" footnote (LiveStatusPublisher.settingsNote).
     private var liveStatusNote: String {
-        var note = "Sends session names and states, never terminal text, to your Prosper account for the iPhone app's Live Activity."
-        if !SupporterClient.shared.isSignedIn { note = "Sign in under Account to use it. " + note }
-        if !AgentIslandController.shared.extLive { note += " Needs Agent Island turned on." }
-        return note
+        LiveStatusPublisher.settingsNote(signedIn: SupporterClient.shared.isSignedIn,
+                                         activated: Preferences.liveStatusActivated,
+                                         islandOn: AgentIslandController.shared.extLive)
     }
 
     /// The Prosper Remote companion app — the only client for the Remote Terminal
@@ -1179,7 +1177,7 @@ private struct GeneralPane: View {
             // Terminal needs a second device, Local AI needs a downloaded model and
             // the RAM to hold it — neither belongs in the first screenful.
             NeonSection("Remote Terminal",
-                        footer: "Serves your terminal sessions to the Prosper Remote iPhone/iPad app over Tailscale. The port binds only to your Tailscale address — never the public internet. Requires Tailscale to be running on both devices.") {
+                        footer: "Serves your terminal sessions to the Prosper Remote iPhone/iPad app over Tailscale. The port binds only to your Tailscale address — never the public internet. Requires Tailscale to be running on both devices. Live status on iPhone is separate: it sends only session names and states to your Prosper account.") {
                 Toggle("Serve sessions over Tailscale", isOn: Binding(
                     get: { model.remoteTerminalEnabled },
                     set: { model.setRemoteTerminal($0) }))

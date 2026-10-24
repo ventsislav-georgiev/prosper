@@ -365,6 +365,8 @@ enum Preferences {
         static let liveStatusEnabled = "liveStatusEnabled"
         // #523: POST /activate succeeded for this Mac on the signed-in account.
         static let liveStatusActivated = "liveStatusActivated"
+        // #532: the last live status seq sent; per Mac, so not in SyncedKeys.
+        static let liveStatusSeq = "liveStatusSeq"
         // Agent Island (#474): which socket dirs it lists while isolation is on.
         static let agentIslandSessions = "agentIslandSessions"
         // #500: what a row click does (AgentIslandClick) and the terminal it opens (AgentTerminal).
@@ -1026,6 +1028,13 @@ enum Preferences {
     static var liveStatusActivated: Bool {
         get { defaults.bool(forKey: Keys.liveStatusActivated) }
         set { defaults.set(newValue, forKey: Keys.liveStatusActivated) }
+    }
+
+    /// #532: the last seq LiveStatusPublisher sent (ms), so a relaunch after a fast
+    /// clock is fixed still posts above what the Worker stored. 0 = none.
+    static var liveStatusSeq: Int64 {
+        get { (defaults.object(forKey: Keys.liveStatusSeq) as? NSNumber)?.int64Value ?? 0 }
+        set { defaults.set(newValue, forKey: Keys.liveStatusSeq) }
     }
 
     /// Agent Island's "Show sessions" raw value (`AgentIslandSource`); unset or
