@@ -49,8 +49,10 @@ tag from the now-released section and put it on the new top draft.
   cannot be picked there; approve those in the terminal. An option that changes the
   session's permission mode (switch to auto mode, accept edits, a plan approval that
   leaves plan mode) is never one click on the island, even when a narrow terminal wraps
-  its label; change modes in the terminal (#491). Prompts without numbered options (codex,
-  cursor, opencode) show their last lines and an Open terminal button (#475).
+  its label; change modes in the terminal (#491). A row that only gives the session
+  access to a folder ("always allow access to …") is a rule, not a mode change (#508).
+  Prompts without numbered options (codex, cursor, opencode) show their last lines and an
+  Open terminal button (#475).
 - **Prosper no longer quits when the Mac goes to sleep with a manual fan speed set and
   the fan helper gone or unreachable.** The error path of the sleep-time fan reset ran
   on the helper connection's queue and stopped the app there; it has been possible

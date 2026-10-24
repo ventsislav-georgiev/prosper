@@ -37,9 +37,15 @@ struct AgentPromptOption: Hashable {
     /// island. A "don't ask again" rule is not a mode change. Matched on label plus
     /// detail with all whitespace removed: a narrow dialog wraps anywhere, even
     /// inside a word ("Yes, and switch to" / "accept edits", "auto-" / "accept").
+    /// One exception (QA #331 L1): "Yes, and always allow access to <dir> …" is
+    /// never a mode change, even on "(shift+tab)" or the shift+tab hint. Claude
+    /// Code appends the cycle key to every file-dialog yes-session row, but draws
+    /// this wording only when acceptEdits is not offered, so the row only adds a
+    /// directory: a rule, one click (OQ-45 b).
     var isModeChange: Bool {
-        if hint == "shift+tab" { return true }
         let text = ([label] + detail).joined().filter { !$0.isWhitespace }
+        if text.hasPrefix(Self.dirRulePrefix) { return false }
+        if hint == "shift+tab" { return true }
         return text.contains("(shift+tab)") || Self.modePrefixes.contains { text.hasPrefix($0) }
     }
 
@@ -47,6 +53,7 @@ struct AgentPromptOption: Hashable {
         "Yes, and switch to", "Yes, and use auto mode", "Yes, auto-accept edits",
         "Yes, manually approve edits", "Yes, clear context",
     ].map { $0.filter { !$0.isWhitespace } }
+    private static let dirRulePrefix = "Yes, and always allow access to".filter { !$0.isWhitespace }
 }
 
 struct AgentPrompt: Hashable {

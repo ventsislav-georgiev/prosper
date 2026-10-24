@@ -1357,6 +1357,36 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertEqual(f.sent, ["2"])
     }
 
+    /// QA #331 L1: Claude Code puts "(shift+tab)" on every file-dialog yes-session
+    /// row; "always allow access to <dir>" only adds a directory, so it stays one
+    /// click, unwrapped or wrapped mid-word. Every other "(shift+tab)" row, and any
+    /// other "Yes, and always allow" wording on it, stays a mode change.
+    func testDirRuleOnShiftTabIsNotAModeChange() throws {
+        func mode(_ label: String, _ detail: [String] = [], hint: String? = nil) -> Bool {
+            AgentPromptOption(digit: 2, label: label, hint: hint, detail: detail).isModeChange
+        }
+        XCTAssertFalse(mode("Yes, and always allow access to tmp/ for this session (shift+tab)"))
+        XCTAssertFalse(mode("Yes, and always allow access to tmp/ for this session", hint: "shift+tab"))
+        XCTAssertFalse(mode("Yes, and always al", ["low access to tmp/ for this", "session (shift+tab)"]))
+        XCTAssertFalse(mode("Yes, and alw", ["ays allow acc", "ess to tmp/ for this session"], hint: "shift+tab"))
+        XCTAssertTrue(mode("Yes, allow all edits during this session (shift+tab)"))
+        XCTAssertTrue(mode("Yes, and always allow all edits (shift+tab)"))
+        XCTAssertTrue(mode("Yes, and always allow", ["all edits"], hint: "shift+tab"))
+        // 2.1.309 joins setMode acceptEdits and the dir grant with "; ", mode row first.
+        let combined = "Yes, and switch to accept edits (auto-approve file edits and common file commands)"
+            + " for this session; Yes, and always allow access to tmp/ for this session (shift+tab)"
+        XCTAssertTrue(mode(combined))
+        XCTAssertTrue(mode("Yes, and switch to accept edits (auto-approve file edits and com",
+                           ["mon file commands) for this session; Yes, and always al",
+                            "low access to tmp/ for this session (shift+tab)"]))
+
+        let screen = altered(run2Screen, "2. Yes, and don’t ask again for: /usr/bin/true qa310 *",
+                             "2. Yes, and always allow access to tmp/ for this session (shift+tab)")
+        let o = try prompt(screen).options[1]
+        XCTAssertEqual(o.hint, "shift+tab")
+        XCTAssertFalse(o.isModeChange)
+    }
+
     /// A "No…" row on "(shift+tab)" is still a deny: on, and no mode caption for it.
     func testDenyOnShiftTabStaysOn() throws {
         let screen = altered(run12Screen, "3. No", "3. No, and tell Claude what to change (shift+tab)")
