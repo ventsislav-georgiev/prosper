@@ -1308,6 +1308,48 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 12s ago", "no meta: unchanged")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
                        "T, Working, 12s ago, 1/2 done, 3 merged, open pull requests r#12")
+        m.meta = DchSessionMeta(openPRs: (1...5).map { pr("o/r", $0) })
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
+                       "T, Working, 12s ago, open pull requests r#1, r#2, r#3 and 2 more", "QA #347 L-e")
+        m.meta = DchSessionMeta(openPRs: (1...4).map { pr("o/r", $0) })
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
+                       "T, Working, 12s ago, open pull requests r#1, r#2, r#3 and 1 more")
+    }
+
+    /// QA #347 L-d: every drawn count caps at "99999+"; done > total stays as drawn.
+    func testCountsCapAt99999() {
+        XCTAssertEqual([99_999, 100_000, Int.max].map(AgentIsland.count), ["99999", "99999+", "99999+"])
+        func summary(done: Int = 1, total: Int = 2, inProgress: Int = 3, queued: Int = 4) -> String? {
+            AgentIsland.metaSummary(DchSessionMeta(tasks: .init(done: done, total: total, inProgress: inProgress,
+                                                                queued: queued)))
+        }
+        XCTAssertEqual(summary(done: 100_000), "99999+/2 done · 3 in progress · 4 queued", "done")
+        XCTAssertEqual(summary(total: 100_000), "1/99999+ done · 3 in progress · 4 queued", "total")
+        XCTAssertEqual(summary(inProgress: 100_000), "1/2 done · 99999+ in progress · 4 queued", "in progress")
+        XCTAssertEqual(summary(queued: 100_000), "1/2 done · 3 in progress · 99999+ queued", "queued")
+        XCTAssertEqual(summary(done: 7, total: 3), "7/3 done · 3 in progress · 4 queued", "done > total as is")
+        XCTAssertEqual(AgentIsland.mergedLabel(DchSessionMeta(merged: 100_000)), "99999+ merged")
+        var s = session("s", .working, activity: 100, alias: "T")
+        s.meta = DchSessionMeta(tasks: .init(done: Int.max, total: Int.max), merged: Int.max)
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112),
+                       "T, Working, 12s ago, 99999+/99999+ done, 99999+ merged")
+        // Layout: an Int.max merged label still leaves the chips their room.
+        let three = (1...3).map { pr("o/r", $0) }
+        XCTAssertEqual(AgentIsland.prChips(DchSessionMeta(openPRs: three, merged: Int.max)).chips.count, 3)
+    }
+
+    /// QA #347 L-c: the worst case (Int.max merged, 50 long PRs with 10-digit
+    /// numbers) measures within the budget, "+M" and merged label included.
+    func testWorstCaseChipLineFitsTheBudget() {
+        let meta = DchSessionMeta(openPRs: (1...50).map { pr("o/a-very-long-repository-name-\($0)", 1_234_567_890 + $0) },
+                                  merged: Int.max)
+        let (chips, more) = AgentIsland.prChips(meta)
+        XCTAssertEqual(chips, [], "k == 0: not one chip fits, only the +M is drawn")
+        XCTAssertEqual(more, 50)
+        let parts = chips.map { AgentIsland.chipWidth($0.label) } + (more > 0 ? [AgentIsland.chipWidth("+\(more)")] : [])
+            + [AgentIslandGeometry.width(AgentIsland.mergedLabel(meta)!, AgentIslandGeometry.chipFont)]
+        let width = parts.reduce(0, +) + CGFloat(parts.count - 1) * AgentIsland.chipSpacing
+        XCTAssertLessThanOrEqual(width, AgentIsland.prChipBudget)
     }
 
     func testPRChipsCapWithPlusMAndFitTheBudget() {
@@ -1354,6 +1396,17 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(opened, [URL(string: "https://github.com/o/r/pull/12")!])
         AgentIsland.open(AgentIsland.PRChip(label: "x#1", title: "", url: nil))
         XCTAssertEqual(opened.count, 1, "a label chip opens nothing")
+    }
+
+    /// QA #347 L-f: unstubbed, the default seam opens nothing under XCTest.
+    @MainActor
+    func testDefaultOpenURLOpensNothingUnderXCTest() {
+        var reached: [URL] = []
+        let saved = AgentIsland.workspaceOpen
+        AgentIsland.workspaceOpen = { reached.append($0); return true }
+        defer { AgentIsland.workspaceOpen = saved }
+        AgentIsland.open(AgentIsland.PRChip(label: "r#12", title: "", url: URL(string: "https://github.com/o/r/pull/12")))
+        XCTAssertEqual(reached, [])
     }
 
     /// QA I1: `dch --meta` writes only .sock.meta; the stamp must see it or PRs
@@ -1447,7 +1500,7 @@ final class AgentIslandTests: XCTestCase {
         func m(_ prs: [DchSessionMeta.PR], tasks: DchSessionMeta.Tasks? = nil, merged: Int? = nil) -> DchSessionMeta {
             DchSessionMeta(tasks: tasks, openPRs: prs, merged: merged)
         }
-        let big = 999_999_999
+        let big = Int.max
         var rows = [
             session("prosper-main", .working, activity: old, alias: "prosper", agents: 2),
             session("sec-1", .blocked, activity: old, alias: "a very long session title that has to truncate somewhere", agents: 12),

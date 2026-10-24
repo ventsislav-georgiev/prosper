@@ -342,6 +342,7 @@ struct AgentIslandRow: View {
     @State private var hover = false
 
     var body: some View {
+        let prs = AgentIsland.prChips(session.meta)   // once per body
         Button(action: action) {
             HStack(alignment: .center, spacing: 10) {
                 Text(session.state.glyph)
@@ -364,7 +365,7 @@ struct AgentIslandRow: View {
                         }
                         if !prs.chips.isEmpty || prs.more > 0 || AgentIsland.mergedLabel(session.meta) != nil {
                             Spacer(minLength: 6)
-                            prChips
+                            prChips(prs)
                         }
                     }
                     HStack(spacing: 6) {
@@ -419,12 +420,10 @@ struct AgentIslandRow: View {
     /// line, so the state label keeps its room whatever the numbers are.
     static let summaryMaxWidth: CGFloat = 220
 
-    private var prs: (chips: [AgentIsland.PRChip], more: Int) { AgentIsland.prChips(session.meta) }
-
     /// Open PRs as "repo#12" chips in the agents capsule's style: a button when
     /// the URL passed the allowlist, else a dimmer label; then "18 merged".
     /// Static, no animation.
-    private var prChips: some View {
+    private func prChips(_ prs: (chips: [AgentIsland.PRChip], more: Int)) -> some View {
         HStack(spacing: AgentIsland.chipSpacing) {
             ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
                 if chip.url != nil {

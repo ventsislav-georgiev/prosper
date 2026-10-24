@@ -152,29 +152,34 @@ enum AgentIsland {
 
     static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval) -> String {
         let age = age(of: s, now: now)
-        let prs = prChips(s.meta, budget: .infinity).chips.map(\.label)
+        let (chips, more) = prChips(s.meta, budget: .infinity)
+        let prs = chips.map(\.label).joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
         return [s.title, s.state.label, age.isEmpty ? nil : "\(age) ago", metaSummary(s.meta), mergedLabel(s.meta),
-                prs.isEmpty ? nil : "open pull requests " + prs.joined(separator: ", ")]
+                chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
     }
 
     // MARK: - Session meta (#506)
+
+    /// Every count the row draws: "99999+" above 99999, so a runaway number
+    /// cannot squeeze the title. done > total is drawn as is.
+    static func count(_ n: Int) -> String { n > 99_999 ? "99999+" : "\(n)" }
 
     /// The second line's "22/26 done · 2 in progress · 2 queued": zero and
     /// unknown parts left out, nil when nothing is left (the row looks as before).
     static func metaSummary(_ m: DchSessionMeta?) -> String? {
         guard let t = m?.tasks else { return nil }
         var parts: [String] = []
-        if let total = t.total, total > 0 { parts.append("\(t.done ?? 0)/\(total) done") }
-        if let n = t.inProgress, n > 0 { parts.append("\(n) in progress") }
-        if let n = t.queued, n > 0 { parts.append("\(n) queued") }
+        if let total = t.total, total > 0 { parts.append("\(count(t.done ?? 0))/\(count(total)) done") }
+        if let n = t.inProgress, n > 0 { parts.append("\(count(n)) in progress") }
+        if let n = t.queued, n > 0 { parts.append("\(count(n)) queued") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// "18 merged", after the PR chips on the title line; nil for none.
     static func mergedLabel(_ m: DchSessionMeta?) -> String? {
         guard let n = m?.merged, n > 0 else { return nil }
-        return "\(n) merged"
+        return "\(count(n)) merged"
     }
 
     /// One open PR as the row draws it. `url` is set only when it passed the
@@ -220,7 +225,13 @@ enum AgentIsland {
     }
 
     /// A PR click's only way out of the app; tests replace it and never open a real URL.
-    @MainActor static var openURL: (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
+    /// Under XCTest the default opens nothing even unstubbed (as GhosttyEventSender).
+    @MainActor static var openURL: @MainActor (URL) -> Void = { url in
+        guard NSClassFromString("XCTestCase") == nil else { return }
+        _ = workspaceOpen(url)
+    }
+    /// What the default reaches; replaced only by the guard's test.
+    @MainActor static var workspaceOpen: @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }
 
     /// Opens an allowlisted chip; a label chip opens nothing.
     @MainActor static func open(_ chip: PRChip) {
