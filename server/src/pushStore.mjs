@@ -289,7 +289,7 @@ export async function postSessions(deps, email, body) {
       return NO_CONTENT;
     }
   }
-  return { status: 503, error: "busy" }; // lost twice: the Mac backs off and resends (#523)
+  return { status: 503, error: "busy" }; // lost twice: the Mac resends on its next change or heartbeat (#523)
 }
 
 /** The every-minute cron: lapse silent Macs, end idle cards, re-push old ones. */
