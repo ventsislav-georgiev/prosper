@@ -406,12 +406,18 @@ test("alerts: the sessions entering blocked are in card order; 120 s and the blo
 
 test("alertPayload: one session as before; two or more aggregate under the first, collapsed per Mac", async () => {
   const one = alertPayload(HEX, "Studio", [{ name: "a", label: "Fix it" }]);
-  assert.equal(one.aps.alert.body, "Fix it needs you");
+  assert.deepEqual(one, {
+    aps: { alert: { title: "Studio", body: "Fix it needs you" }, sound: "default", "thread-id": HEX },
+    mac_id: HEX,
+    session: "a",
+    more: 0,
+  });
   const many = alertPayload(HEX, "Studio", [{ name: "a", label: "Fix it" }, { name: "m", label: "m" }, { name: "z", label: "z" }]);
   assert.deepEqual(many, {
     aps: { alert: { title: "Studio", body: "Fix it and 2 more need you" }, sound: "default", "thread-id": HEX },
     mac_id: HEX,
     session: "a",
+    more: 2,
   });
   const perMac = await collapseId(HEX);
   assert.match(perMac, /^[0-9a-f]{32}$/);
@@ -465,6 +471,7 @@ test("Live Activity payloads carry timestamp + stale-date; start carries attribu
     aps: { alert: { title: "Studio", body: "Fix it needs you" }, sound: "default", "thread-id": HEX },
     mac_id: HEX,
     session: "a",
+    more: 0,
   });
 });
 

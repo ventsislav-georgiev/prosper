@@ -312,6 +312,8 @@ export function startPayload(cs, now, macId, macName) {
 /**
  * The "needs you" alert. A post sends at most one per phone: alerts = every session
  * alertable in it, in card order. Two or more read "<first> and N more need you".
+ * userInfo: {mac_id, session: the first name, more: the others' count, 0 for one}. The
+ * phone opens that session only when more is 0, the Mac's list otherwise.
  */
 export function alertPayload(macId, macName, alerts) {
   const [alert] = alerts;
@@ -320,6 +322,7 @@ export function alertPayload(macId, macName, alerts) {
     aps: { alert: { title: macName, body }, sound: "default", "thread-id": macId },
     mac_id: macId,
     session: alert.name,
+    more: alerts.length - 1,
   };
 }
 

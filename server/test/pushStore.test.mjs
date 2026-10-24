@@ -248,6 +248,7 @@ test("flow: start edge -> push-to-start; card token -> catch-up; blocked -> prio
     aps: { alert: { title: "Studio", body: "Fix it needs you" }, sound: "default", "thread-id": MAC },
     mac_id: MAC,
     session: "b",
+    more: 0,
   });
 });
 
@@ -712,8 +713,12 @@ test("aggregate alert: body under the first in card order, userInfo session = th
   const alerts = t.takeCalls().filter((c) => c.headers["apns-push-type"] === "alert");
   assert.deepEqual(alerts.map((c) => c.token).sort(), [tok("1"), tok("5")]);
   for (const a of alerts) {
-    assert.equal(a.body.aps.alert.body, "Fix it and 1 more need you");
-    assert.equal(a.body.session, "b");
+    assert.deepEqual(a.body, {
+      aps: { alert: { title: "Studio", body: "Fix it and 1 more need you" }, sound: "default", "thread-id": MAC },
+      mac_id: MAC,
+      session: "b",
+      more: 1,
+    });
     assert.equal(a.headers["apns-collapse-id"], await collapseId(MAC));
   }
   // A single one keeps its own collapse-id.
