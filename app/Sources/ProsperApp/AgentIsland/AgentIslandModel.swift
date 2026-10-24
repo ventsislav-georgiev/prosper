@@ -351,15 +351,28 @@ enum AgentIsland {
     /// takes exec -l's "-" on its argv[0]; dch keeps a clean one (it re-execs
     /// itself from argv[0]).
     static func ghosttyNewWindow(_ key: AgentSessionKey, dch: String) -> NSAppleEventDescriptor {
+        ghosttyEvent("NWin", configKeyword: "GNwS", key, dch: dch)
+    }
+
+    /// #527: Ghostty's `new tab with configuration {command}`, no `in`. Ghostty
+    /// (handleNewTabScriptCommand) then tabs onto its main, else last-main window,
+    /// and with no window at all makes a new window instead, so one event covers
+    /// both. `in front window` would name scriptWindows.first and fail with none.
+    static func ghosttyNewTab(_ key: AgentSessionKey, dch: String) -> NSAppleEventDescriptor {
+        ghosttyEvent("NTab", configKeyword: "GNtS", key, dch: dch)
+    }
+
+    private static func ghosttyEvent(_ id: String, configKeyword: String, _ key: AgentSessionKey,
+                                     dch: String) -> NSAppleEventDescriptor {
         func code(_ s: String) -> FourCharCode { s.utf8.reduce(0) { $0 << 8 | FourCharCode($1) } }
         let cfg = NSAppleEventDescriptor.record()
         cfg.setDescriptor(NSAppleEventDescriptor(string: attachArgv(key, dch: dch).map(shellQuoted).joined(separator: " ")),
                           forKeyword: code("GScC"))
         let event = NSAppleEventDescriptor(
-            eventClass: code("Ghst"), eventID: code("NWin"),
+            eventClass: code("Ghst"), eventID: code(id),
             targetDescriptor: NSAppleEventDescriptor(bundleIdentifier: AgentTerminal.ghostty.bundleID),
             returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
-        event.setParam(cfg, forKeyword: code("GNwS"))
+        event.setParam(cfg, forKeyword: code(configKeyword))
         return event
     }
 }

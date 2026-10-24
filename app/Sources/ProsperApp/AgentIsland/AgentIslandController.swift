@@ -83,7 +83,7 @@ final class AgentIslandController {
         AgentIslandController.raiseWindow(pid: pid, matching: needles)
         AgentIslandController.activate(pid)
     }
-    /// #505 seam: send Ghostty's new-window event; `done` gets noErr or the AE error.
+    /// #505 seam: send Ghostty's new-tab or new-window event; `done` gets noErr or the AE error.
     var sendGhostty: @MainActor (NSAppleEventDescriptor, @escaping @Sendable (OSStatus) -> Void) -> Void
         = { GhosttyEventSender.send($0, done: $1) }
     /// Automation denied (-1743): the rest of the run opens Ghostty by script.
@@ -288,13 +288,28 @@ final class AgentIslandController {
         guard opening.insert(s.key).inserted else { return }
         let t = terminal()
         guard t == .ghostty, !ghosttyDenied else { return launch(s, t) }
-        sendGhostty(AgentIsland.ghosttyNewWindow(s.key, dch: DchCommand.dchPath)) { [weak self] status in
+        openInGhostty(s, tab: true)
+    }
+
+    /// #527: a new tab first (Ghostty makes a window when it has none). Ghostty
+    /// refusing the tab (non-native fullscreen: -10000) tries a new window. Not up
+    /// in time (-600), no handler (-1708) or a timeout (-1712, the tab may exist)
+    /// go to the script as before: a second event would wait again, fail the
+    /// same way, or open the session twice.
+    private func openInGhostty(_ s: AgentSession, tab: Bool) {
+        let dch = DchCommand.dchPath
+        let event = tab ? AgentIsland.ghosttyNewTab(s.key, dch: dch) : AgentIsland.ghosttyNewWindow(s.key, dch: dch)
+        sendGhostty(event) { [weak self] status in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    if status == noErr { return self.opened(s, t, ok: true) }
+                    if status == noErr { return self.opened(s, .ghostty, ok: true) }
                     if status == errAEEventNotPermitted { self.ghosttyDenied = true }
-                    self.launch(s, t)
+                    // Torn down meanwhile: no fallback opens anything; opened() only clears `opening`.
+                    guard self.store != nil else { return self.opened(s, .ghostty, ok: false) }
+                    let toScript = [errAEEventNotPermitted, procNotFound, errAEEventNotHandled, errAETimeout]
+                    if tab, !toScript.map(OSStatus.init).contains(status) { return self.openInGhostty(s, tab: false) }
+                    self.launch(s, .ghostty)
                 }
             }
         }

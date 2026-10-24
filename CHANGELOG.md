@@ -35,8 +35,10 @@ tag from the now-released section and put it on the new top draft.
   Ghostty opens the session through its scripting interface: macOS asks once whether
   Prosper may control Ghostty, instead of Ghostty asking to run a script on every click.
   If Ghostty is not running it is started first, and if you decline, the island falls
-  back to the script (#505). A session that publishes its work through dch also shows
-  its open pull requests as repo#number buttons that open in your browser, how many it
+  back to the script (#505). In Ghostty the session opens as a new tab of the open
+  Ghostty window, and in a new window only when Ghostty has none (#527). A session that
+  publishes its work through dch also shows its open pull requests as repo#number
+  buttons that open in your browser, how many it
   has merged, and its tasks done, in progress and queued (#506). The pull requests get a
   line of their own under the session: up to three, then how many more are pending, with
   the merged count at the right (#525). Remote

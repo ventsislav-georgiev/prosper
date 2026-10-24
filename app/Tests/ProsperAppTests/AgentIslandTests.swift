@@ -837,7 +837,7 @@ final class AgentIslandTests: XCTestCase {
 
     /// The configuration record's command, its env list, and its key count.
     private func ghosttyConfig(_ e: NSAppleEventDescriptor) -> (command: String?, env: [String], keys: Int) {
-        let cfg = e.paramDescriptor(forKeyword: code("GNwS"))
+        let cfg = e.paramDescriptor(forKeyword: code(e.eventID == code("NTab") ? "GNtS" : "GNwS"))
         let env = cfg?.forKeyword(code("GScE"))
         return (cfg?.forKeyword(code("GScC"))?.stringValue,
                 (0..<(env?.numberOfItems ?? 0)).compactMap { env?.atIndex($0 + 1)?.stringValue },
@@ -855,6 +855,24 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(cfg.command, "/usr/bin/env DCH_SOCKET_DIR=/d /opt/fake/dch -n s",
                        "the env lead, no direct:/shell: prefix, no exec")
         XCTAssertEqual(cfg.keys, 1, "the command only; the dir rides in env's argument")
+    }
+
+    /// #527: new tab with the same configuration and no `in`, so Ghostty picks its
+    /// main window, or makes a window when it has none.
+    func testGhosttyNewTabEventCarriesTheConfigurationAndNoTargetWindow() {
+        let key = AgentSessionKey(dir: "/d", name: "s")
+        let e = AgentIsland.ghosttyNewTab(key, dch: "/opt/fake/dch")
+        XCTAssertEqual(e.eventClass, code("Ghst"))
+        XCTAssertEqual(e.eventID, code("NTab"))
+        let target = e.attributeDescriptor(forKeyword: keyAddressAttr)
+        XCTAssertEqual(target.map { String(decoding: $0.data, as: UTF8.self) }, "com.mitchellh.ghostty")
+        XCTAssertNil(e.paramDescriptor(forKeyword: code("GNtW")), "no in: Ghostty's preferred parent, or a new window")
+        XCTAssertNil(e.paramDescriptor(forKeyword: code("GNwS")), "new tab's own configuration keyword")
+        XCTAssertEqual(e.numberOfItems, 1, "the configuration only")
+        let cfg = ghosttyConfig(e)
+        XCTAssertEqual(cfg.command, ghosttyConfig(AgentIsland.ghosttyNewWindow(key, dch: "/opt/fake/dch")).command)
+        XCTAssertEqual(cfg.command, "/usr/bin/env DCH_SOCKET_DIR=/d /opt/fake/dch -n s")
+        XCTAssertEqual(cfg.keys, 1)
     }
 
     /// Quotes, backslashes, $ and backticks in the name, the dir and the dch path
@@ -906,9 +924,9 @@ final class AgentIslandTests: XCTestCase {
         let (c, l) = clickController(.notAttached, .open, s)
         c.terminal = { .ghostty }
         c.jump(s)
-        XCTAssertEqual(l.events.count, 1)
+        XCTAssertEqual(l.events.map(\.eventID), [code("NTab")], "one event: a new tab")
         XCTAssertEqual(l.events.first.map(ghosttyConfig)?.command,
-                       ghosttyConfig(AgentIsland.ghosttyNewWindow(s.key, dch: "/opt/fake/dch")).command)
+                       ghosttyConfig(AgentIsland.ghosttyNewTab(s.key, dch: "/opt/fake/dch")).command)
         drain(c)
         XCTAssertTrue(l.calls.isEmpty, "no .command script, so no Ghostty prompt")
         XCTAssertEqual(c.store?.expanded, false)
@@ -945,13 +963,65 @@ final class AgentIslandTests: XCTestCase {
         c.terminal = { .ghostty }
         c.jump(s)
         drain(c); drain(c)
-        XCTAssertEqual(l.events.count, 1)
+        XCTAssertEqual(l.events.map(\.eventID), [code("NTab")], "no new-window retry after a denial")
         XCTAssertEqual(l.calls.count, 1, "the denied click still opens by script")
         XCTAssertTrue(c.ghosttyDenied)
         c.jump(s)
         drain(c)
         XCTAssertEqual(l.events.count, 1, "denied: no second event")
         XCTAssertEqual(l.calls.count, 2)
+    }
+
+    /// #527: Ghostty refuses the tab (non-native fullscreen, -10000): a new window,
+    /// then the script; a denial on the window still latches.
+    @MainActor func testGhosttyNewTabFailureFallsBackToNewWindowThenScript() {
+        let failed = OSStatus(errAEEventFailed), denied = OSStatus(errAEEventNotPermitted)
+        for (statuses, script, latched) in [([failed, noErr], false, false), ([failed, failed], true, false),
+                                            ([failed, denied], true, true)] {
+            let s = session("s", .idle, dir: "/x/other dir")
+            let (c, l) = clickController(.notAttached, .open, s)
+            var queue = statuses
+            c.terminal = { .ghostty }
+            c.sendGhostty = { e, done in l.events.append(e); done(queue.isEmpty ? noErr : queue.removeFirst()) }
+            c.jump(s)
+            drain(c); drain(c); drain(c)
+            XCTAssertEqual(l.events.map(\.eventID), [code("NTab"), code("NWin")], "\(statuses)")
+            XCTAssertEqual(l.events.last.map(ghosttyConfig)?.command,
+                           ghosttyConfig(AgentIsland.ghosttyNewTab(s.key, dch: "/opt/fake/dch")).command, "\(statuses)")
+            XCTAssertEqual(l.calls.count, script ? 1 : 0, "\(statuses)")
+            XCTAssertEqual(l.calls.first?.0, script ? .ghostty : nil, "\(statuses)")
+            XCTAssertEqual(c.ghosttyDenied, latched, "\(statuses)")
+            XCTAssertEqual(c.store?.expanded, false, "\(statuses): opened")
+            XCTAssertNil(Pasteboard.general.string(forType: .string), "\(statuses)")
+            queue = [noErr]
+            c.jump(s)
+            XCTAssertEqual(l.events.count, latched ? 2 : 3, "\(statuses): the open finished, a click opens again")
+        }
+    }
+
+    /// QA F1: a failure that lands after teardown opens nothing, at either step:
+    /// no further event, no script, no copy.
+    @MainActor func testGhosttyFailureAfterTeardownOpensNothing() {
+        let failed = OSStatus(errAEEventFailed)
+        for (live, last) in [([], failed), ([], OSStatus(errAETimeout)), ([], OSStatus(errAEEventNotPermitted)),
+                             ([failed], failed)] as [([OSStatus], OSStatus)] {
+            let s = session("s", .idle)
+            let (c, l) = clickController(.notAttached, .open, s)
+            var pending: [@Sendable (OSStatus) -> Void] = []
+            c.terminal = { .ghostty }
+            c.sendGhostty = { e, done in l.events.append(e); pending.append(done) }
+            c.jump(s)
+            for status in live where !pending.isEmpty { pending.removeFirst()(status); drain(c) }
+            XCTAssertEqual(l.events.count, live.count + 1, "\(live)")
+            c.reload()   // extLive is false: teardown
+            XCTAssertNil(c.store)
+            guard !pending.isEmpty else { XCTFail("\(live): no event pending at teardown"); continue }
+            pending.removeFirst()(last)
+            drain(c); drain(c)
+            XCTAssertEqual(l.events.count, live.count + 1, "\(live) \(last): no further event")
+            XCTAssertTrue(l.calls.isEmpty, "\(live) \(last): no script")
+            XCTAssertNil(Pasteboard.general.string(forType: .string), "\(live) \(last)")
+        }
     }
 
     /// The event and then the script fail: copy with the existing notice.
