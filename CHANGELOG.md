@@ -28,8 +28,9 @@ tag from the now-released section and put it on the new top draft.
   and the time since its last output. Click a session to bring its terminal to the front;
   one with no terminal attached copies its attach command instead. While Remote Terminal
   keeps its sessions separate, a setting picks which sessions to show (#474).
-- Ships dch 1.21.0, which recognizes Claude Code's Write and Edit permission prompts, so
-  Agent Island shows those sessions as needing input (#474).
+- Ships dch 1.21.1, which recognizes Claude Code's Write and Edit permission prompts, so
+  Agent Island shows those sessions as needing input, and reads a session as waiting on a
+  permission only from the prompt's own footer line (#474, #494).
 - **Agent Island answers a waiting agent.** When a Claude Code session stops on a
   permission prompt or a question, the island shows what it asks under that session, with
   one button per option. A click types the option's number into the session, and only if
