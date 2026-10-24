@@ -41,13 +41,15 @@ struct AgentPromptOption: Hashable {
     /// never a mode change, even on "(shift+tab)" or the shift+tab hint. Claude
     /// Code appends the cycle key to every file-dialog yes-session row, but draws
     /// this wording only when acceptEdits is not offered, so the row only adds a
-    /// directory: a rule, one click (OQ-45 b). Only while no mode clause (a mode
-    /// prefix, "accept edits", "allow all edits", "auto mode") appears anywhere in
-    /// it, so a combined row is off whichever clause leads (a folder name holding
-    /// one is off too: fails safe).
+    /// directory: a rule, one click (OQ-45 b). Only a single-clause row: no
+    /// "; Yes," anywhere (Claude Code joins a combined row's clauses with "; ", so
+    /// every combined row is off whatever it says) and no mode clause (a mode
+    /// prefix, "accept edits", "allow all edits", "auto mode") anywhere either. A
+    /// folder name holding one of them turns the row off: fails safe.
     var isModeChange: Bool {
         let text = ([label] + detail).joined().filter { !$0.isWhitespace }
-        if text.hasPrefix(Self.dirRulePrefix), !Self.modeClauses.contains(where: text.contains) { return false }
+        if text.hasPrefix(Self.dirRulePrefix), !text.contains(";Yes,"),
+           !Self.modeClauses.contains(where: text.contains) { return false }
         if hint == "shift+tab" { return true }
         return text.contains("(shift+tab)") || Self.modePrefixes.contains { text.hasPrefix($0) }
     }

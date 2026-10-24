@@ -1361,7 +1361,8 @@ final class AgentIslandPromptTests: XCTestCase {
     /// row; "always allow access to <dir>" only adds a directory, so it stays one
     /// click, unwrapped or wrapped mid-word. Every other "(shift+tab)" row, and any
     /// other "Yes, and always allow" wording on it, stays a mode change, and so does
-    /// a dir row carrying any mode clause, whichever clause leads (QA #343).
+    /// a dir row carrying any mode clause or a second "; Yes," clause, whichever
+    /// clause leads (QA #343).
     func testDirRuleOnShiftTabIsNotAModeChange() throws {
         func mode(_ label: String, _ detail: [String] = [], hint: String? = nil) -> Bool {
             AgentPromptOption(digit: 2, label: label, hint: hint, detail: detail).isModeChange
@@ -1397,6 +1398,18 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertTrue(mode(dir + "auto mode", hint: "shift+tab"))
         // Only a leading dir clause is exempt: one further in stays a mode change.
         XCTAssertTrue(mode("Yes, allow reading from src/ during this session; " + dir + "(shift+tab)"))
+        XCTAssertTrue(mode("Yes, allow reading from src/ during this session, Yes, and always allow access"
+                           + " to tmp/ for this session (shift+tab)"))
+        // QA #343: "; Yes," keeps every combined row off, even one naming no known clause.
+        XCTAssertTrue(mode(dir + "Yes, and enable turbo for this session (shift+tab)"))
+        // The clause check alone, with separators other than "; ".
+        let bare = "Yes, and always allow access to tmp/ for this session"
+        for sep in [", ", " · ", " and "] {
+            XCTAssertTrue(mode(bare + sep + "Yes, and switch to plan mode (read-only) for this session (shift+tab)"))
+        }
+        XCTAssertTrue(mode(bare + ", Yes, and switch to bypass permissions for this session (shift+tab)"))
+        XCTAssertTrue(mode(bare + " · Yes, clear context (42% used) and bypass permissions (shift+tab)"))
+        XCTAssertTrue(mode(bare + " and Yes, manually approve edits (shift+tab)"))
 
         let screen = altered(run2Screen, "2. Yes, and don’t ask again for: /usr/bin/true qa310 *",
                              "2. Yes, and always allow access to tmp/ for this session (shift+tab)")
