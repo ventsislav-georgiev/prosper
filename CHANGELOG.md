@@ -34,7 +34,8 @@ tag from the now-released section and put it on the new top draft.
   If Ghostty is not running it is started first, and if you decline, the island falls
   back to the script (#505). A session that publishes its work through dch also shows
   its open pull requests as repo#number buttons that open in your browser, how many it
-  has merged, and its tasks done, in progress and queued (#506).
+  has merged, and its tasks done, in progress and queued (#506). Remote
+  Terminal sends the same to the phone's session list (#507).
   While Remote Terminal keeps its sessions separate, a setting picks which sessions to
   show (#474).
 - Ships dch 1.22.0, which recognizes Claude Code's Write and Edit permission prompts, so

@@ -184,4 +184,70 @@ final class DchListParseTests: XCTestCase {
         XCTAssertEqual(rows[0].state, "")   // unknown, and the UI shows nothing for it
         XCTAssertEqual(rows[1].name, "b")
     }
+
+    // MARK: - Remote Terminal list wire (#507)
+
+    private func wire(_ row: DchListRow) -> String {
+        let d = try! JSONSerialization.data(withJSONObject: row.metaWire, options: [.sortedKeys])
+        return String(decoding: d, as: UTF8.self)
+    }
+
+    private func row(_ json: String) -> DchListRow {
+        DchCommand.parseListJSON(Data(json.utf8))[0]
+    }
+
+    /// The phone gets the same meta Agent Island shows, re-encoded from the decode.
+    func testMetaWireReencodesDecodedMeta() {
+        let r = row("""
+        [{"name":"a","state":"idle","meta_epoch":1784995200,"meta":{"tasks":{"done":3,"total":7,"in_progress":1,"queued":2,"x":9},
+          "prs":{"open":[{"url":"https://github.com/o/prosper/pull/12","repo":"o/prosper","num":12,"title":"Fix it","extra":1}],"merged":4},
+          "junk":true}}]
+        """)
+        XCTAssertEqual(wire(r), #"{"meta":{"prs":{"merged":4,"open":[{"num":12,"repo":"o\/prosper","title":"Fix it","url":"https:\/\/github.com\/o\/prosper\/pull\/12"}]},"tasks":{"done":3,"in_progress":1,"queued":2,"total":7}},"meta_epoch":1784995200}"#)
+    }
+
+    func testMetaWireAbsentWithoutMeta() {
+        var r = row(#"[{"name":"a","state":"idle","meta_epoch":5}]"#)
+        XCTAssertNil(r.meta)
+        XCTAssertEqual(r.metaEpoch, 5)
+        XCTAssertTrue(r.metaWire.isEmpty)
+        r.metaEpoch = 0
+        r.meta = DchSessionMeta()
+        XCTAssertEqual(wire(r), #"{"meta":{"prs":{"open":[]}}}"#)   // no epoch at 0
+    }
+
+    func testMetaWireDropsNonAllowlistedPRs() {
+        let r = row("""
+        [{"name":"a","meta":{"prs":{"open":[
+          {"url":"javascript:alert(1)","repo":"o/evil","num":1,"title":"x"},
+          {"url":"https://github.com/o/r/pull/7","repo":"o/r","title":"ok"},
+          {"url":"https://github.com.evil.example/o/r/pull/8","repo":"o/r","num":8,"title":"x"}]}}}]
+        """)
+        XCTAssertEqual(r.meta?.openPRs.count, 3)
+        XCTAssertEqual(wire(r), #"{"meta":{"prs":{"open":[{"num":7,"repo":"o\/r","title":"ok","url":"https:\/\/github.com\/o\/r\/pull\/7"}]}}}"#)
+    }
+
+    func testMetaWireOmitsNilTaskFields() {
+        let r = row(#"[{"name":"a","meta":{"tasks":{"done":2,"total":"7"}}}]"#)
+        XCTAssertEqual(wire(r), #"{"meta":{"prs":{"open":[]},"tasks":{"done":2}}}"#)
+        let empty = row(#"[{"name":"a","meta":{"tasks":{}}}]"#)
+        XCTAssertEqual(wire(empty), #"{"meta":{"prs":{"open":[]},"tasks":{}}}"#)
+    }
+
+    func testMetaWireTruncatesRepoAndTitle() {
+        let repo = String(repeating: "r", count: 150), title = String(repeating: "t", count: 300)
+        var r = DchListRow(name: "a", alias: "", activityEpoch: 0, state: "", agents: 0)
+        r.meta = DchSessionMeta(openPRs: [.init(url: "https://github.com/o/\(repo)/pull/1", repo: "o/r", num: 1, title: title)])
+        let pr = ((r.metaWire["meta"] as? [String: Any])?["prs"] as? [String: Any])?["open"] as? [[String: Any]]
+        XCTAssertEqual(pr?.first?["repo"] as? String, "o/" + String(repeating: "r", count: 98))
+        XCTAssertEqual(pr?.first?["title"] as? String, String(repeating: "t", count: 200))
+    }
+
+    /// dch's repo/num are untrusted: a chip reading "o/safe#1" must not open evil/x#9.
+    func testMetaWireRepoAndNumComeFromURL() {
+        let r = row("""
+        [{"name":"a","meta":{"prs":{"open":[{"url":"https://github.com/evil/x/pull/9","repo":"o/safe","num":1,"title":"t"}]}}}]
+        """)
+        XCTAssertEqual(wire(r), #"{"meta":{"prs":{"open":[{"num":9,"repo":"evil\/x","title":"t","url":"https:\/\/github.com\/evil\/x\/pull\/9"}]}}}"#)
+    }
 }

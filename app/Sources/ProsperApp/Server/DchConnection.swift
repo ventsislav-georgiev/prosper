@@ -135,6 +135,7 @@ final class DchConnection: @unchecked Sendable {
                 if !row.alias.isEmpty { o["alias"] = row.alias }
                 if !row.state.isEmpty { o["state"] = row.state }   // working|idle|blocked|done
                 if row.agents > 0 { o["agents"] = row.agents }     // live subagents; absent from older dch
+                o.merge(row.metaWire) { $1 }                       // "meta"/"meta_epoch", dch 1.22+
                 return o
             }
             send(DchFrame.encode(DchFrame.listResp, json: rows))
@@ -303,6 +304,40 @@ struct DchListRow: Equatable, Sendable {
     var meta: DchSessionMeta? = nil
     /// When the meta's content last changed (not liveness); 0 = unknown.
     var metaEpoch: Int = 0
+
+    /// The phone's `meta`/`meta_epoch` row keys, re-encoded from the decoded fields
+    /// (never dch's raw JSON); empty when there is no meta. The phone is a second
+    /// untrusted-text consumer: only allowlisted PR URLs go out, repo/title truncated.
+    var metaWire: [String: Any] {
+        guard let meta else { return [:] }
+        var m: [String: Any] = [:]
+        if let t = meta.tasks {
+            var o: [String: Any] = [:]
+            if let v = t.done { o["done"] = v }
+            if let v = t.total { o["total"] = v }
+            if let v = t.inProgress { o["in_progress"] = v }
+            if let v = t.queued { o["queued"] = v }
+            m["tasks"] = o
+        }
+        var prs: [String: Any] = [:]
+        prs["open"] = meta.openPRs.compactMap { pr -> [String: Any]? in
+            // repo/num come from the URL, not dch's fields, so the chip names what opens.
+            guard let u = pr.pullURL else { return nil }
+            let p = u.path.split(separator: "/")   // owner, repo, "pull", digits
+            var o: [String: Any] = ["url": u.absoluteString, "repo": String("\(p[0])/\(p[1])".prefix(Self.maxRepoChars)),
+                                    "title": String(pr.title.prefix(Self.maxTitleChars))]
+            if let n = Int(p[3]) { o["num"] = n }
+            return o
+        }
+        if let v = meta.merged { prs["merged"] = v }
+        m["prs"] = prs
+        var w: [String: Any] = ["meta": m]
+        if metaEpoch > 0 { w["meta_epoch"] = metaEpoch }
+        return w
+    }
+
+    static let maxRepoChars = 100
+    static let maxTitleChars = 200
 }
 
 /// dch 1.22's per-session `meta`, written by `dch --meta` from ANY program in the
