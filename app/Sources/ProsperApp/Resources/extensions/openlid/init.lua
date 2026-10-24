@@ -158,6 +158,8 @@ local function format_remaining(s) return s.endTime and fmt_remaining(s.endTime)
 --   ☕ "Display awake": the screen + screensaver stay off while the lid is OPEN.
 --   🔌 menu-bar icon for the plugged-in hold: awake only on AC, sleeps when you unplug.
 local function awake_line(s)
+    -- Same test as the 🔌 icon (rule_lock_active, defined below) so toast and icon agree.
+    if s.active == true and s.autoActivated == true then return "\u{1F50C} Kept awake while plugged in \u{2014} sleeps when you unplug" end
     if s.endTime then return "\u{1F513} Mac awake for " .. fmt_remaining(s.endTime) .. " \u{2014} lid can close" end
     return "\u{1F513} Mac awake \u{2014} closing the lid won't sleep"
 end
@@ -281,8 +283,8 @@ local function build_menu(s)
         -- hold (deactivate), so name that. rule_on_ac() with its legacy fallback, the
         -- same test deactivate uses, so a never-touched default (no key, rule on)
         -- gets the true label too. Reads only in this branch: up to 3 prefs, at most
-        -- once a minute on the tick.
-        local back = s.lastPowerSource == "AC Power" and rule_on_ac()
+        -- once a minute on the tick. Live power, as deactivate's guard reads it.
+        local back = host.battery.power_source() == "AC Power" and rule_on_ac()
         items[#items + 1] = { title = back and "Let it sleep on unplug" or "Let Mac sleep on lid close", handler = "on_menu_off", stay = true }
     else
         items[#items + 1] = { title = "Mac sleeps on lid close", enabled = false }
@@ -389,7 +391,7 @@ local function deactivate(reason)
         save_state(s)
         render(s)
         log("manual session ended (" .. tostring(reason) .. "), back to the plugged-in hold")
-        host.alert.show("\u{1F50C} Kept awake while plugged in \u{2014} sleeps when you unplug")
+        host.alert.show(awake_line(s))
         return
     end
     log(string.format("off (%s): was %s", tostring(reason),
@@ -430,6 +432,7 @@ end
 local function release_rule_hold(s, c, reason)
     if busy_active(c.busyCmd) then
         s.autoActivated = false; save_state(s)  -- now manual; survives unplug
+        render(s) -- repaint: icon and rows still show the "while plugged in" hold
         log("unplugged: busy command reports work, plugged-in hold kept as manual")
         host.alert.show("\u{1F513} Mac awake \u{2014} active sessions")
     else
@@ -670,6 +673,8 @@ function on_battery(payload)
     -- (demote to manual so it won't auto-off later); else turn off.
     if changed and src == "Battery Power" and s.active and s.autoActivated then
         release_rule_hold(s, c, "unplugged")
+    elseif changed then
+        render(s) -- power-dependent rows (off label, battery line) moved with the source
     end
     -- The no-network guard is battery-only: an unplug arms it from reality (the
     -- network may already be gone), a plug-in cancels it.

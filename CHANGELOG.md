@@ -77,6 +77,8 @@ tag from the now-released section and put it on the new top draft.
   toggle command's result in the launcher (#504), show 🔌 while the Mac is awake only
   because it is plugged in, so you can tell before closing the lid that it will sleep when
   you unplug; 🔓 and ⚡ now mean it stays awake (#502).
+  The icon, the menu and the notice change the moment you plug in or unplug, and the
+  notice and status overlay for the plugged-in hold show 🔌 as well (#516).
   Three things no longer end a keep-awake on their own:
   - a Wi-Fi drop while charging (the 2-minute no-network guard now runs on battery only);
   - a late timer from an earlier timed session, even while a newer timed one runs, for

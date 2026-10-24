@@ -893,4 +893,85 @@ do
     h.eq(env.flags.locked, false, "no lock when the setting is off")
 end
 
+-- ── #516 A power edge re-renders the menu (rows 8 status, 9 toggle) ───────────
+do
+    local function row(env, i) return env.menu.menu[i].title end
+
+    -- (a) Busy unplug demotes the hold: manual-on-battery rows, not the hold row.
+    local host, env = h.makeHost { power = "AC Power" }
+    host.prefs.set("busy_cmd", "dch -ls")
+    local G = h.load(INIT, host)
+    batt(G, host, "AC Power")
+    assert(row(env, 8):find("plugged in"), "precondition: hold row")
+    env.shellOut = "s1\n"; env.power = "Battery Power"; batt(G, host, "Battery Power")
+    assert(row(env, 8):find("Mac awake with lid closed"), "busy unplug: manual status row, got " .. row(env, 8))
+    h.eq(row(env, 9), "Let Mac sleep on lid close", "busy unplug: manual off row")
+    h.eq(env.menu.title, "\u{1F513}", "busy unplug: manual glyph")
+
+    -- (b) Plain unplug of a manual session: the back-to-hold label goes.
+    local hostM, envM = h.makeHost { power = "AC Power" }
+    local GM = h.load(INIT, hostM)
+    GM.on_launch(hostM.json.encode { powerSource = "AC Power" })
+    GM.on_menu_on("")                                        -- hold -> manual
+    h.eq(row(envM, 9), "Let it sleep on unplug", "precondition: back-to-hold label")
+    envM.power = "Battery Power"; batt(GM, hostM, "Battery Power")
+    h.eq(row(envM, 9), "Let Mac sleep on lid close", "manual unplug: plain off label")
+
+    -- (c) Launch on battery, restored hold kept by the busy command: manual rows.
+    local hostL, envL = h.makeHost { power = "Battery Power", shellOut = "s1\n" }
+    hostL.prefs.set("state", '{"active":true,"autoActivated":true,"lastPowerSource":"AC Power"}')
+    hostL.prefs.set("busy_cmd", "dch -ls")
+    local GL = h.load(INIT, hostL)
+    GL.on_launch(hostL.json.encode { powerSource = "Battery Power" })
+    h.eq(state(hostL).autoActivated, false, "precondition: kept as manual")
+    assert(row(envL, 8):find("Mac awake with lid closed"), "launch: manual status row, got " .. row(envL, 8))
+    h.eq(envL.menu.title, "\u{1F513}", "launch: manual glyph")
+
+    -- L2: the off label reads live power, as deactivate's guard does, so a render
+    -- before the battery event (here the tick) already names the hold it goes to.
+    local hostP, envP = h.makeHost { power = "Battery Power" }
+    local GP = h.load(INIT, hostP)
+    GP.on_launch(hostP.json.encode { powerSource = "Battery Power" })
+    GP.on_menu_on("")
+    envP.power = "AC Power"                                  -- plugged in, event not yet in
+    GP.on_tick("")
+    h.eq(row(envP, 9), "Let it sleep on unplug", "label follows live power")
+    GP.on_menu_off("{}")
+    h.eq(state(hostP).autoActivated, true, "and the click does go back to the hold")
+
+    -- Toast and HUD in the hold carry the 🔌 wording the icon shows.
+    local hostH, envH = h.makeHost { power = "Battery Power" }
+    local GH = h.load(INIT, hostH)
+    envH.power = "AC Power"; batt(GH, hostH, "AC Power")
+    h.eq(envH.menu.title, "\u{1F50C}", "precondition: plug icon")
+    h.eq(h.lastAlert(envH), "\u{1F50C} Kept awake while plugged in \u{2014} sleeps when you unplug", "hold toast")
+    assert(GH.openlid_status(""):find("^\u{1F50C} Kept awake while plugged in"), "hold HUD head")
+    -- G6: a stale-menu off click during the hold is refused under the plug glyph.
+    GH.on_menu_off("{}")
+    assert(h.lastAlert(envH):find("^\u{1F50C}"), "stale-menu refusal starts with plug: " .. h.lastAlert(envH))
+    h.eq(state(hostH).active, true, "refused: still held")
+    -- T2: the toggle ON result names a manual session, not the hold.
+    local hostT = h.makeHost { power = "Battery Power" }
+    local GT = h.load(INIT, hostT)
+    h.eq(GT.openlid_toggle(""), "\u{1F513} Mac awake \u{2014} lid closed", "toggle on returns unlock")
+end
+
+-- ── #516 Expiry boundaries: 30 s left re-arms, under 1 s ends (E4/C4) ─────────
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.on_menu_on(host.json.encode { secs = 1800 })
+    G.on_caff_on(host.json.encode { secs = 1800 })
+    env.now = env.now + 1770
+    G.on_expiry(""); G.on_caffeine_expiry("")
+    h.eq(state(host).active, true, "30 s left: session kept")
+    h.eq(env.timers["expiry"].after, 30, "30 s left: expiry re-armed")
+    h.eq(state(host).caffeine, true, "30 s left: display kept")
+    h.eq(env.timers["caffexpiry"].after, 30, "30 s left: caffexpiry re-armed")
+    env.now = env.now + 29.5                                 -- 0.5 s left: inside the slack
+    G.on_expiry(""); G.on_caffeine_expiry("")
+    h.eq(state(host).active, false, "0.5 s left: session ends")
+    h.eq(state(host).caffeine, false, "0.5 s left: display ends")
+end
+
 print("ok openlid")
