@@ -73,6 +73,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ steps.ver.outputs.tag }}
+          # No step pushes with the checkout token; keep it out of .git/config so
+          # third-party tools (the Sparkle binaries) cannot read it off disk.
+          persist-credentials: false
 
       - name: Select Xcode 27 (Swift 6.4 toolchain)
         id: xcode
@@ -351,6 +354,7 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           IS_PRERELEASE: ${{ steps.ver.outputs.is_prerelease }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           NOTES="$RUNNER_TEMP/notes.md"
           : > "$NOTES"
@@ -370,6 +374,15 @@ jobs:
           else
             echo "::warning::No CHANGELOG.md section for v${BASE} — using auto-generated notes only."
           fi
+          # Sparkle's update window shows this section too: generate_appcast embeds an
+          # .html file named like the archive, with no DOCTYPE or body, as the item's
+          # description. Rendered here so the token never shares a step with the Sparkle
+          # tools. Best effort: a failed render publishes without notes.
+          if [[ -s "$NOTES" ]] && ! gh api markdown -f text="$(cat "$NOTES")" \
+              -f mode=markdown > "dist/Prosper-${VERSION}.html"; then
+            echo "::warning::Could not render the release notes for Sparkle; publishing without them."
+            rm -f "dist/Prosper-${VERSION}.html"
+          fi
           echo "file=$NOTES" >> "$GITHUB_OUTPUT"
 
       - name: Sign update + generate appcast
@@ -378,8 +391,6 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
           TAG: ${{ steps.ver.outputs.tag }}
           IS_PRERELEASE: ${{ steps.ver.outputs.is_prerelease }}
-          NOTES_FILE: ${{ steps.notes.outputs.file }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           BIN=$(find sparkle-tools -name sign_update -type f | head -n1)
           GEN=$(find sparkle-tools -name generate_appcast -type f | head -n1)
@@ -389,14 +400,6 @@ jobs:
           DL_PREFIX="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/"
           CHANNEL_ARGS=()
           if [[ "${IS_PRERELEASE}" == "true" ]]; then CHANNEL_ARGS=(--channel beta); fi
-          # Sparkle's update window shows this version's CHANGELOG section: an .html
-          # file named like the archive, with no DOCTYPE or body, is embedded as the
-          # item's description. Best effort: a failed render publishes without notes.
-          if [[ -s "${NOTES_FILE}" ]] && ! gh api markdown -f text="$(cat "${NOTES_FILE}")" \
-              -f mode=markdown > "dist/Prosper-${VERSION}.html"; then
-            echo "::warning::Could not render the release notes for Sparkle; publishing without them."
-            rm -f "dist/Prosper-${VERSION}.html"
-          fi
           if [[ -n "${SPARKLE_PRIVATE_KEY}" && -n "${GEN}" ]]; then
             printf '%s' "${SPARKLE_PRIVATE_KEY}" > eddsa_priv.pem
             "${GEN}" --ed-key-file eddsa_priv.pem \
