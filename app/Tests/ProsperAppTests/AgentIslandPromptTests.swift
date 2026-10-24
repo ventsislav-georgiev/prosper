@@ -1295,6 +1295,94 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertEqual(f.sent, ["2"])
     }
 
+    /// QA #325 H1: a 30-column Write dialog wraps "Yes, and switch to" / "accept
+    /// edits" onto two lines; the whole text is the mode change, not the first line.
+    func testRealNarrowWriteWithAWrappedSwitchToIsOff() throws {
+        let p = try prompt(run6Screen), o = p.options[1]
+        XCTAssertEqual(p.question, "notes.txt?", "the line above option 1; the wrapped head is context")
+        XCTAssertEqual(o.label, "Yes, and switch to")
+        XCTAssertEqual(o.hint, nil)
+        XCTAssertEqual(o.detail, ["accept edits", "(auto-approve file edits", "and common file", "commands) for this"])
+        XCTAssertTrue(o.isModeChange)
+        XCTAssertFalse(p.layout.isEnabled(o))
+        // Option 3 is Claude Code's own overprint, "Nossion (shift+tab)": off too, fails safe.
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [true, false, false])
+        XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.modeCaption)
+        let f = FakeDch()
+        f.screen = run6Screen
+        XCTAssertEqual(f.answer(2, expected: p), .changed)
+        XCTAssertEqual(f.sent, [], "one click never switches to accept edits")
+        XCTAssertEqual(f.answer(1, expected: p), .sent)
+        XCTAssertEqual(f.sent, ["1"])
+    }
+
+    /// QA #325 M1: every plan-approval (ExitPlanMode) exit leaves plan mode, so
+    /// each is a mode change, also when wrapped at a space or inside a word.
+    func testPlanApprovalLabelsAreModeChanges() {
+        func mode(_ label: String, _ detail: [String] = [], hint: String? = nil) -> Bool {
+            AgentPromptOption(digit: 1, label: label, hint: hint, detail: detail).isModeChange
+        }
+        XCTAssertTrue(mode("Yes, and use auto mode"))
+        XCTAssertTrue(mode("Yes, auto-accept edits"))
+        XCTAssertTrue(mode("Yes, manually approve edits"))
+        XCTAssertTrue(mode("Yes, clear context (42% used) and use auto mode"))
+        XCTAssertTrue(mode("Yes, clear context (42% used) and bypass permissions"))
+        XCTAssertTrue(mode("Yes, clear context (42% used) and auto-accept edits"))
+        // Wrapped at a space, and hard-wrapped inside a word.
+        XCTAssertTrue(mode("Yes, and use", ["auto mode"]))
+        XCTAssertTrue(mode("Yes, auto-", ["accept edits"]))
+        XCTAssertTrue(mode("Yes, manually", ["approve edits"]))
+        XCTAssertTrue(mode("Yes, clear", ["context (42% used) and use", "auto mode"]))
+        // "(shift+tab)" on a detail line, also split mid-token, with no hint and no prefix.
+        XCTAssertTrue(mode("Yes, allow all edits during this", ["session (shift+tab)"]))
+        XCTAssertTrue(mode("Yes, allow all edits during this", ["session (shift+", "tab)"]))
+        XCTAssertTrue(mode("Yes, allow all edits", hint: "shift+tab"))
+        // Not mode changes: plain yes, rules, and a bare (unparenthesised) shift+tab.
+        XCTAssertFalse(mode("Yes"))
+        XCTAssertFalse(mode("Yes, and don’t ask again for: /usr/bin/true qa310 *"))
+        XCTAssertFalse(mode("Yes, and always allow access to tmp/ from this project"))
+        XCTAssertFalse(mode("Tell Claude what to change", ["shift+tab to approve with this feedback"]))
+    }
+
+    /// QA #325 R8: an "always allow access" rule with no "(shift+tab)" stays one-click.
+    func testAlwaysAllowAccessIsNotAModeChange() throws {
+        let screen = altered(run2Screen, "2. Yes, and don’t ask again for: /usr/bin/true qa310 *",
+                             "2. Yes, and always allow access to tmp/ from this project")
+        let p = try prompt(screen), o = p.options[1]
+        XCTAssertFalse(o.isModeChange)
+        XCTAssertTrue(p.isEnabled(o))
+        let f = FakeDch()
+        f.screen = screen
+        XCTAssertEqual(f.answer(2, expected: p), .sent)
+        XCTAssertEqual(f.sent, ["2"])
+    }
+
+    /// A "No…" row on "(shift+tab)" is still a deny: on, and no mode caption for it.
+    func testDenyOnShiftTabStaysOn() throws {
+        let screen = altered(run12Screen, "3. No", "3. No, and tell Claude what to change (shift+tab)")
+        let p = try prompt(screen), no = p.options[2]
+        XCTAssertTrue(no.isModeChange)
+        XCTAssertEqual(no.style(first: false), .deny)
+        XCTAssertTrue(p.isEnabled(no))
+        let f = FakeDch()
+        f.screen = screen
+        XCTAssertEqual(f.answer(3, expected: p), .sent)
+        XCTAssertEqual(f.sent, ["3"])
+        let only = AgentPrompt(question: "Proceed?", context: [], options: [
+            AgentPromptOption(digit: 1, label: "Yes", hint: nil),
+            AgentPromptOption(digit: 2, label: "No, keep planning", hint: "shift+tab")])
+        XCTAssertEqual(only.options.map { only.isEnabled($0) }, [true, true])
+        XCTAssertEqual(only.layout.caption, [], "no option is off for a mode change")
+    }
+
+    /// QA #325 L2: too long outranks a mode change in the caption.
+    func testTooLongCaptionWinsOverModeCaption() throws {
+        let p = try prompt(altered(run2Screen, "for: /usr/bin/true qa310 *", "for: \(wideAllow) *"))
+        XCTAssertTrue(p.options[2].isModeChange)
+        XCTAssertEqual(p.layout.tooWide, [2])
+        XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.tooLongCaption)
+    }
+
     // MARK: - OQ-46 (c): 10 context rows
 
     func testNineAndTenRowCommandsStayApprovableAndElevenIsDenyOnly() throws {
@@ -1625,3 +1713,40 @@ Which deployment target?
 
 Enter to select · ↑/↓ to navigate · Esc to cancel
 """
+
+/// QA #325 run-6: a live Claude Code 2.1.309 Write dialog 30 columns wide;
+/// option 2 wraps "Yes, and switch to" / "accept edits", option 3 is overprinted.
+private let run6Screen = #"""
+           Claude Code
+ ▐▛███▛█   v2.1.309
+▝▜██████▀  Haiku 5.5
+ ▝▝   ▝▝   Claude Team
+           ~/…/project
+
+
+❯ Use the Write tool to
+  create the file notes.txt
+  in the current directory
+  containing the single line:
+  hello qa325
+
+⏺ Write(notes.txt)
+
+──────────────────────────────
+ Create file
+ notes.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1 hello qa325
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to create
+ notes.txt?
+ ❯ 1. Yes
+   2. Yes, and switch to
+      accept edits
+      (auto-approve file edits
+      and common file
+      commands) for this
+   3. Nossion (shift+tab)
+
+ Esc to cancel · Tab to amend
+"""#

@@ -30,10 +30,23 @@ struct AgentPromptOption: Hashable {
     }
 
     /// Switches the session's permission mode (OQ-45): "Yes, and switch to auto
-    /// mode …" / "… accept edits …", or an option on shift+tab, Claude Code's
-    /// mode-cycle key ("Yes, allow all edits during this session"). Never
-    /// one-click on the island. A "don't ask again" rule is not a mode change.
-    var isModeChange: Bool { label.hasPrefix("Yes, and switch to ") || hint == "shift+tab" }
+    /// mode …" / "… accept edits …", a plan-approval exit ("Yes, and use auto
+    /// mode", "Yes, auto-accept edits", "Yes, manually approve edits", "Yes, clear
+    /// context …"), or an option on "(shift+tab)", Claude Code's mode-cycle key
+    /// ("Yes, allow all edits during this session"). Never one-click on the
+    /// island. A "don't ask again" rule is not a mode change. Matched on label plus
+    /// detail with all whitespace removed: a narrow dialog wraps anywhere, even
+    /// inside a word ("Yes, and switch to" / "accept edits", "auto-" / "accept").
+    var isModeChange: Bool {
+        if hint == "shift+tab" { return true }
+        let text = ([label] + detail).joined().filter { !$0.isWhitespace }
+        return text.contains("(shift+tab)") || Self.modePrefixes.contains { text.hasPrefix($0) }
+    }
+
+    private static let modePrefixes = [
+        "Yes, and switch to", "Yes, and use auto mode", "Yes, auto-accept edits",
+        "Yes, manually approve edits", "Yes, clear context",
+    ].map { $0.filter { !$0.isWhitespace } }
 }
 
 struct AgentPrompt: Hashable {

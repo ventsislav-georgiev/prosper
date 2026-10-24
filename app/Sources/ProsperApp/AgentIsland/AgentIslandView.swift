@@ -439,7 +439,7 @@ struct AgentCardLayout: Equatable {
         // Several apply: hidden characters win, then the off-screen top, then too long, then a mode change.
         let why = hidden ? Self.hiddenCaption : !p.topFound ? Self.offTopCaption
             : (isOverCap || !tooWide.isEmpty) ? Self.tooLongCaption
-            : p.options.contains(where: \.isModeChange) ? Self.modeCaption : nil
+            : p.options.contains(where: { $0.isModeChange && $0.style(first: false) != .deny }) ? Self.modeCaption : nil
         caption = why.map { G.wrap($0, G.questionFont, G.cardInner) } ?? []
     }
 
