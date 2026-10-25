@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.159.0 *(unreleased)*
+## v2.159.0
 
 - **Agent Island: every agent session and its state, over the notch.** A new opt-in
   extension (Settings › Extensions › Agent Island) shows your dch sessions in a black
