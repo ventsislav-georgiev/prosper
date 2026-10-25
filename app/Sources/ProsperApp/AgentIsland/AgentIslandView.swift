@@ -377,7 +377,7 @@ struct AgentIslandRow: View {
     let now: TimeInterval
     let notice: String?
     /// #534: the row details toggled on.
-    var show: AgentIslandRowDetails = .all
+    var show: AgentIslandRowDetails
     let action: () -> Void
     @State private var hover = false
 
@@ -441,7 +441,7 @@ struct AgentIslandRow: View {
             }
             .padding(.leading, AgentIslandGeometry.rowLead)
             .padding(.trailing, AgentIslandGeometry.rowTrail)
-            .frame(height: AgentIslandGeometry.height(of: session, show: show) - 4)
+            .frame(height: (prLine ? AgentIslandGeometry.prRowHeight : AgentIslandGeometry.rowHeight) - 4)
             .background(RoundedRectangle(cornerRadius: 12)
                 .fill(Color.white.opacity(hover ? 0.10 : 0.05)))
             .contentShape(Rectangle())

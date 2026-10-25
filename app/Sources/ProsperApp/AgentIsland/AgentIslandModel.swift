@@ -365,7 +365,7 @@ enum AgentIsland {
     /// #529 (QA #333 L-2): env reads any word with "=" as an assignment and
     /// documents no "--" (env(1) suggests interposing a utility), so a dch path
     /// with "=" goes through `sh -c 'exec "$0" "$@"'`, which keeps dch's argv[0]
-    /// its path.
+    /// its path. No "--" after exec: /bin/dash (a valid /bin/sh) rejects it.
     static func attachArgv(_ key: AgentSessionKey, dch: String) -> [String] {
         ["/usr/bin/env", "DCH_SOCKET_DIR=\(key.dir)"] + (dch.contains("=") ? ["/bin/sh", "-c", #"exec "$0" "$@""#] : [])
             + [dch, "-n", key.name]

@@ -1097,6 +1097,9 @@ final class AgentIslandTests: XCTestCase {
         let argv = AgentIsland.attachArgv(key, dch: fake.path)
         XCTAssertEqual(AgentIsland.attachArgv(key, dch: "/opt/fake/dch"),
                        ["/usr/bin/env", "DCH_SOCKET_DIR=/x/other dir", "/opt/fake/dch", "-n", "s=1"], "no = in the path: as before")
+        // No "--" after exec: /bin/dash, a valid /bin/sh, rejects `exec --`.
+        XCTAssertEqual(argv, ["/usr/bin/env", "DCH_SOCKET_DIR=/x/other dir", "/bin/sh", "-c", #"exec "$0" "$@""#,
+                              fake.path, "-n", "s=1"])
         guard case .arguments(let args) = AgentTerminal.kitty.launch(argv),
               case .script(let text) = AgentTerminal.terminal.launch(argv) else { return XCTFail("kitty argv, Terminal script") }
         let file = dir.appendingPathComponent("a.command")
@@ -1835,7 +1838,7 @@ final class AgentIslandTests: XCTestCase {
         ]
         for meta in metas {
             var s = session("s", .working); s.meta = meta
-            let row = AgentIslandRow(session: s, now: 0, notice: nil) {}
+            let row = AgentIslandRow(session: s, now: 0, notice: nil, show: .all) {}
             let host = NSHostingView(rootView: row.prLineView(AgentIsland.prChips(meta)).fixedSize())
             let w = host.fittingSize.width
             XCTAssertGreaterThan(w, 0)
