@@ -2036,6 +2036,68 @@ final class AgentIslandPromptTests: XCTestCase {
             .map { $0.hasPrefix("  2. ") ? String($0.prefix(34)) + bottom.dropFirst(34) : $0 }
         XCTAssertNil(AgentPrompt.parse(empty.joined(separator: "\n")))
     }
+
+    // MARK: - QA #382, QA #384 (#539)
+
+    /// G1-a: a preview form with its Notes row and "Chat about this" gone, under
+    /// the ordinary footer or none, splits cleanly and fails the preview tail.
+    /// Its box sits inside the dialog, so no plain retry: nil, nothing sent.
+    /// I2 (mutant R1b): the same form with only "Chat about this" gone is nil
+    /// too; a retry on the cut rows made it a clean card that sent "1"/"2".
+    /// QA's g1 screens byte for byte.
+    func testPreviewFormWithoutChatAboutThisIsNeverAnswerable() {
+        let footer = "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel"
+        let notes = String(repeating: " ", count: 34) + "Notes: press n to add notes\n"
+        let noChat = altered(rowLayoutScreen, "  Chat about this\n", "")
+        let noNotes = altered(rowLayoutScreen, notes, "")
+        for (why, screen) in [
+            ("g1-nonotes-nochat-fshort", altered(altered(noChat, notes, ""), footer,
+                                                 "Enter to select · ↑/↓ to navigate · Esc to cancel")),
+            ("g1-nonotes-nochat-fnone", altered(noNotes, "\n  Chat about this\n\n" + footer, "") + "\n"),
+            ("g1-nochat-fshort", altered(noChat, footer, "Enter to select · ↑/↓ to navigate · Esc to cancel")),
+            ("g1-nochat-fnone", altered(rowLayoutScreen, "\n  Chat about this\n\n" + footer, "") + "\n"),
+        ] {
+            XCTAssertNil(AgentPrompt.parse(screen), why)
+        }
+    }
+
+    /// G1-a, R1b: the retry parses the rows unchanged. A scrollback box wider
+    /// than the dialog (drawn before the terminal narrowed) outruns its top
+    /// rule, so the top rule is no frame and is not seen: nil. The cut rows
+    /// would drop the box bottom and give a card.
+    func testBoxInScrollbackWiderThanTheDialogIsNoCard() throws {
+        let rule = String(repeating: "─", count: 90)
+        let wide = altered(scrollboxRun7Screen, """
+              1. Draw the frame ┌──────────┐
+                                │ x        │
+                                └──────────┘
+            """, """
+              1. Draw the frame ┌\(rule)┐
+                                │ x\(String(repeating: " ", count: 88))│
+                                └\(rule)┘
+            """)
+        XCTAssertNil(AgentPrompt.parse(wide))
+        XCTAssertEqual(try prompt(scrollboxRun7Screen), try prompt(run7Screen), "the narrow box keeps the card")
+    }
+
+    /// #536 U3: an Ask form whose top rule is off the screen, its chip line on
+    /// row 0: the chip line is only known under a seen top rule, so the
+    /// question is the last line only, not joined with the lines above it.
+    func testChipLineWithTheTopRuleOffScreenJoinsNothing() throws {
+        let rows = run7Screen.split(separator: "\n", omittingEmptySubsequences: false).dropFirst(2)
+        let tall = altered(rows.joined(separator: "\n"), "\nWhich color?",
+                           "\nThis is a long question line one\nline two of the question\nline three\nWhich color?")
+        let p = try prompt(tall)
+        XCTAssertEqual(p.question, "Which color?")
+        XCTAssertFalse(p.topFound)
+    }
+
+    /// #536 U4 (QA #370 F2): any box-drawing character left of the cut, not
+    /// only "│", rejects the split; the plain parse rejects the form: nil.
+    func testBoxDrawingInAPreviewFormLabelRejectsTheSplit() {
+        XCTAssertNil(AgentPrompt.parse(altered(rowLayoutScreen, "2. Two lines, swapped", "2. ├── src/ tree view")))
+        XCTAssertNil(AgentPrompt.parse(altered(rowLayoutScreen, "1. PR line (Recommended)", "1. PR line ─ compact    ")))
+    }
 }
 
 // MARK: - Real Claude Code 2.1.309 screens (QA #310 live pty probe)

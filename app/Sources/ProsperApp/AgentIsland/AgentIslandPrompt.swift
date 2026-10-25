@@ -177,18 +177,22 @@ extension AgentPrompt {
         let raw = screen.split(separator: "\n", omittingEmptySubsequences: false)
         // QA #370 F1, QA #377 R1: a "N. … ┌──┐" row that is no box top
         // (scrollback, a command, an option label) is parsed as before #526,
-        // rows unchanged, whether the split fails or the split rows fail the
-        // preview parse (a whole box just above the top rule splits cleanly).
-        // Only a nil preview parse retries, once; the plain parse still
-        // rejects a real preview form ("Chat about this" above the footer).
-        if let t = previewTop(raw), let s = splitPreview(raw, t),
-           let p = parse(s.left, form: (s.preview, s.notes)) { return p }
+        // rows unchanged, when the split fails. A box that splits cleanly but
+        // fails the preview parse is retried once, rows unchanged, only when
+        // its top sits above the dialog's top rule (a whole box in scrollback,
+        // QA #382 G1-a): one inside the dialog is a preview form with a broken
+        // tail (Notes and "Chat about this" gone), never a card.
+        if let t = previewTop(raw), let s = splitPreview(raw, t) {
+            return parse(s.left, form: (s.preview, s.notes)) ?? parse(raw, form: nil, boxTop: t.row)
+        }
         return parse(raw, form: nil)
     }
 
     /// `parse` on screen rows; `form` is a split preview form's box lines and
-    /// notes, its rows `raw` already cut to the left column.
-    private static func parse(_ raw: [Substring], form: (preview: [String], notes: [String])?) -> AgentPrompt? {
+    /// notes, its rows `raw` already cut to the left column. `boxTop`: nil
+    /// unless the dialog's top rule is seen below that row.
+    private static func parse(_ raw: [Substring], form: (preview: [String], notes: [String])?,
+                              boxTop: Int? = nil) -> AgentPrompt? {
         let lines = unframe(raw)
         guard let last = lines.lastIndex(where: { option($0) != nil }) else { return nil }
         var found: [(digit: Int, label: String, caret: Bool, detail: [String])] = []
@@ -262,6 +266,8 @@ extension AgentPrompt {
             }
             j -= 1
         }
+        // j is the top rule's row, -1 when off the screen (that fails too).
+        if let boxTop, j <= boxTop { return nil }
         // #526: an AskUserQuestion's question wraps over several lines under its
         // header-chip line; all of them are the question, joined. The chip line
         // and anything above it stay context. Other dialogs: the last line only.
