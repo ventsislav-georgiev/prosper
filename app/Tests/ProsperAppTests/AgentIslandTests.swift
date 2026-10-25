@@ -1143,11 +1143,66 @@ final class AgentIslandTests: XCTestCase {
     }
 
     func testGhosttyColdStartLaunchesOnceAndRetriesUntilTheEventLands() {
-        let r = ColdStart([OSStatus(procNotFound), OSStatus(procNotFound), OSStatus(errAEEventNotHandled), noErr])
+        let r = ColdStart([OSStatus(procNotFound), OSStatus(procNotFound), OSStatus(procNotFound), noErr])
         XCTAssertEqual(r.deliver(), noErr)
         XCTAssertEqual(r.launches, 1, "launched once, no arguments")
-        XCTAssertEqual(r.attempts, 4, "-600 while starting, -1708 while its handler loads")
+        XCTAssertEqual(r.attempts, 4, "-600 while starting")
         XCTAssertEqual(r.slept, [0.5, 0.5, 0.5])
+    }
+
+    /// #545: -1708 was delivered (Ghostty opened the tab, then threw on its reply):
+    /// resending opened 16 tabs, so it ends the retries.
+    func testGhosttyColdStartNeverResendsADeliveredEvent() {
+        let r = ColdStart([OSStatus(procNotFound), OSStatus(errAEEventNotHandled), noErr])
+        XCTAssertEqual(r.deliver(), OSStatus(errAEEventNotHandled))
+        XCTAssertEqual(r.launches, 1)
+        XCTAssertEqual(r.attempts, 2, "one launch, one more send, no third tab")
+    }
+
+    /// #545: a minimal copy of Ghostty.sdef's two commands (tip build, 2026-10).
+    private let ghosttySdef = """
+        <dictionary title="Ghostty Scripting Dictionary">
+          <suite name="Ghostty Suite" code="Ghst">
+            <command name="new window" code="GhstNWin" description="Create a new Ghostty window.">
+              <result type="window" description="The newly created window."/>
+            </command>
+            <command name="new tab" code="GhstNTab" description="Create a new Ghostty tab.">
+              <result type="tab" description="The newly created tab."/>
+            </command>
+          </suite>
+        </dictionary>
+        """
+
+    /// #545: the event's own class+id against the sdef, each command on its own.
+    func testGhosttySdefDeclaresEachCommand() {
+        let key = AgentSessionKey(dir: "/d", name: "s")
+        let tab = AgentIsland.ghosttyNewTab(key, dch: "/opt/fake/dch")
+        let window = AgentIsland.ghosttyNewWindow(key, dch: "/opt/fake/dch")
+        let noTab = ghosttySdef.replacingOccurrences(of: "code=\"GhstNTab\"", with: "code=\"GhstXTab\"")
+        let noWindow = ghosttySdef.replacingOccurrences(of: "code=\"GhstNWin\"", with: "code=\"GhstXWin\"")
+        XCTAssertTrue(GhosttyEventSender.declares(ghosttySdef, tab))
+        XCTAssertTrue(GhosttyEventSender.declares(ghosttySdef, window))
+        XCTAssertFalse(GhosttyEventSender.declares(noTab, tab), "only new window declared")
+        XCTAssertTrue(GhosttyEventSender.declares(noTab, window))
+        XCTAssertFalse(GhosttyEventSender.declares(noWindow, window), "only new tab declared")
+        XCTAssertTrue(GhosttyEventSender.declares(noWindow, tab))
+        XCTAssertFalse(GhosttyEventSender.declares("", tab), "no dictionary")
+        XCTAssertFalse(GhosttyEventSender.declares("", window))
+        XCTAssertFalse(GhosttyEventSender.declares("<!-- GhstNTab was removed -->", tab), "a mention is not a code")
+    }
+
+    /// #545: a declared -1708 opened (noErr); an undeclared one stays -1708 and
+    /// goes to the script; any other status passes through unread.
+    func testGhosttyDeclaredUnhandledReplyCountsAsOpened() {
+        let unhandled = OSStatus(errAEEventNotHandled)
+        XCTAssertEqual(GhosttyEventSender.opened(unhandled, declared: { true }), noErr)
+        XCTAssertEqual(GhosttyEventSender.opened(unhandled, declared: { false }), unhandled)
+        for other in [noErr, OSStatus(procNotFound), OSStatus(errAETimeout), OSStatus(errAEEventFailed),
+                      OSStatus(errAEEventNotPermitted)] {
+            var asked = false
+            XCTAssertEqual(GhosttyEventSender.opened(other, declared: { asked = true; return true }), other, "\(other)")
+            XCTAssertFalse(asked, "\(other): the sdef is read only for a -1708")
+        }
     }
 
     func testGhosttyColdStartGivesUpAfterEightSeconds() {

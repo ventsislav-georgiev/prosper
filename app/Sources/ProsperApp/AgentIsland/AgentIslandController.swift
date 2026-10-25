@@ -304,6 +304,7 @@ final class AgentIslandController {
     /// in time (-600) or no handler (-1708) go to the script as before: a second
     /// event would wait again or fail the same way. #529: a timeout (-1712) may
     /// still have opened the tab, so it opens nothing more and copies instead.
+    /// #545: a -1708 here is an undeclared command; the sender maps a declared one to noErr.
     private func openInGhostty(_ s: AgentSession, tab: Bool) {
         let dch = DchCommand.dchPath
         let event = tab ? AgentIsland.ghosttyNewTab(s.key, dch: dch) : AgentIsland.ghosttyNewWindow(s.key, dch: dch)
@@ -432,13 +433,15 @@ enum AgentTerminalLauncher {
 enum GhosttyEventSender {
     /// `done` runs on a background queue: noErr once the window is up, else the
     /// AE error (-600 not running, -1743 denied, -1708 no dictionary, -1712 timeout).
+    /// #545: -1708 for a command the installed sdef declares is noErr (see opened).
     nonisolated static func send(_ event: NSAppleEventDescriptor, done: @escaping @Sendable (OSStatus) -> Void) {
         // Belt and braces: a test that forgot the seam never sends a real Apple Event.
         guard NSClassFromString("XCTestCase") == nil else { done(OSStatus(procNotFound)); return }
         nonisolated(unsafe) let event = event   // built for this send, touched only on the queue
         DispatchQueue.global(qos: .userInitiated).async {
-            let status = deliver(attempt: { attempt(event) }, launch: activateGhostty,
-                                 sleep: { Thread.sleep(forTimeInterval: $0) })
+            let status = opened(deliver(attempt: { attempt(event) }, launch: activateGhostty,
+                                        sleep: { Thread.sleep(forTimeInterval: $0) }),
+                                declared: { declares(installedSdef(), event) })
             // Cooperative activation may ignore Ghostty's own activate: bring it
             // forward through Launch Services, as the script path does.
             if status == noErr { activateGhostty() }
@@ -447,18 +450,44 @@ enum GhosttyEventSender {
     }
 
     /// Ghostty not running (-600): launch it once, then retry every 0.5 s for up
-    /// to 8 s while it is still starting (-600) or its handler is not ready (-1708).
-    /// Any other status ends it. Pure over its seams (tests drive it).
+    /// to 8 s while it is still starting (-600). #545: only -600, an undelivered
+    /// event; any other status (-1708 included) was delivered, and a resend repeats
+    /// its side effect (16 tabs). Pure over its seams (tests drive it).
     nonisolated static func deliver(attempt: () -> OSStatus, launch: () -> Void,
                                     sleep: (TimeInterval) -> Void) -> OSStatus {
         var status = attempt()
         guard status == procNotFound else { return status }
         launch()
-        for _ in 0..<16 where status == procNotFound || status == errAEEventNotHandled {
+        for _ in 0..<16 where status == procNotFound {
             sleep(0.5)
             status = attempt()
         }
         return status
+    }
+
+    /// #545: a -1708 to a command Ghostty's dictionary declares means the handler
+    /// ran and then threw building its reply (the tab is open): treat it as noErr.
+    /// `declared` is asked only for a -1708.
+    nonisolated static func opened(_ status: OSStatus, declared: () -> Bool) -> OSStatus {
+        status == errAEEventNotHandled && declared() ? noErr : status
+    }
+
+    /// #545: whether the sdef text declares the event's command (code="GhstNTab").
+    nonisolated static func declares(_ sdef: String, _ event: NSAppleEventDescriptor) -> Bool {
+        let code = [event.eventClass, event.eventID].map {
+            String(decoding: withUnsafeBytes(of: $0.bigEndian) { Array($0) }, as: UTF8.self)
+        }.joined()
+        return sdef.contains("code=\"\(code)\"")
+    }
+
+    /// #545: the installed Ghostty's sdef (Info.plist OSAScriptingDefinition), or ""
+    /// with none. Plain file reads, no Bundle cache, so an updated Ghostty counts.
+    private nonisolated static func installedSdef() -> String {
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: AgentTerminal.ghostty.bundleID),
+              let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
+              let name = info["OSAScriptingDefinition"] as? String else { return "" }
+        let url = app.appendingPathComponent("Contents/Resources").appendingPathComponent(name)
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
     /// The one-time Automation consent alert blocks this queue (never main) until

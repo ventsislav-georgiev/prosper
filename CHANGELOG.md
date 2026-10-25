@@ -40,7 +40,9 @@ tag from the now-released section and put it on the new top draft.
   back to the script (#505). In Ghostty the session opens as a new tab of the open
   Ghostty window, and in a new window only when Ghostty has none (#527). If Ghostty
   does not answer in time, the attach command is copied instead, so the session never
-  opens twice (#529). A session that
+  opens twice (#529). A click opens exactly one tab even when Ghostty fails while
+  answering after it has opened it: no second copy, no script prompt, and no row of
+  extra tabs when Ghostty was not running (#545). A session that
   publishes its work through dch also shows its open pull requests as repo#number
   buttons that open in your browser, how many it
   has merged, and its tasks done, in progress and queued (#506). The pull requests get a
