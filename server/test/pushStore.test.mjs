@@ -1041,3 +1041,124 @@ test("#546: cron restarts stay within the budget after the lapses; the rest rest
   assert.deepEqual(await run(), []);
   assert.equal(t.rows(`SELECT * FROM push_tokens WHERE kind = 'la_expired'`).length, 0);
 });
+
+// ---- #546 round 3 (QA #399) --------------------------------------------------
+
+// cardOn, then rotated while an edge start is under 60 s old: the la_expired row waits.
+async function waiting(t) {
+  await cardOn(t);
+  expire(t);
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "blocked")]));
+  await t.settle();
+  await runCron(t.deps);
+  t.takeCalls();
+  assert.deepEqual(kinds(t), ["alert", "la_expired", "la_start"], "waiting");
+}
+const startedAt = (t) => t.rows(`SELECT started_at FROM push_macs WHERE mac_id = ?`, MAC)[0].started_at;
+
+test("#546 W3: an la_update re-post of the SAME activity while its rotation waits is no card: it still restarts", async () => {
+  const t = setup();
+  await waiting(t);
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC)); // iOS re-posts the ended activity's cached token
+  await t.settle();
+  t.takeCalls();
+  t.clock.now += 60;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4 });
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), [[tok("3"), "end"], [tok("2"), "start"]]);
+});
+
+test("#546 W1: a token-start sets started_at; an edge 5 s later sends no second start", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  t.clock.now += 120; // the first edge's started_at is long past
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 2 });
+  await registerPhone(t);
+  await t.settle();
+  assert.deepEqual(sent(t), [[tok("2"), "start"]]);
+  assert.equal(startedAt(t), t.clock.now);
+  t.clock.now += 5;
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "blocked")]));
+  await t.settle();
+  assert.deepEqual(sent(t), [[tok("1"), "alert"]], "the card's update token has not landed: no second start");
+});
+
+test("#546 W1: a token-start landing between a post's load and its upsert still holds that post's start back", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  t.clock.now += 120;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 2 });
+  await putToken(t.deps, ALICE, alertBody(PHONE));
+  await t.settle();
+  t.takeCalls();
+  interpose(t, "INSERT INTO push_macs", async () => {
+    await putToken(t.deps, ALICE, startBody(PHONE, "2"));
+    await t.settle();
+  });
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "blocked")]));
+  await t.settle();
+  assert.deepEqual(sent(t).sort(), [[tok("1"), "alert"], [tok("2"), "start"]], "one start, the token's");
+});
+
+test("#546 W2: a restart sets started_at; an edge 5 s later sends no second start", async () => {
+  const t = setup();
+  await cardOn(t);
+  expire(t);
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), [[tok("3"), "end"], [tok("2"), "start"]]);
+  assert.equal(startedAt(t), t.clock.now);
+  t.clock.now += 5;
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "blocked")]));
+  await t.settle();
+  assert.deepEqual(sent(t), [[tok("1"), "alert"]]);
+});
+
+test("#546 W6: a new la_start token during a wait starts once; the cron waits again, then only ends the old card", async () => {
+  const t = setup();
+  await waiting(t); // edge at E, cron at E: wait
+  t.clock.now += 55;
+  await putToken(t.deps, ALICE, startBody(PHONE, "4"));
+  await t.settle();
+  assert.deepEqual(sent(t), [[tok("4"), "start"]]);
+  t.clock.now += 5; // E + 60: the edge's gap is over, the token-start's is not
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4 });
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), [], "no second start");
+  assert.deepEqual(kinds(t), ["alert", "la_expired", "la_start"]);
+  await putToken(t.deps, ALICE, { ...cardBody(PHONE, MAC, "5"), activity_id: "act-new" });
+  await t.settle();
+  t.takeCalls();
+  t.clock.now += 60;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 5 });
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), [[tok("3"), "end"]]);
+});
+
+test("#546 W5: a DELETE of the activity while its rotation waits takes the la_expired row: no restart", async () => {
+  const t = setup();
+  await waiting(t);
+  await deleteTokens(t.deps, ALICE, { device_id: PHONE, kind: "la_update", activity_id: cardBody(PHONE, MAC).activity_id });
+  assert.deepEqual(kinds(t), ["alert", "la_start"]);
+  t.clock.now += 60;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4 });
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), []);
+});
+
+test("#546 M10b/M10c: deleteDevice while a rotation waits: the next cron ends that card and drops it", async () => {
+  const t = setup();
+  await waiting(t);
+  await t.deps.db.batch([
+    t.deps.db.prepare(`DELETE FROM devices WHERE email = ?1 AND device_id = ?2`).bind(ALICE, MAC),
+    ...purgeMacStatements(t.deps.db, ALICE, MAC),
+  ]);
+  assert.deepEqual(kinds(t), ["alert", "la_expired", "la_start"], "the purge leaves the la_expired row");
+  await runCron(t.deps);
+  const calls = t.takeCalls();
+  assert.deepEqual(calls.map((c) => [c.token, c.body.aps.event]), [[tok("3"), "end"]], "no start for a deleted Mac");
+  assert.equal(calls[0].body.aps["dismissal-date"], t.clock.now);
+  assert.deepEqual(calls[0].body.aps["content-state"].online, false);
+  assert.deepEqual(kinds(t), ["alert", "la_start"]);
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), [], "once");
+});

@@ -10,7 +10,12 @@ export type PushDeps = {
 };
 export type RouteResult = { status: 204 } | { status: 400 | 403 | 429 | 503; error: string };
 
-export function deliver(deps: PushDeps, pushes: ApnsPush[], alsoDrop?: TokenRow[]): Promise<ApnsResult[]>;
+export function deliver(
+  deps: PushDeps,
+  pushes: ApnsPush[],
+  alsoDrop?: TokenRow[],
+  also?: D1PreparedStatement[],
+): Promise<ApnsResult[]>;
 export function putToken(deps: PushDeps, email: string, body: unknown, tokenHash: string): Promise<RouteResult>;
 export function deleteTokens(deps: PushDeps, email: string, body: unknown): Promise<RouteResult>;
 export function postSessions(deps: PushDeps, email: string, body: unknown): Promise<RouteResult>;
