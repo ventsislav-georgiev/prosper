@@ -1145,7 +1145,7 @@ test("#546 W5: a DELETE of the activity while its rotation waits takes the la_ex
   assert.deepEqual(sent(t), []);
 });
 
-test("#546 M10b/M10c: deleteDevice while a rotation waits: the next cron ends that card and drops it", async () => {
+test("#546 M10c: deleteDevice while a rotation waits: the next cron ends that card and drops it", async () => {
   const t = setup();
   await waiting(t);
   await t.deps.db.batch([
@@ -1161,4 +1161,143 @@ test("#546 M10b/M10c: deleteDevice while a rotation waits: the next cron ends th
   assert.deepEqual(kinds(t), ["alert", "la_start"]);
   await runCron(t.deps);
   assert.deepEqual(sent(t), [], "once");
+});
+
+test("#546 M10b: a phone evicted past MAX_PHONES while its rotation waits goes with its la_expired row", async () => {
+  const t = setup();
+  await waiting(t);
+  for (let i = 1; i <= 10; i++) {
+    t.clock.now += 1;
+    await putToken(t.deps, ALICE, alertBody(phoneId(i)));
+  }
+  assert.ok(!phones(t).includes(PHONE), "least recently updated: evicted");
+  assert.deepEqual(t.rows(`SELECT kind FROM push_tokens WHERE device_id = ?`, PHONE), []);
+  t.clock.now += 60;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4 });
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), []);
+});
+
+// ---- #548 (QA #401) -----------------------------------------------------------
+
+test("#548 N5: a DELETE of one activity leaves another activity's la_expired row", async () => {
+  const t = setup();
+  t.raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, MAC2, "Other");
+  await registerPhone(t);
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await postSessions(t.deps, ALICE, { mac_id: MAC2, seq: 1, sessions: [S("x", "working")] });
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC));
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC2, "5"));
+  await t.settle();
+  t.clock.now += 120;
+  expire(t);
+  await postSessions(t.deps, ALICE, sessions(2, [S("a", "blocked")])); // both rotations wait out the gap
+  await postSessions(t.deps, ALICE, { mac_id: MAC2, seq: 2, sessions: [S("x", "blocked")] });
+  await t.settle();
+  await runCron(t.deps);
+  t.takeCalls();
+  await deleteTokens(t.deps, ALICE, { device_id: PHONE, kind: "la_update", activity_id: cardBody(PHONE, MAC).activity_id });
+  assert.deepEqual(t.rows(`SELECT activity_id FROM push_tokens WHERE kind = 'la_expired'`), [{ activity_id: cardBody(PHONE, MAC2).activity_id }]);
+  t.clock.now += 60;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 3 });
+  await postSessions(t.deps, ALICE, { mac_id: MAC2, seq: 3 });
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), [[tok("5"), "end"], [tok("2"), "start"]], "only the other Mac's card rotates");
+});
+
+test("#548 C2: a token-start bumps started_at only when APNs answered ok; a Mac that wants no card never", async () => {
+  const t = setup();
+  t.raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, MAC2, "Other");
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await postSessions(t.deps, ALICE, { mac_id: MAC2, seq: 1, sessions: [S("x", "idle")] });
+  await t.settle();
+  t.clock.now += 120;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 2 });
+  const at = () => t.rows(`SELECT mac_id, started_at, rev FROM push_macs ORDER BY mac_id`);
+  const before = at();
+  t.answers.set(tok("4"), { status: 410, reason: "Unregistered" });
+  t.answers.set(tok("5"), { status: 500, reason: "InternalServerError" });
+  for (const c of ["4", "5"]) {
+    const base = t.deps;
+    const n = countSubrequests(t);
+    await putToken(t.deps, ALICE, startBody(PHONE, c));
+    await t.settle();
+    t.deps = base;
+    assert.deepEqual(sent(t), [[tok(c), "start"]]);
+    assert.deepEqual(at(), before, `${c}: no card, no bump`);
+    // upsert batch, Mac SELECT, the send; then the drop batch for the 410 only.
+    assert.deepEqual(n, { d1: c === "4" ? 3 : 2, apns: 1 }, c);
+  }
+  await putToken(t.deps, ALICE, startBody(PHONE, "6"));
+  await t.settle();
+  assert.deepEqual(sent(t), [[tok("6"), "start"]]);
+  const after = at();
+  assert.equal(after[1].mac_id, MAC);
+  assert.deepEqual(after[1], { ...before[1], started_at: t.clock.now, rev: before[1].rev + 1 }, "ok: bumped");
+  assert.deepEqual(after[0], before[0], "the idle Mac got no start and no bump");
+});
+
+test("#548 C2: a restart bumps started_at only when its start answered ok", async () => {
+  for (const status of [410, 500]) {
+    const t = setup();
+    await cardOn(t);
+    const before = startedAt(t);
+    t.answers.set(tok("2"), { status, reason: "x" });
+    expire(t);
+    await runCron(t.deps);
+    assert.deepEqual(sent(t), [[tok("3"), "end"], [tok("2"), "start"]]);
+    assert.equal(startedAt(t), before, `${status}`);
+  }
+});
+
+test("#548 C4: a card being rotated out re-posted with a new token: the token goes to its la_expired row, which the restart ends", async () => {
+  const t = setup();
+  await waiting(t);
+  await putToken(t.deps, ALICE, { ...cardBody(PHONE, MAC, "9"), env: "sandbox" }); // ActivityKit rotated the old card's token
+  await t.settle();
+  assert.deepEqual(sent(t), [], "no catch-up for a card on its way out");
+  assert.deepEqual(t.rows(`SELECT kind, token, env FROM push_tokens WHERE kind LIKE 'la_%' ORDER BY kind`), [
+    { kind: "la_expired", token: tok("9"), env: "sandbox" },
+    { kind: "la_start", token: tok("2"), env: "production" },
+  ], "no la_update row: no new 7 h 50 min clock");
+  t.clock.now += 60;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4 });
+  await runCron(t.deps);
+  const calls = t.takeCalls();
+  assert.deepEqual(calls.map((c) => [c.token, c.body.aps.event]), [[tok("9"), "end"], [tok("2"), "start"]]);
+  assert.ok(calls[0].url.includes("api.sandbox.push.apple.com"), "the end goes to the new token's env");
+  assert.deepEqual(kinds(t), ["alert", "la_start"]);
+  await putToken(t.deps, ALICE, { ...cardBody(PHONE, MAC, "5"), activity_id: "act-new" }); // the new card registers
+  await t.settle();
+  assert.deepEqual(sent(t), [[tok("5"), "update"]]);
+  // Once its la_expired row is gone, a re-post of the old activity is a card again (as before #548).
+  // It deletes act-new: the W10 residual, closed on the iOS side by prosper-ios 199d5fc.
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC, "9"));
+  await t.settle();
+  assert.deepEqual(sent(t), [[tok("9"), "update"]]);
+  assert.deepEqual(t.rows(`SELECT activity_id FROM push_tokens WHERE kind = 'la_update'`), [{ activity_id: cardBody(PHONE, MAC).activity_id }]);
+});
+
+test("#548 C4: a live card re-posted with the same token still gets its catch-up (every app launch)", async () => {
+  const t = setup();
+  await cardOn(t);
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC)); // no la_expired row: not rotating
+  await t.settle();
+  assert.deepEqual(sent(t), [[tok("3"), "update"]]);
+  assert.deepEqual(kinds(t), ["alert", "la_start", "la_update"]);
+});
+
+test("#548 C4: a re-post of a card being rotated out leaves the newer card that already landed", async () => {
+  const t = setup();
+  await waiting(t);
+  await putToken(t.deps, ALICE, { ...cardBody(PHONE, MAC, "5"), activity_id: "act-new" });
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC, "9"));
+  await t.settle();
+  assert.deepEqual(sent(t), [[tok("5"), "update"]]);
+  assert.deepEqual(t.rows(`SELECT activity_id, token FROM push_tokens WHERE kind = 'la_update'`), [{ activity_id: "act-new", token: tok("5") }]);
+  t.clock.now += 60;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4 });
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), [[tok("9"), "end"]], "the old card ends at its new token; the new card stays");
+  assert.deepEqual(kinds(t), ["alert", "la_start", "la_update"]);
 });

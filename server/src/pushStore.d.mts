@@ -14,7 +14,7 @@ export function deliver(
   deps: PushDeps,
   pushes: ApnsPush[],
   alsoDrop?: TokenRow[],
-  also?: D1PreparedStatement[],
+  also?: (results: ApnsResult[]) => D1PreparedStatement[],
 ): Promise<ApnsResult[]>;
 export function putToken(deps: PushDeps, email: string, body: unknown, tokenHash: string): Promise<RouteResult>;
 export function deleteTokens(deps: PushDeps, email: string, body: unknown): Promise<RouteResult>;

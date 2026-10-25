@@ -38,6 +38,9 @@ const NO_CONTENT = { status: 204 };
 const TOKEN_COLS = "email, device_id, kind, activity_id, token, env";
 const MAC_COLS =
   "m.seq, m.last_seen, m.online, m.snapshot, m.last_push_at, m.last_alert, m.idle_since, m.started_at, m.blocked, m.rev";
+// Binds ?1 email, ?2 device_id, ?4 activity_id: that activity's card is being rotated out.
+const ROTATING = `EXISTS (SELECT 1 FROM push_tokens x WHERE x.email = ?1 AND x.device_id = ?2
+  AND x.kind = 'la_expired' AND x.activity_id = ?4)`;
 
 /** The Mac's display name, or null when mac_id is not an activated device of `email`. */
 async function macName(db, email, macId) {
@@ -107,12 +110,12 @@ async function dropTokens(db, rows, also = []) {
 /**
  * Send every push; tokens APNs calls dead (410, BadDeviceToken, DeviceTokenNotForTopic)
  * are deleted, together with `alsoDrop`, in one batch (one subrequest) that also runs
- * the statements `also`.
+ * the statements also(results), built from what APNs answered.
  */
-export async function deliver(deps, pushes, alsoDrop = [], also = []) {
+export async function deliver(deps, pushes, alsoDrop = [], also = () => []) {
   const results = await Promise.all(pushes.map((p) => deps.send(p)));
   const dead = pushes.filter((_, i) => results[i] === "drop").map((p) => p.row);
-  await dropTokens(deps.db, [...alsoDrop, ...dead], also); // a row twice is deleted once
+  await dropTokens(deps.db, [...alsoDrop, ...dead], also(results)); // a row twice is deleted once
   return results;
 }
 
@@ -120,11 +123,16 @@ export async function deliver(deps, pushes, alsoDrop = [], also = []) {
  * started_at = now for every Mac a push-to-start just went out for without an edge, so
  * an edge in the next START_GAP_S does not start a second card on the same phone before
  * its update token lands (#546 round 3). It bumps rev like every writer of the row, so a
- * post that loaded the row before re-reduces with it. pairs = [[email, mac_id]].
+ * post that loaded the row before re-reduces with it. Only starts APNs answered "ok"
+ * count (#548): a dropped or failed one shows no card, so a bump would only hold back
+ * the next edge start.
  */
-function startedStatements(db, pairs, now) {
-  const keys = [...new Set(pairs.map(([email, macId]) => JSON.stringify([email, macId])))];
-  return keys.map((k) =>
+function startedStatements(db, pushes, results, now) {
+  const keys = new Set();
+  pushes.forEach(({ row, payload: { aps } }, i) => {
+    if (results[i] === "ok" && aps.event === "start") keys.add(JSON.stringify([row.email, aps.attributes.mac_id]));
+  });
+  return [...keys].map((k) =>
     db
       .prepare(`UPDATE push_macs SET started_at = ?3, rev = rev + 1 WHERE email = ?1 AND mac_id = ?2`)
       .bind(...JSON.parse(k), now),
@@ -177,10 +185,11 @@ export async function putToken(deps, email, body, tokenHash) {
   // Two statements so the first one's changes say "new row or new token value" (#546):
   // iOS re-posts the same la_start token on every launch, and that must start nothing.
   // Inside the batch's transaction, so two posts of one new token count it once.
+  // An activity whose la_expired row waits for its restart is no card again (#548).
   const upsert = db
     .prepare(
       `INSERT INTO push_tokens (email, device_id, kind, activity_id, mac_id, token, env, created_at, updated_at, token_hash)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9 WHERE ?3 != 'la_update' OR NOT ${ROTATING}
        ON CONFLICT(email, device_id, kind, activity_id) DO UPDATE SET token = excluded.token
        WHERE push_tokens.token != excluded.token`,
     )
@@ -205,19 +214,29 @@ export async function putToken(deps, email, body, tokenHash) {
       )
       .bind(email, v.device_id, MAX_PHONES),
   ];
+  // A card being rotated out that re-posts (iOS rotates its token any time) is no newer
+  // card: its new token goes to the la_expired row, so the restart's end reaches it.
+  const carry = db
+    .prepare(
+      `UPDATE push_tokens SET token = ?4, env = ?5, updated_at = ?6, token_hash = ?7
+       WHERE email = ?1 AND device_id = ?2 AND kind = 'la_expired' AND activity_id = ?3`,
+    )
+    .bind(email, v.device_id, v.activity_id, v.token, v.env, now, tokenHash);
   if (v.kind === "la_update") {
     // One card per phone per Mac: a newer activity replaces any older one's token.
     stmts.unshift(
       db
         .prepare(
           `DELETE FROM push_tokens WHERE email = ?1 AND device_id = ?2 AND kind = 'la_update'
-           AND mac_id = ?3 AND activity_id != ?4`,
+           AND mac_id = ?3 AND activity_id != ?4 AND NOT ${ROTATING}`,
         )
         .bind(email, v.device_id, v.mac_id, v.activity_id),
+      carry,
     );
   }
   const res = await db.batch(stmts);
-  if (v.kind === "la_update") deps.defer(catchUp(deps, email, v, name, now));
+  const rotating = v.kind === "la_update" && res[stmts.indexOf(carry)].meta.changes;
+  if (v.kind === "la_update" && !rotating) deps.defer(catchUp(deps, email, v, name, now));
   if (v.kind === "la_start" && res[stmts.indexOf(upsert)].meta.changes) deps.defer(startPhone(deps, email, v, now));
   return NO_CONTENT;
 }
@@ -249,14 +268,12 @@ async function startPhone(deps, email, v, now) {
     .all();
   const row = { email, device_id: v.device_id, kind: v.kind, activity_id: v.activity_id, token: v.token, env: v.env };
   const pushes = [];
-  const started = [];
   for (const r of results) {
     const mac = liveMac(r);
     if (!wantsCard(mac, now)) continue;
     pushes.push(startPush(row, r.mac_id, r.mac_name, mac.sessions, now));
-    started.push([email, r.mac_id]);
   }
-  await deliver(deps, pushes, [], startedStatements(deps.db, started, now));
+  await deliver(deps, pushes, [], (sent) => startedStatements(deps.db, pushes, sent, now));
 }
 
 /**
@@ -436,7 +453,6 @@ export async function runCron(deps) {
  */
 async function restart(deps, steps, now) {
   const pushes = [];
-  const started = [];
   for (const { start, row: e } of steps) {
     const old = { email: e.email, device_id: e.device_id, kind: "la_expired", activity_id: e.activity_id, token: e.token, env: e.env };
     const cs = contentState(e.mac?.sessions ?? [], e.mac?.online ?? false);
@@ -444,10 +460,9 @@ async function restart(deps, steps, now) {
     if (!start) continue;
     const row = { email: e.email, device_id: e.device_id, kind: "la_start", activity_id: "", token: e.start_token, env: e.start_env };
     pushes.push(startPush(row, e.mac_id, e.mac_name, e.mac.sessions, now));
-    started.push([e.email, e.mac_id]);
   }
   const handled = steps.map(({ row: e }) => ({ ...e, kind: "la_expired" }));
-  await deliver(deps, pushes, handled, startedStatements(deps.db, started, now));
+  await deliver(deps, pushes, handled, (sent) => startedStatements(deps.db, pushes, sent, now));
 }
 
 /** deleteDevice: the Mac's status row and every card showing it. */
