@@ -8,7 +8,8 @@
 // Free plan: 50 subrequests per invocation, D1 queries (a batch is one) and APNs
 // fetches alike. A post spends at most 2 (requireSession) + 9 D1 (device, 2 x load and
 // upsert, card/start/alert SELECTs, one drop batch) + 20 sends (per phone: one card
-// update or start, one alert); a cron run, 2 + its budget.
+// update or start, one alert); a cron run, 2 + its budget. A la_start post with a new
+// token: 2 + the upsert batch, the Mac SELECT, one start per Mac, one drop batch.
 
 import {
   parseTokenBody,
@@ -22,9 +23,11 @@ import {
   collapseId,
   cleanMacName,
   emptyMac,
+  wantsCard,
   planCron,
   RATE_PER_MIN,
   LA_MAX_AGE_S,
+  ROTATE_LEAD_S,
   OFFLINE_DISMISS_S,
   MAX_PHONES,
   CRON_BUDGET,
@@ -153,16 +156,25 @@ export async function putToken(deps, email, body, tokenHash) {
     if (name === null) return { status: 403, error: "forbidden" };
   }
   const now = deps.now();
+  // Two statements so the first one's changes say "new row or new token value" (#546):
+  // iOS re-posts the same la_start token on every launch, and that must start nothing.
+  // Inside the batch's transaction, so two posts of one new token count it once.
+  const upsert = db
+    .prepare(
+      `INSERT INTO push_tokens (email, device_id, kind, activity_id, mac_id, token, env, created_at, updated_at, token_hash)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
+       ON CONFLICT(email, device_id, kind, activity_id) DO UPDATE SET token = excluded.token
+       WHERE push_tokens.token != excluded.token`,
+    )
+    .bind(email, v.device_id, v.kind, v.activity_id, v.mac_id, v.token, v.env, now, tokenHash);
   const stmts = [
+    upsert,
     db
       .prepare(
-        `INSERT INTO push_tokens (email, device_id, kind, activity_id, mac_id, token, env, created_at, updated_at, token_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
-         ON CONFLICT(email, device_id, kind, activity_id) DO UPDATE SET
-           mac_id = excluded.mac_id, token = excluded.token, env = excluded.env,
-           updated_at = excluded.updated_at, token_hash = excluded.token_hash`,
+        `UPDATE push_tokens SET mac_id = ?5, env = ?6, updated_at = ?7, token_hash = ?8
+         WHERE email = ?1 AND device_id = ?2 AND kind = ?3 AND activity_id = ?4`,
       )
-      .bind(email, v.device_id, v.kind, v.activity_id, v.mac_id, v.token, v.env, now, tokenHash),
+      .bind(email, v.device_id, v.kind, v.activity_id, v.mac_id, v.env, now, tokenHash),
     // At most MAX_PHONES install ids per account: past that, the least recently
     // updated phones go with all their rows, so a reinstalled phone always gets in.
     // max(0, ...): a negative LIMIT is no limit in SQLite.
@@ -186,9 +198,43 @@ export async function putToken(deps, email, body, tokenHash) {
         .bind(email, v.device_id, v.mac_id, v.activity_id),
     );
   }
-  await db.batch(stmts);
+  const res = await db.batch(stmts);
   if (v.kind === "la_update") deps.defer(catchUp(deps, email, v, name, now));
+  if (v.kind === "la_start" && res[stmts.indexOf(upsert)].meta.changes) deps.defer(startPhone(deps, email, v, now));
   return NO_CONTENT;
+}
+
+/** The Mac columns wantsCard/restartStep read; null when the LEFT JOIN found no Mac. */
+const liveMac = (r) =>
+  r.online === null ? null : { online: !!r.online, last_seen: r.last_seen, sessions: JSON.parse(r.snapshot), started_at: r.started_at };
+
+const startPush = (row, macId, macName, sessions, now) =>
+  laPush(row, 5, startPayload(contentState(sessions), now, macId, cleanMacName(macName)));
+
+/**
+ * A new or changed la_start token (#546: install, reinstall, rotation, re-login): the
+ * phone gets no card until the next edge otherwise, so push-to-start it now on every
+ * Mac that wants a card and on which it holds none. started_at is neither checked nor
+ * bumped: the token itself is the per-phone guard, and a bump would hold back the next
+ * edge's start for the account's other phones.
+ */
+async function startPhone(deps, email, v, now) {
+  const { results } = await deps.db
+    .prepare(
+      `SELECT m.mac_id, m.online, m.last_seen, m.snapshot, m.started_at, d.name AS mac_name
+       FROM push_macs m JOIN devices d ON d.email = m.email AND d.device_id = m.mac_id
+       WHERE m.email = ?1 AND m.online = 1 AND NOT EXISTS (SELECT 1 FROM push_tokens u
+         WHERE u.email = ?1 AND u.device_id = ?2 AND u.kind = 'la_update' AND u.mac_id = m.mac_id)`,
+    )
+    .bind(email, v.device_id)
+    .all();
+  const row = { email, device_id: v.device_id, kind: v.kind, activity_id: v.activity_id, token: v.token, env: v.env };
+  const pushes = [];
+  for (const r of results) {
+    const mac = liveMac(r);
+    if (wantsCard(mac, now)) pushes.push(startPush(row, r.mac_id, r.mac_name, mac.sessions, now));
+  }
+  await deliver(deps, pushes);
 }
 
 /**
@@ -292,16 +338,37 @@ export async function postSessions(deps, email, body) {
   return { status: 503, error: "busy" }; // lost twice: the Mac resends on its next change or heartbeat (#523)
 }
 
-/** The every-minute cron: lapse silent Macs, end idle cards, re-push old ones. */
+/**
+ * The every-minute cron: lapse silent Macs, end idle cards, restart expired ones,
+ * re-push old ones.
+ */
 export async function runCron(deps) {
   const { db } = deps;
   const now = deps.now();
-  // iOS ends every Live Activity after 8 h; its token is dead even if never deleted,
-  // and keeping it would block the next push-to-start for that Mac.
-  await db
-    .prepare(`DELETE FROM push_tokens WHERE kind = 'la_update' AND created_at <= ?1`)
-    .bind(now - LA_MAX_AGE_S)
-    .run();
+  // iOS ends every Live Activity after 8 h, and its frozen card can stay on the Lock
+  // Screen for hours after. So a card is rotated ROTATE_LEAD_S before that (#546): the
+  // row stops being an la_update (no update goes to it, the next edge can start a
+  // card) and stays as la_expired until a restart step has ended the old card and,
+  // where the Mac still wants one, push-started a new one; a restart the budget
+  // defers is never lost.
+  // One batch: the purge and the read of every expired card (one subrequest).
+  const [, { results: expired }] = await db.batch([
+    db
+      .prepare(`UPDATE OR REPLACE push_tokens SET kind = 'la_expired' WHERE kind = 'la_update' AND created_at <= ?1`)
+      .bind(now - (LA_MAX_AGE_S - ROTATE_LEAD_S)),
+    db.prepare(
+      `SELECT e.email, e.device_id, e.activity_id, e.token, e.env, e.mac_id, e.created_at,
+         s.token AS start_token, s.env AS start_env, m.online, m.last_seen, m.snapshot, m.started_at,
+         d.name AS mac_name,
+         EXISTS (SELECT 1 FROM push_tokens u WHERE u.email = e.email AND u.device_id = e.device_id
+           AND u.kind = 'la_update' AND u.mac_id = e.mac_id) AS has_card
+       FROM push_tokens e
+       LEFT JOIN push_tokens s ON s.email = e.email AND s.device_id = e.device_id AND s.kind = 'la_start'
+       LEFT JOIN push_macs m ON m.email = e.email AND m.mac_id = e.mac_id
+       LEFT JOIN devices d ON d.email = e.email AND d.device_id = e.mac_id
+       WHERE e.kind = 'la_expired'`,
+    ),
+  ]);
   const { results } = await db
     .prepare(
       `SELECT m.email, m.mac_id, ${MAC_COLS}, d.name AS mac_name,
@@ -317,9 +384,12 @@ export async function runCron(deps) {
     results.map((row) => ({ ...row, mac: fromRow(row) })),
     now,
     deps.budget ?? CRON_BUDGET,
+    expired.map((row) => ({ ...row, mac: liveMac(row) })),
   );
-  await Promise.allSettled(
-    plan.map(async ({ row, mac, push }) => {
+  const restarts = plan.filter((s) => s.kind === "restart");
+  await Promise.allSettled([
+    restarts.length && restart(deps, restarts, now),
+    ...plan.filter((s) => s.kind !== "restart").map(async ({ row, mac, push }) => {
       const res = await db
         .prepare(
           `UPDATE push_macs SET online = ?3, snapshot = ?4, idle_since = ?5, last_push_at = ?6, rev = rev + 1
@@ -330,7 +400,26 @@ export async function runCron(deps) {
       if (!res.meta.changes) return; // the Mac posted meanwhile; its post decides
       await dispatch(deps, row.email, row.mac_id, cleanMacName(row.mac_name), mac, push, now);
     }),
-  );
+  ]);
+}
+
+/**
+ * Restart steps: end every handled old card now (it is still live, and a new card
+ * must never sit beside it), push-to-start the phones due one; every handled expired
+ * row goes in the one drop batch, so a dead old token needs nothing more.
+ */
+async function restart(deps, steps, now) {
+  const pushes = [];
+  for (const { start, row: e } of steps) {
+    const old = { email: e.email, device_id: e.device_id, kind: "la_expired", activity_id: e.activity_id, token: e.token, env: e.env };
+    const cs = contentState(e.mac?.sessions ?? [], e.mac?.online ?? false);
+    pushes.push(laPush(old, 5, laPayload("end", cs, now, { "dismissal-date": now })));
+    if (!start) continue;
+    const row = { email: e.email, device_id: e.device_id, kind: "la_start", activity_id: "", token: e.start_token, env: e.start_env };
+    pushes.push(startPush(row, e.mac_id, e.mac_name, e.mac.sessions, now));
+  }
+  const handled = steps.map(({ row: e }) => ({ ...e, kind: "la_expired" }));
+  await deliver(deps, pushes, handled);
 }
 
 /** deleteDevice: the Mac's status row and every card showing it. */

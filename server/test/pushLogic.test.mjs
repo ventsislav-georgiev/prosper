@@ -21,6 +21,8 @@ import {
   readBody,
   cronBudget,
   planCron,
+  restartStep,
+  wantsCard,
 } from "../src/pushLogic.mjs";
 
 const S = (name, state, extra = {}) => ({ name, state, ...extra });
@@ -509,6 +511,54 @@ test("planCron: lapses first, then ends, then re-pushes, oldest due first; a ste
   assert.deepEqual(planCron([repush("x", now - 100, 1)], now, 40), [], "not due");
   const nine = Array.from({ length: 9 }, (_, i) => lapse(`m${i}`, now - 300 + i, 5));
   assert.equal(planCron(nine, now).length, 5, "default budget: 44 subrequests at 8 a step");
+});
+
+// ---- #546: starts without an edge -------------------------------------------
+
+test("wantsCard: online, heartbeat under 180 s old, something working or blocked", () => {
+  assert.equal(wantsCard(live(), 1179), true);
+  assert.equal(wantsCard(live({ sessions: [S("a", "blocked")] }), 1000), true);
+  assert.equal(wantsCard(live(), 1180), false, "lapsed, even before the cron marks it offline");
+  assert.equal(wantsCard(live({ online: false }), 1000), false);
+  assert.equal(wantsCard(live({ sessions: [S("a", "idle"), S("b", "done")] }), 1000), false);
+});
+
+test("restartStep: start where the Mac wants a card; wait inside START_GAP_S; drop otherwise", () => {
+  const p = (over = {}) => ({ mac: live({ started_at: 900 }), start_token: HEX, has_card: 0, created_at: 1, ...over });
+  assert.equal(restartStep(p(), 1000), "start");
+  assert.equal(restartStep(p({ mac: live({ started_at: 950 }) }), 1009), "wait", "a start went 59 s ago");
+  assert.equal(restartStep(p({ mac: live({ started_at: 950 }) }), 1010), "start");
+  assert.equal(restartStep(p({ mac: live({ started_at: null }) }), 1000), "start");
+  assert.equal(restartStep(p({ mac: null }), 1000), "drop", "the Mac is gone");
+  assert.equal(restartStep(p({ start_token: null }), 1000), "drop", "no la_start token");
+  assert.equal(restartStep(p({ has_card: 1 }), 1000), "drop", "the phone holds a newer card");
+  assert.equal(restartStep(p({ mac: live({ sessions: [S("a", "idle")] }) }), 1000), "drop");
+  assert.equal(restartStep(p({ mac: live({ online: false }) }), 1000), "drop");
+  assert.equal(restartStep(p(), 1180), "drop", "lapsed");
+});
+
+test("planCron: restarts after lapses and ends, before re-pushes; an end, a start, one shared batch", () => {
+  const now = 10_000;
+  const lapse = { id: "lapse", cards: 2, mac: live({ last_seen: now - 300, last_push_at: now - 300 }) };
+  const end = { id: "end", cards: 1, mac: live({ sessions: [S("a", "idle")], idle_since: now - 700, last_seen: now - 10, last_push_at: now - 10 }) };
+  const repush = { id: "repush", cards: 1, mac: live({ last_seen: now - 10, last_push_at: now - 700 }) };
+  const mac = live({ last_seen: now - 10 });
+  const x = (id, created_at, over = {}) => ({ id, created_at, mac, start_token: HEX, has_card: 0, ...over });
+  const expired = [x("x-new", 50), x("x-old", 10), x("x-drop", 30, { start_token: null }), x("x-wait", 5, { mac: live({ last_seen: now - 10, started_at: now - 30 }) })];
+  const ids = (plan) => plan.map((s) => s.row.id);
+  // Costs: lapse 5, end 4, restarts x-old 2 + 1 (batch), x-drop 1 (its end), x-new 2, repush 4 = 19.
+  const all = planCron([repush, end, lapse], now, 100, expired);
+  assert.deepEqual(ids(all), ["lapse", "end", "x-old", "x-drop", "x-new", "repush"], "x-wait waits");
+  assert.deepEqual(all.filter((s) => s.kind === "restart").map((s) => s.start), [true, false, true]);
+  assert.deepEqual(ids(planCron([repush, end, lapse], now, 18, expired)), ["lapse", "end", "x-old", "x-drop", "x-new"]);
+  assert.deepEqual(ids(planCron([repush, end, lapse], now, 13, expired)), ["lapse", "end", "x-old", "x-drop"], "x-new's end + start no longer fit");
+  assert.deepEqual(ids(planCron([repush, end, lapse], now, 11, expired)), ["lapse", "end", "x-drop"], "x-old's 3 do not fit, x-drop's end + batch do");
+  assert.deepEqual(ids(planCron([lapse], now, 7, expired)), ["lapse", "x-drop"], "a drop costs its end and the batch");
+  assert.deepEqual(ids(planCron([lapse], now, 6, expired)), ["lapse"]);
+  assert.deepEqual(ids(planCron([], now, 6, expired)), ["x-old", "x-drop", "x-new"]);
+  assert.deepEqual(ids(planCron([], now, 5, expired)), ["x-old", "x-drop"]);
+  assert.deepEqual(ids(planCron([lapse], now, 5, expired)), ["lapse"], "lapses keep their priority");
+  assert.deepEqual(ids(planCron([lapse], now, 44)), ["lapse"], "no expired cards: as before");
 });
 
 // ---- payloads ---------------------------------------------------------------

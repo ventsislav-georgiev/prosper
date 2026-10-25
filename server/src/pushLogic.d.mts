@@ -62,6 +62,7 @@ export const OFFLINE_DISMISS_S: number;
 export const START_GAP_S: number;
 export const RATE_PER_MIN: number;
 export const LA_MAX_AGE_S: number;
+export const ROTATE_LEAD_S: number;
 export const ATTRIBUTES_TYPE: string;
 export const MAX_PHONES: number;
 export const CRON_BUDGET: number;
@@ -92,11 +93,19 @@ export function cronStep(
   hasCard: boolean,
   now: number,
 ): { kind: "lapse" | "end" | "repush"; mac: MacState; push: PushIntents } | null;
-export function planCron<R extends { mac: MacState; cards: number }>(
+export type LiveMac = Pick<MacState, "online" | "last_seen" | "sessions" | "started_at">;
+export function wantsCard(mac: Pick<MacState, "online" | "last_seen" | "sessions">, now: number): boolean;
+export type ExpiredCard = { mac: LiveMac | null; start_token: string | null; has_card: number | boolean; created_at: number };
+export function restartStep(p: ExpiredCard, now: number): "start" | "drop" | "wait";
+export function planCron<R extends { mac: MacState; cards: number }, E extends ExpiredCard = ExpiredCard>(
   rows: R[],
   now: number,
   budget?: number,
-): { kind: "lapse" | "end" | "repush"; mac: MacState; push: PushIntents; row: R }[];
+  expired?: E[],
+): (
+  | { kind: "lapse" | "end" | "repush"; mac: MacState; push: PushIntents; row: R }
+  | { kind: "restart"; start: boolean; row: E }
+)[];
 export function laPayload(event: string, cs: ContentState, now: number, extra?: Record<string, unknown>): unknown;
 export function startPayload(cs: ContentState, now: number, macId: string, macName: string): unknown;
 export function alertPayload(macId: string, macName: string, alerts: { name: string; label: string }[]): unknown;

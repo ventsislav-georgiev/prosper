@@ -15,9 +15,12 @@ export const OFFLINE_DISMISS_S = 600; // an offline card stays 10 min, then goes
 export const START_GAP_S = 60; // no second push-to-start while the first is landing
 export const RATE_PER_MIN = 60; // POST /push/sessions per Mac per minute
 export const LA_MAX_AGE_S = 8 * 3600; // iOS ends any Live Activity after 8 h
+// The cron rotates a card this long before iOS's limit (#546): it ends the old one and
+// push-starts a new one while the old is still live, so no frozen card stays beside it.
+export const ROTATE_LEAD_S = 600;
 export const MAX_PHONES = 10; // install ids per account; an 11th evicts the least recently updated
 // Free plan: 50 subrequests per invocation, APNs fetches and D1 queries together.
-// The cron spends 2 up front (the 8 h purge, the SELECT), so 44 leaves 4 of margin.
+// The cron spends 2 up front (the 8 h purge batch, the SELECT), so 44 leaves 4 of margin.
 export const CRON_BUDGET = 44; // subrequests per cron run for the steps
 export const STEP_D1 = 3; // D1 queries per cron step: the guarded UPDATE, the card SELECT, one drop batch
 export const SEQ_AHEAD_MS = 3600 * 1000; // a seq more than 1 h past the Worker's clock is a 400
@@ -173,6 +176,22 @@ export function cut(s, n = CUT) {
 
 export const isActive = (sessions) => sessions.some((s) => s.state === "working" || s.state === "blocked");
 
+/** A Mac that should be showing a card: online, not lapsed, something working or blocked. */
+export const wantsCard = (mac, now) => mac.online && now - mac.last_seen < LAPSE_S && isActive(mac.sessions);
+
+/**
+ * A card the cron rotated ahead of iOS's 8 h limit (#546): p = {mac (null when gone), start_token (the
+ * phone's la_start, or null), has_card (the phone holds a newer card for this Mac)}.
+ * -> "start" (push-to-start the phone again), "drop" (nothing to restart) or "wait"
+ * (a push-to-start for this Mac is under START_GAP_S old and may be this phone's card
+ * landing: ask again next minute, when has_card tells).
+ */
+export function restartStep(p, now) {
+  if (!p.mac || !p.start_token || p.has_card || !wantsCard(p.mac, now)) return "drop";
+  if (p.mac.started_at !== null && now - p.mac.started_at < START_GAP_S) return "wait";
+  return "start";
+}
+
 /** The Live Activity content-state the phone decodes (contract v1). No timestamps. */
 export function contentState(sessions, online = true) {
   const counts = { blocked: 0, working: 0, idle: 0, done: 0 };
@@ -290,9 +309,15 @@ export function cronStep(mac, hasCard, now) {
   return null;
 }
 
-const KIND_ORDER = { lapse: 0, end: 1, repush: 2 };
-const dueAt = ({ kind, row: { mac } }) =>
-  kind === "lapse" ? mac.last_seen : kind === "end" ? mac.idle_since : (mac.last_push_at ?? 0);
+const KIND_ORDER = { lapse: 0, end: 1, restart: 2, repush: 3 };
+const dueAt = ({ kind, row }) =>
+  kind === "restart"
+    ? row.created_at
+    : kind === "lapse"
+      ? row.mac.last_seen
+      : kind === "end"
+        ? row.mac.idle_since
+        : (row.mac.last_push_at ?? 0);
 
 /**
  * One cron run over every online Mac: rows = [{mac, cards, ...}] where cards = the
@@ -300,20 +325,31 @@ const dueAt = ({ kind, row: { mac } }) =>
  * queries. Lapses go first, then ends, then re-pushes, each oldest due first; a step
  * that no longer fits the budget waits for the next minute (its row is untouched, so
  * it is due again). -> [{kind, mac, push, row}] in send order.
+ *
+ * expired = the cards the 8 h purge took (see restartStep), oldest first after the
+ * lapses and ends, before the re-pushes: {kind: "restart", start, row}. A restart costs
+ * an end to the old card, a start when it starts, and all of a run's restarts share
+ * one delete batch; one that does not fit keeps its row and runs next minute.
  */
-export function planCron(rows, now, budget = CRON_BUDGET) {
+export function planCron(rows, now, budget = CRON_BUDGET, expired = []) {
   const steps = [];
   for (const row of rows) {
     const r = cronStep(row.mac, row.cards > 0, now);
     if (r) steps.push({ ...r, row });
   }
+  for (const row of expired) {
+    const act = restartStep(row, now);
+    if (act !== "wait") steps.push({ kind: "restart", start: act === "start", row });
+  }
   steps.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || dueAt(a) - dueAt(b));
   const out = [];
   let left = budget;
+  let batch = 0; // the restarts' shared delete batch, paid by the first one taken
   for (const s of steps) {
-    const cost = s.row.cards + STEP_D1;
+    const cost = s.kind === "restart" ? (s.start ? 2 : 1) + (batch ? 0 : 1) : s.row.cards + STEP_D1;
     if (cost > left) continue;
     left -= cost;
+    if (s.kind === "restart") batch = 1;
     out.push(s);
   }
   return out;
