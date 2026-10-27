@@ -275,8 +275,13 @@ final class AgentIslandStore: ObservableObject {
     /// Keyed by row; a dir's `--revive --all` is `(dir, "")`.
     /// #579: a session row's Restart too; `(dir, "")` also holds Restart all and a failed New session.
     @Published var actions: [AgentSessionKey: String] = [:]
+    /// #580: a History row's Resume status, apart from `actions`: a record and a
+    /// live session can share a key (Resume as <name>-2), and each row says its own.
+    @Published var historyActions: [AgentSessionKey: String] = [:]
     /// #579: the inline "Restart stale agents?" line is up (never a modal).
     @Published var confirmingRestartAll = false
+    /// #580: the inline "Stop N sessions?" line is up; at most one question shows.
+    @Published var confirmingStopAll = false
 
     init(geometry: AgentIslandGeometry, details: AgentIslandRowDetails = .all,
          sort: AgentIslandSort = .activity, sidekickPattern: String = "") {
@@ -308,21 +313,41 @@ final class AgentIslandStore: ObservableObject {
     var showsIsland: Bool { !sessions.isEmpty || !history.isEmpty }
 
     /// The session rows the list draws: the shown tab's half; none under History.
-    var visible: [AgentSession] {
-        guard !historyTab else { return [] }
+    var visible: [AgentSession] { historyTab ? [] : sessionTab.sessions }
+
+    /// #580: the Sessions or Sidekicks tab, the one shown (under History, the
+    /// one the list goes back to): its name and rows.
+    var sessionTab: (label: String, sessions: [AgentSession]) {
         let s = split
-        return AgentIsland.showsSidekicks(s, tab: sidekickTab) ? s.sidekicks : s.primary
+        return AgentIsland.showsSidekicks(s, tab: sidekickTab) ? ("Sidekicks", s.sidekicks) : ("Sessions", s.primary)
+    }
+
+    /// #580: Stop all's rows, the session tab's whose master can stop, and how
+    /// many it leaves for an old dch.
+    var stopAllTargets: (stop: [AgentSession], skipped: Int) {
+        let rows = sessionTab.sessions, stop = rows.filter(AgentIsland.canStop)
+        return (stop, rows.count - stop.count)
     }
 
     /// #578: the History tab's rows, capped.
     var shownHistory: [DchHistoryRecord] { historyTab ? Array(history.prefix(AgentIsland.historyCap)) : [] }
 
-    /// Every control verb's gate (Resume, and #579's Restart, Restart all, New
-    /// session): the control binary against 1.23.0 and every live master;
-    /// `.refused` carries the one-line reason.
+    /// Every control verb's gate (Resume, #579's Restart, Restart all, New
+    /// session, #580's Stop): the control binary against 1.24.0 and every live
+    /// master; `.refused` carries the one-line reason.
     var resumeGate: DchCommand.Gate {
-        DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.reviveMinimum)
+        DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.controlMinimum)
     }
+
+    /// #580 addendum 2: Restart agent, Restart all and Stop's gate, 1.24.1.
+    var restartGate: DchCommand.Gate {
+        DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.restartMinimum)
+    }
+
+    /// Those items' "(needs dch 1.24.1)", only while the base gate passes: its
+    /// refusal has its own line. With the base passing the control dch is at
+    /// least every master, so this can only name `restartMinimum`.
+    var restartNeeds: String? { resumeGate.isOK ? restartGate.refusal : nil }
 
     /// Cards show under blocked rows only.
     func card(for s: AgentSession) -> AgentCard? { s.state == .blocked ? cards[s.key] : nil }
@@ -339,7 +364,7 @@ final class AgentIslandStore: ObservableObject {
 
     /// #579: the line over the rows: the Restart all question on any tab, else
     /// under Sessions the dir-wide status (History's header has its own).
-    var showsControlLine: Bool { confirmingRestartAll || (!historyTab && !dirStatus.isEmpty) }
+    var showsControlLine: Bool { confirmingRestartAll || confirmingStopAll || (!historyTab && !dirStatus.isEmpty) }
 
     /// #579: the header "⋯" menu's content: recent folders for New session,
     /// and the gate's reason when its items are off.
@@ -381,6 +406,9 @@ struct AgentIslandView: View {
     var onRestart: (AgentSession) -> Void = { _ in }
     var onControls: () -> Void = {}
     var onConfirmRestartAll: (Bool) -> Void = { _ in }
+    /// #580: a row's Stop and the inline Stop all answer.
+    var onStop: (AgentSession) -> Void = { _ in }
+    var onConfirmStopAll: (Bool) -> Void = { _ in }
 
     private var g: AgentIslandGeometry { store.geometry }
 
@@ -450,7 +478,7 @@ struct AgentIslandView: View {
                 if store.historyTab { historyHeader }
                 ForEach(historyDrawn) { r in
                     AgentIslandHistoryRow(record: r.record, now: ctx.date.timeIntervalSince1970,
-                                          status: store.actions[r.record.key], enabled: r.enabled, action: r.resume)
+                                          status: store.historyActions[r.record.key], enabled: r.enabled, action: r.resume)
                 }
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
@@ -475,23 +503,40 @@ struct AgentIslandView: View {
         /// #579: its context menu's Restart agent, off with the gate's reason.
         var restart: () -> Void = {}
         var refused: String? = nil
+        /// #580: its Stop; `canStop` false (a master under 1.24.0) is the "restart this session first" item.
+        var stop: () -> Void = {}
+        var canStop = false
+        /// #580 addendum 2: Restart agent and Stop off, reading "(needs dch 1.24.1)".
+        var needs: String? = nil
         var id: AgentSessionKey { session.key }
+        var restartTitle: String { AgentIsland.label(AgentIsland.restartLabel, needs: needs) }
+        /// One hint, never both: the dch one wins over "restart this session first".
+        var stopTitle: String {
+            canStop || needs != nil ? AgentIsland.label(AgentIsland.stopLabel, needs: needs) : AgentIsland.stopOldMasterLabel
+        }
+        var restartEnabled: Bool { refused == nil && needs == nil }
+        var stopEnabled: Bool { restartEnabled && canStop }
     }
 
     var drawn: [Drawn] {
-        let refused = store.resumeGate.refusal
+        let refused = store.resumeGate.refusal, needs = store.restartNeeds
         return store.visible.map { s in
             Drawn(session: s, card: store.card(for: s), open: { onRow(s) }, answer: { onAnswer(s, $0, $1) },
-                  restart: { onRestart(s) }, refused: refused)
+                  restart: { onRestart(s) }, refused: refused, stop: { onStop(s) }, canStop: AgentIsland.canStop(s),
+                  needs: needs)
         }
     }
 
     /// #579: a row's right-click menu. Shown even where dch will skip it (a
     /// claude typed into a shell, a pending respawn): the row shows the skip line.
+    /// #580: Stop next to Restart agent; off, saying why, on a master under 1.24.0.
+    /// Under a 1.24.0 control dch both read "(needs dch 1.24.1)", and that hint
+    /// wins over Stop's "restart this session first".
     @ViewBuilder
     private func restartItem(_ r: Drawn) -> some View {
-        Button(AgentIsland.restartLabel, action: r.restart).disabled(r.refused != nil)
-        if let why = r.refused { Text(verbatim: "Restart \(why)") }
+        Button(r.restartTitle, action: r.restart).disabled(!r.restartEnabled)
+        Button(r.stopTitle, action: r.stop).disabled(!r.stopEnabled)
+        if let why = r.refused { Text(verbatim: "Controls \(why)") }
     }
 
     /// #579: the header "⋯": a plain button; the controller pops its menu
@@ -518,6 +563,15 @@ struct AgentIslandView: View {
                 Spacer(minLength: 0)
                 lineButton("Restart") { onConfirmRestartAll(true) }
                 lineButton("Cancel") { onConfirmRestartAll(false) }
+            } else if store.confirmingStopAll {
+                // #580: same line, same look; the count is live, as the answer recounts.
+                let t = store.stopAllTargets, n = t.stop.count
+                Text(verbatim: AgentIsland.stopAllQuestion(n, skipped: t.skipped)).foregroundStyle(Color.white.opacity(0.8))
+                Spacer(minLength: 0)
+                lineButton("Stop") { onConfirmStopAll(true) }
+                    .accessibilityLabel(Text(verbatim: "Stop \(n) session\(n == 1 ? "" : "s")"))
+                lineButton("Cancel") { onConfirmStopAll(false) }
+                    .accessibilityLabel(Text(verbatim: "Cancel Stop all"))
             } else {
                 Text(verbatim: store.dirStatus).foregroundStyle(Color.white.opacity(0.6))
                 Spacer(minLength: 0)

@@ -21,7 +21,9 @@ final class AgentIslandControlsTests: XCTestCase {
         DchHistoryRecord(key: AgentSessionKey(dir: dir, name: name), cwd: "/src", updated: ended, ended: ended, end: end)
     }
 
-    private static let v123 = DchCommand.Binary(path: "/fake/dch", version: [1, 23, 0])
+    private static let v124 = DchCommand.Binary(path: "/fake/dch", version: [1, 24, 0])
+    /// #580 addendum 2: Restart agent, Restart all and Stop need 1.24.1.
+    private static let v1241 = DchCommand.Binary(path: "/fake/dch", version: [1, 24, 1])
 
     // MARK: - Binary choice
 
@@ -66,18 +68,28 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertNil(pick([:]))
     }
 
+    /// #580: one minimum, 1.24.0, for every control; still at least every live master.
     func testGateRefusesBelowAMasterOrTheVerbMinimum() {
-        let min = AgentIsland.reviveMinimum
-        XCTAssertEqual(DchCommand.gate(Self.v123, masters: ["1.23.0", ""], minimum: min), .ok("/fake/dch"),
+        let min = AgentIsland.controlMinimum
+        XCTAssertEqual(min, [1, 24, 0])
+        XCTAssertEqual(DchCommand.gate(Self.v124, masters: ["1.23.0", ""], minimum: min), .ok("/fake/dch"),
                        "an old master (\"\") passes")
-        XCTAssertEqual(DchCommand.gate(Self.v123, masters: ["1.9.0"], minimum: min), .ok("/fake/dch"), "numeric, not string")
-        XCTAssertEqual(DchCommand.gate(Self.v123, masters: ["1.23.0", "1.24.0"], minimum: min), .refused("needs dch 1.24.0"),
+        XCTAssertEqual(DchCommand.gate(Self.v124, masters: ["1.9.0"], minimum: min), .ok("/fake/dch"), "numeric, not string")
+        XCTAssertEqual(DchCommand.gate(Self.v124, masters: ["1.24.0", "1.25.0"], minimum: min), .refused("needs dch 1.25.0"),
                        "older than a master: --restart would downgrade it")
-        XCTAssertEqual(DchCommand.gate(DchCommand.Binary(path: "/b", version: [1, 22, 9]), masters: [], minimum: min),
-                       .refused("needs dch 1.23.0"))
-        XCTAssertEqual(DchCommand.gate(nil, masters: [], minimum: min), .refused("needs dch 1.23.0"))
+        XCTAssertEqual(DchCommand.gate(DchCommand.Binary(path: "/b", version: [1, 23, 0]), masters: [], minimum: min),
+                       .refused("needs dch 1.24.0"), "1.23.0 has no --json or --stop")
+        XCTAssertEqual(DchCommand.gate(nil, masters: [], minimum: min), .refused("needs dch 1.24.0"))
         XCTAssertEqual(DchCommand.gate(DchCommand.Binary(path: "/b", version: [1, 30, 0]), masters: ["1.24.0"], minimum: min),
                        .ok("/b"))
+    }
+
+    /// #580: Stop needs the row's own master at 1.24.0 or later, compared as numbers.
+    func testStopGateReadsTheRowsMasterVersionNumerically() {
+        for (v, ok) in [("", false), ("1.23.0", false), ("1.23.9", false), ("1.24.0", true), ("1.24.1", true),
+                        ("1.100.0", true), ("2.0.0", true), ("garbage", false), ("1.2x.0", false), ("v1.24.0", false)] {
+            XCTAssertEqual(AgentIsland.canStop(session("a", version: v)), ok, v)
+        }
     }
 
     /// The probe runs `<path> --version` once per resolved path and mtime.
@@ -141,6 +153,12 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.endLabel(""), "vanished", "a master that died without writing its end")
         XCTAssertEqual(AgentIsland.endLabel("killed"), "killed")
         XCTAssertEqual(AgentIsland.endLabel("stopped"), "stopped", "1.24.0 passes through")
+        // #580: a real 1.24.0 record after `dch --stop s1`.
+        let real = #"[{"name":"s1","sock_dir":"/d","alias":"","cwd":"/src","argv":["/bin/sleep","1000"],"started":1793139535,"#
+            + #""updated":1793139537,"ended":1793139537,"end":"stopped","agent":null}]"#
+        let r = try? XCTUnwrap(AgentIsland.parseHistory(Data(real.utf8), dir: "/d").first)
+        XCTAssertEqual(r?.end, "stopped")
+        XCTAssertEqual(r.map { AgentIsland.endLabel($0.end) }, "stopped")
     }
 
     /// One `--history --json` per dir with that dir's DCH_SOCKET_DIR; newest first across dirs.
@@ -162,20 +180,256 @@ final class AgentIslandControlsTests: XCTestCase {
 
     func testReviveArgsPickTheFirstFreeName() {
         let r = record("a")
-        XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["b"], records: []), ["--revive", "a"])
-        XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["a"], records: []), ["--revive", "a", "--as", "a-2"])
-        XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["a", "a-2"], records: ["a-3"]), ["--revive", "a", "--as", "a-4"],
+        XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["b"], records: []), ["--revive", "a", "--json"])
+        XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["a"], records: []), ["--revive", "a", "--as", "a-2", "--json"])
+        XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["a", "a-2"], records: ["a-3"]), ["--revive", "a", "--as", "a-4", "--json"],
                        "a name another record holds is not free either")
     }
 
-    func testResultIsTheExitCodeAndTheLastNonEmptyLine() {
-        let r = AgentIsland.actionResult(status: 1, output: Data("a: revived as a in /x\n\ndch: session b is live\n  \n".utf8))
-        XCTAssertEqual(r, DchActionResult(status: 1, line: "dch: session b is live"))
-        XCTAssertEqual(AgentIsland.resumeText(r), "Resume failed: dch: session b is live")
-        XCTAssertEqual(AgentIsland.resumeText(DchActionResult(status: 1, line: "")), "Resume failed (exit 1)")
-        XCTAssertNil(AgentIsland.resumeText(DchActionResult(status: 0, line: "a: revived as a in /x")))
-        XCTAssertEqual(AgentIsland.resumeText(DchActionResult(status: 0, line: "nothing to revive"), all: true), "nothing to revive")
-        XCTAssertEqual(AgentIsland.resumeText(DchActionResult(status: 15, line: "", stopped: true)), "Resume stopped: no answer in 5m")
+    // MARK: - #580: --json results
+
+    /// dch 1.24.0 output. Lines marked "real" were captured from the built 1.24.0
+    /// binary in a private socket dir (sessions running /bin/sleep or /bin/cat);
+    /// the rest follow the README's shapes (they need a live Claude or dch-lite).
+    enum Fixture {
+        // real
+        static let restartOne = """
+            {"name":"s1","phase":"master","result":"ok","reason":"","detail":"restarted on dch 1.24.0","session_id":""}
+            {"name":"s1","result":"skipped","reason":"not_claude","detail":"no claude runs in the session","session_id":""}
+            """
+        static let restartAllCurrent = """
+            {"name":"s1","phase":"master","result":"skipped","reason":"current","detail":"already on dch 1.24.0","session_id":""}
+            {"name":"s2","phase":"master","result":"skipped","reason":"current","detail":"already on dch 1.24.0","session_id":""}
+            {"name":"s1","result":"skipped","reason":"not_claude","detail":"no claude runs in the session","session_id":""}
+            {"name":"s2","result":"skipped","reason":"not_claude","detail":"no claude runs in the session","session_id":""}
+            """
+        static let restartAllForced = """
+            {"name":"s1","phase":"master","result":"ok","reason":"","detail":"restarted on dch 1.24.0","session_id":""}
+            {"name":"s2","phase":"master","result":"ok","reason":"","detail":"restarted on dch 1.24.0","session_id":""}
+            {"name":"s1","result":"skipped","reason":"not_claude","detail":"no claude runs in the session","session_id":""}
+            {"name":"s2","result":"skipped","reason":"not_claude","detail":"no claude runs in the session","session_id":""}
+            """
+        static let restartNoSession = """
+            {"name":"nosuch","phase":"master","result":"failed","reason":"no_session","detail":"no such session","session_id":""}
+            dch: no session: nosuch
+            """
+        static let stopOne = """
+            {"name":"s1","phase":"ending"}
+            {"name":"s1","result":"ok","reason":"","detail":"","session_id":""}
+            """
+        static let stopNoSession = #"{"name":"nosuch","result":"failed","reason":"no_session","detail":"no such session","session_id":""}"#
+        static let stopTwo = """
+            {"name":"s1","phase":"ending"}
+            {"name":"s1","result":"ok","reason":"","detail":"","session_id":""}
+            {"name":"s1b","phase":"ending"}
+            {"name":"s1b","result":"ok","reason":"","detail":"","session_id":""}
+            {"name":"s2","phase":"ending"}
+            {"name":"s2","result":"ok","reason":"","detail":"","session_id":""}
+            """
+        static let reviveOne = """
+            {"name":"s1","phase":"starting"}
+            {"name":"s1","as":"s1","result":"ok","reason":"","detail":"revived as s1 in /Users/u/personal/prosper","session_id":""}
+            """
+        static let reviveAs = """
+            {"name":"s1","phase":"starting"}
+            {"name":"s1","as":"s1b","result":"ok","reason":"","detail":"revived as s1b in /Users/u/personal/prosper","session_id":""}
+            """
+        static let reviveNoHistory = """
+            {"name":"nosuch","as":"nosuch","result":"failed","reason":"no_history","detail":"no history for this session","session_id":""}
+            dch: no history for session nosuch
+            """
+        static let reviveNotStarted = """
+            {"name":"s3","phase":"starting"}
+            {"name":"s3","as":"s3","result":"failed","reason":"not_started","detail":"NOT revived — the session did not start","session_id":""}
+            dch: s3: /tmp/p/myprog: No such file or directory
+            dch: failed to spawn session
+            """
+        static let spawnNotExecutable = """
+            dch: s4: /tmp/p/nonexistent-prog: No such file or directory
+            dch: failed to spawn session
+            """
+        // README shapes
+        static let restartAgent = """
+            {"name":"a","phase":"master","result":"ok","reason":"","detail":"restarted on dch 1.24.0","session_id":""}
+            {"name":"a","phase":"pausing"}
+            {"name":"a","phase":"exiting"}
+            {"name":"a","phase":"relaunching"}
+            {"name":"a","phase":"resuming"}
+            {"name":"a","result":"ok","reason":"","detail":"claude 2.0.1 -> 2.1.0, resumed abc","session_id":"abc"}
+            """
+        static let reviveLite = #"{"name":"a","as":"a","result":"ok","reason":"no_screen","detail":"a: revived, resume message not typed","session_id":"abc"}"#
+        static let stopInterrupted = """
+            {"name":"a","phase":"pausing"}
+            {"name":"a","result":"interrupted","reason":"signal","detail":"a: interrupted — resume message typed","session_id":""}
+            """
+        // Hand-written, dch 1.24.1 (not tagged yet), from the dch session's shapes (#580 addendum 2).
+        static let restartInShell = """
+            {"name":"a","phase":"master","result":"skipped","reason":"current","detail":"already on dch 1.24.1","session_id":""}
+            {"name":"a","result":"skipped","reason":"in_shell","detail":"a: skipped — claude was started inside the session's shell, not as its command","session_id":""}
+            """
+        static let stopInShell = """
+            {"name":"a","phase":"pausing"}
+            {"name":"a","phase":"ending"}
+            {"name":"a","result":"ok","reason":"","detail":"","session_id":"abc"}
+            """
+        static let stopOldMaster = #"{"name":"a","result":"failed","reason":"old_master","detail":"a: NOT stopped — its master is older than dch 1.24.0","session_id":""}"#
+    }
+
+    private func result(_ out: String, status: Int32 = 0, stopped: Bool = false) -> DchActionResult {
+        AgentIsland.actionResult(status: status, output: Data((out + "\n").utf8), stopped: stopped)
+    }
+
+    /// Each stdout line decodes on its own; a line that does not (stderr's text,
+    /// a stray line, bad JSON, a wrong type, no name, neither phase nor result)
+    /// is text, never a crash.
+    func testJSONLinesDecodeLenientlyAndTheRestIsText() {
+        let r = result("""
+            {"name":"s1","phase":"ending"}
+            warning: something
+            {"name":"s1","result":"ok","reason":"","detail":"","session_id":"","future":[1]}
+            {"name":"x","result":
+            {"name":5,"result":"ok"}
+            {"result":"ok"}
+            {"name":"y"}
+              dch: s1: trailing spaces  \("")
+            """, status: 1)
+        XCTAssertEqual(r.json, [DchJSONLine(name: "s1", phase: "ending"),
+                                DchJSONLine(name: "s1", result: "ok", reason: "", detail: "", sessionID: "")])
+        XCTAssertEqual(r.text, ["warning: something", #"{"name":"x","result":"#, #"{"name":5,"result":"ok"}"#,
+                                #"{"result":"ok"}"#, #"{"name":"y"}"#, "dch: s1: trailing spaces"])
+        XCTAssertEqual(r.dchLine, "dch: s1: trailing spaces")
+        XCTAssertEqual(AgentIsland.actionResult(status: 0, output: Data()), DchActionResult(status: 0))
+        let o = AgentIsland.jsonLine(#"{"name":"s1","as":"s1b","result":"ok","reason":"","detail":"d","session_id":"z"}"#)
+        XCTAssertEqual(o?.revivedAs, "s1b")
+        XCTAssertEqual(o?.sessionID, "z")
+    }
+
+    /// A phase is running text, never a result; the master pass is neither.
+    func testPhasesAreRunningTextOnly() throws {
+        let words = ["pausing": "Pausing…", "exiting": "Exiting…", "relaunching": "Relaunching…", "resuming": "Resuming…",
+                     "starting": "Starting…", "ending": "Ending…"]
+        for (p, t) in words {
+            let o = DchJSONLine(name: "a", phase: p)
+            XCTAssertEqual(AgentIsland.phaseText(o), t)
+            XCTAssertTrue(o.isPhase && !o.isFinal && !o.isMaster, p)
+        }
+        XCTAssertNil(AgentIsland.phaseText(DchJSONLine(name: "a", phase: "waiting")), "an unknown phase shows nothing")
+        // QA #452: a result is "result" with no "phase", or phase "master"; any other phase is progress.
+        let odd = DchJSONLine(name: "a", phase: "pausing", result: "ok")
+        XCTAssertTrue(odd.isPhase && !odd.isFinal && !odd.isMaster)
+        XCTAssertEqual(AgentIsland.phaseText(odd), "Pausing…")
+        XCTAssertFalse(DchJSONLine(name: "a", phase: "master").isMaster, "a master object always carries its result")
+        let master = try XCTUnwrap(result(Fixture.restartOne).json.first)
+        XCTAssertTrue(master.isMaster && !master.isPhase && !master.isFinal)
+        XCTAssertNil(AgentIsland.phaseText(master), "the master object is the master pass's result, not a running text")
+        XCTAssertNil(AgentIsland.phaseText(result(Fixture.stopNoSession).json[0]))
+        for p in words.values { XCTAssertTrue(AgentIsland.runningTexts.contains(p)) }
+    }
+
+    /// A one-row job's text, from its last result for the row (real fixtures first).
+    func testRowTextsFromTheResults() {
+        func row(_ out: String, _ name: String, _ verb: AgentIsland.Verb, status: Int32 = 0) -> String {
+            AgentIsland.rowText(result(out, status: status), name: name, verb)
+        }
+        XCTAssertEqual(row(Fixture.restartOne, "s1", .restart), "no claude runs in the session", "the agent's result, not the master's")
+        XCTAssertEqual(row(Fixture.restartAgent, "a", .restart), "Restarted")
+        XCTAssertEqual(row(Fixture.restartNoSession, "nosuch", .restart, status: 1), "no such session", "a master failure")
+        XCTAssertEqual(row(Fixture.stopOne, "s1", .stop), "Stopped")
+        XCTAssertEqual(row(Fixture.restartInShell, "a", .restart), "skipped — claude was started inside the session's shell, not as its command",
+                       "1.24.1's in_shell skip: dch's detail")
+        XCTAssertEqual(row(Fixture.stopInShell, "a", .stop), "Stopped", "1.24.1: pausing, ending, no exiting")
+        XCTAssertEqual(row(Fixture.stopOldMaster, "a", .stop, status: 1), "NOT stopped — its master is older than dch 1.24.0")
+        XCTAssertEqual(row(Fixture.stopNoSession, "nosuch", .stop, status: 1), "no such session")
+        XCTAssertEqual(row(Fixture.stopInterrupted, "a", .stop, status: 1), "interrupted — resume message typed", "\"a: \" stripped")
+        XCTAssertEqual(row(Fixture.reviveOne, "s1", .resume), "Resumed")
+        XCTAssertEqual(row(Fixture.reviveAs, "s1", .resume), "Resumed as s1b")
+        XCTAssertEqual(row(Fixture.reviveLite, "a", .resume), "Resumed (resume message not typed)", "dch-lite: ok no_screen")
+        XCTAssertEqual(row(Fixture.reviveNoHistory, "nosuch", .resume, status: 1), "no history for this session")
+        XCTAssertEqual(row(Fixture.reviveNotStarted, "s3", .resume, status: 1), "NOT revived — the session did not start")
+        // No result for the row: the exit decides; L1's "dch: " line, else the code.
+        XCTAssertEqual(row(#"{"name":"a","phase":"pausing"}"# + "\ndch: a: killed", "a", .stop, status: 1),
+                       "Stop failed: dch: a: killed", "a phase is never the result")
+        XCTAssertEqual(row("", "a", .restart, status: 1), "Restart failed (exit 1)")
+        XCTAssertEqual(row(Fixture.stopOne, "other", .stop), "Stopped", "exit 0, nothing about the row")
+        XCTAssertEqual(AgentIsland.rowText(result("", status: 143, stopped: true), name: "a", .stop), "Stop cancelled: no answer in 15m")
+        XCTAssertEqual(AgentIsland.rowText(result("", status: 143, stopped: true), name: "a", .resume), "Resume cancelled: no answer in 5m")
+        XCTAssertEqual(AgentIsland.finalText(DchJSONLine(name: "a", result: "failed", reason: "not_idle", detail: ""), .stop),
+                       "Stop failed (not_idle)", "no detail: the reason")
+    }
+
+    func testRestartAllSummaryFromTheResults() {
+        func sum(_ out: String, status: Int32 = 0) -> String { AgentIsland.restartAllSummary(result(out, status: status)) }
+        XCTAssertEqual(sum(Fixture.restartAllCurrent), "all agents current", "not_claude and current are no skip")
+        XCTAssertEqual(sum(Fixture.restartAllForced), "2 sessions restarted on dch 1.24.0",
+                       "masters moved, no agent: not \"all agents current\", and no agent counted")
+        XCTAssertEqual(sum(Fixture.restartAgent), "1 session restarted on dch 1.24.0, 1 agent restarted")
+        XCTAssertEqual(sum(Fixture.restartAllCurrent + "\n" + """
+            {"name":"p","result":"skipped","reason":"respawn_pending","detail":"p: skipped — a respawn is pending","session_id":""}
+            """), "all agents current (1 skipped)")
+        XCTAssertEqual(sum("""
+            {"name":"a","phase":"pausing"}
+            {"name":"b","phase":"pausing"}
+            {"name":"a","result":"ok","reason":"","detail":"claude 2.0.1 -> 2.1.0, resumed abc","session_id":"abc"}
+            {"name":"b","result":"failed","reason":"not_idle","detail":"b: NOT restarted — not idle within 600s","session_id":"def"}
+            {"name":"c","result":"interrupted","reason":"signal","detail":"c: interrupted","session_id":""}
+            """, status: 1), "1 agent restarted, 2 failed")
+        XCTAssertEqual(sum(Fixture.restartNoSession, status: 1), "1 failed", "a master failure is a failure")
+        XCTAssertEqual(sum(Fixture.restartInShell), "all agents current (1 skipped)", "in_shell is a skip")
+        XCTAssertEqual(sum(Fixture.restartAgent + "\n" + Fixture.restartInShell),
+                       "1 session restarted on dch 1.24.0, 1 agent restarted, 1 skipped")
+        // QA #449 L1: exit 1 with no failed result still reads as failed.
+        XCTAssertEqual(sum(Fixture.restartAgent + "\ndch: b: re-exec failed; still on dch 1.23.0", status: 1),
+                       "1 session restarted on dch 1.24.0, 1 agent restarted, failed: dch: b: re-exec failed; still on dch 1.23.0")
+        XCTAssertEqual(sum(Fixture.restartAllCurrent, status: 1), "Restart all failed (exit 1)")
+        XCTAssertEqual(sum("dch: --restart: no sessions", status: 1), "Restart all failed: dch: --restart: no sessions")
+        XCTAssertEqual(AgentIsland.restartAllSummary(result("", status: 15, stopped: true)), "Restart all cancelled: no answer in 15m")
+    }
+
+    func testResumeCrashedAndStopAllTallies() {
+        func resume(_ out: String, status: Int32 = 0) -> String {
+            AgentIsland.tally(result(out, status: status), .resume, title: "Resume", empty: "nothing to resume")
+        }
+        func stop(_ out: String, status: Int32 = 0) -> String {
+            AgentIsland.tally(result(out, status: status), .stop, title: "Stop all", empty: "nothing stopped")
+        }
+        XCTAssertEqual(resume(""), "nothing to resume", "real: --revive --all --json with nothing to revive is empty, exit 0")
+        XCTAssertEqual(resume(Fixture.reviveOne + "\n" + Fixture.reviveAs), "2 resumed")
+        XCTAssertEqual(resume(Fixture.reviveOne + "\n" + Fixture.reviveNotStarted, status: 1), "1 resumed, 1 failed")
+        XCTAssertEqual(resume("dch: cannot read history", status: 1), "Resume failed: dch: cannot read history")
+        XCTAssertEqual(stop(Fixture.stopTwo), "3 stopped")
+        XCTAssertEqual(stop(Fixture.stopOne + "\n" + Fixture.stopNoSession + "\n" + Fixture.stopInterrupted + "\n" + """
+            {"name":"q","result":"skipped","reason":"no_screen","detail":"q: skipped — no_screen","session_id":""}
+            """, status: 1), "1 stopped, 2 failed, 1 skipped")
+        XCTAssertEqual(stop(Fixture.stopOne, status: 1), "1 stopped, failed (exit 1)", "L1: exit 1 with no failed result")
+        XCTAssertEqual(stop("", status: 1), "Stop all failed (exit 1)")
+        XCTAssertEqual(AgentIsland.tally(result("", stopped: true), .stop, title: "Stop all", empty: ""),
+                       "Stop all cancelled: no answer in 15m")
+    }
+
+    /// --json on every long verb; Stop names sessions, never --all.
+    func testLongVerbArgsCarryJSON() {
+        XCTAssertEqual(AgentIsland.reviveArgs(record("a"), live: [], records: []), ["--revive", "a", "--json"])
+        XCTAssertEqual(AgentIsland.reviveArgs(record("a"), live: ["a"], records: []), ["--revive", "a", "--as", "a-2", "--json"])
+        XCTAssertEqual(AgentIsland.reviveAllArgs, ["--revive", "--all", "--json"])
+        XCTAssertEqual(AgentIsland.restartArgs("a"), ["--restart", "a", "--include-agents", "-f", "--json"], "a row restarts even when current")
+        XCTAssertEqual(AgentIsland.restartAllArgs, ["--restart", "--all", "--include-agents", "--json"], "no -f: stale agents only")
+        XCTAssertEqual(AgentIsland.stopArgs(["a", "b"]), ["--stop", "a", "b", "--json"])
+    }
+
+    /// --spawn has no --json: its exec failure's first stderr line, not dch's
+    /// closing "failed to spawn session", is the text (real 1.24.0 output).
+    func testSpawnFailureShowsTheExecLine() {
+        let r = result(Fixture.spawnNotExecutable, status: 1)
+        XCTAssertEqual(r.status, 1)
+        XCTAssertEqual(r.text.count, 2, "both stderr lines")
+        XCTAssertEqual(AgentIsland.spawnText(r, name: "s4"), "New session failed: dch: s4: /tmp/p/nonexistent-prog: No such file or directory")
+        XCTAssertEqual(AgentIsland.spawnText(result("dch: s4: a\ndch: s4: b\ndch: failed to spawn session", status: 1), name: "s4"),
+                       "New session failed: dch: s4: b", "the last line naming the session")
+        XCTAssertEqual(AgentIsland.spawnText(result("dch: s40: x\ndch: failed to spawn session", status: 1), name: "s4"),
+                       "New session failed: dch: failed to spawn session", "another name's line is not this one's")
+        XCTAssertEqual(AgentIsland.spawnText(result("dch: session s4 exists", status: 1), name: "s4"), "New session failed: dch: session s4 exists")
+        XCTAssertEqual(AgentIsland.spawnText(result("", status: 1), name: "s4"), "New session failed (exit 1)")
+        XCTAssertNil(AgentIsland.spawnText(result("s4"), name: "s4"))
     }
 
     // MARK: - Control env (QA #445 M1)
@@ -239,6 +493,8 @@ final class AgentIslandControlsTests: XCTestCase {
             XCTAssertTrue(AgentIsland.resumeAllHelp.contains(word), word)
         }
         XCTAssertEqual(AgentIsland.resumeAllLabel, "Resume crashed")
+        // #580: dch's --revive --all never takes a stopped or killed record.
+        XCTAssertTrue(AgentIsland.resumeAllHelp.hasSuffix("Stopped and killed sessions come back only from their own row"))
     }
 
     // MARK: - Runner
@@ -323,7 +579,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(res.done.wait(timeout: .now() + 0.2), .timedOut, "no result before it exits")
         f.release.signal()
         XCTAssertEqual(res.done.wait(timeout: .now() + 5), .success)
-        XCTAssertEqual(res.all, [DchActionResult(status: 143, line: "a: stopping", stopped: true)])
+        XCTAssertEqual(res.all, [DchActionResult(status: 143, text: ["a: stopping"], stopped: true)])
         runner.cancel(k)
         XCTAssertEqual(f.sent, [4242], "a reaped job is never signalled")
     }
@@ -367,13 +623,13 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertTrue(fast.start(AgentSessionKey(dir: "/d", name: "a"), path: "/bin/sh",
                                  args: ["-c", "echo 'a: revived'; echo 'dch: refused' >&2; exit 3"], env: { [:] }, done: res.add))
         XCTAssertEqual(res.done.wait(timeout: .now() + 10), .success)
-        XCTAssertEqual(res.all, [DchActionResult(status: 3, line: "dch: refused")])
+        XCTAssertEqual(res.all, [DchActionResult(status: 3, text: ["a: revived", "dch: refused"])])
         let slow = DchActionRunner(bound: 2)   // room for sh to set its trap under load
         XCTAssertTrue(slow.start(AgentSessionKey(dir: "/d", name: "b"), path: "/bin/sh",
                                  args: ["-c", "trap 'echo got term; exit 7' TERM; echo started; while :; do /bin/sleep 0.1; done"],
                                  env: { [:] }, done: res.add))
         XCTAssertEqual(res.done.wait(timeout: .now() + 10), .success)
-        XCTAssertEqual(res.all.last, DchActionResult(status: 7, line: "got term", stopped: true),
+        XCTAssertEqual(res.all.last, DchActionResult(status: 7, text: ["started", "got term"], stopped: true),
                        "SIGTERM (not SIGKILL): the child's trap ran and its exit code came back")
     }
 
@@ -433,7 +689,7 @@ final class AgentIslandControlsTests: XCTestCase {
 
     /// A panel-less controller whose history read, control binary and runner are fakes.
     @MainActor
-    private func controller(_ f: FakeProc, _ reads: Reads, dch: DchCommand.Binary? = AgentIslandControlsTests.v123,
+    private func controller(_ f: FakeProc, _ reads: Reads, dch: DchCommand.Binary? = AgentIslandControlsTests.v1241,
                             dirs: [String] = ["/d"]) -> AgentIslandController {
         let c = AgentIslandController()
         c.showsPanel = false
@@ -471,7 +727,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(reads.calls.map(\.0), ["/fake/dch"])
         XCTAssertEqual(reads.calls.map(\.1), [["/d", "/e"]])
         XCTAssertEqual(c.store?.history, [record("x")])
-        XCTAssertEqual(c.store?.controlDch, Self.v123)
+        XCTAssertEqual(c.store?.controlDch, Self.v1241)
         c.setExpanded(false)
         settle(c)
         XCTAssertEqual(reads.count, 1, "closing reads nothing")
@@ -536,7 +792,7 @@ final class AgentIslandControlsTests: XCTestCase {
     func testABinaryBelowTheMinimumReadsNoHistory() {
         let f = FakeProc(), reads = Reads()
         reads.records = [record("x")]
-        let c = controller(f, reads, dch: DchCommand.Binary(path: "/old/dch", version: [1, 22, 0]))
+        let c = controller(f, reads, dch: DchCommand.Binary(path: "/old/dch", version: [1, 23, 0]))
         c.store?.sessions = [session("a")]
         c.setExpanded(true)
         settle(c) { c.store?.controlDch != nil }
@@ -563,18 +819,18 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c)
         c.resume(record("x", dir: "/d"))
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        XCTAssertEqual(f.args, [["--revive", "x"]], "nothing ran --all on its own")
+        XCTAssertEqual(f.args, [["--revive", "x", "--json"]], "nothing ran --all on its own")
         c.resumeCrashed()
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
         XCTAssertEqual(f.args.count, 2, "/d is busy with x: its --all is refused, /e runs")
-        XCTAssertEqual(f.args.last, ["--revive", "--all"])
+        XCTAssertEqual(f.args.last, ["--revive", "--all", "--json"])
         XCTAssertEqual(f.lock.withLock { f.launches.last?.dir }, "/e", "with that dir's DCH_SOCKET_DIR")
         XCTAssertEqual(c.store?.actions[AgentSessionKey(dir: "/e", name: "")], AgentIsland.resumingText)
         f.release.signal(); f.release.signal()
         settle(c) { c.store?.actions.values.contains(AgentIsland.resumingText) == false }
         c.resumeCrashed()
         for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
-        XCTAssertEqual(f.args.suffix(2), [["--revive", "--all"], ["--revive", "--all"]], "one per dir with history")
+        XCTAssertEqual(f.args.suffix(2), [AgentIsland.reviveAllArgs, AgentIsland.reviveAllArgs], "one per dir with history")
         XCTAssertEqual(Set(f.lock.withLock { f.launches.suffix(2).compactMap(\.dir) }), ["/d", "/e"])
         f.release.signal(); f.release.signal()
         settle(c) { c.store?.actions.values.contains(AgentIsland.resumingText) == false }
@@ -613,17 +869,23 @@ final class AgentIslandControlsTests: XCTestCase {
         c.store?.sessions = [session("a"), session("a", dir: "/other")]
         c.setExpanded(true)
         settle(c) { c.store?.history.count == 2 }
+        f.progress = #"{"name":"a","phase":"starting"}"# + "\n"
         c.resume(x)
-        XCTAssertEqual(c.store?.actions[x.key], "Resuming…")
+        XCTAssertEqual(c.store?.historyActions[x.key], "Resuming…")
+        XCTAssertNil(c.store?.actions[x.key], "#580: the live row a is another session: it says nothing")
         c.resume(x)
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        XCTAssertEqual(f.args, [["--revive", "a", "--as", "a-3"]], "one launch; a-2 is another record's name")
+        XCTAssertEqual(f.args, [["--revive", "a", "--as", "a-3", "--json"]], "one launch; a-2 is another record's name")
         XCTAssertEqual(f.lock.withLock { f.launches.map(\.path) }, ["/fake/dch"])
+        settle(c) { c.store?.historyActions[x.key] == "Starting…" }
+        XCTAssertEqual(c.store?.historyActions[x.key], "Starting…", "the phase line, as it comes")
         reads.records = [taken]   // revived under a new name: dch retired the old record
+        f.output = #"{"name":"a","as":"a-3","result":"ok","reason":"","detail":"revived as a-3 in /src","session_id":""}"# + "\n"
         f.release.signal()
         settle(c) { c.store?.history == [taken] }
         XCTAssertEqual(reads.count, 2, "re-read after the action")
-        XCTAssertNil(c.store?.actions[x.key])
+        XCTAssertNil(c.store?.historyActions[x.key], "the record is gone, and its status with it")
+        XCTAssertNil(c.store?.actions[x.key], "never on the live row a")
     }
 
     @MainActor
@@ -631,17 +893,21 @@ final class AgentIslandControlsTests: XCTestCase {
         let f = FakeProc(), reads = Reads()
         reads.records = [record("a")]
         f.status = 1
-        f.output = "dch: no history for session a\n"
+        f.output = """
+            {"name":"a","as":"a","result":"failed","reason":"no_history","detail":"no history for this session","session_id":""}
+            dch: no history for session a
+
+            """
         let c = controller(f, reads)
         c.store?.sessions = [session("b")]
         c.setExpanded(true)
         settle(c) { c.store?.history.count == 1 }
         c.resume(record("a"))
         f.release.signal()
-        settle(c) { c.store?.actions[record("a").key] != AgentIsland.resumingText }
-        XCTAssertEqual(c.store?.actions[record("a").key], "Resume failed: dch: no history for session a")
+        settle(c) { c.store?.historyActions[record("a").key] != AgentIsland.resumingText }
+        XCTAssertEqual(c.store?.historyActions[record("a").key], "no history for this session", "dch's detail")
         c.setExpanded(false)
-        XCTAssertEqual(c.store?.actions, [:], "closing drops finished statuses")
+        XCTAssertEqual(c.store?.historyActions, [:], "closing drops finished statuses")
     }
 
     /// A master newer than the control binary: Resume and Resume crashed are off, with the reason.
@@ -650,18 +916,19 @@ final class AgentIslandControlsTests: XCTestCase {
         let f = FakeProc(), reads = Reads()
         reads.records = [record("x")]
         let c = controller(f, reads)
-        c.store?.sessions = [session("a", version: "1.24.0"), session("b", version: "")]
+        c.store?.sessions = [session("a", version: "1.25.0"), session("b", version: "")]
         c.setExpanded(true)
         settle(c) { c.store?.history.count == 1 }
-        XCTAssertEqual(c.store?.resumeGate, .refused("needs dch 1.24.0"))
+        XCTAssertEqual(c.store?.resumeGate, .refused("needs dch 1.25.0"))
         c.resume(record("x"))
         c.resumeCrashed()
         XCTAssertEqual(f.args, [])
         XCTAssertEqual(c.store?.actions, [:])
+        XCTAssertEqual(c.store?.historyActions, [:])
         let store = try XCTUnwrap(c.store)
         store.historyTab = true
         XCTAssertEqual(AgentIslandView(store: store).historyDrawn.map(\.enabled), [false])
-        store.sessions = [session("a", version: "1.23.0")]
+        store.sessions = [session("a", version: "1.24.0")]
         XCTAssertEqual(AgentIslandView(store: store).historyDrawn.map(\.enabled), [true])
     }
 
@@ -670,7 +937,7 @@ final class AgentIslandControlsTests: XCTestCase {
     func testDrawnHistoryRowsCarryTheirRecord() {
         let store = AgentIslandStore(geometry: notched)
         store.sessions = [session("a")]
-        store.controlDch = Self.v123
+        store.controlDch = Self.v124
         store.history = [record("x", ended: 3), record("y", ended: 2)]
         store.historyTab = true
         var resumed: [String] = []
@@ -685,8 +952,8 @@ final class AgentIslandControlsTests: XCTestCase {
     func testRendersHistoryTabOffscreen() throws {
         let now = Date().timeIntervalSince1970
         let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails(), sidekickPattern: "-qa")
-        store.sessions = [session("prosper-main", version: "1.23.0"), session("prosper-qa")]
-        store.controlDch = Self.v123
+        store.sessions = [session("prosper-main", version: "1.24.0"), session("prosper-qa")]
+        store.controlDch = Self.v124
         var a = record("prosper-main", ended: now - 120, end: "signal 9")
         a.alias = "Prosper"
         a.cwd = NSHomeDirectory() + "/personal/prosper"
@@ -695,16 +962,18 @@ final class AgentIslandControlsTests: XCTestCase {
         b.cwd = NSHomeDirectory() + "/personal/prosper-ios"
         let c = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dch-build"), cwd: "/tmp", updated: now - 4000, end: "")
         let d = record("scratch", ended: now - 90000, end: "killed")
-        store.history = [a, b, c, d]
-        store.actions[b.key] = "Resume failed: dch: session ios is live; revive it under another name"
-        store.actions[d.key] = AgentIsland.resumingText
-        store.actions[AgentSessionKey(dir: "/d", name: "")] = "nothing to revive"
+        var e = record("review", ended: now - 600, end: "stopped")   // #580
+        e.cwd = NSHomeDirectory() + "/personal/prosper"
+        store.history = [a, e, b, c, d]
+        store.historyActions[b.key] = "session ios is live"
+        store.historyActions[d.key] = "Starting…"
+        store.actions[AgentSessionKey(dir: "/d", name: "")] = "nothing to resume"
         store.historyTab = true
         store.expanded = true
         let out = tempDir()
         func island(_ name: String) throws { try render(store, name, to: out) }
         try island("agent-island-history")
-        store.sessions = [session("prosper-main", version: "1.24.0")]
+        store.sessions = [session("prosper-main", version: "1.25.0")]
         try island("agent-island-history-gated")
         store.historyTab = false
         try island("agent-island-history-tab-sessions")
@@ -907,7 +1176,7 @@ final class AgentIslandControlsTests: XCTestCase {
     func testRendersHistoryOnlyIslandOffscreen() throws {
         let now = Date().timeIntervalSince1970
         let store = AgentIslandStore(geometry: notched)
-        store.controlDch = Self.v123
+        store.controlDch = Self.v124
         var a = record("prosper-main", ended: 0, end: "vanished")
         a.updated = now - 300
         a.cwd = NSHomeDirectory() + "/personal/prosper"
@@ -961,14 +1230,14 @@ final class AgentIslandControlsTests: XCTestCase {
         let x = record("a", dir: "/d")
         reads.records = [x]
         let c = controller(f, reads)
-        c.store?.controlDch = Self.v123
+        c.store?.controlDch = Self.v124
         c.store?.sessions = [session("a", dir: "/d")]
         c.store?.history = [x, record("a-2", dir: "/e", ended: 50)]
         c.resume(x)
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        XCTAssertEqual(f.args, [["--revive", "a", "--as", "a-2"]])
+        XCTAssertEqual(f.args, [["--revive", "a", "--as", "a-2", "--json"]])
         f.release.signal()
-        settle(c) { c.store?.actions[x.key] != AgentIsland.resumingText }
+        settle(c) { c.store?.historyActions[x.key] != AgentIsland.resumingText }
     }
 
     // MARK: - #579: Restart agent, Restart all agents, New session
@@ -1066,56 +1335,6 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.spawnEnv(env), ["PATH": "/p", "DCH_SOCKET_DIR": "/d", "CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"])
     }
 
-    func testRestartArgsAndTexts() {
-        XCTAssertEqual(AgentIsland.restartArgs("a"), ["--restart", "a", "--include-agents", "-f"], "a row restarts even when current")
-        XCTAssertEqual(AgentIsland.restartAllArgs, ["--restart", "--all", "--include-agents"], "no -f: stale agents only")
-        let skip = "a: skipped — claude was started inside the session's shell, not as its command"
-        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 0, line: skip), name: "a"),
-                       "skipped — claude was started inside the session's shell, not as its command", "dch's skip line is the result")
-        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 1, line: "a: NOT restarted — not ready"), name: "a"),
-                       "Restart failed: NOT restarted — not ready")
-        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 1, line: "dch: no session a"), name: "a"),
-                       "Restart failed: dch: no session a")
-        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 1, line: ""), name: "a"), "Restart failed (exit 1)")
-        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 15, line: "", stopped: true), name: "a"),
-                       "Restart stopped: no answer in 15m")
-        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 0, line: ""), name: "a"), "Restarted")
-    }
-
-    func testRestartAllSummary() {
-        func sum(_ out: String, status: Int32 = 0) -> String {
-            let lines = out.split(separator: "\n").map(String.init)
-            return AgentIsland.restartAllSummary(DchActionResult(status: status, line: lines.last ?? ""), lines: lines)
-        }
-        XCTAssertEqual(sum("all sessions already on dch 1.23.0\nall claude agents already on claude 2.1.0"), "all agents current")
-        XCTAssertEqual(sum("all sessions already on dch 1.23.0"), "all agents current", "no claude anywhere")
-        XCTAssertEqual(sum("all sessions already on dch 1.23.0\np: skipped — claude was started inside the session's shell, not as its command"),
-                       "all agents current (1 skipped)")
-        XCTAssertEqual(sum("""
-            a: pause message sent; waiting for claude 2.0.1 to go idle
-            b: pause message sent; waiting for claude 2.0.1 to go idle
-            a: claude 2.0.1 -> 2.1.0, resumed abc
-            b: NOT restarted — not ready within 600s (busy); resume message typed
-            """, status: 1), "1 agent restarted, 1 failed")
-        XCTAssertEqual(sum("a: claude 2.0 -> 2.1, resumed x\nb: claude 2.0 -> 2.1, resumed y"), "2 agents restarted")
-        XCTAssertEqual(sum("a: restarted on dch 1.23.0\nb: restarted on dch 1.23.0\nall claude agents already on claude 2.1.0"),
-                       "2 sessions restarted on dch 1.23.0", "masters moved, no agent: not \"all agents current\"")
-        XCTAssertEqual(sum("""
-            a: restarted on dch 1.23.0
-            b: pause message sent; waiting for claude 2.0.1 to go idle
-            b: claude 2.0.1 -> 2.1.0, resumed abc
-            p: skipped — claude was started inside the session's shell, not as its command
-            """), "1 session restarted on dch 1.23.0, 1 agent restarted, 1 skipped")
-        XCTAssertEqual(sum("dch: --restart: no sessions", status: 1), "Restart all failed: dch: --restart: no sessions")
-        // QA #449 L1: a master that did not take is a stderr line and exit 1.
-        XCTAssertEqual(sum("a: restarted on dch 1.23.0\ndch: b: re-exec failed; still on dch 1.22.0\nc: claude 2.1.1 -> 2.1.2, resumed x",
-                           status: 1),
-                       "1 session restarted on dch 1.23.0, 1 agent restarted, failed: dch: b: re-exec failed; still on dch 1.22.0")
-        XCTAssertEqual(sum("a: claude 2.0 -> 2.1, resumed x", status: 1), "1 agent restarted, failed (exit 1)")
-        XCTAssertEqual(AgentIsland.restartAllSummary(DchActionResult(status: 15, line: "", stopped: true), lines: []),
-                       "Restart all stopped: no answer in 15m")
-    }
-
     /// QA #447 I3: history and no live session: the label says History is there.
     func testIslandLabelMentionsHistoryWithNoSession() {
         XCTAssertEqual(AgentIsland.islandAccessibilityLabel(AgentIsland.summary([]), history: 3), "Agent Island, no sessions, 3 in History")
@@ -1175,8 +1394,8 @@ final class AgentIslandControlsTests: XCTestCase {
         return c
     }
 
-    /// A row's Restart agent: -f, the control env, "Restarting…", refused while
-    /// busy, then dch's last line without the name.
+    /// A row's Restart agent: -f and --json, the control env, "Restarting…",
+    /// refused while busy, dch's phases as they come, then the row's agent result.
     @MainActor
     func testRowRestartRunsWithForceAndShowsDchsLine() throws {
         let f = FakeProc()
@@ -1185,18 +1404,28 @@ final class AgentIslandControlsTests: XCTestCase {
         let store = try XCTUnwrap(c.store)
         let row = try XCTUnwrap(AgentIslandView(store: store, onRestart: { c.restart($0) }).drawn.first { $0.session.name == "a" })
         XCTAssertNil(row.refused)
+        f.progress = """
+            {"name":"a","phase":"master","result":"ok","reason":"","detail":"restarted on dch 1.24.0","session_id":""}
+            {"name":"a","phase":"pausing"}
+            {"name":"b","phase":"exiting"}
+            not json
+
+            """
         row.restart()
         XCTAssertEqual(store.actions[row.session.key], AgentIsland.restartingText)
         c.restart(session("a"))
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        XCTAssertEqual(f.args, [["--restart", "a", "--include-agents", "-f"]], "one launch: a busy row refuses")
+        XCTAssertEqual(f.args, [["--restart", "a", "--include-agents", "-f", "--json"]], "one launch: a busy row refuses")
         XCTAssertEqual(f.lock.withLock { f.envs }, [["PATH": "/login/bin", "DCH_SOCKET_DIR": "/d", "CLAUDECODE": "1"]],
                        "the control env; the CLAUDE* strip is --spawn's only")
         XCTAssertNil(f.lock.withLock { f.launches[0].cwd })
-        f.output = "a: restarted on dch 1.23.0\na: skipped — claude was started inside the session's shell, not as its command\n"
+        settle(c) { store.actions[row.session.key] == "Pausing…" }
+        XCTAssertEqual(store.actions[row.session.key], "Pausing…", "the phase, not the master pass")
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "b")], "another name's line is not this row's")
+        f.output = #"{"name":"a","result":"skipped","reason":"not_claude","detail":"no claude runs in the session","session_id":""}"# + "\n"
         f.release.signal()
-        settle(c) { store.actions[row.session.key] != AgentIsland.restartingText }
-        XCTAssertEqual(store.actions[row.session.key], "skipped — claude was started inside the session's shell, not as its command")
+        settle(c) { store.actions[row.session.key] != "Pausing…" }
+        XCTAssertEqual(store.actions[row.session.key], "no claude runs in the session")
         c.refreshHistory()
         settle(c)
         XCTAssertNotNil(store.actions[row.session.key], "a history read keeps a live row's result")
@@ -1230,16 +1459,21 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.args, [])
     }
 
-    /// Confirmed: one job per dir with a live session, no -f. A row shows
-    /// "Restarting…" once dch reports pausing it, then its own line; a paused
-    /// row dch never reports on again is cleared; the dir gets the summary.
+    /// Confirmed: one job per dir with a live session, no -f. A row shows dch's
+    /// phases once it reaches it, then its result; a row left on a phase is
+    /// cleared; a skip with no phase leaves its row alone; the dir gets the summary.
     @MainActor
     func testRestartAllRunsPerDirWithoutForceAndReportsRows() throws {
         let f = FakeProc()
-        let c = opened(f, [session("a"), session("b"), session("q"), session("c", dir: "/e")], dirs: ["/d", "/e"])
+        let c = opened(f, [session("a"), session("b"), session("q"), session("p"), session("c", dir: "/e")], dirs: ["/d", "/e"])
         let store = try XCTUnwrap(c.store)
-        f.progress = "a: pause message sent; waiting for claude 2.0.1 to go idle\n"
-            + "b: pause message sent; waiting for claude 2.0.1 to go idle\nzz: pause message sent; waiting\n"
+        f.progress = """
+            {"name":"a","phase":"master","result":"skipped","reason":"current","detail":"already on dch 1.24.0","session_id":""}
+            {"name":"a","phase":"pausing"}
+            {"name":"b","phase":"pausing"}
+            {"name":"zz","phase":"pausing"}
+
+            """
         c.askRestartAll()
         c.confirmRestartAll(true)
         for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
@@ -1247,21 +1481,30 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(Set(f.lock.withLock { f.launches.compactMap(\.dir) }), ["/d", "/e"])
         let d = AgentSessionKey(dir: "/d", name: ""), a = AgentSessionKey(dir: "/d", name: "a")
         XCTAssertEqual(store.actions[d], AgentIsland.restartAllRunningText)
-        settle(c) { store.actions[a] == AgentIsland.restartingText }
-        XCTAssertEqual(store.actions[a], AgentIsland.restartingText)
-        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "b")], AgentIsland.restartingText)
-        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "q")], "not reported: no Restarting…")
+        settle(c) { store.actions[a] == "Pausing…" }
+        XCTAssertEqual(store.actions[a], "Pausing…")
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "b")], "Pausing…")
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "q")], "not reached: no running text")
         XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "zz")], "not a live row")
         c.restart(session("q"))
         XCTAssertEqual(f.args.count, 2, "a row of a dir under Restart all is refused")
+        c.stop(session("q", version: "1.24.0"))
+        XCTAssertEqual(f.args.count, 2, "so is its Stop")
         XCTAssertTrue(store.showsControlLine, "the dir status shows over the Sessions rows")
-        f.output = "a: claude 2.0.1 -> 2.1.0, resumed abc\n"
+        f.output = """
+            {"name":"a","result":"ok","reason":"","detail":"claude 2.0.1 -> 2.1.0, resumed abc","session_id":"abc"}
+            {"name":"q","result":"skipped","reason":"not_claude","detail":"no claude runs in the session","session_id":""}
+            {"name":"p","result":"failed","reason":"no_record","detail":"p: NOT restarted — no claude session record","session_id":""}
+
+            """
         f.release.signal(); f.release.signal()
         settle(c) { store.actions[d] != AgentIsland.restartAllRunningText && store.actions[AgentSessionKey(dir: "/e", name: "")] != AgentIsland.restartAllRunningText }
-        XCTAssertEqual(store.actions[a], "claude 2.0.1 -> 2.1.0, resumed abc")
-        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "b")], "no stale Restarting…")
-        XCTAssertEqual(store.actions[d], "1 agent restarted")
-        XCTAssertEqual(store.dirStatus, "1 agent restarted · 1 agent restarted")
+        XCTAssertEqual(store.actions[a], "Restarted")
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "b")], "no stale Pausing…")
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "q")], "a not_claude skip with no phase: the row says nothing")
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "p")], "NOT restarted — no claude session record", "a failure always shows")
+        XCTAssertEqual(store.actions[d], "1 agent restarted, 1 failed")
+        XCTAssertEqual(store.dirStatus, "1 agent restarted, 1 failed · 1 agent restarted, 1 failed")
     }
 
     /// New session: --spawn <free name> [stripped launch], the Process cwd is the
@@ -1288,7 +1531,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.lock.withLock { f.launches[0].cwd }, app)
         XCTAssertEqual(f.lock.withLock { f.envs }, [["PATH": "/login/bin", "DCH_SOCKET_DIR": "/d", "CLAUDE_CONFIG_DIR": "/c"]])
         f.status = 1
-        f.output = "dch: app-3: headroom: No such file or directory\n"
+        f.output = "dch: app-3: headroom: No such file or directory\ndch: failed to spawn session\n"   // #580: real 1.24.0 shape
         f.release.signal()
         settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != nil }
         XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], "New session failed: dch: app-3: headroom: No such file or directory")
@@ -1321,7 +1564,7 @@ final class AgentIslandControlsTests: XCTestCase {
     @MainActor
     func testGateRefusalDisablesRestartAndNewSession() throws {
         let f = FakeProc()
-        let c = opened(f, [session("a", version: "1.24.0")])
+        let c = opened(f, [session("a", version: "1.25.0")])
         let store = try XCTUnwrap(c.store)
         c.chooseFolder = { _ in XCTFail("no chooser while refused") }
         c.restart(session("a"))
@@ -1332,17 +1575,77 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
         XCTAssertEqual(f.args, [])
         XCTAssertEqual(store.actions, [:])
-        XCTAssertEqual(store.controlsMenu.refused, "needs dch 1.24.0")
-        XCTAssertEqual(AgentIslandView(store: store).drawn.map(\.refused), ["needs dch 1.24.0"])
+        c.stop(session("a", version: "1.25.0"))
+        c.askStopAll()
+        XCTAssertFalse(store.confirmingStopAll)
+        XCTAssertEqual(f.args, [], "#580: Stop and Stop all too")
+        XCTAssertEqual(store.controlsMenu.refused, "needs dch 1.25.0")
+        XCTAssertEqual(AgentIslandView(store: store).drawn.map(\.refused), ["needs dch 1.25.0"])
         let menu = c.makeControlsMenu()
-        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, "", "Controls needs dch 1.24.0"])
-        XCTAssertEqual(menu.items.map(\.isEnabled), [false, false, false, false], "off, with the reason under them")
+        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, "Stop all in Sessions…",
+                                                 "", "Controls needs dch 1.25.0"])
+        XCTAssertEqual(menu.items.map(\.isEnabled), [false, false, false, false, false], "off, with the reason under them")
         press(menu.items[1])
+        press(menu.items[2])
         XCTAssertFalse(store.confirmingRestartAll, "the action re-checks the gate")
-        store.sessions = [session("a", version: "1.23.0")]
+        XCTAssertFalse(store.confirmingStopAll)
+        store.sessions = [session("a", version: "1.24.0")]
         XCTAssertNil(store.controlsMenu.refused)
         XCTAssertEqual(AgentIslandView(store: store).drawn.map(\.refused), [nil])
-        XCTAssertEqual(c.makeControlsMenu().items.map(\.isEnabled), [true, true])
+        XCTAssertEqual(c.makeControlsMenu().items.map(\.isEnabled), [true, true, true])
+    }
+
+    /// #580 addendum 2: a 1.24.0 control dch types /exit into a shell that ran
+    /// claude by hand, so Restart agent, Restart all and Stop / Stop all are off
+    /// below 1.24.1 and say so; Resume and New session stay on at 1.24.0. On a
+    /// row whose master is old, the dch hint is the one Stop shows.
+    @MainActor
+    func testRestartAndStopNeedDch1241AndResumeDoesNot() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("x")]
+        let c = controller(f, reads, dch: Self.v124)
+        c.store?.sessions = [session("a", version: "1.24.0"), session("old", version: "1.23.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.controlDch != nil && c.store?.history.count == 1 }
+        let store = try XCTUnwrap(c.store)
+        XCTAssertNil(store.resumeGate.refusal)
+        XCTAssertEqual(store.restartNeeds, "needs dch 1.24.1")
+        let drawn = AgentIslandView(store: store, onRestart: { c.restart($0) }, onStop: { c.stop($0) }).drawn
+        XCTAssertEqual(drawn.map(\.restartTitle), ["Restart agent (needs dch 1.24.1)", "Restart agent (needs dch 1.24.1)"])
+        XCTAssertEqual(drawn.map(\.stopTitle), ["Stop (needs dch 1.24.1)", "Stop (needs dch 1.24.1)"],
+                       "one hint: the dch one wins over \"restart this session first\"")
+        XCTAssertEqual(drawn.map(\.restartEnabled) + drawn.map(\.stopEnabled), [false, false, false, false])
+        let menu = c.makeControlsMenu()
+        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, "Restart all agents (needs dch 1.24.1)",
+                                                 "Stop all in Sessions… (needs dch 1.24.1)"])
+        XCTAssertEqual(menu.items.map(\.isEnabled), [true, false, false])
+        drawn[0].restart()
+        drawn[0].stop()
+        c.askRestartAll()
+        c.askStopAll()
+        XCTAssertFalse(store.confirmingRestartAll || store.confirmingStopAll)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [], "no restart or stop under 1.24.0")
+        c.resume(record("x"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--revive", "x", "--json"]], "Resume is on at 1.24.0")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "x")) }
+
+        store.controlDch = Self.v1241
+        XCTAssertNil(store.restartNeeds)
+        let on = AgentIslandView(store: store, onRestart: { c.restart($0) }).drawn
+        XCTAssertEqual(on.map(\.restartTitle), [AgentIsland.restartLabel, AgentIsland.restartLabel])
+        XCTAssertEqual(on.map(\.stopTitle), [AgentIsland.stopLabel, AgentIsland.stopOldMasterLabel])
+        XCTAssertEqual(on.map(\.restartEnabled) + on.map(\.stopEnabled), [true, true, true, false])
+        XCTAssertEqual(c.makeControlsMenu().items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel,
+                                                                 "Stop all in Sessions…"])
+        XCTAssertEqual(c.makeControlsMenu().items.map(\.isEnabled), [true, true, true])
+        on[0].restart()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, AgentIsland.restartArgs("a"), "on at 1.24.1")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(drawn[0].session.key) }
     }
 
     /// The header "⋯" pops the menu through the seam (never a real one here).
@@ -1353,7 +1656,7 @@ final class AgentIslandControlsTests: XCTestCase {
         var shown: [[String]] = []
         c.popUpMenu = { shown.append($0.items.map(\.title)) }
         c.showControlsMenu()
-        XCTAssertEqual(shown, [[AgentIsland.newSessionLabel, AgentIsland.restartAllLabel]])
+        XCTAssertEqual(shown, [[AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, "Stop all in Sessions…"]])
         XCTAssertEqual(f.args, [])
     }
 
@@ -1371,8 +1674,8 @@ final class AgentIslandControlsTests: XCTestCase {
         c.setExpanded(true)
         XCTAssertNil(store.controlsMenu.refused)
         let menu = c.makeControlsMenu()
-        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel])
-        XCTAssertEqual(menu.items.map(\.isEnabled), [true, false])
+        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, "Stop all in Sessions…"])
+        XCTAssertEqual(menu.items.map(\.isEnabled), [true, false, false], "nothing live: nothing to stop")
         c.askRestartAll()
         XCTAssertFalse(store.confirmingRestartAll)
         XCTAssertEqual(f.args, [])
@@ -1383,8 +1686,8 @@ final class AgentIslandControlsTests: XCTestCase {
     @MainActor
     func testRendersSessionControlsOffscreen() throws {
         let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
-        store.sessions = [session("prosper-main", version: "1.23.0"), session("ios"), session("dch-build")]
-        store.controlDch = Self.v123
+        store.sessions = [session("prosper-main", version: "1.24.0"), session("ios"), session("dch-build")]
+        store.controlDch = Self.v1241
         store.expanded = true
         let out = tempDir()
         try render(store, "agent-island-579-header-menu", to: out)
@@ -1392,8 +1695,185 @@ final class AgentIslandControlsTests: XCTestCase {
         try render(store, "agent-island-579-confirm", to: out)
         store.confirmingRestartAll = false
         store.actions[AgentSessionKey(dir: "/d", name: "prosper-main")] = AgentIsland.restartingText
-        store.actions[AgentSessionKey(dir: "/d", name: "ios")] = "claude 2.0.1 -> 2.1.0, resumed 3f2a"
+        store.actions[AgentSessionKey(dir: "/d", name: "ios")] = "Restarted"
         store.actions[AgentSessionKey(dir: "/d", name: "")] = AgentIsland.restartAllRunningText
         try render(store, "agent-island-579-restarting", to: out)
+    }
+
+    // MARK: - #580: Stop and Stop all
+
+    /// A row's Stop: only on a 1.24.0+ master; `--stop <name> --json`; phases as
+    /// they come; refused while the row runs a job; the result, then one History read.
+    @MainActor
+    func testRowStopRunsByNameOnANewMasterAndReReadsHistory() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("x")]
+        let c = controller(f, reads)
+        c.store?.sessions = [session("a", version: "1.24.0"), session("old", version: "1.23.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 1 }
+        let store = try XCTUnwrap(c.store)
+        let drawn = AgentIslandView(store: store, onStop: { c.stop($0) }).drawn
+        XCTAssertEqual(drawn.map(\.canStop), [true, false], "the old master's item reads \"restart this session first\"")
+        drawn[1].stop()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "an old master never stops")
+        XCTAssertEqual(store.actions, [:])
+        f.progress = #"{"name":"a","phase":"pausing"}"# + "\n"
+        drawn[0].stop()
+        XCTAssertEqual(store.actions[drawn[0].session.key], AgentIsland.stoppingText)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        c.stop(drawn[0].session)
+        c.restart(drawn[0].session)
+        XCTAssertEqual(f.args, [["--stop", "a", "--json"]], "one long verb per session: the second Stop and the Restart are refused")
+        settle(c) { store.actions[drawn[0].session.key] == "Pausing…" }
+        XCTAssertEqual(store.actions[drawn[0].session.key], "Pausing…")
+        let before = reads.count
+        f.status = 1
+        f.output = #"{"name":"a","result":"failed","reason":"not_idle","detail":"a: NOT stopped — claude did not go idle; resume message typed","session_id":""}"# + "\n"
+        f.release.signal()
+        settle(c) { reads.count > before }
+        XCTAssertEqual(store.actions[drawn[0].session.key], "NOT stopped — claude did not go idle; resume message typed")
+        XCTAssertEqual(reads.count, before + 1, "one History read after the stop")
+    }
+
+    /// Stop all in <tab>: the shown tab's sessions whose master can stop, by
+    /// name and per dir, never --all; asks first on the inline line (Cancel runs
+    /// nothing); refused while the dir runs a job; the dir gets the tally.
+    @MainActor
+    func testStopAllNamesTheShownTabsEligibleSessions() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("x")]
+        // The control binary is newer than every master (the gate's other rule).
+        let c = controller(f, reads, dch: DchCommand.Binary(path: "/fake/dch", version: [1, 100, 0]), dirs: ["/d", "/e"])
+        c.store?.sidekickPattern = "-qa"
+        c.store?.sessions = [session("main", version: "1.24.0"), session("legacy", version: "1.23.0"),
+                             session("x-qa", version: "1.24.1"), session("y-qa", version: ""),
+                             session("z-qa", dir: "/e", version: "1.100.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.controlDch != nil && c.store?.history.count == 1 }
+        let store = try XCTUnwrap(c.store)
+        XCTAssertEqual(store.stopAllTargets.stop.map(\.name), ["main"])
+        XCTAssertEqual(store.stopAllTargets.skipped, 1)
+        var menu = c.makeControlsMenu()
+        XCTAssertEqual(menu.items[2].title, "Stop all in Sessions…")
+        XCTAssertTrue(menu.items[2].isEnabled)
+        c.askRestartAll()
+        press(menu.items[2])
+        XCTAssertTrue(store.confirmingStopAll)
+        XCTAssertFalse(store.confirmingRestartAll, "one question at a time")
+        XCTAssertTrue(store.showsControlLine)
+        XCTAssertEqual(AgentIsland.stopAllQuestion(1, skipped: 1), "Stop 1 session? 1 on an old dch skipped.")
+        XCTAssertEqual(AgentIsland.stopAllQuestion(3, skipped: 0), "Stop 3 sessions?")
+        c.confirmStopAll(false)
+        XCTAssertFalse(store.confirmingStopAll)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [], "Cancel: no verb")
+        c.showSidekicks(true)
+        menu = c.makeControlsMenu()
+        XCTAssertEqual(menu.items[2].title, "Stop all in Sidekicks…")
+        f.progress = #"{"name":"x-qa","phase":"ending"}"# + "\n"
+        press(menu.items[2])
+        c.confirmStopAll(true)
+        for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
+        XCTAssertEqual(Set(f.args), [["--stop", "x-qa", "--json"], ["--stop", "z-qa", "--json"]],
+                       "the shown tab only, by name, the old and the unknown master left out")
+        XCTAssertFalse(f.args.joined().contains("--all"), "never --all")
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: f.lock.withLock { f.launches.map { ($0.args[1], $0.dir ?? "") } }),
+                       ["x-qa": "/d", "z-qa": "/e"], "each with its dir's DCH_SOCKET_DIR")
+        let xq = AgentSessionKey(dir: "/d", name: "x-qa"), zq = AgentSessionKey(dir: "/e", name: "z-qa")
+        XCTAssertEqual(store.actions[zq], AgentIsland.stoppingText)
+        settle(c) { store.actions[xq] == "Ending…" }
+        XCTAssertEqual(store.actions[xq], "Ending…")
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "y-qa")], "not asked to stop")
+        c.stop(session("x-qa", version: "1.24.1"))
+        c.askStopAll()
+        c.confirmStopAll(true)
+        settle(c)
+        XCTAssertEqual(f.args.count, 2, "a running Stop all refuses its rows and a second Stop all")
+        let before = reads.count
+        f.output = """
+            {"name":"x-qa","result":"ok","reason":"","detail":"","session_id":"abc"}
+            {"name":"z-qa","result":"skipped","reason":"no_screen","detail":"z-qa: skipped — no_screen","session_id":""}
+
+            """
+        f.release.signal(); f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/e", name: "")] != AgentIsland.stoppingText
+            && store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.stoppingText && reads.count >= before + 2 }
+        XCTAssertEqual(store.actions[xq], "Stopped")
+        XCTAssertEqual(store.actions[zq], "skipped — no_screen")
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], "1 stopped, 1 skipped")
+        XCTAssertEqual(reads.count, before + 2, "one History read per finished job")
+    }
+
+    /// No session in the shown tab can stop: the item is off and asking does nothing.
+    @MainActor
+    func testStopAllIsOffWithNoEligibleSession() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a", version: "1.23.0"), session("b", version: "")])
+        let store = try XCTUnwrap(c.store)
+        XCTAssertEqual(store.stopAllTargets.stop, [])
+        XCTAssertEqual(store.stopAllTargets.skipped, 2)
+        let item = c.makeControlsMenu().items[2]
+        XCTAssertEqual(item.title, "Stop all in Sessions…")
+        XCTAssertFalse(item.isEnabled)
+        c.askStopAll()
+        XCTAssertFalse(store.confirmingStopAll)
+        c.confirmStopAll(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [])
+    }
+
+    /// Resume crashed: --revive --all --json; a phase or result lands on its
+    /// History row, never on a live row of that name; empty stdout + exit 0
+    /// reads "nothing to resume".
+    @MainActor
+    func testResumeCrashedShowsRowsAndNothingToResume() throws {
+        let f = FakeProc(), reads = Reads()
+        let x = record("x")
+        reads.records = [x]
+        let c = controller(f, reads)
+        c.store?.sessions = [session("x", version: "1.24.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 1 }
+        let store = try XCTUnwrap(c.store)
+        f.progress = #"{"name":"x","phase":"starting"}"# + "\n"
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--revive", "--all", "--json"]])
+        settle(c) { store.historyActions[x.key] == "Starting…" }
+        XCTAssertEqual(store.historyActions[x.key], "Starting…")
+        XCTAssertNil(store.actions[x.key], "the live x is another session")
+        f.output = #"{"name":"x","as":"x-2","result":"ok","reason":"","detail":"revived as x-2 in /src","session_id":""}"# + "\n"
+        f.release.signal()
+        let all = AgentSessionKey(dir: "/d", name: "")
+        settle(c) { store.actions[all] != AgentIsland.resumingText }
+        XCTAssertEqual(store.actions[all], "1 resumed")
+        XCTAssertEqual(store.historyActions[x.key], "Resumed as x-2")
+        f.progress = ""
+        f.output = ""
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        settle(c) { store.actions[all] != AgentIsland.resumingText }
+        XCTAssertEqual(store.actions[all], "nothing to resume")
+    }
+
+    /// Visual evidence: the inline Stop all question, and rows with a Stop
+    /// running, failed and a Stop all tally. Offscreen only.
+    @MainActor
+    func testRendersStopControlsOffscreen() throws {
+        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        store.sessions = [session("prosper-main", version: "1.24.0"), session("ios", version: "1.24.0"),
+                          session("dch-build", version: "1.23.0")]
+        store.controlDch = Self.v1241
+        store.expanded = true
+        let out = tempDir()
+        store.confirmingStopAll = true
+        try render(store, "agent-island-580-stop-confirm", to: out)
+        store.confirmingStopAll = false
+        store.actions[AgentSessionKey(dir: "/d", name: "prosper-main")] = "Pausing…"
+        store.actions[AgentSessionKey(dir: "/d", name: "ios")] = "NOT stopped — claude did not go idle; resume message typed"
+        store.actions[AgentSessionKey(dir: "/d", name: "")] = "1 stopped, 1 failed"
+        try render(store, "agent-island-580-stop-results", to: out)
     }
 }

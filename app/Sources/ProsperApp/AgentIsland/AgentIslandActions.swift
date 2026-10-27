@@ -34,19 +34,63 @@ struct DchHistoryRecord: Equatable, Identifiable {
     var lastSeen: TimeInterval { ended > 0 ? ended : updated }
 }
 
-/// One finished long verb: the exit code and the last non-empty output line.
+/// #580: one `--json` stdout line of a long verb (dch 1.24.0's "Machine-readable
+/// output"). A phase is {"name","phase"}; a result {"name","result","reason",
+/// "detail","session_id"} (`--revive` adds "as"); --restart's master pass
+/// carries both, with phase "master". Missing fields decode as nil.
+struct DchJSONLine: Decodable, Equatable, Sendable {
+    var name: String
+    var phase: String?
+    var result: String?
+    var reason: String?
+    var detail: String?
+    var revivedAs: String?
+    var sessionID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name, phase, result, reason, detail
+        case revivedAs = "as", sessionID = "session_id"
+    }
+
+    /// QA #452: a result is an object with "result" and no "phase", or phase
+    /// "master"; any other object with a "phase" is progress.
+    var isMaster: Bool { phase == "master" && result != nil }
+    /// A step on the way ("pausing", "starting", …), never a result.
+    var isPhase: Bool { phase != nil && phase != "master" }
+    /// One session's result (an agent's, for --restart); the master pass is not one.
+    var isFinal: Bool { result != nil && phase == nil }
+    var failed: Bool { result == "failed" || result == "interrupted" }
+}
+
+/// One finished long verb. `json`: its NDJSON objects in order; `text`: every
+/// other non-empty line, trimmed (stderr's human text; all of --spawn's).
 /// `stopped`: the bound expired and the runner sent its one SIGTERM.
 struct DchActionResult: Equatable, Sendable {
     let status: Int32
-    let line: String
+    var json: [DchJSONLine] = []
+    var text: [String] = []
     var stopped = false
+
+    var line: String { text.last ?? "" }
+    /// QA #449 L1: the reason behind a failure no result names.
+    var dchLine: String? { text.last { $0.hasPrefix("dch: ") } }
 }
 
 extension AgentIsland {
     // MARK: - History
 
-    /// --history and --revive arrived in dch 1.23.0.
-    static let reviveMinimum = [1, 23, 0]
+    /// #580: every control (and the History read) needs dch 1.24.0: --json, and
+    /// --stop. Also a row's master minimum for Stop (a 1.23.x master records the
+    /// stop as a crash).
+    static let controlMinimum = [1, 24, 0]
+    /// #580 addendum 2: Restart agent, Restart all and Stop need 1.24.1. 1.24.0
+    /// sends /exit to a claude typed into a session's shell, and the shell then
+    /// runs whatever followed it (`claude && git push`); 1.24.1 skips that case
+    /// (reason in_shell) and its --stop never types /exit there.
+    static let restartMinimum = [1, 24, 1]
+
+    /// A risky verb's label while the control dch is under `restartMinimum`.
+    static func label(_ label: String, needs: String?) -> String { needs.map { "\(label) (\($0))" } ?? label }
     /// The History tab lists at most this many records, newest first.
     static let historyCap = 50
 
@@ -88,9 +132,12 @@ extension AgentIsland {
     /// `<name>-2`, `-3`, … — free of live sessions and of other records in the dir
     /// (dch would overwrite that record).
     static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>) -> [String] {
-        guard live.contains(r.name) else { return ["--revive", r.name] }
-        return ["--revive", r.name, "--as", freeName(r.name, taken: live.union(records))]
+        guard live.contains(r.name) else { return ["--revive", r.name, "--json"] }
+        return ["--revive", r.name, "--as", freeName(r.name, taken: live.union(records)), "--json"]
     }
+
+    /// Resume crashed. dch skips stopped, killed and exit 0 records itself.
+    static let reviveAllArgs = ["--revive", "--all", "--json"]
 
     /// `name` when free, else the first free `<name>-2`, `-3`, ….
     static func freeName(_ name: String, taken: Set<String>) -> String {
@@ -106,52 +153,129 @@ extension AgentIsland {
     static let restartAllQuestion = "Restart stale agents? Each pauses for up to minutes."
 
     /// An explicit row click: `-f`, so a current agent restarts too.
-    static func restartArgs(_ name: String) -> [String] { ["--restart", name, "--include-agents", "-f"] }
+    static func restartArgs(_ name: String) -> [String] { ["--restart", name, "--include-agents", "-f", "--json"] }
     /// No `-f`: only stale agents restart.
-    static let restartAllArgs = ["--restart", "--all", "--include-agents"]
+    static let restartAllArgs = ["--restart", "--all", "--include-agents", "--json"]
 
-    /// A restart output line about one session, "<name>: <text>"; nil without
-    /// ": ". The caller keeps only names live in the dir ("dch: …" and the
-    /// summaries name none).
-    static func restartReport(_ line: String) -> (name: String, text: String)? {
-        guard let r = line.range(of: ": "), r.lowerBound > line.startIndex else { return nil }
-        return (String(line[..<r.lowerBound]), String(line[r.upperBound...]))
+    // MARK: - --json results (#580)
+
+    /// A row's verb: its done word and the minutes of its bound.
+    enum Verb: String {
+        case restart = "Restart", stop = "Stop", resume = "Resume"
+
+        var done: String {
+            switch self {
+            case .restart: "Restarted"
+            case .stop: "Stopped"
+            case .resume: "Resumed"
+            }
+        }
+        var minutes: Int { Int((self == .resume ? DchActionRunner.bound : DchActionRunner.restartBound) / 60) }
     }
 
-    /// dch 1.23.0's line once it has paused an agent it is about to restart.
-    static func isPauseSent(_ text: String) -> Bool { text.hasPrefix("pause message sent") }
-
-    /// A row's Restart result: dch's last line without the "<name>: " (a skip
-    /// line included), as failure text on a non-zero exit.
-    static func restartText(_ r: DchActionResult, name: String) -> String {
-        if r.stopped { return "Restart stopped: no answer in \(Int(DchActionRunner.restartBound / 60))m" }
-        let line = r.line.hasPrefix(name + ": ") ? String(r.line.dropFirst(name.count + 2)) : r.line
-        if r.status == 0 { return line.isEmpty ? "Restarted" : line }
-        return line.isEmpty ? "Restart failed (exit \(r.status))" : "Restart failed: \(line)"
+    /// One output line as a --json object; nil for anything else (stderr's text,
+    /// a stray line, an object with neither a phase nor a result).
+    static func jsonLine(_ line: String) -> DchJSONLine? {
+        guard line.hasPrefix("{"), let o = try? JSONDecoder().decode(DchJSONLine.self, from: Data(line.utf8)),
+              o.phase != nil || o.result != nil else { return nil }
+        return o
     }
 
-    /// Restart all's one line, from every output line of its run: the masters
-    /// moved to a new dch ("<name>: restarted on dch <v>"), the agents restarted
-    /// and failed, else "all agents current" (with the skips).
-    static func restartAllSummary(_ r: DchActionResult, lines: [String]) -> String {
-        if r.stopped { return "Restart all stopped: no answer in \(Int(DchActionRunner.restartBound / 60))m" }
-        let texts = lines.compactMap { restartReport($0)?.text }
-        let restarted = texts.filter { $0.hasPrefix("claude ") && $0.contains(" -> ") }.count
-        let failed = texts.filter { $0.hasPrefix("NOT restarted") }.count
-        let skipped = texts.filter { $0.hasPrefix("skipped") }.count
-        let masters = texts.filter { $0.hasPrefix("restarted on dch ") }
-        guard restarted + failed + masters.count > 0 else {
-            if r.status != 0 { return r.line.isEmpty ? "Restart all failed (exit \(r.status))" : "Restart all failed: \(r.line)" }
+    /// A phase as a row's running text: "Pausing…", "Exiting…", "Relaunching…",
+    /// "Resuming…", "Starting…", "Ending…"; nil for a result or the master pass.
+    static func phaseText(_ o: DchJSONLine) -> String? {
+        guard o.isPhase, let p = o.phase, phaseWords.contains(p) else { return nil }
+        return p.prefix(1).uppercased() + p.dropFirst() + "…"
+    }
+
+    static let phaseWords = ["pausing", "exiting", "relaunching", "resuming", "starting", "ending"]
+
+    /// The texts a row shows while a job runs; a dir job clears any left when it ends.
+    static var runningTexts: Set<String> {
+        Set(phaseWords.map { $0.prefix(1).uppercased() + $0.dropFirst() + "…" } + [restartingText, stoppingText, resumingText])
+    }
+
+    /// A result as its row's text: a short word for ok, else dch's detail
+    /// without a leading "<name>: ".
+    static func finalText(_ o: DchJSONLine, _ verb: Verb) -> String {
+        if o.result == "ok" {
+            guard verb == .resume else { return verb.done }
+            if o.reason == "no_screen" { return "Resumed (resume message not typed)" }   // dch-lite
+            if let a = o.revivedAs, !a.isEmpty, a != o.name { return "Resumed as \(a)" }
+            return "Resumed"
+        }
+        let detail = o.detail ?? ""
+        let d = detail.hasPrefix(o.name + ": ") ? String(detail.dropFirst(o.name.count + 2)) : detail
+        return d.isEmpty ? "\(verb.rawValue) \(o.result ?? "failed") (\(o.reason ?? ""))" : d
+    }
+
+    /// "failed: <last dch: line>", else "failed (exit N)".
+    static func failedText(_ r: DchActionResult) -> String {
+        r.dchLine.map { "failed: \($0)" } ?? "failed (exit \(r.status))"
+    }
+
+    /// A one-row job's text: its last result for `name` (for --restart the
+    /// agent's, else the master pass's), else the exit.
+    static func rowText(_ r: DchActionResult, name: String, _ verb: Verb) -> String {
+        if r.stopped { return "\(verb.rawValue) cancelled: no answer in \(verb.minutes)m" }
+        if let f = r.json.last(where: { $0.name == name && ($0.isFinal || $0.isMaster) }) { return finalText(f, verb) }
+        return r.status == 0 ? verb.done : "\(verb.rawValue) \(failedText(r))"
+    }
+
+    /// Restart all's one line: the masters moved to this dch, the agents
+    /// restarted, failed and skipped (not_claude and current are no skip), else
+    /// "all agents current". A non-zero exit no result explains reads as failed.
+    static func restartAllSummary(_ r: DchActionResult) -> String {
+        if r.stopped { return "Restart all cancelled: no answer in \(Verb.restart.minutes)m" }
+        let masters = r.json.filter(\.isMaster), agents = r.json.filter(\.isFinal), all = masters + agents
+        let moved = masters.filter { $0.result == "ok" }
+        let restarted = agents.filter { $0.result == "ok" }.count
+        let failed = all.filter(\.failed).count
+        let skipped = all.filter { $0.result == "skipped" && !["not_claude", "current"].contains($0.reason ?? "") }.count
+        let other = r.status != 0 && failed == 0 ? failedText(r) : nil
+        guard !moved.isEmpty || restarted + failed > 0 else {
+            if let other { return "Restart all \(other)" }
             return "all agents current" + (skipped > 0 ? " (\(skipped) skipped)" : "")
         }
-        // A master that did not take is a stderr "dch: …" line and exit 1, with no
-        // per-agent "NOT restarted": say the run failed anyway.
-        let other = r.status == 0 || failed > 0 ? nil
-            : lines.last { $0.hasPrefix("dch: ") }.map { "failed: \($0)" } ?? "failed (exit \(r.status))"
-        return [masters.last.map { "\(masters.count) session\(masters.count == 1 ? "" : "s") \($0)" },
-                restarted + failed > 0 ? "\(restarted) agent\(restarted == 1 ? "" : "s") restarted" : nil,
+        let dch = moved.last?.detail.flatMap { $0.isEmpty ? nil : $0 } ?? "restarted"
+        return [moved.isEmpty ? nil : "\(moved.count) session\(moved.count == 1 ? "" : "s") \(dch)",
+                restarted > 0 ? "\(restarted) agent\(restarted == 1 ? "" : "s") restarted" : nil,
                 failed > 0 ? "\(failed) failed" : nil, skipped > 0 ? "\(skipped) skipped" : nil, other]
             .compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// Resume crashed's and Stop all's one line: "N resumed|stopped, N failed,
+    /// N skipped"; `empty` when dch named no session and exited 0.
+    static func tally(_ r: DchActionResult, _ verb: Verb, title: String, empty: String) -> String {
+        if r.stopped { return "\(title) cancelled: no answer in \(verb.minutes)m" }
+        let finals = r.json.filter(\.isFinal)
+        let failed = finals.filter(\.failed).count
+        let other = r.status != 0 && failed == 0 ? failedText(r) : nil
+        let parts = [(finals.filter { $0.result == "ok" }.count, verb.done.lowercased()), (failed, "failed"),
+                     (finals.filter { $0.result == "skipped" }.count, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+        if parts.isEmpty { return other.map { "\(title) \($0)" } ?? empty }
+        return (parts + [other].compactMap { $0 }).joined(separator: ", ")
+    }
+
+    // MARK: - Stop (#580)
+
+    static let stopLabel = "Stop"
+    static let stopOldMasterLabel = "Stop (restart this session first)"
+    static let stoppingText = "Stopping…"
+
+    static func stopAllLabel(tab: String) -> String { "Stop all in \(tab)…" }
+
+    static func stopAllQuestion(_ n: Int, skipped: Int) -> String {
+        "Stop \(n) session\(n == 1 ? "" : "s")?" + (skipped > 0 ? " \(skipped) on an old dch skipped." : "")
+    }
+
+    /// Named sessions only, never `--all`.
+    static func stopArgs(_ names: [String]) -> [String] { ["--stop"] + names + ["--json"] }
+
+    /// A row's master can stop: its --ls-json version reads >= 1.24.0, compared
+    /// numerically. A 1.23.x master records a stop as a crash; "" is too old to say.
+    static func canStop(_ s: AgentSession) -> Bool {
+        !s.version.isEmpty && DchCommand.isAtLeast(DchCommand.masterVersion(s.version), controlMinimum)
     }
 
     // MARK: - New session (#579)
@@ -251,37 +375,35 @@ extension AgentIsland {
         env.filter { k, _ in !(k == "CLAUDECODE" || k.hasPrefix("CLAUDE_CODE_") || k == "CLAUDE_PID" || k == "CLAUDE_EFFORT") }
     }
 
-    static func spawnText(_ r: DchActionResult) -> String? {
+    /// --spawn has no --json. #580 (QA #452 L1): a program that cannot be executed
+    /// prints "dch: <name>: <cmd>: <reason>", then "dch: failed to spawn session":
+    /// the last "dch: <name>: " line says why; else the last line.
+    static func spawnText(_ r: DchActionResult, name: String) -> String? {
         if r.status == 0 { return nil }
-        return r.line.isEmpty ? "New session failed (exit \(r.status))" : "New session failed: \(r.line)"
+        let line = r.text.last { $0.hasPrefix("dch: \(name): ") } ?? r.line
+        return line.isEmpty ? "New session failed (exit \(r.status))" : "New session failed: \(line)"
     }
 
     // MARK: - Action results
 
-    /// The one place a verb's output becomes a result. dch 1.24.0's `--json`
-    /// NDJSON ({"name","phase"}, then {"name","result","reason"} per session)
-    /// parses here (#580); 1.23.0 prints text: the exit code and the last
-    /// non-empty line.
+    /// The one place a verb's output becomes a result: #580's --json objects
+    /// (a line that does not decode is text, never an error) and the other lines.
     static func actionResult(status: Int32, output: Data, stopped: Bool = false) -> DchActionResult {
-        let last = String(decoding: output, as: UTF8.self).split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty } ?? ""
-        return DchActionResult(status: status, line: last, stopped: stopped)
-    }
-
-    /// What a Resume row says when it finishes: nil when it worked (the row goes
-    /// away with the next history read); else the failure as static text.
-    /// `all`: the Resume crashed line also reports a success (dch's last line).
-    static func resumeText(_ r: DchActionResult, all: Bool = false) -> String? {
-        if r.stopped { return "Resume stopped: no answer in \(Int(DchActionRunner.bound / 60))m" }
-        if r.status == 0 { return all && !r.line.isEmpty ? r.line : nil }
-        return r.line.isEmpty ? "Resume failed (exit \(r.status))" : "Resume failed: \(r.line)"
+        var r = DchActionResult(status: status, stopped: stopped)
+        for l in String(decoding: output, as: UTF8.self).split(whereSeparator: \.isNewline) {
+            let line = l.trimmingCharacters(in: .whitespaces)
+            if let o = jsonLine(line) { r.json.append(o) } else if !line.isEmpty { r.text.append(line) }
+        }
+        return r
     }
 
     static let resumingText = "Resuming…"
     static let resumeAllLabel = "Resume crashed"
     /// QA #445 I2: `--revive --all` takes every abnormal end, not only signals.
+    /// #580: never a stopped or killed session (dch skips them).
     static let resumeAllHelp = "Brings back the sessions that crashed, exited with an error or vanished "
-        + "(a reboot) in the last 3 days, after running at least 5 minutes"
+        + "(a reboot) in the last 3 days, after running at least 5 minutes. Stopped and killed sessions "
+        + "come back only from their own row"
 
     /// The env every control verb runs with: listEnv (DCH_SOCKET_DIR, no
     /// DCH_SESSION) plus the user's PATH. QA #445 M1: under launchd the PATH is
@@ -357,13 +479,13 @@ enum LoginPath {
 
 /// #578: runs the long dch verbs, one per row at a time, off main. The verb is
 /// just its args: Resume, Restart and New session (#579), Stop (#580). `key.name == ""`
-/// stands for a whole socket dir (`--revive --all`): it and any row of its dir
-/// exclude each other. A busy request is refused, never queued.
+/// stands for a whole socket dir (`--revive --all`, Restart all, Stop all): it and
+/// any row of its dir exclude each other. A busy request is refused, never queued.
 final class DchActionRunner: @unchecked Sendable {
     /// A revive waits up to dch's DCH_AGENT_STEP_MS (60 s) per agent step.
     static let bound: TimeInterval = 300
     /// #579: a restart waits up to DCH_AGENT_TIMEOUT_MS (10 min) for its agents
-    /// to pause, then up to DCH_AGENT_STEP_MS per step.
+    /// to pause, then up to DCH_AGENT_STEP_MS per step. #580: --stop waits the same.
     static let restartBound: TimeInterval = 900
 
     /// Starts the process in `cwd` (nil: ours), reports its pid and each output

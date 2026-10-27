@@ -121,8 +121,6 @@ final class AgentIslandController {
     /// #579 seam: shows the header "⋯" menu at the mouse. Tests record it; none
     /// opens a real menu.
     var popUpMenu: @MainActor (NSMenu) -> Void = { $0.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil) }
-    /// #579: each running Restart all's output lines so far, by dir (its summary).
-    private var restartLines: [String: [String]] = [:]
 
     init() {}
 
@@ -172,6 +170,11 @@ final class AgentIslandController {
         onSessions?(sessions)
         let live = Set(sessions.map(\.key))
         store.notices = store.notices.filter { live.contains($0.key) }
+        // #580: a session that ended (a Stop) takes its row's text with it, so a
+        // later session of that name starts clean.
+        if store.actions.contains(where: { !$0.key.name.isEmpty && !live.contains($0.key) }) {
+            store.actions = store.actions.filter { $0.key.name.isEmpty || live.contains($0.key) || runner.isBusy($0.key) }
+        }
         // #581: the last session gone: one history read, so its record can keep the
         // island. On that edge only, never per tick.
         // ponytail: with no history yet the collapsed ear hides for the ~100 ms the
@@ -220,13 +223,13 @@ final class AgentIslandController {
 
     /// Reads `--history --json` with the control binary: once when the island is
     /// built (#581), on open and after an action, never on the poll timer. A
-    /// binary under 1.23.0 reads none (no tab).
+    /// binary under 1.24.0 (#580) reads none (no tab).
     func refreshHistory() {
         guard store != nil else { return }
         let dirs = historyDirs(), probe = controlDch, read = readHistory
         queue.async { [weak self] in
             let dch = probe()
-            let records = dch.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveMinimum) ? read($0.path, dirs) : [] } ?? []
+            let records = dch.map { DchCommand.isAtLeast($0.version, AgentIsland.controlMinimum) ? read($0.path, dirs) : [] } ?? []
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.setHistory(records, dch) } }
         }
     }
@@ -237,8 +240,9 @@ final class AgentIslandController {
         store.history = records
         // A record gone (revived) takes its status with it; running ones, the --all
         // lines and #579's live rows (a Restart result) stay.
-        let keys = Set(records.map(\.key)).union(store.sessions.map(\.key))
-        store.actions = store.actions.filter { $0.key.name.isEmpty || keys.contains($0.key) || runner.isBusy($0.key) }
+        let recordKeys = Set(records.map(\.key)), live = Set(store.sessions.map(\.key))
+        store.historyActions = store.historyActions.filter { recordKeys.contains($0.key) || runner.isBusy($0.key) }
+        store.actions = store.actions.filter { $0.key.name.isEmpty || live.contains($0.key) || runner.isBusy($0.key) }
         layout()
     }
 
@@ -248,8 +252,11 @@ final class AgentIslandController {
         guard let store, case .ok(let dch) = store.resumeGate else { return }
         let live = Set(store.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))
         let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
-        run(r.key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records), running: AgentIsland.resumingText) {
-            [weak self] in self?.resumed(r.key, $0, all: false)
+        let key = r.key
+        run(key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records), running: AgentIsland.resumingText,
+            history: true, onLine: { [weak self] in self?.rowLine($0, key: key, history: true) }) { [weak self] res in
+            self?.store?.historyActions[key] = AgentIsland.rowText(res, name: key.name, .resume)
+            self?.refreshHistory()
         }
     }
 
@@ -260,18 +267,21 @@ final class AgentIslandController {
         guard let store, case .ok(let dch) = store.resumeGate else { return }
         for dir in Set(store.history.map(\.key.dir)).sorted() {
             let key = AgentSessionKey(dir: dir, name: "")
-            run(key, dch: dch, args: ["--revive", "--all"], running: AgentIsland.resumingText) {
-                [weak self] in self?.resumed(key, $0, all: true)
+            run(key, dch: dch, args: AgentIsland.reviveAllArgs, running: AgentIsland.resumingText,
+                onLine: { [weak self] in self?.dirLine($0, dir: dir, .resume) }) { [weak self] r in
+                self?.dirDone(dir, AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume"))
+                self?.refreshHistory()
             }
         }
     }
 
     /// One long verb on the runner with the control env (QA #445 M1), plus
-    /// spawnEnv's strip for --spawn. `running` shows in the row meanwhile;
-    /// `onLine` and `done` run on main. A busy key refuses: false, nothing shown.
+    /// spawnEnv's strip for --spawn. `running` shows in the row meanwhile (a
+    /// History row's with `history`); `onLine` and `done` run on main. A busy
+    /// key refuses: false, nothing shown.
     @discardableResult
     private func run(_ key: AgentSessionKey, dch: String, args: [String], running: String?, cwd: String? = nil,
-                     bound: TimeInterval? = nil, spawn: Bool = false,
+                     bound: TimeInterval? = nil, spawn: Bool = false, history: Bool = false,
                      onLine: (@MainActor @Sendable (String) -> Void)? = nil,
                      done: @escaping @MainActor @Sendable (DchActionResult) -> Void) -> Bool {
         let env = controlEnv
@@ -289,29 +299,117 @@ final class AgentIslandController {
             }
         }
         guard started else { return false }
-        if let running { store?.actions[key] = running }
+        if let running {
+            if history { store?.historyActions[key] = running } else { store?.actions[key] = running }
+        }
         layout()
         return true
     }
 
-    /// Both lists refresh: the history here; the sessions on the poller's next
-    /// tick (a revived session's socket moves its dir's mtime).
-    private func resumed(_ key: AgentSessionKey, _ r: DchActionResult, all: Bool) {
-        store?.actions[key] = AgentIsland.resumeText(r, all: all)
-        refreshHistory()
+    // MARK: - --json progress (#580)
+
+    /// A one-row job's line: a phase is the row's running text; the result
+    /// comes with `done`. Both lists refresh after a Resume: the history in
+    /// `done`, the sessions on the poller's next tick.
+    private func rowLine(_ line: String, key: AgentSessionKey, history: Bool = false) {
+        guard let store, let o = AgentIsland.jsonLine(line), o.name == key.name, let t = AgentIsland.phaseText(o) else { return }
+        if history { store.historyActions[key] = t } else { store.actions[key] = t }
+        layout()
+    }
+
+    /// A dir job's line, on its row (a live session; a record for Resume
+    /// crashed): a phase is the running text; a result shows where a phase or
+    /// the job's own running text is up, when it failed, or when dch 1.24.1
+    /// skipped a claude typed into the shell (in_shell). The master pass is
+    /// Restart all's summary only.
+    private func dirLine(_ line: String, dir: String, _ verb: AgentIsland.Verb) {
+        guard let store, let o = AgentIsland.jsonLine(line) else { return }
+        let key = AgentSessionKey(dir: dir, name: o.name), history = verb == .resume
+        guard history ? store.history.contains(where: { $0.key == key }) : store.sessions.contains(where: { $0.key == key })
+        else { return }
+        let now = history ? store.historyActions[key] : store.actions[key]
+        let text: String
+        if let t = AgentIsland.phaseText(o) {
+            text = t
+        } else if o.isFinal, o.failed || o.reason == "in_shell" || AgentIsland.runningTexts.contains(now ?? "") {
+            text = AgentIsland.finalText(o, verb)
+        } else { return }
+        if history { store.historyActions[key] = text } else { store.actions[key] = text }
+        layout()
+    }
+
+    /// A dir job's end: the summary on the dir line; a row left on a running
+    /// text (dch paused it but never reported on it again) is cleared.
+    private func dirDone(_ dir: String, _ summary: String) {
+        guard let store else { return }
+        store.actions[AgentSessionKey(dir: dir, name: "")] = summary
+        let running = AgentIsland.runningTexts
+        func stale(_ e: (key: AgentSessionKey, value: String)) -> Bool { e.key.dir == dir && running.contains(e.value) }
+        store.actions = store.actions.filter { !stale($0) || $0.key.name.isEmpty }
+        store.historyActions = store.historyActions.filter { !stale($0) }
     }
 
     // MARK: - Restart and New session (#579)
 
     /// A row's Restart agent: `--restart <name> --include-agents -f`, even when
-    /// current. A busy row refuses. dch's skip line is the result.
+    /// current. A busy row refuses. Its result (a skip included) is the row's text.
     func restart(_ s: AgentSession) {
-        guard let store, case .ok(let dch) = store.resumeGate else { return }
+        guard let store, case .ok(let dch) = store.restartGate else { return }
         let key = s.key
         run(key, dch: dch, args: AgentIsland.restartArgs(s.name), running: AgentIsland.restartingText,
-            bound: DchActionRunner.restartBound) { [weak self] r in
-            self?.store?.actions[key] = AgentIsland.restartText(r, name: key.name)
+            bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.rowLine($0, key: key) }) { [weak self] r in
+            self?.store?.actions[key] = AgentIsland.rowText(r, name: key.name, .restart)
         }
+    }
+
+    // MARK: - Stop (#580)
+
+    /// A row's Stop: `--stop <name> --json`, only on a master at 1.24.0 or
+    /// later. A busy row (or its dir under an "all" job) refuses. The ended
+    /// session shows in History after one re-read.
+    func stop(_ s: AgentSession) {
+        guard let store, case .ok(let dch) = store.restartGate, AgentIsland.canStop(s) else { return }
+        let key = s.key
+        run(key, dch: dch, args: AgentIsland.stopArgs([s.name]), running: AgentIsland.stoppingText,
+            bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.rowLine($0, key: key) }) { [weak self] r in
+            self?.store?.actions[key] = AgentIsland.rowText(r, name: key.name, .stop)
+            self?.refreshHistory()
+        }
+    }
+
+    /// The "⋯" menu's Stop all in <tab>: only asks (the inline line).
+    func askStopAll() {
+        guard let store, store.restartGate.isOK, !store.stopAllTargets.stop.isEmpty else { return }
+        store.confirmingRestartAll = false
+        store.confirmingStopAll = true
+        layout()
+    }
+
+    /// The inline answer. Stop recounts the shown tab and runs; Cancel runs nothing.
+    func confirmStopAll(_ yes: Bool) {
+        guard let store, store.confirmingStopAll else { return }
+        store.confirmingStopAll = false
+        if yes { stopAll() } else { layout() }
+    }
+
+    /// The shown tab's stoppable sessions by name, never `--all`: one job per
+    /// dir under the dir-wide key, like Restart all, so a dir with any job
+    /// running is refused whole. Each row shows "Stopping…", then its result;
+    /// the dir gets "N stopped, N failed, N skipped".
+    private func stopAll() {
+        guard let store, case .ok(let dch) = store.restartGate else { return }
+        let byDir = Dictionary(grouping: store.stopAllTargets.stop, by: \.key.dir)
+        for (dir, rows) in byDir.sorted(by: { $0.key < $1.key }) {
+            let key = AgentSessionKey(dir: dir, name: "")
+            let started = run(key, dch: dch, args: AgentIsland.stopArgs(rows.map(\.name)), running: AgentIsland.stoppingText,
+                              bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.dirLine($0, dir: dir, .stop) }) {
+                [weak self] r in
+                self?.dirDone(dir, AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped"))
+                self?.refreshHistory()
+            }
+            if started { for s in rows { store.actions[s.key] = AgentIsland.stoppingText } }
+        }
+        layout()
     }
 
     /// The header "⋯".
@@ -336,8 +434,16 @@ final class AgentIslandController {
         new.submenu = sub
         menu.addItem(new)
         // Restart all only reaches live sessions: off with history only.
-        let live = !(store?.sessions.isEmpty ?? true)
-        menu.addItem(AgentIslandMenuItem(AgentIsland.restartAllLabel, enabled: on && live) { [weak self] in self?.askRestartAll() })
+        // #580 addendum 2: both off under a 1.24.0 control dch, reading "(needs dch 1.24.1)".
+        let live = !(store?.sessions.isEmpty ?? true), needs = store?.restartNeeds, risky = on && needs == nil
+        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.restartAllLabel, needs: needs), enabled: risky && live) {
+            [weak self] in self?.askRestartAll()
+        })
+        // #580: the shown tab's sessions; off when none of them can stop.
+        let tab = store?.sessionTab.label ?? "Sessions", stoppable = !(store?.stopAllTargets.stop.isEmpty ?? true)
+        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.stopAllLabel(tab: tab), needs: needs), enabled: risky && stoppable) {
+            [weak self] in self?.askStopAll()
+        })
         if let why = m.refused {
             menu.addItem(.separator())
             menu.addItem(AgentIslandMenuItem("Controls \(why)", enabled: false))
@@ -347,7 +453,8 @@ final class AgentIslandController {
 
     /// The "⋯" menu's Restart all agents: only asks (the inline line).
     func askRestartAll() {
-        guard let store, store.resumeGate.isOK, !store.sessions.isEmpty else { return }
+        guard let store, store.restartGate.isOK, !store.sessions.isEmpty else { return }
+        store.confirmingStopAll = false
         store.confirmingRestartAll = true
         layout()
     }
@@ -359,41 +466,17 @@ final class AgentIslandController {
         if yes { restartAll() } else { layout() }
     }
 
-    /// `--restart --all --include-agents` (no -f: stale agents only), one job per
-    /// dir with a live session under the dir-wide key. A row shows "Restarting…"
-    /// once dch reports pausing it, then its own line; the dir gets the summary.
+    /// `--restart --all --include-agents --json` (no -f: stale agents only), one
+    /// job per dir with a live session under the dir-wide key. A row shows dch's
+    /// phases once it reaches it ("Pausing…"), then its result; the dir gets the summary.
     private func restartAll() {
-        guard let store, case .ok(let dch) = store.resumeGate else { return }
+        guard let store, case .ok(let dch) = store.restartGate else { return }
         for dir in Set(store.sessions.map(\.key.dir)).sorted() {
             let key = AgentSessionKey(dir: dir, name: "")
             run(key, dch: dch, args: AgentIsland.restartAllArgs, running: AgentIsland.restartAllRunningText,
-                bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.restartAllLine($0, dir: dir) }) {
-                [weak self] r in self?.restartedAll(dir, r)
+                bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.dirLine($0, dir: dir, .restart) }) {
+                [weak self] r in self?.dirDone(dir, AgentIsland.restartAllSummary(r))
             }
-        }
-    }
-
-    private func restartAllLine(_ line: String, dir: String) {
-        guard let store else { return }
-        restartLines[dir, default: []].append(line)
-        guard let rep = AgentIsland.restartReport(line) else { return }
-        let key = AgentSessionKey(dir: dir, name: rep.name)
-        guard store.sessions.contains(where: { $0.key == key }) else { return }
-        if AgentIsland.isPauseSent(rep.text) {
-            store.actions[key] = AgentIsland.restartingText
-        } else if store.actions[key] == AgentIsland.restartingText {
-            store.actions[key] = rep.text   // its result line
-        }
-        layout()
-    }
-
-    private func restartedAll(_ dir: String, _ r: DchActionResult) {
-        guard let store else { return }
-        store.actions[AgentSessionKey(dir: dir, name: "")] = AgentIsland.restartAllSummary(r, lines: restartLines[dir] ?? [])
-        restartLines[dir] = nil
-        // A row dch paused but never reported on again: no stale "Restarting…".
-        for (k, v) in store.actions where k.dir == dir && !k.name.isEmpty && v == AgentIsland.restartingText {
-            store.actions[k] = nil
         }
     }
 
@@ -408,7 +491,7 @@ final class AgentIslandController {
         let key = AgentSessionKey(dir: dir, name: args[1])
         run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: true) { [weak self] r in
             guard let store = self?.store else { return }
-            if let failed = AgentIsland.spawnText(r) { store.actions[AgentSessionKey(dir: dir, name: "")] = failed }
+            if let failed = AgentIsland.spawnText(r, name: key.name) { store.actions[AgentSessionKey(dir: dir, name: "")] = failed }
         }
     }
 
@@ -475,7 +558,9 @@ final class AgentIslandController {
             onResumeAll: { [weak self] in self?.resumeCrashed() },
             onRestart: { [weak self] in self?.restart($0) },
             onControls: { [weak self] in self?.showControlsMenu() },
-            onConfirmRestartAll: { [weak self] in self?.confirmRestartAll($0) }))
+            onConfirmRestartAll: { [weak self] in self?.confirmRestartAll($0) },
+            onStop: { [weak self] in self?.stop($0) },
+            onConfirmStopAll: { [weak self] in self?.confirmStopAll($0) }))
         host.sizingOptions = []
         p.contentView = host
         panel = p
@@ -491,7 +576,9 @@ final class AgentIslandController {
         if !on {
             store.notices = [:]; store.cards = [:]; readAt = [:]
             store.confirmingRestartAll = false
+            store.confirmingStopAll = false
             store.actions = store.actions.filter { runner.isBusy($0.key) }   // a running one keeps its "Resuming…"
+            store.historyActions = store.historyActions.filter { runner.isBusy($0.key) }
         }
         refreshCards()
         if on { refreshHistory() }
