@@ -116,7 +116,80 @@ extension AgentIsland {
 
     static let resumingText = "Resuming…"
     static let resumeAllLabel = "Resume crashed"
-    static let resumeAllHelp = "Revives the sessions that crashed in the last 3 days (after running 5 minutes or more)"
+    /// QA #445 I2: `--revive --all` takes every abnormal end, not only signals.
+    static let resumeAllHelp = "Brings back the sessions that crashed, exited with an error or vanished "
+        + "(a reboot) in the last 3 days, after running at least 5 minutes"
+
+    /// The env every control verb runs with: listEnv (DCH_SOCKET_DIR, no
+    /// DCH_SESSION) plus the user's PATH. QA #445 M1: under launchd the PATH is
+    /// /usr/bin:/bin:/usr/sbin:/sbin, and a revived record whose argv[0] is a
+    /// bare "headroom" or "claude" dies at once while dch prints "revived".
+    /// #579's --spawn must use this builder too. `login`: LoginPath.read(), nil
+    /// when the probe failed (the well-known dirs go in front of the process PATH).
+    static func controlEnv(dir: String, login: String?,
+                           base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        var env = listEnv(dir: dir, base: base)
+        env["PATH"] = LoginPath.path(login: login, process: base["PATH"] ?? "",
+                                     home: base["HOME"] ?? NSHomeDirectory())
+        return env
+    }
+}
+
+/// The user's login PATH, read once from `$SHELL -lc` (#578 r2).
+enum LoginPath {
+    static let marker = "__PROSPER_LOGIN_PATH__"
+    /// Markers around the value, so profile output before or after is ignored.
+    static let script = "printf '\(marker)%s\(marker)' \"$PATH\""
+    static let timeout: TimeInterval = 4
+
+    /// stdout of `shell -lc script`; nil when it timed out.
+    typealias Probe = @Sendable (_ shell: String, _ script: String) -> Data?
+
+    static let shellProbe: Probe = { shell, script in
+        DchCommand.bounded(timeout) { onPid in
+            DchCommand.runCapturingBoth(args: ["-lc", script], env: ProcessInfo.processInfo.environment,
+                                        path: shell, onPid: onPid).out
+        }
+    }
+
+    /// The text between the first two markers; nil without both or when empty.
+    static func parse(_ out: String) -> String? {
+        let parts = out.components(separatedBy: marker)
+        guard parts.count >= 3, !parts[1].isEmpty else { return nil }
+        return parts[1]
+    }
+
+    /// Always present: `zsh -l` reads no .zshrc, where ~/.local/bin (headroom)
+    /// is usually added.
+    static func wellKnown(home: String) -> [String] {
+        ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", home + "/.local/bin"]
+    }
+
+    /// The login PATH with any missing well-known dir after it (its order wins);
+    /// without one, the well-known dirs in front of the process PATH. Deduplicated.
+    static func path(login: String?, process: String, home: String) -> String {
+        let split = { (p: String) in p.split(separator: ":").map(String.init) }
+        let dirs = login.map { split($0) + wellKnown(home: home) } ?? wellKnown(home: home) + split(process)
+        var seen = Set<String>()
+        return dirs.filter { seen.insert($0).inserted }.joined(separator: ":")
+    }
+
+    final class Cache: @unchecked Sendable {
+        let lock = NSLock()
+        var path: String?
+    }
+    static let shared = Cache()
+
+    /// Probed at most once per process once it works; a timeout or a parse
+    /// failure is not cached, so the next control use retries. Off main.
+    static func read(shell: String? = ProcessInfo.processInfo.environment["SHELL"],
+                     cache: Cache = shared, probe: Probe = shellProbe) -> String? {
+        if let hit = cache.lock.withLock({ cache.path }) { return hit }
+        let shell = shell.flatMap { $0.hasPrefix("/") ? $0 : nil } ?? "/bin/zsh"
+        guard let out = probe(shell, script), let p = parse(String(decoding: out, as: UTF8.self)) else { return nil }
+        cache.lock.withLock { cache.path = p }
+        return p
+    }
 }
 
 /// #578: runs the long dch verbs, one per row at a time, off main. The verb is
@@ -164,7 +237,8 @@ final class DchActionRunner: @unchecked Sendable {
     /// false: the row (or its dir's --all) is busy and nothing ran. `done` runs
     /// on the runner's thread once the process has exited.
     @discardableResult
-    func start(_ key: AgentSessionKey, path: String, args: [String], env: [String: String],
+    /// `env` is built on the job's thread (it may probe the login shell).
+    func start(_ key: AgentSessionKey, path: String, args: [String], env: @escaping @Sendable () -> [String: String],
                done: @escaping @Sendable (DchActionResult) -> Void) -> Bool {
         let job = Job()
         guard lock.withLock({ () -> Bool in
@@ -174,7 +248,7 @@ final class DchActionRunner: @unchecked Sendable {
         }) else { return false }
         let launch = launch
         DispatchQueue.global(qos: .utility).async { [self] in
-            let r = launch(path, args, env) { pid in
+            let r = launch(path, args, env()) { pid in
                 // Cancelled before the pid was known: its one SIGTERM goes now.
                 let late = self.lock.withLock { () -> pid_t? in
                     job.pid = pid

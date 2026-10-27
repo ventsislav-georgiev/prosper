@@ -33,9 +33,11 @@ tag from the now-released section and put it on the new top draft.
   (crashed, exited, vanished after a reboot or a kill), when, and its folder. Click one to
   resume it: dch starts it again in its folder and resumes its Claude Code conversation. A
   name that is live again comes back as `<name>-2`. Resume crashed brings back every session
-  that crashed in the last 3 days after running at least 5 minutes, and only when you click
-  it. The controls run with the newest dch installed (Homebrew first) and stay off when a
-  session runs a newer dch than that, so they never downgrade one.
+  that crashed, exited with an error or vanished in the last 3 days after running at least 5
+  minutes, and only when you click it. The controls run with the newest dch installed
+  (Homebrew first) and with your login shell's PATH, so a session started as `claude` or
+  through a wrapper finds it again even when Prosper was opened from the Dock. They stay off
+  when a session runs a newer dch than that, so they never downgrade one.
 - **Fixed: Agent Island shows Claude Code's questions again in sessions with a title.** Claude
   Code draws the session's title in a rule under a question while it waits. The island read
   that line as something after the dialog and showed the last screen lines instead of the

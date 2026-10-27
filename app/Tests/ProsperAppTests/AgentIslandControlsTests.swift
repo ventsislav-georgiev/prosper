@@ -178,6 +178,69 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.resumeText(DchActionResult(status: 15, line: "", stopped: true)), "Resume stopped: no answer in 5m")
     }
 
+    // MARK: - Control env (QA #445 M1)
+
+    static let launchd = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/Users/u", "DCH_SESSION": "s"]
+
+    func testControlEnvHasTheUserPathFromTheProbeOrTheFallback() {
+        let login = "/opt/homebrew/bin:/usr/bin:/bin"
+        let probed = AgentIsland.controlEnv(dir: "/d", login: login, base: Self.launchd)
+        XCTAssertEqual(probed["PATH"], "/opt/homebrew/bin:/usr/bin:/bin:/opt/homebrew/sbin:/usr/local/bin:/Users/u/.local/bin",
+                       "the login order wins; missing well-known dirs follow")
+        XCTAssertEqual(probed["DCH_SOCKET_DIR"], "/d")
+        XCTAssertNil(probed["DCH_SESSION"])
+        let fallback = AgentIsland.controlEnv(dir: "/d", login: nil, base: Self.launchd)
+        XCTAssertEqual(fallback["PATH"],
+                       "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/Users/u/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+        XCTAssertEqual(LoginPath.path(login: nil, process: "/usr/local/bin:/usr/bin", home: "/h"),
+                       "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/h/.local/bin:/usr/bin", "deduplicated")
+    }
+
+    func testMarkerParseIgnoresProfileNoise() {
+        let m = LoginPath.marker
+        XCTAssertEqual(LoginPath.parse("Agent pid 29033\nwelcome\(m)/a:/b\(m)bye\n"), "/a:/b")
+        XCTAssertNil(LoginPath.parse("Agent pid 1\n/a:/b"))
+        XCTAssertNil(LoginPath.parse("\(m)/a:/b"))
+        XCTAssertNil(LoginPath.parse("\(m)\(m)"))
+    }
+
+    private final class Probes: @unchecked Sendable {
+        let lock = NSLock()
+        var calls: [String] = []
+        var out: Data?
+    }
+
+    /// A timed-out probe (nil) means the fallback and no cache: the next use
+    /// probes again. A parsed PATH is cached for the process.
+    func testProbeTimeoutUsesTheFallbackAndOnlyAWorkingProbeIsCached() {
+        let probes = Probes(), cache = LoginPath.Cache()
+        let probe: LoginPath.Probe = { shell, script in
+            probes.lock.withLock { probes.calls.append(shell); return probes.out }
+        }
+        XCTAssertNil(LoginPath.read(shell: "/bin/fish", cache: cache, probe: probe))
+        XCTAssertTrue(AgentIsland.controlEnv(dir: "/d", login: nil, base: Self.launchd)["PATH"]!.hasPrefix("/opt/homebrew/bin:"))
+        probes.lock.withLock { probes.out = Data("noise\(LoginPath.marker)/x:/y\(LoginPath.marker)".utf8) }
+        XCTAssertEqual(LoginPath.read(shell: nil, cache: cache, probe: probe), "/x:/y")
+        XCTAssertEqual(LoginPath.read(shell: "/bin/fish", cache: cache, probe: probe), "/x:/y")
+        XCTAssertEqual(probes.lock.withLock { probes.calls }, ["/bin/fish", "/bin/zsh"], "retried once, then cached")
+    }
+
+    /// The default probe end to end against a fake shell (never a real login
+    /// shell): it gets `-lc` and the script, and profile noise around it is dropped.
+    func testShellProbeRunsTheScriptAndDropsNoise() throws {
+        let shell = tempDir().appendingPathComponent("fakesh")
+        try "#!/bin/sh\ntest \"$1\" = -lc || exit 1\necho \"Agent pid 1\"\nPATH=/p/q:/r /bin/sh -c \"$2\"\necho bye\n".write(to: shell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
+        XCTAssertEqual(LoginPath.read(shell: shell.path, cache: LoginPath.Cache()), "/p/q:/r")
+    }
+
+    func testResumeAllHelpNamesEveryAbnormalEnd() {
+        for word in ["crashed", "exited with an error", "vanished", "3 days", "5 minutes"] {
+            XCTAssertTrue(AgentIsland.resumeAllHelp.contains(word), word)
+        }
+        XCTAssertEqual(AgentIsland.resumeAllLabel, "Resume crashed")
+    }
+
     // MARK: - Runner
 
     /// A fake process: records each launch, reports pid 4242 (or waits for
@@ -186,6 +249,7 @@ final class AgentIslandControlsTests: XCTestCase {
     private final class FakeProc: @unchecked Sendable {
         let lock = NSLock()
         var launches: [(path: String, args: [String], dir: String?)] = []
+        var envs: [[String: String]] = []
         var signals: [pid_t] = []
         var status: Int32 = 0
         var output = ""
@@ -195,7 +259,7 @@ final class AgentIslandControlsTests: XCTestCase {
 
         func runner(bound: TimeInterval = 60) -> DchActionRunner {
             DchActionRunner(bound: bound, launch: { path, args, env, onPid in
-                self.lock.withLock { self.launches.append((path, args, env["DCH_SOCKET_DIR"])) }
+                self.lock.withLock { self.launches.append((path, args, env["DCH_SOCKET_DIR"])); self.envs.append(env) }
                 self.pidGate?.wait()
                 onPid(4242)
                 self.launched.signal()
@@ -218,7 +282,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let f = FakeProc(), runner = f.runner(), res = Results()
         let a = AgentSessionKey(dir: "/d", name: "a"), b = AgentSessionKey(dir: "/d", name: "b")
         let all = AgentSessionKey(dir: "/d", name: ""), other = AgentSessionKey(dir: "/e", name: "a")
-        let go = { (k: AgentSessionKey) in runner.start(k, path: "/fake/dch", args: [k.name], env: [:], done: res.add) }
+        let go = { (k: AgentSessionKey) in runner.start(k, path: "/fake/dch", args: [k.name], env: { [:] }, done: res.add) }
         XCTAssertTrue(go(a))
         XCTAssertFalse(go(a), "busy: refused, never queued")
         XCTAssertTrue(go(b), "another row runs")
@@ -243,7 +307,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let f = FakeProc(), runner = f.runner(bound: 0.2), res = Results(), k = AgentSessionKey(dir: "/d", name: "a")
         f.status = 143
         f.output = "a: stopping\n"
-        XCTAssertTrue(runner.start(k, path: "/fake/dch", args: ["--revive", "a"], env: [:], done: res.add))
+        XCTAssertTrue(runner.start(k, path: "/fake/dch", args: ["--revive", "a"], env: { [:] }, done: res.add))
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
         runner.cancel(k)
         runner.cancel(k)
@@ -262,7 +326,7 @@ final class AgentIslandControlsTests: XCTestCase {
     /// (the pid is reaped and may belong to another process by then).
     func testAFinishedJobIsNeverSignalledByItsBound() {
         let f = FakeProc(), runner = f.runner(bound: 0.3), res = Results(), k = AgentSessionKey(dir: "/d", name: "a")
-        XCTAssertTrue(runner.start(k, path: "/fake/dch", args: [], env: [:], done: res.add))
+        XCTAssertTrue(runner.start(k, path: "/fake/dch", args: [], env: { [:] }, done: res.add))
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
         f.release.signal()
         XCTAssertEqual(res.done.wait(timeout: .now() + 5), .success)
@@ -276,7 +340,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let f = FakeProc(), runner = f.runner(), res = Results(), k = AgentSessionKey(dir: "/d", name: "a")
         let gate = DispatchSemaphore(value: 0)
         f.pidGate = gate
-        XCTAssertTrue(runner.start(k, path: "/fake/dch", args: [], env: [:], done: res.add))
+        XCTAssertTrue(runner.start(k, path: "/fake/dch", args: [], env: { [:] }, done: res.add))
         runner.cancel(k)
         XCTAssertEqual(f.sent, [])
         gate.signal()
@@ -295,13 +359,13 @@ final class AgentIslandControlsTests: XCTestCase {
         let res = Results()
         let fast = DchActionRunner()
         XCTAssertTrue(fast.start(AgentSessionKey(dir: "/d", name: "a"), path: "/bin/sh",
-                                 args: ["-c", "echo 'a: revived'; echo 'dch: refused' >&2; exit 3"], env: [:], done: res.add))
+                                 args: ["-c", "echo 'a: revived'; echo 'dch: refused' >&2; exit 3"], env: { [:] }, done: res.add))
         XCTAssertEqual(res.done.wait(timeout: .now() + 10), .success)
         XCTAssertEqual(res.all, [DchActionResult(status: 3, line: "dch: refused")])
         let slow = DchActionRunner(bound: 2)   // room for sh to set its trap under load
         XCTAssertTrue(slow.start(AgentSessionKey(dir: "/d", name: "b"), path: "/bin/sh",
                                  args: ["-c", "trap 'echo got term; exit 7' TERM; echo started; while :; do /bin/sleep 0.1; done"],
-                                 env: [:], done: res.add))
+                                 env: { [:] }, done: res.add))
         XCTAssertEqual(res.done.wait(timeout: .now() + 10), .success)
         XCTAssertEqual(res.all.last, DchActionResult(status: 7, line: "got term", stopped: true),
                        "SIGTERM (not SIGKILL): the child's trap ran and its exit code came back")
@@ -508,6 +572,27 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(Set(f.lock.withLock { f.launches.suffix(2).compactMap(\.dir) }), ["/d", "/e"])
         f.release.signal(); f.release.signal()
         settle(c) { c.store?.actions.values.contains(AgentIsland.resumingText) == false }
+    }
+
+    /// QA #445 M1: a Resume runs with the controller's control env (the user's
+    /// PATH), not listEnv's process env; under XCTest that env runs no login
+    /// shell and leads with the fallback dirs.
+    @MainActor
+    func testResumeRunsWithTheControlEnv() {
+        let f = FakeProc(), reads = Reads()
+        let x = record("a")
+        reads.records = [x]
+        let c = controller(f, reads)
+        let fallback = AgentIslandController().controlEnv("/d")["PATH"] ?? ""
+        XCTAssertTrue(fallback.hasPrefix(LoginPath.wellKnown(home: NSHomeDirectory()).joined(separator: ":") + ":"), fallback)
+        c.controlEnv = { ["PATH": "/login/bin", "DCH_SOCKET_DIR": $0] }
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 1 }
+        c.resume(x)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.lock.withLock { f.envs }, [["PATH": "/login/bin", "DCH_SOCKET_DIR": "/d"]])
+        f.release.signal()
+        settle(c) { c.store?.actions[x.key] == nil }
     }
 
     /// A live name revives under the first free name; the row says "Resuming…"

@@ -104,6 +104,12 @@ final class AgentIslandController {
         AgentIsland.history(dirs: dirs) { DchCommand.runIsland(args: $0, env: $1, path: dch) }
     }
     var historyDirs: @MainActor () -> [String] = { AgentIsland.liveSocketDirs() }
+    /// A control verb's env for one dir, built on the runner's thread (QA #445 M1:
+    /// the user's PATH, not launchd's). Under XCTest no login shell runs: the
+    /// fallback dirs only.
+    var controlEnv: @Sendable (_ dir: String) -> [String: String] = { dir in
+        AgentIsland.controlEnv(dir: dir, login: NSClassFromString("XCTestCase") == nil ? LoginPath.read() : nil)
+    }
     var runner = DchActionRunner()
 
     init() {}
@@ -234,7 +240,8 @@ final class AgentIslandController {
     }
 
     private func run(_ key: AgentSessionKey, dch: String, args: [String], all: Bool) {
-        let started = runner.start(key, path: dch, args: args, env: AgentIsland.listEnv(dir: key.dir)) { [weak self] r in
+        let env = controlEnv
+        let started = runner.start(key, path: dch, args: args, env: { env(key.dir) }) { [weak self] r in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.finished(key, r, all: all) } }
         }
         guard started else { return }
