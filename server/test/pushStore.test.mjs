@@ -1430,7 +1430,7 @@ test("#573: deleteDevice, deleteAccount and logout end exactly the cards they pu
 });
 
 test("#573: past END_MAX cards every route stays under 50 subrequests and still deletes every row", async () => {
-  const WAKE_SWEEP = 2 + 2 * 5; // deleteAccount's KV sweep: 2 lists + wake/wakemeta per Mac at DEVICE_LIMIT 5
+  const WAKE_SWEEP = 2 + 2 * 5; // deleteAccount's KV sweep: 2 lists + wake/wakemeta for a tested K = 5 devTags (client-chosen, not bounded by DEVICE_LIMIT)
   const many = (device, i, kind = i % 2 ? "la_expired" : "la_update") =>
     [ALICE, device, kind, `act-${i}`, MAC, String(i).padStart(2, "0").repeat(32), HASH[ALICE]];
   const paths = [
