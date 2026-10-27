@@ -12,6 +12,10 @@ import {
   purgeAccountStatements,
   logoutStatements,
   sessionCleanupStatements,
+  purgeMac,
+  purgeAccount,
+  logout,
+  END_MAX,
 } from "../src/pushStore.mjs";
 
 // A D1 stand-in over node:sqlite, so the real SQL and migrations run. APNs is a fake
@@ -1300,4 +1304,140 @@ test("#548 C4: a re-post of a card being rotated out leaves the newer card that 
   await runCron(t.deps);
   assert.deepEqual(sent(t), [[tok("9"), "end"]], "the old card ends at its new token; the new card stays");
   assert.deepEqual(kinds(t), ["alert", "la_start", "la_update"]);
+});
+
+// ---- #573 (QA #399 v9 item 4): end a card before a request path wipes its row ----
+
+const H2 = "a2".repeat(32); // Alice's second session, the one PHONE2 registered under
+// [email, device, kind, activity, mac, token char, token_hash]
+const CARDS = [
+  [ALICE, PHONE, "alert", "", null, "1", HASH[ALICE]],
+  [ALICE, PHONE, "la_start", "", null, "2", HASH[ALICE]],
+  [ALICE, PHONE, "la_update", "act-A", MAC, "3", HASH[ALICE]],
+  [ALICE, PHONE, "la_expired", "act-B", MAC2, "4", HASH[ALICE]],
+  [ALICE, PHONE2, "la_update", "act-D", MAC, "6", H2],
+  [ALICE, PHONE2, "la_update", "act-F", MAC2, "7", H2],
+  [ALICE, PHONE2, "la_expired", "act-G", MAC, "8", H2],
+  [BOB, PHONE, "la_update", "act-E", BOB_MAC, "9", HASH[BOB]],
+];
+function insertCard(t, [email, device, kind, activity, mac, token, hash]) {
+  t.raw
+    .prepare(`INSERT INTO push_tokens VALUES (?, ?, ?, ?, ?, ?, 'production', ?, ?, ?)`)
+    .run(email, device, kind, activity, mac, token.length === 1 ? tok(token) : token, t.clock.now, t.clock.now, hash);
+}
+function withCards() {
+  const t = setup();
+  for (const c of CARDS) insertCard(t, c);
+  return t;
+}
+const ended = (t) => {
+  const calls = t.takeCalls();
+  for (const c of calls) {
+    assert.equal(c.body.aps.event, "end", c.token);
+    assert.equal(c.body.aps["dismissal-date"], t.clock.now);
+    assert.equal(c.body.aps["content-state"].online, false);
+    assert.equal(c.headers["apns-priority"], "5");
+  }
+  return calls.map((c) => c.token[0]).sort().join("");
+};
+const left = (t) => t.rows(`SELECT token FROM push_tokens`).map((r) => r.token[0]).sort().join("");
+
+test("#573: a kind-less DELETE ends each la_update and la_expired card of that phone, only that phone, then deletes", async () => {
+  const t = withCards();
+  const n = countSubrequests(t);
+  assert.equal((await deleteTokens(t.deps, ALICE, { device_id: PHONE, activity_id: "act-A" })).status, 204);
+  assert.equal(ended(t), "3", "an activity-scoped DELETE ends that card only");
+  assert.equal(left(t), "1246789");
+  assert.deepEqual(n, { d1: 2, apns: 1 }, "the card SELECT, the end, one batch");
+  insertCard(t, CARDS[2]);
+  n.d1 = n.apns = 0;
+  assert.equal((await deleteTokens(t.deps, ALICE, { device_id: PHONE })).status, 204);
+  assert.equal(ended(t), "34", "PHONE's la_update and la_expired; not PHONE2's, not Bob's PHONE");
+  assert.equal(left(t), "6789");
+  assert.deepEqual(n, { d1: 2, apns: 2 });
+  await deleteTokens(t.deps, ALICE, { device_id: PHONE });
+  assert.equal(ended(t), "", "nothing left to end");
+});
+
+test("#573: a kind la_update DELETE (a dismissal the phone ended) and an alert/la_start DELETE send no end", async () => {
+  const t = withCards();
+  const n = countSubrequests(t);
+  await deleteTokens(t.deps, ALICE, { device_id: PHONE, kind: "la_update", activity_id: "act-A" });
+  await deleteTokens(t.deps, ALICE, { device_id: PHONE, kind: "la_update" });
+  await deleteTokens(t.deps, ALICE, { device_id: PHONE, kind: "la_start" });
+  await deleteTokens(t.deps, ALICE, { device_id: PHONE, kind: "alert" });
+  assert.equal(ended(t), "");
+  assert.equal(left(t), "6789");
+  assert.deepEqual(n, { d1: 4, apns: 0 }, "one DELETE each, as before");
+});
+
+test("#573: a dead (410) or failing (500) end still deletes the row", async () => {
+  const t = withCards();
+  t.answers.set(tok("3"), { status: 410, reason: "Unregistered" });
+  t.answers.set(tok("4"), { status: 500, reason: "InternalServerError" });
+  const n = countSubrequests(t);
+  await deleteTokens(t.deps, ALICE, { device_id: PHONE });
+  assert.equal(ended(t), "34");
+  assert.equal(left(t), "6789");
+  assert.deepEqual(n, { d1: 2, apns: 2 }, "the dead row rides the DELETE's batch");
+  // A purge path: the dead row and the purge share the one batch.
+  t.answers.set(tok("6"), { status: 410, reason: "Unregistered" });
+  t.answers.set(tok("7"), { status: 500, reason: "InternalServerError" });
+  n.d1 = n.apns = 0;
+  await purgeAccount(t.deps, ALICE);
+  assert.equal(ended(t), "678");
+  assert.equal(left(t), "9");
+  assert.deepEqual(n, { d1: 2, apns: 3 });
+});
+
+// What the route passes as extra: its own statements, run in the purge's batch.
+const extraRow = (t) => [t.deps.db.prepare(`DELETE FROM devices WHERE email = ?1`).bind(ALICE)];
+const ROUTES = [
+  ["deleteDevice", (t, ex) => purgeMac(t.deps, ALICE, MAC, ex)],
+  ["deleteAccount", (t, ex) => purgeAccount(t.deps, ALICE, ex)],
+  ["logout", (t) => logout(t.deps, H2)],
+];
+
+test("#573: deleteDevice, deleteAccount and logout end exactly the cards they purge, then purge in one batch", async () => {
+  const want = { deleteDevice: ["36", "12478"], deleteAccount: ["34678", ""], logout: ["678", "1234"] };
+  for (const [name, run] of ROUTES) {
+    const t = withCards();
+    const order = [];
+    const { send, db } = t.deps;
+    t.deps.send = (p) => (order.push(`end ${p.row.token[0]}`), send(p));
+    t.deps.db = { ...db, batch: (stmts) => (order.push("batch"), db.batch(stmts)) };
+    const n = countSubrequests(t);
+    await run(t, extraRow(t));
+    const [ends, rest] = want[name];
+    assert.equal(ended(t), ends, name);
+    assert.equal(left(t), rest + "9", `${name}: Bob's card stays`);
+    assert.deepEqual([...order.slice(0, -1).sort(), order.at(-1)], [...[...ends].map((c) => `end ${c}`), "batch"], `${name}: every end before the purge`);
+    assert.deepEqual(n, { d1: 2, apns: ends.length }, `${name}: the card SELECT, the ends, one batch`);
+    const devices = t.rows(`SELECT device_id FROM devices WHERE email = ?`, ALICE).length;
+    assert.equal(devices, name === "logout" ? 1 : 0, `${name}: the route's extra statements ran`);
+    if (name === "logout") assert.deepEqual(t.rows(`SELECT email FROM sessions WHERE token_hash = ?`, H2), []);
+  }
+});
+
+test("#573: past END_MAX cards every route stays under 50 subrequests and still deletes every row", async () => {
+  const WAKE_SWEEP = 2 + 2 * 5; // deleteAccount's KV sweep: 2 lists + wake/wakemeta per Mac at DEVICE_LIMIT 5
+  const many = (device, i, kind = i % 2 ? "la_expired" : "la_update") =>
+    [ALICE, device, kind, `act-${i}`, MAC, String(i).padStart(2, "0").repeat(32), HASH[ALICE]];
+  const paths = [
+    ["DELETE", (t) => deleteTokens(t.deps, ALICE, { device_id: PHONE }), (i) => many(PHONE, i), SESSION_CHECK],
+    ["deleteDevice", (t) => purgeMac(t.deps, ALICE, MAC, extraRow(t)), (i) => many(phoneId(i), i, "la_update"), SESSION_CHECK],
+    ["deleteAccount", (t) => purgeAccount(t.deps, ALICE, extraRow(t)), (i) => many(phoneId(i % 10), i), SESSION_CHECK + WAKE_SWEEP],
+    ["logout", (t) => logout(t.deps, HASH[ALICE]), (i) => many(phoneId(i % 10), i), 0], // reads the bearer itself
+  ];
+  for (const [name, run, row, around] of paths) {
+    const t = setup();
+    for (let i = 0; i < END_MAX + 10; i++) insertCard(t, row(i));
+    t.answers.set("00".repeat(32), { status: 410, reason: "Unregistered" }); // rides the one batch
+    const n = countSubrequests(t);
+    await run(t);
+    assert.equal(t.takeCalls().length, END_MAX, name);
+    assert.deepEqual(n, { d1: 2, apns: END_MAX }, `${name}: SELECT, ends, one batch`);
+    assert.ok(n.d1 + n.apns + around <= 50, `${name}: ${n.d1} + ${n.apns} + ${around}`);
+    assert.equal(t.rows(`SELECT * FROM push_tokens WHERE email = ? AND kind LIKE 'la_%'`, ALICE).length, 0, `${name}: every row goes`);
+  }
 });

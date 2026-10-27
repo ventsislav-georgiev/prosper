@@ -20,6 +20,10 @@ export function putToken(deps: PushDeps, email: string, body: unknown, tokenHash
 export function deleteTokens(deps: PushDeps, email: string, body: unknown): Promise<RouteResult>;
 export function postSessions(deps: PushDeps, email: string, body: unknown): Promise<RouteResult>;
 export function runCron(deps: PushDeps): Promise<void>;
+export const END_MAX: number;
+export function purgeMac(deps: PushDeps, email: string, macId: string, extra?: D1PreparedStatement[]): Promise<void>;
+export function purgeAccount(deps: PushDeps, email: string, extra?: D1PreparedStatement[]): Promise<void>;
+export function logout(deps: PushDeps, tokenHash: string): Promise<void>;
 export function purgeMacStatements(db: D1Database, email: string, macId: string): D1PreparedStatement[];
 export function purgeAccountStatements(db: D1Database, email: string): D1PreparedStatement[];
 export function logoutStatements(db: D1Database, tokenHash: string): D1PreparedStatement[];

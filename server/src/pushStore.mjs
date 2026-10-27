@@ -292,22 +292,52 @@ async function catchUp(deps, email, v, name, now) {
   }
 }
 
+// Cards a request path ends before it deletes their rows (#573): at most this many. The
+// worst path, deleteAccount: 2 (requireSession) + SELECT + END_MAX sends + one batch (drops
+// and the purge) + the wake-key sweep (2 KV lists + 2 deletes per Mac, 12 at DEVICE_LIMIT
+// 5) = 36 of 50. ponytail: past the cap a row goes without its end (10 phones x 2+ Macs);
+// page the ends over defer() if accounts ever hold that many cards.
+export const END_MAX = 20;
+
+/**
+ * End every card (la_update, la_expired) that `where` selects before a request path
+ * deletes its row (#573), so no card stays on a lock screen when the phone's own end
+ * fails. Same payload as restart()'s end of an old card, through deliver(): a dead token
+ * is dropped, a failed send blocks nothing; also() runs in the drop batch.
+ */
+async function endCards(deps, where, binds, also) {
+  const { results } = await deps.db
+    .prepare(`SELECT ${TOKEN_COLS} FROM push_tokens WHERE kind IN ('la_update', 'la_expired') AND ${where} LIMIT ${END_MAX}`)
+    .bind(...binds)
+    .all();
+  const now = deps.now();
+  const cs = contentState([], false);
+  const ends = results.map((row) => laPush(row, 5, laPayload("end", cs, now, { "dismissal-date": now })));
+  await deliver(deps, ends, [], also);
+}
+
 /**
  * DELETE /push/tokens. kind la_update also takes the la_expired row of that activity
- * (#546 round 3): a dismissal while its rotation waits sticks, no restart.
+ * (#546 round 3): a dismissal while its rotation waits sticks, no restart. With kind
+ * omitted the phone's cards are ended first (#573); a kind la_update DELETE is a
+ * dismissal the phone already ended.
  */
 export async function deleteTokens(deps, email, body) {
   const p = parseDeleteBody(body);
   if (p.error) return { status: 400, error: p.error };
   const v = p.value;
-  await deps.db
+  const del = deps.db
     .prepare(
       `DELETE FROM push_tokens WHERE email = ?1 AND device_id = ?2
        AND (?3 IS NULL OR kind = ?3 OR (?3 = 'la_update' AND kind = 'la_expired'))
        AND (?4 IS NULL OR activity_id = ?4)`,
     )
-    .bind(email, v.device_id, v.kind, v.activity_id)
-    .run();
+    .bind(email, v.device_id, v.kind, v.activity_id);
+  if (v.kind === null) {
+    await endCards(deps, `email = ?1 AND device_id = ?2 AND (?3 IS NULL OR activity_id = ?3)`, [email, v.device_id, v.activity_id], () => [del]);
+  } else {
+    await del.run();
+  }
   return NO_CONTENT;
 }
 
@@ -464,6 +494,21 @@ async function restart(deps, steps, now) {
   const handled = steps.map(({ row: e }) => ({ ...e, kind: "la_expired" }));
   await deliver(deps, pushes, handled, (sent) => startedStatements(deps.db, pushes, sent, now));
 }
+
+/** deleteDevice: end every card showing the Mac (#573), then one batch: extra + the purge. */
+export const purgeMac = (deps, email, macId, extra = []) =>
+  endCards(deps, `email = ?1 AND kind = 'la_update' AND mac_id = ?2`, [email, macId], () => [
+    ...extra,
+    ...purgeMacStatements(deps.db, email, macId),
+  ]);
+
+/** deleteAccount: end every card of the account (#573), then one batch: extra + the purge. */
+export const purgeAccount = (deps, email, extra = []) =>
+  endCards(deps, `email = ?1`, [email], () => [...extra, ...purgeAccountStatements(deps.db, email)]);
+
+/** POST /auth/logout: end every card the session registered (#573), then delete the session and its tokens. */
+export const logout = (deps, tokenHash) =>
+  endCards(deps, `token_hash = ?1`, [tokenHash], () => logoutStatements(deps.db, tokenHash));
 
 /** deleteDevice: the Mac's status row and every card showing it. */
 export function purgeMacStatements(db, email, macId) {

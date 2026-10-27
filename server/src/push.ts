@@ -19,12 +19,15 @@ const deps = (env: Bindings, defer: PushDeps["defer"]): PushDeps => ({
   budget: cronBudget(env.PUSH_CRON_BUDGET),
 });
 
+/** A request's deps: deferred work rides the request's waitUntil. */
+export const pushDeps = (c: Ctx): PushDeps => deps(c.env, (p) => c.executionCtx.waitUntil(p));
+
 type Handler = (deps: PushDeps, email: string, body: unknown, tokenHash: string) => Promise<RouteResult>;
 
 const route = (h: Handler) => async (c: Ctx) => {
   const b = await readBody(c.req.raw); // capped at 32 KB before the JSON parse
   if (b.tooLarge) return c.json({ error: "payload_too_large" }, 413);
-  const r = await h(deps(c.env, (p) => c.executionCtx.waitUntil(p)), c.get("email"), b.value, c.get("tokenHash"));
+  const r = await h(pushDeps(c), c.get("email"), b.value, c.get("tokenHash"));
   return r.status === 204 ? c.body(null, 204) : c.json({ error: r.error }, r.status);
 };
 

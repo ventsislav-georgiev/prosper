@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import type { Env } from "./types";
 import { mintSupporterToken } from "./supporter";
 import { sendMagicLinkEmail } from "./email";
-import { logoutStatements } from "./pushStore.mjs";
+import { logout } from "./pushStore.mjs";
+import { pushDeps } from "./push";
 import {
   intEnv,
   isValidEmail,
@@ -132,12 +133,13 @@ auth.post("/poll", async (c) => {
 // Server-side logout: revoke this one session so a leaked Bearer token can't
 // outlive the device's sign-out (sessions otherwise live up to SESSION_TTL_DAYS).
 // Deletes by token_hash, not email, so other devices' sessions survive; the push
-// tokens that session registered go with it (a signed-out phone gets no alerts).
+// tokens that session registered go with it (a signed-out phone gets no alerts), its
+// cards ended over APNs first (#573).
 // Idempotent — an already-gone session still returns ok.
 auth.post("/logout", async (c) => {
   const m = (c.req.header("Authorization") ?? "").match(/^Bearer\s+(.+)$/i);
   if (!m) return c.json({ error: "unauthorized" }, 401);
-  await c.env.DB.batch(logoutStatements(c.env.DB, await sha256Hex(m[1])));
+  await logout(pushDeps(c), await sha256Hex(m[1]));
   return c.json({ ok: true });
 });
 

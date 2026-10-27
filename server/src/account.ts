@@ -1,7 +1,8 @@
 import type { Ctx } from "./types";
 import { intEnv, nowSec } from "./util";
 import { acctTag } from "./wakeId.mjs";
-import { purgeAccountStatements, purgeMacStatements } from "./pushStore.mjs";
+import { purgeAccount, purgeMac } from "./pushStore.mjs";
+import { pushDeps } from "./push";
 
 /**
  * Delete every wake key in this account's namespace. The remote-wake flag
@@ -91,10 +92,10 @@ export async function deleteDevice(c: Ctx) {
   const email = c.get("email");
   const deviceId = c.req.param("id") ?? ""; // always set: the route is /devices/:id
   // A Mac's live-status row and the cards showing it go with it. Phone push tokens
-  // are keyed by the phone's install id, not a devices row, so they stay.
-  await c.env.DB.batch([
+  // are keyed by the phone's install id, not a devices row, so they stay. The cards
+  // are ended over APNs first (#573).
+  await purgeMac(pushDeps(c), email, deviceId, [
     c.env.DB.prepare(`DELETE FROM devices WHERE email = ?1 AND device_id = ?2`).bind(email, deviceId),
-    ...purgeMacStatements(c.env.DB, email, deviceId),
   ]);
   return c.json({ ok: true });
 }
@@ -107,12 +108,11 @@ export async function deleteDevice(c: Ctx) {
 export async function deleteAccount(c: Ctx) {
   const email = c.get("email");
   const now = nowSec();
-  await c.env.DB.batch([
+  await purgeAccount(pushDeps(c), email, [ // the cards are ended over APNs first (#573)
     c.env.DB.prepare(`DELETE FROM sessions WHERE email = ?1`).bind(email),
     c.env.DB.prepare(`DELETE FROM devices WHERE email = ?1`).bind(email),
     c.env.DB.prepare(`DELETE FROM settings WHERE email = ?1`).bind(email),
     c.env.DB.prepare(`UPDATE users SET deleted_at = ?2 WHERE email = ?1`).bind(email, now),
-    ...purgeAccountStatements(c.env.DB, email),
   ]);
   await sweepWakeKeys(c, email);
   return c.json({ ok: true });
