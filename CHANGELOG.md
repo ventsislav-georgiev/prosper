@@ -52,22 +52,22 @@ tag from the now-released section and put it on the new top draft.
   there with the command you last used in it, never resuming an old conversation. Restart all
   agents and Stop all ask first, inline. Restart all restarts only the agents and sessions
   running an older version; Stop all stops the sessions in the tab you are looking at,
-  skipping any that run a dch older than 1.24.0; each sums up what it did. Restart and Stop
-  need dch 1.24.1 and say so in the menu until it is installed. Like Resume, these run with
-  the newest dch installed and stay off when a session runs a newer one.
+  skipping any that run a dch older than 1.24.0; each sums up what it did. Like Resume, these
+  run with the newest dch installed and stay off when a session runs a newer one.
 - **Fixed: Agent Island shows Claude Code's questions again in sessions with a title.** Claude
   Code draws the session's title in a rule under a question while it waits. The island read
   that line as something after the dialog and showed the last screen lines instead of the
   question and its options. It now reads the question, and when it cannot, the screen lines
   it shows wrap between words instead of mid-word.
-- Ships dch 1.24.0, which keeps a record of every session it runs, so a session that ended
+- Ships dch 1.24.1, which keeps a record of every session it runs, so a session that ended
   (a crash, a reboot, a kill) can be brought back in its folder with its Claude Code
   conversation resumed (`dch --history`, `dch --revive`) (#578). The record holds the
   session's folder and command line, including a prompt typed as a `claude` argument, for 30
   days in `~/.local/state/dch/sessions`, readable only by you; the environment is never kept.
-  dch 1.24.0 also restarts a Claude Code typed into a session's shell (Restart agent used to
-  skip it), and adds `dch --say` (type one message into idle sessions), `dch --stop` (end a
-  session so `dch --revive` resumes it later) and `--json` output.
+  It adds `dch --say` (type one message into idle sessions), `dch --stop` (end a session so
+  `dch --revive` resumes it later) and `--json` output. Restart agent still skips a Claude
+  Code typed into a session's shell, and Stop ends such a session without typing `/exit`
+  into it.
 
 ## v2.159.0
 
