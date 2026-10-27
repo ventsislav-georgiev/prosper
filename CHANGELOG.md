@@ -28,6 +28,14 @@ tag from the now-released section and put it on the new top draft.
   (`-qa` by default, case ignored) move under a Sidekicks tab, and the rest stay under
   Sessions. The tabs appear only when there is at least one sidekick. The summary beside the
   notch still counts every session.
+- **Agent Island: a History tab brings ended sessions back.** Next to Sessions (and
+  Sidekicks), History lists the dch sessions that ended, newest first: how each one ended
+  (crashed, exited, vanished after a reboot or a kill), when, and its folder. Click one to
+  resume it: dch starts it again in its folder and resumes its Claude Code conversation. A
+  name that is live again comes back as `<name>-2`. Resume crashed brings back every session
+  that crashed in the last 3 days after running at least 5 minutes, and only when you click
+  it. The controls run with the newest dch installed (Homebrew first) and stay off when a
+  session runs a newer dch than that, so they never downgrade one.
 - **Fixed: Agent Island shows Claude Code's questions again in sessions with a title.** Claude
   Code draws the session's title in a rule under a question while it waits. The island read
   that line as something after the dialog and showed the last screen lines instead of the
@@ -35,7 +43,9 @@ tag from the now-released section and put it on the new top draft.
   it shows wrap between words instead of mid-word.
 - Ships dch 1.23.0, which keeps a record of every session it runs, so a session that ended
   (a crash, a reboot, a kill) can be brought back in its folder with its Claude Code
-  conversation resumed (`dch --history`, `dch --revive`) (#578).
+  conversation resumed (`dch --history`, `dch --revive`) (#578). The record holds the
+  session's folder and command line, including a prompt typed as a `claude` argument, for 30
+  days in `~/.local/state/dch/sessions`, readable only by you; the environment is never kept.
 
 ## v2.159.0
 

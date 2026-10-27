@@ -54,6 +54,8 @@ struct AgentIslandGeometry: Equatable {
     /// fit beside the notch (~118 pt of text room left of a 185 pt notch, and the
     /// right side holds the state counts).
     static let tabsHeight: CGFloat = 22
+    /// #578: the History list's "Resume crashed" line.
+    static let historyHeaderHeight: CGFloat = 26
     static let closedRadii = (top: CGFloat(6), bottom: CGFloat(14))
     static let openRadii = (top: CGFloat(19), bottom: CGFloat(24))
 
@@ -263,6 +265,15 @@ final class AgentIslandStore: ObservableObject {
     @Published var sort: AgentIslandSort
     @Published var sidekickPattern: String { didSet { resetTab() } }
     @Published var sidekickTab = false
+    /// #578: `dch --history --json`'s records, newest first, read on open and
+    /// after an action; the History tab is chosen (it wins over `sidekickTab`).
+    @Published var history: [DchHistoryRecord] = [] { didSet { resetTab() } }
+    @Published var historyTab = false
+    /// The control binary (DchCommand.controlDch), probed with the history.
+    @Published var controlDch: DchCommand.Binary?
+    /// A long verb's static status in its row: "Resuming…", then the result.
+    /// Keyed by row; a dir's `--revive --all` is `(dir, "")`.
+    @Published var actions: [AgentSessionKey: String] = [:]
 
     init(geometry: AgentIslandGeometry, details: AgentIslandRowDetails = .all,
          sort: AgentIslandSort = .activity, sidekickPattern: String = "") {
@@ -276,6 +287,7 @@ final class AgentIslandStore: ObservableObject {
     /// sidekick to appear does not switch the list.
     private func resetTab() {
         if sidekickTab, AgentIsland.split(sessions, pattern: sidekickPattern).sidekicks.isEmpty { sidekickTab = false }
+        if historyTab, history.isEmpty { historyTab = false }
     }
 
     /// The collapsed island and the header: every session, whichever tab shows,
@@ -284,12 +296,23 @@ final class AgentIslandStore: ObservableObject {
 
     /// Sorted, then split. No sidekicks = no tabs and the whole list.
     var split: AgentIsland.Split { AgentIsland.split(AgentIsland.sorted(sessions, by: sort), pattern: sidekickPattern) }
-    var showsTabs: Bool { !split.sidekicks.isEmpty }
+    /// #578: sidekicks or history.
+    var showsTabs: Bool { !split.sidekicks.isEmpty || !history.isEmpty }
 
-    /// The rows the list draws: the shown tab's half.
+    /// The session rows the list draws: the shown tab's half; none under History.
     var visible: [AgentSession] {
+        guard !historyTab else { return [] }
         let s = split
         return AgentIsland.showsSidekicks(s, tab: sidekickTab) ? s.sidekicks : s.primary
+    }
+
+    /// #578: the History tab's rows, capped.
+    var shownHistory: [DchHistoryRecord] { historyTab ? Array(history.prefix(AgentIsland.historyCap)) : [] }
+
+    /// Resume's gate: the control binary against the verb's minimum and every
+    /// live master; `.refused` carries the one-line reason.
+    var resumeGate: DchCommand.Gate {
+        DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.reviveMinimum)
     }
 
     /// Cards show under blocked rows only.
@@ -300,7 +323,11 @@ final class AgentIslandStore: ObservableObject {
     }
 
     /// #525: per row, two or three lines.
-    var rowHeights: [CGFloat] { visible.map { AgentIslandGeometry.height(of: $0, show: details) } }
+    /// #578: under History, the Resume crashed line, then two-line rows.
+    var rowHeights: [CGFloat] {
+        historyTab ? [AgentIslandGeometry.historyHeaderHeight] + shownHistory.map { _ in AgentIslandGeometry.rowHeight }
+            : visible.map { AgentIslandGeometry.height(of: $0, show: details) }
+    }
 
     var size: CGSize {
         expanded ? geometry.expandedSize(rows: rowHeights, cards: cardsHeight, tabs: showsTabs) : geometry.collapsedSize
@@ -314,6 +341,10 @@ struct AgentIslandView: View {
     var onAnswer: (AgentSession, AgentPrompt, AgentPromptOption) -> Void = { _, _, _ in }
     /// #571: a tab click, true = Sidekicks.
     var onTab: (Bool) -> Void = { _ in }
+    /// #578: the History tab, a history row's Resume, and Resume crashed.
+    var onHistory: () -> Void = {}
+    var onResume: (DchHistoryRecord) -> Void = { _ in }
+    var onResumeAll: () -> Void = {}
 
     private var g: AgentIslandGeometry { store.geometry }
 
@@ -378,6 +409,11 @@ struct AgentIslandView: View {
     private var rows: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             VStack(spacing: 0) {
+                if store.historyTab { historyHeader }
+                ForEach(historyDrawn) { r in
+                    AgentIslandHistoryRow(record: r.record, now: ctx.date.timeIntervalSince1970,
+                                          status: store.actions[r.record.key], enabled: r.enabled, action: r.resume)
+                }
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
                                    notice: store.notices[r.session.key], show: store.details, action: r.open)
@@ -403,6 +439,47 @@ struct AgentIslandView: View {
         store.visible.map { s in
             Drawn(session: s, card: store.card(for: s), open: { onRow(s) }, answer: { onAnswer(s, $0, $1) })
         }
+    }
+
+    /// #578: one drawn History row and its Resume; off while the gate refuses.
+    struct HistoryDrawn: Identifiable {
+        let record: DchHistoryRecord
+        let enabled: Bool
+        let resume: () -> Void
+        var id: AgentSessionKey { record.key }
+    }
+
+    var historyDrawn: [HistoryDrawn] {
+        let on = store.resumeGate.isOK
+        return store.shownHistory.map { r in HistoryDrawn(record: r, enabled: on, resume: { onResume(r) }) }
+    }
+
+    /// The line over the History rows: the Resume crashed button and each
+    /// dir's --all status, or the gate's reason in its place. Static text.
+    private var historyHeader: some View {
+        let status = Set(store.history.map(\.key.dir)).sorted()
+            .compactMap { store.actions[AgentSessionKey(dir: $0, name: "")] }.joined(separator: " · ")
+        return HStack(spacing: 10) {
+            if case .refused(let why) = store.resumeGate {
+                Text(verbatim: "Resume \(why)").foregroundStyle(Color.white.opacity(0.45))
+            } else {
+                Button(action: onResumeAll) {
+                    Text(verbatim: AgentIsland.resumeAllLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(Text(verbatim: AgentIsland.resumeAllHelp))
+                .accessibilityHint(Text(verbatim: AgentIsland.resumeAllHelp))
+                Text(verbatim: status).foregroundStyle(Color.white.opacity(0.6))
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 11))
+        .lineLimit(1)
+        .padding(.horizontal, AgentIslandGeometry.rowLead)
+        .frame(height: AgentIslandGeometry.historyHeaderHeight)
     }
 
     /// Count on the left of the notch, per-state counts on its right.
@@ -431,12 +508,18 @@ struct AgentIslandView: View {
     }
 
     /// #571: "Sessions (n)  Sidekicks (n)", plain text buttons; the shown one bright.
+    /// #578: "History (n)" after them; Sidekicks only when there are some.
     private var tabRow: some View {
-        let split = store.split
+        let split = store.split, history = store.historyTab
         let shows = AgentIsland.showsSidekicks(split, tab: store.sidekickTab)
         return HStack(spacing: 14) {
-            tab("Sessions (\(split.primary.count))", on: !shows) { onTab(false) }
-            tab("Sidekicks (\(split.sidekicks.count))", on: shows) { onTab(true) }
+            tab("Sessions (\(split.primary.count))", on: !history && !shows) { onTab(false) }
+            if !split.sidekicks.isEmpty {
+                tab("Sidekicks (\(split.sidekicks.count))", on: !history && shows) { onTab(true) }
+            }
+            if !store.history.isEmpty {
+                tab("History (\(min(store.history.count, AgentIsland.historyCap)))", on: history) { onHistory() }
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, AgentIslandGeometry.openRadii.top + 10)
@@ -451,6 +534,79 @@ struct AgentIslandView: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+/// #578: one ended session. Line 1: the title, its Claude agent's name, how
+/// long ago it ended; line 2: the end in words and the cwd, or the Resume
+/// status as static text. A click is Resume.
+struct AgentIslandHistoryRow: View {
+    let record: DchHistoryRecord
+    let now: TimeInterval
+    let status: String?
+    let enabled: Bool
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        let age = record.lastSeen > 0 ? AgentIsland.age(now - record.lastSeen) : ""
+        let end = AgentIsland.endLabel(record.end)
+        let cwd = (record.cwd as NSString).abbreviatingWithTildeInPath
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: AgentIslandGeometry.glyphGap) {
+                Text(verbatim: "○")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.35))
+                    .frame(width: AgentIslandGeometry.glyphWidth)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(verbatim: record.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.8))
+                            .lineLimit(1)
+                        if let agent = record.agent?.name, !agent.isEmpty {
+                            Text(verbatim: agent)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(Color.white.opacity(0.4))
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 6)
+                        Text(verbatim: age)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                            .fixedSize()
+                    }
+                    HStack(spacing: 6) {
+                        if let status {
+                            Text(verbatim: status).foregroundStyle(Color.white.opacity(0.7))
+                        } else {
+                            Text(verbatim: end)
+                                .foregroundStyle(record.end.hasPrefix("signal ") ? AgentState.blocked.color : Color.white.opacity(0.5))
+                                .fixedSize()
+                            Text(verbatim: cwd)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(Color.white.opacity(0.35))
+                                .truncationMode(.middle)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.leading, AgentIslandGeometry.rowLead)
+            .padding(.trailing, AgentIslandGeometry.rowTrail)
+            .frame(height: AgentIslandGeometry.rowHeight - 4)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(hover && enabled ? 0.10 : 0.05)))
+            .contentShape(Rectangle())
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .onHover { hover = $0 }
+        .accessibilityLabel(([record.title, status ?? end, age.isEmpty ? nil : "\(age) ago", cwd] as [String?])
+            .compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint(enabled ? "Resume" : "")
     }
 }
 

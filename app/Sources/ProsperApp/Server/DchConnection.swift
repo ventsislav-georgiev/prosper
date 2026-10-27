@@ -304,6 +304,8 @@ struct DchListRow: Equatable, Sendable {
     var meta: DchSessionMeta? = nil
     /// When the meta's content last changed (not liveness); 0 = unknown.
     var metaEpoch: Int = 0
+    /// #578: the dch version of the master serving it; "" from a master too old to say.
+    var version: String = ""
 
     /// The phone's `meta`/`meta_epoch` row keys, re-encoded from the decoded fields
     /// (never dch's raw JSON); empty when there is no meta or nothing survives the
@@ -450,6 +452,101 @@ enum DchCommand {
     /// /bin/sh or a sleeping script, never at dch.
     nonisolated(unsafe) static var dchPathOverride: String?
 
+    // MARK: Control verbs (#578)
+
+    /// The binaries a control verb (--history, --revive; later --restart, --spawn)
+    /// may run with. Never ~/personal/dch/dch: that is dch's working tree, built
+    /// from uncommitted code, so its version string proves nothing. Homebrew first,
+    /// so it wins a version tie: --restart re-execs masters onto the calling
+    /// binary's path, and a path inside Prosper.app goes away when the app moves.
+    static var controlCandidates: [String] {
+        ["/opt/homebrew/bin/dch", Bundle.main.resourceURL?.appendingPathComponent("dch").path,
+         "/usr/local/bin/dch"].compactMap { $0 }
+    }
+
+    /// `dch --version` is exactly "dch X.Y.Z" (one trailing newline allowed).
+    static func parseVersion(_ s: String) -> [Int]? {
+        let t = s.hasSuffix("\n") ? String(s.dropLast()) : s
+        guard t.hasPrefix("dch ") else { return nil }
+        let parts = t.dropFirst(4).split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }) else { return nil }
+        return parts.compactMap { Int($0) }
+    }
+
+    /// A master's `--ls-json` "version" ("1.23.0"; "" from a master too old to
+    /// say, which is []). Each component's leading digits, so "1.24.0-rc1" is 1.24.0.
+    static func masterVersion(_ s: String) -> [Int] {
+        s.isEmpty ? [] : s.split(separator: ".", omittingEmptySubsequences: false).map { Int($0.prefix { $0.isASCII && $0.isNumber }) ?? 0 }
+    }
+
+    /// Numeric per component (1.10.0 > 1.9.0), never as strings; missing components are 0.
+    static func isAtLeast(_ a: [Int], _ b: [Int]) -> Bool {
+        for i in 0..<max(a.count, b.count) {
+            let x = i < a.count ? a[i] : 0, y = i < b.count ? b[i] : 0
+            if x != y { return x > y }
+        }
+        return true
+    }
+
+    static func versionString(_ v: [Int]) -> String { v.map(String.init).joined(separator: ".") }
+
+    struct Binary: Equatable, Sendable {
+        let path: String
+        let version: [Int]
+    }
+
+    /// The newest candidate that answers `--version`; on a tie the earlier one.
+    static func newest(_ candidates: [String], version: (String) -> [Int]?) -> Binary? {
+        var best: Binary?
+        for path in candidates {
+            guard let v = version(path) else { continue }
+            if best.map({ !isAtLeast($0.version, v) }) ?? true { best = Binary(path: path, version: v) }
+        }
+        return best
+    }
+
+    /// The binary control verbs run with; probes are cached, so this forks only
+    /// for a binary not seen at its current mtime. Off main: a probe is bounded
+    /// at `islandTimeout`.
+    static func controlDch() -> Binary? { newest(controlCandidates, version: probedVersion) }
+
+    private final class VersionCache: @unchecked Sendable {
+        let lock = NSLock()
+        var map: [String: (mtime: TimeInterval, version: [Int]?)] = [:]
+    }
+    private static let versionCache = VersionCache()
+
+    /// `path --version`, cached per resolved path and mtime (a brew upgrade
+    /// retargets the symlink, a rebuild moves the mtime), never per call. A
+    /// missing or non-executable path is nil; a timed-out probe is not cached.
+    static func probedVersion(_ path: String) -> [Int]? {
+        let real = (path as NSString).resolvingSymlinksInPath
+        guard FileManager.default.isExecutableFile(atPath: real), let m = AgentDirScanner.mtime(real) else { return nil }
+        if let hit = versionCache.lock.withLock({ versionCache.map[real] }), hit.mtime == m { return hit.version }
+        guard let out = bounded(islandTimeout, { onPid in
+            runCapturingBoth(args: ["--version"], env: AgentIsland.listEnv(dir: defaultSocketDir), path: real, onPid: onPid).out
+        }) else { return nil }
+        let v = parseVersion(String(decoding: out, as: UTF8.self))
+        versionCache.lock.withLock { versionCache.map[real] = (m, v) }
+        return v
+    }
+
+    /// Whether a control may run: the binary is at least the verb's minimum and
+    /// every live master's version ("" = an old master, which passes), so it never
+    /// downgrades a newer master. `.refused` carries the one-line reason.
+    enum Gate: Equatable {
+        case ok(String)
+        case refused(String)
+
+        var isOK: Bool { if case .ok = self { true } else { false } }
+    }
+
+    static func gate(_ dch: Binary?, masters: [String], minimum: [Int]) -> Gate {
+        let need = masters.map(masterVersion).reduce(minimum) { isAtLeast($0, $1) ? $0 : $1 }
+        guard let dch, isAtLeast(dch.version, need) else { return .refused("needs dch \(versionString(need))") }
+        return .ok(dch.path)
+    }
+
     /// `-E` disables dch's in-band detach escape (Ctrl-\) so it passes through to the
     /// inner app (Claude Code); the app detaches by closing the TCP connection.
     /// `-f` force-attaches so an app client can mirror a session already attached in
@@ -546,7 +643,8 @@ enum DchCommand {
                               activityEpoch: o["activity_epoch"] as? Int ?? 0, state: o["state"] as? String ?? "",
                               agents: o["agents"] as? Int ?? 0,
                               meta: DchSessionMeta(json: o["meta"]),
-                              metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0)
+                              metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0,
+                              version: o["version"] as? String ?? "")
         }
     }
 
@@ -700,15 +798,19 @@ enum DchCommand {
         if Preferences.isolateRemoteSessions {
             env["DCH_SOCKET_DIR"] = isolatedSocketDir
         }
-        return runCapturingBoth(args: args, env: env)
+        let r = runCapturingBoth(args: args, env: env)
+        return (r.out, r.err)
     }
 
     /// Run dch with exactly `env` — #474 lists each socket dir with its own
     /// DCH_SOCKET_DIR, whatever the isolation preference says.
     /// `path` defaults to dchPath read here; a bounded caller resolves it on its own
     /// thread instead (#486 r2), so a late-starting body never reads a reset override.
-    static func runCapturingBoth(args: [String], env: [String: String], path: String = dchPath,
-                                 onPid: (pid_t) -> Void = { _ in }) -> (out: Data, err: String) {
+    /// #578: `merge` sends stderr into `out` (a control verb prints results on
+    /// stdout and refusals on stderr; its last line is whichever came last), and
+    /// `status` is the exit code (-1 when it never started).
+    static func runCapturingBoth(args: [String], env: [String: String], path: String = dchPath, merge: Bool = false,
+                                 onPid: (pid_t) -> Void = { _ in }) -> (out: Data, err: String, status: Int32) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
@@ -716,15 +818,15 @@ enum DchCommand {
         let pipe = Pipe()
         let errPipe = Pipe()
         p.standardOutput = pipe
-        p.standardError = errPipe
-        do { try p.run() } catch { return (Data(), "") }
+        p.standardError = merge ? pipe : errPipe
+        do { try p.run() } catch { return (Data(), "", -1) }
         onPid(p.processIdentifier)
         // Screen first (it can be tens of KB), then stderr (one line at most, so it
         // fits the pipe buffer while we drain stdout — no deadlock).
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let err = errPipe.fileHandleForReading.readDataToEndOfFile()
+        let err = merge ? Data() : errPipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        return (data, String(data: err, encoding: .utf8) ?? "")
+        return (data, String(data: err, encoding: .utf8) ?? "", p.terminationStatus)
     }
 
     /// #477: every Agent Island dch call (--ls-json, -lj, --read, --status, --send)
@@ -734,8 +836,9 @@ enum DchCommand {
     nonisolated(unsafe) static var islandTimeout: TimeInterval = 4
 
     /// stdout of one island call; nil when it timed out (#486: list keeps the last sessions).
-    static func runIsland(args: [String], env: [String: String]) -> Data? {
-        let path = dchPath   // on the caller's thread, not the body's
+    /// #578: `path` is the control binary for --history.
+    static func runIsland(args: [String], env: [String: String], path: String? = nil) -> Data? {
+        let path = path ?? dchPath   // on the caller's thread, not the body's
         return bounded(islandTimeout) { onPid in runCapturingBoth(args: args, env: env, path: path, onPid: onPid).out }
     }
 

@@ -93,6 +93,18 @@ final class AgentIslandController {
     /// #523: every published list, on main, and nil when the island stops.
     /// LiveStatusPublisher listens (set by AppDelegate; tests leave it nil).
     var onSessions: (@MainActor ([AgentSession]?) -> Void)?
+    /// #578 seams: the control binary (probed and cached), the history read
+    /// with it, the dirs to read (the poller's), and the long-verb runner.
+    /// Under XCTest the default finds no binary even unstubbed, so a test that
+    /// expands a controller never runs a real dch (no history, Resume refused).
+    var controlDch: @Sendable () -> DchCommand.Binary? = {
+        NSClassFromString("XCTestCase") == nil ? DchCommand.controlDch() : nil
+    }
+    var readHistory: @Sendable (_ dch: String, _ dirs: [String]) -> [DchHistoryRecord] = { dch, dirs in
+        AgentIsland.history(dirs: dirs) { DchCommand.runIsland(args: $0, env: $1, path: dch) }
+    }
+    var historyDirs: @MainActor () -> [String] = { AgentIsland.liveSocketDirs() }
+    var runner = DchActionRunner()
 
     init() {}
 
@@ -164,8 +176,78 @@ final class AgentIslandController {
     /// #571: a Sessions / Sidekicks tab click. Only the shown rows get cards.
     func showSidekicks(_ on: Bool) {
         guard let store else { return }
+        store.historyTab = false
         store.sidekickTab = on
         refreshCards()
+        layout()
+    }
+
+    /// #578: the History tab click.
+    func showHistory() {
+        guard let store, !store.history.isEmpty else { return }
+        store.historyTab = true
+        refreshCards()
+        layout()
+    }
+
+    // MARK: - History and Resume (#578)
+
+    /// Reads `--history --json` with the control binary: on open and after an
+    /// action, never on the poll timer. A binary under 1.23.0 reads none (no tab).
+    func refreshHistory() {
+        guard store != nil else { return }
+        let dirs = historyDirs(), probe = controlDch, read = readHistory
+        queue.async { [weak self] in
+            let dch = probe()
+            let records = dch.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveMinimum) ? read($0.path, dirs) : [] } ?? []
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.setHistory(records, dch) } }
+        }
+    }
+
+    private func setHistory(_ records: [DchHistoryRecord], _ dch: DchCommand.Binary?) {
+        guard let store else { return }
+        store.controlDch = dch
+        store.history = records
+        // A record gone (revived) takes its status with it; running ones and the --all lines stay.
+        let keys = Set(records.map(\.key))
+        store.actions = store.actions.filter { $0.key.name.isEmpty || keys.contains($0.key) || runner.isBusy($0.key) }
+        layout()
+    }
+
+    /// A History row's click. A name that is live now revives under the first
+    /// free `<name>-N`. A busy row refuses (the runner never queues).
+    func resume(_ r: DchHistoryRecord) {
+        guard let store, case .ok(let dch) = store.resumeGate else { return }
+        let live = Set(store.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))
+        let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
+        run(r.key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records), all: false)
+    }
+
+    /// The Resume crashed button, and nothing else: `--revive --all` in each dir
+    /// with history. Never on launch, a timer or a reconnect — after a reboot
+    /// every session reads "vanished" and would qualify.
+    func resumeCrashed() {
+        guard let store, case .ok(let dch) = store.resumeGate else { return }
+        for dir in Set(store.history.map(\.key.dir)).sorted() {
+            run(AgentSessionKey(dir: dir, name: ""), dch: dch, args: ["--revive", "--all"], all: true)
+        }
+    }
+
+    private func run(_ key: AgentSessionKey, dch: String, args: [String], all: Bool) {
+        let started = runner.start(key, path: dch, args: args, env: AgentIsland.listEnv(dir: key.dir)) { [weak self] r in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.finished(key, r, all: all) } }
+        }
+        guard started else { return }
+        store?.actions[key] = AgentIsland.resumingText
+        layout()
+    }
+
+    /// Both lists refresh: the history here; the sessions on the poller's next
+    /// tick (a revived session's socket moves its dir's mtime).
+    private func finished(_ key: AgentSessionKey, _ r: DchActionResult, all: Bool) {
+        guard let store else { return }
+        store.actions[key] = AgentIsland.resumeText(r, all: all)
+        refreshHistory()
         layout()
     }
 
@@ -199,7 +281,10 @@ final class AgentIslandController {
             onToggle: { [weak self] in self?.setExpanded(!(self?.store?.expanded ?? true)) },
             onRow: { [weak self] in self?.jump($0) },
             onAnswer: { [weak self] in self?.answer($0, $1, $2) },
-            onTab: { [weak self] in self?.showSidekicks($0) }))
+            onTab: { [weak self] in self?.showSidekicks($0) },
+            onHistory: { [weak self] in self?.showHistory() },
+            onResume: { [weak self] in self?.resume($0) },
+            onResumeAll: { [weak self] in self?.resumeCrashed() }))
         host.sizingOptions = []
         p.contentView = host
         panel = p
@@ -210,8 +295,12 @@ final class AgentIslandController {
     func setExpanded(_ on: Bool) {
         guard let store, store.expanded != on else { return }
         store.expanded = on
-        if !on { store.notices = [:]; store.cards = [:]; readAt = [:] }
+        if !on {
+            store.notices = [:]; store.cards = [:]; readAt = [:]
+            store.actions = store.actions.filter { runner.isBusy($0.key) }   // a running one keeps its "Resuming…"
+        }
         refreshCards()
+        if on { refreshHistory() }
         panel?.keyable = on
         layout()
         if on {

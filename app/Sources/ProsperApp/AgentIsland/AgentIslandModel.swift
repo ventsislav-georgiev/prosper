@@ -73,6 +73,8 @@ struct AgentSession: Equatable, Identifiable {
     let agents: Int
     /// #506: dch 1.22's `meta` (open PRs, task counts); nil from older dch or none set.
     var meta: DchSessionMeta? = nil
+    /// #578: its master's dch version, "" when too old to say (the control gate).
+    var version: String = ""
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -385,7 +387,7 @@ enum AgentIsland {
             return rows.map {
                 AgentSession(key: AgentSessionKey(dir: dir, name: $0.name), alias: $0.alias,
                              activity: TimeInterval($0.activityEpoch), state: AgentState(dch: $0.state),
-                             agents: $0.agents, meta: $0.meta)
+                             agents: $0.agents, meta: $0.meta, version: $0.version)
             }
         }
     }
