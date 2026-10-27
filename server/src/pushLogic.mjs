@@ -409,8 +409,11 @@ export const apnsHost = (env) => (env === "sandbox" ? "api.sandbox.push.apple.co
 /**
  * Send one push through `fetchFn` (the only way out to APNs; tests inject it).
  * p = {row: {token, env}, pushType: "alert"|"liveactivity", priority, payload, collapseId?}.
+ * The fetch is bounded (QA #431 L1): a stalled APNs is "error", so a request path that
+ * ends cards before its delete still deletes inside the iOS client's 10 s.
  */
-export async function sendApns(fetchFn, { jwt, topic }, p) {
+export const APNS_TIMEOUT_MS = 5000;
+export async function sendApns(fetchFn, { jwt, topic, timeoutMs = APNS_TIMEOUT_MS }, p) {
   const headers = {
     authorization: `bearer ${jwt}`,
     "apns-topic": p.pushType === "liveactivity" ? `${topic}.push-type.liveactivity` : topic,
@@ -425,6 +428,7 @@ export async function sendApns(fetchFn, { jwt, topic }, p) {
       method: "POST",
       headers,
       body: JSON.stringify(p.payload),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     return "error";

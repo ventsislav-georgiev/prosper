@@ -15,6 +15,7 @@ import {
   collapseId,
   classifyApns,
   sendApns,
+  APNS_TIMEOUT_MS,
   importP8,
   signApnsJwt,
   cleanMacName,
@@ -651,6 +652,19 @@ test("sendApns: classifies APNs answers, network errors are errors", async () =>
   assert.equal(await sendApns(with_({ status: 400, reason: "BadPriority" }), auth, p), "error");
   assert.equal(await sendApns(with_({ status: 403, reason: "ExpiredProviderToken" }), auth, p), "auth");
   assert.equal(await sendApns(with_({ throws: true }), auth, p), "error");
+});
+
+test("sendApns: a stalled APNs aborts at the bound and is an error (QA #431 L1)", { timeout: 2000 }, async () => {
+  const p = { row: { token: HEX, env: "production" }, pushType: "liveactivity", priority: 5, payload: {} };
+  let signal;
+  const stalled = (url, init) =>
+    new Promise((_, reject) => {
+      signal = init.signal;
+      init.signal?.addEventListener("abort", () => reject(init.signal.reason));
+    });
+  assert.equal(await sendApns(stalled, { jwt: "J", topic: "t", timeoutMs: 20 }, p), "error");
+  assert.equal(signal.aborted, true);
+  assert.equal(APNS_TIMEOUT_MS, 5000, "under the iOS client's 10 s, with room for the delete batch");
 });
 
 // ---- provider JWT -----------------------------------------------------------

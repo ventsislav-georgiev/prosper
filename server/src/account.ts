@@ -108,12 +108,14 @@ export async function deleteDevice(c: Ctx) {
 export async function deleteAccount(c: Ctx) {
   const email = c.get("email");
   const now = nowSec();
+  // Sweep before the purge (QA #431 I1): a sweep that runs out of subrequests fails while
+  // the session still holds, so a retry resumes it; after the batch a retry would be a 401.
+  await sweepWakeKeys(c, email);
   await purgeAccount(pushDeps(c), email, [ // the cards are ended over APNs first (#573)
     c.env.DB.prepare(`DELETE FROM sessions WHERE email = ?1`).bind(email),
     c.env.DB.prepare(`DELETE FROM devices WHERE email = ?1`).bind(email),
     c.env.DB.prepare(`DELETE FROM settings WHERE email = ?1`).bind(email),
     c.env.DB.prepare(`UPDATE users SET deleted_at = ?2 WHERE email = ?1`).bind(email, now),
   ]);
-  await sweepWakeKeys(c, email);
   return c.json({ ok: true });
 }

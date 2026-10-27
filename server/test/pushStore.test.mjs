@@ -74,18 +74,19 @@ function setup() {
     raw.prepare(`INSERT INTO sessions VALUES (?, ?, 0, 0, NULL)`).run(HASH[email], email);
   }
   const clock = { now: T0 };
-  const answers = new Map(); // token -> {status, reason}
+  const answers = new Map(); // token -> {status, reason} | {hang: true} (answers only by aborting)
   const calls = [];
   const fetchFn = async (url, init) => {
     const token = url.split("/").pop();
     calls.push({ url, token, headers: init.headers, body: JSON.parse(init.body) });
     const a = answers.get(token) ?? { status: 200 };
+    if (a.hang) return new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal.reason)));
     return new Response(a.status === 200 ? null : JSON.stringify({ reason: a.reason }), { status: a.status });
   };
   const pending = [];
   const deps = {
     db: d1(raw),
-    send: (p) => sendApns(fetchFn, { jwt: "test-jwt", topic: "eu.illegible.prosperios" }, p),
+    send: (p) => sendApns(fetchFn, { jwt: "test-jwt", topic: "eu.illegible.prosperios", timeoutMs: 50 }, p),
     now: () => clock.now,
     defer: (p) => pending.push(p),
   };
@@ -1319,6 +1320,7 @@ const CARDS = [
   [ALICE, PHONE2, "la_update", "act-F", MAC2, "7", H2],
   [ALICE, PHONE2, "la_expired", "act-G", MAC, "8", H2],
   [BOB, PHONE, "la_update", "act-E", BOB_MAC, "9", HASH[BOB]],
+  [BOB, PHONE, "la_update", "act-H", MAC, "5", HASH[BOB]], // QA #431 I2: Bob's card on Alice's mac id
 ];
 function insertCard(t, [email, device, kind, activity, mac, token, hash]) {
   t.raw
@@ -1347,13 +1349,13 @@ test("#573: a kind-less DELETE ends each la_update and la_expired card of that p
   const n = countSubrequests(t);
   assert.equal((await deleteTokens(t.deps, ALICE, { device_id: PHONE, activity_id: "act-A" })).status, 204);
   assert.equal(ended(t), "3", "an activity-scoped DELETE ends that card only");
-  assert.equal(left(t), "1246789");
+  assert.equal(left(t), "12456789");
   assert.deepEqual(n, { d1: 2, apns: 1 }, "the card SELECT, the end, one batch");
   insertCard(t, CARDS[2]);
   n.d1 = n.apns = 0;
   assert.equal((await deleteTokens(t.deps, ALICE, { device_id: PHONE })).status, 204);
   assert.equal(ended(t), "34", "PHONE's la_update and la_expired; not PHONE2's, not Bob's PHONE");
-  assert.equal(left(t), "6789");
+  assert.equal(left(t), "56789");
   assert.deepEqual(n, { d1: 2, apns: 2 });
   await deleteTokens(t.deps, ALICE, { device_id: PHONE });
   assert.equal(ended(t), "", "nothing left to end");
@@ -1367,7 +1369,7 @@ test("#573: a kind la_update DELETE (a dismissal the phone ended) and an alert/l
   await deleteTokens(t.deps, ALICE, { device_id: PHONE, kind: "la_start" });
   await deleteTokens(t.deps, ALICE, { device_id: PHONE, kind: "alert" });
   assert.equal(ended(t), "");
-  assert.equal(left(t), "6789");
+  assert.equal(left(t), "56789");
   assert.deepEqual(n, { d1: 4, apns: 0 }, "one DELETE each, as before");
 });
 
@@ -1378,7 +1380,7 @@ test("#573: a dead (410) or failing (500) end still deletes the row", async () =
   const n = countSubrequests(t);
   await deleteTokens(t.deps, ALICE, { device_id: PHONE });
   assert.equal(ended(t), "34");
-  assert.equal(left(t), "6789");
+  assert.equal(left(t), "56789");
   assert.deepEqual(n, { d1: 2, apns: 2 }, "the dead row rides the DELETE's batch");
   // A purge path: the dead row and the purge share the one batch.
   t.answers.set(tok("6"), { status: 410, reason: "Unregistered" });
@@ -1386,8 +1388,16 @@ test("#573: a dead (410) or failing (500) end still deletes the row", async () =
   n.d1 = n.apns = 0;
   await purgeAccount(t.deps, ALICE);
   assert.equal(ended(t), "678");
-  assert.equal(left(t), "9");
+  assert.equal(left(t), "59");
   assert.deepEqual(n, { d1: 2, apns: 3 });
+});
+
+test("#573 / QA #431 L1: an end APNs never answers still lets a kind-less DELETE delete its rows", { timeout: 2000 }, async () => {
+  const t = withCards();
+  t.answers.set(tok("3"), { hang: true });
+  assert.equal((await deleteTokens(t.deps, ALICE, { device_id: PHONE })).status, 204);
+  assert.equal(ended(t), "34");
+  assert.equal(left(t), "56789");
 });
 
 // What the route passes as extra: its own statements, run in the purge's batch.
@@ -1410,7 +1420,7 @@ test("#573: deleteDevice, deleteAccount and logout end exactly the cards they pu
     await run(t, extraRow(t));
     const [ends, rest] = want[name];
     assert.equal(ended(t), ends, name);
-    assert.equal(left(t), rest + "9", `${name}: Bob's card stays`);
+    assert.equal(left(t), [...rest, "5", "9"].sort().join(""), `${name}: Bob's cards stay, the one on MAC too`);
     assert.deepEqual([...order.slice(0, -1).sort(), order.at(-1)], [...[...ends].map((c) => `end ${c}`), "batch"], `${name}: every end before the purge`);
     assert.deepEqual(n, { d1: 2, apns: ends.length }, `${name}: the card SELECT, the ends, one batch`);
     const devices = t.rows(`SELECT device_id FROM devices WHERE email = ?`, ALICE).length;

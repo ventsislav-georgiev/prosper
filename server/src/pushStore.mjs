@@ -293,9 +293,11 @@ async function catchUp(deps, email, v, name, now) {
 }
 
 // Cards a request path ends before it deletes their rows (#573): at most this many. The
-// worst path, deleteAccount: 2 (requireSession) + SELECT + END_MAX sends + one batch (drops
-// and the purge) + the wake-key sweep (2 KV lists + 2 deletes per Mac, 12 at DEVICE_LIMIT
-// 5) = 36 of 50. ponytail: past the cap a row goes without its end (10 phones x 2+ Macs);
+// worst path, deleteAccount: 2 (requireSession) + the wake-key sweep (2 KV lists + 2
+// deletes per devTag; devTags are client-chosen, so DEVICE_LIMIT does not bound it) + SELECT
+// + END_MAX sends + one batch (drops and the purge) = 24 + the sweep, of 50. The sweep runs
+// first (QA #431 I1), so an overflow fails before the batch and a retry still has its
+// session. ponytail: past the cap a row goes without its end (10 phones x 2+ Macs);
 // page the ends over defer() if accounts ever hold that many cards.
 export const END_MAX = 20;
 
