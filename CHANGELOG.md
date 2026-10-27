@@ -37,7 +37,10 @@ tag from the now-released section and put it on the new top draft.
   minutes, and only when you click it. The controls run with the newest dch installed
   (Homebrew first) and with your login shell's PATH, so a session started as `claude` or
   through a wrapper finds it again even when Prosper was opened from the Dock. They stay off
-  when a session runs a newer dch than that, so they never downgrade one.
+  when a session runs a newer dch than that, so they never downgrade one. With no session
+  running, the island stays at the notch with a dimmed 0 while History has sessions from the
+  last 30 days, and opens on History. An open island now stays open when its last session
+  ends; it closes when you click away.
 - **Fixed: Agent Island shows Claude Code's questions again in sessions with a title.** Claude
   Code draws the session's title in a rule under a question while it waits. The island read
   that line as something after the dialog and showed the last screen lines instead of the

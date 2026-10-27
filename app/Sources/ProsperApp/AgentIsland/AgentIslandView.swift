@@ -298,6 +298,9 @@ final class AgentIslandStore: ObservableObject {
     var split: AgentIsland.Split { AgentIsland.split(AgentIsland.sorted(sessions, by: sort), pattern: sidekickPattern) }
     /// #578: sidekicks or history.
     var showsTabs: Bool { !split.sidekicks.isEmpty || !history.isEmpty }
+    /// #581: the collapsed island shows with a live session, or with none but a
+    /// control to offer: today the History tab (#579 adds New session here).
+    var showsIsland: Bool { !sessions.isEmpty || !history.isEmpty }
 
     /// The session rows the list draws: the shown tab's half; none under History.
     var visible: [AgentSession] {
@@ -373,7 +376,8 @@ struct AgentIslandView: View {
                 Color.clear.frame(width: g.notchWidth)
                 Text("\(ear.value)")
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(ear.state == .blocked ? ear.state.color : Color.white.opacity(0.9))
+                    // #581: nothing live (history only): a dim 0, no glyph on the left.
+                    .foregroundStyle(ear.state == .blocked ? ear.state.color : Color.white.opacity(s.total == 0 ? 0.35 : 0.9))
                     .frame(width: g.earWidth)
             }
             .frame(height: g.barHeight)

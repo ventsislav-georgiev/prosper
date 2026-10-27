@@ -492,16 +492,16 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { c.store?.sessions.isEmpty == false }
         XCTAssertEqual(c.store?.sessions.map(\.name), ["a"], "a tick published")
         settle(c)
-        XCTAssertEqual(reads.count, 0, "no history read on a tick")
+        XCTAssertEqual(reads.count, 1, "#581: the launch read only, no history read on a tick")
         XCTAssertEqual(f.args, [])
         c.setExpanded(true)
-        settle(c) { reads.count == 1 }
-        XCTAssertEqual(reads.count, 1)
+        settle(c) { reads.count == 2 }
+        XCTAssertEqual(reads.count, 2)
         XCTAssertEqual(c.store?.history.count, 1)
         FileManager.default.createFile(atPath: dir.appendingPathComponent("b.sock").path, contents: nil)
         settle(c) { c.store?.sessions.count == 2 }   // the gate's 2 s floor, then a fetch
         XCTAssertEqual(c.store?.sessions.map(\.name).sorted(), ["a", "b"], "a second tick published while open")
-        XCTAssertEqual(reads.count, 1, "the open read only")
+        XCTAssertEqual(reads.count, 2, "the launch and open reads only")
         XCTAssertEqual(f.args, [], "no verb from a tick")
     }
 
@@ -586,6 +586,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let fallback = AgentIslandController().controlEnv("/d")["PATH"] ?? ""
         XCTAssertTrue(fallback.hasPrefix(LoginPath.wellKnown(home: NSHomeDirectory()).joined(separator: ":") + ":"), fallback)
         c.controlEnv = { ["PATH": "/login/bin", "DCH_SOCKET_DIR": $0] }
+        c.store?.sessions = [session("b")]   // #581: an empty island does not open
         c.setExpanded(true)
         settle(c) { c.store?.history.count == 1 }
         c.resume(x)
@@ -695,20 +696,272 @@ final class AgentIslandControlsTests: XCTestCase {
         store.historyTab = true
         store.expanded = true
         let out = tempDir()
-        let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
-        func island(_ name: String) throws {
-            let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
-            r.scale = 2
-            let cg = try XCTUnwrap(r.cgImage)
-            XCTAssertEqual(CGFloat(cg.height), (store.size.height + 40) * 2, "\(name): drawn = sized")
-            let png = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]))
-            try png.write(to: out.appendingPathComponent("\(name).png"))
-            if let extra { try png.write(to: extra.appendingPathComponent("\(name).png")) }
-        }
+        func island(_ name: String) throws { try render(store, name, to: out) }
         try island("agent-island-history")
         store.sessions = [session("prosper-main", version: "1.24.0")]
         try island("agent-island-history-gated")
         store.historyTab = false
         try island("agent-island-history-tab-sessions")
+    }
+
+    /// Offscreen PNG of the island into `out`, and into PROSPER_RENDER_DIR when set.
+    @MainActor
+    private func render(_ store: AgentIslandStore, _ name: String, to out: URL) throws {
+        let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
+        let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
+        r.scale = 2
+        let cg = try XCTUnwrap(r.cgImage)
+        XCTAssertEqual(CGFloat(cg.height), (store.size.height + 40) * 2, "\(name): drawn = sized")
+        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]))
+        try png.write(to: out.appendingPathComponent("\(name).png"))
+        if let extra { try png.write(to: extra.appendingPathComponent("\(name).png")) }
+    }
+
+    // MARK: - #581: the island with history and no live session
+
+    /// A controller started like AppDelegate does (extLive + reload) over an
+    /// empty socket dir; history goes through AgentIsland.history with a fake
+    /// dch that records every argv.
+    private final class Argvs: @unchecked Sendable {
+        let lock = NSLock()
+        var all: [[String]] = []
+        var json = ""
+    }
+
+    @MainActor
+    private func launched(_ f: FakeProc, _ argvs: Argvs, dir: URL) -> AgentIslandController {
+        let c = controller(f, Reads(), dirs: [dir.path])
+        c.readHistory = { _, dirs in
+            AgentIsland.history(dirs: dirs) { args, _ in argvs.lock.withLock { argvs.all.append(args); return Data(argvs.json.utf8) } }
+        }
+        c.store = nil
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        let g = notched
+        c.currentGeometry = { g }
+        let path = dir.path
+        c.makePoller = { Self.sockPoller(path) }
+        c.monitorClicks = { _ in NSObject() }   // a token, so a leaked monitor shows
+        c.removeMonitor = { _ in }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        return c
+    }
+
+    /// After a reboot: no live session, every record "vanished". The launch reads
+    /// `--history --json` once, shows the collapsed island, and revives nothing.
+    @MainActor
+    func testLaunchReadShowsTheIslandWithHistoryAndNeverRevives() {
+        let f = FakeProc(), argvs = Argvs(), dir = tempDir()
+        argvs.json = #"[{"name":"a","updated":10,"ended":0,"end":"vanished"},{"name":"b","ended":20,"end":"signal 9"}]"#
+        let c = launched(f, argvs, dir: dir)
+        c.extLive = true
+        c.reload()
+        settle(c) { c.store?.history.count == 2 }
+        XCTAssertEqual(argvs.lock.withLock { argvs.all }, [["--history", "--json"]], "one read, a read only")
+        XCTAssertEqual(c.store?.sessions, [])
+        XCTAssertTrue(c.shown, "history and no live session: the island shows")
+        XCTAssertEqual(c.store?.expanded, false, "collapsed")
+        Thread.sleep(forTimeInterval: 1.2)   // a poll tick or two
+        settle(c)
+        XCTAssertEqual(argvs.lock.withLock { argvs.all }, [["--history", "--json"]], "ticks read nothing")
+        XCTAssertEqual(f.args, [], "no verb ran: never --revive at launch")
+        c.reload()   // a screen change: same island, no second launch read
+        settle(c)
+        XCTAssertEqual(argvs.lock.withLock { argvs.all.count }, 1)
+    }
+
+    /// No history and no live session: hidden as before, and it cannot be opened.
+    @MainActor
+    func testNoHistoryAndNoSessionStaysHidden() {
+        let f = FakeProc(), argvs = Argvs(), dir = tempDir()
+        argvs.json = "[]"
+        let c = launched(f, argvs, dir: dir)
+        c.extLive = true
+        c.reload()
+        settle(c) { c.store?.controlDch != nil }   // the launch read landed
+        XCTAssertEqual(argvs.lock.withLock { argvs.all.count }, 1)
+        XCTAssertFalse(c.shown)
+        c.setExpanded(true)
+        XCTAssertEqual(c.store?.expanded, false, "nothing to show: no expand")
+        XCTAssertNil(c.outsideClick)
+    }
+
+    /// The extension off: no store, no read, nothing shown; turning it off
+    /// later hides an island that history was showing.
+    @MainActor
+    func testExtensionOffShowsNothing() {
+        let f = FakeProc(), argvs = Argvs(), dir = tempDir()
+        argvs.json = #"[{"name":"a","ended":20,"end":"signal 9"}]"#
+        let c = launched(f, argvs, dir: dir)
+        c.extLive = false
+        c.reload()
+        settle(c)
+        XCTAssertNil(c.store)
+        XCTAssertFalse(c.shown)
+        XCTAssertEqual(argvs.lock.withLock { argvs.all.count }, 0, "off: no read")
+        c.extLive = true
+        c.reload()
+        settle(c) { c.shown }
+        XCTAssertTrue(c.shown)
+        c.extLive = false
+        c.reload()
+        XCTAssertNil(c.store)
+        XCTAssertFalse(c.shown, "off again: hidden")
+    }
+
+    /// Expanding with no live session opens on History; with one, on Sessions.
+    @MainActor
+    func testExpandLandsOnHistoryWhenNoSessionIsLive() {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("x")]
+        let c = controller(f, reads)
+        c.store?.history = [record("x")]
+        c.setExpanded(true)
+        XCTAssertEqual(c.store?.expanded, true)
+        XCTAssertEqual(c.store?.historyTab, true, "Sessions is empty: History")
+        XCTAssertEqual(c.store?.visible, [])
+        settle(c) { reads.count == 1 }
+        c.setExpanded(false)
+        c.store?.historyTab = false
+        c.store?.sessions = [session("a")]
+        c.setExpanded(true)
+        XCTAssertEqual(c.store?.historyTab, false, "a live session: Sessions as before")
+    }
+
+    /// An open island never closes itself: history emptying with nothing live
+    /// (a Resume's re-read landing before the revived session's tick) keeps it
+    /// open on Sessions, and the tick's session shows there. Only the user
+    /// collapses it; collapsed with nothing to show, it hides.
+    @MainActor
+    func testAnOpenIslandNeverClosesItself() throws {
+        let f = FakeProc(), argvs = Argvs(), dir = tempDir()
+        argvs.json = #"[{"name":"x","ended":20,"end":"signal 9"}]"#
+        let c = launched(f, argvs, dir: dir)
+        c.extLive = true
+        c.reload()
+        settle(c) { c.store?.history.isEmpty == false }
+        XCTAssertEqual(c.store?.sessions, [])
+        c.setExpanded(true)
+        XCTAssertEqual(c.store?.historyTab, true)
+        argvs.lock.withLock { argvs.json = "[]" }
+        c.refreshHistory()   // as after the Resume of x
+        settle(c) { c.store?.history.isEmpty == true }
+        XCTAssertEqual(c.store?.expanded, true, "nothing to show, still open")
+        XCTAssertTrue(c.shown)
+        XCTAssertEqual(c.store?.historyTab, false, "history gone: back to Sessions")
+        let sock = dir.appendingPathComponent("x.sock")
+        FileManager.default.createFile(atPath: sock.path, contents: nil)
+        settle(c) { c.store?.sessions.isEmpty == false }
+        XCTAssertEqual(c.store?.visible.map(\.name), ["x"], "the revived session shows in the open list")
+        XCTAssertEqual(c.store?.expanded, true)
+        try FileManager.default.removeItem(at: sock)
+        settle(c) { c.store?.sessions.isEmpty == true }
+        settle(c)   // the edge read (still [])
+        XCTAssertEqual(c.store?.expanded, true)
+        XCTAssertTrue(c.shown)
+        XCTAssertNotNil(c.outsideClick)
+        c.setExpanded(false)
+        XCTAssertFalse(c.shown, "collapsed with nothing to show: hidden")
+        XCTAssertNil(c.outsideClick)
+    }
+
+    /// One history read when the live count reaches 0, none while it only
+    /// drops or stays at 0: the ended session's record then keeps the island.
+    @MainActor
+    func testLastSessionEndingReadsHistoryOnce() throws {
+        let f = FakeProc(), argvs = Argvs(), dir = tempDir()
+        argvs.json = "[]"
+        let a = dir.appendingPathComponent("a.sock"), b = dir.appendingPathComponent("b.sock")
+        for s in [a, b] { FileManager.default.createFile(atPath: s.path, contents: nil) }
+        let c = launched(f, argvs, dir: dir)
+        let reads = { argvs.lock.withLock { argvs.all.count } }
+        c.extLive = true
+        c.reload()
+        settle(c) { c.store?.sessions.count == 2 && c.store?.controlDch != nil }
+        XCTAssertEqual(reads(), 1, "the launch read")
+        try FileManager.default.removeItem(at: b)
+        settle(c) { c.store?.sessions.count == 1 }
+        settle(c)
+        XCTAssertEqual(reads(), 1, "2 -> 1 live: no read")
+        argvs.lock.withLock { argvs.json = #"[{"name":"a","ended":20,"end":"exit 0"}]"# }
+        try FileManager.default.removeItem(at: a)
+        settle(c) { c.store?.history.count == 1 }
+        XCTAssertEqual(reads(), 2, "1 -> 0 live: one read")
+        XCTAssertEqual(c.store?.sessions, [])
+        XCTAssertTrue(c.shown, "its record keeps the island")
+        Thread.sleep(forTimeInterval: 1.2)   // more ticks at 0 (an unchanged tick publishes nothing)
+        settle(c)
+        XCTAssertEqual(reads(), 2, "no read per tick at 0")
+        XCTAssertEqual(f.args, [], "and never a verb")
+    }
+
+    /// Visual evidence: the history-only island, collapsed (dim 0, no glyph)
+    /// and open on History. Offscreen only.
+    @MainActor
+    func testRendersHistoryOnlyIslandOffscreen() throws {
+        let now = Date().timeIntervalSince1970
+        let store = AgentIslandStore(geometry: notched)
+        store.controlDch = Self.v123
+        var a = record("prosper-main", ended: 0, end: "vanished")
+        a.updated = now - 300
+        a.cwd = NSHomeDirectory() + "/personal/prosper"
+        store.history = [a, record("ios", ended: now - 7200, end: "exit 1")]
+        XCTAssertTrue(store.showsIsland)
+        XCTAssertNil(store.summary.mostUrgent, "no urgency glyph")
+        let out = tempDir()
+        try render(store, "agent-island-history-only-collapsed", to: out)
+        store.historyTab = true
+        store.expanded = true
+        try render(store, "agent-island-history-only-open", to: out)
+    }
+
+    // MARK: - QA #445 pins (Q9, Q8, Q13)
+
+    /// L1 (Q9): the env closure runs on the job's thread, never on the caller's
+    /// main thread, and start() does not wait for it.
+    @MainActor
+    func testRunnerBuildsTheEnvOnTheJobsThread() {
+        final class Seen: @unchecked Sendable { let lock = NSLock(); var main: [Bool] = [] }
+        let f = FakeProc(), runner = f.runner(), res = Results(), seen = Seen()
+        XCTAssertTrue(Thread.isMainThread)
+        let t0 = Date()
+        XCTAssertTrue(runner.start(AgentSessionKey(dir: "/d", name: "a"), path: "/fake/dch", args: [], env: {
+            seen.lock.withLock { seen.main.append(Thread.isMainThread) }
+            Thread.sleep(forTimeInterval: 0.4)   // a slow login-shell probe
+            return [:]
+        }, done: res.add))
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 0.3, "start returned before the env was built")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        XCTAssertEqual(res.done.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(seen.lock.withLock { seen.main }, [false])
+    }
+
+    /// L2 (Q8): a relative or missing SHELL probes /bin/zsh; an absolute one is used.
+    func testRelativeOrMissingShellProbesBinZsh() {
+        let probes = Probes()
+        let probe: LoginPath.Probe = { shell, _ in probes.lock.withLock { probes.calls.append(shell) }; return nil }
+        XCTAssertNil(LoginPath.read(shell: "zsh", cache: .init(), probe: probe))
+        XCTAssertNil(LoginPath.read(shell: nil, cache: .init(), probe: probe))
+        XCTAssertNil(LoginPath.read(shell: "/opt/homebrew/bin/fish", cache: .init(), probe: probe))
+        XCTAssertEqual(probes.lock.withLock { probes.calls }, ["/bin/zsh", "/bin/zsh", "/opt/homebrew/bin/fish"])
+    }
+
+    /// I1 (Q13): the --as pick skips only the same dir's record names; a record
+    /// named a-2 in another dir leaves a-2 free here.
+    @MainActor
+    func testAsPickIgnoresAnotherDirsRecords() {
+        let f = FakeProc(), reads = Reads()
+        let x = record("a", dir: "/d")
+        reads.records = [x]
+        let c = controller(f, reads)
+        c.store?.controlDch = Self.v123
+        c.store?.sessions = [session("a", dir: "/d")]
+        c.store?.history = [x, record("a-2", dir: "/e", ended: 50)]
+        c.resume(x)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--revive", "a", "--as", "a-2"]])
+        f.release.signal()
+        settle(c) { c.store?.actions[x.key] != AgentIsland.resumingText }
     }
 }

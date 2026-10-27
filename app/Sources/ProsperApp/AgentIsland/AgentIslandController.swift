@@ -39,6 +39,8 @@ final class AgentIslandController {
     private(set) var timer: DispatchSourceTimer?
     private(set) var outsideClick: Any?
     private(set) var screenObserver: NSObjectProtocol?
+    /// #581: layout()'s last decision (the panel shown or ordered out); tests read it.
+    private(set) var shown = false
     /// #475: the activity each blocked session's screen was last read at, and a
     /// per-session generation (never reset) so a late read never revives an
     /// answered card.
@@ -134,6 +136,9 @@ final class AgentIslandController {
         }
         t.resume()
         timer = t
+        // #581: once per build, so the island can show with history and no live
+        // session (after a reboot). A read only, never --revive.
+        refreshHistory()
     }
 
     /// #478: nonisolated so the handler is too. Built in reload() it was inferred
@@ -152,11 +157,16 @@ final class AgentIslandController {
 
     private func apply(_ sessions: [AgentSession]) {
         guard timer != nil, let store else { return }   // a tick that raced teardown
+        let wasLive = !store.sessions.isEmpty
         store.sessions = sessions
         onSessions?(sessions)
         let live = Set(sessions.map(\.key))
         store.notices = store.notices.filter { live.contains($0.key) }
-        if sessions.isEmpty { setExpanded(false) }
+        // #581: the last session gone: one history read, so its record can keep the
+        // island. On that edge only, never per tick.
+        // ponytail: with no history yet the collapsed ear hides for the ~100 ms the
+        // read takes, then shows; keep the island up meanwhile if that ever flickers.
+        if wasLive, sessions.isEmpty { refreshHistory() }
         refreshCards()
         layout()
     }
@@ -198,8 +208,9 @@ final class AgentIslandController {
 
     // MARK: - History and Resume (#578)
 
-    /// Reads `--history --json` with the control binary: on open and after an
-    /// action, never on the poll timer. A binary under 1.23.0 reads none (no tab).
+    /// Reads `--history --json` with the control binary: once when the island is
+    /// built (#581), on open and after an action, never on the poll timer. A
+    /// binary under 1.23.0 reads none (no tab).
     func refreshHistory() {
         guard store != nil else { return }
         let dirs = historyDirs(), probe = controlDch, read = readHistory
@@ -258,12 +269,16 @@ final class AgentIslandController {
         layout()
     }
 
-    /// Size the panel to the island so nothing outside it eats clicks; hide it
-    /// with no sessions.
+    /// Size the panel to the island so nothing outside it eats clicks. #581: an
+    /// open island never closes itself (a Resume's re-read can land before the
+    /// tick shows the revived session); a collapsed one hides with nothing to
+    /// show: no session and no history.
     private func layout() {
-        guard showsPanel, let store else { return }
+        guard let store else { return }
+        shown = store.expanded || store.showsIsland
+        guard showsPanel else { return }
         if let g = currentGeometry(), g != store.geometry { store.geometry = g }
-        guard !store.sessions.isEmpty else { panel?.orderOut(nil); return }
+        guard shown else { panel?.orderOut(nil); return }
         let panel = self.panel ?? makePanel(store)
         panel.setFrame(store.geometry.frame(store.size), display: true)
         if !panel.isVisible { panel.orderFrontRegardless() }
@@ -300,8 +315,10 @@ final class AgentIslandController {
 
     /// Only the panel's own view expands it, so a nil panel (tests) just skips the window work.
     func setExpanded(_ on: Bool) {
-        guard let store, store.expanded != on else { return }
+        guard let store, store.expanded != on, !on || store.showsIsland else { return }
         store.expanded = on
+        // #581: nothing live: open on History.
+        if on, store.sessions.isEmpty, !store.history.isEmpty { store.historyTab = true }
         if !on {
             store.notices = [:]; store.cards = [:]; readAt = [:]
             store.actions = store.actions.filter { runner.isBusy($0.key) }   // a running one keeps its "Resuming…"
@@ -508,6 +525,7 @@ final class AgentIslandController {
         panel?.contentView = nil
         panel = nil
         store = nil
+        shown = false
     }
 }
 
