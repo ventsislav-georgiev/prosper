@@ -18,6 +18,17 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.160.0 *(unreleased)*
+
+- **Agent Island: sort by name, and an optional Sidekicks tab.** Settings › Extensions ›
+  Agent Island has a new Session list section. Sort sessions keeps Last activity (the
+  current order: sessions that need input first, then working, done and idle, newest first
+  in each) or switches to Name, a flat A to Z list. Sidekick tabs, off by default, splits the
+  list the way the iOS app does: sessions whose name or alias contains the Sidekick pattern
+  (`-qa` by default, case ignored) move under a Sidekicks tab, and the rest stay under
+  Sessions. The tabs appear only when there is at least one sidekick. The summary beside the
+  notch still counts every session.
+
 ## v2.159.0
 
 - **Agent Island: every agent session and its state, over the notch.** A new opt-in

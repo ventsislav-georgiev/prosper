@@ -2224,6 +2224,395 @@ final class AgentIslandTests: XCTestCase {
         }
         XCTAssertEqual(store.details, .all)
         store.details = AgentIslandRowDetails()
-        XCTAssertEqual(store.rowHeights, [AgentIslandGeometry.prRowHeight, AgentIslandGeometry.prRowHeight, AgentIslandGeometry.rowHeight])
+        // #571: drawn in the island's order (working, done, idle), whatever order the store was given.
+        XCTAssertEqual(store.rowHeights, [AgentIslandGeometry.prRowHeight, AgentIslandGeometry.rowHeight, AgentIslandGeometry.prRowHeight])
+    }
+
+    // MARK: - Sort and sidekick tabs (#571)
+
+    private static let listKeys = ["agentIslandSort", "agentIslandSidekickTabs", "agentIslandSidekickPattern"]
+
+    /// Clears the three keys in the scratch Preferences domain for one test and
+    /// puts back whatever was there.
+    private func clearListKeys() {
+        let saved = Self.listKeys.map { Preferences.defaults.object(forKey: $0) }
+        addTeardownBlock {
+            for (k, v) in zip(Self.listKeys, saved) {
+                if let v { Preferences.defaults.set(v, forKey: k) } else { Preferences.defaults.removeObject(forKey: k) }
+            }
+        }
+        Self.listKeys.forEach(Preferences.defaults.removeObject(forKey:))
+    }
+
+    private func names(_ l: [AgentSession]) -> [String] { l.map(\.name) }
+
+    /// Last activity is the default everywhere and is today's order.
+    @MainActor
+    func testDefaultSortIsLastActivityUnchanged() {
+        let rows = [session("i", .idle, activity: 50), session("w1", .working, activity: 10),
+                    session("d", .done, activity: 90), session("b", .blocked, activity: 1),
+                    session("w2", .working, activity: 20), session("i2", .idle, activity: 60)]
+        XCTAssertEqual(names(AgentIsland.sorted(rows, by: .activity)), ["b", "w2", "w1", "d", "i2", "i"])
+        XCTAssertEqual(names(AgentIsland.sorted(rows)), names(AgentIsland.sorted(rows, by: .activity)))
+        XCTAssertEqual(AgentIslandSort(raw: nil), .activity)
+        XCTAssertEqual(AgentIslandSort(raw: "bogus"), .activity)
+        XCTAssertEqual(AgentIslandSort(raw: "name"), .name)
+        XCTAssertEqual(AgentIslandSort.allCases.map(\.label), ["Last activity", "Name"])
+        let store = AgentIslandStore(geometry: notched)
+        XCTAssertEqual(store.sort, .activity)
+        XCTAssertEqual(store.sidekickPattern, "", "a store built without a pattern has no tabs")
+        store.sessions = rows
+        XCTAssertEqual(names(store.visible), ["b", "w2", "w1", "d", "i2", "i"])
+    }
+
+    /// Name: flat (no state groups), by the alias when set, "a2" before "a10",
+    /// ties on name then dir.
+    func testNameSortIsFlatByTitleNumericAwareWithTies() {
+        let rows = [session("a10", .blocked, activity: 99), session("zz", .idle, alias: "a3"),
+                    session("b", .working, activity: 50), session("x", .idle, alias: "a2", dir: "/e"),
+                    session("a2", .done), session("x", .idle, alias: "a2", dir: "/d")]
+        let sorted = AgentIsland.sorted(rows, by: .name)
+        XCTAssertEqual(sorted.map { "\($0.name)\($0.key.dir)" }, ["a2/d", "x/d", "x/e", "zz/d", "a10/d", "b/d"])
+        // States and ages move; the rows keep their places.
+        let moved = rows.map { session($0.name, $0.name == "b" ? .blocked : .idle, activity: 1000 - $0.activity,
+                                       alias: $0.alias, dir: $0.key.dir) }
+        XCTAssertEqual(AgentIsland.sorted(moved, by: .name).map(\.key), sorted.map(\.key))
+        XCTAssertEqual(AgentIsland.sorted(rows.reversed(), by: .name).map(\.key), sorted.map(\.key), "input order is irrelevant")
+    }
+
+    // Ported from prosper-ios SidekickSplitTests.
+
+    func testSplitDefaultPattern() {
+        let r = AgentIsland.split([session("build", .idle), session("build-qa", .idle), session("notes", .idle)],
+                                  pattern: AgentIsland.sidekickDefault)
+        XCTAssertEqual(AgentIsland.sidekickDefault, "-qa")
+        XCTAssertEqual(names(r.primary), ["build", "notes"])
+        XCTAssertEqual(names(r.sidekicks), ["build-qa"])
+    }
+
+    func testSplitCaseInsensitive() {
+        let r = AgentIsland.split([session("build-QA", .idle), session("notes", .idle)], pattern: "-Qa")
+        XCTAssertEqual(names(r.sidekicks), ["build-QA"])
+        XCTAssertEqual(names(r.primary), ["notes"])
+    }
+
+    func testSplitEmptyPatternMeansNoSplit() {
+        let list = [session("build", .idle), session("build-qa", .idle)]
+        for p in ["", "   ", "\n\t"] {
+            let r = AgentIsland.split(list, pattern: p)
+            XCTAssertEqual(names(r.primary), ["build", "build-qa"])
+            XCTAssertTrue(r.sidekicks.isEmpty)
+        }
+        XCTAssertEqual(names(AgentIsland.split(list, pattern: " -qa ").sidekicks), ["build-qa"], "the pattern is trimmed")
+    }
+
+    /// A renamed session counts by its alias; a matching name still counts under a plain alias.
+    func testSplitAliasOrNameMatches() {
+        let r = AgentIsland.split([session("build", .idle, alias: "build-qa"), session("notes-qa", .idle, alias: "notes"),
+                                   session("web", .idle, alias: "site"), session("api", .idle)], pattern: "-qa")
+        XCTAssertEqual(names(r.primary), ["web", "api"])
+        XCTAssertEqual(names(r.sidekicks), ["build", "notes-qa"])
+    }
+
+    func testSplitAliasCaseInsensitive() {
+        let r = AgentIsland.split([session("build", .idle, alias: "Build-QA"), session("notes", .idle)], pattern: "-qa")
+        XCTAssertEqual(names(r.sidekicks), ["build"])
+        XCTAssertEqual(names(r.primary), ["notes"])
+    }
+
+    func testSplitKeepsOrder() {
+        let r = AgentIsland.split([session("z-qa", .idle), session("b", .idle), session("a-qa", .idle), session("a", .idle)],
+                                  pattern: "-qa")
+        XCTAssertEqual(names(r.primary), ["b", "a"])
+        XCTAssertEqual(names(r.sidekicks), ["z-qa", "a-qa"])
+    }
+
+    func testShowsSidekicksAllThreeCases() {
+        let all = AgentIsland.split([session("a-qa", .idle), session("b-qa", .idle)], pattern: "-qa")
+        XCTAssertTrue(AgentIsland.showsSidekicks(all, tab: false), "sidekicks are all there is")
+        XCTAssertTrue(AgentIsland.showsSidekicks(all, tab: true))
+        let both = AgentIsland.split([session("a", .idle), session("a-qa", .idle)], pattern: "-qa")
+        XCTAssertFalse(AgentIsland.showsSidekicks(both, tab: false), "both halves: the chosen tab")
+        XCTAssertTrue(AgentIsland.showsSidekicks(both, tab: true))
+        let none = AgentIsland.split([session("a", .idle), session("b", .idle)], pattern: "-qa")
+        XCTAssertFalse(AgentIsland.showsSidekicks(none, tab: false), "never without sidekicks")
+        XCTAssertFalse(AgentIsland.showsSidekicks(none, tab: true))
+        XCTAssertFalse(AgentIsland.showsSidekicks(AgentIsland.split([], pattern: "-qa"), tab: true))
+    }
+
+    /// The list, its row heights, cards and the size follow the shown tab; the
+    /// collapsed island and the header summary count every session.
+    @MainActor
+    func testStoreListsTheShownTabAndSummarizesEverySession() {
+        let two = AgentIslandGeometry.rowHeight, three = AgentIslandGeometry.prRowHeight, g = notched
+        let main = session("main", .working, activity: 10), other = session("other", .idle, activity: 1)
+        var qa = session("main-qa", .blocked, activity: 5)
+        qa.meta = DchSessionMeta(openPRs: [pr("o/r", 1)])   // a three-line row
+        let store = AgentIslandStore(geometry: g, sidekickPattern: "-qa")
+        store.sessions = [qa, main, other]
+        store.expanded = true
+        XCTAssertTrue(store.showsTabs)
+        XCTAssertEqual(names(store.visible), ["main", "other"])
+        XCTAssertEqual(store.rowHeights, [two, two])
+        XCTAssertEqual(store.size, g.expandedSize(rows: [two, two], tabs: true))
+        XCTAssertEqual(store.size.height, 32 + AgentIslandGeometry.tabsHeight + 4 + 2 * two + 12)
+        XCTAssertEqual(store.summary.total, 3)
+        XCTAssertEqual(store.summary.blocked, 1, "the blocked sidekick under the other tab still lights the ear")
+        XCTAssertEqual(store.summary.mostUrgent, .blocked)
+        store.cards[qa.key] = .changed
+        XCTAssertEqual(store.cardsHeight, 0, "a hidden row's card adds nothing")
+        let card = AgentIslandGeometry.cardHeight(.changed)
+        store.sidekickTab = true
+        XCTAssertEqual(names(store.visible), ["main-qa"])
+        XCTAssertEqual(store.rowHeights, [three])
+        XCTAssertEqual(store.cardsHeight, card)
+        XCTAssertEqual(store.size, g.expandedSize(rows: [three], cards: card, tabs: true))
+        XCTAssertEqual(store.summary.total, 3)
+        // Tabs off: no tab row, the whole list, back to Sessions.
+        store.sidekickPattern = ""
+        XCTAssertFalse(store.sidekickTab, "tabs off: back to Sessions")
+        XCTAssertFalse(store.showsTabs)
+        XCTAssertEqual(names(store.visible), ["main-qa", "main", "other"])
+        XCTAssertEqual(store.size, g.expandedSize(rows: [three, two, two], cards: card))
+        XCTAssertEqual(store.size.height, 32 + 4 + three + 2 * two + card + 12, "no tab row")
+        // Name sort inside a tab.
+        store.sidekickPattern = "-qa"
+        store.sort = .name
+        XCTAssertEqual(names(store.visible), ["main", "other"])
+        store.sessions = [other, main, session("b", .blocked)]
+        XCTAssertEqual(names(store.visible), ["b", "main", "other"], "flat: blocked is not first")
+        store.expanded = false
+        XCTAssertEqual(store.size, g.collapsedSize)
+    }
+
+    /// The tab space comes out of the list's cap, so the island still ends 40 pt above the screen bottom.
+    func testTabRowComesOutOfTheListCap() {
+        let g = notched
+        XCTAssertEqual(g.maxListHeight(tabs: true), g.maxListHeight - AgentIslandGeometry.tabsHeight)
+        XCTAssertEqual(g.expandedSize(rows: [], cards: 5000, tabs: true).height, g.expandedSize(rows: [], cards: 5000).height,
+                       "capped: same height with or without tabs")
+        let fits = g.maxListHeight - 10   // fits without tabs, not with them
+        XCTAssertFalse(g.listScrolls(rows: [fits]))
+        XCTAssertTrue(g.listScrolls(rows: [fits], tabs: true))
+    }
+
+    /// The last sidekick gone sends the tab back to Sessions, so the next one to
+    /// appear does not switch the list; while sidekicks stay, the tab stays.
+    @MainActor
+    func testLastSidekickGoneReturnsToSessions() {
+        let store = AgentIslandStore(geometry: notched, sidekickPattern: "-qa")
+        let a = session("a", .idle), aqa = session("a-qa", .idle), bqa = session("b-qa", .idle)
+        store.sessions = [a, aqa]
+        store.sidekickTab = true
+        XCTAssertEqual(names(store.visible), ["a-qa"])
+        store.sessions = [a, aqa, bqa]
+        XCTAssertTrue(store.sidekickTab, "sidekicks remain: the tab stays")
+        store.sessions = [a]
+        XCTAssertFalse(store.sidekickTab)
+        XCTAssertFalse(store.showsTabs)
+        store.sessions = [a, bqa]
+        XCTAssertEqual(names(store.visible), ["a"], "a new sidekick does not switch the list")
+        store.sessions = [bqa]
+        XCTAssertEqual(names(store.visible), ["b-qa"], "sidekicks only: shown without a click")
+        XCTAssertTrue(store.showsTabs)
+    }
+
+    /// Unset keys: Last activity, tabs off, pattern "-qa". Per Mac: no key syncs.
+    func testListDefaultsAndKeysAreNotSynced() {
+        clearListKeys()
+        XCTAssertEqual(Preferences.agentIslandSort, .activity)
+        XCTAssertFalse(Preferences.agentIslandSidekickTabs)
+        XCTAssertEqual(Preferences.agentIslandSidekickPattern, "-qa")
+        for k in Self.listKeys { XCTAssertFalse(SyncedKeys.isSynced(k), "\(k): per Mac") }
+        Preferences.agentIslandSort = .name
+        Preferences.agentIslandSidekickTabs = true
+        Preferences.agentIslandSidekickPattern = ""
+        XCTAssertEqual(Self.listKeys.map { Preferences.defaults.object(forKey: $0) as? NSObject },
+                       ["name" as NSString, true as NSNumber, "" as NSString], "the keys are pinned")
+        XCTAssertEqual(Preferences.agentIslandSort, .name)
+        XCTAssertTrue(Preferences.agentIslandSidekickTabs)
+        XCTAssertEqual(Preferences.agentIslandSidekickPattern, "", "an empty pattern stays empty: no split")
+    }
+
+    /// reload() builds the store from Preferences; tabs off means no pattern.
+    @MainActor
+    func testReloadBuildsTheStoreWithTheListSettings() throws {
+        clearListKeys()
+        let l = Lifecycle(), c = lifecycleController(l)
+        l.geometry = notched
+        Preferences.agentIslandSort = .name
+        Preferences.agentIslandSidekickPattern = "-x"
+        c.extLive = true
+        c.reload()
+        XCTAssertEqual(c.store?.sort, .name)
+        XCTAssertEqual(c.store?.sidekickPattern, "", "tabs off: no split whatever the pattern")
+        c.extLive = false
+        c.reload()
+        Preferences.agentIslandSidekickTabs = true
+        c.extLive = true
+        c.reload()
+        XCTAssertEqual(c.store?.sidekickPattern, "-x")
+    }
+
+    /// A Settings change reaches the open island at once: re-sorted, re-split
+    /// and resized (here: the store; no panel).
+    @MainActor
+    func testListSettingsChangeReSortsAndReSplitsTheOpenIsland() {
+        clearListKeys()
+        clearRowDetailKeys()
+        let c = AgentIslandController()
+        c.showsPanel = false
+        c.store = AgentIslandStore(geometry: notched)
+        c.store?.sessions = AgentIsland.sorted([session("b", .blocked, activity: 1), session("a-qa", .working, activity: 2),
+                                                session("c", .idle, activity: 3)])
+        c.store?.expanded = true
+        c.rowDetailsChanged()
+        XCTAssertEqual(c.store.map { names($0.visible) }, ["b", "a-qa", "c"], "unset: last activity, no tabs")
+        Preferences.agentIslandSort = .name
+        c.rowDetailsChanged()
+        XCTAssertEqual(c.store.map { names($0.visible) }, ["a-qa", "b", "c"])
+        Preferences.agentIslandSidekickTabs = true
+        c.rowDetailsChanged()
+        XCTAssertEqual(c.store?.sidekickPattern, "-qa")
+        XCTAssertEqual(c.store.map { names($0.visible) }, ["b", "c"])
+        XCTAssertEqual(c.store?.size, notched.expandedSize(rows: Array(repeating: AgentIslandGeometry.rowHeight, count: 2), tabs: true))
+        c.showSidekicks(true)
+        XCTAssertEqual(c.store.map { names($0.visible) }, ["a-qa"])
+        XCTAssertEqual(c.store?.size, notched.expandedSize(rows: Array(repeating: AgentIslandGeometry.rowHeight, count: 1), tabs: true))
+        Preferences.agentIslandSidekickPattern = "  "
+        c.rowDetailsChanged()
+        XCTAssertEqual(c.store?.sidekickTab, false, "no sidekicks: back to Sessions")
+        XCTAssertEqual(c.store.map { names($0.visible) }, ["a-qa", "b", "c"])
+        XCTAssertEqual(c.store?.size, notched.expandedSize(rows: 3))
+        Preferences.agentIslandSidekickPattern = "-QA"
+        Preferences.agentIslandSidekickTabs = false
+        c.rowDetailsChanged()
+        XCTAssertEqual(c.store?.sidekickPattern, "", "toggle off: no split")
+    }
+
+    /// Cards are read only for the shown tab's blocked rows; a tab click reads the other.
+    @MainActor
+    func testOnlyTheShownTabsBlockedRowsGetCards() {
+        clearListKeys()
+        let f = FakeIO(), c = AgentIslandController()
+        c.io = f.io
+        c.showsPanel = false
+        let s = session("s", .blocked, activity: 1), qa = session("s-qa", .blocked, activity: 1)
+        c.store = AgentIslandStore(geometry: notched, sidekickPattern: "-qa")
+        c.store?.sessions = [s, qa]
+        c.store?.expanded = true
+        c.refreshCards()
+        drain(c)
+        XCTAssertEqual(f.reads, 1, "the sidekick under the other tab is never read")
+        XCTAssertEqual(c.store.map { Set($0.cards.keys) }, [s.key])
+        c.showSidekicks(true)
+        drain(c)
+        XCTAssertEqual(f.reads, 2)
+        XCTAssertEqual(c.store.map { Set($0.cards.keys) }, [qa.key])
+        c.showSidekicks(true)   // already shown: nothing new to read
+        drain(c)
+        XCTAssertEqual(f.reads, 2)
+        // Tabs off in Settings (unset keys): both rows show and the other one is read at once.
+        c.rowDetailsChanged()
+        drain(c)
+        XCTAssertEqual(f.reads, 3)
+        XCTAssertEqual(c.store.map { Set($0.cards.keys) }, [s.key, qa.key])
+    }
+
+    /// The list draws the shown tab's rows only, and the tab row only with
+    /// sidekicks: below the header (and tab row), the Sessions tab is
+    /// pixel-identical to a tabless island over the same rows. No ages
+    /// (activity 0), so nothing depends on the clock.
+    @MainActor
+    func testTabbedListDrawsOnlyTheShownRows() throws {
+        let main = session("main", .working), other = session("other", .idle), qa = session("main-qa", .blocked)
+        /// The list region as RGBA bytes.
+        func listPixels(_ store: AgentIslandStore) throws -> [UInt8] {
+            store.expanded = true
+            let r = ImageRenderer(content: AgentIslandView(store: store))
+            r.scale = 2
+            let cg = try XCTUnwrap(r.cgImage)
+            let top = Int((store.geometry.barHeight + (store.showsTabs ? AgentIslandGeometry.tabsHeight : 0)) * 2)
+            let crop = try XCTUnwrap(cg.cropping(to: CGRect(x: 0, y: top, width: cg.width, height: cg.height - top)))
+            var buf = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+            buf.withUnsafeMutableBytes { b in
+                CGContext(data: b.baseAddress, width: crop.width, height: crop.height, bitsPerComponent: 8,
+                          bytesPerRow: crop.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?
+                    .draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+            }
+            return buf
+        }
+        /// Channel values that differ by more than antialiasing noise.
+        func differing(_ a: [UInt8], _ b: [UInt8]) -> Int {
+            a.count != b.count ? Int.max : zip(a, b).filter { abs(Int($0) - Int($1)) > 32 }.count
+        }
+        let tabbed = AgentIslandStore(geometry: notched, sidekickPattern: "-qa")
+        tabbed.sessions = [qa, main, other]
+        let plain = AgentIslandStore(geometry: notched)
+        plain.sessions = [main, other]
+        let all = AgentIslandStore(geometry: notched)
+        all.sessions = [qa, main, other]
+        let p = try listPixels(plain)
+        XCTAssertEqual(differing(try listPixels(tabbed), p), 0, "the Sessions tab draws main and other only")
+        XCTAssertGreaterThan(differing(try listPixels(all), p), 1000, "the check sees a different row set")
+    }
+
+    /// Visual evidence: the island with tabs off, tabs on (Sessions and
+    /// Sidekicks), the collapsed island with a blocked sidekick, and the Settings
+    /// section at UI scale 0.7, 0.85 and 1.0. Offscreen only.
+    @MainActor
+    func testRendersSidekickTabsOffscreen() throws {
+        let now = Date().timeIntervalSince1970
+        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        store.sessions = AgentIsland.sorted([
+            session("prosper-qa", .blocked, activity: now - 30, alias: "QA 571"),
+            session("prosper-main", .working, activity: now - 5, agents: 2),
+            session("sec-branch-name", .idle, activity: now - 900, alias: "sec-1"),
+            session("ios-qa", .done, activity: now - 4000)])
+        store.expanded = true
+        let out = tempDir()
+        let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
+        func write(_ png: Data, _ name: String) throws {
+            try png.write(to: out.appendingPathComponent("\(name).png"))
+            if let extra { try png.write(to: extra.appendingPathComponent("\(name).png")) }
+        }
+        func island(_ name: String) throws {
+            let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
+            r.scale = 2
+            let cg = try XCTUnwrap(r.cgImage)
+            XCTAssertEqual(CGFloat(cg.height), (store.size.height + 40) * 2, "\(name): drawn = sized")
+            try write(try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])), name)
+        }
+        try island("agent-island-tabs-off")
+        store.sidekickPattern = "-qa"
+        try island("agent-island-tabs-sessions")
+        store.sidekickTab = true
+        try island("agent-island-tabs-sidekicks")
+        store.sidekickTab = false
+        store.sort = .name
+        try island("agent-island-tabs-sessions-name-sort")
+        store.expanded = false
+        try island("agent-island-collapsed-blocked-sidekick")
+        clearListKeys()
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        for (scale, tabs) in [(0.7, true), (0.85, false), (1.0, true)] as [(CGFloat, Bool)] {
+            ThemeRuntime.scale = scale
+            Preferences.agentIslandSidekickTabs = tabs
+            let width = sz(560)
+            let h = NSHostingView(rootView: AgentIslandListSection().frame(width: width).padding(sz(16))
+                .background(Color(white: 0.1)).preferredColorScheme(.dark))
+            h.frame = CGRect(origin: .zero, size: CGSize(width: width + 2 * sz(16), height: 10))
+            h.frame.size = h.fittingSize
+            h.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            h.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(h.bounds.height, 3 * sz(20), "scale \(scale): three rows laid out")
+            let rep = try XCTUnwrap(h.bitmapImageRepForCachingDisplay(in: h.bounds))
+            h.cacheDisplay(in: h.bounds, to: rep)
+            try write(try XCTUnwrap(rep.representation(using: .png, properties: [:])),
+                      "settings-session-list-\(scale)-tabs-\(tabs ? "on" : "off")")
+        }
     }
 }

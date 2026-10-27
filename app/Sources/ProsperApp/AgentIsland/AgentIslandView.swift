@@ -50,6 +50,10 @@ struct AgentIslandGeometry: Equatable {
     static let maxVisibleRows = 6
     static let listTop: CGFloat = 4
     static let listBottom: CGFloat = 12
+    /// #571: the Sessions / Sidekicks row under the header. The two tabs do not
+    /// fit beside the notch (~118 pt of text room left of a 185 pt notch, and the
+    /// right side holds the state counts).
+    static let tabsHeight: CGFloat = 22
     static let closedRadii = (top: CGFloat(6), bottom: CGFloat(14))
     static let openRadii = (top: CGFloat(19), bottom: CGFloat(24))
 
@@ -66,12 +70,12 @@ struct AgentIslandGeometry: Equatable {
     /// The first 6 rows (`rows`, their heights in order) plus the prompt cards
     /// under blocked rows (`cards`, their summed `cardHeight`): the island grows
     /// for a card instead of clipping it, up to `maxListHeight`, then the list scrolls.
-    func listHeight(rows: [CGFloat], cards: CGFloat = 0) -> CGFloat {
-        min((rows.isEmpty ? Self.rowHeight : rows.prefix(Self.maxVisibleRows).reduce(0, +)) + cards, maxListHeight)
+    func listHeight(rows: [CGFloat], cards: CGFloat = 0, tabs: Bool = false) -> CGFloat {
+        min((rows.isEmpty ? Self.rowHeight : rows.prefix(Self.maxVisibleRows).reduce(0, +)) + cards, maxListHeight(tabs: tabs))
     }
 
-    func listScrolls(rows: [CGFloat], cards: CGFloat = 0) -> Bool {
-        rows.count > Self.maxVisibleRows || rows.reduce(0, +) + cards > maxListHeight
+    func listScrolls(rows: [CGFloat], cards: CGFloat = 0, tabs: Bool = false) -> Bool {
+        rows.count > Self.maxVisibleRows || rows.reduce(0, +) + cards > maxListHeight(tabs: tabs)
     }
 
     /// `rows` two-line rows.
@@ -80,11 +84,16 @@ struct AgentIslandGeometry: Equatable {
     private static func twoLine(_ n: Int) -> [CGFloat] { Array(repeating: rowHeight, count: max(n, 0)) }
 
     /// Leaves 40 pt of the screen below the island.
-    var maxListHeight: CGFloat { max(Self.rowHeight, screen.height - barHeight - Self.listTop - Self.listBottom - 40) }
+    var maxListHeight: CGFloat { maxListHeight(tabs: false) }
+    func maxListHeight(tabs: Bool) -> CGFloat {
+        max(Self.rowHeight, screen.height - barHeight - (tabs ? Self.tabsHeight : 0) - Self.listTop - Self.listBottom - 40)
+    }
 
-    func expandedSize(rows: [CGFloat], cards: CGFloat = 0) -> CGSize {
+    /// `tabs`: the Sessions / Sidekicks row shows (#571).
+    func expandedSize(rows: [CGFloat], cards: CGFloat = 0, tabs: Bool = false) -> CGSize {
         CGSize(width: min(screen.width, max(Self.expandedWidth, collapsedSize.width)),
-               height: barHeight + Self.listTop + listHeight(rows: rows, cards: cards) + Self.listBottom)
+               height: barHeight + (tabs ? Self.tabsHeight : 0) + Self.listTop
+                   + listHeight(rows: rows, cards: cards, tabs: tabs) + Self.listBottom)
     }
 
     func expandedSize(rows: Int, cards: CGFloat = 0) -> CGSize { expandedSize(rows: Self.twoLine(rows), cards: cards) }
@@ -237,7 +246,9 @@ struct AgentIslandGeometry: Equatable {
 
 @MainActor
 final class AgentIslandStore: ObservableObject {
-    @Published var sessions: [AgentSession] = []
+    /// Every session, in the poller's order: the collapsed island and the
+    /// header summarize these; the list draws `visible`.
+    @Published var sessions: [AgentSession] = [] { didSet { resetTab() } }
     @Published var expanded = false
     @Published var geometry: AgentIslandGeometry
     /// Inline row notes: "Attach command copied", "Attached in tmux/ssh …".
@@ -247,24 +258,52 @@ final class AgentIslandStore: ObservableObject {
     /// #534: the row details shown. The controller sets it from Preferences at
     /// build and on every Settings toggle; the tests set it outright.
     @Published var details: AgentIslandRowDetails
+    /// #571: the list order and the sidekick pattern ("" = tabs off), set like
+    /// `details`; the chosen tab, in memory only.
+    @Published var sort: AgentIslandSort
+    @Published var sidekickPattern: String { didSet { resetTab() } }
+    @Published var sidekickTab = false
 
-    init(geometry: AgentIslandGeometry, details: AgentIslandRowDetails = .all) {
+    init(geometry: AgentIslandGeometry, details: AgentIslandRowDetails = .all,
+         sort: AgentIslandSort = .activity, sidekickPattern: String = "") {
         self.geometry = geometry
         self.details = details
+        self.sort = sort
+        self.sidekickPattern = sidekickPattern
+    }
+
+    /// The last sidekick gone (or the tabs off): back to Sessions, so the next
+    /// sidekick to appear does not switch the list.
+    private func resetTab() {
+        if sidekickTab, AgentIsland.split(sessions, pattern: sidekickPattern).sidekicks.isEmpty { sidekickTab = false }
+    }
+
+    /// The collapsed island and the header: every session, whichever tab shows,
+    /// so a blocked sidekick still lights the ear.
+    var summary: AgentIsland.Summary { AgentIsland.summary(sessions) }
+
+    /// Sorted, then split. No sidekicks = no tabs and the whole list.
+    var split: AgentIsland.Split { AgentIsland.split(AgentIsland.sorted(sessions, by: sort), pattern: sidekickPattern) }
+    var showsTabs: Bool { !split.sidekicks.isEmpty }
+
+    /// The rows the list draws: the shown tab's half.
+    var visible: [AgentSession] {
+        let s = split
+        return AgentIsland.showsSidekicks(s, tab: sidekickTab) ? s.sidekicks : s.primary
     }
 
     /// Cards show under blocked rows only.
     func card(for s: AgentSession) -> AgentCard? { s.state == .blocked ? cards[s.key] : nil }
 
     var cardsHeight: CGFloat {
-        sessions.compactMap(card(for:)).reduce(0) { $0 + AgentIslandGeometry.cardHeight($1) }
+        visible.compactMap(card(for:)).reduce(0) { $0 + AgentIslandGeometry.cardHeight($1) }
     }
 
     /// #525: per row, two or three lines.
-    var rowHeights: [CGFloat] { sessions.map { AgentIslandGeometry.height(of: $0, show: details) } }
+    var rowHeights: [CGFloat] { visible.map { AgentIslandGeometry.height(of: $0, show: details) } }
 
     var size: CGSize {
-        expanded ? geometry.expandedSize(rows: rowHeights, cards: cardsHeight) : geometry.collapsedSize
+        expanded ? geometry.expandedSize(rows: rowHeights, cards: cardsHeight, tabs: showsTabs) : geometry.collapsedSize
     }
 }
 
@@ -273,6 +312,8 @@ struct AgentIslandView: View {
     var onToggle: () -> Void = {}
     var onRow: (AgentSession) -> Void = { _ in }
     var onAnswer: (AgentSession, AgentPrompt, AgentPromptOption) -> Void = { _, _, _ in }
+    /// #571: a tab click, true = Sidekicks.
+    var onTab: (Bool) -> Void = { _ in }
 
     private var g: AgentIslandGeometry { store.geometry }
 
@@ -290,7 +331,7 @@ struct AgentIslandView: View {
     // MARK: Collapsed
 
     private var collapsed: some View {
-        let s = AgentIsland.summary(store.sessions)
+        let s = store.summary
         let ear = s.earCount
         return Button(action: onToggle) {
             HStack(spacing: 0) {
@@ -316,14 +357,16 @@ struct AgentIslandView: View {
     private var expanded: some View {
         VStack(spacing: 0) {
             header.frame(height: g.barHeight)
+            let tabs = store.showsTabs
+            if tabs { tabRow.frame(height: AgentIslandGeometry.tabsHeight) }
             Group {
-                if g.listScrolls(rows: store.rowHeights, cards: store.cardsHeight) {
+                if g.listScrolls(rows: store.rowHeights, cards: store.cardsHeight, tabs: tabs) {
                     ScrollView(.vertical, showsIndicators: false) { rows }
                 } else {
                     rows
                 }
             }
-            .frame(height: g.listHeight(rows: store.rowHeights, cards: store.cardsHeight), alignment: .top)
+            .frame(height: g.listHeight(rows: store.rowHeights, cards: store.cardsHeight, tabs: tabs), alignment: .top)
             .padding(.top, AgentIslandGeometry.listTop)
             // Inside the shape's straight sides (the top corners curve in by `top`).
             .padding(.horizontal, AgentIslandGeometry.listInset)
@@ -335,7 +378,7 @@ struct AgentIslandView: View {
     private var rows: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             VStack(spacing: 0) {
-                ForEach(store.sessions) { s in
+                ForEach(store.visible) { s in
                     AgentIslandRow(session: s, now: ctx.date.timeIntervalSince1970,
                                    notice: store.notices[s.key], show: store.details) { onRow(s) }
                     if let card = store.card(for: s) {
@@ -348,7 +391,7 @@ struct AgentIslandView: View {
 
     /// Count on the left of the notch, per-state counts on its right.
     private var header: some View {
-        let s = AgentIsland.summary(store.sessions)
+        let s = store.summary
         return HStack(spacing: 0) {
             Text(s.total == 1 ? "1 session" : "\(s.total) sessions")
                 .font(.system(size: 12, weight: .medium))
@@ -369,6 +412,29 @@ struct AgentIslandView: View {
             }
         }
         .padding(.horizontal, AgentIslandGeometry.openRadii.top + 10)   // lines up with the row glyphs
+    }
+
+    /// #571: "Sessions (n)  Sidekicks (n)", plain text buttons; the shown one bright.
+    private var tabRow: some View {
+        let split = store.split
+        let shows = AgentIsland.showsSidekicks(split, tab: store.sidekickTab)
+        return HStack(spacing: 14) {
+            tab("Sessions (\(split.primary.count))", on: !shows) { onTab(false) }
+            tab("Sidekicks (\(split.sidekicks.count))", on: shows) { onTab(true) }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, AgentIslandGeometry.openRadii.top + 10)
+    }
+
+    private func tab(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(verbatim: title)
+                .font(.system(size: 11, weight: on ? .semibold : .regular))
+                .foregroundStyle(Color.white.opacity(on ? 0.9 : 0.45))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 

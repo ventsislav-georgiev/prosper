@@ -380,6 +380,11 @@ enum Preferences {
         static let agentIslandShowTasksDone = "agentIslandShowTasksDone"
         static let agentIslandShowInProgress = "agentIslandShowInProgress"
         static let agentIslandShowQueued = "agentIslandShowQueued"
+        // #571: the list order (AgentIslandSort) and the Sessions / Sidekicks
+        // tabs; per Mac, so not in SyncedKeys.
+        static let agentIslandSort = "agentIslandSort"
+        static let agentIslandSidekickTabs = "agentIslandSidekickTabs"
+        static let agentIslandSidekickPattern = "agentIslandSidekickPattern"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1090,6 +1095,25 @@ enum Preferences {
             put(newValue.inProgress, old.inProgress, Keys.agentIslandShowInProgress)
             put(newValue.queued, old.queued, Keys.agentIslandShowQueued)
         }
+    }
+
+    /// #571: Agent Island's sort; unset or unknown reads as last activity.
+    static var agentIslandSort: AgentIslandSort {
+        get { AgentIslandSort(raw: defaults.string(forKey: Keys.agentIslandSort)) }
+        set { defaults.set(newValue.rawValue, forKey: Keys.agentIslandSort) }
+    }
+
+    /// #571: the Sessions / Sidekicks tabs; off when unset.
+    static var agentIslandSidekickTabs: Bool {
+        get { defaults.bool(forKey: Keys.agentIslandSidekickTabs) }
+        set { defaults.set(newValue, forKey: Keys.agentIslandSidekickTabs) }
+    }
+
+    /// #571: the sidekick name pattern; unset reads as "-qa" (prosper-ios's default).
+    /// Empty is kept: it means no split.
+    static var agentIslandSidekickPattern: String {
+        get { defaults.string(forKey: Keys.agentIslandSidekickPattern) ?? AgentIsland.sidekickDefault }
+        set { defaults.set(newValue, forKey: Keys.agentIslandSidekickPattern) }
     }
 
     /// MCP servers configured for the coding agent. Stored JSON-encoded; an unreadable

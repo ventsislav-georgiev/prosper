@@ -112,16 +112,62 @@ struct AgentIslandRowDetails: Equatable {
                                            tasksDone: true, inProgress: true, queued: true)
 }
 
+/// #571: Settings › Agent Island › Sort sessions. Per Mac, never synced.
+enum AgentIslandSort: String, CaseIterable {
+    case activity, name
+
+    /// Unset or unknown = last activity, the order before the setting existed.
+    init(raw: String?) { self = raw.flatMap(Self.init(rawValue:)) ?? .activity }
+
+    var label: String {
+        switch self {
+        case .activity: "Last activity"
+        case .name: "Name"
+        }
+    }
+}
+
 enum AgentIsland {
     // MARK: - Display
 
-    /// Blocked, working, done, idle; newest activity first inside a group.
-    static func sorted(_ sessions: [AgentSession]) -> [AgentSession] {
-        sessions.sorted {
-            if $0.state != $1.state { return $0.state < $1.state }
-            if $0.activity != $1.activity { return $0.activity > $1.activity }
-            return ($0.key.name, $0.key.dir) < ($1.key.name, $1.key.dir)
+    /// `.activity`: blocked, working, done, idle; newest activity first inside a
+    /// group. `.name` (#571): flat by the row title (alias, else name),
+    /// numeric-aware ("a2" before "a10"), ties on name then dir; no state groups,
+    /// so rows keep their places. prosper-ios DchSession.ordered.
+    static func sorted(_ sessions: [AgentSession], by order: AgentIslandSort = .activity) -> [AgentSession] {
+        switch order {
+        case .activity:
+            sessions.sorted {
+                if $0.state != $1.state { return $0.state < $1.state }
+                if $0.activity != $1.activity { return $0.activity > $1.activity }
+                return ($0.key.name, $0.key.dir) < ($1.key.name, $1.key.dir)
+            }
+        case .name:
+            sessions.sorted {
+                let c = $0.title.localizedStandardCompare($1.title)
+                return c == .orderedSame ? ($0.key.name, $0.key.dir) < ($1.key.name, $1.key.dir) : c == .orderedAscending
+            }
         }
+    }
+
+    // MARK: - Sidekicks (#571, prosper-ios DchSession.split)
+
+    static let sidekickDefault = "-qa"
+
+    typealias Split = (primary: [AgentSession], sidekicks: [AgentSession])
+
+    /// A sidekick's name or alias contains `pattern` (trimmed), case-insensitive.
+    /// An empty pattern means no split. Order is kept in both halves.
+    static func split(_ list: [AgentSession], pattern: String) -> Split {
+        let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !p.isEmpty else { return (list, []) }
+        let isSidekick = { (s: AgentSession) in [s.name, s.alias].contains { $0.range(of: p, options: .caseInsensitive) != nil } }
+        return (list.filter { !isSidekick($0) }, list.filter(isSidekick))
+    }
+
+    /// Never without sidekicks; always when they are all there is; else the chosen tab.
+    static func showsSidekicks(_ split: Split, tab: Bool) -> Bool {
+        !split.sidekicks.isEmpty && (tab || split.primary.isEmpty)
     }
 
     /// 12s, 4m, 2h, 3d — whole units, rounded down. Nothing for an unknown time.

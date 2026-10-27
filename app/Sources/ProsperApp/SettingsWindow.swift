@@ -859,9 +859,9 @@ private struct SettingsRootView: View {
         // kind, so the picker has to be native.
         case "com.prosper.mouse": footer = AnyView(MousePane())
         // Agent Island: the "Show sessions" picker (Remote Terminal isolation on),
-        // then (#534) the row-detail toggles.
+        // then (#571) the sort and sidekick tabs, then (#534) the row-detail toggles.
         case "com.prosper.agentisland":
-            footer = AnyView(Group { AgentIslandPane(); AgentIslandRowDetailsSection() })
+            footer = AnyView(Group { AgentIslandPane(); AgentIslandListSection(); AgentIslandRowDetailsSection() })
         default: break
         }
         return ExtensionSettingsPane(registry: registry, record: record, section: section,
@@ -983,6 +983,38 @@ struct AgentIslandRowDetailsSection: View {
             Preferences.agentIslandRowDetails = v
             AgentIslandController.shared.rowDetailsChanged()
         }
+    }
+}
+
+/// #571: Agent Island › Session list: the sort and the Sessions / Sidekicks
+/// tabs (prosper-ios's split). Per Mac (not in SyncedKeys). A change re-sorts
+/// or re-splits the open island at once, with no animation.
+struct AgentIslandListSection: View {
+    @State private var sort = Preferences.agentIslandSort
+    @State private var tabs = Preferences.agentIslandSidekickTabs
+    @State private var pattern = Preferences.agentIslandSidekickPattern
+
+    var body: some View {
+        NeonSection("Session list",
+                    footer: "Sessions whose name or alias contains the pattern, ignoring case, go under a Sidekicks tab. Empty shows every session together.") {
+            NeonRow("Sort sessions") {
+                // Menu, not segmented: segmented controls ignore the UI scale.
+                Picker("", selection: $sort) {
+                    ForEach(AgentIslandSort.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+            }
+            NeonDivider()
+            NeonRow("Sidekick tabs") { Toggle("", isOn: $tabs).labelsHidden() }
+            NeonDivider()
+            NeonRow("Sidekick pattern") {
+                TextField(AgentIsland.sidekickDefault, text: $pattern).frame(width: sz(140))
+                    .disabled(!tabs)
+            }
+        }
+        .onChange(of: sort) { _, v in Preferences.agentIslandSort = v; AgentIslandController.shared.rowDetailsChanged() }
+        .onChange(of: tabs) { _, v in Preferences.agentIslandSidekickTabs = v; AgentIslandController.shared.rowDetailsChanged() }
+        .onChange(of: pattern) { _, v in Preferences.agentIslandSidekickPattern = v; AgentIslandController.shared.rowDetailsChanged() }
     }
 }
 

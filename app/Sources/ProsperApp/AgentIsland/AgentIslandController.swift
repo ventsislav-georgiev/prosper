@@ -109,7 +109,8 @@ final class AgentIslandController {
             }
         }
         guard timer == nil, let geometry = currentGeometry() else { return }
-        store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails)
+        store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails,
+                                 sort: Preferences.agentIslandSort, sidekickPattern: Self.sidekickPattern)
         let t = Self.makePollTimer(makePoller(), queue: queue) { [weak self] sessions in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions) } }
         }
@@ -142,11 +143,29 @@ final class AgentIslandController {
         layout()
     }
 
-    /// #534: a Settings row-detail toggle. Redraws the island and resizes the
-    /// panel at once (a row losing its PR line is 48 pt again); no animation.
+    /// #534: a Settings row-detail toggle; #571: the sort, the sidekick tabs
+    /// toggle or pattern. Redraws the island and resizes the panel at once (a
+    /// row losing its PR line is 48 pt again, a tab change shows other rows);
+    /// no animation.
     func rowDetailsChanged() {
         guard let store else { return }
         store.details = Preferences.agentIslandRowDetails
+        store.sort = Preferences.agentIslandSort
+        store.sidekickPattern = Self.sidekickPattern
+        refreshCards()
+        layout()
+    }
+
+    /// #571: the pattern the store splits by; "" while the tabs are off.
+    private static var sidekickPattern: String {
+        Preferences.agentIslandSidekickTabs ? Preferences.agentIslandSidekickPattern : ""
+    }
+
+    /// #571: a Sessions / Sidekicks tab click. Only the shown rows get cards.
+    func showSidekicks(_ on: Bool) {
+        guard let store else { return }
+        store.sidekickTab = on
+        refreshCards()
         layout()
     }
 
@@ -179,7 +198,8 @@ final class AgentIslandController {
             store: store,
             onToggle: { [weak self] in self?.setExpanded(!(self?.store?.expanded ?? true)) },
             onRow: { [weak self] in self?.jump($0) },
-            onAnswer: { [weak self] in self?.answer($0, $1, $2) }))
+            onAnswer: { [weak self] in self?.answer($0, $1, $2) },
+            onTab: { [weak self] in self?.showSidekicks($0) }))
         host.sizingOptions = []
         p.contentView = host
         panel = p
@@ -213,10 +233,11 @@ final class AgentIslandController {
 
     /// While expanded, re-read a blocked session's screen whenever its output
     /// moved since the last read (activity is the .act mtime); drop the cards of
-    /// rows that are no longer blocked.
+    /// rows that are no longer blocked. #571: shown rows only, so a session under
+    /// the other tab is never read.
     func refreshCards() {
         guard let store, store.expanded else { return }
-        let blocked = store.sessions.filter { $0.state == .blocked }
+        let blocked = store.visible.filter { $0.state == .blocked }
         let keys = Set(blocked.map(\.key))
         store.cards = store.cards.filter { keys.contains($0.key) }
         for k in readAt.keys where !keys.contains(k) { _ = bump(k) }   // a read still queued is stale
