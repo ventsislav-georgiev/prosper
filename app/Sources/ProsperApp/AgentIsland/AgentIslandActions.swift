@@ -89,8 +89,171 @@ extension AgentIsland {
     /// (dch would overwrite that record).
     static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>) -> [String] {
         guard live.contains(r.name) else { return ["--revive", r.name] }
-        let free = (2...).lazy.map { "\(r.name)-\($0)" }.first { !live.contains($0) && !records.contains($0) }!
-        return ["--revive", r.name, "--as", free]
+        return ["--revive", r.name, "--as", freeName(r.name, taken: live.union(records))]
+    }
+
+    /// `name` when free, else the first free `<name>-2`, `-3`, ….
+    static func freeName(_ name: String, taken: Set<String>) -> String {
+        taken.contains(name) ? (2...).lazy.map { "\(name)-\($0)" }.first { !taken.contains($0) }! : name
+    }
+
+    // MARK: - Restart (#579)
+
+    static let restartingText = "Restarting…"
+    static let restartAllRunningText = "Restarting stale agents…"
+    static let restartLabel = "Restart agent"
+    static let restartAllLabel = "Restart all agents"
+    static let restartAllQuestion = "Restart stale agents? Each pauses for up to minutes."
+
+    /// An explicit row click: `-f`, so a current agent restarts too.
+    static func restartArgs(_ name: String) -> [String] { ["--restart", name, "--include-agents", "-f"] }
+    /// No `-f`: only stale agents restart.
+    static let restartAllArgs = ["--restart", "--all", "--include-agents"]
+
+    /// A restart output line about one session, "<name>: <text>"; nil without
+    /// ": ". The caller keeps only names live in the dir ("dch: …" and the
+    /// summaries name none).
+    static func restartReport(_ line: String) -> (name: String, text: String)? {
+        guard let r = line.range(of: ": "), r.lowerBound > line.startIndex else { return nil }
+        return (String(line[..<r.lowerBound]), String(line[r.upperBound...]))
+    }
+
+    /// dch 1.23.0's line once it has paused an agent it is about to restart.
+    static func isPauseSent(_ text: String) -> Bool { text.hasPrefix("pause message sent") }
+
+    /// A row's Restart result: dch's last line without the "<name>: " (a skip
+    /// line included), as failure text on a non-zero exit.
+    static func restartText(_ r: DchActionResult, name: String) -> String {
+        if r.stopped { return "Restart stopped: no answer in \(Int(DchActionRunner.restartBound / 60))m" }
+        let line = r.line.hasPrefix(name + ": ") ? String(r.line.dropFirst(name.count + 2)) : r.line
+        if r.status == 0 { return line.isEmpty ? "Restarted" : line }
+        return line.isEmpty ? "Restart failed (exit \(r.status))" : "Restart failed: \(line)"
+    }
+
+    /// Restart all's one line, from every output line of its run: the masters
+    /// moved to a new dch ("<name>: restarted on dch <v>"), the agents restarted
+    /// and failed, else "all agents current" (with the skips).
+    static func restartAllSummary(_ r: DchActionResult, lines: [String]) -> String {
+        if r.stopped { return "Restart all stopped: no answer in \(Int(DchActionRunner.restartBound / 60))m" }
+        let texts = lines.compactMap { restartReport($0)?.text }
+        let restarted = texts.filter { $0.hasPrefix("claude ") && $0.contains(" -> ") }.count
+        let failed = texts.filter { $0.hasPrefix("NOT restarted") }.count
+        let skipped = texts.filter { $0.hasPrefix("skipped") }.count
+        let masters = texts.filter { $0.hasPrefix("restarted on dch ") }
+        guard restarted + failed + masters.count > 0 else {
+            if r.status != 0 { return r.line.isEmpty ? "Restart all failed (exit \(r.status))" : "Restart all failed: \(r.line)" }
+            return "all agents current" + (skipped > 0 ? " (\(skipped) skipped)" : "")
+        }
+        // A master that did not take is a stderr "dch: …" line and exit 1, with no
+        // per-agent "NOT restarted": say the run failed anyway.
+        let other = r.status == 0 || failed > 0 ? nil
+            : lines.last { $0.hasPrefix("dch: ") }.map { "failed: \($0)" } ?? "failed (exit \(r.status))"
+        return [masters.last.map { "\(masters.count) session\(masters.count == 1 ? "" : "s") \($0)" },
+                restarted + failed > 0 ? "\(restarted) agent\(restarted == 1 ? "" : "s") restarted" : nil,
+                failed > 0 ? "\(failed) failed" : nil, skipped > 0 ? "\(skipped) skipped" : nil, other]
+            .compactMap { $0 }.joined(separator: ", ")
+    }
+
+    // MARK: - New session (#579)
+
+    static let newSessionLabel = "New session"
+    static let chooseFolderLabel = "Choose folder…"
+    static let recentFoldersMax = 8
+
+    /// A record's folder: its Claude agent's cwd, else the session's.
+    static func folder(_ r: DchHistoryRecord) -> String {
+        if let c = r.agent?.cwd, !c.isEmpty { return c }
+        return r.cwd
+    }
+
+    /// Distinct folders of the agent records that still exist, newest first
+    /// (`history` is), at most 8. One stat per distinct folder, stopping at 8.
+    static func recentFolders(_ history: [DchHistoryRecord], exists: (String) -> Bool = isFolder) -> [String] {
+        var seen = Set<String>(), out: [String] = []
+        for r in history where r.agent != nil && out.count < recentFoldersMax {
+            let f = folder(r)
+            if !f.isEmpty, seen.insert(f).inserted, exists(f) { out.append(f) }
+        }
+        return out
+    }
+
+    static func isFolder(_ path: String) -> Bool {
+        var dir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &dir) && dir.boolValue
+    }
+
+    /// The newest agent command recorded in `cwd`, else the newest anywhere, else
+    /// `claude`; resume flags stripped either way. Per record, dch's revive_spawn
+    /// choice: the session's argv when it holds a `claude` token (RV_ARGV, which
+    /// keeps a wrapper such as `headroom wrap claude`, since agent.launch is the
+    /// process below the session's child), else agent.launch (RV_SHELL: claude
+    /// typed into a shell). A record with no agent is no source.
+    static func launchCommand(cwd: String, history: [DchHistoryRecord]) -> [String] {
+        let launches = history.compactMap { r -> (String, [String])? in
+            guard let agent = r.agent else { return nil }
+            let argv = r.argv.contains { ($0 as NSString).lastPathComponent == "claude" } ? r.argv : agent.launch
+            return argv.isEmpty ? nil : (folder(r), argv)
+        }
+        let argv = launches.first { $0.0 == cwd }?.1 ?? launches.first?.1 ?? ["claude"]
+        return strippingResume(argv)
+    }
+
+    /// dch's resume_argv rules, so a new session never resumes a recorded
+    /// conversation a second time (only --revive may carry --resume). After the
+    /// `claude` token (else after argv[0]), up to a bare `--`: --resume/-r and
+    /// a next token not starting with '-'; --session-id and its next token;
+    /// --resume=, --session-id=, --continue, -c, --fork-session alone.
+    static func strippingResume(_ argv: [String]) -> [String] {
+        let tok = argv.firstIndex { ($0 as NSString).lastPathComponent == "claude" } ?? 0
+        var out = Array(argv.prefix(tok + 1)), k = tok + 1
+        while k < argv.count {
+            let a = argv[k]
+            k += 1
+            switch a {
+            case "--":
+                return out + argv[(k - 1)...]
+            case "--resume", "-r":
+                if k < argv.count, !argv[k].hasPrefix("-") { k += 1 }
+            case "--session-id":
+                k += 1
+            case "--continue", "-c", "--fork-session":
+                break
+            case _ where a.hasPrefix("--resume=") || a.hasPrefix("--session-id="):
+                break
+            default:
+                out.append(a)
+            }
+        }
+        return out
+    }
+
+    /// The folder's basename as a session name: [A-Za-z0-9._-] kept, any other
+    /// run as one "-", no leading "-" or "." (dch would read a flag), never empty.
+    static func sessionName(folder: String) -> String {
+        var out = ""
+        for c in (folder as NSString).lastPathComponent {
+            let ok = c.isASCII && (c.isLetter || c.isNumber || "._-".contains(c))
+            if ok { out.append(c) } else if out.last != "-" { out.append("-") }
+        }
+        let trimmed = out.drop { $0 == "-" || $0 == "." }.reversed().drop { $0 == "-" }.reversed()
+        return trimmed.isEmpty ? "session" : String(trimmed)
+    }
+
+    /// `--spawn <name> [launch argv]`; the name is free of the dir's live
+    /// sessions and records (a record of that name would be overwritten).
+    static func newSessionArgs(folder: String, history: [DchHistoryRecord], taken: Set<String>) -> [String] {
+        ["--spawn", freeName(sessionName(folder: folder), taken: taken)] + launchCommand(cwd: folder, history: history)
+    }
+
+    /// --spawn passes its env to the session: a Claude Code identity in it
+    /// would make the child Claude think it runs inside the caller's.
+    static func spawnEnv(_ env: [String: String]) -> [String: String] {
+        env.filter { k, _ in !(k == "CLAUDECODE" || k.hasPrefix("CLAUDE_CODE_") || k == "CLAUDE_PID" || k == "CLAUDE_EFFORT") }
+    }
+
+    static func spawnText(_ r: DchActionResult) -> String? {
+        if r.status == 0 { return nil }
+        return r.line.isEmpty ? "New session failed (exit \(r.status))" : "New session failed: \(r.line)"
     }
 
     // MARK: - Action results
@@ -124,7 +287,7 @@ extension AgentIsland {
     /// DCH_SESSION) plus the user's PATH. QA #445 M1: under launchd the PATH is
     /// /usr/bin:/bin:/usr/sbin:/sbin, and a revived record whose argv[0] is a
     /// bare "headroom" or "claude" dies at once while dch prints "revived".
-    /// #579's --spawn must use this builder too. `login`: LoginPath.read(), nil
+    /// #579's --spawn uses it too, with spawnEnv on top. `login`: LoginPath.read(), nil
     /// when the probe failed (the well-known dirs go in front of the process PATH).
     static func controlEnv(dir: String, login: String?,
                            base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
@@ -193,16 +356,21 @@ enum LoginPath {
 }
 
 /// #578: runs the long dch verbs, one per row at a time, off main. The verb is
-/// just its args: Resume today, Stop and Restart (#580) later. `key.name == ""`
+/// just its args: Resume, Restart and New session (#579), Stop (#580). `key.name == ""`
 /// stands for a whole socket dir (`--revive --all`): it and any row of its dir
 /// exclude each other. A busy request is refused, never queued.
 final class DchActionRunner: @unchecked Sendable {
     /// A revive waits up to dch's DCH_AGENT_STEP_MS (60 s) per agent step.
     static let bound: TimeInterval = 300
+    /// #579: a restart waits up to DCH_AGENT_TIMEOUT_MS (10 min) for its agents
+    /// to pause, then up to DCH_AGENT_STEP_MS per step.
+    static let restartBound: TimeInterval = 900
 
-    /// Starts the process, reports its pid, waits for it: (exit code, stdout+stderr).
-    typealias Launch = @Sendable (_ path: String, _ args: [String], _ env: [String: String],
-                                  _ onPid: @escaping @Sendable (pid_t) -> Void) -> (status: Int32, out: Data)
+    /// Starts the process in `cwd` (nil: ours), reports its pid and each output
+    /// chunk as it comes, waits for it: (exit code, stdout+stderr).
+    typealias Launch = @Sendable (_ path: String, _ args: [String], _ env: [String: String], _ cwd: String?,
+                                  _ onPid: @escaping @Sendable (pid_t) -> Void,
+                                  _ onOutput: @escaping @Sendable (Data) -> Void) -> (status: Int32, out: Data)
 
     private final class Job: @unchecked Sendable {   // touched under `lock` only
         var pid: pid_t?
@@ -217,8 +385,9 @@ final class DchActionRunner: @unchecked Sendable {
     private let signal: @Sendable (pid_t) -> Void
 
     init(bound: TimeInterval = DchActionRunner.bound,
-         launch: @escaping Launch = { path, args, env, onPid in
-             let r = DchCommand.runCapturingBoth(args: args, env: env, path: path, merge: true, onPid: onPid)
+         launch: @escaping Launch = { path, args, env, cwd, onPid, onOutput in
+             let r = DchCommand.runCapturingBoth(args: args, env: env, path: path, merge: true, cwd: cwd,
+                                                 onPid: onPid, onOutput: onOutput)
              return (r.status, r.out)
          },
          signal: @escaping @Sendable (pid_t) -> Void = { _ = Darwin.kill($0, SIGTERM) }) {
@@ -236,9 +405,12 @@ final class DchActionRunner: @unchecked Sendable {
 
     /// false: the row (or its dir's --all) is busy and nothing ran. `done` runs
     /// on the runner's thread once the process has exited.
-    @discardableResult
     /// `env` is built on the job's thread (it may probe the login shell).
-    func start(_ key: AgentSessionKey, path: String, args: [String], env: @escaping @Sendable () -> [String: String],
+    /// #579: `cwd` for --spawn, `bound` overrides the runner's, and `onLine` gets
+    /// each non-empty output line (trimmed) as it comes, all before `done`.
+    @discardableResult
+    func start(_ key: AgentSessionKey, path: String, args: [String], cwd: String? = nil, bound: TimeInterval? = nil,
+               env: @escaping @Sendable () -> [String: String], onLine: (@Sendable (String) -> Void)? = nil,
                done: @escaping @Sendable (DchActionResult) -> Void) -> Bool {
         let job = Job()
         guard lock.withLock({ () -> Bool in
@@ -246,16 +418,17 @@ final class DchActionRunner: @unchecked Sendable {
             jobs[key] = job
             return true
         }) else { return false }
-        let launch = launch
+        let launch = launch, lines = LineSplitter(onLine)
         DispatchQueue.global(qos: .utility).async { [self] in
-            let r = launch(path, args, env()) { pid in
+            let r = launch(path, args, env(), cwd, { pid in
                 // Cancelled before the pid was known: its one SIGTERM goes now.
                 let late = self.lock.withLock { () -> pid_t? in
                     job.pid = pid
                     return job.cancelled ? self.claimSignal(job) : nil
                 }
                 if let late { self.signal(late) }
-            }
+            }, { lines.add($0) })
+            lines.flush()
             let stopped = lock.withLock { () -> Bool in
                 jobs[key] = nil
                 job.pid = nil   // reaped: never signalled again (the pid may be reused)
@@ -263,7 +436,7 @@ final class DchActionRunner: @unchecked Sendable {
             }
             done(AgentIsland.actionResult(status: r.status, output: r.out, stopped: stopped))
         }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + bound) { [weak self] in
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + (bound ?? self.bound)) { [weak self] in
             self?.cancel(job)
         }
         return true
@@ -290,5 +463,35 @@ final class DchActionRunner: @unchecked Sendable {
         guard !job.signalled, let pid = job.pid else { return nil }
         job.signalled = true
         return pid
+    }
+}
+
+/// Output chunks into lines for `DchActionRunner.start`'s `onLine`. Bytes are
+/// buffered until a newline, so a multi-byte character split across chunks
+/// decodes whole. Touched only on the job's thread.
+private final class LineSplitter: @unchecked Sendable {
+    private var buf = Data()
+    private let onLine: (@Sendable (String) -> Void)?
+
+    init(_ onLine: (@Sendable (String) -> Void)?) { self.onLine = onLine }
+
+    func add(_ chunk: Data) {
+        guard onLine != nil else { return }
+        buf.append(chunk)
+        while let nl = buf.firstIndex(of: 0x0A) {
+            emit(buf[buf.startIndex..<nl])
+            buf = Data(buf[(nl + 1)...])
+        }
+    }
+
+    /// The last line when it had no newline.
+    func flush() {
+        emit(buf)
+        buf = Data()
+    }
+
+    private func emit(_ bytes: Data) {
+        let line = String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespaces)
+        if !line.isEmpty { onLine?(line) }
     }
 }

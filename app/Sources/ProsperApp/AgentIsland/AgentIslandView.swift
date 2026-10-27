@@ -273,7 +273,10 @@ final class AgentIslandStore: ObservableObject {
     @Published var controlDch: DchCommand.Binary?
     /// A long verb's static status in its row: "Resuming…", then the result.
     /// Keyed by row; a dir's `--revive --all` is `(dir, "")`.
+    /// #579: a session row's Restart too; `(dir, "")` also holds Restart all and a failed New session.
     @Published var actions: [AgentSessionKey: String] = [:]
+    /// #579: the inline "Restart stale agents?" line is up (never a modal).
+    @Published var confirmingRestartAll = false
 
     init(geometry: AgentIslandGeometry, details: AgentIslandRowDetails = .all,
          sort: AgentIslandSort = .activity, sidekickPattern: String = "") {
@@ -298,8 +301,10 @@ final class AgentIslandStore: ObservableObject {
     var split: AgentIsland.Split { AgentIsland.split(AgentIsland.sorted(sessions, by: sort), pattern: sidekickPattern) }
     /// #578: sidekicks or history.
     var showsTabs: Bool { !split.sidekicks.isEmpty || !history.isEmpty }
-    /// #581: the collapsed island shows with a live session, or with none but a
-    /// control to offer: today the History tab (#579 adds New session here).
+    /// #581: the collapsed island shows with a live session, or with none but
+    /// history (the History tab). #579's New session lives in the open island's
+    /// "⋯" menu, so with nothing live and no history it is not offered: the
+    /// island stays hidden.
     var showsIsland: Bool { !sessions.isEmpty || !history.isEmpty }
 
     /// The session rows the list draws: the shown tab's half; none under History.
@@ -312,8 +317,9 @@ final class AgentIslandStore: ObservableObject {
     /// #578: the History tab's rows, capped.
     var shownHistory: [DchHistoryRecord] { historyTab ? Array(history.prefix(AgentIsland.historyCap)) : [] }
 
-    /// Resume's gate: the control binary against the verb's minimum and every
-    /// live master; `.refused` carries the one-line reason.
+    /// Every control verb's gate (Resume, and #579's Restart, Restart all, New
+    /// session): the control binary against 1.23.0 and every live master;
+    /// `.refused` carries the one-line reason.
     var resumeGate: DchCommand.Gate {
         DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.reviveMinimum)
     }
@@ -325,11 +331,33 @@ final class AgentIslandStore: ObservableObject {
         visible.compactMap(card(for:)).reduce(0) { $0 + AgentIslandGeometry.cardHeight($1) }
     }
 
+    /// #579: every dir's last dir-wide status (Resume crashed, Restart all, a
+    /// failed New session), by dir.
+    var dirStatus: String {
+        actions.filter { $0.key.name.isEmpty }.sorted { $0.key.dir < $1.key.dir }.map(\.value).joined(separator: " · ")
+    }
+
+    /// #579: the line over the rows: the Restart all question on any tab, else
+    /// under Sessions the dir-wide status (History's header has its own).
+    var showsControlLine: Bool { confirmingRestartAll || (!historyTab && !dirStatus.isEmpty) }
+
+    /// #579: the header "⋯" menu's content: recent folders for New session,
+    /// and the gate's reason when its items are off.
+    struct ControlsMenu: Equatable {
+        let recent: [String]
+        let refused: String?
+    }
+
+    var controlsMenu: ControlsMenu {
+        ControlsMenu(recent: AgentIsland.recentFolders(history), refused: resumeGate.refusal)
+    }
+
     /// #525: per row, two or three lines.
     /// #578: under History, the Resume crashed line, then two-line rows.
     var rowHeights: [CGFloat] {
-        historyTab ? [AgentIslandGeometry.historyHeaderHeight] + shownHistory.map { _ in AgentIslandGeometry.rowHeight }
-            : visible.map { AgentIslandGeometry.height(of: $0, show: details) }
+        (showsControlLine ? [AgentIslandGeometry.historyHeaderHeight] : [])
+            + (historyTab ? [AgentIslandGeometry.historyHeaderHeight] + shownHistory.map { _ in AgentIslandGeometry.rowHeight }
+                : visible.map { AgentIslandGeometry.height(of: $0, show: details) })
     }
 
     var size: CGSize {
@@ -348,6 +376,11 @@ struct AgentIslandView: View {
     var onHistory: () -> Void = {}
     var onResume: (DchHistoryRecord) -> Void = { _ in }
     var onResumeAll: () -> Void = {}
+    /// #579: a row's Restart agent, the header "⋯" (its menu is the
+    /// controller's), and the inline Restart all answer.
+    var onRestart: (AgentSession) -> Void = { _ in }
+    var onControls: () -> Void = {}
+    var onConfirmRestartAll: (Bool) -> Void = { _ in }
 
     private var g: AgentIslandGeometry { store.geometry }
 
@@ -384,7 +417,7 @@ struct AgentIslandView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(AgentIsland.islandAccessibilityLabel(s))
+        .accessibilityLabel(AgentIsland.islandAccessibilityLabel(s, history: min(store.history.count, AgentIsland.historyCap)))
     }
 
     // MARK: Expanded
@@ -413,6 +446,7 @@ struct AgentIslandView: View {
     private var rows: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             VStack(spacing: 0) {
+                if store.showsControlLine { controlLine }
                 if store.historyTab { historyHeader }
                 ForEach(historyDrawn) { r in
                     AgentIslandHistoryRow(record: r.record, now: ctx.date.timeIntervalSince1970,
@@ -420,7 +454,9 @@ struct AgentIslandView: View {
                 }
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
-                                   notice: store.notices[r.session.key], show: store.details, action: r.open)
+                                   notice: store.notices[r.session.key] ?? store.actions[r.session.key],
+                                   show: store.details, action: r.open)
+                    .contextMenu { restartItem(r) }
                     if let card = r.card {
                         AgentPromptCardView(card: card, onOption: r.answer, onJump: r.open)
                     }
@@ -436,13 +472,71 @@ struct AgentIslandView: View {
         let card: AgentCard?
         let open: () -> Void
         let answer: (AgentPrompt, AgentPromptOption) -> Void
+        /// #579: its context menu's Restart agent, off with the gate's reason.
+        var restart: () -> Void = {}
+        var refused: String? = nil
         var id: AgentSessionKey { session.key }
     }
 
     var drawn: [Drawn] {
-        store.visible.map { s in
-            Drawn(session: s, card: store.card(for: s), open: { onRow(s) }, answer: { onAnswer(s, $0, $1) })
+        let refused = store.resumeGate.refusal
+        return store.visible.map { s in
+            Drawn(session: s, card: store.card(for: s), open: { onRow(s) }, answer: { onAnswer(s, $0, $1) },
+                  restart: { onRestart(s) }, refused: refused)
         }
+    }
+
+    /// #579: a row's right-click menu. Shown even where dch will skip it (a
+    /// claude typed into a shell, a pending respawn): the row shows the skip line.
+    @ViewBuilder
+    private func restartItem(_ r: Drawn) -> some View {
+        Button(AgentIsland.restartLabel, action: r.restart).disabled(r.refused != nil)
+        if let why = r.refused { Text(verbatim: "Restart \(why)") }
+    }
+
+    /// #579: the header "⋯": a plain button; the controller pops its menu
+    /// (New session, Restart all agents) at the mouse.
+    private var controlsButton: some View {
+        Button(action: onControls) {
+            Text(verbatim: "⋯")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .frame(minWidth: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityLabel("Session controls")
+    }
+
+    /// #579: the line over the rows: the inline Restart all question (Restart,
+    /// Cancel; no modal, no animation), else the dir-wide statuses. Static text.
+    private var controlLine: some View {
+        HStack(spacing: 10) {
+            if store.confirmingRestartAll {
+                Text(verbatim: AgentIsland.restartAllQuestion).foregroundStyle(Color.white.opacity(0.8))
+                Spacer(minLength: 0)
+                lineButton("Restart") { onConfirmRestartAll(true) }
+                lineButton("Cancel") { onConfirmRestartAll(false) }
+            } else {
+                Text(verbatim: store.dirStatus).foregroundStyle(Color.white.opacity(0.6))
+                Spacer(minLength: 0)
+            }
+        }
+        .font(.system(size: 11))
+        .lineLimit(1)
+        .padding(.horizontal, AgentIslandGeometry.rowLead)
+        .frame(height: AgentIslandGeometry.historyHeaderHeight)
+    }
+
+    private func lineButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(verbatim: title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.9))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// #578: one drawn History row and its Resume; off while the gate refuses.
@@ -506,6 +600,7 @@ struct AgentIslandView: View {
                         .accessibilityLabel("\(n) \(st.label.lowercased())")
                     }
                 }
+                controlsButton   // #579: at the right end, on every tab
             }
         }
         .padding(.horizontal, AgentIslandGeometry.openRadii.top + 10)   // lines up with the row glyphs

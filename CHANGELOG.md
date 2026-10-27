@@ -41,6 +41,15 @@ tag from the now-released section and put it on the new top draft.
   running, the island stays at the notch with a dimmed 0 while History has sessions from the
   last 30 days, and opens on History. An open island now stays open when its last session
   ends; it closes when you click away.
+- **Agent Island: restart agents and start sessions from the island.** Right-click a session
+  for Restart agent: dch pauses its Claude Code, restarts it on the installed version and
+  resumes the conversation; the row shows "Restarting…", then dch's result (or why it skipped
+  it). The new ⋯ at the top right holds New session and Restart all agents. New session
+  offers your recent folders (and Choose folder…) and starts a dch session there with the
+  command you last used in it, never resuming an old conversation. Restart all agents asks
+  first, inline, then restarts only the agents and sessions running an older version and sums
+  up what it did. Like Resume, these run with the newest dch installed and stay off when a
+  session runs a newer one.
 - **Fixed: Agent Island shows Claude Code's questions again in sessions with a title.** Claude
   Code draws the session's title in a rule under a question while it waits. The island read
   that line as something after the dialog and showed the last screen lines instead of the

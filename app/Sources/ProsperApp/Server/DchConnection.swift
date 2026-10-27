@@ -539,6 +539,8 @@ enum DchCommand {
         case refused(String)
 
         var isOK: Bool { if case .ok = self { true } else { false } }
+        /// The reason, nil when it may run.
+        var refusal: String? { if case .refused(let why) = self { why } else { nil } }
     }
 
     static func gate(_ dch: Binary?, masters: [String], minimum: [Int]) -> Gate {
@@ -809,12 +811,16 @@ enum DchCommand {
     /// #578: `merge` sends stderr into `out` (a control verb prints results on
     /// stdout and refusals on stderr; its last line is whichever came last), and
     /// `status` is the exit code (-1 when it never started).
+    /// #579: `cwd` is the child's working dir (--spawn has no --cwd); `onOutput`
+    /// gets each stdout chunk as it comes (a restart reports per session).
     static func runCapturingBoth(args: [String], env: [String: String], path: String = dchPath, merge: Bool = false,
-                                 onPid: (pid_t) -> Void = { _ in }) -> (out: Data, err: String, status: Int32) {
+                                 cwd: String? = nil, onPid: (pid_t) -> Void = { _ in },
+                                 onOutput: (Data) -> Void = { _ in }) -> (out: Data, err: String, status: Int32) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
         p.environment = env
+        if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true) }
         let pipe = Pipe()
         let errPipe = Pipe()
         p.standardOutput = pipe
@@ -823,7 +829,11 @@ enum DchCommand {
         onPid(p.processIdentifier)
         // Screen first (it can be tens of KB), then stderr (one line at most, so it
         // fits the pipe buffer while we drain stdout — no deadlock).
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        var data = Data()
+        while case let chunk = pipe.fileHandleForReading.availableData, !chunk.isEmpty {
+            data.append(chunk)
+            onOutput(chunk)
+        }
         let err = merge ? Data() : errPipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         return (data, String(data: err, encoding: .utf8) ?? "", p.terminationStatus)

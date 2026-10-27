@@ -206,13 +206,16 @@ enum AgentIsland {
     }
 
     /// "Agent Island, 3 working, 1 needs input" — non-zero states only.
-    static func islandAccessibilityLabel(_ s: Summary) -> String {
+    /// QA #447 I3: with no session, the History count the island shows for
+    /// ("Agent Island, no sessions, 3 in History").
+    static func islandAccessibilityLabel(_ s: Summary, history: Int = 0) -> String {
         let order: [AgentState] = [.working, .blocked, .done, .idle]
         let parts = order.compactMap { st -> String? in
             guard let n = s.counts[st], n > 0 else { return nil }
             return "\(n) \(st.label.lowercased())"
         }
-        return (["Agent Island"] + (parts.isEmpty ? ["no sessions"] : parts)).joined(separator: ", ")
+        let none = ["no sessions"] + (history > 0 ? ["\(history) in History"] : [])
+        return (["Agent Island"] + (parts.isEmpty ? none : parts)).joined(separator: ", ")
     }
 
     static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval, show d: AgentIslandRowDetails = .all) -> String {

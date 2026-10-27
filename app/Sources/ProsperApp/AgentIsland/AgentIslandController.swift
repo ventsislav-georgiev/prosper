@@ -113,6 +113,16 @@ final class AgentIslandController {
         AgentIsland.controlEnv(dir: dir, login: NSClassFromString("XCTestCase") == nil ? LoginPath.read() : nil)
     }
     var runner = DchActionRunner()
+    /// #579 seam: the folder chooser for New session (NSOpenPanel, directories
+    /// only); `done` gets the path, nil when cancelled. Tests never show a real one.
+    var chooseFolder: @MainActor (@escaping @MainActor (String?) -> Void) -> Void = { done in
+        AgentIslandController.openFolderPanel(done)
+    }
+    /// #579 seam: shows the header "⋯" menu at the mouse. Tests record it; none
+    /// opens a real menu.
+    var popUpMenu: @MainActor (NSMenu) -> Void = { $0.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil) }
+    /// #579: each running Restart all's output lines so far, by dir (its summary).
+    private var restartLines: [String: [String]] = [:]
 
     init() {}
 
@@ -225,8 +235,9 @@ final class AgentIslandController {
         guard let store else { return }
         store.controlDch = dch
         store.history = records
-        // A record gone (revived) takes its status with it; running ones and the --all lines stay.
-        let keys = Set(records.map(\.key))
+        // A record gone (revived) takes its status with it; running ones, the --all
+        // lines and #579's live rows (a Restart result) stay.
+        let keys = Set(records.map(\.key)).union(store.sessions.map(\.key))
         store.actions = store.actions.filter { $0.key.name.isEmpty || keys.contains($0.key) || runner.isBusy($0.key) }
         layout()
     }
@@ -237,7 +248,9 @@ final class AgentIslandController {
         guard let store, case .ok(let dch) = store.resumeGate else { return }
         let live = Set(store.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))
         let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
-        run(r.key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records), all: false)
+        run(r.key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records), running: AgentIsland.resumingText) {
+            [weak self] in self?.resumed(r.key, $0, all: false)
+        }
     }
 
     /// The Resume crashed button, and nothing else: `--revive --all` in each dir
@@ -246,27 +259,180 @@ final class AgentIslandController {
     func resumeCrashed() {
         guard let store, case .ok(let dch) = store.resumeGate else { return }
         for dir in Set(store.history.map(\.key.dir)).sorted() {
-            run(AgentSessionKey(dir: dir, name: ""), dch: dch, args: ["--revive", "--all"], all: true)
+            let key = AgentSessionKey(dir: dir, name: "")
+            run(key, dch: dch, args: ["--revive", "--all"], running: AgentIsland.resumingText) {
+                [weak self] in self?.resumed(key, $0, all: true)
+            }
         }
     }
 
-    private func run(_ key: AgentSessionKey, dch: String, args: [String], all: Bool) {
+    /// One long verb on the runner with the control env (QA #445 M1), plus
+    /// spawnEnv's strip for --spawn. `running` shows in the row meanwhile;
+    /// `onLine` and `done` run on main. A busy key refuses: false, nothing shown.
+    @discardableResult
+    private func run(_ key: AgentSessionKey, dch: String, args: [String], running: String?, cwd: String? = nil,
+                     bound: TimeInterval? = nil, spawn: Bool = false,
+                     onLine: (@MainActor @Sendable (String) -> Void)? = nil,
+                     done: @escaping @MainActor @Sendable (DchActionResult) -> Void) -> Bool {
         let env = controlEnv
-        let started = runner.start(key, path: dch, args: args, env: { env(key.dir) }) { [weak self] r in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.finished(key, r, all: all) } }
+        var hook: (@Sendable (String) -> Void)?
+        if let onLine { hook = { line in DispatchQueue.main.async { MainActor.assumeIsolated { onLine(line) } } } }
+        let started = runner.start(key, path: dch, args: args, cwd: cwd, bound: bound,
+                                   env: { spawn ? AgentIsland.spawnEnv(env(key.dir)) : env(key.dir) },
+                                   onLine: hook) { [weak self] r in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.store != nil else { return }
+                    done(r)
+                    self.layout()
+                }
+            }
         }
-        guard started else { return }
-        store?.actions[key] = AgentIsland.resumingText
+        guard started else { return false }
+        if let running { store?.actions[key] = running }
         layout()
+        return true
     }
 
     /// Both lists refresh: the history here; the sessions on the poller's next
     /// tick (a revived session's socket moves its dir's mtime).
-    private func finished(_ key: AgentSessionKey, _ r: DchActionResult, all: Bool) {
-        guard let store else { return }
-        store.actions[key] = AgentIsland.resumeText(r, all: all)
+    private func resumed(_ key: AgentSessionKey, _ r: DchActionResult, all: Bool) {
+        store?.actions[key] = AgentIsland.resumeText(r, all: all)
         refreshHistory()
+    }
+
+    // MARK: - Restart and New session (#579)
+
+    /// A row's Restart agent: `--restart <name> --include-agents -f`, even when
+    /// current. A busy row refuses. dch's skip line is the result.
+    func restart(_ s: AgentSession) {
+        guard let store, case .ok(let dch) = store.resumeGate else { return }
+        let key = s.key
+        run(key, dch: dch, args: AgentIsland.restartArgs(s.name), running: AgentIsland.restartingText,
+            bound: DchActionRunner.restartBound) { [weak self] r in
+            self?.store?.actions[key] = AgentIsland.restartText(r, name: key.name)
+        }
+    }
+
+    /// The header "⋯".
+    func showControlsMenu() {
+        guard store != nil else { return }
+        popUpMenu(makeControlsMenu())
+    }
+
+    /// New session ▸ recent folders, Choose folder…; Restart all agents. Off,
+    /// with the gate's reason under them, while the gate refuses.
+    func makeControlsMenu() -> NSMenu {
+        let m = store?.controlsMenu ?? .init(recent: [], refused: nil), on = m.refused == nil
+        let menu = NSMenu(), sub = NSMenu()
+        menu.autoenablesItems = false
+        sub.autoenablesItems = false
+        for f in m.recent {
+            sub.addItem(AgentIslandMenuItem((f as NSString).abbreviatingWithTildeInPath) { [weak self] in self?.newSession(in: f) })
+        }
+        if !m.recent.isEmpty { sub.addItem(.separator()) }
+        sub.addItem(AgentIslandMenuItem(AgentIsland.chooseFolderLabel) { [weak self] in self?.chooseNewSessionFolder() })
+        let new = AgentIslandMenuItem(AgentIsland.newSessionLabel, enabled: on)
+        new.submenu = sub
+        menu.addItem(new)
+        // Restart all only reaches live sessions: off with history only.
+        let live = !(store?.sessions.isEmpty ?? true)
+        menu.addItem(AgentIslandMenuItem(AgentIsland.restartAllLabel, enabled: on && live) { [weak self] in self?.askRestartAll() })
+        if let why = m.refused {
+            menu.addItem(.separator())
+            menu.addItem(AgentIslandMenuItem("Controls \(why)", enabled: false))
+        }
+        return menu
+    }
+
+    /// The "⋯" menu's Restart all agents: only asks (the inline line).
+    func askRestartAll() {
+        guard let store, store.resumeGate.isOK, !store.sessions.isEmpty else { return }
+        store.confirmingRestartAll = true
         layout()
+    }
+
+    /// The inline answer. Restart runs Restart all; Cancel runs nothing.
+    func confirmRestartAll(_ yes: Bool) {
+        guard let store, store.confirmingRestartAll else { return }
+        store.confirmingRestartAll = false
+        if yes { restartAll() } else { layout() }
+    }
+
+    /// `--restart --all --include-agents` (no -f: stale agents only), one job per
+    /// dir with a live session under the dir-wide key. A row shows "Restarting…"
+    /// once dch reports pausing it, then its own line; the dir gets the summary.
+    private func restartAll() {
+        guard let store, case .ok(let dch) = store.resumeGate else { return }
+        for dir in Set(store.sessions.map(\.key.dir)).sorted() {
+            let key = AgentSessionKey(dir: dir, name: "")
+            run(key, dch: dch, args: AgentIsland.restartAllArgs, running: AgentIsland.restartAllRunningText,
+                bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.restartAllLine($0, dir: dir) }) {
+                [weak self] r in self?.restartedAll(dir, r)
+            }
+        }
+    }
+
+    private func restartAllLine(_ line: String, dir: String) {
+        guard let store else { return }
+        restartLines[dir, default: []].append(line)
+        guard let rep = AgentIsland.restartReport(line) else { return }
+        let key = AgentSessionKey(dir: dir, name: rep.name)
+        guard store.sessions.contains(where: { $0.key == key }) else { return }
+        if AgentIsland.isPauseSent(rep.text) {
+            store.actions[key] = AgentIsland.restartingText
+        } else if store.actions[key] == AgentIsland.restartingText {
+            store.actions[key] = rep.text   // its result line
+        }
+        layout()
+    }
+
+    private func restartedAll(_ dir: String, _ r: DchActionResult) {
+        guard let store else { return }
+        store.actions[AgentSessionKey(dir: dir, name: "")] = AgentIsland.restartAllSummary(r, lines: restartLines[dir] ?? [])
+        restartLines[dir] = nil
+        // A row dch paused but never reported on again: no stale "Restarting…".
+        for (k, v) in store.actions where k.dir == dir && !k.name.isEmpty && v == AgentIsland.restartingText {
+            store.actions[k] = nil
+        }
+    }
+
+    /// New session in `folder`: `--spawn <name> [launch]` with the Process cwd
+    /// set to it, into the island's first socket dir (it shows on the next tick).
+    func newSession(in folder: String) {
+        guard let store, case .ok(let dch) = store.resumeGate else { return }
+        let dir = historyDirs().first ?? DchCommand.defaultSocketDir
+        let taken = Set(store.sessions.filter { $0.key.dir == dir }.map(\.name))
+            .union(store.history.filter { $0.key.dir == dir }.map(\.name))
+        let args = AgentIsland.newSessionArgs(folder: folder, history: store.history, taken: taken)
+        let key = AgentSessionKey(dir: dir, name: args[1])
+        run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: true) { [weak self] r in
+            guard let store = self?.store else { return }
+            if let failed = AgentIsland.spawnText(r) { store.actions[AgentSessionKey(dir: dir, name: "")] = failed }
+        }
+    }
+
+    /// "Choose folder…": the island collapses, then the chooser; a folder spawns.
+    func chooseNewSessionFolder() {
+        guard let store, store.resumeGate.isOK else { return }
+        setExpanded(false)
+        chooseFolder { [weak self] path in
+            if let path { self?.newSession(in: path) }
+        }
+    }
+
+    /// The live chooser: directories only, after activating the app (an
+    /// LSUIElement app's panel would open behind the front app). Non-modal.
+    private static func openFolderPanel(_ done: @escaping @MainActor (String?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "New session"
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { resp in
+            MainActor.assumeIsolated { done(resp == .OK ? panel.url?.path : nil) }
+        }
     }
 
     /// Size the panel to the island so nothing outside it eats clicks. #581: an
@@ -306,7 +472,10 @@ final class AgentIslandController {
             onTab: { [weak self] in self?.showSidekicks($0) },
             onHistory: { [weak self] in self?.showHistory() },
             onResume: { [weak self] in self?.resume($0) },
-            onResumeAll: { [weak self] in self?.resumeCrashed() }))
+            onResumeAll: { [weak self] in self?.resumeCrashed() },
+            onRestart: { [weak self] in self?.restart($0) },
+            onControls: { [weak self] in self?.showControlsMenu() },
+            onConfirmRestartAll: { [weak self] in self?.confirmRestartAll($0) }))
         host.sizingOptions = []
         p.contentView = host
         panel = p
@@ -321,6 +490,7 @@ final class AgentIslandController {
         if on, store.sessions.isEmpty, !store.history.isEmpty { store.historyTab = true }
         if !on {
             store.notices = [:]; store.cards = [:]; readAt = [:]
+            store.confirmingRestartAll = false
             store.actions = store.actions.filter { runner.isBusy($0.key) }   // a running one keeps its "Resuming…"
         }
         refreshCards()
@@ -527,6 +697,23 @@ final class AgentIslandController {
         store = nil
         shown = false
     }
+}
+
+/// #579: a menu item that runs a closure (the "⋯" menu has no responder chain
+/// to target). `enabled: false` is a plain line (the gate's reason).
+final class AgentIslandMenuItem: NSMenuItem {
+    private let run: () -> Void
+
+    init(_ title: String, enabled: Bool = true, run: @escaping () -> Void = {}) {
+        self.run = run
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+        isEnabled = enabled
+    }
+
+    required init(coder: NSCoder) { fatalError("not from a nib") }
+
+    @objc private func fire() { run() }
 }
 
 /// #500: the live launcher behind AgentIslandController.launchTerminal.

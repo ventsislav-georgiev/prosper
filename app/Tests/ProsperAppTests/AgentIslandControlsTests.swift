@@ -109,7 +109,7 @@ final class AgentIslandControlsTests: XCTestCase {
     private static let historyJSON = #"""
     [{"name":"work","sock_dir":"/d","alias":"My work","cwd":"/src/app","argv":["headroom","wrap","claude"],
       "started":1761400000,"updated":1761403600,"ended":1761403612,"end":"signal 9","future":{"x":1},
-      "agent":{"kind":"claude","session_id":"abc","name":"fix-tests","cwd":"/src/app","launch":["/usr/local/bin/headroom","wrap","claude"]}},
+      "agent":{"kind":"claude","session_id":"abc","name":"fix-tests","cwd":"/src/app","launch":["/usr/local/bin/claude"]}},
      {"name":"gone","updated":1761409999,"ended":0,"end":"vanished","agent":null},
      {"name":"","ended":5},
      {"alias":"no name"},
@@ -123,7 +123,7 @@ final class AgentIslandControlsTests: XCTestCase {
             key: AgentSessionKey(dir: "/d", name: "work"), alias: "My work", cwd: "/src/app", argv: ["headroom", "wrap", "claude"],
             started: 1_761_400_000, updated: 1_761_403_600, ended: 1_761_403_612, end: "signal 9",
             agent: .init(kind: "claude", sessionID: "abc", name: "fix-tests", cwd: "/src/app",
-                         launch: ["/usr/local/bin/headroom", "wrap", "claude"])))
+                         launch: ["/usr/local/bin/claude"])))
         XCTAssertEqual(rows[0].title, "My work")
         XCTAssertNil(rows[1].agent)
         XCTAssertEqual(rows[1].lastSeen, 1_761_409_999, "ended 0: last seen is updated")
@@ -248,23 +248,29 @@ final class AgentIslandControlsTests: XCTestCase {
     /// never end it, so a second one would show.
     private final class FakeProc: @unchecked Sendable {
         let lock = NSLock()
-        var launches: [(path: String, args: [String], dir: String?)] = []
+        var launches: [(path: String, args: [String], dir: String?, cwd: String?)] = []
         var envs: [[String: String]] = []
         var signals: [pid_t] = []
         var status: Int32 = 0
         var output = ""
+        /// #579: printed once the pid is known, before the release (a restart's progress lines).
+        var progress = ""
         let release = DispatchSemaphore(value: 0)
         var pidGate: DispatchSemaphore?
         let launched = DispatchSemaphore(value: 0)
 
         func runner(bound: TimeInterval = 60) -> DchActionRunner {
-            DchActionRunner(bound: bound, launch: { path, args, env, onPid in
-                self.lock.withLock { self.launches.append((path, args, env["DCH_SOCKET_DIR"])); self.envs.append(env) }
+            DchActionRunner(bound: bound, launch: { path, args, env, cwd, onPid, onOutput in
+                self.lock.withLock { self.launches.append((path, args, env["DCH_SOCKET_DIR"], cwd)); self.envs.append(env) }
                 self.pidGate?.wait()
                 onPid(4242)
+                let early = self.lock.withLock { Data(self.progress.utf8) }
+                if !early.isEmpty { onOutput(early) }
                 self.launched.signal()
                 self.release.wait()
-                return self.lock.withLock { (self.status, Data(self.output.utf8)) }
+                let out = self.lock.withLock { Data(self.output.utf8) }
+                onOutput(out)
+                return self.lock.withLock { (self.status, early + out) }
             }, signal: { pid in self.lock.withLock { self.signals.append(pid) } })
         }
 
@@ -963,5 +969,431 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.args, [["--revive", "a", "--as", "a-2"]])
         f.release.signal()
         settle(c) { c.store?.actions[x.key] != AgentIsland.resumingText }
+    }
+
+    // MARK: - #579: Restart agent, Restart all agents, New session
+
+    /// dch's resume_argv rules: a new session never resumes a recorded conversation.
+    func testStrippingResumeFollowsDchsRules() {
+        func strip(_ s: String) -> String { AgentIsland.strippingResume(s.split(separator: " ").map(String.init)).joined(separator: " ") }
+        XCTAssertEqual(strip("headroom wrap claude --resume sid --chrome"), "headroom wrap claude --chrome", "--resume and its id")
+        XCTAssertEqual(strip("claude --resume --chrome"), "claude --chrome", "an optional value: a flag is not --resume's")
+        XCTAssertEqual(strip("claude --resume"), "claude")
+        XCTAssertEqual(strip("claude -r sid --chrome"), "claude --chrome")
+        XCTAssertEqual(strip("claude -r -x"), "claude -x")
+        XCTAssertEqual(strip("claude --session-id sid --chrome"), "claude --chrome")
+        XCTAssertEqual(strip("claude --session-id --chrome"), "claude", "--session-id always takes the next token")
+        XCTAssertEqual(strip("claude --resume=sid --session-id=x --chrome"), "claude --chrome", "the = forms drop as one token")
+        XCTAssertEqual(strip("claude -c --continue --fork-session --model opus"), "claude --model opus", "these drop alone")
+        XCTAssertEqual(strip("claude --chrome -- --resume sid -c"), "claude --chrome -- --resume sid -c", "the prompt after -- stays")
+        XCTAssertEqual(strip("claude --resume sid -- -c"), "claude -- -c")
+        XCTAssertEqual(strip("wrapper -c /usr/local/bin/claude --continue"), "wrapper -c /usr/local/bin/claude",
+                       "only after the claude token")
+        XCTAssertEqual(strip("agent --resume sid -v"), "agent -v", "no claude token: after argv[0]")
+        XCTAssertEqual(AgentIsland.strippingResume([]), [])
+    }
+
+    /// argv defaults to a shell session: only then is agent.launch the typed
+    /// line (a wrapper included). A session whose command is the wrapper records
+    /// it as argv, and launch is the process below it (dch_agent_probe).
+    private func agentRecord(_ name: String, dir: String = "/d", ended: TimeInterval, cwd: String, launch: [String],
+                             argv: [String] = ["/bin/zsh"]) -> DchHistoryRecord {
+        var r = record(name, dir: dir, ended: ended)
+        r.cwd = "/ignored"
+        r.argv = argv
+        r.agent = .init(kind: "claude", cwd: cwd, launch: launch)
+        return r
+    }
+
+    /// The newest launch for the folder, else the newest anywhere, else claude; stripped either way.
+    func testLaunchPickPrefersTheFolderThenTheNewestThenClaude() {
+        let history = [agentRecord("n", ended: 30, cwd: "/b", launch: ["claude", "--chrome", "--resume", "s3"]),
+                       agentRecord("e", ended: 25, cwd: "/a", launch: []),
+                       agentRecord("m", ended: 20, cwd: "/a", launch: ["headroom", "wrap", "claude", "--resume", "s2"]),
+                       agentRecord("o", ended: 10, cwd: "/a", launch: ["old"])]
+        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/a", history: history), ["headroom", "wrap", "claude"],
+                       "the folder's newest non-empty launch, without its --resume")
+        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/c", history: history), ["claude", "--chrome"], "the newest overall")
+        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/a", history: [record("x")]), ["claude"], "no agent launch: claude")
+        // QA #449 M1: dch's revive_spawn choice per record.
+        let wrapped = agentRecord("w", ended: 5, cwd: "/w", launch: ["/opt/homebrew/bin/claude", "--resume", "X", "--chrome"],
+                                  argv: ["headroom", "wrap", "claude", "--resume", "X", "--chrome"])
+        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/w", history: [wrapped]), ["headroom", "wrap", "claude", "--chrome"],
+                       "claude in the argv: the session's own command, wrapper kept")
+        let shell = agentRecord("s", ended: 5, cwd: "/s", launch: ["headroom", "wrap", "claude", "--resume", "X"], argv: ["/bin/zsh"])
+        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/s", history: [shell]), ["headroom", "wrap", "claude"],
+                       "a shell session: the typed launch")
+        var noAgent = record("n", ended: 9)
+        noAgent.argv = ["headroom", "wrap", "claude", "--x"]
+        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/src", history: [noAgent, shell]), ["headroom", "wrap", "claude"],
+                       "a record with no agent is no source")
+    }
+
+    func testRecentFoldersAreDistinctAgentFoldersNewestFirstAtMostEight() {
+        var history = [agentRecord("a", ended: 100, cwd: "/f0", launch: ["claude"]), record("plain", ended: 99),
+                       agentRecord("b", ended: 98, cwd: "/f0", launch: ["claude"])]
+        var noAgentCwd = agentRecord("c", ended: 97, cwd: "", launch: ["claude"])
+        noAgentCwd.cwd = "/session-cwd"
+        history.append(noAgentCwd)
+        history += (1...10).map { agentRecord("r\($0)", ended: TimeInterval(90 - $0), cwd: "/f\($0)", launch: ["claude"]) }
+        let all: (String) -> Bool = { _ in true }
+        XCTAssertEqual(AgentIsland.recentFolders(history, exists: all), ["/f0", "/session-cwd", "/f1", "/f2", "/f3", "/f4", "/f5", "/f6"])
+        XCTAssertEqual(AgentIsland.recentFolders(history, exists: { $0 != "/f1" }),
+                       ["/f0", "/session-cwd", "/f2", "/f3", "/f4", "/f5", "/f6", "/f7"], "a missing folder is skipped, the next fills in")
+        XCTAssertEqual(AgentIsland.recentFolders([record("plain")], exists: all), [], "only agent records")
+        let real = tempDir().path
+        XCTAssertEqual(AgentIsland.recentFolders([agentRecord("x", ended: 2, cwd: real + "/gone", launch: ["claude"]),
+                                                  agentRecord("y", ended: 1, cwd: real, launch: ["claude"])]), [real],
+                       "by default a folder that no longer exists is not offered")
+    }
+
+    func testSessionNameIsTheSanitizedBasenameFirstFree() {
+        XCTAssertEqual(AgentIsland.sessionName(folder: "/Users/u/prosper"), "prosper")
+        XCTAssertEqual(AgentIsland.sessionName(folder: "/Users/u/My Project!"), "My-Project")
+        XCTAssertEqual(AgentIsland.sessionName(folder: "/x/--a  b.c_d"), "a-b.c_d", "no leading -: dch would read a flag")
+        XCTAssertEqual(AgentIsland.sessionName(folder: "/x/.hidden"), "hidden")
+        XCTAssertEqual(AgentIsland.sessionName(folder: "/x/café"), "caf")
+        XCTAssertEqual(AgentIsland.sessionName(folder: "/x/ü"), "session")
+        XCTAssertEqual(AgentIsland.sessionName(folder: "/"), "session")
+        XCTAssertEqual(AgentIsland.freeName("app", taken: ["app", "app-2"]), "app-3")
+        XCTAssertEqual(AgentIsland.freeName("app", taken: ["app-2"]), "app")
+        XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/src/app", history: [], taken: ["app"]), ["--spawn", "app-2", "claude"])
+    }
+
+    func testSpawnEnvDropsTheClaudeCodeIdentity() {
+        let env = ["PATH": "/p", "DCH_SOCKET_DIR": "/d", "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
+                   "CLAUDE_CODE_SSE_PORT": "1", "CLAUDE_PID": "9", "CLAUDE_EFFORT": "high", "CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"]
+        XCTAssertEqual(AgentIsland.spawnEnv(env), ["PATH": "/p", "DCH_SOCKET_DIR": "/d", "CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"])
+    }
+
+    func testRestartArgsAndTexts() {
+        XCTAssertEqual(AgentIsland.restartArgs("a"), ["--restart", "a", "--include-agents", "-f"], "a row restarts even when current")
+        XCTAssertEqual(AgentIsland.restartAllArgs, ["--restart", "--all", "--include-agents"], "no -f: stale agents only")
+        let skip = "a: skipped — claude was started inside the session's shell, not as its command"
+        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 0, line: skip), name: "a"),
+                       "skipped — claude was started inside the session's shell, not as its command", "dch's skip line is the result")
+        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 1, line: "a: NOT restarted — not ready"), name: "a"),
+                       "Restart failed: NOT restarted — not ready")
+        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 1, line: "dch: no session a"), name: "a"),
+                       "Restart failed: dch: no session a")
+        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 1, line: ""), name: "a"), "Restart failed (exit 1)")
+        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 15, line: "", stopped: true), name: "a"),
+                       "Restart stopped: no answer in 15m")
+        XCTAssertEqual(AgentIsland.restartText(DchActionResult(status: 0, line: ""), name: "a"), "Restarted")
+    }
+
+    func testRestartAllSummary() {
+        func sum(_ out: String, status: Int32 = 0) -> String {
+            let lines = out.split(separator: "\n").map(String.init)
+            return AgentIsland.restartAllSummary(DchActionResult(status: status, line: lines.last ?? ""), lines: lines)
+        }
+        XCTAssertEqual(sum("all sessions already on dch 1.23.0\nall claude agents already on claude 2.1.0"), "all agents current")
+        XCTAssertEqual(sum("all sessions already on dch 1.23.0"), "all agents current", "no claude anywhere")
+        XCTAssertEqual(sum("all sessions already on dch 1.23.0\np: skipped — claude was started inside the session's shell, not as its command"),
+                       "all agents current (1 skipped)")
+        XCTAssertEqual(sum("""
+            a: pause message sent; waiting for claude 2.0.1 to go idle
+            b: pause message sent; waiting for claude 2.0.1 to go idle
+            a: claude 2.0.1 -> 2.1.0, resumed abc
+            b: NOT restarted — not ready within 600s (busy); resume message typed
+            """, status: 1), "1 agent restarted, 1 failed")
+        XCTAssertEqual(sum("a: claude 2.0 -> 2.1, resumed x\nb: claude 2.0 -> 2.1, resumed y"), "2 agents restarted")
+        XCTAssertEqual(sum("a: restarted on dch 1.23.0\nb: restarted on dch 1.23.0\nall claude agents already on claude 2.1.0"),
+                       "2 sessions restarted on dch 1.23.0", "masters moved, no agent: not \"all agents current\"")
+        XCTAssertEqual(sum("""
+            a: restarted on dch 1.23.0
+            b: pause message sent; waiting for claude 2.0.1 to go idle
+            b: claude 2.0.1 -> 2.1.0, resumed abc
+            p: skipped — claude was started inside the session's shell, not as its command
+            """), "1 session restarted on dch 1.23.0, 1 agent restarted, 1 skipped")
+        XCTAssertEqual(sum("dch: --restart: no sessions", status: 1), "Restart all failed: dch: --restart: no sessions")
+        // QA #449 L1: a master that did not take is a stderr line and exit 1.
+        XCTAssertEqual(sum("a: restarted on dch 1.23.0\ndch: b: re-exec failed; still on dch 1.22.0\nc: claude 2.1.1 -> 2.1.2, resumed x",
+                           status: 1),
+                       "1 session restarted on dch 1.23.0, 1 agent restarted, failed: dch: b: re-exec failed; still on dch 1.22.0")
+        XCTAssertEqual(sum("a: claude 2.0 -> 2.1, resumed x", status: 1), "1 agent restarted, failed (exit 1)")
+        XCTAssertEqual(AgentIsland.restartAllSummary(DchActionResult(status: 15, line: "", stopped: true), lines: []),
+                       "Restart all stopped: no answer in 15m")
+    }
+
+    /// QA #447 I3: history and no live session: the label says History is there.
+    func testIslandLabelMentionsHistoryWithNoSession() {
+        XCTAssertEqual(AgentIsland.islandAccessibilityLabel(AgentIsland.summary([]), history: 3), "Agent Island, no sessions, 3 in History")
+        XCTAssertEqual(AgentIsland.islandAccessibilityLabel(AgentIsland.summary([]), history: 0), "Agent Island, no sessions")
+        XCTAssertEqual(AgentIsland.islandAccessibilityLabel(AgentIsland.summary([session("a")]), history: 3), "Agent Island, 1 idle")
+    }
+
+    /// The default launch (/bin/sh, never dch) streams lines as they come, a
+    /// UTF-8 character split across two writes whole, and runs in `cwd`.
+    func testRunnerStreamsLinesAndRunsInTheCwd() throws {
+        final class Lines: @unchecked Sendable { let lock = NSLock(); var all: [String] = [] }
+        let lines = Lines(), res = Results(), runner = DchActionRunner()
+        XCTAssertTrue(runner.start(AgentSessionKey(dir: "/d", name: "a"), path: "/bin/sh",
+                                   args: ["-c", #"printf 'a: one\n\n  b: caf\303'; /bin/sleep 0.1; printf '\251 \342\200\224 ok\nlast'"#],
+                                   env: { [:] }, onLine: { l in lines.lock.withLock { lines.all.append(l) } }, done: res.add))
+        XCTAssertEqual(res.done.wait(timeout: .now() + 10), .success)
+        XCTAssertEqual(lines.lock.withLock { lines.all }, ["a: one", "b: café — ok", "last"], "before done, trimmed, no empty line")
+        XCTAssertEqual(res.all.last?.line, "last")
+        let dir = tempDir()
+        XCTAssertTrue(runner.start(AgentSessionKey(dir: "/d", name: "b"), path: "/bin/pwd", args: ["-P"], cwd: dir.path,
+                                   env: { [:] }, done: res.add))
+        XCTAssertEqual(res.done.wait(timeout: .now() + 10), .success)
+        let pwd = try XCTUnwrap(res.all.last?.line)
+        XCTAssertTrue(pwd.hasPrefix("/") && pwd.hasSuffix("/" + dir.lastPathComponent), pwd)
+    }
+
+    /// A job's own bound wins over the runner's.
+    func testPerJobBoundOverridesTheRunners() {
+        let f = FakeProc(), runner = f.runner(bound: 60), res = Results(), k = AgentSessionKey(dir: "/d", name: "a")
+        XCTAssertTrue(runner.start(k, path: "/fake/dch", args: [], bound: 0.2, env: { [:] }, done: res.add))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(f.sent, [4242])
+        f.release.signal()
+        XCTAssertEqual(res.done.wait(timeout: .now() + 5), .success)
+    }
+
+    /// A menu item's action through its own target (no NSApp under XCTest, and
+    /// the menu is never shown). Ignores isEnabled: tests check that apart.
+    @MainActor
+    private func press(_ item: NSMenuItem) {
+        guard let action = item.action else { return }
+        _ = (item.target as AnyObject?)?.perform(action, with: item)
+    }
+
+    /// An open controller whose gate is open (control binary read on open).
+    @MainActor
+    private func opened(_ f: FakeProc, _ sessions: [AgentSession], history: [DchHistoryRecord]? = nil,
+                        dirs: [String] = ["/d"]) -> AgentIslandController {
+        let history = history ?? [record("x")]
+        let reads = Reads()
+        reads.records = history
+        let c = controller(f, reads, dirs: dirs)
+        c.store?.sessions = sessions
+        c.setExpanded(true)
+        settle(c) { c.store?.controlDch != nil && c.store?.history.count == history.count }
+        return c
+    }
+
+    /// A row's Restart agent: -f, the control env, "Restarting…", refused while
+    /// busy, then dch's last line without the name.
+    @MainActor
+    func testRowRestartRunsWithForceAndShowsDchsLine() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a"), session("b")])
+        c.controlEnv = { ["PATH": "/login/bin", "DCH_SOCKET_DIR": $0, "CLAUDECODE": "1"] }
+        let store = try XCTUnwrap(c.store)
+        let row = try XCTUnwrap(AgentIslandView(store: store, onRestart: { c.restart($0) }).drawn.first { $0.session.name == "a" })
+        XCTAssertNil(row.refused)
+        row.restart()
+        XCTAssertEqual(store.actions[row.session.key], AgentIsland.restartingText)
+        c.restart(session("a"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--restart", "a", "--include-agents", "-f"]], "one launch: a busy row refuses")
+        XCTAssertEqual(f.lock.withLock { f.envs }, [["PATH": "/login/bin", "DCH_SOCKET_DIR": "/d", "CLAUDECODE": "1"]],
+                       "the control env; the CLAUDE* strip is --spawn's only")
+        XCTAssertNil(f.lock.withLock { f.launches[0].cwd })
+        f.output = "a: restarted on dch 1.23.0\na: skipped — claude was started inside the session's shell, not as its command\n"
+        f.release.signal()
+        settle(c) { store.actions[row.session.key] != AgentIsland.restartingText }
+        XCTAssertEqual(store.actions[row.session.key], "skipped — claude was started inside the session's shell, not as its command")
+        c.refreshHistory()
+        settle(c)
+        XCTAssertNotNil(store.actions[row.session.key], "a history read keeps a live row's result")
+    }
+
+    /// Restart all only asks; Cancel runs nothing and drops the line.
+    @MainActor
+    func testRestartAllAsksFirstAndCancelRunsNothing() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a")])
+        let store = try XCTUnwrap(c.store)
+        let before = store.rowHeights
+        let menu = c.makeControlsMenu()
+        XCTAssertEqual(menu.items[1].title, AgentIsland.restartAllLabel)
+        press(menu.items[1])
+        XCTAssertTrue(store.confirmingRestartAll)
+        XCTAssertTrue(store.showsControlLine)
+        XCTAssertEqual(store.rowHeights, [AgentIslandGeometry.historyHeaderHeight] + before, "the island grows by the line")
+        settle(c)
+        XCTAssertEqual(f.args, [], "asking runs nothing")
+        c.confirmRestartAll(false)
+        XCTAssertFalse(store.confirmingRestartAll)
+        XCTAssertEqual(store.rowHeights, before)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [], "Cancel: no verb")
+        c.confirmRestartAll(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "an answer with no question runs nothing")
+        c.askRestartAll()
+        c.setExpanded(false)
+        XCTAssertFalse(store.confirmingRestartAll, "closing drops the question")
+        XCTAssertEqual(f.args, [])
+    }
+
+    /// Confirmed: one job per dir with a live session, no -f. A row shows
+    /// "Restarting…" once dch reports pausing it, then its own line; a paused
+    /// row dch never reports on again is cleared; the dir gets the summary.
+    @MainActor
+    func testRestartAllRunsPerDirWithoutForceAndReportsRows() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a"), session("b"), session("q"), session("c", dir: "/e")], dirs: ["/d", "/e"])
+        let store = try XCTUnwrap(c.store)
+        f.progress = "a: pause message sent; waiting for claude 2.0.1 to go idle\n"
+            + "b: pause message sent; waiting for claude 2.0.1 to go idle\nzz: pause message sent; waiting\n"
+        c.askRestartAll()
+        c.confirmRestartAll(true)
+        for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
+        XCTAssertEqual(f.args, [AgentIsland.restartAllArgs, AgentIsland.restartAllArgs])
+        XCTAssertEqual(Set(f.lock.withLock { f.launches.compactMap(\.dir) }), ["/d", "/e"])
+        let d = AgentSessionKey(dir: "/d", name: ""), a = AgentSessionKey(dir: "/d", name: "a")
+        XCTAssertEqual(store.actions[d], AgentIsland.restartAllRunningText)
+        settle(c) { store.actions[a] == AgentIsland.restartingText }
+        XCTAssertEqual(store.actions[a], AgentIsland.restartingText)
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "b")], AgentIsland.restartingText)
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "q")], "not reported: no Restarting…")
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "zz")], "not a live row")
+        c.restart(session("q"))
+        XCTAssertEqual(f.args.count, 2, "a row of a dir under Restart all is refused")
+        XCTAssertTrue(store.showsControlLine, "the dir status shows over the Sessions rows")
+        f.output = "a: claude 2.0.1 -> 2.1.0, resumed abc\n"
+        f.release.signal(); f.release.signal()
+        settle(c) { store.actions[d] != AgentIsland.restartAllRunningText && store.actions[AgentSessionKey(dir: "/e", name: "")] != AgentIsland.restartAllRunningText }
+        XCTAssertEqual(store.actions[a], "claude 2.0.1 -> 2.1.0, resumed abc")
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "b")], "no stale Restarting…")
+        XCTAssertEqual(store.actions[d], "1 agent restarted")
+        XCTAssertEqual(store.dirStatus, "1 agent restarted · 1 agent restarted")
+    }
+
+    /// New session: --spawn <free name> [stripped launch], the Process cwd is the
+    /// folder, the env is the control env minus the Claude Code identity.
+    @MainActor
+    func testNewSessionSpawnsInTheFolderWithAStrippedEnv() throws {
+        let f = FakeProc()
+        let argv = ["/opt/homebrew/bin/headroom", "wrap", "claude", "--resume", "sid", "--chrome"]
+        let app = tempDir().appendingPathComponent("app").path, gone = tempDir().appendingPathComponent("gone").path
+        try FileManager.default.createDirectory(atPath: app, withIntermediateDirectories: true)
+        let c = opened(f, [session("app")], history: [agentRecord("old", ended: 6, cwd: gone, launch: ["claude"]),
+                                                     agentRecord("app-2", ended: 5, cwd: app,
+                                                                 launch: ["/opt/homebrew/bin/claude", "--resume", "sid", "--chrome"], argv: argv)])
+        c.controlEnv = { ["PATH": "/login/bin", "DCH_SOCKET_DIR": $0, "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
+                          "CLAUDE_PID": "9", "CLAUDE_EFFORT": "high", "CLAUDE_CONFIG_DIR": "/c"] }
+        let store = try XCTUnwrap(c.store)
+        XCTAssertEqual(store.controlsMenu, .init(recent: [app], refused: nil), "the deleted folder is left out")
+        let sub = try XCTUnwrap(c.makeControlsMenu().items.first?.submenu)
+        XCTAssertEqual(sub.items.map(\.title), [(app as NSString).abbreviatingWithTildeInPath, "", AgentIsland.chooseFolderLabel])
+        press(sub.items[0])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--spawn", "app-3", "/opt/homebrew/bin/headroom", "wrap", "claude", "--chrome"]],
+                       "app is live and app-2 a record: app-3; no --resume")
+        XCTAssertEqual(f.lock.withLock { f.launches[0].cwd }, app)
+        XCTAssertEqual(f.lock.withLock { f.envs }, [["PATH": "/login/bin", "DCH_SOCKET_DIR": "/d", "CLAUDE_CONFIG_DIR": "/c"]])
+        f.status = 1
+        f.output = "dch: app-3: headroom: No such file or directory\n"
+        f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != nil }
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], "New session failed: dch: app-3: headroom: No such file or directory")
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "app-3")])
+    }
+
+    /// "Choose folder…" goes through the seam (never a real panel); cancel spawns nothing.
+    @MainActor
+    func testChooseFolderGoesThroughTheSeam() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a")])
+        var answer: String? = nil, asked = 0
+        c.chooseFolder = { done in asked += 1; done(answer) }
+        c.chooseNewSessionFolder()
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(c.store?.expanded, false, "the island collapses for the panel")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "cancelled: nothing spawns")
+        answer = "/picked/My Repo"
+        let sub = try XCTUnwrap(c.makeControlsMenu().items.first?.submenu)
+        XCTAssertEqual(sub.items.map(\.title), [AgentIsland.chooseFolderLabel], "no agent history: the chooser only")
+        press(sub.items[0])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--spawn", "My-Repo", "claude"]])
+        XCTAssertEqual(f.lock.withLock { f.launches[0].cwd }, "/picked/My Repo")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "My-Repo")) }
+    }
+
+    /// A master newer than the control binary: every #579 verb is off, with the reason.
+    @MainActor
+    func testGateRefusalDisablesRestartAndNewSession() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a", version: "1.24.0")])
+        let store = try XCTUnwrap(c.store)
+        c.chooseFolder = { _ in XCTFail("no chooser while refused") }
+        c.restart(session("a"))
+        c.askRestartAll()
+        c.newSession(in: "/src")
+        c.chooseNewSessionFolder()
+        XCTAssertFalse(store.confirmingRestartAll)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [])
+        XCTAssertEqual(store.actions, [:])
+        XCTAssertEqual(store.controlsMenu.refused, "needs dch 1.24.0")
+        XCTAssertEqual(AgentIslandView(store: store).drawn.map(\.refused), ["needs dch 1.24.0"])
+        let menu = c.makeControlsMenu()
+        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, "", "Controls needs dch 1.24.0"])
+        XCTAssertEqual(menu.items.map(\.isEnabled), [false, false, false, false], "off, with the reason under them")
+        press(menu.items[1])
+        XCTAssertFalse(store.confirmingRestartAll, "the action re-checks the gate")
+        store.sessions = [session("a", version: "1.23.0")]
+        XCTAssertNil(store.controlsMenu.refused)
+        XCTAssertEqual(AgentIslandView(store: store).drawn.map(\.refused), [nil])
+        XCTAssertEqual(c.makeControlsMenu().items.map(\.isEnabled), [true, true])
+    }
+
+    /// The header "⋯" pops the menu through the seam (never a real one here).
+    @MainActor
+    func testControlsButtonPopsTheMenuThroughTheSeam() {
+        let f = FakeProc()
+        let c = opened(f, [session("a")])
+        var shown: [[String]] = []
+        c.popUpMenu = { shown.append($0.items.map(\.title)) }
+        c.showControlsMenu()
+        XCTAssertEqual(shown, [[AgentIsland.newSessionLabel, AgentIsland.restartAllLabel]])
+        XCTAssertEqual(f.args, [])
+    }
+
+    /// History only, nothing live: Restart all would reach no session, so it is
+    /// off (and asking does nothing); New session stays on.
+    @MainActor
+    func testRestartAllIsOffWithNoLiveSession() throws {
+        let f = FakeProc()
+        let reads = Reads()
+        reads.records = [agentRecord("a", ended: 5, cwd: "/src/a", launch: ["claude"])]
+        let c = controller(f, reads)
+        let store = try XCTUnwrap(c.store)
+        c.refreshHistory()  // nothing live: the island shows once the history is in
+        settle(c) { store.controlDch != nil && !store.history.isEmpty }
+        c.setExpanded(true)
+        XCTAssertNil(store.controlsMenu.refused)
+        let menu = c.makeControlsMenu()
+        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel])
+        XCTAssertEqual(menu.items.map(\.isEnabled), [true, false])
+        c.askRestartAll()
+        XCTAssertFalse(store.confirmingRestartAll)
+        XCTAssertEqual(f.args, [])
+    }
+
+    /// Visual evidence: the header "⋯", the inline Restart all question, and a
+    /// row showing "Restarting…" with a dir summary line. Offscreen only.
+    @MainActor
+    func testRendersSessionControlsOffscreen() throws {
+        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        store.sessions = [session("prosper-main", version: "1.23.0"), session("ios"), session("dch-build")]
+        store.controlDch = Self.v123
+        store.expanded = true
+        let out = tempDir()
+        try render(store, "agent-island-579-header-menu", to: out)
+        store.confirmingRestartAll = true
+        try render(store, "agent-island-579-confirm", to: out)
+        store.confirmingRestartAll = false
+        store.actions[AgentSessionKey(dir: "/d", name: "prosper-main")] = AgentIsland.restartingText
+        store.actions[AgentSessionKey(dir: "/d", name: "ios")] = "claude 2.0.1 -> 2.1.0, resumed 3f2a"
+        store.actions[AgentSessionKey(dir: "/d", name: "")] = AgentIsland.restartAllRunningText
+        try render(store, "agent-island-579-restarting", to: out)
     }
 }
