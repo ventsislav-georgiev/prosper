@@ -55,11 +55,14 @@ tag from the now-released section and put it on the new top draft.
   that line as something after the dialog and showed the last screen lines instead of the
   question and its options. It now reads the question, and when it cannot, the screen lines
   it shows wrap between words instead of mid-word.
-- Ships dch 1.23.0, which keeps a record of every session it runs, so a session that ended
+- Ships dch 1.24.0, which keeps a record of every session it runs, so a session that ended
   (a crash, a reboot, a kill) can be brought back in its folder with its Claude Code
   conversation resumed (`dch --history`, `dch --revive`) (#578). The record holds the
   session's folder and command line, including a prompt typed as a `claude` argument, for 30
   days in `~/.local/state/dch/sessions`, readable only by you; the environment is never kept.
+  dch 1.24.0 also restarts a Claude Code typed into a session's shell (Restart agent used to
+  skip it), and adds `dch --say` (type one message into idle sessions), `dch --stop` (end a
+  session so `dch --revive` resumes it later) and `--json` output.
 
 ## v2.159.0
 
