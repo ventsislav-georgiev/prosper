@@ -210,7 +210,7 @@ struct AgentIslandGeometry: Equatable {
                 + CGFloat(l.labels.reduce(0) { $0 + $1.count - 1 }) * cardLabelLine
                 + CGFloat(l.details.reduce(0) { $0 + $1.count }) * cardDetailLine
         case .context(let lines):
-            body = context(AgentCardLayout.contextRows(lines, in: cache).rows.count) + cardButton
+            body = context(AgentCardLayout.contextRows(lines, words: true, in: cache).rows.count) + cardButton
         case .changed:
             body = cardQuestion + cardButton
         }
@@ -681,12 +681,16 @@ struct AgentCardLayout: Equatable {
     }
 
     /// Lines wrapped into measured rows, then capped at `maxContext` rows (cached).
-    static func contextRows(_ lines: [String], in cache: AgentCardLayoutCache = .shared) -> (rows: [String], overCap: Bool) {
-        cache.get(\.contexts, lines) { measuredContextRows(lines) }
+    /// `words`: the context-only card (a screen tail, #574) breaks at spaces;
+    /// a prompt's own context keeps the character wrap (W1: every character
+    /// of what may be approved is shown where the screen has it).
+    static func contextRows(_ lines: [String], words: Bool = false,
+                            in cache: AgentCardLayoutCache = .shared) -> (rows: [String], overCap: Bool) {
+        cache.get(words ? \.tails : \.contexts, lines) { measuredContextRows(lines, words: words) }
     }
 
-    private static func measuredContextRows(_ lines: [String]) -> (rows: [String], overCap: Bool) {
-        let rows = lines.flatMap { G.wrap(AgentPrompt.visible($0), G.contextFont, G.cardContextWidth) }
+    private static func measuredContextRows(_ lines: [String], words: Bool) -> (rows: [String], overCap: Bool) {
+        let rows = lines.flatMap { G.wrap(AgentPrompt.visible($0), G.contextFont, G.cardContextWidth, words: words) }
         // The cap stays at 10 rows (OQ-46): an 11th row is over it, so deny-only.
         let cap = AgentPrompt.maxContext, n = rows.count - cap
         guard n > 0 else { return (rows, false) }
@@ -721,9 +725,11 @@ final class AgentCardLayoutCache: @unchecked Sendable {
     private var built = 0
     fileprivate var layouts: [AgentPrompt: AgentCardLayout] = [:]
     fileprivate var contexts: [[String]: (rows: [String], overCap: Bool)] = [:]
+    /// Word-wrapped context rows (`contextRows(words: true)`), apart from `contexts`.
+    fileprivate var tails: [[String]: (rows: [String], overCap: Bool)] = [:]
 
-    var count: Int { lock.withLock { layouts.count + contexts.count } }
-    func removeAll() { lock.withLock { layouts.removeAll(); contexts.removeAll() } }
+    var count: Int { lock.withLock { layouts.count + contexts.count + tails.count } }
+    func removeAll() { lock.withLock { layouts.removeAll(); contexts.removeAll(); tails.removeAll() } }
     /// Layouts and context rows this instance measured (misses), for the tests.
     var builds: Int { lock.withLock { built } }
 
@@ -779,7 +785,7 @@ struct AgentPromptCardView: View {
                 }
                 jump
             case .context(let lines):
-                context(AgentCardLayout.contextRows(lines).rows)
+                context(AgentCardLayout.contextRows(lines, words: true).rows)
                 jump
             case .changed:
                 line(Self.changedText, AgentState.blocked.color)

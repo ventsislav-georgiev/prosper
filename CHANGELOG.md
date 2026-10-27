@@ -28,6 +28,11 @@ tag from the now-released section and put it on the new top draft.
   (`-qa` by default, case ignored) move under a Sidekicks tab, and the rest stay under
   Sessions. The tabs appear only when there is at least one sidekick. The summary beside the
   notch still counts every session.
+- **Fixed: Agent Island shows Claude Code's questions again in sessions with a title.** Claude
+  Code draws the session's title in a rule under a question while it waits. The island read
+  that line as something after the dialog and showed the last screen lines instead of the
+  question and its options. It now reads the question, and when it cannot, the screen lines
+  it shows wrap between words instead of mid-word.
 
 ## v2.159.0
 

@@ -100,6 +100,42 @@ How far should the refactor go?
 Enter to select · ↑/↓ to navigate · Esc to cancel
 """
 
+/// #574: the operator's AskUserQuestion (terminal.png, 107 columns), as Claude
+/// Code 2.1.309 draws it: the multi-line question in its "│ " gutter, long
+/// descriptions, and under the footer the session-title rule (component WZ).
+/// The screenshot's crop starts at the chip line; the top rule is Claude
+/// Code's, as on every probe Ask form.
+private let secOneTitle = String(repeating: "─", count: 99) + " sec-1 ─"
+private let secOneFooter = "Enter to select · ↑/↓ to navigate · Esc to cancel"
+private let secOneScreen = """
+\(String(repeating: "─", count: 107))
+ ☐ Prod IAM
+
+│ Critical, verified read-only: any workflow in any payhawk repo whose `name:` is "Solution repo PR" can
+│ impersonate terraform-ci, which can mint tokens for terraform@ — roles/owner in production
+│ (payhawk-206420), staging and system. Those members were added by hand, not through terraform, and no
+│ solution workflow has used that name since 2023-09-08. Remove the 4 forgeable members by hand now: the 2
+│ name-only members on terraform-ci and terraform-ci-readonly, and the 2 develop-branch pins for deleted
+│ workflows? The fix PR #20669 then makes terraform authoritative so they can't come back.
+
+❯ 1. Remove all 4 now (Recommended)
+     I run 4 `gcloud iam service-accounts remove-iam-policy-binding` calls on the two SAs in payhawk-206420
+     after backing up both policies to ~/.todos/sec-1/backups. If prodguard refuses, I hand you the exact
+     commands to run with `!`. No current caller breaks.
+  2. Remove only the 2 name-only members
+     Closes the cross-repo path to production owner. The develop pins stay until #20669 is applied; anyone
+     with write access to solution could still create a `develop` branch and use them.
+  3. Wait for #20669
+     Nothing changes by hand. The hole stays open until you merge #20669 and the master-push apply of the
+     ci layer runs.
+  4. Type something.
+\(String(repeating: "─", count: 107))
+  5. Chat about this
+
+\(secOneFooter)
+\(secOneTitle)
+"""
+
 /// Claude Code 1.x drew the dialog in a box.
 private let boxedScreen = """
 ╭──────────────────────────────────────────────╮
@@ -221,6 +257,102 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertEqual(p.options.map(\.label), ["Just this file", "The whole module", "Everything that imports it",
                                                 "Type something.", "Chat about this"])
         XCTAssertEqual(p.options.map(\.detail), [[], ["Includes the tests"], [], [], []])
+    }
+
+    // MARK: - #574: the session-title rule under a dialog, the word-wrapped tail
+
+    /// The title rule "───…─── sec-1 ─" under the footer used to fail the parse
+    /// (it is no rule, it holds letters): the card fell back to the screen tail.
+    /// Now it parses, gutter off the question, and equals the screen without it.
+    func testAskUnderTheSessionTitleRuleParses() throws {
+        let p = try prompt(secOneScreen)
+        XCTAssertEqual(p.question, "Critical, verified read-only: any workflow in any payhawk repo whose `name:` is "
+            + "\"Solution repo PR\" can impersonate terraform-ci, which can mint tokens for terraform@ — roles/owner "
+            + "in production (payhawk-206420), staging and system. Those members were added by hand, not through "
+            + "terraform, and no solution workflow has used that name since 2023-09-08. Remove the 4 forgeable "
+            + "members by hand now: the 2 name-only members on terraform-ci and terraform-ci-readonly, and the 2 "
+            + "develop-branch pins for deleted workflows? The fix PR #20669 then makes terraform authoritative so "
+            + "they can't come back.", "the gutter block joined, its bars off")
+        XCTAssertEqual(p.context, ["☐ Prod IAM"])
+        XCTAssertTrue(p.topFound)
+        XCTAssertEqual(p.options.map(\.digit), Array(1...5))
+        XCTAssertEqual(p.options.map(\.label), ["Remove all 4 now (Recommended)", "Remove only the 2 name-only members",
+                                                "Wait for #20669", "Type something.", "Chat about this"])
+        XCTAssertEqual(p.options.map(\.detail), [
+            ["I run 4 `gcloud iam service-accounts remove-iam-policy-binding` calls on the two SAs in payhawk-206420",
+             "after backing up both policies to ~/.todos/sec-1/backups. If prodguard refuses, I hand you the exact",
+             "commands to run with `!`. No current caller breaks."],
+            ["Closes the cross-repo path to production owner. The develop pins stay until #20669 is applied; anyone",
+             "with write access to solution could still create a `develop` branch and use them."],
+            ["Nothing changes by hand. The hole stays open until you merge #20669 and the master-push apply of the",
+             "ci layer runs."], [], []])
+        XCTAssertEqual(AgentPrompt.card(screen: secOneScreen), .prompt(p))
+        XCTAssertEqual(try prompt(altered(secOneScreen, "\n" + secOneTitle, "")), p, "the same screen without the title rule")
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, false, true, true],
+                       "descriptions wider than a row: the existing too-long rule")
+        XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.tooLongCaption)
+        let mixed = try prompt(altered(askFourScreen, "Which deployment target?", "Which table?\n│ a │ b │"))
+        XCTAssertEqual(mixed.question, "Which table? │ a │ b │", "a bar on some rows only is the question's own text")
+        // Under any dialog's footer, the preview form's too, at that screen's width.
+        let bash = bash21(["echo safe"])
+        XCTAssertEqual(try prompt(bash + "\n" + String(repeating: "─", count: 82) + " sec-1 ─"), try prompt(bash))
+        XCTAssertEqual(try prompt(rowLayoutScreen + "\n" + String(repeating: "─", count: 102) + " sec-1 ─"),
+                       try prompt(rowLayoutScreen))
+    }
+
+    /// The dialog must still be the last thing on the screen: the title rule is
+    /// taken only as the last line, right under the footer, full width, with
+    /// rules then a label then one rule cell.
+    func testATitleRuleCountsOnlyAsTheLastLineUnderTheFooter() {
+        let cases = [
+            ("a shell prompt under a static copy", secOneScreen + "\nventsislav@mac prosper % "),
+            ("a second title rule", secOneScreen + "\n" + secOneTitle),
+            ("a rule-drawn shell prompt under the footer", altered(secOneScreen, secOneTitle, "└─$ ")),
+            ("a short labelled rule under the footer", altered(secOneScreen, secOneTitle, "─── prosper ─")),
+            ("a title rule three cells short", altered(secOneScreen, secOneTitle, String(secOneTitle.dropFirst(3)))),
+            ("no label", altered(secOneScreen, secOneTitle, String(repeating: "─", count: 105) + " ─")),
+            ("the title rule with no footer above it", altered(secOneScreen, "\n" + secOneFooter, "")),
+        ]
+        for (why, screen) in cases {
+            XCTAssertNil(AgentPrompt.parse(screen), why)
+            XCTAssertEqual(AgentPrompt.card(screen: screen), .context(AgentPrompt.tail(screen)), why)
+        }
+        XCTAssertNotNil(AgentPrompt.parse(altered(secOneScreen, secOneTitle, String(secOneTitle.dropFirst(2)))),
+                        "frameSlack: two cells short still counts")
+    }
+
+    /// (b) The context-only card word-wraps: the character wrap broke "develop"
+    /// into "dev" / "elop". Checked as drawn and as the card height counts it;
+    /// only a word wider than a whole row (the title rule's run of "─") splits.
+    @MainActor
+    func testTheTailCardNeverSplitsAWord() throws {
+        let screen = secOneScreen + "\nventsislav@mac prosper % "
+        guard case .context(let tail) = AgentPrompt.card(screen: screen) else { return XCTFail("a context card") }
+        // Three words each 3/5 of a row: two never share a row, so words take 3 rows, characters 2.
+        var n = 1
+        while G.fits(String(repeating: "a", count: n + 1), G.contextFont, G.cardContextWidth) { n += 1 }
+        let three = ["a", "b", "c"].map { String(repeating: $0, count: n * 3 / 5) }.joined(separator: " ")
+        var drawn: [String] = []
+        AgentPromptCardView.textHook = { if ObjectIdentifier($1) == ObjectIdentifier(G.contextFont) { drawn.append($0) } }
+        defer { AgentPromptCardView.textHook = nil }
+        for lines in [tail, [three]] {
+            let (rows, overCap) = AgentCardLayout.contextRows(lines, words: true)
+            drawn = []
+            let r = ImageRenderer(content: AgentPromptCardView(card: .context(lines)).frame(width: G.cardInner + 2 * G.cardPad))
+            _ = try XCTUnwrap(r.cgImage)
+            XCTAssertEqual(Set(drawn), Set(rows), "the card draws the word-wrapped rows")
+            let words = Set(lines.flatMap { $0.split(separator: " ") })
+            for row in overCap ? rows.dropLast() : rows[...] {
+                for w in row.split(separator: " ") where !words.contains(w) {
+                    XCTAssertTrue(words.contains { !G.fits(String($0), G.contextFont, G.cardContextWidth) && $0.contains(w) },
+                                  "\(w) is a piece of a word that fits a row, in: \(row)")
+                }
+            }
+            XCTAssertEqual(G.cardHeight(.context(lines)), G.cardHeight(.context(Array(repeating: "x", count: rows.count))),
+                           "the height counts the drawn rows")
+        }
+        XCTAssertEqual(AgentCardLayout.contextRows([three], words: true).rows.count, 3)
+        XCTAssertEqual(AgentCardLayout.contextRows([three]).rows.count, 2, "a prompt's context keeps the character wrap")
     }
 
     func testWrappedLabelContinuationIsPartOfTheOption() throws {

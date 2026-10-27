@@ -169,7 +169,8 @@ extension AgentPrompt {
     /// The dialog must be the last thing on the screen (a static copy printed
     /// above a shell prompt is not a live dialog): below the last option and its
     /// detail only blank lines, rules and, last, one footer line ("Esc to
-    /// cancel …"); a last option with detail lines needs that rule or footer
+    /// cancel …"), then at most Claude Code's session-title rule (`isTitleRule`);
+    /// a last option with detail lines needs that rule or footer
     /// under it (else the detail could be a shell prompt). A preview form
     /// (`splitPreview`) is parsed on its left column; it ends in a rule, an
     /// unnumbered "Chat about this" and its own footer (`isPreviewFooter`).
@@ -199,7 +200,17 @@ extension AgentPrompt {
         // Lines below the option the walk reaches next: the last option's tail first.
         var below = Array(lines[(last + 1)...].prefix(while: { !isBlankOrRule($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) })
-        let after = lines[(last + 1 + below.count)...].filter { !isBlank($0) }
+        var after = lines[(last + 1 + below.count)...].filter { !isBlank($0) }
+        // Frame widths, below: a rule's raw extent and the widest rule on the screen.
+        let extent = { (r: Substring) in r.reversed().drop(while: \.isWhitespace).count }
+        let width = raw.indices.filter { isRule(lines[$0]) }.map { extent(raw[$0]) }.max() ?? 0
+        // #574: the session-title rule Claude Code draws under a dialog is the
+        // last line; taken off only right under the footer, so the footer is
+        // still the dialog's last line and nothing may follow the title rule.
+        if after.count >= 2, isTitleRule(after[after.count - 1], width: width),
+           isFooter(after[after.count - 2]) || isPreviewFooter(after[after.count - 2]) {
+            after.removeLast()
+        }
         if form == nil {
             guard after.dropLast().allSatisfy(isRule),
                   after.last.map({ isRule($0) || isFooter($0) }) ?? below.isEmpty else { return nil }
@@ -237,9 +248,7 @@ extension AgentPrompt {
         // option 1 (QA #310 F1): an Ask form whose top rule scrolled off still
         // has its full-width rule above "Chat about this", so a short rule in
         // its question is never the widest. Not the widest line: screen lines in
-        // the fixtures run past their frames.
-        let extent = { (r: Substring) in r.reversed().drop(while: \.isWhitespace).count }
-        let width = raw.indices.filter { isRule(lines[$0]) }.map { extent(raw[$0]) }.max() ?? 0
+        // the fixtures run past their frames. (`extent`, `width`: above.)
         func isFrame(_ k: Int) -> Bool {
             isRule(lines[k]) && raw[k].prefix(while: { $0.isWhitespace || $0 == "│" }).count <= 1
                 && extent(raw[k]) + frameSlack >= width
@@ -273,9 +282,17 @@ extension AgentPrompt {
         // and anything above it stay context. Other dialogs: the last line only.
         // The chip line is the first non-blank line under the top rule (QA #370
         // F4: a Write dialog's " ✔notes.txt" path line further down is not).
+        // A multi-line question sits in Claude Code's gutter, "│ " at column 0
+        // on every row (#574): off when every row has it.
         if j >= 0, let c = context.firstIndex(where: { !isBlank($0) }), isChipLine(context[c]) {
-            question = (context[(c + 1)...] + [lines[i]]).filter { !isBlank($0) }
-                .map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " ")
+            var block = (context[(c + 1)...] + [lines[i]]).filter { !isBlank($0) }
+            let gutterless = block.map { s -> String? in
+                guard s.first == "│", s.dropFirst().first.map(\.isWhitespace) ?? true else { return nil }
+                return String(s.dropFirst())
+            }
+            if !gutterless.contains(nil) { block = gutterless.compactMap { $0 } }
+            question = block.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                .joined(separator: " ")
             context = Array(context[...c])
         }
         // Blank lines: kept inside a command (both neighbours at column 2 or
@@ -457,6 +474,18 @@ extension AgentPrompt {
     static func isRule(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
         return !t.isEmpty && t.allSatisfy { "─━═╌┄╭╮╰╯┌┐└┘".contains($0) }
+    }
+
+    /// #574: Claude Code's session-title rule, drawn under a dialog while the
+    /// input box is hidden (2.1.309 components WZ/Bv): "─" × n, " <title> ",
+    /// one "─", from column 0 across the screen's full width (`frameSlack`,
+    /// `width`: the widest rule; title in cells). A title long enough to leave
+    /// no leading "─" does not match: the parse fails to the context card.
+    static func isTitleRule(_ line: String, width: Int) -> Bool {
+        guard line.first == "─", line.hasSuffix(" ─") else { return false }
+        let label = line.drop(while: { $0 == "─" }).dropLast(2)
+        return label.first == " " && !isBlank(String(label))
+            && line.reduce(0) { $0 + cells($1) } + frameSlack >= width
     }
 
     /// A dashed rule ("╌╌╌"): an inner frame, never the dialog's top.
