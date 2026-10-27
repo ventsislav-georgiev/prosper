@@ -1008,7 +1008,8 @@ struct AgentIslandListSection: View {
             NeonRow("Sidekick tabs") { Toggle("", isOn: $tabs).labelsHidden() }
             NeonDivider()
             NeonRow("Sidekick pattern") {
-                TextField(AgentIsland.sidekickDefault, text: $pattern).frame(width: sz(140))
+                // Empty = no split, so the placeholder says so (QA #434 L1).
+                TextField("None", text: $pattern).frame(width: sz(140))
                     .disabled(!tabs)
             }
         }

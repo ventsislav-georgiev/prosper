@@ -2615,4 +2615,42 @@ final class AgentIslandTests: XCTestCase {
                       "settings-session-list-\(scale)-tabs-\(tabs ? "on" : "off")")
         }
     }
+
+    // MARK: - Clicks resolve to the drawn session (QA #434 I1)
+
+    /// Name sort plus a Sidekicks tab: the drawn list is [alpha, mid, zed] while
+    /// the raw list is [zed, b-qa, mid, alpha] and the sorted unsplit one
+    /// [alpha, b-qa, mid, zed], so index 1 is "mid" only in the drawn list. A row
+    /// click, the card's Jump and an answer under "mid" must each carry "mid".
+    /// SwiftUI builds no in-process accessibility tree for a hosted view, so the
+    /// test presses the view's `drawn` rows, the ones `rows` draws.
+    @MainActor
+    func testRowCardJumpAndAnswerCarryTheDrawnSession() throws {
+        let zed = session("zed", .idle), bqa = session("b-qa", .blocked), mid = session("mid", .blocked),
+            alpha = session("alpha", .idle)
+        let yes = AgentPromptOption(digit: 1, label: "Yes", hint: nil)
+        let prompt = AgentPrompt(question: "Proceed?", context: [], options: [yes, AgentPromptOption(digit: 2, label: "No", hint: "esc")])
+        let store = AgentIslandStore(geometry: notched, sort: .name, sidekickPattern: "-qa")
+        store.sessions = [zed, bqa, mid, alpha]
+        store.cards[mid.key] = .prompt(prompt)
+        store.cards[bqa.key] = .changed
+        store.expanded = true
+        var rows: [String] = [], answers: [String] = []
+        let view = AgentIslandView(store: store, onRow: { rows.append($0.name) },
+                                   onAnswer: { s, _, o in answers.append("\(s.name) \(o.digit)") })
+        let drawn = view.drawn
+        XCTAssertEqual(names(drawn.map(\.session)), ["alpha", "mid", "zed"])
+        XCTAssertEqual(drawn.map(\.card), [nil, .prompt(prompt), nil], "the card sits under its own row")
+        for r in drawn { r.open() }
+        XCTAssertEqual(rows, ["alpha", "mid", "zed"], "each row click carries its drawn session")
+        rows = []
+        drawn[1].answer(prompt, yes)
+        XCTAssertEqual(answers, ["mid 1"], "the card's answer carries the drawn session")
+        store.sidekickTab = true
+        let qa = view.drawn
+        XCTAssertEqual(names(qa.map(\.session)), ["b-qa"])
+        XCTAssertEqual(qa.map(\.card), [.changed])
+        qa[0].open()
+        XCTAssertEqual(rows, ["b-qa"], "the Sidekicks tab's row and Jump carry the sidekick")
+    }
 }

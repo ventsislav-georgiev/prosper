@@ -378,14 +378,30 @@ struct AgentIslandView: View {
     private var rows: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             VStack(spacing: 0) {
-                ForEach(store.visible) { s in
-                    AgentIslandRow(session: s, now: ctx.date.timeIntervalSince1970,
-                                   notice: store.notices[s.key], show: store.details) { onRow(s) }
-                    if let card = store.card(for: s) {
-                        AgentPromptCardView(card: card, onOption: { onAnswer(s, $0, $1) }, onJump: { onRow(s) })
+                ForEach(drawn) { r in
+                    AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
+                                   notice: store.notices[r.session.key], show: store.details, action: r.open)
+                    if let card = r.card {
+                        AgentPromptCardView(card: card, onOption: r.answer, onJump: r.open)
                     }
                 }
             }
+        }
+    }
+
+    /// QA #434 I1: one drawn row and the session its click, its card's answers
+    /// and its Jump carry. `rows` draws exactly these, so a test can press them.
+    struct Drawn: Identifiable {
+        let session: AgentSession
+        let card: AgentCard?
+        let open: () -> Void
+        let answer: (AgentPrompt, AgentPromptOption) -> Void
+        var id: AgentSessionKey { session.key }
+    }
+
+    var drawn: [Drawn] {
+        store.visible.map { s in
+            Drawn(session: s, card: store.card(for: s), open: { onRow(s) }, answer: { onAnswer(s, $0, $1) })
         }
     }
 
