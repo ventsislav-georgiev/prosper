@@ -25,7 +25,8 @@ tag from the now-released section and put it on the new top draft.
   v2.156.0 it then refused your speed until the Mac cooled below 80 °C, which on a lap may
   never happen, so the fans stayed at macOS's own, often slower, speed. Now, about 10 seconds
   after the cut-off, your speed comes back as long as it is at or above the speed macOS is
-  running the fans at. A speed below macOS's still waits for the Mac to cool below 80 °C.
+  running the fans at, or ramping them to. A speed below macOS's still waits for the Mac to
+  cool below 80 °C.
 - **Agent Island: History shows how each session ended, in plain words.** A session you
   closed reads "closed" (it used to read "killed"), and one that ended on SIGTERM, SIGHUP or
   SIGINT reads "ended (signal N)" instead of "crashed". Only other signals read as a crash.

@@ -747,7 +747,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
         final class Conn {}
         let clock = Clock(), conn = Conn(), holder = ObjectIdentifier(conn)
         let core = FanControlCore(reset: { true }, maxCelsius: { nil }, now: { clock.t })
-        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3103, holder: holder, maxCelsius: 50, currentRPM: nil))
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3103, holder: holder, maxCelsius: 50, macOSRPM: nil))
         XCTAssertEqual(core.supervise(maxCelsius: 96, isManualEngaged: { _ in true }), .fired)
         let trip = Date()
         let readings = [0, 1].map { FanReading(id: $0, min: 1350, max: 5777, current: 2500, manual: false) }
@@ -757,7 +757,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
         func reapply() async -> Bool {
             await FanControlHelper.applySavedTargets(
                 reclaimGeneration: FanControlHelper.reclaimGeneration,
-                engage: { i, rpm, _ in core.manualRequest(index: i, rpm: rpm, holder: holder, maxCelsius: 96, currentRPM: 2500) },
+                engage: { i, rpm, _ in core.manualRequest(index: i, rpm: rpm, holder: holder, maxCelsius: 96, macOSRPM: 2500) },
                 reset: { resets.append($0); return true })
         }
 
@@ -797,13 +797,13 @@ final class FanReclaimRecoveryTests: XCTestCase {
         FanControlHelper.inject(connection: fake, engagesInFlight: 0)
         let reads = LockedBox()
         let speed: @Sendable (Int) -> Double? = { _ in reads.set(true); return 2500 }
-        var reply = await FanControlHelper.setManualReply(0, rpm: 3103, currentRPM: speed)
+        var reply = await FanControlHelper.setManualReply(0, rpm: 3103, macOSRPM: speed)
         XCTAssertEqual(reply, .engaged)
         XCTAssertEqual(reads.get(), [], "no fan read on an engage")
         fake.proxy.manualReply = false
-        reply = await FanControlHelper.setManualReply(0, rpm: 3103, currentRPM: speed)
+        reply = await FanControlHelper.setManualReply(0, rpm: 3103, macOSRPM: speed)
         XCTAssertEqual(reply, .settling)
-        reply = await FanControlHelper.setManualReply(0, rpm: 2000, currentRPM: speed)
+        reply = await FanControlHelper.setManualReply(0, rpm: 2000, macOSRPM: speed)
         XCTAssertEqual(reply, .refused)
         XCTAssertEqual(reads.get().count, 2)
         await FanControlHelper.resetAll(teardown: true)
@@ -952,11 +952,14 @@ final class FanManualReplyTests: XCTestCase {
 
     /// #586: the held text is only for a target below macOS's speed (or an unreadable one).
     func testRefusalIsNamedByMacOSSpeed() {
-        XCTAssertEqual(FanManualReply.refusal(rpm: 3103, currentRPM: 2500), .settling)
-        XCTAssertEqual(FanManualReply.refusal(rpm: 2500, currentRPM: 2500), .settling)
-        XCTAssertEqual(FanManualReply.refusal(rpm: 2400, currentRPM: 2500), .refused)
-        XCTAssertEqual(FanManualReply.refusal(rpm: 3103, currentRPM: nil), .refused)
-        XCTAssertEqual(FanManualReply.refusal(rpm: 3103, currentRPM: .nan), .refused)
+        XCTAssertEqual(FanManualReply.refusal(rpm: 3103, macOSRPM: 2500), .settling)
+        XCTAssertEqual(FanManualReply.refusal(rpm: 2500, macOSRPM: 2500), .settling)
+        XCTAssertEqual(FanManualReply.refusal(rpm: 2400, macOSRPM: 2500), .refused)
+        XCTAssertEqual(FanManualReply.refusal(rpm: 3103, macOSRPM: nil), .refused)
+        XCTAssertEqual(FanManualReply.refusal(rpm: 3103, macOSRPM: .nan), .refused)
+        // QA #456 H1: the app names it by the daemon's rule, macOS's target counts too.
+        XCTAssertEqual(FanManualReply.refusal(rpm: 2400, macOSRPM: FanControlCore.macOSSpeed(current: 2300, target: 2500)),
+                       .refused)
     }
 }
 

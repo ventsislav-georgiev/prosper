@@ -50,8 +50,8 @@ public final class FanControlCore {
     private var reassertBudget = 0
 
     /// `setFanManualRPM`. False = refused by the trip latch (`lastRefusal` says why):
-    /// the daemon replies false and writes nothing. `currentRPM` is fan `index`'s
-    /// speed now, read only while latched (see `mayEngageManual`). True = recorded;
+    /// the daemon replies false and writes nothing. `macOSRPM` is fan `index`'s
+    /// `macOSSpeed` now, read only while latched (see `mayEngageManual`). True = recorded;
     /// the daemon arms supervision and writes.
     /// Crash-safety, holder and target are recorded BEFORE the write on purpose: if
     /// the write half-succeeds and its own fail-closed cleanup also fails, the fan is
@@ -59,8 +59,8 @@ public final class FanControlCore {
     /// clean failure is harmless (reset is idempotent); under-arming strands the fan.
     public func manualRequest(index: Int, rpm: Double, holder: ObjectIdentifier,
                               maxCelsius: @autoclosure () -> Double?,
-                              currentRPM: @autoclosure () -> Double?) -> Bool {
-        guard mayEngageManual(rpm: rpm, maxCelsius: maxCelsius(), currentRPM: currentRPM()) else { return false }
+                              macOSRPM: @autoclosure () -> Double?) -> Bool {
+        guard mayEngageManual(rpm: rpm, maxCelsius: maxCelsius(), macOSRPM: macOSRPM()) else { return false }
         didSetManual()
         self.holder = holder
         heldTargets[index] = rpm
@@ -72,6 +72,7 @@ public final class FanControlCore {
     /// supervision: the last pinned fan went to auto with the controller unlock kept.
     /// `hasFtst` is only read on that path (it is an SMC read).
     public func autoApplied(index: Int, holdUnlock: Bool, hasFtst: @autoclosure () -> Bool) -> Bool {
+        if heldTargets[index] != nil { pinHandedBack() }
         heldTargets[index] = nil
         guard heldTargets.isEmpty, holdUnlock, hasFtst() else { return false }
         didAutoWithHold()
@@ -141,8 +142,8 @@ public final class FanControlCore {
 
     /// After a trip, how long macOS keeps the fans before a pin at or above its own
     /// speed may take them back. The handback is the probe of what macOS wants: a fan
-    /// spinning down from the pin needs a few seconds before F<i>Ac shows macOS's
-    /// choice. It also bounds the trip → handback → re-pin cycle: before #209 the app
+    /// spinning down from the pin needs a few seconds before F<i>Ac and F<i>Tg show
+    /// macOS's choice. It also bounds the trip → handback → re-pin cycle: before #209 the app
     /// re-pinned ~1 s after every trip (563 trips in 3 days on an M4 Pro).
     public static let reTakeSettleSeconds: Double = 10
 
@@ -190,16 +191,34 @@ public final class FanControlCore {
         lastRefusal = nil
     }
 
+    /// A pin went back to macOS without a trip (release, `resetAllFans`, a holder drop,
+    /// a single-fan auto). While latched that is a handback like a trip's: F<i>Ac still
+    /// reads the pin, so the settle window starts again (#586, QA #456 L1). A reset with
+    /// no pin held (the app's reset after a refused re-apply) hands nothing back and
+    /// leaves the window alone, or the retry one window later would land inside it.
+    private func pinHandedBack() {
+        if tripLatched { trippedAt = now() }
+    }
+
+    /// The speed macOS runs fan i at: the higher of its live speed (F<i>Ac) and its
+    /// target (F<i>Tg). Ac alone lags a ramp still under way; Tg tracks macOS's own
+    /// target while the fan is automatic. Nil when either is unreadable (fail closed).
+    /// Shared by the daemon's gate and the app's refusal text.
+    public static func macOSSpeed(current: Double?, target: Double?) -> Double? {
+        guard let current, let target, current.isFinite, target.isFinite else { return nil }
+        return max(current, target)
+    }
+
     /// Gate for a manual engage of one fan at `rpm` from any client after a trip.
     /// While latched it is allowed when EITHER the hottest sensor is back below
     /// `reArmCelsius` (which clears the latch), OR the settle window has passed and
-    /// `rpm` is at or above the fan's current speed (the latch stays: every later
+    /// `rpm` is at or above macOS's speed for the fan (`macOSSpeed`; the latch stays: every later
     /// engage is judged again). Unreadable temperature or speed refuses. Nothing else
     /// but a daemon cold start clears the latch — not a reconnect, not choosing
     /// Automatic, not `resetAllFans`. The reads only happen while latched, so the
     /// common path costs no SMC reads.
     public func mayEngageManual(rpm: Double, maxCelsius: @autoclosure () -> Double?,
-                                currentRPM: @autoclosure () -> Double?) -> Bool {
+                                macOSRPM: @autoclosure () -> Double?) -> Bool {
         guard tripLatched else { return true }
         guard let t = maxCelsius(), t.isFinite else { return refuse(.unreadable) }
         if t < Self.reArmCelsius {
@@ -213,8 +232,8 @@ public final class FanControlCore {
         guard let trippedAt, now() - trippedAt >= .seconds(Self.reTakeSettleSeconds) else {
             return refuse(.settling)
         }
-        guard let current = currentRPM(), current.isFinite else { return refuse(.unreadable) }
-        return rpm >= current ? true : refuse(.belowMacOS)
+        guard let macOS = macOSRPM(), macOS.isFinite else { return refuse(.unreadable) }
+        return rpm >= macOS ? true : refuse(.belowMacOS)
     }
 
     private func refuse(_ why: Refusal) -> Bool {
@@ -226,7 +245,7 @@ public final class FanControlCore {
     /// nothing left wedged, so disarm. A single-fan auto does NOT call this: other
     /// fans may still be manual, and over-resetting on a later drop is harmless while
     /// under-resetting is the hazard.
-    public func didResetAll() { manualHeld = false; unlockHeld = false; holder = nil; heldTargets = [:] }
+    public func didResetAll() { if manualHeld { pinHandedBack() }; manualHeld = false; unlockHeld = false; holder = nil; heldTargets = [:] }
 
     /// `.release`: reset every fan, and disarm only if that worked. A failed reset
     /// must leave everything held, or supervision stops while the fans are pinned.
@@ -241,6 +260,7 @@ public final class FanControlCore {
     /// the client is gone). Idempotent: a second call with nothing held is a no-op.
     public func lastClientGone() {
         guard needsSupervision else { return }
+        if manualHeld { pinHandedBack() }
         _ = reset()
         manualHeld = false
         unlockHeld = false

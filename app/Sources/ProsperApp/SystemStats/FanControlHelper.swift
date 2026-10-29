@@ -93,11 +93,11 @@ enum FanManualReply: Equatable {
     }
 
     /// Name a live helper's `false` by the helper's rule (#586): after a trip it lets a
-    /// pin at or above the fan's current speed take the fans back once its settle
-    /// window passed, so a refusal of such a pin is the window. Below the current speed,
-    /// or with the speed unreadable, it holds until the Mac cools down.
-    static func refusal(rpm: Double, currentRPM: Double?) -> FanManualReply {
-        guard let currentRPM, currentRPM.isFinite, rpm >= currentRPM else { return .refused }
+    /// pin at or above macOS's speed for the fan (`FanControlCore.macOSSpeed`) take the
+    /// fans back once its settle window passed, so a refusal of such a pin is the window.
+    /// Below that speed, or with it unreadable, it holds until the Mac cools down.
+    static func refusal(rpm: Double, macOSRPM: Double?) -> FanManualReply {
+        guard let macOSRPM, macOSRPM.isFinite, rpm >= macOSRPM else { return .refused }
         return .settling
     }
 
@@ -154,10 +154,12 @@ struct FanTargetOwner: Equatable {
 /// whole section. ponytail: read on demand (settings open), not polled — fan specs
 /// don't change at runtime; current RPM is a point-in-time hint, not a live gauge.
 enum FanInfo {
-    /// One fan's live speed (F<i>Ac), nil when unreadable.
-    static func currentRPM(_ index: Int) -> Double? {
+    /// One fan's speed by the helper's rule (`FanControlCore.macOSSpeed` of F<i>Ac and
+    /// F<i>Tg), nil when unreadable.
+    static func macOSRPM(_ index: Int) -> Double? {
         guard let smc = try? SMC() else { return nil }
-        return SMCFanController(smc).currentRPM(index)
+        let fc = SMCFanController(smc)
+        return FanControlCore.macOSSpeed(current: fc.currentRPM(index), target: fc.targetRPM(index))
     }
 
     static func read() -> [FanReading] {
@@ -250,9 +252,9 @@ enum FanControlHelper {
     }
 
     /// `setManual` keeping the helper's refusal apart from an unreachable helper.
-    /// `currentRPM` (the test seam) is read off-main, and only on a refusal.
+    /// `macOSRPM` (the test seam) is read off-main, and only on a refusal.
     static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12,
-                               currentRPM: @escaping @Sendable (Int) -> Double? = { FanInfo.currentRPM($0) }) async -> FanManualReply {
+                               macOSRPM: @escaping @Sendable (Int) -> Double? = { FanInfo.macOSRPM($0) }) async -> FanManualReply {
         // In flight from before the registration await: a willSleep while this engage
         // waits there must still reset the fans an earlier engage pinned (#343).
         engagesInFlight += 1
@@ -264,7 +266,7 @@ enum FanControlHelper {
         let late: @Sendable (Bool) -> Void = { ok in Task { @MainActor in lateEngageLanded(ok) } }
         switch await callReply(c, timeout: timeout, late: late, { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }) {
         case true?: return .engaged
-        case false?: return .refusal(rpm: rpm, currentRPM: await Task.detached(priority: .utility) { currentRPM(index) }.value)
+        case false?: return .refusal(rpm: rpm, macOSRPM: await Task.detached(priority: .utility) { macOSRPM(index) }.value)
         case nil: return .unavailable
         }
     }

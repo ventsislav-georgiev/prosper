@@ -67,6 +67,8 @@ public final class SMCFanController {
     }
 
     public func currentRPM(_ i: Int) -> Double? { smc.read("F\(i)Ac")?.double }
+    /// F<i>Tg, read-only: macOS's own target while the fan is automatic.
+    public func targetRPM(_ i: Int) -> Double? { smc.read("F\(i)Tg")?.double }
 
     /// True on M1–M4 (layered unlock required); false on M5+ (direct mode write).
     public func hasFtst() -> Bool { smc.exists("Ftst") }

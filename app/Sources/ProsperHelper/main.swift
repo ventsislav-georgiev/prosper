@@ -181,13 +181,15 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             // Kill-switch hysteresis: a pin was just reset at the cut-off. Never hold a
             // fan below macOS's own speed then: ANY client's engage is refused before
             // any write or arming until the chassis is back below re-arm, except one at
-            // or above the fan's current speed once the settle window has passed.
+            // or above macOS's speed for the fan (max of F<i>Ac and F<i>Tg) once the
+            // settle window has passed.
             // The core also records holder + target and arms crash-safety BEFORE the
             // risky write (see FanControlCore.manualRequest).
             let seen = self.fanCore.lastRefusal
             guard self.fanCore.manualRequest(index: index, rpm: rpm, holder: cid,
                                              maxCelsius: fan.maxTemperature(complete: true),
-                                             currentRPM: fan.currentRPM(index)) else {
+                                             macOSRPM: FanControlCore.macOSSpeed(current: fan.currentRPM(index),
+                                                                                 target: fan.targetRPM(index))) else {
                 // One line per reason change in a latched episode, not one per retry.
                 if let why = self.fanCore.lastRefusal, why != seen {
                     fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) refused (\(why.rawValue, privacy: .public)): kill-switch latched until < \(FanControlCore.reArmCelsius, privacy: .public)°C; at or above macOS's speed after \(FanControlCore.reTakeSettleSeconds, privacy: .public) s")
