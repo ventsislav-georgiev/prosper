@@ -217,6 +217,7 @@ final class AgentIslandController {
         store.historyTab = true
         refreshCards()
         layout()
+        refreshHistory()  // #585: count a session that ended while open
     }
 
     // MARK: - History and Resume (#578)
@@ -260,7 +261,7 @@ final class AgentIslandController {
         }
     }
 
-    /// The Resume crashed button, and nothing else: `--revive --all` in each dir
+    /// The Resume interrupted button, and nothing else: `--revive --all` in each dir
     /// with history. Never on launch, a timer or a reconnect — after a reboot
     /// every session reads "vanished" and would qualify.
     func resumeCrashed() {

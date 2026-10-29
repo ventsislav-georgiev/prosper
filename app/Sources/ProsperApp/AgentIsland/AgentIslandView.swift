@@ -54,7 +54,7 @@ struct AgentIslandGeometry: Equatable {
     /// fit beside the notch (~118 pt of text room left of a 185 pt notch, and the
     /// right side holds the state counts).
     static let tabsHeight: CGFloat = 22
-    /// #578: the History list's "Resume crashed" line.
+    /// #578: the History list's header line (Resume interrupted, a dir status, the gate).
     static let historyHeaderHeight: CGFloat = 26
     static let closedRadii = (top: CGFloat(6), bottom: CGFloat(14))
     static let openRadii = (top: CGFloat(19), bottom: CGFloat(24))
@@ -332,6 +332,34 @@ final class AgentIslandStore: ObservableObject {
     /// #578: the History tab's rows, capped.
     var shownHistory: [DchHistoryRecord] { historyTab ? Array(history.prefix(AgentIsland.historyCap)) : [] }
 
+    /// #585: the clock reviveAllTakes reads; the tests pin it.
+    var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
+
+    /// #585: how many records `--revive --all` would take: every record, not
+    /// just the `historyCap` shown, as dch takes them all.
+    var resumableCount: Int {
+        let t = now()
+        return history.filter { AgentIsland.reviveAllTakes($0, now: t) }.count
+    }
+
+    /// Each History dir's last --all status, by dir.
+    var historyStatus: String {
+        Set(history.map(\.key.dir)).sorted().compactMap { actions[AgentSessionKey(dir: $0, name: "")] }.joined(separator: " · ")
+    }
+
+    /// #585: the History header's button, "Resume interrupted (n)"; nil (no
+    /// button) at n == 0 or while the gate refuses (its reason shows instead).
+    var resumeAllButton: String? {
+        let n = resumableCount
+        return resumeGate.isOK && n > 0 ? AgentIsland.resumeAllLabel(n) : nil
+    }
+
+    /// #585: the line over the History rows only with something on it: the
+    /// gate's refusal, the button, or a dir status.
+    var showsHistoryHeader: Bool {
+        historyTab && (!resumeGate.isOK || resumeAllButton != nil || !historyStatus.isEmpty)
+    }
+
     /// Every control verb's gate (Resume, #579's Restart, Restart all, New
     /// session, #580's Stop): the control binary against 1.24.0 and every live
     /// master; `.refused` carries the one-line reason.
@@ -356,7 +384,7 @@ final class AgentIslandStore: ObservableObject {
         visible.compactMap(card(for:)).reduce(0) { $0 + AgentIslandGeometry.cardHeight($1) }
     }
 
-    /// #579: every dir's last dir-wide status (Resume crashed, Restart all, a
+    /// #579: every dir's last dir-wide status (Resume interrupted, Restart all, a
     /// failed New session), by dir.
     var dirStatus: String {
         actions.filter { $0.key.name.isEmpty }.sorted { $0.key.dir < $1.key.dir }.map(\.value).joined(separator: " · ")
@@ -378,10 +406,11 @@ final class AgentIslandStore: ObservableObject {
     }
 
     /// #525: per row, two or three lines.
-    /// #578: under History, the Resume crashed line, then two-line rows.
+    /// #578: under History, the header line (#585: when shown), then two-line rows.
     var rowHeights: [CGFloat] {
         (showsControlLine ? [AgentIslandGeometry.historyHeaderHeight] : [])
-            + (historyTab ? [AgentIslandGeometry.historyHeaderHeight] + shownHistory.map { _ in AgentIslandGeometry.rowHeight }
+            + (showsHistoryHeader ? [AgentIslandGeometry.historyHeaderHeight] : [])
+            + (historyTab ? shownHistory.map { _ in AgentIslandGeometry.rowHeight }
                 : visible.map { AgentIslandGeometry.height(of: $0, show: details) })
     }
 
@@ -397,7 +426,7 @@ struct AgentIslandView: View {
     var onAnswer: (AgentSession, AgentPrompt, AgentPromptOption) -> Void = { _, _, _ in }
     /// #571: a tab click, true = Sidekicks.
     var onTab: (Bool) -> Void = { _ in }
-    /// #578: the History tab, a history row's Resume, and Resume crashed.
+    /// #578: the History tab, a history row's Resume, and Resume interrupted.
     var onHistory: () -> Void = {}
     var onResume: (DchHistoryRecord) -> Void = { _ in }
     var onResumeAll: () -> Void = {}
@@ -475,7 +504,7 @@ struct AgentIslandView: View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             VStack(spacing: 0) {
                 if store.showsControlLine { controlLine }
-                if store.historyTab { historyHeader }
+                if store.showsHistoryHeader { historyHeader }
                 ForEach(historyDrawn) { r in
                     AgentIslandHistoryRow(record: r.record, now: ctx.date.timeIntervalSince1970,
                                           status: store.historyActions[r.record.key], enabled: r.enabled, action: r.resume)
@@ -606,25 +635,26 @@ struct AgentIslandView: View {
         return store.shownHistory.map { r in HistoryDrawn(record: r, enabled: on, resume: { onResume(r) }) }
     }
 
-    /// The line over the History rows: the Resume crashed button and each
-    /// dir's --all status, or the gate's reason in its place. Static text.
+    /// The line over the History rows: Resume interrupted (#585: only with a
+    /// record it would take) and each dir's --all status, or the gate's reason
+    /// in its place. Static text.
     private var historyHeader: some View {
-        let status = Set(store.history.map(\.key.dir)).sorted()
-            .compactMap { store.actions[AgentSessionKey(dir: $0, name: "")] }.joined(separator: " · ")
-        return HStack(spacing: 10) {
+        HStack(spacing: 10) {
             if case .refused(let why) = store.resumeGate {
                 Text(verbatim: "Resume \(why)").foregroundStyle(Color.white.opacity(0.45))
             } else {
-                Button(action: onResumeAll) {
-                    Text(verbatim: AgentIsland.resumeAllLabel)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.9))
-                        .contentShape(Rectangle())
+                if let label = store.resumeAllButton {
+                    Button(action: onResumeAll) {
+                        Text(verbatim: label)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(Text(verbatim: AgentIsland.resumeAllHelp))
+                    .accessibilityHint(Text(verbatim: AgentIsland.resumeAllHelp))
                 }
-                .buttonStyle(.plain)
-                .help(Text(verbatim: AgentIsland.resumeAllHelp))
-                .accessibilityHint(Text(verbatim: AgentIsland.resumeAllHelp))
-                Text(verbatim: status).foregroundStyle(Color.white.opacity(0.6))
+                Text(verbatim: store.historyStatus).foregroundStyle(Color.white.opacity(0.6))
             }
             Spacer(minLength: 0)
         }
@@ -734,7 +764,8 @@ struct AgentIslandHistoryRow: View {
                             Text(verbatim: status).foregroundStyle(Color.white.opacity(0.7))
                         } else {
                             Text(verbatim: end)
-                                .foregroundStyle(record.end.hasPrefix("signal ") ? AgentState.blocked.color : Color.white.opacity(0.5))
+                                // #585: only a crash is colored; "ended (signal 15)" stays neutral.
+                                .foregroundStyle(end.hasPrefix("crashed") ? AgentState.blocked.color : Color.white.opacity(0.5))
                                 .fixedSize()
                             Text(verbatim: cwd)
                                 .font(.system(size: 10, design: .monospaced))

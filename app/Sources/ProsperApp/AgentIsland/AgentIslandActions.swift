@@ -23,7 +23,8 @@ struct DchHistoryRecord: Equatable, Identifiable {
     var updated: TimeInterval = 0
     /// 0 while running, or after a master that died without a word.
     var ended: TimeInterval = 0
-    /// "exit N", "signal N", "killed", "vanished" ("" reads as vanished); 1.24.0 adds "stopped".
+    /// "exit N", "signal N", "killed" (dch -k), "stopped" (--stop, 1.24.0), "vanished"
+    /// ("" reads as vanished). endLabel puts them in words.
     var end = ""
     var agent: Agent?
 
@@ -119,13 +120,29 @@ extension AgentIsland {
             .sorted { $0.lastSeen != $1.lastSeen ? $0.lastSeen > $1.lastSeen : ($0.name, $0.key.dir) < ($1.name, $1.key.dir) }
     }
 
-    /// The end in words: "crashed (signal 9)", "exited (1)", "vanished",
-    /// "killed"; anything else ("stopped", 1.24.0) as dch wrote it.
+    /// #585: the end in neutral words; nothing the user did on purpose reads as
+    /// a crash. "closed" (dch -k), "stopped", "exited" / "exited (N)", "ended
+    /// (signal N)" for TERM, HUP and INT (also logout and reboot), "crashed
+    /// (signal N)" for any other signal, "vanished" ("" too); else as dch wrote it.
     static func endLabel(_ end: String) -> String {
-        if end.isEmpty { return "vanished" }
-        if end.hasPrefix("signal ") { return "crashed (\(end))" }
-        if end.hasPrefix("exit ") { return "exited (\(end.dropFirst(5)))" }
-        return end
+        switch end {
+        case "", "vanished": return "vanished"
+        case "killed": return "closed"
+        case "exit 0": return "exited"
+        case "signal 15", "signal 1", "signal 2": return "ended (\(end))"
+        default:
+            if end.hasPrefix("signal ") { return "crashed (\(end))" }
+            if end.hasPrefix("exit ") { return "exited (\(end.dropFirst(5)))" }
+            return end
+        }
+    }
+
+    /// #585: dch's own `--revive --all` rule (rv_all_takes, dch 1.24.1): an
+    /// abnormal end (not exit 0, killed or stopped; vanished counts), last seen
+    /// within 3 days, after running at least 5 minutes (last seen minus started).
+    static func reviveAllTakes(_ r: DchHistoryRecord, now: TimeInterval) -> Bool {
+        !["exit 0", "killed", "stopped"].contains(r.end)
+            && r.lastSeen >= now - 3 * 86400 && r.lastSeen - r.started >= 5 * 60
     }
 
     /// `--revive <name>`; a name live now goes to `--as` the first free
@@ -136,7 +153,7 @@ extension AgentIsland {
         return ["--revive", r.name, "--as", freeName(r.name, taken: live.union(records)), "--json"]
     }
 
-    /// Resume crashed. dch skips stopped, killed and exit 0 records itself.
+    /// Resume interrupted. dch skips stopped, killed and exit 0 records itself.
     static let reviveAllArgs = ["--revive", "--all", "--json"]
 
     /// `name` when free, else the first free `<name>-2`, `-3`, ….
@@ -244,7 +261,7 @@ extension AgentIsland {
             .compactMap { $0 }.joined(separator: ", ")
     }
 
-    /// Resume crashed's and Stop all's one line: "N resumed|stopped, N failed,
+    /// Resume interrupted's and Stop all's one line: "N resumed|stopped, N failed,
     /// N skipped"; `empty` when dch named no session and exited 0.
     static func tally(_ r: DchActionResult, _ verb: Verb, title: String, empty: String) -> String {
         if r.stopped { return "\(title) cancelled: no answer in \(verb.minutes)m" }
@@ -398,12 +415,13 @@ extension AgentIsland {
     }
 
     static let resumingText = "Resuming…"
-    static let resumeAllLabel = "Resume crashed"
+    /// #585: shown only with n > 0 records reviveAllTakes.
+    static func resumeAllLabel(_ n: Int) -> String { "Resume interrupted (\(n))" }
     /// QA #445 I2: `--revive --all` takes every abnormal end, not only signals.
-    /// #580: never a stopped or killed session (dch skips them).
-    static let resumeAllHelp = "Brings back the sessions that crashed, exited with an error or vanished "
-        + "(a reboot) in the last 3 days, after running at least 5 minutes. Stopped and killed sessions "
-        + "come back only from their own row"
+    /// #580: never a stopped or closed session (dch skips them).
+    static let resumeAllHelp = "Brings back the sessions that ended on a signal, crashed, exited with an error "
+        + "or vanished (a reboot) in the last 3 days, after running at least 5 minutes. Closed, stopped and "
+        + "cleanly exited sessions come back only from their own row"
 
     /// The env every control verb runs with: listEnv (DCH_SOCKET_DIR, no
     /// DCH_SESSION) plus the user's PATH. QA #445 M1: under launchd the PATH is

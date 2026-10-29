@@ -26,6 +26,13 @@ tag from the now-released section and put it on the new top draft.
   never happen, so the fans stayed at macOS's own, often slower, speed. Now, about 10 seconds
   after the cut-off, your speed comes back as long as it is at or above the speed macOS is
   running the fans at. A speed below macOS's still waits for the Mac to cool below 80 °C.
+- **Agent Island: History shows how each session ended, in plain words.** A session you
+  closed reads "closed" (it used to read "killed"), and one that ended on SIGTERM, SIGHUP or
+  SIGINT reads "ended (signal N)" instead of "crashed". Only other signals read as a crash.
+  The Resume button over the list appears only when there is something to resume: it reads
+  "Resume interrupted (N)" and counts the sessions that `dch --revive --all` would bring
+  back (an abnormal end in the last 3 days, after running at least 5 minutes). With nothing
+  to resume, the History tab is just the list.
 
 ## v2.160.0
 

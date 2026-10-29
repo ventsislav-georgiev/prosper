@@ -145,20 +145,89 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.parseHistory(Data(), dir: "/d"), [])
     }
 
+    /// #585: neutral words; nothing the user ended on purpose reads as a crash.
     func testEndLabels() {
-        XCTAssertEqual(AgentIsland.endLabel("signal 9"), "crashed (signal 9)")
-        XCTAssertEqual(AgentIsland.endLabel("exit 1"), "exited (1)")
-        XCTAssertEqual(AgentIsland.endLabel("exit 0"), "exited (0)")
-        XCTAssertEqual(AgentIsland.endLabel("vanished"), "vanished")
-        XCTAssertEqual(AgentIsland.endLabel(""), "vanished", "a master that died without writing its end")
-        XCTAssertEqual(AgentIsland.endLabel("killed"), "killed")
-        XCTAssertEqual(AgentIsland.endLabel("stopped"), "stopped", "1.24.0 passes through")
+        let table: [(String, String)] = [
+            ("killed", "closed"), ("stopped", "stopped"),
+            ("exit 0", "exited"), ("exit 1", "exited (1)"), ("exit 130", "exited (130)"),
+            ("signal 15", "ended (signal 15)"), ("signal 1", "ended (signal 1)"), ("signal 2", "ended (signal 2)"),
+            ("signal 9", "crashed (signal 9)"), ("signal 11", "crashed (signal 11)"), ("signal 6", "crashed (signal 6)"),
+            ("signal 150", "crashed (signal 150)"),
+            ("", "vanished"), ("vanished", "vanished"),
+            ("paused", "paused"), ("exitx", "exitx"),
+        ]
+        for (end, label) in table { XCTAssertEqual(AgentIsland.endLabel(end), label, end) }
         // #580: a real 1.24.0 record after `dch --stop s1`.
         let real = #"[{"name":"s1","sock_dir":"/d","alias":"","cwd":"/src","argv":["/bin/sleep","1000"],"started":1793139535,"#
             + #""updated":1793139537,"ended":1793139537,"end":"stopped","agent":null}]"#
         let r = try? XCTUnwrap(AgentIsland.parseHistory(Data(real.utf8), dir: "/d").first)
         XCTAssertEqual(r?.end, "stopped")
         XCTAssertEqual(r.map { AgentIsland.endLabel($0.end) }, "stopped")
+    }
+
+    /// #585: dch 1.24.1's rv_all_takes, edge by edge.
+    func testReviveAllTakesMatchesDchRule() {
+        let now: TimeInterval = 2_000_000_000, day: TimeInterval = 86400
+        func rec(_ end: String, started: TimeInterval = 2_000_000_000 - 3600, ended: TimeInterval = 2_000_000_000 - 60,
+                 updated: TimeInterval = 0) -> DchHistoryRecord {
+            DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "s"), started: started, updated: updated, ended: ended, end: end)
+        }
+        for end in ["exit 0", "killed", "stopped"] {
+            XCTAssertFalse(AgentIsland.reviveAllTakes(rec(end), now: now), end)
+        }
+        for end in ["exit 1", "signal 15", "signal 9", "vanished", "", "odd"] {
+            XCTAssertTrue(AgentIsland.reviveAllTakes(rec(end), now: now), end)
+        }
+        let started = now - 4 * day
+        XCTAssertTrue(AgentIsland.reviveAllTakes(rec("signal 9", started: started, ended: now - 3 * day + 1), now: now))
+        XCTAssertTrue(AgentIsland.reviveAllTakes(rec("signal 9", started: started, ended: now - 3 * day), now: now),
+                      "dch: seen >= now - 3 days")
+        XCTAssertFalse(AgentIsland.reviveAllTakes(rec("signal 9", started: started, ended: now - 3 * day - 1), now: now))
+        XCTAssertFalse(AgentIsland.reviveAllTakes(rec("signal 9", started: now - 1000, ended: now - 1000 + 299), now: now))
+        XCTAssertTrue(AgentIsland.reviveAllTakes(rec("signal 9", started: now - 1000, ended: now - 1000 + 300), now: now))
+        // Vanished with ended 0: last seen is updated.
+        XCTAssertTrue(AgentIsland.reviveAllTakes(rec("vanished", started: now - 1000, ended: 0, updated: now - 600), now: now))
+        XCTAssertFalse(AgentIsland.reviveAllTakes(rec("vanished", started: now - 1000, ended: 0, updated: now - 701), now: now),
+                       "ran 299 s by updated")
+        XCTAssertFalse(AgentIsland.reviveAllTakes(rec("", started: now - 4 * day, ended: 0, updated: now - 3 * day - 1), now: now),
+                       "seen too long ago by updated")
+        XCTAssertFalse(AgentIsland.reviveAllTakes(rec("", started: 0, ended: 0, updated: 0), now: now), "never seen")
+    }
+
+    /// #585: the History header: no line at all with nothing to resume, no
+    /// status and the gate open; "Resume interrupted (N)" counting the takers.
+    @MainActor
+    func testHistoryHeaderShowsOnlyWithResumableRecords() {
+        let now: TimeInterval = 2_000_000_000
+        let store = AgentIslandStore(geometry: notched)
+        store.now = { now }
+        store.sessions = [session("a", version: "1.24.0")]
+        store.controlDch = Self.v124
+        func rec(_ name: String, _ end: String, ago: TimeInterval = 60) -> DchHistoryRecord {
+            DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: name), started: now - 3600, updated: now - ago,
+                             ended: now - ago, end: end)
+        }
+        store.history = [rec("k", "killed"), rec("s", "stopped"), rec("e", "exit 0"), rec("old", "signal 9", ago: 4 * 86400)]
+        store.historyTab = true
+        XCTAssertEqual(store.resumableCount, 0)
+        XCTAssertNil(store.resumeAllButton)
+        XCTAssertFalse(store.showsHistoryHeader)
+        XCTAssertEqual(store.rowHeights, Array(repeating: AgentIslandGeometry.rowHeight, count: 4), "plain history, no line")
+        store.actions[AgentSessionKey(dir: "/d", name: "")] = "nothing to resume"
+        XCTAssertTrue(store.showsHistoryHeader, "a dir status keeps the line")
+        XCTAssertNil(store.resumeAllButton)
+        store.actions = [:]
+        store.history.append(contentsOf: [rec("t", "signal 15"), rec("v", "")])
+        XCTAssertEqual(store.resumableCount, 2)
+        XCTAssertEqual(store.resumeAllButton, "Resume interrupted (2)")
+        XCTAssertTrue(store.showsHistoryHeader)
+        XCTAssertEqual(store.rowHeights, [AgentIslandGeometry.historyHeaderHeight]
+                       + Array(repeating: AgentIslandGeometry.rowHeight, count: 6))
+        store.sessions = [session("a", version: "1.25.0")]
+        XCTAssertNil(store.resumeAllButton, "the gate's refusal in its place")
+        XCTAssertTrue(store.showsHistoryHeader)
+        store.historyTab = false
+        XCTAssertFalse(store.showsHistoryHeader, "Sessions tab: no History line")
     }
 
     /// One `--history --json` per dir with that dir's DCH_SOCKET_DIR; newest first across dirs.
@@ -489,12 +558,13 @@ final class AgentIslandControlsTests: XCTestCase {
     }
 
     func testResumeAllHelpNamesEveryAbnormalEnd() {
-        for word in ["crashed", "exited with an error", "vanished", "3 days", "5 minutes"] {
+        for word in ["ended on a signal", "crashed", "exited with an error", "vanished", "3 days", "5 minutes"] {
             XCTAssertTrue(AgentIsland.resumeAllHelp.contains(word), word)
         }
-        XCTAssertEqual(AgentIsland.resumeAllLabel, "Resume crashed")
-        // #580: dch's --revive --all never takes a stopped or killed record.
-        XCTAssertTrue(AgentIsland.resumeAllHelp.hasSuffix("Stopped and killed sessions come back only from their own row"))
+        XCTAssertEqual(AgentIsland.resumeAllLabel(3), "Resume interrupted (3)")
+        // #580/#585: dch's --revive --all never takes a closed (killed), stopped or exit 0 record.
+        XCTAssertTrue(AgentIsland.resumeAllHelp.hasSuffix(
+            "Closed, stopped and cleanly exited sessions come back only from their own row"))
     }
 
     // MARK: - Runner
@@ -659,6 +729,25 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertTrue(store.showsTabs, "sidekicks alone")
     }
 
+    /// #585 L1: the count covers every record, past the shown historyCap.
+    @MainActor
+    func testResumableCountCoversRecordsPastTheCap() {
+        let now: TimeInterval = 2_000_000_000
+        let store = AgentIslandStore(geometry: notched)
+        store.now = { now }
+        store.sessions = [session("a", version: "1.24.0")]
+        store.controlDch = Self.v124
+        func rec(_ name: String, _ end: String) -> DchHistoryRecord {
+            DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: name), started: now - 3600, updated: now - 60,
+                             ended: now - 60, end: end)
+        }
+        store.history = (0..<AgentIsland.historyCap).map { rec("k\($0)", "killed") } + [rec("late", "signal 15")]
+        store.historyTab = true
+        XCTAssertEqual(store.shownHistory.count, AgentIsland.historyCap)
+        XCTAssertEqual(store.resumableCount, 1)
+        XCTAssertEqual(store.resumeAllButton, "Resume interrupted (1)")
+    }
+
     @MainActor
     func testTabClicksMoveBetweenTheThreeTabs() {
         let c = AgentIslandController()
@@ -733,6 +822,24 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(reads.count, 1, "closing reads nothing")
     }
 
+    /// #585 L2: a History tab click re-reads history, so a session that ended
+    /// while the island was open is counted.
+    @MainActor
+    func testHistoryTabClickRereadsHistory() {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("x")]
+        let c = controller(f, reads)
+        c.store?.sessions = [session("a")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.isEmpty == false }
+        XCTAssertEqual(reads.count, 1)
+        reads.lock.withLock { reads.records = [record("x"), record("y")] }
+        c.showHistory()
+        settle(c) { c.store?.history.count == 2 }
+        XCTAssertEqual(reads.count, 2, "the tab click read again")
+        XCTAssertEqual(c.store?.history, [record("x"), record("y")])
+    }
+
     /// The 1 s poll publishing sessions reads no history and runs no verb,
     /// closed or open (with history there for a stray --revive --all to take).
     @MainActor
@@ -802,7 +909,7 @@ final class AgentIslandControlsTests: XCTestCase {
     }
 
     /// Opening, Settings changes, tab clicks and a row's Resume never run
-    /// `--revive --all`; only the Resume crashed click does, once per dir.
+    /// `--revive --all`; only the Resume interrupted click does, once per dir.
     @MainActor
     func testReviveAllRunsOnlyFromTheClick() {
         let f = FakeProc(), reads = Reads()
@@ -910,7 +1017,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(c.store?.historyActions, [:], "closing drops finished statuses")
     }
 
-    /// A master newer than the control binary: Resume and Resume crashed are off, with the reason.
+    /// A master newer than the control binary: Resume and Resume interrupted are off, with the reason.
     @MainActor
     func testGateRefusalDisablesResume() throws {
         let f = FakeProc(), reads = Reads()
@@ -946,8 +1053,9 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(resumed, ["x", "y"])
     }
 
-    /// Visual evidence: the History tab (with a running and a failed row) and the
-    /// gate's reason in place of Resume crashed. Offscreen only.
+    /// Visual evidence: the History tab (with a running and a failed row), the
+    /// gate's reason in place of Resume interrupted, and (#585) plain history
+    /// with no header line. Offscreen only.
     @MainActor
     func testRendersHistoryTabOffscreen() throws {
         let now = Date().timeIntervalSince1970
@@ -975,6 +1083,19 @@ final class AgentIslandControlsTests: XCTestCase {
         try island("agent-island-history")
         store.sessions = [session("prosper-main", version: "1.25.0")]
         try island("agent-island-history-gated")
+        // #585: nothing --revive --all would take and no status: no header line.
+        store.sessions = [session("prosper-main", version: "1.24.0")]
+        XCTAssertEqual(store.resumeAllButton, "Resume interrupted (3)", "a, b and c; not d (killed) or e (stopped)")
+        var f = record("done", ended: now - 300, end: "exit 0")
+        f.cwd = NSHomeDirectory() + "/personal/dch"
+        // SIGTERM after 2 min: neutral words, and too short-lived for --all.
+        let g = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "quick"), cwd: "/src", started: now - 1320,
+                                 updated: now - 1200, ended: now - 1200, end: "signal 15")
+        store.history = [e, f, g, d]
+        store.actions = [:]
+        store.historyActions = [:]
+        XCTAssertFalse(store.showsHistoryHeader)
+        try island("agent-island-history-plain")
         store.historyTab = false
         try island("agent-island-history-tab-sessions")
     }
@@ -1823,7 +1944,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.args, [])
     }
 
-    /// Resume crashed: --revive --all --json; a phase or result lands on its
+    /// Resume interrupted: --revive --all --json; a phase or result lands on its
     /// History row, never on a live row of that name; empty stdout + exit 0
     /// reads "nothing to resume".
     @MainActor
