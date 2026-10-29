@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.160.0 *(unreleased)*
+## v2.161.0 *(unreleased)*
+
+- **Fans: Prosper takes the fans back after the overheat cut-off.** When the Mac reaches
+  95 °C while your manual speed is set, Prosper still hands the fans to macOS. Since
+  v2.156.0 it then refused your speed until the Mac cooled below 80 °C, which on a lap may
+  never happen, so the fans stayed at macOS's own, often slower, speed. Now, about 10 seconds
+  after the cut-off, your speed comes back as long as it is at or above the speed macOS is
+  running the fans at. A speed below macOS's still waits for the Mac to cool below 80 °C.
+
+## v2.160.0
 
 - **Agent Island: sort by name, and an optional Sidekicks tab.** Settings › Extensions ›
   Agent Island has a new Session list section. Sort sessions keeps Last activity (the

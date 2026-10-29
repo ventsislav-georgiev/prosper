@@ -20,11 +20,14 @@ struct FanReading: Identifiable, Equatable {
 enum FanReclaimRecovery {
     static let minimumManualFraction = 0.2
 
-    /// Pause after a reclaim re-apply failed before the timer tries again. The helper
-    /// refuses manual engages while its kill-switch is latched (chassis still above the
-    /// re-arm temperature), and every failed attempt costs a resetAllFans; one attempt
-    /// per helper supervision tick (30 s) is enough to notice the re-arm.
-    static let retryCooldown: TimeInterval = 30
+    /// Pause after a reclaim re-apply failed before the timer tries again. After a
+    /// kill-switch trip the helper refuses every engage for its settle window, then
+    /// lets a pin at or above macOS's own speed take the fans back (#586). A refusal
+    /// lands at or after the trip, so one window later the retry is past it: the
+    /// user's speed comes back ~10-14 s after a trip instead of a whole minute. A pin
+    /// below macOS's speed stays refused until the re-arm, asked once per window
+    /// (each failed attempt costs a resetAllFans).
+    static let retryCooldown: TimeInterval = FanControlCore.reTakeSettleSeconds
 
     enum Disposition: Equatable {
         case abandonManualIntent
@@ -77,14 +80,25 @@ enum FanReclaimRecovery {
 /// (not registered/approved, XPC error, timeout).
 enum FanManualReply: Equatable {
     case engaged
-    case refused       // live helper replied false
+    case refused       // live helper replied false; the target is below macOS's speed
+    case settling      // live helper replied false; the target is at or above it (#586)
     case unavailable   // no reply from the helper
 
     /// Collapse one burst of per-fan replies: any refusal wins (the latch is global),
     /// then any unreachable fan; all engaged → engaged.
     static func combine(_ replies: [FanManualReply]) -> FanManualReply {
         if replies.contains(.refused) { return .refused }
+        if replies.contains(.settling) { return .settling }
         return replies.allSatisfy { $0 == .engaged } ? .engaged : .unavailable
+    }
+
+    /// Name a live helper's `false` by the helper's rule (#586): after a trip it lets a
+    /// pin at or above the fan's current speed take the fans back once its settle
+    /// window passed, so a refusal of such a pin is the window. Below the current speed,
+    /// or with the speed unreadable, it holds until the Mac cools down.
+    static func refusal(rpm: Double, currentRPM: Double?) -> FanManualReply {
+        guard let currentRPM, currentRPM.isFinite, rpm >= currentRPM else { return .refused }
+        return .settling
     }
 
     /// The single status line the fan popup shows for a failed engage/commit.
@@ -95,7 +109,11 @@ enum FanManualReply: Equatable {
         case .engaged: return nil
         case .refused:
             return "Fans are held automatic until the Mac cools down — the overheat "
-                + "cut-off tripped. Try again in a few minutes."
+                + "cut-off tripped, and macOS runs them faster than this. Try again in a few "
+                + "minutes, or pick a faster speed."
+        case .settling:
+            return "The overheat cut-off just handed the fans to macOS. "
+                + "Try again in a few seconds."
         case .unavailable:
             return "Couldn’t enable manual control — the Prosper helper isn’t "
                 + "running or wasn’t approved. Turn on “Prosper” under System Settings ▸ "
@@ -136,6 +154,12 @@ struct FanTargetOwner: Equatable {
 /// whole section. ponytail: read on demand (settings open), not polled — fan specs
 /// don't change at runtime; current RPM is a point-in-time hint, not a live gauge.
 enum FanInfo {
+    /// One fan's live speed (F<i>Ac), nil when unreadable.
+    static func currentRPM(_ index: Int) -> Double? {
+        guard let smc = try? SMC() else { return nil }
+        return SMCFanController(smc).currentRPM(index)
+    }
+
     static func read() -> [FanReading] {
         guard let smc = try? SMC() else { return [] }
         let fc = SMCFanController(smc)
@@ -226,7 +250,9 @@ enum FanControlHelper {
     }
 
     /// `setManual` keeping the helper's refusal apart from an unreachable helper.
-    static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12) async -> FanManualReply {
+    /// `currentRPM` (the test seam) is read off-main, and only on a refusal.
+    static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12,
+                               currentRPM: @escaping @Sendable (Int) -> Double? = { FanInfo.currentRPM($0) }) async -> FanManualReply {
         // In flight from before the registration await: a willSleep while this engage
         // waits there must still reset the fans an earlier engage pinned (#343).
         engagesInFlight += 1
@@ -238,7 +264,7 @@ enum FanControlHelper {
         let late: @Sendable (Bool) -> Void = { ok in Task { @MainActor in lateEngageLanded(ok) } }
         switch await callReply(c, timeout: timeout, late: late, { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }) {
         case true?: return .engaged
-        case false?: return .refused
+        case false?: return .refusal(rpm: rpm, currentRPM: await Task.detached(priority: .utility) { currentRPM(index) }.value)
         case nil: return .unavailable
         }
     }
@@ -522,7 +548,9 @@ enum FanControlHelper {
     }
 
     /// Act on a reclaim re-apply's outcome. `.retry` holds the next attempt for the
-    /// cooldown, so a latched helper is asked once per 30 s, not every 2 s tick.
+    /// cooldown, so a latched helper is asked once per settle window, not every 2 s
+    /// tick. A refusal keeps the manual pref and the saved targets: only `.abandon…`
+    /// (a pin under the 20 % floor) drops intent.
     static func settleReclaim(_ disposition: FanReclaimRecovery.Disposition, now: Date = Date(),
                               reset: (Bool) async -> Bool = { await resetAll(teardown: $0) }) async {
         switch disposition {

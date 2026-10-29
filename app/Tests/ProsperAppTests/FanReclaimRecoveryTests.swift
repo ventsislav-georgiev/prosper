@@ -68,7 +68,9 @@ final class FanReclaimRecoveryTests: XCTestCase {
         Preferences.fanManualEnabled = true
         FanControlHelper.armRecoveryLifecycle()
         XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, since: FanControlHelper.reclaimGeneration))
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.settling, since: FanControlHelper.reclaimGeneration))
         XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
+        XCTAssertTrue(Preferences.fanManualEnabled, "a refusal never flips manual off")
         Preferences.fanManualEnabled = false
         await FanControlHelper.resetAll(teardown: true)
     }
@@ -708,9 +710,10 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
     }
 
-    /// #221 (3): a failed reclaim re-apply holds the next attempt for 30 s.
+    /// #221 (3), #586: a failed reclaim re-apply holds the next attempt for the helper's
+    /// settle window, so the retry after a trip lands past it.
     @MainActor
-    func testFailedReapplyCoolsDownForThirtySeconds() {
+    func testFailedReapplyCoolsDownForTheSettleWindow() {
         let previousManualIntent = Preferences.fanManualEnabled
         defer {
             Preferences.fanManualEnabled = previousManualIntent
@@ -720,9 +723,90 @@ final class FanReclaimRecoveryTests: XCTestCase {
         let t = Date()
         XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: t))
         FanControlHelper.deferReclaimRetry(now: t)
-        XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(29)))
+        XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(9.9)))
         XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(FanReclaimRecovery.retryCooldown)))
-        XCTAssertEqual(FanReclaimRecovery.retryCooldown, 30)
+        XCTAssertEqual(FanReclaimRecovery.retryCooldown, 10)
+        XCTAssertEqual(FanReclaimRecovery.retryCooldown, FanControlCore.reTakeSettleSeconds)
+    }
+
+    /// #586: the operator's lap. A 3103 RPM pin trips the kill-switch; macOS runs the
+    /// fans at 2500. The reclaim re-apply, driven against the helper's real core
+    /// (injected clock, temperature and speeds; no XPC, no SMC): the attempt inside the
+    /// settle window is refused and keeps manual intent and targets, the retry one
+    /// cooldown later takes the fans back.
+    @MainActor
+    func testReclaimReappliesAfterTheSettleWindowAndKeepsIntentOnRefusal() async throws {
+        let previousManualIntent = Preferences.fanManualEnabled, previousTargets = Preferences.fanTargets
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent; Preferences.fanTargets = previousTargets
+            FanControlHelper.deferReclaimRetry(now: .distantPast)
+        }
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = [0: 3103, 1: 3103]
+        final class Clock { var t = ContinuousClock.now }
+        final class Conn {}
+        let clock = Clock(), conn = Conn(), holder = ObjectIdentifier(conn)
+        let core = FanControlCore(reset: { true }, maxCelsius: { nil }, now: { clock.t })
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3103, holder: holder, maxCelsius: 50, currentRPM: nil))
+        XCTAssertEqual(core.supervise(maxCelsius: 96, isManualEngaged: { _ in true }), .fired)
+        let trip = Date()
+        let readings = [0, 1].map { FanReading(id: $0, min: 1350, max: 5777, current: 2500, manual: false) }
+        XCTAssertTrue(FanReclaimRecovery.reclaimDetected(readings))
+        let fraction = try XCTUnwrap(FanReclaimRecovery.manualFraction(targets: Preferences.fanTargets, readings: readings))
+        var resets: [Bool] = []
+        func reapply() async -> Bool {
+            await FanControlHelper.applySavedTargets(
+                reclaimGeneration: FanControlHelper.reclaimGeneration,
+                engage: { i, rpm, _ in core.manualRequest(index: i, rpm: rpm, holder: holder, maxCelsius: 96, currentRPM: 2500) },
+                reset: { resets.append($0); return true })
+        }
+
+        clock.t = clock.t.advanced(by: .seconds(2))   // the next 2 s reclaim tick
+        let refusedAt = trip.addingTimeInterval(2)
+        let refused = await reapply()
+        XCTAssertFalse(refused, "inside the settle window")
+        await FanControlHelper.settleReclaim(FanReclaimRecovery.disposition(manualFraction: fraction, reengaged: false),
+                                             now: refusedAt) { resets.append($0); return true }
+        XCTAssertTrue(Preferences.fanManualEnabled, "a refusal keeps manual intent")
+        XCTAssertEqual(Preferences.fanTargets, [0: 3103, 1: 3103], "and the saved targets")
+        XCTAssertEqual(resets, [false], "one plain reset, no teardown")
+        XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: refusedAt.addingTimeInterval(FanReclaimRecovery.retryCooldown - 0.1)))
+
+        let retryAt = refusedAt.addingTimeInterval(FanReclaimRecovery.retryCooldown)
+        XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: retryAt))
+        clock.t = clock.t.advanced(by: .seconds(FanReclaimRecovery.retryCooldown))
+        let retaken = await reapply()
+        XCTAssertTrue(retaken, "past the window, the faster pin takes the fans back")
+        XCTAssertEqual(core.heldTargets, [0: 3103, 1: 3103])
+        XCTAssertTrue(core.tripLatched)
+        XCTAssertLessThanOrEqual(retryAt.timeIntervalSince(trip), 30, "the user's speed is back within ~10-30 s")
+    }
+
+    /// #586: a live helper's false is named by the fan's speed, read through the seam
+    /// only on a refusal. Fake connection, fake registration: no helper, no SMC.
+    @MainActor
+    func testSetManualReplyNamesARefusalByTheFanSpeed() async {
+        let previousManualIntent = Preferences.fanManualEnabled, savedRegistration = LidSleepHelper.registration
+        let fake = FakeHelperConnection()
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent; LidSleepHelper.registration = savedRegistration
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        }
+        Preferences.fanManualEnabled = false
+        LidSleepHelper.registration = { .enabled }
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        let reads = LockedBox()
+        let speed: @Sendable (Int) -> Double? = { _ in reads.set(true); return 2500 }
+        var reply = await FanControlHelper.setManualReply(0, rpm: 3103, currentRPM: speed)
+        XCTAssertEqual(reply, .engaged)
+        XCTAssertEqual(reads.get(), [], "no fan read on an engage")
+        fake.proxy.manualReply = false
+        reply = await FanControlHelper.setManualReply(0, rpm: 3103, currentRPM: speed)
+        XCTAssertEqual(reply, .settling)
+        reply = await FanControlHelper.setManualReply(0, rpm: 2000, currentRPM: speed)
+        XCTAssertEqual(reply, .refused)
+        XCTAssertEqual(reads.get().count, 2)
+        await FanControlHelper.resetAll(teardown: true)
     }
 
     /// #259 (QA #74 eW2): the timer's tick honours the cooldown — no fan read inside
@@ -849,6 +933,10 @@ final class FanManualReplyTests: XCTestCase {
         let latched = try XCTUnwrap(FanManualReply.refused.errorText)
         XCTAssertTrue(latched.contains("held automatic until the Mac cools down"))
         XCTAssertFalse(latched.contains("helper"))
+        let settling = try XCTUnwrap(FanManualReply.settling.errorText)
+        XCTAssertFalse(settling.contains("held automatic"), "a faster pin is not held until the Mac cools")
+        XCTAssertTrue(settling.contains("few seconds"))
+        XCTAssertFalse(settling.contains("helper"))
         let missing = try XCTUnwrap(FanManualReply.unavailable.errorText)
         XCTAssertTrue(missing.contains("isn’t running or wasn’t approved"))
         XCTAssertNil(FanManualReply.engaged.errorText)
@@ -858,6 +946,17 @@ final class FanManualReplyTests: XCTestCase {
         XCTAssertEqual(FanManualReply.combine([.engaged, .refused, .unavailable]), .refused)
         XCTAssertEqual(FanManualReply.combine([.engaged, .unavailable]), .unavailable)
         XCTAssertEqual(FanManualReply.combine([.engaged, .engaged]), .engaged)
+        XCTAssertEqual(FanManualReply.combine([.engaged, .settling, .unavailable]), .settling)
+        XCTAssertEqual(FanManualReply.combine([.settling, .refused]), .refused)
+    }
+
+    /// #586: the held text is only for a target below macOS's speed (or an unreadable one).
+    func testRefusalIsNamedByMacOSSpeed() {
+        XCTAssertEqual(FanManualReply.refusal(rpm: 3103, currentRPM: 2500), .settling)
+        XCTAssertEqual(FanManualReply.refusal(rpm: 2500, currentRPM: 2500), .settling)
+        XCTAssertEqual(FanManualReply.refusal(rpm: 2400, currentRPM: 2500), .refused)
+        XCTAssertEqual(FanManualReply.refusal(rpm: 3103, currentRPM: nil), .refused)
+        XCTAssertEqual(FanManualReply.refusal(rpm: 3103, currentRPM: .nan), .refused)
     }
 }
 
@@ -873,12 +972,13 @@ private final class FakeHelperConnection: NSXPCConnection, @unchecked Sendable {
     final class Proxy: NSObject, ProsperHelperProtocol, @unchecked Sendable {
         var resets = 0
         var replies = true
+        var manualReply = true
         func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func clearRemoteSession(withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func sleepNow(withReply reply: @escaping (Bool) -> Void) { reply(true) }
-        func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) { reply(true) }
+        func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) { reply(manualReply) }
         func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func resetAllFans(withReply reply: @escaping (Bool) -> Void) { resets += 1; if replies { reply(true) } }
     }

@@ -976,7 +976,8 @@ struct StatsPopupView: View {
             // hang there — which is exactly a stuck "Enabling…" with no daemon log,
             // since the call never reaches the daemon. Race the whole engage so the
             // button always resolves and surfaces the actionable error.
-            // A live helper replying false is its overheat latch (#209), not a missing helper.
+            // A live helper replying false is its overheat latch (#209: the settle window, or a
+            // pin below macOS's speed, #586), not a missing helper.
             // popupEngage captures the generation and the sleeping flag at the click: a sleep
             // anywhere after it, or a click while asleep, leaves the pref unsaved (#345, #390).
             let (saved, reply) = await FanControlHelper.popupEngage(targets, first: first.key) {

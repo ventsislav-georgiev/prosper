@@ -99,15 +99,15 @@ final class FanControlCoreTests: XCTestCase {
         core.didSetManual()
         XCTAssertTrue(core.temperatureTick(maxCelsius: 98))
         XCTAssertEqual(resets(), 1)
-        XCTAssertFalse(core.mayEngageManual(maxCelsius: 98), "still above the cut-off")
-        XCTAssertFalse(core.mayEngageManual(maxCelsius: FanControlCore.reArmCelsius),
+        XCTAssertFalse(core.mayEngageManual(rpm: 3000, maxCelsius: 98, currentRPM: nil), "still above the cut-off")
+        XCTAssertFalse(core.mayEngageManual(rpm: 3000, maxCelsius: FanControlCore.reArmCelsius, currentRPM: nil),
                        "inside the band: not re-armed yet")
-        XCTAssertFalse(core.mayEngageManual(maxCelsius: nil), "unreadable sensors keep the latch")
-        XCTAssertFalse(core.mayEngageManual(maxCelsius: .nan))
-        XCTAssertTrue(core.mayEngageManual(maxCelsius: FanControlCore.reArmCelsius - 0.1),
+        XCTAssertFalse(core.mayEngageManual(rpm: 3000, maxCelsius: nil, currentRPM: nil), "unreadable sensors keep the latch")
+        XCTAssertFalse(core.mayEngageManual(rpm: 3000, maxCelsius: .nan, currentRPM: nil))
+        XCTAssertTrue(core.mayEngageManual(rpm: 3000, maxCelsius: FanControlCore.reArmCelsius - 0.1, currentRPM: nil),
                       "below re-arm: manual allowed again")
         XCTAssertFalse(core.tripLatched, "re-arm clears the latch")
-        XCTAssertTrue(core.mayEngageManual(maxCelsius: 94), "re-armed: no band any more")
+        XCTAssertTrue(core.mayEngageManual(rpm: 3000, maxCelsius: 94, currentRPM: nil), "re-armed: no band any more")
     }
 
     func testReArmBandSitsBelowTheCutOff() {
@@ -123,9 +123,9 @@ final class FanControlCoreTests: XCTestCase {
         core.temperatureTick(maxCelsius: 98)
         core.lastClientGone()   // old connection dropped: nothing held, no second reset
         XCTAssertEqual(resets(), 1)
-        XCTAssertFalse(core.mayEngageManual(maxCelsius: 90), "fresh connection, chassis still hot")
+        XCTAssertFalse(core.mayEngageManual(rpm: 3000, maxCelsius: 90, currentRPM: nil), "fresh connection, chassis still hot")
         XCTAssertTrue(core.tripLatched)
-        XCTAssertTrue(core.mayEngageManual(maxCelsius: 79))
+        XCTAssertTrue(core.mayEngageManual(rpm: 3000, maxCelsius: 79, currentRPM: nil))
     }
 
     func testFullResetDoesNotClearTheLatch() {
@@ -133,7 +133,7 @@ final class FanControlCoreTests: XCTestCase {
         core.didSetManual()
         core.temperatureTick(maxCelsius: 98)
         core.didResetAll()   // the app's reclaim retry sends resetAllFans too
-        XCTAssertFalse(core.mayEngageManual(maxCelsius: 98))
+        XCTAssertFalse(core.mayEngageManual(rpm: 3000, maxCelsius: 98, currentRPM: nil))
     }
 
     /// Choosing Automatic with the fast-re-engage hold keeps the controller unlocked
@@ -143,7 +143,7 @@ final class FanControlCoreTests: XCTestCase {
         core.didSetManual()
         core.temperatureTick(maxCelsius: 98)
         core.didAutoWithHold()
-        XCTAssertFalse(core.mayEngageManual(maxCelsius: 90))
+        XCTAssertFalse(core.mayEngageManual(rpm: 3000, maxCelsius: 90, currentRPM: nil))
     }
 
     func testTripOnHeldUnlockLatchesNothing() {
@@ -172,8 +172,153 @@ final class FanControlCoreTests: XCTestCase {
         let (core, _) = makeCore()
         var reads = 0
         func read() -> Double? { reads += 1; return 120 }
-        XCTAssertTrue(core.mayEngageManual(maxCelsius: read()))
+        var rpmReads = 0
+        func rpm() -> Double? { rpmReads += 1; return 5000 }
+        XCTAssertTrue(core.mayEngageManual(rpm: 3000, maxCelsius: read(), currentRPM: rpm()))
         XCTAssertEqual(reads, 0, "the common path must not cost an SMC temperature sweep")
+        XCTAssertEqual(rpmReads, 0, "nor a fan speed read")
+    }
+
+    // MARK: - Re-take after a trip (#586): a pin faster than macOS takes the fans back
+
+    /// The injected clock: tests move it, the core never reads the real time.
+    private final class Clock {
+        var t = ContinuousClock.now
+        func advance(_ s: Double) { t = t.advanced(by: .seconds(s)) }
+    }
+
+    /// A core whose 3103 RPM pin on fan 0 just tripped the kill-switch at `clock.t`.
+    private func makeTripped(_ clock: Clock) -> FanControlCore {
+        let core = FanControlCore(reset: { true }, maxCelsius: { nil }, now: { clock.t })
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 50, currentRPM: nil))
+        XCTAssertEqual(core.supervise(maxCelsius: 96, isManualEngaged: { _ in true }), .fired)
+        XCTAssertTrue(core.tripLatched)
+        return core
+    }
+
+    func testSettleWindowIsTenSeconds() {
+        XCTAssertEqual(FanControlCore.reTakeSettleSeconds, 10)
+    }
+
+    func testInsideTheSettleWindowEvenAFasterPinIsRefused() {
+        let clock = Clock(), core = makeTripped(clock)
+        clock.advance(FanControlCore.reTakeSettleSeconds - 0.01)
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500))
+        XCTAssertEqual(core.lastRefusal, .settling)
+        XCTAssertFalse(core.manualHeld, "refused engage arms nothing")
+        XCTAssertNil(core.holder)
+        XCTAssertTrue(core.heldTargets.isEmpty)
+    }
+
+    /// The operator's case: macOS runs the fans at ~2500 on a hot lap, the pin is 3103.
+    func testAfterTheWindowAPinAtOrAboveMacOSTakesTheFansBackAndKeepsTheLatch() {
+        let clock = Clock(), core = makeTripped(clock)
+        clock.advance(FanControlCore.reTakeSettleSeconds)
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500))
+        XCTAssertTrue(core.manualRequest(index: 1, rpm: 2500, holder: idA, maxCelsius: 96, currentRPM: 2500),
+                      "equal to macOS's speed is not below it")
+        XCTAssertTrue(core.tripLatched, "a re-take does not re-arm: the next engage is judged again")
+        XCTAssertTrue(core.manualHeld)
+        XCTAssertEqual(core.holder, idA)
+        XCTAssertEqual(core.heldTargets, [0: 3103, 1: 2500])
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 2000, holder: idA, maxCelsius: 96, currentRPM: 3103),
+                       "still latched: lowering under the running speed is refused")
+        XCTAssertEqual(core.heldTargets[0], 3103, "a refusal leaves the held pin alone")
+    }
+
+    func testAfterTheWindowAPinBelowMacOSIsRefusedUntilReArm() {
+        let clock = Clock(), core = makeTripped(clock)
+        clock.advance(60)
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 2400, holder: idA, maxCelsius: 96, currentRPM: 2500))
+        XCTAssertEqual(core.lastRefusal, .belowMacOS)
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 2400, holder: idA, maxCelsius: FanControlCore.reArmCelsius,
+                                          currentRPM: 2500), "inside the band: not re-armed yet")
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: .nan, holder: idA, maxCelsius: 96, currentRPM: 2500))
+        XCTAssertFalse(core.manualHeld)
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 2400, holder: idA, maxCelsius: 79, currentRPM: 2500))
+        XCTAssertFalse(core.tripLatched, "below re-arm clears the latch, as before")
+        XCTAssertNil(core.lastRefusal)
+    }
+
+    func testUnreadableTemperatureOrSpeedWhileLatchedRefuses() {
+        let clock = Clock(), core = makeTripped(clock)
+        clock.advance(60)
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: nil))
+        XCTAssertEqual(core.lastRefusal, .unreadable)
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: .nan))
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: nil, currentRPM: 2500))
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: .nan, currentRPM: 2500))
+        XCTAssertEqual(core.lastRefusal, .unreadable)
+        XCTAssertFalse(core.manualHeld)
+        XCTAssertTrue(core.tripLatched)
+    }
+
+    func testBelowReArmIsAllowedEvenInsideTheWindow() {
+        let clock = Clock(), core = makeTripped(clock)
+        clock.advance(1)
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 1500, holder: idA, maxCelsius: 79, currentRPM: 2500))
+        XCTAssertFalse(core.tripLatched)
+    }
+
+    func testASecondTripRestartsTheWindow() {
+        let clock = Clock(), core = makeTripped(clock)
+        clock.advance(FanControlCore.reTakeSettleSeconds)
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500))
+        clock.advance(30)   // the daemon's next supervision tick, still hot
+        XCTAssertEqual(core.supervise(maxCelsius: 96, isManualEngaged: { _ in true }), .fired)
+        XCTAssertNil(core.lastRefusal, "a new trip is a new episode: its first refusal logs again")
+        clock.advance(FanControlCore.reTakeSettleSeconds - 0.01)
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500))
+        XCTAssertEqual(core.lastRefusal, .settling)
+        clock.advance(0.01)
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500))
+    }
+
+    /// The pre-#209 loop: the app re-pinned ~1 s after every trip. With an app that
+    /// asks every second, no re-pin lands sooner than the window after a trip.
+    func testTripHandbackRepinCycleCannotRunFasterThanTheWindow() {
+        let clock = Clock()
+        let core = FanControlCore(reset: { true }, maxCelsius: { nil }, now: { clock.t })
+        var engagedAt: Double?, trips: [Double] = [], engages: [Double] = []
+        for second in 0..<300 {
+            let t = Double(second)
+            if !core.manualHeld,
+               core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500) {
+                engagedAt = t; engages.append(t)
+            } else if let e = engagedAt, t - e >= 30,   // the daemon's timer: first tick 30 s after arming
+                      core.supervise(maxCelsius: 96, isManualEngaged: { _ in true }) == .fired {
+                trips.append(t); engagedAt = nil
+            }
+            clock.advance(1)
+        }
+        XCTAssertGreaterThan(trips.count, 3, "the cycle runs: Prosper keeps taking the fans back")
+        for trip in trips {
+            let next = engages.first { $0 > trip }
+            XCTAssertGreaterThanOrEqual((next ?? .infinity) - trip, FanControlCore.reTakeSettleSeconds)
+        }
+    }
+
+    /// The daemon logs a refusal only when its reason changes: retries keep the reason.
+    func testRefusalReasonIsStableAcrossRetries() {
+        let clock = Clock(), core = makeTripped(clock)
+        for _ in 0..<3 { _ = core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500) }
+        XCTAssertEqual(core.lastRefusal, .settling)
+        clock.advance(60)
+        _ = core.manualRequest(index: 0, rpm: 2000, holder: idA, maxCelsius: 96, currentRPM: 2500)
+        XCTAssertEqual(core.lastRefusal, .belowMacOS)
+        XCTAssertTrue(core.manualRequest(index: 1, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500))
+        XCTAssertEqual(core.lastRefusal, .belowMacOS, "a re-take between refusals does not re-log the same reason")
+    }
+
+    /// A cold start into a chassis at the cut-off latches and starts the window then.
+    func testColdStartIntoHotChassisStartsTheWindow() {
+        let clock = Clock()
+        let core = FanControlCore(reset: { true }, maxCelsius: { 96 }, now: { clock.t })
+        core.reclaimAtStartup()
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500))
+        clock.advance(FanControlCore.reTakeSettleSeconds)
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3103, holder: idA, maxCelsius: 96, currentRPM: 2500))
+        XCTAssertFalse(core.manualRequest(index: 1, rpm: 2000, holder: idA, maxCelsius: 96, currentRPM: 2500))
     }
 
     // MARK: - Held unlock (fast re-engage) — same supervision as a manual pin
@@ -239,14 +384,14 @@ final class FanControlCoreTests: XCTestCase {
     /// setFanManualRPM must go through the trip latch and record nothing when refused.
     func testManualRequestIsGatedByTheLatch() {
         let (core, _) = makeCore()
-        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50))
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil))
         XCTAssertEqual(core.supervise(maxCelsius: 98, isManualEngaged: { _ in true }), .fired)
-        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3000, holder: idB, maxCelsius: 90),
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3000, holder: idB, maxCelsius: 90, currentRPM: nil),
                        "latched: a re-pin into a hot chassis is refused")
         XCTAssertFalse(core.manualHeld, "refused engage arms nothing")
         XCTAssertNil(core.holder)
         XCTAssertTrue(core.heldTargets.isEmpty)
-        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3000, holder: idB, maxCelsius: 79))
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3000, holder: idB, maxCelsius: 79, currentRPM: nil))
         XCTAssertTrue(core.manualHeld)
         XCTAssertEqual(core.holder, idB)
         XCTAssertEqual(core.heldTargets, [0: 3000])
@@ -257,7 +402,7 @@ final class FanControlCoreTests: XCTestCase {
         let (core, resets) = makeCore()
         XCTAssertEqual(core.supervise(maxCelsius: 120, isManualEngaged: { _ in true }), .stop,
                        "nothing held: stop the timer")
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
         XCTAssertEqual(core.supervise(maxCelsius: 90, isManualEngaged: { _ in true }), .keep)
         XCTAssertEqual(core.supervise(maxCelsius: 98, isManualEngaged: { _ in true }), .fired)
         XCTAssertEqual(resets(), 1)
@@ -269,8 +414,8 @@ final class FanControlCoreTests: XCTestCase {
 
     func testSuperviseReassertsOnceThenReleases() {
         let (core, _) = makeCore()
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
-        _ = core.manualRequest(index: 1, rpm: 3100, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
+        _ = core.manualRequest(index: 1, rpm: 3100, holder: idA, maxCelsius: 50, currentRPM: nil)
         XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { $0 == 0 }), .reassert([1]))
         XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in true }), .keep,
                        "healthy tick refills the budget")
@@ -286,7 +431,7 @@ final class FanControlCoreTests: XCTestCase {
     /// so the next tick must release again instead of going quiet.
     func testFailedReleaseResetIsRetriedNextTick() {
         let (core, _) = makeCore()
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
         XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .reassert([0]))
         XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .release([0]))
         XCTAssertTrue(core.manualHeld)
@@ -301,7 +446,7 @@ final class FanControlCoreTests: XCTestCase {
     func testReleaseAllDisarmsOnlyOnASuccessfulReset() {
         var resetWorks = false
         let core = FanControlCore(reset: { resetWorks }, maxCelsius: { nil })
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
         XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .reassert([0]))
         XCTAssertEqual(core.supervise(maxCelsius: 60, isManualEngaged: { _ in false }), .release([0]))
         XCTAssertFalse(core.releaseAll())
@@ -319,18 +464,18 @@ final class FanControlCoreTests: XCTestCase {
         let hot = FanControlCore(reset: { true }, maxCelsius: { 100 })
         hot.reclaimAtStartup()
         XCTAssertTrue(hot.tripLatched)
-        XCTAssertFalse(hot.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 90))
+        XCTAssertFalse(hot.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 90, currentRPM: nil))
         let cool = FanControlCore(reset: { true }, maxCelsius: { 60 })
         cool.reclaimAtStartup()
         XCTAssertFalse(cool.tripLatched)
-        XCTAssertTrue(cool.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 60))
+        XCTAssertTrue(cool.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 60, currentRPM: nil))
     }
 
     /// #221 (5): setFanAuto on the last pinned fan (the per-client release #219 took
     /// out) must not clear a standing trip latch.
     func testAutoAppliedKeepsTheLatch() {
         let (core, _) = makeCore()
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
         XCTAssertEqual(core.supervise(maxCelsius: 98, isManualEngaged: { _ in true }), .fired)
         XCTAssertTrue(core.autoApplied(index: 0, holdUnlock: true, hasFtst: true))
         XCTAssertTrue(core.tripLatched)
@@ -347,7 +492,7 @@ final class FanControlCoreTests: XCTestCase {
         core.reclaimAtStartup(maxCelsius: FanControlCore.killSwitchCelsius)
         XCTAssertEqual(resets(), 1)
         XCTAssertTrue(core.tripLatched)
-        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 90))
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 90, currentRPM: nil))
         core.reclaimAtStartup(maxCelsius: FanControlCore.killSwitchCelsius - 0.1)
         XCTAssertFalse(core.tripLatched)
         core.reclaimAtStartup(maxCelsius: .nan)
@@ -370,7 +515,7 @@ final class FanControlCoreTests: XCTestCase {
     /// later drop or tick has nothing to act on.
     func testResetAllClearsHolderAndTargets() {
         let (core, resets) = makeCore()
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
         core.didResetAll()
         XCTAssertNil(core.holder)
         XCTAssertTrue(core.heldTargets.isEmpty)
@@ -383,8 +528,8 @@ final class FanControlCoreTests: XCTestCase {
     /// with the hold kept arms supervision of the unlock.
     func testAutoAppliedDropsTargetAndHoldsUnlockOnLastFan() {
         let (core, _) = makeCore()
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
-        _ = core.manualRequest(index: 1, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
+        _ = core.manualRequest(index: 1, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
         var ftstReads = 0
         func ftst() -> Bool { ftstReads += 1; return true }
         XCTAssertFalse(core.autoApplied(index: 0, holdUnlock: true, hasFtst: ftst()))
@@ -399,11 +544,11 @@ final class FanControlCoreTests: XCTestCase {
 
     func testAutoAppliedWithoutHoldOrFtstArmsNothing() {
         let (core, _) = makeCore()
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
         XCTAssertFalse(core.autoApplied(index: 0, holdUnlock: false, hasFtst: true))
         XCTAssertFalse(core.unlockHeld)
         XCTAssertTrue(core.manualHeld, "single-fan auto does not disarm the crash reset")
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
         XCTAssertFalse(core.autoApplied(index: 0, holdUnlock: true, hasFtst: false))
         XCTAssertFalse(core.unlockHeld)
     }
@@ -411,7 +556,7 @@ final class FanControlCoreTests: XCTestCase {
     /// Only the holder's drop resets; the lid connection closing is a no-op.
     func testOnlyTheHoldersDropResets() {
         let (core, resets) = makeCore()
-        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50)
+        _ = core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, currentRPM: nil)
         core.connectionClosed(idB)
         XCTAssertEqual(resets(), 0)
         XCTAssertTrue(core.manualHeld)
