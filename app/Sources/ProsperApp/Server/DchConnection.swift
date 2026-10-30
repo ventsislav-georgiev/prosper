@@ -25,15 +25,34 @@ enum DchFrame {
     static let machineInfo: UInt8 = 0x08 // (empty) → machineInfoResp; identity handshake
     static let snapshot: UInt8 = 0x09 // (empty) → snapshotResp; authoritative screen (on an attached conn)
     static let putClipboard: UInt8 = 0x0a // raw image bytes → this Mac's clipboard, then ok
+    // #591: the island's History and its controls (DchControlOps). Each gets exactly one reply.
+    static let history: UInt8 = 0x0b  // (empty) → historyResp | error
+    static let revive: UInt8  = 0x0c  // {name} | {all: true} → ok {names} | error
+    static let restart: UInt8 = 0x0d  // {names: [..]} | {all: true} → ok {names} | error
+    static let stop: UInt8    = 0x0e  // {names: [..]} → ok {names} | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
     static let listResp: UInt8 = 0x11 // [{name, alias?, state?}]
     static let exit: UInt8     = 0x12 // {code}
     static let error: UInt8    = 0x13 // {message}
-    static let ok: UInt8       = 0x14 // (empty) ack for kill
-    static let machineInfoResp: UInt8 = 0x18 // {device_id, hostname, wakeId?}
+    static let ok: UInt8       = 0x14 // (empty) ack for kill, rename, putClipboard; {names} for #591's verbs
+    static let machineInfoResp: UInt8 = 0x18 // {device_id, hostname, wakeId?, ops}
     static let snapshotResp: UInt8 = 0x19 // raw ANSI screen from dch's VT mirror (empty = unavailable)
+    static let historyResp: UInt8 = 0x1b // [{name, alias?, end, last_seen, started, runtime, cwd?, command?, takes}]
+
+    /// #591: the requests beyond the original set this Mac answers, in machineInfoResp's
+    /// "ops" (an older phone ignores the key; a newer one hides what an older Mac lacks).
+    static let ops = ["history", "revive", "restart", "stop"]
+
+    /// The identity handshake's payload. Read-only, no secret: the wake config itself
+    /// comes authenticated from the server. wakeId is nil until remote wake was set
+    /// up while signed in.
+    static func machineInfo(deviceID: String, hostname: String, wakeId: String?) -> [String: Any] {
+        var info: [String: Any] = ["device_id": deviceID, "hostname": hostname, "ops": ops]
+        if let wakeId { info["wakeId"] = wakeId }
+        return info
+    }
 
     /// Encode one frame. DATA payloads can be large; control payloads are tiny.
     static func encode(_ type: UInt8, _ payload: [UInt8]) -> Data {
@@ -68,6 +87,10 @@ final class DchConnection: @unchecked Sendable {
 
     /// The session this connection attached to, once it has one.
     var attachedSession: String? { sessionName }
+    /// #591: the history and control verbs' dch, server-wide (DchControlOps.live).
+    var ops = DchControlOps.live
+    /// Test seam (#591): frames go here instead of the socket.
+    var sendOverride: (@Sendable (Data) -> Void)?
 
     init(conn: NWConnection, queue: DispatchQueue, log: Logger,
          onClose: @escaping (ObjectIdentifier) -> Void,
@@ -124,10 +147,11 @@ final class DchConnection: @unchecked Sendable {
     }
 
     private func send(_ frame: Data) {
+        if let sendOverride { return sendOverride(frame) }
         conn.send(content: frame, completion: .contentProcessed { _ in })
     }
 
-    private func handle(type: UInt8, payload: Data) {
+    func handle(type: UInt8, payload: Data) {
         switch type {
         case DchFrame.list:
             let rows = DchCommand.listSessions().map { row -> [String: Any] in
@@ -173,14 +197,20 @@ final class DchConnection: @unchecked Sendable {
             // app bind this connection to a stable machine + its wake id, so it can
             // wake the right Mac later regardless of which address was dialed. The
             // wake config itself (enabled/cadence) is fetched authenticated from the
-            // server; only non-secret identity goes over the tailnet. wakeId is nil
-            // until remote-wake was configured while signed in.
-            var info: [String: Any] = [
-                "device_id": SupporterStore.deviceID(),
-                "hostname": SupporterStore.deviceName(),
-            ]
-            if let wakeId = LiveExtensionHostServices.currentWakeId { info["wakeId"] = wakeId }
-            send(DchFrame.encode(DchFrame.machineInfoResp, json: info))
+            // server; only non-secret identity goes over the tailnet.
+            send(DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
+                deviceID: SupporterStore.deviceID(), hostname: SupporterStore.deviceName(),
+                wakeId: LiveExtensionHostServices.currentWakeId)))
+        case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop:
+            // #591: off this queue, unlike kill: the reads fork dch and a restart can
+            // take minutes, while every connection (and each attached pty's send
+            // completions) runs on this one queue. The one reply comes back here.
+            let ops = ops
+            DispatchQueue.global(qos: .userInitiated).async {
+                ops.handle(type, payload) { frame in
+                    self.queue.async { if !self.closed { self.send(frame) } }
+                }
+            }
         default:
             break
         }
@@ -288,6 +318,260 @@ final class DchConnection: @unchecked Sendable {
             send(DchFrame.encode(DchFrame.error, json: ["message": "\(error)"]))
             close()
         }
+    }
+}
+
+// MARK: - Phone history and session controls (#591)
+
+/// The phone's History tab and its Resume, Restart and Stop: the same sessions,
+/// binary, gates, env and argv helpers as Agent Island's own buttons. A wire name
+/// reaches argv only after it matched exactly one live session (restart, stop) or
+/// history record (revive); argv comes only from AgentIsland's *Args helpers, run
+/// without a shell. Every request gets exactly one reply. Seamed: no test runs dch.
+struct DchControlOps: Sendable {
+    /// The island's socket dirs.
+    var dirs: @Sendable () -> [String] = { AgentIsland.liveSocketDirs() }
+    /// The island's control binary; none under XCTest, so an unstubbed test is refused.
+    var binary: @Sendable () -> DchCommand.Binary? = {
+        NSClassFromString("XCTestCase") == nil ? DchCommand.controlDch() : nil
+    }
+    /// One bounded read: --ls-json/-lj with the island's dch (path nil), --history with the control binary.
+    var read: @Sendable (_ args: [String], _ env: [String: String], _ path: String?) -> Data? = {
+        DchCommand.runIsland(args: $0, env: $1, path: $2)
+    }
+    /// A verb's env for one dir, as the island's controlEnv (the user's PATH).
+    var env: @Sendable (_ dir: String) -> [String: String] = { dir in
+        AgentIsland.controlEnv(dir: dir, login: NSClassFromString("XCTestCase") == nil ? LoginPath.read() : nil)
+    }
+    /// Bounded like the island's (one SIGTERM on expiry). ponytail: its own runner, so
+    /// a phone job and an island job on the same row are not excluded from each other;
+    /// share the island's if that ever bites.
+    var runner = DchActionRunner()
+    var now: @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }
+    /// After a verb: the island re-reads its history, as after its own Resume and Stop
+    /// (its live rows follow on the next poll tick).
+    var refresh: @Sendable () -> Void = {
+        DispatchQueue.main.async { MainActor.assumeIsolated { AgentIslandController.shared.refreshHistory() } }
+    }
+
+    /// Server-wide: one connection per request, so the runner's busy check must outlive it.
+    static let live = DchControlOps()
+
+    typealias Reply = @Sendable (Data) -> Void
+
+    enum Request: Equatable {
+        case names([String])
+        case all
+    }
+
+    /// `type`'s work, off the server queue. `reply` gets one frame.
+    func handle(_ type: UInt8, _ payload: Data, reply: @escaping Reply) {
+        let o = payload.isEmpty ? [:] : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+        guard let o else { return reply(Self.error("malformed request: not a JSON object")) }
+        switch type {
+        case DchFrame.history: history(reply)
+        case DchFrame.revive: revive(o, reply)
+        case DchFrame.restart: restart(o, reply)
+        case DchFrame.stop: stop(o, reply)
+        default: reply(Self.error("unknown request"))
+        }
+    }
+
+    static func error(_ message: String) -> Data { DchFrame.encode(DchFrame.error, json: ["message": message]) }
+
+    /// `{"<key>": …}` or `{"all": true}`, never both. "name" is one non-empty string,
+    /// "names" a non-empty array of them (deduplicated). nil for anything else.
+    static func request(_ o: [String: Any], key: String, allowAll: Bool) -> Request? {
+        switch (o[key], o["all"]) {
+        case (nil, let all?):
+            // JSON true only: JSONSerialization hands 1 over as true too.
+            guard allowAll, let n = all as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID(), n.boolValue else { return nil }
+            return .all
+        case (let v?, nil):
+            let raw: [Any] = key == "name" ? [v] : (v as? [Any] ?? [])
+            var names: [String] = []
+            for e in raw {
+                guard let s = e as? String, !s.isEmpty else { return nil }
+                if !names.contains(s) { names.append(s) }
+            }
+            return names.isEmpty ? nil : .names(names)
+        default:
+            return nil
+        }
+    }
+
+    /// historyResp's object for one record. Seconds are whole; a value no Int holds reads 0.
+    static func historyWire(_ r: DchHistoryRecord, now: TimeInterval) -> [String: Any] {
+        func secs(_ t: TimeInterval) -> Int { t.isFinite && abs(t) < 1e15 ? Int(t) : 0 }
+        var o: [String: Any] = ["name": r.name, "end": r.end, "last_seen": secs(r.lastSeen), "started": secs(r.started),
+                                "runtime": max(0, secs(r.lastSeen - r.started)),
+                                "takes": AgentIsland.reviveAllTakes(r, now: now)]
+        if !r.alias.isEmpty { o["alias"] = r.alias }
+        if !r.cwd.isEmpty { o["cwd"] = r.cwd }
+        if !r.argv.isEmpty { o["command"] = r.argv }
+        return o
+    }
+
+    private func sessions() -> [AgentSession] {
+        let read = read
+        return AgentIsland.list(dirs: dirs()) { read($0, $1, nil) }
+    }
+
+    /// The island's gate: the control binary against `minimum` and every live
+    /// master. No binary refuses before any listing, so an unstubbed test forks nothing.
+    private func gated(_ verb: String, minimum: [Int], _ reply: Reply) -> (path: String, live: [AgentSession])? {
+        guard let bin = binary() else {
+            reply(Self.error("\(verb) needs dch \(DchCommand.versionString(minimum))"))
+            return nil
+        }
+        let live = sessions(), gate = DchCommand.gate(bin, masters: live.map(\.version), minimum: minimum)
+        guard case .ok(let path) = gate else {
+            reply(Self.error("\(verb) \(gate.refusal ?? "refused")"))
+            return nil
+        }
+        return (path, live)
+    }
+
+    private func records(_ path: String) -> [DchHistoryRecord] {
+        let read = read
+        return AgentIsland.history(dirs: dirs()) { read($0, $1, path) }
+    }
+
+    /// The History tab's rows: newest first, capped, with the binary the island reads them with.
+    private func history(_ reply: Reply) {
+        let gate = DchCommand.gate(binary(), masters: [], minimum: AgentIsland.controlMinimum)
+        guard case .ok(let path) = gate else { return reply(Self.error("History \(gate.refusal ?? "")")) }
+        let t = now()
+        reply(DchFrame.encode(DchFrame.historyResp,
+                              json: records(path).prefix(AgentIsland.historyCap).map { Self.historyWire($0, now: t) }))
+    }
+
+    /// The island's Resume (a record by name, `--as` a free name when it is live
+    /// again) or Resume interrupted (`--revive --all` in each dir with history).
+    private func revive(_ o: [String: Any], _ reply: @escaping Reply) {
+        guard let req = Self.request(o, key: "name", allowAll: true) else {
+            return reply(Self.error("malformed revive request: send {\"name\": \"…\"} or {\"all\": true}"))
+        }
+        guard case let (path, live)? = gated("Resume", minimum: AgentIsland.controlMinimum, reply) else { return }
+        let history = records(path)
+        switch req {
+        case .all:
+            let jobs = Set(history.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.reviveAllArgs) }
+            run(jobs, path: path, bound: nil, .resume, named: false, reply)
+        case .names(let names):
+            let name = names[0], matches = history.filter { $0.name == name }
+            guard matches.count == 1, let r = matches.first else {
+                return reply(Self.error(matches.isEmpty ? "\(name): no history record of that name"
+                                                        : "\(name): in more than one socket dir"))
+            }
+            let liveNames = Set(live.filter { $0.key.dir == r.key.dir }.map(\.name))
+            let others = Set(history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
+            run([(r.key, AgentIsland.reviveArgs(r, live: liveNames, records: others))], path: path, bound: nil, .resume,
+                named: true, reply)
+        }
+    }
+
+    /// The island's Restart agent per name (`-f`), or Restart all per dir with a live session.
+    private func restart(_ o: [String: Any], _ reply: @escaping Reply) {
+        guard let req = Self.request(o, key: "names", allowAll: true) else {
+            return reply(Self.error("malformed restart request: send {\"names\": [\"…\"]} or {\"all\": true}"))
+        }
+        guard case let (path, live)? = gated("Restart", minimum: AgentIsland.restartMinimum, reply) else { return }
+        switch req {
+        case .all:
+            let jobs = Set(live.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.restartAllArgs) }
+            run(jobs, path: path, bound: DchActionRunner.restartBound, .restart, named: false, reply)
+        case .names(let names):
+            switch Self.resolve(names, live: live) {
+            case .failure(let why): reply(Self.error(why.message))
+            case .success(let rows):
+                run(rows.map { ($0.key, AgentIsland.restartArgs($0.name)) }, path: path, bound: DchActionRunner.restartBound,
+                    .restart, named: true, reply)
+            }
+        }
+    }
+
+    /// The island's Stop, by name only (never `--all`): one `--stop` per dir, on masters that can stop.
+    private func stop(_ o: [String: Any], _ reply: @escaping Reply) {
+        guard let req = Self.request(o, key: "names", allowAll: false), case .names(let names) = req else {
+            return reply(Self.error("malformed stop request: send {\"names\": [\"…\"]}"))
+        }
+        guard case let (path, live)? = gated("Stop", minimum: AgentIsland.restartMinimum, reply) else { return }
+        switch Self.resolve(names, live: live) {
+        case .failure(let why): reply(Self.error(why.message))
+        case .success(let rows):
+            if let old = rows.first(where: { !AgentIsland.canStop($0) }) {
+                return reply(Self.error("\(old.name): restart this session first, its dch cannot stop"))
+            }
+            let jobs = Dictionary(grouping: rows, by: \.key.dir).sorted { $0.key < $1.key }
+                .map { (AgentSessionKey(dir: $0.key, name: ""), AgentIsland.stopArgs($0.value.map(\.name))) }
+            run(jobs, path: path, bound: DchActionRunner.restartBound, .stop, named: true, reply)
+        }
+    }
+
+    struct Refusal: Error { let message: String }
+
+    /// Each name's one live session, in request order; refused whole when any name
+    /// is not live, or is live in two socket dirs (the wire carries no dir).
+    static func resolve(_ names: [String], live: [AgentSession]) -> Result<[AgentSession], Refusal> {
+        var rows: [AgentSession] = []
+        for n in names {
+            let m = live.filter { $0.name == n }
+            guard m.count == 1 else {
+                return .failure(Refusal(message: m.isEmpty ? "\(n): no live session of that name" : "\(n): live in more than one socket dir"))
+            }
+            rows.append(m[0])
+        }
+        return .success(rows)
+    }
+
+    private final class Results: @unchecked Sendable {
+        let lock = NSLock()
+        var all: [DchActionResult?]
+        init(_ n: Int) { all = Array(repeating: nil, count: n) }
+    }
+
+    /// Runs the jobs at once on the runner (a busy key reads as a failure), then
+    /// pokes the island and replies once, with every job's output in job order.
+    private func run(_ jobs: [(AgentSessionKey, [String])], path: String, bound: TimeInterval?, _ verb: AgentIsland.Verb,
+                     named: Bool, _ reply: @escaping Reply) {
+        let group = DispatchGroup(), results = Results(jobs.count), env = env
+        for (i, (key, args)) in jobs.enumerated() {
+            group.enter()
+            let started = runner.start(key, path: path, args: args, bound: bound, env: { env(key.dir) }) { r in
+                results.lock.withLock { results.all[i] = r }
+                group.leave()
+            }
+            if !started {
+                results.lock.withLock { results.all[i] = DchActionResult(status: -1, text: ["dch: busy with an earlier request"]) }
+                group.leave()
+            }
+        }
+        let refresh = refresh, ran = !jobs.isEmpty
+        group.notify(queue: .global(qos: .utility)) {
+            let rs = results.lock.withLock { results.all.compactMap { $0 } }
+            let merged = DchActionResult(status: rs.first { $0.status != 0 }?.status ?? 0, json: rs.flatMap(\.json),
+                                         text: rs.flatMap(\.text), stopped: rs.contains { $0.stopped })
+            if ran { refresh() }
+            reply(Self.answer(merged, verb, named: named))
+        }
+    }
+
+    /// ok {"names"}: each session dch reports ok (a revive's under its `as` name),
+    /// in dch's order. A named request with none ok, or a non-zero exit with none
+    /// ok, is an error with dch's own words; so is a job its bound cancelled.
+    static func answer(_ r: DchActionResult, _ verb: AgentIsland.Verb, named: Bool) -> Data {
+        if r.stopped { return error("\(verb.rawValue) cancelled: no answer in \(verb.minutes)m") }
+        var names: [String] = []
+        for o in r.json where o.result == "ok" && (o.isFinal || o.isMaster) {
+            let n = o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name
+            if !names.contains(n) { names.append(n) }
+        }
+        if names.isEmpty, named || r.status != 0 {
+            let why = r.json.last { ($0.isFinal || $0.isMaster) && $0.result != "ok" }.map { AgentIsland.finalText($0, verb) }
+            return error(why ?? (r.status != 0 ? "\(verb.rawValue) \(AgentIsland.failedText(r))" : "nothing \(verb.done.lowercased())"))
+        }
+        return DchFrame.encode(DchFrame.ok, json: ["names": names])
     }
 }
 
