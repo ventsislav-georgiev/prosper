@@ -31,6 +31,8 @@ tag from the now-released section and put it on the new top draft.
   as the island's own buttons, on the sessions the phone lists. It only acts on a
   session that is live or a record in History, and a row busy on the Mac is busy on
   the phone too. The phone half ships in the iOS app.
+- Ships dch 1.24.2, whose session pickers (`dch -l`, the rename picker and the headless
+  listings) sort alphabetically by the name they show instead of in folder order.
 
 ## v2.161.0
 

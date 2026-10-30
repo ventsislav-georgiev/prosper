@@ -237,7 +237,7 @@ jobs:
         # when DCH_VERSION (what dch --version prints) is not AC_INIT's value;
         # nothing in dch itself runs it (#181, #448).
         env:
-          DCH_TAG: v1.24.1
+          DCH_TAG: v1.24.2
           # dch's configure sets no deployment target, so clang targets the runner
           # SDK: every dch from v2.156.0-beta.5 to v2.158.0 was minos 27.0 inside a
           # 14.0 app and dyld refused it on macOS 14-26 (#447). Keep this equal to
