@@ -380,6 +380,7 @@ enum Preferences {
         static let agentIslandShowTasksDone = "agentIslandShowTasksDone"
         static let agentIslandShowInProgress = "agentIslandShowInProgress"
         static let agentIslandShowQueued = "agentIslandShowQueued"
+        static let agentIslandShowSessionName = "agentIslandShowSessionName"   // #587
         // #571: the list order (AgentIslandSort) and the Sessions / Sidekicks
         // tabs; per Mac, so not in SyncedKeys.
         static let agentIslandSort = "agentIslandSort"
@@ -1083,7 +1084,8 @@ enum Preferences {
                 merged: on(Keys.agentIslandShowMerged, d.merged),
                 tasksDone: on(Keys.agentIslandShowTasksDone, d.tasksDone),
                 inProgress: on(Keys.agentIslandShowInProgress, d.inProgress),
-                queued: on(Keys.agentIslandShowQueued, d.queued))
+                queued: on(Keys.agentIslandShowQueued, d.queued),
+                sessionName: on(Keys.agentIslandShowSessionName, d.sessionName))
         }
         set {
             let old = agentIslandRowDetails
@@ -1094,6 +1096,7 @@ enum Preferences {
             put(newValue.tasksDone, old.tasksDone, Keys.agentIslandShowTasksDone)
             put(newValue.inProgress, old.inProgress, Keys.agentIslandShowInProgress)
             put(newValue.queued, old.queued, Keys.agentIslandShowQueued)
+            put(newValue.sessionName, old.sessionName, Keys.agentIslandShowSessionName)
         }
     }
 

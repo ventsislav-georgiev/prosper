@@ -2017,7 +2017,8 @@ final class AgentIslandTests: XCTestCase {
     // MARK: - Row details (#534)
 
     private static let rowDetailKeys = ["agentIslandShowAgents", "agentIslandShowOpenPRs", "agentIslandShowMerged",
-                                        "agentIslandShowTasksDone", "agentIslandShowInProgress", "agentIslandShowQueued"]
+                                        "agentIslandShowTasksDone", "agentIslandShowInProgress", "agentIslandShowQueued",
+                                        "agentIslandShowSessionName"]
 
     /// Clears the six keys in the scratch Preferences domain for one test and
     /// puts back whatever was there.
@@ -2055,6 +2056,57 @@ final class AgentIslandTests: XCTestCase {
         Preferences.agentIslandRowDetails = AgentIslandRowDetails(agents: false, openPRs: false, merged: false)
         XCTAssertEqual(Preferences.agentIslandRowDetails,
                        AgentIslandRowDetails(agents: false, openPRs: false, merged: false))
+    }
+
+    /// #587: Session name is off by default and on in `.all`; per Mac; unset reads
+    /// false, a set writes only the keys that changed.
+    func testSessionNameRowDetailDefaultsOffAndRoundTrips() {
+        clearRowDetailKeys()
+        XCTAssertFalse(AgentIslandRowDetails().sessionName, "off by default")
+        XCTAssertTrue(AgentIslandRowDetails.all.sessionName, "on in .all")
+        XCTAssertFalse(SyncedKeys.isSynced("agentIslandShowSessionName"), "per Mac")
+        XCTAssertFalse(Preferences.agentIslandRowDetails.sessionName, "unset reads false")
+        var d = Preferences.agentIslandRowDetails
+        d.queued = true
+        Preferences.agentIslandRowDetails = d
+        XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandShowSessionName"), "another field leaves the key unwritten")
+        d.sessionName = true
+        Preferences.agentIslandRowDetails = d
+        XCTAssertEqual(Preferences.defaults.object(forKey: "agentIslandShowSessionName") as? Bool, true)
+        XCTAssertTrue(Preferences.agentIslandRowDetails.sessionName, "set true reads true")
+        XCTAssertEqual(Preferences.agentIslandRowDetails, d)
+    }
+
+    /// #587: the grey dch name after the state shows only with Session name on and
+    /// an alias; a row with no alias keeps its name as the title either way.
+    @MainActor
+    func testRowDrawsSessionNameOnlyWhenToggledOn() throws {
+        let aliased = session("solution-master-7", .working, activity: 100, alias: "fix auth")
+        let plain = session("solution-master-4", .idle, activity: 100)
+        let on = AgentIslandRowDetails(sessionName: true)
+        XCTAssertNil(AgentIsland.sessionNameLabel(aliased, show: AgentIslandRowDetails()), "default: hidden")
+        XCTAssertEqual(AgentIsland.sessionNameLabel(aliased, show: on), "solution-master-7")
+        XCTAssertEqual(AgentIsland.sessionNameLabel(aliased, show: .all), "solution-master-7")
+        XCTAssertNil(AgentIsland.sessionNameLabel(plain, show: on), "no alias: the title is the name")
+        XCTAssertEqual(plain.title, "solution-master-4", "no alias: the name is still the title")
+        // The drawn row: the toggle changes the aliased row's pixels and never its height
+        // (the name sits on line 2 beside the state). No pixel-equality check: two
+        // renders of one row differ now and then (a solo run failed 1 in 2).
+        func pixels(_ s: AgentSession, _ d: AgentIslandRowDetails) throws -> (Data, Int) {
+            let r = ImageRenderer(content: AgentIslandRow(session: s, now: 112, notice: nil, show: d) {}
+                .frame(width: AgentIslandGeometry.rowTextWidth + 60).background(Color.black))
+            r.scale = 1
+            let cg = try XCTUnwrap(r.cgImage)
+            let data = try XCTUnwrap(cg.dataProvider?.data) as Data
+            return (data, cg.height)
+        }
+        let (aOff, hOff) = try pixels(aliased, AgentIslandRowDetails())
+        let (aOn, hOn) = try pixels(aliased, on)
+        XCTAssertNotEqual(aOff, aOn, "alias != name: the name is drawn only when on")
+        XCTAssertEqual(hOff, hOn, "same height")
+        XCTAssertEqual(CGFloat(hOn), AgentIslandGeometry.height(of: aliased, show: on))
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(aliased, now: 112, show: on),
+                       AgentIsland.rowAccessibilityLabel(aliased, now: 112, show: AgentIslandRowDetails()), "a11y unchanged")
     }
 
     /// Line 2's summary drops each part toggled off; nothing left is nil.

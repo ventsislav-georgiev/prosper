@@ -18,7 +18,14 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.161.0 *(unreleased)*
+## v2.162.0 *(unreleased)*
+
+- **Agent Island: the dch session name is hidden unless you turn it on.** A session with
+  an alias used to show its dch name (like "solution-master-7") in grey after its state.
+  That name is now a Row details option, Session name, off by default. A session without
+  an alias still shows its name as the title.
+
+## v2.161.0
 
 - **Fans: Prosper takes the fans back after the overheat cut-off.** When the Mac reaches
   95 °C while your manual speed is set, Prosper still hands the fans to macOS. Since

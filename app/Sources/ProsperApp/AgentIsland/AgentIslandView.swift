@@ -840,8 +840,8 @@ struct AgentIslandRow: View {
                             Text(notice).foregroundStyle(Color.white.opacity(0.7))
                         } else {
                             Text(session.state.label).foregroundStyle(session.state.color)
-                            if session.title != session.name {
-                                Text(session.name)
+                            if let name = AgentIsland.sessionNameLabel(session, show: show) {
+                                Text(verbatim: name)
                                     .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(Color.white.opacity(0.35))
                             }

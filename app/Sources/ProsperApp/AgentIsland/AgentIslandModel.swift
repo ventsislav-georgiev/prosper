@@ -101,6 +101,7 @@ enum AgentIslandSource: String, CaseIterable {
 /// Row details). Per Mac, never synced. prosper-ios (#533) has the same six
 /// labels and defaults: Agents, Open PRs and Merged on; Tasks done, In progress
 /// and Queued off, so a fresh install draws no task summary on line 2.
+/// #587: Session name (the dch name beside an alias on line 2) is Mac only, off.
 /// The pure functions below take it as a parameter and never read defaults.
 struct AgentIslandRowDetails: Equatable {
     var agents = true
@@ -109,9 +110,10 @@ struct AgentIslandRowDetails: Equatable {
     var tasksDone = false
     var inProgress = false
     var queued = false
+    var sessionName = false
 
     static let all = AgentIslandRowDetails(agents: true, openPRs: true, merged: true,
-                                           tasksDone: true, inProgress: true, queued: true)
+                                           tasksDone: true, inProgress: true, queued: true, sessionName: true)
 }
 
 /// #571: Settings › Agent Island › Sort sessions. Per Mac, never synced.
@@ -216,6 +218,12 @@ enum AgentIsland {
         }
         let none = ["no sessions"] + (history > 0 ? ["\(history) in History"] : [])
         return (["Agent Island"] + (parts.isEmpty ? none : parts)).joined(separator: ", ")
+    }
+
+    /// #587: the grey dch name after the state label: only with Session name on,
+    /// and only beside an alias (with no alias the title already is the name).
+    static func sessionNameLabel(_ s: AgentSession, show d: AgentIslandRowDetails) -> String? {
+        d.sessionName && s.title != s.name ? s.name : nil
     }
 
     static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval, show d: AgentIslandRowDetails = .all) -> String {

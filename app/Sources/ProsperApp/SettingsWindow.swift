@@ -978,6 +978,9 @@ struct AgentIslandRowDetailsSection: View {
             NeonRow("In progress") { Toggle("", isOn: $show.inProgress).labelsHidden() }
             NeonDivider()
             NeonRow("Queued") { Toggle("", isOn: $show.queued).labelsHidden() }
+            NeonDivider()
+            // #587: the dch session name beside an alias; off by default.
+            NeonRow("Session name") { Toggle("", isOn: $show.sessionName).labelsHidden() }
         }
         .onChange(of: show) { _, v in
             Preferences.agentIslandRowDetails = v
