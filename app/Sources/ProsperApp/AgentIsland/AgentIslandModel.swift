@@ -248,11 +248,12 @@ enum AgentIsland {
         historyAccessibilityLabel(r, line2: status ?? end, age: age, cwd: cwd, show: status == nil ? d : AgentIslandRowDetails())
     }
 
+    /// #596 (QA #465 INFO-1): the dch name after the state, as line 2 draws it (#587's rule).
     static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval, show d: AgentIslandRowDetails = .all) -> String {
         let age = age(of: s, now: now)
         let (chips, more) = prChips(s.meta, show: d, budget: .infinity)
         let prs = chips.map(\.fullName).joined(separator: ", ") + (more > 0 ? " and \(more) more pending PR\(more == 1 ? "" : "s")" : "")
-        return [s.title, s.state.label, age.isEmpty ? nil : "\(age) ago", metaSummary(s.meta, show: d), mergedLabel(s.meta, show: d),
+        return [s.title, s.state.label, sessionNameLabel(s, show: d), age.isEmpty ? nil : "\(age) ago", metaSummary(s.meta, show: d), mergedLabel(s.meta, show: d),
                 chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
     }

@@ -964,23 +964,20 @@ private struct SettingsRootView: View {
 struct AgentIslandRowDetailsSection: View {
     @State private var show = Preferences.agentIslandRowDetails
 
+    /// #596 (QA #465 INFO-3): label -> the detail its toggle binds, in drawn order.
+    static let toggles: [(label: String, path: WritableKeyPath<AgentIslandRowDetails, Bool>)] = [
+        ("Agents", \.agents), ("Open PRs", \.openPRs), ("Merged", \.merged), ("Tasks done", \.tasksDone),
+        ("In progress", \.inProgress), ("Queued", \.queued),
+        ("Session name", \.sessionName), // #587: the dch session name beside an alias; off by default.
+    ]
+
     var body: some View {
         // NeonRow + a trailing toggle, as the manifest's own toggle rows above.
         NeonSection("Row details", footer: "What each session row shows besides its title, age and state.") {
-            NeonRow("Agents") { Toggle("", isOn: $show.agents).labelsHidden() }
-            NeonDivider()
-            NeonRow("Open PRs") { Toggle("", isOn: $show.openPRs).labelsHidden() }
-            NeonDivider()
-            NeonRow("Merged") { Toggle("", isOn: $show.merged).labelsHidden() }
-            NeonDivider()
-            NeonRow("Tasks done") { Toggle("", isOn: $show.tasksDone).labelsHidden() }
-            NeonDivider()
-            NeonRow("In progress") { Toggle("", isOn: $show.inProgress).labelsHidden() }
-            NeonDivider()
-            NeonRow("Queued") { Toggle("", isOn: $show.queued).labelsHidden() }
-            NeonDivider()
-            // #587: the dch session name beside an alias; off by default.
-            NeonRow("Session name") { Toggle("", isOn: $show.sessionName).labelsHidden() }
+            ForEach(Self.toggles.indices, id: \.self) { i in
+                if i > 0 { NeonDivider() }
+                NeonRow(Self.toggles[i].label) { Toggle("", isOn: $show[dynamicMember: Self.toggles[i].path]).labelsHidden() }
+            }
         }
         .onChange(of: show) { _, v in
             Preferences.agentIslandRowDetails = v

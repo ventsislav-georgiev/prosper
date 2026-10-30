@@ -1147,6 +1147,7 @@ final class AgentIslandControlsTests: XCTestCase {
             return try XCTUnwrap(try XCTUnwrap(r.cgImage).dataProvider?.data) as Data
         }
         let historyOff = try pixels()
+        XCTAssertEqual(historyOff, try pixels(), "control: same input, same render")
         store.details.sessionName = true
         XCTAssertNotEqual(historyOff, try pixels(), "History row: the dch name drawn only with Session name on")
         store.details = AgentIslandRowDetails()
@@ -1154,6 +1155,7 @@ final class AgentIslandControlsTests: XCTestCase {
         store.sessions = [AgentSession(key: AgentSessionKey(dir: "/d", name: "dobby-main"), alias: "A", activity: now - 7200,
                                        state: .idle, agents: 0)]
         let sessionsOff = try pixels()
+        XCTAssertEqual(sessionsOff, try pixels(), "control: same input, same render")
         store.details.sessionName = true
         XCTAssertNotEqual(sessionsOff, try pixels(), "Sessions row: the dch name drawn only with Session name on")
     }

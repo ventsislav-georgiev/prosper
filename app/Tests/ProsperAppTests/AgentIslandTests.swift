@@ -71,7 +71,7 @@ final class AgentIslandTests: XCTestCase {
 
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(
             session("fix-auth", .blocked, activity: 100, alias: "fix auth bug"), now: 112),
-            "fix auth bug, Needs input, 12s ago")
+            "fix auth bug, Needs input, fix-auth, 12s ago")
     }
 
     // MARK: - Socket dirs and listing (G5)
@@ -1521,15 +1521,15 @@ final class AgentIslandTests: XCTestCase {
                                                             merged: 0)), "all zero: the row looks as before")
         let s = session("s", .working, activity: 100, alias: "T")
         var m = s; m.meta = DchSessionMeta(tasks: .init(done: 1, total: 2), openPRs: [pr("o/r", 12)], merged: 3)
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 12s ago", "no meta: unchanged")
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, s, 12s ago", "no meta: unchanged")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 12s ago, 1/2 done, 3 merged, open pull requests o/r#12", "#525: owner kept here")
+                       "T, Working, s, 12s ago, 1/2 done, 3 merged, open pull requests o/r#12", "#525: owner kept here")
         m.meta = DchSessionMeta(openPRs: (1...5).map { pr("o/r", $0) })
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 2 more pending PRs", "QA #347 L-e")
+                       "T, Working, s, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 2 more pending PRs", "QA #347 L-e")
         m.meta = DchSessionMeta(openPRs: (1...4).map { pr("o/r", $0) })
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 1 more pending PR")
+                       "T, Working, s, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 1 more pending PR")
     }
 
     /// QA #347 L-d: every drawn count caps at "99999+"; done > total stays as drawn.
@@ -1548,7 +1548,7 @@ final class AgentIslandTests: XCTestCase {
         var s = session("s", .working, activity: 100, alias: "T")
         s.meta = DchSessionMeta(tasks: .init(done: Int.max, total: Int.max), merged: Int.max)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112),
-                       "T, Working, 12s ago, 99999+/99999+ done, 99999+ merged")
+                       "T, Working, s, 12s ago, 99999+/99999+ done, 99999+ merged")
         // Layout: an Int.max merged label still leaves the chips their room.
         let three = (1...3).map { pr("o/r", $0) }
         XCTAssertEqual(AgentIsland.prChips(DchSessionMeta(openPRs: three, merged: Int.max)).chips.count, 3)
@@ -2105,8 +2105,20 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertNotEqual(aOff, aOn, "alias != name: the name is drawn only when on")
         XCTAssertEqual(hOff, hOn, "same height")
         XCTAssertEqual(CGFloat(hOn), AgentIslandGeometry.height(of: aliased, show: on))
+    }
+
+    /// #596 (QA #465 INFO-1): a Sessions row's label carries the dch name exactly
+    /// when the row draws it, after the state as on line 2.
+    func testRowAccessibilityLabelCarriesSessionNameAsDrawn() {
+        let aliased = session("solution-master-7", .working, activity: 100, alias: "fix auth")
+        let plain = session("solution-master-4", .idle, activity: 100)
+        let on = AgentIslandRowDetails(sessionName: true)
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(aliased, now: 112, show: AgentIslandRowDetails()),
+                       "fix auth, Working, 12s ago", "off: no dch name")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(aliased, now: 112, show: on),
-                       AgentIsland.rowAccessibilityLabel(aliased, now: 112, show: AgentIslandRowDetails()), "a11y unchanged")
+                       "fix auth, Working, solution-master-7, 12s ago", "on: the dch name after the state")
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(plain, now: 112, show: on),
+                       "solution-master-4, Idle, 12s ago", "no alias: never read twice")
     }
 
     /// #592: a History row's title is the alias, else the agent's session name,
@@ -2252,7 +2264,7 @@ final class AgentIslandTests: XCTestCase {
         var s = session("s", .working, activity: 100, alias: "T", agents: 2)
         s.meta = DchSessionMeta(tasks: .init(done: 1, total: 2, inProgress: 3, queued: 4), openPRs: [pr("o/r", 12)], merged: 3)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: .all),
-                       "T, Working, 12s ago, 1/2 done · 3 in progress · 4 queued, 3 merged, open pull requests o/r#12")
+                       "T, Working, s, 12s ago, 1/2 done · 3 in progress · 4 queued, 3 merged, open pull requests o/r#12")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails()),
                        "T, Working, 12s ago, 3 merged, open pull requests o/r#12", "defaults")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(openPRs: false, queued: true)),
@@ -2281,6 +2293,15 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(c.store?.details, AgentIslandRowDetails(openPRs: false, merged: false))
         XCTAssertEqual(c.store?.rowHeights, [AgentIslandGeometry.rowHeight])
         XCTAssertEqual(c.store.map { $0.size.height }, before.map { $0.height - (AgentIslandGeometry.prRowHeight - AgentIslandGeometry.rowHeight) })
+    }
+
+    /// #596 (QA #465 INFO-3): each Row details toggle binds its own detail.
+    @MainActor
+    func testRowDetailsTogglesBindTheirOwnDetail() {
+        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.label),
+                       ["Agents", "Open PRs", "Merged", "Tasks done", "In progress", "Queued", "Session name"])
+        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.path),
+                       [\.agents, \.openPRs, \.merged, \.tasksDone, \.inProgress, \.queued, \.sessionName])
     }
 
     /// Visual evidence: the island with the default row details and with all on,
