@@ -167,6 +167,26 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertTrue(f.launches.isEmpty)
     }
 
+    /// #592: "agent_name" carries the record's agent session name, omitted when
+    /// empty or absent; every other field as before.
+    func testHistoryWireAgentName() {
+        func rec(_ agent: String?) -> DchHistoryRecord {
+            DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dobby-main"), alias: "A", cwd: "/src", argv: ["claude"],
+                             started: 10, updated: 50, ended: 60, end: "exit 0", agent: agent.map { .init(name: $0) })
+        }
+        let base: Set = ["name", "end", "last_seen", "started", "runtime", "takes", "alias", "cwd", "command"]
+        let named = DchControlOps.historyWire(rec("dobby-qa"), now: 100)
+        XCTAssertEqual(named["agent_name"] as? String, "dobby-qa")
+        XCTAssertEqual(Set(named.keys), base.union(["agent_name"]))
+        for a in ["", nil] as [String?] {
+            let o = DchControlOps.historyWire(rec(a), now: 100)
+            XCTAssertEqual(Set(o.keys), base, "agent_name omitted for \(String(describing: a))")
+        }
+        XCTAssertEqual(named["name"] as? String, "dobby-main", "name stays the dch name")
+        XCTAssertEqual(named["alias"] as? String, "A")
+        XCTAssertEqual(named["runtime"] as? Int, 50)
+    }
+
     func testHistoryIsCappedLikeTheTab() {
         let f = Fake()
         f.hist["/d"] = Self.hist((0..<60).map { ["name": "s\($0)", "updated": Self.now - Double($0), "end": "killed"] as [String: Any] })

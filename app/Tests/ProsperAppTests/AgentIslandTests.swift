@@ -2109,6 +2109,52 @@ final class AgentIslandTests: XCTestCase {
                        AgentIsland.rowAccessibilityLabel(aliased, now: 112, show: AgentIslandRowDetails()), "a11y unchanged")
     }
 
+    /// #592: a History row's title is the alias, else the agent's session name,
+    /// else the dch name; the dch name itself stays `name`.
+    func testHistoryTitlePrecedence() {
+        func rec(alias: String = "", agent: String?) -> DchHistoryRecord {
+            DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dobby-main"), alias: alias,
+                             agent: agent.map { DchHistoryRecord.Agent(name: $0) })
+        }
+        XCTAssertEqual(rec(alias: "fix auth", agent: "dobby-qa").title, "fix auth", "alias wins")
+        XCTAssertEqual(rec(agent: "dobby-qa").title, "dobby-qa", "no alias: the agent's name")
+        XCTAssertEqual(rec(agent: "").title, "dobby-main", "empty agent name: the dch name")
+        XCTAssertEqual(rec(agent: nil).title, "dobby-main", "no agent: the dch name")
+        XCTAssertEqual(rec(alias: "fix auth", agent: "dobby-qa").name, "dobby-main")
+    }
+
+    /// #592: a History row draws the dch name on line 2 only with Session name on
+    /// and a title that differs from it (#587's rule); never twice.
+    @MainActor
+    func testHistoryRowDrawsSessionNameOnlyWhenToggledOn() throws {
+        let agented = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dobby-main"), cwd: "/src", ended: 100,
+                                       end: "exit 0", agent: .init(name: "dobby-qa"))
+        let plain = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dobby-main"), cwd: "/src", ended: 100, end: "exit 0")
+        let on = AgentIslandRowDetails(sessionName: true)
+        XCTAssertNil(AgentIsland.sessionNameLabel(agented, show: AgentIslandRowDetails()), "default: hidden")
+        XCTAssertEqual(AgentIsland.sessionNameLabel(agented, show: on), "dobby-main")
+        XCTAssertNil(AgentIsland.sessionNameLabel(plain, show: on), "title == name: not drawn twice")
+        let end = AgentIsland.endLabel("exit 0")
+        XCTAssertEqual(AgentIsland.historyAccessibilityLabel(agented, line2: end, age: "", cwd: "/src", show: AgentIslandRowDetails()),
+                       "dobby-qa, \(end), /src", "off: title, end, cwd")
+        XCTAssertEqual(AgentIsland.historyAccessibilityLabel(agented, line2: end, age: "", cwd: "/src", show: on),
+                       "dobby-qa, \(end), dobby-main, /src", "on: the dch name as drawn")
+        XCTAssertEqual(AgentIsland.historyAccessibilityLabel(plain, line2: end, age: "", cwd: "/src", show: on),
+                       "dobby-main, \(end), /src")
+        // One render difference, never two equal renders (#587: pixel equality flakes).
+        func pixels(_ r: DchHistoryRecord, _ d: AgentIslandRowDetails) throws -> (Data, Int) {
+            let ir = ImageRenderer(content: AgentIslandHistoryRow(record: r, now: 112, status: nil, enabled: true, show: d) {}
+                .frame(width: AgentIslandGeometry.rowTextWidth + 60).background(Color.black))
+            ir.scale = 1
+            let cg = try XCTUnwrap(ir.cgImage)
+            return (try XCTUnwrap(cg.dataProvider?.data) as Data, cg.height)
+        }
+        let (off, hOff) = try pixels(agented, AgentIslandRowDetails())
+        let (drawn, hOn) = try pixels(agented, on)
+        XCTAssertNotEqual(off, drawn, "title != name: the dch name is drawn only when on")
+        XCTAssertEqual(hOff, hOn, "same height")
+    }
+
     /// Line 2's summary drops each part toggled off; nothing left is nil.
     func testMetaSummaryHonoursRowDetails() {
         let m = DchSessionMeta(tasks: .init(done: 22, total: 26, inProgress: 2, queued: 3), merged: 18)

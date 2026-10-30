@@ -507,7 +507,8 @@ struct AgentIslandView: View {
                 if store.showsHistoryHeader { historyHeader }
                 ForEach(historyDrawn) { r in
                     AgentIslandHistoryRow(record: r.record, now: ctx.date.timeIntervalSince1970,
-                                          status: store.historyActions[r.record.key], enabled: r.enabled, action: r.resume)
+                                          status: store.historyActions[r.record.key], enabled: r.enabled,
+                                          show: store.details, action: r.resume)
                 }
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
@@ -720,14 +721,17 @@ struct AgentIslandView: View {
     }
 }
 
-/// #578: one ended session. Line 1: the title, its Claude agent's name, how
-/// long ago it ended; line 2: the end in words and the cwd, or the Resume
-/// status as static text. A click is Resume.
+/// #578: one ended session. Line 1: the title (#592: alias, else the agent's
+/// name, else the dch name) and how long ago it ended; line 2: the end in words,
+/// the dch name (Session name on, #587's rule) and the cwd, or the Resume status
+/// as static text. A click is Resume.
 struct AgentIslandHistoryRow: View {
     let record: DchHistoryRecord
     let now: TimeInterval
     let status: String?
     let enabled: Bool
+    /// #592: the row details toggled on (Session name).
+    var show = AgentIslandRowDetails()
     let action: () -> Void
     @State private var hover = false
 
@@ -747,12 +751,6 @@ struct AgentIslandHistoryRow: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(Color.white.opacity(0.8))
                             .lineLimit(1)
-                        if let agent = record.agent?.name, !agent.isEmpty {
-                            Text(verbatim: agent)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(Color.white.opacity(0.4))
-                                .lineLimit(1)
-                        }
                         Spacer(minLength: 6)
                         Text(verbatim: age)
                             .font(.system(size: 11, design: .monospaced))
@@ -767,6 +765,11 @@ struct AgentIslandHistoryRow: View {
                                 // #585: only a crash is colored; "ended (signal 15)" stays neutral.
                                 .foregroundStyle(end.hasPrefix("crashed") ? AgentState.blocked.color : Color.white.opacity(0.5))
                                 .fixedSize()
+                            if let name = AgentIsland.sessionNameLabel(record, show: show) {
+                                Text(verbatim: name)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(Color.white.opacity(0.35))
+                            }
                             Text(verbatim: cwd)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(Color.white.opacity(0.35))
@@ -788,8 +791,9 @@ struct AgentIslandHistoryRow: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .onHover { hover = $0 }
-        .accessibilityLabel(([record.title, status ?? end, age.isEmpty ? nil : "\(age) ago", cwd] as [String?])
-            .compactMap { $0 }.joined(separator: ", "))
+        // A Resume status replaces line 2, dch name included.
+        .accessibilityLabel(AgentIsland.historyAccessibilityLabel(record, line2: status ?? end, age: age, cwd: cwd,
+                                                                  show: status == nil ? show : AgentIslandRowDetails()))
         .accessibilityHint(enabled ? "Resume" : "")
     }
 }

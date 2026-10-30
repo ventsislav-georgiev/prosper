@@ -23,7 +23,8 @@ tag from the now-released section and put it on the new top draft.
 - **Agent Island: the dch session name is hidden unless you turn it on.** A session with
   an alias used to show its dch name (like "solution-master-7") in grey after its state.
   That name is now a Row details option, Session name, off by default. A session without
-  an alias still shows its name as the title.
+  an alias still shows its name as the title. History rows now match: the agent's
+  session name is the title, and the dch name follows the same option.
 - **Remote Terminal: the iPhone app can resume, restart and stop dch sessions.** Over
   Tailscale, the Mac now serves the Agent Island's History and runs its Resume,
   Restart and Stop for the phone. It uses the same dch and the same version checks

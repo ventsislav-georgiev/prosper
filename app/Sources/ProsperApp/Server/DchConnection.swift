@@ -432,6 +432,7 @@ struct DchControlOps: Sendable {
         if !r.alias.isEmpty { o["alias"] = r.alias }
         if !r.cwd.isEmpty { o["cwd"] = r.cwd }
         if !r.argv.isEmpty { o["command"] = r.argv }
+        if let a = r.agent?.name, !a.isEmpty { o["agent_name"] = a }   // #592: the phone's title fallback
         return o
     }
 

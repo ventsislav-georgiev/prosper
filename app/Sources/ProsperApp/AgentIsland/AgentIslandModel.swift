@@ -223,7 +223,23 @@ enum AgentIsland {
     /// #587: the grey dch name after the state label: only with Session name on,
     /// and only beside an alias (with no alias the title already is the name).
     static func sessionNameLabel(_ s: AgentSession, show d: AgentIslandRowDetails) -> String? {
-        d.sessionName && s.title != s.name ? s.name : nil
+        sessionNameLabel(title: s.title, name: s.name, show: d)
+    }
+
+    /// #592: the same rule for a History row (title from alias or agent name).
+    static func sessionNameLabel(_ r: DchHistoryRecord, show d: AgentIslandRowDetails) -> String? {
+        sessionNameLabel(title: r.title, name: r.name, show: d)
+    }
+
+    static func sessionNameLabel(title: String, name: String, show d: AgentIslandRowDetails) -> String? {
+        d.sessionName && title != name ? name : nil
+    }
+
+    /// #592: a History row's VoiceOver text; the dch name only when the row draws it.
+    static func historyAccessibilityLabel(_ r: DchHistoryRecord, line2: String, age: String, cwd: String,
+                                          show d: AgentIslandRowDetails) -> String {
+        ([r.title, line2, sessionNameLabel(r, show: d), age.isEmpty ? nil : "\(age) ago", cwd] as [String?])
+            .compactMap { $0 }.joined(separator: ", ")
     }
 
     static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval, show d: AgentIslandRowDetails = .all) -> String {

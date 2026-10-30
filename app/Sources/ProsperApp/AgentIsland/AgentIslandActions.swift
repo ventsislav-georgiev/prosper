@@ -30,7 +30,13 @@ struct DchHistoryRecord: Equatable, Identifiable {
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
-    var title: String { alias.isEmpty ? key.name : alias }
+    /// #592: display only (revive, keys and sorting use `name`): the alias, else
+    /// the agent's session name, else the dch name, like a Sessions row's title.
+    var title: String {
+        if !alias.isEmpty { return alias }
+        if let a = agent?.name, !a.isEmpty { return a }
+        return key.name
+    }
     /// dch's own "last seen": ended, else updated.
     var lastSeen: TimeInterval { ended > 0 ? ended : updated }
 }
