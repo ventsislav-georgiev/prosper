@@ -792,8 +792,7 @@ struct AgentIslandHistoryRow: View {
         .disabled(!enabled)
         .onHover { hover = $0 }
         // A Resume status replaces line 2, dch name included.
-        .accessibilityLabel(AgentIsland.historyAccessibilityLabel(record, line2: status ?? end, age: age, cwd: cwd,
-                                                                  show: status == nil ? show : AgentIslandRowDetails()))
+        .accessibilityLabel(AgentIsland.historyRowAccessibilityLabel(record, status: status, end: end, age: age, cwd: cwd, show: show))
         .accessibilityHint(enabled ? "Resume" : "")
     }
 }

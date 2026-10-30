@@ -242,6 +242,12 @@ enum AgentIsland {
             .compactMap { $0 }.joined(separator: ", ")
     }
 
+    /// #594 (QA #464 T6): the History row's label; a Resume status replaces line 2, dch name included.
+    static func historyRowAccessibilityLabel(_ r: DchHistoryRecord, status: String?, end: String, age: String, cwd: String,
+                                             show d: AgentIslandRowDetails) -> String {
+        historyAccessibilityLabel(r, line2: status ?? end, age: age, cwd: cwd, show: status == nil ? d : AgentIslandRowDetails())
+    }
+
     static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval, show d: AgentIslandRowDetails = .all) -> String {
         let age = age(of: s, now: now)
         let (chips, more) = prChips(s.meta, show: d, budget: .infinity)

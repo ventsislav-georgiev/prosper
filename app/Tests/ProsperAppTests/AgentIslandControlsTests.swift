@@ -485,6 +485,20 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.stopArgs(["a", "b"]), ["--stop", "a", "b", "--json"])
     }
 
+    /// #594 (QA #464 T7): Resume names dch's record, never the row's title (alias or agent name).
+    func testReviveArgsUseTheDchNameNotTheTitle() {
+        var r = record("dobby-main")
+        r.alias = "A"
+        r.agent = .init(name: "dobby-qa")
+        XCTAssertEqual(r.title, "A")
+        XCTAssertEqual(AgentIsland.reviveArgs(r, live: [], records: []), ["--revive", "dobby-main", "--json"])
+        XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["dobby-main", "A"], records: []),
+                       ["--revive", "dobby-main", "--as", "dobby-main-2", "--json"], "--as from the name too")
+        r.alias = ""
+        XCTAssertEqual(r.title, "dobby-qa")
+        XCTAssertEqual(AgentIsland.reviveArgs(r, live: [], records: []), ["--revive", "dobby-main", "--json"])
+    }
+
     /// --spawn has no --json: its exec failure's first stderr line, not dch's
     /// closing "failed to spawn session", is the text (real 1.24.0 output).
     func testSpawnFailureShowsTheExecLine() {
@@ -1111,6 +1125,37 @@ final class AgentIslandControlsTests: XCTestCase {
         let png = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]))
         try png.write(to: out.appendingPathComponent("\(name).png"))
         if let extra { try png.write(to: extra.appendingPathComponent("\(name).png")) }
+    }
+
+    /// #594 (T8): the view hands store.details to both row kinds. Session name on vs
+    /// off redraws a History row titled by its agent and a Sessions row titled by its
+    /// alias. One render difference each, never two equal renders.
+    @MainActor
+    func testTheViewPassesItsDetailsToHistoryAndSessionsRows() throws {
+        let now = Date().timeIntervalSince1970
+        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        store.sessions = [session("live")]
+        store.controlDch = Self.v124
+        var a = record("dobby-main", ended: now - 7200, end: "signal 9")
+        a.agent = .init(name: "dobby-qa")
+        store.history = [a]
+        store.historyTab = true
+        store.expanded = true
+        func pixels() throws -> Data {
+            let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
+            r.scale = 1
+            return try XCTUnwrap(try XCTUnwrap(r.cgImage).dataProvider?.data) as Data
+        }
+        let historyOff = try pixels()
+        store.details.sessionName = true
+        XCTAssertNotEqual(historyOff, try pixels(), "History row: the dch name drawn only with Session name on")
+        store.details = AgentIslandRowDetails()
+        store.historyTab = false
+        store.sessions = [AgentSession(key: AgentSessionKey(dir: "/d", name: "dobby-main"), alias: "A", activity: now - 7200,
+                                       state: .idle, agents: 0)]
+        let sessionsOff = try pixels()
+        store.details.sessionName = true
+        XCTAssertNotEqual(sessionsOff, try pixels(), "Sessions row: the dch name drawn only with Session name on")
     }
 
     // MARK: - #581: the island with history and no live session

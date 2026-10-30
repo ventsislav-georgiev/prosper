@@ -2155,6 +2155,17 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(hOff, hOn, "same height")
     }
 
+    /// #594 (QA #464 T6): a Resume status replaces line 2, so the VoiceOver label drops the dch name with it.
+    func testHistoryRowLabelDropsTheDchNameWhileAStatusShows() {
+        let r = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dobby-main"), cwd: "/src", ended: 100,
+                                 end: "signal 9", agent: .init(name: "dobby-qa"))
+        let on = AgentIslandRowDetails(sessionName: true), end = AgentIsland.endLabel("signal 9")
+        XCTAssertEqual(AgentIsland.historyRowAccessibilityLabel(r, status: nil, end: end, age: "2m", cwd: "/src", show: on),
+                       "dobby-qa, \(end), dobby-main, 2m ago, /src")
+        XCTAssertEqual(AgentIsland.historyRowAccessibilityLabel(r, status: "Starting…", end: end, age: "2m", cwd: "/src", show: on),
+                       "dobby-qa, Starting…, 2m ago, /src", "the status replaces line 2, dch name included")
+    }
+
     /// Line 2's summary drops each part toggled off; nothing left is nil.
     func testMetaSummaryHonoursRowDetails() {
         let m = DchSessionMeta(tasks: .init(done: 22, total: 26, inProgress: 2, queued: 3), merged: 18)

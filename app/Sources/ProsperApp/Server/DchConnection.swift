@@ -951,7 +951,7 @@ enum DchCommand {
         // If Prosper was itself launched from inside a dch session, its env carries
         // DCH_SESSION and dch would refuse to spawn ("nesting disabled"). Strip it.
         env.removeValue(forKey: "DCH_SESSION")
-        if Preferences.isolateRemoteSessions {
+        if isolateRemote {
             // Private socket dir so app sessions don't intermix with standalone dch.
             env["DCH_SOCKET_DIR"] = isolatedSocketDir
         }
@@ -1048,10 +1048,13 @@ enum DchCommand {
     /// Test seam (#591 r2): stands in for `Preferences.isolateRemoteSessions`; nil reads it.
     nonisolated(unsafe) static var isolateOverride: Bool?
 
+    /// #594: the one isolation input childEnv and remoteSocketDir both read.
+    static var isolateRemote: Bool { isolateOverride ?? Preferences.isolateRemoteSessions }
+
     /// #591 r2 (QA #462 H2): Remote Terminal's one dir, isolated while
     /// `isolateRemoteSessions` is on, else the default. The phone's list, kill and
     /// rename, and its history and control verbs (DchControlOps.dirs), all read it.
-    static func remoteSocketDir(isolate: Bool = DchCommand.isolateOverride ?? Preferences.isolateRemoteSessions) -> String {
+    static func remoteSocketDir(isolate: Bool = DchCommand.isolateRemote) -> String {
         isolate ? isolatedSocketDir : defaultSocketDir
     }
 

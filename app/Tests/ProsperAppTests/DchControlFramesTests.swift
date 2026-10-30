@@ -507,6 +507,20 @@ final class DchControlFramesTests: XCTestCase {
         }
     }
 
+    /// #594 (L-A): a new session's env reads the same isolation input as remoteSocketDir;
+    /// isolation off adds no DCH_SOCKET_DIR of its own.
+    func testChildEnvFollowsIsolateOverrideBothWays() {
+        defer { DchCommand.isolateOverride = nil }
+        for isolate in [true, false] {
+            DchCommand.isolateOverride = isolate
+            let env = DchCommand.childEnv()
+            XCTAssertEqual(env["DCH_SOCKET_DIR"],
+                           isolate ? DchCommand.isolatedSocketDir : ProcessInfo.processInfo.environment["DCH_SOCKET_DIR"],
+                           "isolate \(isolate)")
+            XCTAssertEqual(DchCommand.socketDir, DchCommand.remoteSocketDir(isolate: isolate), "isolate \(isolate)")
+        }
+    }
+
     /// The phone's kill (and list, rename) read the same helper: a stand-in dch records its DCH_SOCKET_DIR.
     func testKillRunsInTheSameDirAsTheVerbs() throws {
         let script = tempDir().appendingPathComponent("fake-dch").path
@@ -588,6 +602,25 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(f.launchedArgs.filter { $0 != ["--island"] }, [AgentIsland.restartArgs("b")], "no phone job launched while busy")
     }
 
+    /// #594 (QA #462 N7): a stop holds the dir key, not a row's, so an island job on
+    /// another row in the same dir makes the phone's stop busy.
+    func testAnIslandJobOnAnotherRowMakesThePhonesStopBusy() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1"), ("b", "1.24.1")])
+        let o = ops(f), shared = o.runner
+        f.holdArgs = ["--island"]
+        let held = expectation(description: "island job running"), done = expectation(description: "island job done")
+        f.held = held
+        XCTAssertTrue(shared.start(AgentSessionKey(dir: "/d", name: "b"), path: "/fake/dch", args: ["--island"], env: { [:] }) { _ in
+            done.fulfill()
+        })
+        wait(for: [held], timeout: 5)
+        XCTAssertEqual(message(call(o, DchFrame.stop, ["names": ["a"]])), "a: Stop failed: dch: busy with an earlier request")
+        f.hold.signal()
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(f.launchedArgs, [["--island"]], "no stop launched while busy")
+    }
+
     // MARK: - r2: the connection (QA #462 M3)
 
     private func connection(_ o: DchControlOps) -> (DchConnection, DispatchQueue, Frames) {
@@ -640,6 +673,27 @@ final class DchControlFramesTests: XCTestCase {
         queue.sync { conn.handle(type: DchFrame.restart, payload: Self.payload(["names": ["a"]])) }
         waitIdle(conn, queue)
         XCTAssertEqual(frames.lock.withLock { frames.all }.count, 5, "free again after the reply")
+    }
+
+    /// #594 (QA #462 N8): an error reply frees the connection like any other; the next request is served.
+    func testAnErrorReplyFreesTheConnectionForTheNextRequest() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1")])
+        f.out[AgentIsland.restartArgs("a").joined(separator: " ")] = Self.ok("a")
+        let (conn, queue, frames) = connection(ops(f))
+        func next(_ type: UInt8, _ payload: Data) -> (type: UInt8, json: Any?) {
+            let before = frames.lock.withLock { frames.all.count }
+            queue.sync { conn.handle(type: type, payload: payload) }
+            let end = Date().addingTimeInterval(5)
+            while frames.lock.withLock({ frames.all.count }) == before, Date() < end { usleep(10_000) }
+            return frames.lock.withLock { frames.all.last.map(Self.decode) } ?? (0, nil)
+        }
+        XCTAssertTrue(message(next(DchFrame.stop, Self.payload(["all": true]))).hasPrefix("malformed"))
+        XCTAssertEqual(names(next(DchFrame.restart, Self.payload(["names": ["a"]]))), ["a"], "served after a malformed request")
+        XCTAssertTrue(message(next(DchFrame.stop, Self.payload(["names": ["ghost"]]))).contains("ghost"))
+        XCTAssertEqual(names(next(DchFrame.restart, Self.payload(["names": ["a"]]))), ["a"], "served after a refused request")
+        waitIdle(conn, queue)
+        XCTAssertEqual(frames.lock.withLock { frames.all.count }, 4)
     }
 
     func testHistoryInFlightCountsToo() {
