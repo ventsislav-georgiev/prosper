@@ -26,9 +26,10 @@ tag from the now-released section and put it on the new top draft.
   an alias still shows its name as the title.
 - **Remote Terminal: the iPhone app can resume, restart and stop dch sessions.** Over
   Tailscale, the Mac now serves the Agent Island's History and runs its Resume,
-  Restart and Stop for the phone. It uses the same dch, the same version checks and
-  the same sessions as the island's own buttons. It only acts on a session that is
-  live or a record in History. The phone half ships in the iOS app.
+  Restart and Stop for the phone. It uses the same dch and the same version checks
+  as the island's own buttons, on the sessions the phone lists. It only acts on a
+  session that is live or a record in History, and a row busy on the Mac is busy on
+  the phone too. The phone half ships in the iOS app.
 
 ## v2.161.0
 

@@ -112,7 +112,7 @@ final class AgentIslandController {
     var controlEnv: @Sendable (_ dir: String) -> [String: String] = { dir in
         AgentIsland.controlEnv(dir: dir, login: NSClassFromString("XCTestCase") == nil ? LoginPath.read() : nil)
     }
-    var runner = DchActionRunner()
+    var runner = DchActionRunner.shared
     /// #579 seam: the folder chooser for New session (NSOpenPanel, directories
     /// only); `done` gets the path, nil when cancelled. Tests never show a real one.
     var chooseFolder: @MainActor (@escaping @MainActor (String?) -> Void) -> Void = { done in

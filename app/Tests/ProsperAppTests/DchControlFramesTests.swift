@@ -19,9 +19,20 @@ final class DchControlFramesTests: XCTestCase {
         /// argv joined by " " → the launch's stdout; status for every launch.
         var out: [String: String] = [:]
         var status: Int32 = 0
+        /// argv joined by " " → that launch's exit, else `status`.
+        var statusFor: [String: Int32] = [:]
         var launches: [(path: String, args: [String], dir: String?)] = []
         var historyPaths: [String?] = []
+        /// Every read: its first arg and its DCH_SOCKET_DIR.
+        var reads: [(arg: String, dir: String)] = []
         var refreshes = 0
+        /// A launch with exactly these args, or any --history read while holdHistory,
+        /// fulfils `held` and waits on `hold` (outside the lock).
+        var holdArgs: [String]?
+        var holdHistory = false
+        let hold = DispatchSemaphore(value: 0)
+        var held: XCTestExpectation?
+        var onRefresh: XCTestExpectation?
 
         var launchedArgs: [[String]] { lock.withLock { launches.map(\.args) } }
     }
@@ -31,27 +42,38 @@ final class DchControlFramesTests: XCTestCase {
         o.dirs = { dirs }
         o.binary = { binary }
         o.read = { args, env, path in
-            f.lock.withLock {
-                let dir = env["DCH_SOCKET_DIR"] ?? ""
+            let dir = env["DCH_SOCKET_DIR"] ?? ""
+            let (data, holding) = f.lock.withLock { () -> (Data, Bool) in
+                f.reads.append((args.first ?? "", dir))
                 switch args.first {
-                case "--ls-json": return Data((f.ls[dir] ?? "[]").utf8)
+                case "--ls-json": return (Data((f.ls[dir] ?? "[]").utf8), false)
                 case "--history":
                     f.historyPaths.append(path)
-                    return Data((f.hist[dir] ?? "[]").utf8)
-                default: return Data()
+                    return (Data((f.hist[dir] ?? "[]").utf8), f.holdHistory)
+                default: return (Data(), false)
                 }
             }
+            if holding { f.held?.fulfill(); f.hold.wait() }
+            return data
         }
         o.env = { ["DCH_SOCKET_DIR": $0] }
         o.runner = DchActionRunner(launch: { path, args, env, _, onPid, _ in
             onPid(4242)
-            return f.lock.withLock {
+            let holding = f.lock.withLock { () -> Bool in
                 f.launches.append((path, args, env["DCH_SOCKET_DIR"]))
-                return (f.status, Data((f.out[args.joined(separator: " ")] ?? "").utf8))
+                return args == f.holdArgs
+            }
+            if holding { f.held?.fulfill(); f.hold.wait() }
+            return f.lock.withLock {
+                let k = args.joined(separator: " ")
+                return (f.statusFor[k] ?? f.status, Data((f.out[k] ?? "").utf8))
             }
         }, signal: { _ in })
         o.now = { Self.now }
-        o.refresh = { f.lock.withLock { f.refreshes += 1 } }
+        o.refresh = {
+            f.lock.withLock { f.refreshes += 1 }
+            f.onRefresh?.fulfill()
+        }
         return o
     }
 
@@ -212,7 +234,8 @@ final class DchControlFramesTests: XCTestCase {
                       "a live name with no record is not revivable")
         XCTAssertEqual(call(ops(f), DchFrame.revive, ["name": "--all"]).type, DchFrame.error)
         f.hist["/e"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
-        XCTAssertTrue(message(call(ops(f, dirs: ["/d", "/e"]), DchFrame.revive, ["name": "a"])).contains("more than one"))
+        XCTAssertEqual(message(call(ops(f, dirs: ["/d", "/e"]), DchFrame.revive, ["name": "a"])), "a: 2 history records of that name",
+                       "exact-one-match still holds (only a multi-dir seam can show two)")
         XCTAssertTrue(f.launches.isEmpty)
     }
 
@@ -220,10 +243,10 @@ final class DchControlFramesTests: XCTestCase {
         let f = Fake()
         f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
         f.out["--revive a --json"] = Self.json(["name": "a", "result": "failed", "reason": "no_record", "detail": "a: no record"])
-        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["name": "a"])), "no record")
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["name": "a"])), "a: no record")
         f.out["--revive a --json"] = "dch: cannot reach the socket dir"
         f.status = 1
-        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["name": "a"])), "Resume failed: dch: cannot reach the socket dir")
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["name": "a"])), "a: Resume failed: dch: cannot reach the socket dir")
     }
 
     // MARK: - restart 0x0d
@@ -256,7 +279,7 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertTrue(message(call(ops(f), DchFrame.restart, ["names": ["a", "gone"]])).contains("gone"))
         XCTAssertEqual(call(ops(f), DchFrame.restart, ["names": ["--all"]]).type, DchFrame.error)
         f.ls["/e"] = Self.ls([("a", "1.24.1")])
-        XCTAssertTrue(message(call(ops(f, dirs: ["/d", "/e"]), DchFrame.restart, ["names": ["a"]])).contains("more than one"))
+        XCTAssertEqual(message(call(ops(f, dirs: ["/d", "/e"]), DchFrame.restart, ["names": ["a"]])), "a: 2 live sessions of that name")
         XCTAssertTrue(f.launches.isEmpty, "nothing runs when any name is refused")
     }
 
@@ -372,5 +395,328 @@ final class DchControlFramesTests: XCTestCase {
                        (DchFrame.restart, Data("{\"all\":true}".utf8)), (DchFrame.stop, Data("{\"names\":[\"a\"]}".utf8))] {
             XCTAssertTrue(message(call(o, t, raw: p)).contains("needs dch"))
         }
+    }
+
+    // MARK: - r2: one truthful reply (QA #462 H1, M1)
+
+    private static func line(_ name: String, _ result: String, reason: String = "", detail: String = "", phase: String? = nil) -> String {
+        var o: [String: Any] = ["name": name, "result": result, "reason": reason, "detail": detail]
+        if let phase { o["phase"] = phase }
+        return json(o)
+    }
+
+    /// The real --restart shape: the master pass first, then the agent's own result.
+    func testRestartWhoseAgentFailedAfterAnOkMasterIsAnErrorWithTheAgentsWords() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1")])
+        let a = AgentIsland.restartArgs("a").joined(separator: " ")
+        f.out[a] = Self.ok("a", phase: "master") + "\n" + Self.line("a", "failed", reason: "not_paused", detail: "a: agent did not pause")
+        f.statusFor[a] = 1
+        let r = call(ops(f), DchFrame.restart, ["names": ["a"]])
+        XCTAssertEqual(message(r), "a: agent did not pause", "the last result for the name, in rowText's words")
+        XCTAssertNil((r.json as? [String: Any])?["names"], "nothing named ok")
+        for reason in ["not_claude", "current"] {
+            f.out[a] = Self.ok("a", phase: "master") + "\n" + Self.line("a", "skipped", reason: reason)
+            f.statusFor[a] = 0
+            XCTAssertEqual(names(call(ops(f), DchFrame.restart, ["names": ["a"]])), ["a"], "\(reason): the master moved, no agent to restart")
+        }
+        f.out[a] = Self.ok("a", phase: "master") + "\n" + Self.line("a", "skipped", reason: "in_shell", detail: "a: claude typed into the shell")
+        XCTAssertEqual(message(call(ops(f), DchFrame.restart, ["names": ["a"]])), "a: claude typed into the shell",
+                       "any other skip is not done")
+    }
+
+    /// Each name against its own job: a's clean exit with no line is ok, b's failure is the error.
+    func testRestartOfTwoNamesWithOneFailedNamesOnlyTheFailedOne() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1"), ("b", "1.24.1")])
+        let b = AgentIsland.restartArgs("b").joined(separator: " ")
+        f.out[b] = Self.ok("b", phase: "master") + "\n" + Self.line("b", "failed", reason: "not_paused", detail: "b: agent did not pause")
+        f.statusFor[b] = 1
+        XCTAssertEqual(message(call(ops(f), DchFrame.restart, ["names": ["a", "b"]])), "b: agent did not pause")
+        f.out[b] = "dch: b: master gone"
+        XCTAssertEqual(message(call(ops(f), DchFrame.restart, ["names": ["b", "a"]])), "b: Restart failed: dch: b: master gone",
+                       "no result line and a non-zero exit: rowText's failedText")
+        f.statusFor[AgentIsland.restartArgs("a").joined(separator: " ")] = 1
+        XCTAssertEqual(message(call(ops(f), DchFrame.restart, ["names": ["a", "b"]])),
+                       "a: Restart failed (exit 1); b: Restart failed: dch: b: master gone", "every failed name, request order")
+    }
+
+    func testReviveAllWithAnOkLineAndANonZeroExitIsAnErrorWithTheTally() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        f.out[AgentIsland.reviveAllArgs.joined(separator: " ")] = Self.ok("a")
+        f.status = 1
+        let want = AgentIsland.tally(AgentIsland.actionResult(status: 1, output: Data(Self.ok("a").utf8), stopped: false),
+                                     .resume, title: "Resume", empty: "nothing to resume")
+        XCTAssertEqual(want, "1 resumed, failed (exit 1)")
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["all": true])), want)
+        f.status = 0
+        f.out[AgentIsland.reviveAllArgs.joined(separator: " ")] = Self.ok("a") + "\n" + Self.line("b", "failed", detail: "b: no agent")
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["all": true])), "1 resumed, 1 failed", "a failed line on exit 0")
+    }
+
+    func testRestartAllWithNoResultAndANonZeroExitIsAnError() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1")])
+        f.status = 1
+        XCTAssertEqual(message(call(ops(f), DchFrame.restart, ["all": true])), "Restart all failed (exit 1)")
+        f.status = 0
+        f.out[AgentIsland.restartAllArgs.joined(separator: " ")] = Self.line("a", "skipped", reason: "current")
+        XCTAssertEqual(names(call(ops(f), DchFrame.restart, ["all": true])), [], "nothing to do stays an empty ok")
+    }
+
+    func testACancelledJobRepliesTheCancelledText() {
+        let line = AgentIsland.jsonLine(Self.ok("a"))!
+        let named = DchControlOps.answer(named: [("a", DchActionResult(status: 0, json: [line], stopped: true))], .restart)
+        XCTAssertEqual(message(Self.decode(named)), "a: Restart cancelled: no answer in 15m")
+        let all = DchControlOps.answer(all: DchActionResult(status: 0, json: [line], stopped: true), .resume)
+        XCTAssertEqual(message(Self.decode(all)), "Resume cancelled: no answer in 5m")
+    }
+
+    // MARK: - r2: Remote Terminal's one dir (QA #462 H2)
+
+    func testRemoteSocketDirIsTheIsolatedDirOnlyWhileIsolating() {
+        XCTAssertEqual(DchCommand.remoteSocketDir(isolate: true), DchCommand.isolatedSocketDir)
+        XCTAssertEqual(DchCommand.remoteSocketDir(isolate: false), DchCommand.defaultSocketDir)
+        XCTAssertNotEqual(DchCommand.isolatedSocketDir, DchCommand.defaultSocketDir)
+        defer { DchCommand.isolateOverride = nil }
+        for isolate in [true, false] {
+            DchCommand.isolateOverride = isolate
+            XCTAssertEqual(DchControlOps().dirs(), [DchCommand.remoteSocketDir(isolate: isolate)],
+                           "the verbs' default dirs follow the helper, one dir, isolate \(isolate)")
+        }
+    }
+
+    /// The phone's kill (and list, rename) read the same helper: a stand-in dch records its DCH_SOCKET_DIR.
+    func testKillRunsInTheSameDirAsTheVerbs() throws {
+        let script = tempDir().appendingPathComponent("fake-dch").path
+        try "#!/bin/sh\nprintf '%s' \"$DCH_SOCKET_DIR\" > \"$0.out\"\n".write(toFile: script, atomically: true, encoding: .utf8)
+        XCTAssertEqual(chmod(script, 0o755), 0)
+        DchCommand.dchPathOverride = script
+        defer { DchCommand.dchPathOverride = nil; DchCommand.isolateOverride = nil }
+        for isolate in [true, false] {
+            DchCommand.isolateOverride = isolate
+            DchCommand.kill("a")
+            XCTAssertEqual(try String(contentsOfFile: script + ".out", encoding: .utf8), DchCommand.remoteSocketDir(isolate: isolate))
+        }
+    }
+
+    /// Through the seam: history and every verb read and run with DCH_SOCKET_DIR = that one dir only.
+    func testVerbsAndHistoryRunOnlyInTheRemoteDir() {
+        for isolate in [true, false] {
+            let dir = DchCommand.remoteSocketDir(isolate: isolate), f = Fake()
+            f.ls[dir] = Self.ls([("a", "1.24.1"), ("b", "1.24.1")])
+            f.hist[dir] = Self.hist([["name": "c", "updated": Self.now - 60, "end": "signal 9"]])
+            let o = ops(f, dirs: [dir])
+            XCTAssertEqual(call(o, DchFrame.history, raw: Data()).type, DchFrame.historyResp)
+            XCTAssertEqual(names(call(o, DchFrame.revive, ["name": "c"])), ["c"])
+            XCTAssertEqual(names(call(o, DchFrame.revive, ["all": true])), [])
+            XCTAssertEqual(names(call(o, DchFrame.restart, ["names": ["a"]])), ["a"])
+            XCTAssertEqual(names(call(o, DchFrame.restart, ["all": true])), [])
+            XCTAssertEqual(names(call(o, DchFrame.stop, ["names": ["b"]])), ["b"])
+            XCTAssertEqual(Set(f.reads.map(\.dir)), [dir], "isolate \(isolate)")
+            XCTAssertEqual(Set(f.launches.map(\.dir)), [dir], "isolate \(isolate)")
+            XCTAssertEqual(f.launches.count, 5)
+        }
+    }
+
+    // MARK: - r2: the Resume gate (QA #462 mutant M5b)
+
+    func testReviveUnderALiveMasterNewerThanTheBinaryIsRefused() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("x", "1.25.0")])
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["name": "a"])), "Resume needs dch 1.25.0")
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["all": true])), "Resume needs dch 1.25.0")
+        XCTAssertTrue(f.launches.isEmpty)
+        XCTAssertTrue(f.historyPaths.isEmpty, "refused before the history read")
+    }
+
+    // MARK: - r2: the shared runner (QA #462 M2)
+
+    @MainActor func testTheIslandAndThePhoneShareOneRunner() {
+        XCTAssertTrue(AgentIslandController().runner === DchActionRunner.shared)
+        XCTAssertTrue(DchControlOps().runner === DchActionRunner.shared)
+        XCTAssertTrue(DchControlOps.live.runner === DchActionRunner.shared)
+    }
+
+    /// An island job on the shared runner makes the phone's verb on that row, or in that dir, busy.
+    func testAnIslandJobOnTheSharedRunnerMakesThePhonesVerbBusy() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1"), ("b", "1.24.1")])
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        let o = ops(f), shared = o.runner
+        f.holdArgs = ["--island"]
+        for key in [AgentSessionKey(dir: "/d", name: "a"), AgentSessionKey(dir: "/d", name: "")] {
+            let held = expectation(description: "island job running"), done = expectation(description: "island job done")
+            f.held = held
+            XCTAssertTrue(shared.start(key, path: "/fake/dch", args: ["--island"], env: { [:] }) { _ in done.fulfill() })
+            wait(for: [held], timeout: 5)
+            let busy = "busy with an earlier request"
+            XCTAssertEqual(message(call(o, DchFrame.restart, ["names": ["a"]])), "a: Restart failed: dch: \(busy)", "row key \(key)")
+            XCTAssertEqual(message(call(o, DchFrame.revive, ["name": "a"])), "a: Resume failed: dch: \(busy)", "record key \(key)")
+            XCTAssertEqual(message(call(o, DchFrame.stop, ["names": ["a"]])), "a: Stop failed: dch: \(busy)")
+            if key.name.isEmpty {
+                XCTAssertTrue(message(call(o, DchFrame.restart, ["names": ["b"]])).contains(busy), "a dir job holds every row")
+                XCTAssertTrue(message(call(o, DchFrame.restart, ["all": true])).contains(busy))
+            } else {
+                XCTAssertEqual(names(call(o, DchFrame.restart, ["names": ["b"]])), ["b"], "another row is free")
+            }
+            f.hold.signal()
+            wait(for: [done], timeout: 5)
+        }
+        XCTAssertEqual(f.launchedArgs.filter { $0 != ["--island"] }, [AgentIsland.restartArgs("b")], "no phone job launched while busy")
+    }
+
+    // MARK: - r2: the connection (QA #462 M3)
+
+    private func connection(_ o: DchControlOps) -> (DchConnection, DispatchQueue, Frames) {
+        let queue = DispatchQueue(label: "test.dchconn")
+        let conn = DchConnection(conn: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), queue: queue,
+                                 log: Logger(subsystem: "test", category: "dch"), onClose: { _ in })
+        let frames = Frames()
+        conn.sendOverride = { frame in frames.lock.withLock { frames.all.append(frame) } }
+        conn.ops = o
+        return (conn, queue, frames)
+    }
+
+    /// Until the connection's request has had its reply hop (sent or dropped), at most 5 s.
+    private func waitIdle(_ conn: DchConnection, _ queue: DispatchQueue, file: StaticString = #filePath, line: UInt = #line) {
+        let end = Date().addingTimeInterval(5)
+        while queue.sync(execute: { conn.inFlight }) {
+            guard Date() < end else { return XCTFail("still in flight", file: file, line: line) }
+            usleep(10_000)
+        }
+    }
+
+    private static func payload(_ o: Any) -> Data { try! JSONSerialization.data(withJSONObject: o) }
+
+    func testASecondRequestWhileAVerbIsInFlightIsBusyAndTheFirstStillReplies() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1")])
+        f.out[AgentIsland.restartArgs("a").joined(separator: " ")] = Self.ok("a")
+        f.holdArgs = AgentIsland.restartArgs("a")
+        let held = expectation(description: "restart running")
+        f.held = held
+        let (conn, queue, frames) = connection(ops(f))
+        queue.sync { conn.handle(type: DchFrame.restart, payload: Self.payload(["names": ["a"]])) }
+        wait(for: [held], timeout: 5)
+        let readsBefore = f.lock.withLock { f.reads.count }
+        queue.sync {
+            conn.handle(type: DchFrame.restart, payload: Self.payload(["names": ["a"]]))
+            conn.handle(type: DchFrame.history, payload: Data())
+            conn.handle(type: DchFrame.stop, payload: Self.payload(["names": ["a"]]))
+        }
+        let busy = frames.lock.withLock { frames.all }.map { message(Self.decode($0)) }
+        XCTAssertEqual(busy, Array(repeating: "busy with an earlier request", count: 3), "refused at once, on the queue")
+        XCTAssertEqual(f.lock.withLock { f.reads.count }, readsBefore, "a refused request reads nothing")
+        f.hold.signal()
+        waitIdle(conn, queue)
+        let all = frames.lock.withLock { frames.all }
+        XCTAssertEqual(all.count, 4)
+        XCTAssertEqual(all.last.map { names(Self.decode($0)) } ?? nil, ["a"], "the first gets its own reply")
+        XCTAssertEqual(f.launches.count, 1)
+        f.lock.withLock { f.holdArgs = nil }
+        queue.sync { conn.handle(type: DchFrame.restart, payload: Self.payload(["names": ["a"]])) }
+        waitIdle(conn, queue)
+        XCTAssertEqual(frames.lock.withLock { frames.all }.count, 5, "free again after the reply")
+    }
+
+    func testHistoryInFlightCountsToo() {
+        let f = Fake()
+        f.holdHistory = true
+        let held = expectation(description: "history read running")
+        f.held = held
+        let (conn, queue, frames) = connection(ops(f))
+        queue.sync { conn.handle(type: DchFrame.history, payload: Data()) }
+        wait(for: [held], timeout: 5)
+        queue.sync {
+            conn.handle(type: DchFrame.history, payload: Data())
+            conn.handle(type: DchFrame.revive, payload: Self.payload(["all": true]))
+        }
+        XCTAssertEqual(frames.lock.withLock { frames.all }.map { message(Self.decode($0)) },
+                       ["busy with an earlier request", "busy with an earlier request"])
+        f.hold.signal()
+        waitIdle(conn, queue)
+        XCTAssertEqual(frames.lock.withLock { frames.all }.last?.first, DchFrame.historyResp)
+        XCTAssertEqual(f.historyPaths.count, 1)
+    }
+
+    /// QA #462 mutant M3: the reply of a verb whose connection closed meanwhile is dropped; the verb finishes.
+    func testAVerbWhoseConnectionClosedMidRunSendsNothing() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1")])
+        f.out[AgentIsland.restartArgs("a").joined(separator: " ")] = Self.ok("a")
+        f.holdArgs = AgentIsland.restartArgs("a")
+        let held = expectation(description: "restart running"), refreshed = expectation(description: "verb finished")
+        f.held = held
+        f.onRefresh = refreshed
+        let (conn, queue, frames) = connection(ops(f))
+        queue.sync { conn.handle(type: DchFrame.restart, payload: Self.payload(["names": ["a"]])) }
+        wait(for: [held], timeout: 5)
+        queue.sync { conn.close() }
+        f.hold.signal()
+        wait(for: [refreshed], timeout: 5)
+        waitIdle(conn, queue)
+        XCTAssertTrue(frames.lock.withLock { frames.all }.isEmpty, "no frame on a closed connection")
+        XCTAssertEqual(f.launches.count, 1, "the verb was not cancelled")
+    }
+
+    func testAFrameOnAClosedConnectionForksNothing() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1")])
+        let (conn, queue, frames) = connection(ops(f))
+        queue.sync {
+            conn.close()
+            conn.handle(type: DchFrame.restart, payload: Self.payload(["names": ["a"]]))
+            conn.handle(type: DchFrame.history, payload: Data())
+        }
+        XCTAssertFalse(queue.sync { conn.inFlight }, "nothing dispatched")
+        usleep(300_000)
+        XCTAssertTrue(f.lock.withLock { f.reads.isEmpty }, "no dch read")
+        XCTAssertTrue(f.launches.isEmpty)
+        XCTAssertTrue(frames.lock.withLock { frames.all }.isEmpty)
+    }
+
+    // MARK: - r2: bounded names, unknown keys (QA #462 M4, L2)
+
+    func testMoreThan256NamesAreRefusedBeforeAnyReadAnd256Pass() {
+        let f = Fake()
+        let many = (0..<256).map { "s\($0)" }
+        f.ls["/d"] = Self.ls(many.map { ($0, "1.24.1") })
+        for t in [DchFrame.restart, DchFrame.stop, DchFrame.revive] {
+            XCTAssertEqual(message(call(ops(f), t, ["names": many + ["s0"]])), "too many names (max 256)",
+                           "257 with a duplicate: the cap counts before the dedupe")
+        }
+        XCTAssertTrue(f.reads.isEmpty, "refused before any listing")
+        XCTAssertTrue(f.launches.isEmpty)
+        XCTAssertEqual(names(call(ops(f), DchFrame.stop, ["names": many])), many, "256 pass the cap and the gate")
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.stopArgs(many)])
+    }
+
+    func testDuplicateNamesKeepRequestOrder() {
+        XCTAssertEqual(DchControlOps.request(["names": ["b", "a", "b", "c", "a"]], key: "names", allowAll: true),
+                       .names(["b", "a", "c"]))
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1"), ("b", "1.24.1")])
+        XCTAssertEqual(names(call(ops(f), DchFrame.restart, ["names": ["b", "a", "b"]])), ["b", "a"])
+        XCTAssertEqual(f.launches.count, 2)
+    }
+
+    func testUnknownKeysAreRefusedAndRunNothing() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1")])
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        let cases: [(UInt8, [String: Any])] = [
+            (DchFrame.restart, ["names": ["a"], "dir": "/x"]), (DchFrame.stop, ["names": ["a"], "dir": "/x"]),
+            (DchFrame.revive, ["name": "a", "dir": "/x"]), (DchFrame.revive, ["all": true, "x": 1]),
+            (DchFrame.restart, ["all": true, "force": true]), (DchFrame.history, ["dir": "/x"]),
+        ]
+        for (t, o) in cases {
+            XCTAssertTrue(message(call(ops(f), t, o)).hasPrefix("malformed"), "type \(t) \(o)")
+        }
+        XCTAssertEqual(call(ops(f), DchFrame.history, [String: Any]()).type, DchFrame.historyResp, "{} is history's empty payload")
+        XCTAssertTrue(f.launches.isEmpty)
+        XCTAssertEqual(f.reads.map(\.arg), ["--history"], "only the {} history read")
     }
 }

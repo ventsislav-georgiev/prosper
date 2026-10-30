@@ -505,6 +505,9 @@ final class DchActionRunner: @unchecked Sendable {
     /// #579: a restart waits up to DCH_AGENT_TIMEOUT_MS (10 min) for its agents
     /// to pause, then up to DCH_AGENT_STEP_MS per step. #580: --stop waits the same.
     static let restartBound: TimeInterval = 900
+    /// #591 r2 (QA #462 M2): the one runner the island's buttons and the phone's
+    /// verbs share, so a phone job and an island job on one row or dir exclude each other.
+    static let shared = DchActionRunner()
 
     /// Starts the process in `cwd` (nil: ours), reports its pid and each output
     /// chunk as it comes, waits for it: (exit code, stdout+stderr).
