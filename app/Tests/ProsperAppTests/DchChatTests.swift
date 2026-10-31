@@ -400,6 +400,55 @@ final class DchChatTests: XCTestCase {
         XCTAssertEqual(s.get { $0.engine }.calls.count, 1)
     }
 
+    /// QA #502 INFO-2: the connection closes while the chat waits out an idle release. The
+    /// chat never acquires (no load for nobody), sends nothing and frees its claim.
+    func testAChatClosedWhileTheIdleReleaseRunsNeverAcquires() async {
+        let s = State()
+        let chat = makeChat(s)
+        await self.chat(connection(chat), Self.chatBody())
+        s.set { $0.holdRelease = true }
+        guard let fire = s.get({ $0.scheduled.first?.fire }) else { return XCTFail("no timer was armed") }
+        let firing = Task { await fire() }
+        await waitUntil("the release starts") { s.get { $0.releases } == 1 }
+        let r = connection(chat)
+        ingest(r, Self.frame(DchFrame.chat, Self.chatBody()))
+        try? await Task.sleep(for: .milliseconds(100))
+        r.queue.sync { r.conn.close() }
+        s.set { $0.holdRelease = false }
+        await firing.value
+        await waitUntil("the chat ends") { !r.queue.sync { r.conn.inFlight } }
+        XCTAssertEqual(s.get { $0.acquires }, 1, "only the first chat's acquire")
+        XCTAssertFalse(s.get { $0.resident }, "nothing loaded again")
+        XCTAssertEqual(s.get { $0.engine }.calls.count, 1, "no generateChat for the closed chat")
+        XCTAssertTrue(all(r).isEmpty)
+        let f = await self.chat(connection(chat), Self.chatBody())
+        XCTAssertEqual(f.map(Self.type), DchFrame.chatDone, "the claim was cleared")
+    }
+
+    /// QA #502 INFO-2: the connection closes while isResident is suspended.
+    func testAChatClosedDuringTheResidencyCheckNeverAcquires() async {
+        let s = State()
+        let chat = makeChat(s)
+        let isResident = chat.isResident
+        chat.isResident = {
+            s.set { $0.acquiring += 1 }
+            while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(5)) }
+            return await isResident()
+        }
+        let r = connection(chat)
+        ingest(r, Self.frame(DchFrame.chat, Self.chatBody()))
+        await waitUntil("isResident is suspended") { s.get { $0.acquiring } == 1 }
+        r.queue.sync { r.conn.close() }
+        await waitUntil("the chat ends") { !r.queue.sync { r.conn.inFlight } }
+        XCTAssertEqual(s.get { $0.acquires }, 0)
+        XCTAssertTrue(s.get { $0.engine }.calls.isEmpty, "no generateChat")
+        XCTAssertTrue(all(r).isEmpty)
+        XCTAssertTrue(s.get { $0.scheduled }.isEmpty, "nothing loaded, no idle timer")
+        chat.isResident = isResident
+        let f = await self.chat(connection(chat), Self.chatBody())
+        XCTAssertEqual(f.map(Self.type), DchFrame.chatDone, "the claim was cleared")
+    }
+
     /// QA #500 INFO-6: a chat frame ingested after close() never reaches the chat seam.
     func testAChatIngestedAfterCloseNeverAcquires() async {
         let s = State()

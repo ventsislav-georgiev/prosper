@@ -135,6 +135,9 @@ final class DchChat: @unchecked Sendable {
         let engine: any AgentChatEngine
         do {
             let before = await isResident()
+            // QA #502 INFO-2: closed while waiting on the release or isResident; the acquire's
+            // load can't be cancelled, so never start one for nobody. The reply is dropped.
+            guard !Task.isCancelled else { return DchFrame.encode(DchFrame.chatDone, json: ["stop": "stop"]) }
             engine = try await acquire()
             if !before { lock.withLock { phoneLoaded = true } }
         } catch {
