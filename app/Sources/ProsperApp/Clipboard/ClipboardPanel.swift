@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Floating clipboard-history panel (⇧⌥A), Raycast-style: searchable list on
@@ -11,6 +12,7 @@ final class ClipboardPanel {
     private let panel: KeyablePanel
     private let store = ClipboardStore.shared
     private let model = ClipboardPanelModel()
+    private let wait = ClipboardPasteWait(store: .shared)
     private var previousApp: NSRunningApplication?
     /// Opens the Settings window so the user can grant the Accessibility permission
     /// the auto-paste needs. Wired by AppDelegate to its shared settings opener.
@@ -53,7 +55,7 @@ final class ClipboardPanel {
             model: model,
             onCommit: { [weak self] item in self?.commit(item) },
             onCopy: { [weak self] item in self?.copyOnly(item) },
-            onCancel: { [weak self] in self?.dismiss() }
+            onCancel: { [weak self] in self?.escape() }
         )
         let hosting = NSHostingView(rootView: Themed { root })
         // The SwiftUI root fixes width (750) and has an intrinsic height (search bar
@@ -93,7 +95,7 @@ final class ClipboardPanel {
 
     func present() {
         previousApp = NSWorkspace.shared.frontmostApplication
-        model.reset(selecting: store.items.first?.id)
+        model.reset(selecting: store.historyRows.first?.id)
         isProgrammaticMove = true
         positionRelativeToRunner()
         isProgrammaticMove = false
@@ -140,7 +142,13 @@ final class ClipboardPanel {
         if let origin { panel.setFrameOrigin(origin) } else { panel.centerOnScreen() }
     }
 
+    /// Esc: while a paste waits on an upload (#632) it cancels that upload and the panel stays.
+    private func escape() {
+        if !wait.escape() { dismiss() }
+    }
+
     func dismiss() {
+        wait.end()   // a hidden panel never pastes later
         panel.orderOut(nil)
         DockPolicy.windowDidHide(panel)
     }
@@ -148,11 +156,17 @@ final class ClipboardPanel {
     /// ⌘C: copy the selected entry to the system pasteboard and close, WITHOUT
     /// pasting into the previous app (that's Enter's job). Raycast-parity.
     private func copyOnly(_ item: ClipboardItem) {
+        guard store.receiving[item.id] == nil else { return }   // #632: nothing to copy yet
         store.copyToPasteboard(item)
         dismiss()
     }
 
+    /// #632: a row still arriving pastes once its item lands; any other row at once.
     private func commit(_ item: ClipboardItem) {
+        wait.paste(item) { [weak self] in self?.pasteNow($0) }
+    }
+
+    private func pasteNow(_ item: ClipboardItem) {
         store.copyToPasteboard(item)
         dismiss()
         // Auto-paste posts a synthetic ⌘V, which macOS silently drops unless the app
@@ -220,6 +234,80 @@ final class ClipboardPanelModel: ObservableObject {
         let order: [ClipboardKind?] = [nil, .text, .link, .email, .color, .image, .file]
         let i = order.firstIndex(of: typeFilter) ?? 0
         typeFilter = order[(i + 1) % order.count]
+    }
+}
+
+// MARK: - Uploads still arriving (#632)
+
+extension ClipboardReceiving {
+    /// Marks a History row that stands for an upload still arriving; the item lands under the same id.
+    static let placeholderSource = "receiving"
+
+    var placeholder: ClipboardItem {
+        ClipboardItem(id: id, kind: kind, createdAt: createdAt,
+                      preview: name ?? "\(kind.rawValue.capitalized) from iPhone",
+                      byteCount: size, blobFile: nil, sourcePath: nil, fileName: name,
+                      source: Self.placeholderSource)
+    }
+
+    /// "x of y", as the Finder's copy progress reads.
+    var progressText: String {
+        let f = { (n: Int) in ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file) }
+        return "\(f(min(bytes, size))) of \(f(size))"
+    }
+}
+
+extension ClipboardStore {
+    /// History rows: the stored items, plus a placeholder per upload still arriving, by date.
+    var historyRows: [ClipboardItem] {
+        guard !receiving.isEmpty else { return items }
+        let incoming = receiving.values.filter { item($0.id) == nil }.map(\.placeholder)
+        return (items + incoming).sorted { a, b in
+            if a.pinned != b.pinned { return a.pinned }
+            return a.createdAt > b.createdAt
+        }
+    }
+}
+
+/// #632: pasting a row still arriving waits until its item lands, then pastes it; the
+/// upload failing or being cancelled ends the wait quietly. Esc cancels the wait and the upload.
+@MainActor
+final class ClipboardPasteWait {
+    private let store: ClipboardStore
+    /// The upload a paste is waiting on.
+    private(set) var id: UUID?
+    private var sub: AnyCancellable?
+
+    init(store: ClipboardStore) { self.store = store }
+
+    func paste(_ item: ClipboardItem, with paste: @escaping (ClipboardItem) -> Void) {
+        end()
+        // The stored item, also for a placeholder row captured before its upload completed.
+        if let stored = store.item(item.id) { paste(stored); return }
+        guard store.receiving[item.id] != nil else {
+            if item.source != ClipboardReceiving.placeholderSource { paste(item) }
+            return
+        }
+        id = item.id
+        // A completed upload is inserted into `items` before it leaves `receiving`, in one main hop.
+        sub = store.$receiving.sink { [weak self] r in
+            guard let self, let id = self.id, r[id] == nil else { return }
+            self.end()
+            if let it = self.store.item(id) { paste(it) }
+        }
+    }
+
+    /// Esc: cancels the upload being waited on. False when no paste is waiting.
+    func escape() -> Bool {
+        guard let id else { return false }
+        end()
+        store.cancel(id)
+        return true
+    }
+
+    func end() {
+        id = nil
+        sub = nil
     }
 }
 
@@ -304,7 +392,7 @@ private func bucket(_ items: [ClipboardItem]) -> SectionedItems {
 
 // MARK: - SwiftUI
 
-private struct ClipboardView: View {
+struct ClipboardView: View {
     @ObservedObject var store: ClipboardStore
     @ObservedObject var model: ClipboardPanelModel
     let onCommit: (ClipboardItem) -> Void
@@ -315,7 +403,7 @@ private struct ClipboardView: View {
 
     private var filtered: [ClipboardItem] {
         let q = model.query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return store.items.filter { item in
+        return store.historyRows.filter { item in
             if let kind = model.typeFilter, item.kind != kind { return false }
             guard !q.isEmpty else { return true }
             return item.preview.lowercased().contains(q)
@@ -411,7 +499,7 @@ private struct ClipboardView: View {
 
             Divider()
 
-            if store.items.isEmpty {
+            if store.items.isEmpty && store.receiving.isEmpty {
                 emptyState
             } else {
                 HStack(spacing: 0) {
@@ -1014,6 +1102,7 @@ private struct ClipboardView: View {
 
     private func deleteSelected() {
         guard let item = filtered.first(where: { $0.id == model.selectedId }) else { return }
+        guard store.receiving[item.id] == nil else { store.cancel(item.id); return }   // #632
         let nextId = filtered.drop(while: { $0.id != item.id }).dropFirst().first?.id
             ?? filtered.first(where: { $0.id != item.id })?.id
         store.delete(item)
@@ -1026,7 +1115,8 @@ private struct ClipboardView: View {
     }
 
     private func renameSelected() {
-        guard let item = filtered.first(where: { $0.id == model.selectedId }) else { return }
+        guard let item = filtered.first(where: { $0.id == model.selectedId }),
+              store.receiving[item.id] == nil else { return }
         let alert = NSAlert()
         alert.messageText = "Rename clipboard entry"
         alert.informativeText = "Set a custom title (leave empty to clear)."
@@ -1086,7 +1176,7 @@ func clipboardKindIcon(_ kind: ClipboardKind) -> String {
 /// `@ObservedObject` dependency, a `selectedId` change invalidates the row through
 /// Combine directly. Only the ~11 visible rows re-render, and `selectedId` never
 /// changes on scroll, so the scroll-perf path is untouched.
-private struct ClipRowView: View {
+struct ClipRowView: View {
     @ObservedObject var store: ClipboardStore
     @ObservedObject var model: ClipboardPanelModel
     let item: ClipboardItem
@@ -1100,16 +1190,20 @@ private struct ClipRowView: View {
             leading
                 .frame(width: sz(28), height: sz(28))
 
-            Text(item.displayTitle)
-                .lineLimit(1)
-                .font(Neon.font(13))
-                .foregroundColor(isSelected ? Neon.textPrimary : Neon.textSecondary)
+            if let r = store.receiving[item.id] {
+                ClipReceivingProgress(receiving: r, title: item.displayTitle, selected: isSelected)
+            } else {
+                Text(item.displayTitle)
+                    .lineLimit(1)
+                    .font(Neon.font(13))
+                    .foregroundColor(isSelected ? Neon.textPrimary : Neon.textSecondary)
 
-            Spacer(minLength: 0)
-            if item.pinned {
-                Image(systemName: "pin.fill")
-                    .font(Neon.font(9))
-                    .foregroundColor(Neon.blue)
+                Spacer(minLength: 0)
+                if item.pinned {
+                    Image(systemName: "pin.fill")
+                        .font(Neon.font(9))
+                        .foregroundColor(Neon.blue)
+                }
             }
             // ⌃-digit badge is drawn by the fixed `slotOverlay`, not per-row, so it
             // stays anchored to a screen position while rows scroll underneath.
@@ -1164,6 +1258,47 @@ private struct ClipRowView: View {
             Image(systemName: clipboardKindIcon(item.kind))
                 .font(Neon.font(14))
                 .foregroundColor(.secondary)
+        }
+    }
+}
+
+/// #632: an upload still arriving: its name, "x of y" and a plain determinate bar.
+struct ClipReceivingProgress: View {
+    let receiving: ClipboardReceiving
+    let title: String
+    let selected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(3)) {
+            HStack(spacing: sz(6)) {
+                Text(title)
+                    .lineLimit(1)
+                    .font(Neon.font(13))
+                    .foregroundColor(selected ? Neon.textPrimary : Neon.textSecondary)
+                Spacer(minLength: 0)
+                Text(receiving.progressText)
+                    .font(Neon.font(11))
+                    .foregroundColor(Neon.textSecondary)
+                    .fixedSize()
+            }
+            ProgressView(value: Double(min(receiving.bytes, receiving.size)), total: Double(max(receiving.size, 1)))
+                .progressViewStyle(PlainBar())
+        }
+    }
+
+    /// A thin track and fill drawn in SwiftUI: the AppKit-backed .linear style renders as a
+    /// placeholder offscreen (ImageRenderer). Static, no animation.
+    private struct PlainBar: ProgressViewStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            let f = min(max(configuration.fractionCompleted ?? 0, 0), 1)
+            Capsule()
+                .fill(Neon.textSecondary.opacity(0.25))
+                .overlay(alignment: .leading) {
+                    GeometryReader { g in
+                        Capsule().fill(Neon.blue).frame(width: g.size.width * f)
+                    }
+                }
+                .frame(height: sz(4))
         }
     }
 }
