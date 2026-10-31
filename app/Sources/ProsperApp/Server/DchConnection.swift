@@ -635,6 +635,10 @@ struct DchControlOps: Sendable {
 
     /// The History tab's rows: pinned first and never capped, then the newest unpinned
     /// up to the cap (#605), with the binary the island reads them with.
+    /// ponytail: no size guard. Pinned rows are uncapped, so ~2000 pinned records with
+    /// 4 KB argv each (8.4 MB) pass DchFrame.maxFrame and the phone refuses the frame
+    /// (QA #489 I6). Fix if pins ever get that many: past DchLibraryOps.maxReply drop the argv, then
+    /// the oldest unpinned rows.
     private func history(_ reply: Reply) {
         let gate = DchCommand.gate(binary(), masters: [], minimum: AgentIsland.controlMinimum)
         guard case .ok(let path) = gate else { return reply(Self.error("History \(gate.refusal ?? "")")) }
@@ -748,7 +752,7 @@ struct DchControlOps: Sendable {
         let name = names[0]
         switch Self.record(name, in: records(path)) {
         case .failure(let why): reply(Self.error(why.message))
-        case .success(let r) where r.pinned: reply(Self.error("\(name): pinned, unpin it first"))
+        case .success(let r) where r.pinned: reply(Self.error("\(name): \(AgentIsland.pinnedRefusal)"))
         case .success(let r):
             run([(r.key, AgentIsland.forgetArgs(r.name))], path: path, bound: nil, reply) {
                 Self.answer(named: [(name, $0[0])], .remove)

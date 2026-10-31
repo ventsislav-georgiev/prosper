@@ -256,6 +256,7 @@ extension AgentIsland {
             if let a = o.revivedAs, !a.isEmpty, a != o.name { return "Resumed as \(a)" }
             return "Resumed"
         }
+        if o.reason == "pinned" { return pinnedRefusal }   // QA #489 I5: never dch's -f hint
         let detail = o.detail ?? ""
         let d = detail.hasPrefix(o.name + ": ") ? String(detail.dropFirst(o.name.count + 2)) : detail
         return d.isEmpty ? "\(verb.rawValue) \(o.result ?? "failed") (\(o.reason ?? ""))" : d
@@ -330,6 +331,8 @@ extension AgentIsland {
     static func forgetArgs(_ name: String) -> [String]? { named("--forget", [name]) }
     /// Every record neither live nor pinned; dch skips those (-f is a usage error here).
     static let forgetAllArgs = ["--forget", "--all", "--json"]
+    /// dch's reason "pinned" for a remove, in the island's words and the phone's (never dch's -f hint).
+    static let pinnedRefusal = "pinned, unpin it first"
 
     /// A pin, unpin or remove's line for its dir's status; nil when it worked.
     /// dch's detail for a failed result (io_error's is the OS error), else the exit.
@@ -337,7 +340,7 @@ extension AgentIsland {
         let what = "\(verb.rawValue) \(name)"
         if r.stopped { return "\(what) cancelled: no answer in \(verb.minutes)m" }
         if let f = r.json.first(where: { $0.isFinal && $0.failed }) {
-            if f.reason == "pinned" { return "\(what) failed: pinned, unpin it first" }
+            if f.reason == "pinned" { return "\(what) failed: \(pinnedRefusal)" }
             let d = f.detail ?? ""
             return "\(what) failed: \(d.isEmpty ? f.reason ?? "" : d)"
         }

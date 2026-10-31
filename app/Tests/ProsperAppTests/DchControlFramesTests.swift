@@ -998,4 +998,55 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(frames.lock.withLock { frames.all }.map { Self.decode($0).type }, [DchFrame.ok, DchFrame.ok, DchFrame.ok])
         XCTAssertEqual(f.launchedArgs, [["--pin", "a", "--json"], ["--forget", "a", "--json"], AgentIsland.forgetAllArgs])
     }
+
+    // MARK: - QA #489 follow-ups (#633)
+
+    /// LOW-1 (QA mutant T6): Clear unpinned holds the History dir's key, not its first
+    /// record's, so an island job on another record in that dir makes it busy.
+    func testAnIslandJobOnAnotherRecordMakesThePhonesClearUnpinnedBusy() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "exit 0"],
+                                  ["name": "b", "updated": Self.now - 90, "end": "exit 0"]])
+        let o = ops(f, binary: Self.v125), shared = o.runner
+        f.holdArgs = ["--island"]
+        let held = expectation(description: "island job running"), done = expectation(description: "island job done")
+        f.held = held
+        XCTAssertTrue(shared.start(AgentSessionKey(dir: "/d", name: "b"), path: "/fake/dch", args: ["--island"], env: { [:] }) { _ in
+            done.fulfill()
+        })
+        wait(for: [held], timeout: 5)
+        XCTAssertEqual(message(call(o, DchFrame.forgetAll, raw: Data())), "Clear unpinned failed: dch: busy with an earlier request")
+        f.hold.signal()
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(f.launchedArgs, [["--island"]], "no --forget --all launched while busy")
+    }
+
+    /// I1 (QA mutant T1): a stopped Clear is an error even when it exited 0.
+    func testAStoppedClearUnpinnedIsAnErrorEvenOnExit0() {
+        let r = Self.decode(DchControlOps.answer(cleared: [DchActionResult(status: 0, stopped: true)]))
+        XCTAssertEqual(message(r), "Clear unpinned cancelled: no answer in \(AgentIsland.Verb.clear.minutes)m")
+    }
+
+    /// I2 (QA mutant T5): an unpin's failure names Unpin, not Pin.
+    func testAFailedUnpinSaysUnpin() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "exit 0", "pinned": true]])
+        f.out["--unpin a --json"] = "dch: cannot write the record"
+        f.status = 1
+        XCTAssertEqual(message(call(ops(f, binary: Self.v125), DchFrame.pin, ["name": "a", "pin": false])),
+                       "a: Unpin failed: dch: cannot write the record")
+        XCTAssertEqual(message(Self.decode(DchControlOps.answer(named: [("a", DchActionResult(status: 0, stopped: true))], .unpin))),
+                       "a: Unpin cancelled: no answer in \(AgentIsland.Verb.unpin.minutes)m")
+    }
+
+    /// I5: dch's own pinned refusal (a pin between the Mac's read and dch's run) reaches
+    /// the phone in the island's words, never dch's -f hint.
+    func testDchsPinnedRefusalReachesThePhoneWithoutTheForceHint() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "exit 0"]])
+        f.out["--forget a --json"] = Self.line("a", "failed", reason: "pinned", detail: "pinned (-f forgets it anyway)")
+        f.status = 1
+        XCTAssertEqual(message(call(ops(f, binary: Self.v125), DchFrame.forget, ["name": "a"])), "a: pinned, unpin it first")
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs("a")!])
+    }
 }
