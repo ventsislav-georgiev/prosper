@@ -57,8 +57,13 @@ enum DchFrame {
     static let clipboardItemResp: UInt8 = 0x1a // {id, date, kind, source, size, sha256, name?, mime?}, then data
     static let clipboardResp: UInt8 = 0x1d     // [{id, date, kind, source, size, text?, thumb?, name?}]
 
-    /// #617: the phone's ProsperTransport.maxFrame; a request frame past it closes the connection.
+    /// #617: the phone's ProsperTransport.maxFrame: what the Mac sends stays within it
+    /// (list paging, item checks). The Mac's receive side is bounded by maxRequestFrame.
     static let maxFrame = 8 << 20
+    /// #617 fix round 1: a garbage guard on every received frame, not a protocol limit. The
+    /// shipped phone sends a pasted photo as one 0x0a putClipboard (17 MB for a 4032 px PNG)
+    /// and a big paste as one 0x10 frame; a larger length prefix closes the connection.
+    static let maxRequestFrame = 256 << 20
 
     /// #591: the requests beyond the original set this Mac answers, in machineInfoResp's
     /// "ops" (an older phone ignores the key; a newer one hides what an older Mac lacks).
@@ -114,6 +119,9 @@ final class DchConnection: @unchecked Sendable {
     var clipboard = DchClipboardOps()
     /// #617: this connection's clipboardUpload, which its data frames feed. On `queue`.
     private var upload: DchClipboardUpload?
+    /// #617 fix round 1: this connection ever started a clipboardUpload. Sticky: after an
+    /// early reply the phone's leftover data frames would otherwise reach a later pty.
+    private var uploaded = false
     /// #627: the kill frame's `dch -k <name>`; tests set a recorder so no real dch runs.
     var kill: (String) -> Void = { DchCommand.kill($0) }
     /// QA #462 M3: a history/control request of this connection awaits its reply. On `queue`.
@@ -155,13 +163,19 @@ final class DchConnection: @unchecked Sendable {
     private func receive() {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [weak self] data, _, isComplete, error in
             guard let self else { return }
-            if let data, !data.isEmpty { self.buffer.append(data); self.drain() }
+            if let data, !data.isEmpty { self.ingest(data) }
             if isComplete || error != nil { self.close(); return }
             guard !self.closed else { return }
             // #617: an upload's unwritten backlog pauses reading until its disk catches up.
             guard let upload = self.upload else { return self.receive() }
             upload.whenDrained { [weak self] in self?.queue.async { if self?.closed == false { self?.receive() } } }
         }
+    }
+
+    /// Raw socket bytes, on `queue`; a test seam too (#617 fix round 1).
+    func ingest(_ data: Data) {
+        buffer.append(data)
+        drain()
     }
 
     /// Pull complete frames out of `buffer` and dispatch them.
@@ -172,8 +186,8 @@ final class DchConnection: @unchecked Sendable {
                 let b = raw.baseAddress!.advanced(by: 1).assumingMemoryBound(to: UInt8.self)
                 return (Int(b[0]) << 24) | (Int(b[1]) << 16) | (Int(b[2]) << 8) | Int(b[3])
             }
-            // #617: the phone never sends a frame past its maxFrame; a bigger length is garbage.
-            guard len <= DchFrame.maxFrame else {
+            // #617: a length past maxRequestFrame is garbage, whatever the frame type.
+            guard len <= DchFrame.maxRequestFrame else {
                 send(DchControlOps.error("frame too large"))
                 return close()
             }
@@ -213,7 +227,7 @@ final class DchConnection: @unchecked Sendable {
             result.failed = e != nil
             sem.signal()
         })
-        guard sem.wait(timeout: .now() + 20) == .success else {
+        guard sem.wait(timeout: .now() + 60) == .success else {
             queue.async { self.close() }
             return false
         }
@@ -272,6 +286,7 @@ final class DchConnection: @unchecked Sendable {
             // Data frames are this connection's keystrokes once attached.
             guard pty == nil else { return send(DchControlOps.error("clipboardUpload needs its own connection")) }
             inFlight = true
+            uploaded = true
             let up = DchClipboardUpload(ops: clipboard, reply: { self.finalReply($0) },
                                         closeConnection: { [weak self] in self?.queue.async { self?.close() } })
             upload = up
@@ -359,6 +374,8 @@ final class DchConnection: @unchecked Sendable {
 
     private func startSession(type: UInt8, payload: Data) {
         guard pty == nil else { return }  // one session per connection
+        // #617 fix round 1: never on a connection that carried an upload (see `uploaded`).
+        guard !uploaded else { return send(DchControlOps.error("clipboardUpload connections cannot attach or create")) }
         let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
         let name = o["name"] as? String
         sessionName = name

@@ -257,22 +257,27 @@ struct DchClipboardOps: Sendable {
         }
         guard arr.count <= Self.maxItems else { return reply(Self.error("too many items (max \(Self.maxItems))")) }
         var added: [String] = [], skipped: [[String: String]] = []
+        let store = onMain { $0 }
         for e in arr {
             let e = e as? [String: Any] ?? [:]
             let idText = e["id"] as? String ?? ""
             func skip(_ why: String) { skipped.append(["id": idText, "reason": why]) }
             guard let id = UUID(uuidString: idText), let kind = e["kind"] as? String else { skip("bad_item"); continue }
             if kind == "image" || kind == "file" { skip("use_upload"); continue }
-            guard kind == "text", let text = e["text"] as? String, let date = (e["date"] as? String).flatMap(Self.date),
+            guard kind == "text", let text = e["text"] as? String, let date = (e["date"] as? String).flatMap(Self.itemDate),
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { skip("bad_item"); continue }
             guard text.utf8.count <= Self.smallText else { skip("use_upload"); continue }
             let sha = ClipboardStore.sha256(Data(text.utf8))
+            // Sealed here, off main; one main hop decides; a losing blob goes off main.
+            guard let sealed = store.sealRemote(id: id, date: date, source: "iPhone", sha256: sha, .text(text)) else {
+                skip("write_failed"); continue
+            }
             let why = onMain { s -> String? in
                 if s.item(id) != nil || s.receiving[id] != nil || s.dedupe(sha256: sha, date: date) { return "duplicate" }
-                guard s.addRemote(id: id, date: date, source: "iPhone", sha256: sha, .text(text)) else { return "write_failed" }
+                s.insertRemote(sealed)
                 return s.item(id) == nil ? "too_old" : nil   // older than the history's cap keeps
             }
-            if let why { skip(why) } else { added.append(idText) }
+            if let why { store.removeBlob(sealed); skip(why) } else { added.append(idText) }
         }
         reply(DchFrame.encode(DchFrame.ok, json: ["added": added, "skipped": skipped]))
     }
@@ -295,7 +300,7 @@ struct DchClipboardOps: Sendable {
     static func upload(_ payload: Data) -> Upload? {
         guard let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
               let id = (o["id"] as? String).flatMap(UUID.init(uuidString:)),
-              let date = (o["date"] as? String).flatMap(Self.date),
+              let date = (o["date"] as? String).flatMap(Self.itemDate),
               let kind = (o["kind"] as? String).flatMap(ClipboardKind.init(rawValue:)), [.text, .image, .file].contains(kind),
               let size = int(o["size"]),
               let sha = (o["sha256"] as? String)?.lowercased(), sha.count == 64, sha.allSatisfy(\.isHexDigit),
@@ -311,13 +316,17 @@ struct DchClipboardOps: Sendable {
                       mime: o["mime"] as? String, live: live)
     }
 
-    /// The received file's name: the phone's, as one plain path component, else
-    /// "iPhone Clipboard" with an extension from the mime or the kind.
+    /// The received file's name: the phone's, as one plain path component (NUL, "/" and ":"
+    /// become "-"), cut to 200 Characters keeping a short extension, else "iPhone Clipboard"
+    /// with an extension from the mime or the kind.
     static func fileName(_ u: Upload) -> String {
-        var n = String((u.name ?? "").map { "/:".contains($0) || $0.isNewline ? "-" : $0 })
+        var n = String((u.name ?? "").map { "/:\u{0}".contains($0) || $0.isNewline ? "-" : $0 })
             .trimmingCharacters(in: .whitespacesAndNewlines)
         while n.hasPrefix(".") { n.removeFirst() }
-        n = String(n.prefix(200))
+        if n.count > 200 {
+            let ext = (n as NSString).pathExtension, tail = (1...16).contains(ext.count) ? "." + ext : ""
+            n = String((tail.isEmpty ? n : (n as NSString).deletingPathExtension).prefix(200 - tail.count)) + tail
+        }
         guard n.isEmpty else { return n }
         let ext = u.mime.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
             ?? (u.kind == .text ? "txt" : u.kind == .image ? "png" : nil)
@@ -343,11 +352,20 @@ struct DchClipboardOps: Sendable {
 
     /// The live pasteboard once an upload is complete: text as a string, an image as PNG
     /// (and TIFF), a file as its URL. The monitor then records no second copy.
-    @MainActor static func setLive(_ it: ClipboardItem, _ s: ClipboardStore) {
-        if it.kind == .image, let data = it.blobFile.flatMap(s.readBlob) {
+    /// `payload`, when the caller still holds it, spares main the blob's read and decrypt.
+    @MainActor static func setLive(_ it: ClipboardItem, _ s: ClipboardStore, _ payload: ClipboardStore.RemotePayload? = nil) {
+        switch payload {
+        case .text(let t)?:
+            Pasteboard.general.clearContents()
+            Pasteboard.general.setString(t, forType: .string)
+        case .image(let data, _, _)?:
             DchConnection.setPasteboardImage(data)
-        } else {
-            s.copyToPasteboard(it)
+        default:
+            if it.kind == .image, let data = it.blobFile.flatMap(s.readBlob) {
+                DchConnection.setPasteboardImage(data)
+            } else {
+                s.copyToPasteboard(it)
+            }
         }
         ClipboardMonitor.shared.ignoreHistory(changeCount: Pasteboard.general.changeCount)
     }
@@ -376,6 +394,10 @@ struct DchClipboardOps: Sendable {
         f.formatOptions = [.withInternetDateTime]
         return f.date(from: s)
     }
+
+    /// A phone item's date, never later than now (#617 fix round 1): a future date would
+    /// keep it above every later copy, and re-date a kept duplicate on dedupe.
+    static func itemDate(_ s: String) -> Date? { date(s).map { min($0, Date()) } }
 
     /// Milliseconds, the wire date's precision, so `since` = an item's own date excludes it.
     static func ms(_ d: Date) -> Double { (d.timeIntervalSince1970 * 1000).rounded(.down) }
@@ -413,6 +435,7 @@ final class DchClipboardUpload: @unchecked Sendable {
 
     // On q.
     private var u: DchClipboardOps.Upload?
+    private var store: ClipboardStore?
     private var done = false
     private var received = 0
     private var hasher = SHA256()
@@ -462,29 +485,33 @@ final class DchClipboardUpload: @unchecked Sendable {
     private func begin(_ header: Data) {
         guard ops.enabled() else { return finish(DchClipboardOps.error(DchClipboardOps.offMessage)) }
         guard let u = DchClipboardOps.upload(header) else { return finish(DchClipboardOps.error(DchClipboardOps.uploadShape)) }
-        let dup = ops.onMain { s -> Bool in
-            if s.receiving[u.id] != nil { return true }
-            let kept: ClipboardItem? = s.item(u.id)
-                ?? (s.dedupe(sha256: u.sha256, date: u.date) ? s.items.first { $0.sha256 == u.sha256 } : nil)
-            guard let kept else { return false }
-            if u.live { DchClipboardOps.setLive(kept, s) }
-            return true
-        }
-        if dup { return finish(DchClipboardOps.skipped(u.id, "duplicate")) }
-        let toFile = u.kind == .file || u.size > ops.memoryMax(u.kind == .image)
-        guard let dir = toFile ? ops.receivedDir() : ops.onMain({ $0.dir }) else {
-            return finish(DchClipboardOps.error("no folder for received files"))
-        }
-        // ponytail: see minFreeAfter.
-        if let free = ops.freeSpace(dir), free - Int64(u.size) < DchClipboardOps.minFreeAfter {
-            return finish(DchClipboardOps.skipped(u.id, "no_space"))
-        }
-        if toFile, !openPart(in: dir, u) { return finish(DchClipboardOps.error("cannot write the received file")) }
-        self.u = u
         let close = closeConnection
         let r = ClipboardReceiving(id: u.id, kind: u.kind, createdAt: u.date, name: u.name, size: u.size, bytes: 0)
-        ops.onMain { $0.beginReceiving(r, cancel: close) }
+        // One hop: the duplicate check and the row, so no second upload of this id gets past here.
+        let store = ops.onMain { s -> ClipboardStore? in
+            if s.receiving[u.id] != nil { return nil }
+            let kept: ClipboardItem? = s.item(u.id)
+                ?? (s.dedupe(sha256: u.sha256, date: u.date) ? s.items.first { $0.sha256 == u.sha256 } : nil)
+            if let kept {
+                if u.live { DchClipboardOps.setLive(kept, s) }
+                return nil
+            }
+            s.beginReceiving(r, cancel: close)
+            return s
+        }
+        guard let store else { return finish(DchClipboardOps.skipped(u.id, "duplicate")) }
+        (self.u, self.store) = (u, store)   // from here a refusal ends the row (cleanup)
+        let toFile = u.kind == .file || u.size > ops.memoryMax(u.kind == .image)
+        guard let dir = toFile ? ops.receivedDir() : store.dir else { return fail("no folder for received files") }
+        guard hasRoom(dir, u.size) else { return skip("no_space") }
+        if toFile, !openPart(in: dir, u) { return fail("cannot write the received file") }
         if u.size == 0 { complete() }
+    }
+
+    /// ponytail: see minFreeAfter.
+    private func hasRoom(_ dir: URL, _ size: Int) -> Bool {
+        guard let free = ops.freeSpace(dir) else { return true }
+        return free - Int64(size) >= DchClipboardOps.minFreeAfter
     }
 
     private func openPart(in dir: URL, _ u: DchClipboardOps.Upload) -> Bool {
@@ -525,8 +552,11 @@ final class DchClipboardUpload: @unchecked Sendable {
             }
             guard let (w, h) = Self.pixels(data) else { return skip("bad_item") }
             guard w * h > ops.maxPixels else { return add(.image(data, width: w, height: h)) }
-            // Past the Mac's own pixel limit: a file, as a big image always is.
-            guard let dir = ops.receivedDir(), openPart(in: dir, u), (try? file?.write(contentsOf: data)) != nil else {
+            // Past the Mac's own pixel limit: a file, as a big image always is. Its room was
+            // checked on the store's volume; the received folder can be another one.
+            guard let dir = ops.receivedDir() else { return fail("no folder for received files") }
+            guard hasRoom(dir, data.count) else { return skip("no_space") }
+            guard openPart(in: dir, u), (try? file?.write(contentsOf: data)) != nil else {
                 return fail("cannot write the received file")
             }
         }
@@ -539,26 +569,34 @@ final class DchClipboardUpload: @unchecked Sendable {
         add(.file(dest)) { try? FileManager.default.removeItem(at: dest) }
     }
 
-    /// Inserts the item, ends its receiving row and (live) sets the pasteboard, in one main
-    /// hop; a content duplicate that arrived meanwhile is skipped and `undo` runs.
+    /// Seals the item here, off main (classify, preview, encrypt, write), then one main hop
+    /// inserts it, ends its receiving row and (live) sets the pasteboard. A content duplicate
+    /// that arrived meanwhile, or an item older than the history keeps, loses: its blob is
+    /// removed back here, `undo` runs, and it is skipped.
     private func add(_ payload: ClipboardStore.RemotePayload, undo: () -> Void = {}) {
-        guard let u else { return }
+        guard let u, let store else { return }
+        guard let item = store.sealRemote(id: u.id, date: u.date, source: "iPhone", sha256: u.sha256, payload) else {
+            undo()
+            return fail("cannot store the item")
+        }
+        let live = u.live ? payload : nil
         let result = ops.onMain { s -> String? in
+            // Cancelled (#632's Esc) while it was sealing: it never lands.
+            guard s.receiving[u.id] != nil else { return "cancelled" }
             defer { s.endReceiving(u.id) }
             if s.dedupe(sha256: u.sha256, date: u.date) {
                 if u.live, let kept = s.items.first(where: { $0.sha256 == u.sha256 }) { DchClipboardOps.setLive(kept, s) }
                 return "duplicate"
             }
-            guard s.addRemote(id: u.id, date: u.date, source: "iPhone", sha256: u.sha256, payload) else { return "write" }
+            s.insertRemote(item)
             guard let it = s.item(u.id) else { return "too_old" }   // evicted at once: older than the cap keeps
-            if u.live { DchClipboardOps.setLive(it, s) }
+            if let live { DchClipboardOps.setLive(it, s, live) }
             return nil
         }
-        switch result {
-        case nil: finish(DchFrame.encode(DchFrame.ok, json: ["added": [u.id.uuidString]]))
-        case "duplicate", "too_old": undo(); finish(DchClipboardOps.skipped(u.id, result!))
-        default: undo(); finish(DchClipboardOps.error("cannot store the item"))
-        }
+        guard let result else { return finish(DchFrame.encode(DchFrame.ok, json: ["added": [u.id.uuidString]])) }
+        store.removeBlob(item)   // too_old: eviction already removed it
+        undo()
+        finish(result == "cancelled" ? DchClipboardOps.error(result) : DchClipboardOps.skipped(u.id, result))
     }
 
     private func skip(_ why: String) {

@@ -41,6 +41,10 @@ final class DchClipboardFramesTests: XCTestCase {
         o.freeSpace = { _ in free }
         if let memoryMax { o.memoryMax = { _ in memoryMax } }
         if let maxPixels { o.maxPixels = maxPixels }
+        return wire(o, store: store, received: received)
+    }
+
+    private func wire(_ o: DchClipboardOps, store: ClipboardStore, received: URL) -> Rig {
         let queue = DispatchQueue(label: "test.dchconn.clipboard")
         let frames = Frames()
         let conn = DchConnection(conn: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), queue: queue,
@@ -50,6 +54,9 @@ final class DchClipboardFramesTests: XCTestCase {
         conn.clipboard = o
         return Rig(conn: conn, queue: queue, frames: frames, store: store, received: received)
     }
+
+    /// QA #493 P4: a second connection on the same store, folders and gate.
+    private func peer(_ r: Rig) -> Rig { wire(r.conn.clipboard, store: r.store, received: r.received) }
 
     // MARK: Frame helpers
 
@@ -438,6 +445,7 @@ final class DchClipboardFramesTests: XCTestCase {
         XCTAssertEqual(r.store.item(a)?.createdAt, t + 10, "an older duplicate moves nothing")
         XCTAssertEqual(skipped(request(r, DchFrame.addClipboardHistory, ["items": [item(a, "other text")]])).first?["reason"], "duplicate",
                        "a known id is a duplicate too")
+        XCTAssertEqual(r.store.text(for: r.store.item(a)!), "first", "the refused item's seal never touches the kept item's blob")
 
         let atCap = request(r, DchFrame.addClipboardHistory, ["items": [item(UUID(), String(repeating: "c", count: DchClipboardOps.smallText))]])
         XCTAssertEqual(added(atCap).count, 1, "exactly 64 KB is small")
@@ -869,5 +877,300 @@ final class DchClipboardFramesTests: XCTestCase {
         r.conn.clipboard.receivedDir = DchClipboardOps().receivedDir
         handle(r, DchFrame.clipboardUpload, header(Data("x".utf8), kind: "file"))
         XCTAssertEqual(Self.message(final(r)), "no folder for received files")
+    }
+
+    // MARK: - Fix round 1 (QA #493)
+
+    /// Raw socket bytes through DchConnection.ingest, in `piece`-sized reads.
+    private func ingest(_ r: Rig, _ bytes: Data, piece: Int = 64 << 10) {
+        var at = 0
+        while at < bytes.count {
+            let d = bytes.subdata(in: at..<min(at + piece, bytes.count))
+            r.queue.sync { r.conn.ingest(d) }
+            at += d.count
+        }
+    }
+
+    private static func lengthPrefix(_ type: UInt8, _ n: Int) -> Data {
+        var d = Data([type]), be = UInt32(n).bigEndian
+        withUnsafeBytes(of: &be) { d.append(contentsOf: $0) }
+        return d
+    }
+
+    /// An RGB noise PNG: incompressible, so 2410 x 2410 is past 16 MiB, like a 4032 px photo.
+    private static func noisePNG(_ w: Int, _ h: Int) -> Data {
+        var px = Data(count: w * h * 4)
+        px.withUnsafeMutableBytes { arc4random_buf($0.baseAddress!, $0.count) }
+        let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                         space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                         provider: CGDataProvider(data: px as CFData)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+        let out = NSMutableData()
+        let dst = CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(dst, cg, nil)
+        CGImageDestinationFinalize(dst)
+        return out as Data
+    }
+
+    private func blobs(_ r: Rig) -> [String] { dir(r.store.dir).filter { $0 != "index.json" } }
+
+    /// F1: the shipped phone sends a pasted photo as ONE putClipboard frame, full size, on the
+    /// attached connection, sync on or off. A 17 MB PNG read off the socket in pieces is set
+    /// on the pasteboard and acked; the connection stays.
+    func testAPutClipboardFramePastEightMegabytesIsSetAndAcked() {
+        defer { Pasteboard.general.clearContents() }
+        let png = Self.noisePNG(2410, 2410)
+        XCTAssertGreaterThan(png.count, 16 << 20)
+        let frame = DchFrame.encode(DchFrame.putClipboard, [UInt8](png))
+        for on in [true, false] {
+            let r = rig(on: on, label: "sync\(on)")
+            Pasteboard.general.clearContents()
+            ingest(r, frame)
+            XCTAssertEqual(all(r), [DchFrame.encode(DchFrame.ok, [])], "sync \(on)")
+            XCTAssertEqual(r.frames.lock.withLock { r.frames.closed }, 0, "sync \(on)")
+            XCTAssertEqual(Pasteboard.general.data(forType: .png), png, "sync \(on)")
+        }
+    }
+
+    /// The receive bound is a 256 MiB garbage guard on every frame type: a 2^31 length closes
+    /// with "frame too large", a length at the bound waits for its bytes, and a big data frame
+    /// with no pty and no upload is dropped with the connection kept.
+    func testOnlyALengthPastTheRequestBoundClosesTheConnection() throws {
+        XCTAssertEqual(DchFrame.maxRequestFrame, 256 << 20)
+        XCTAssertEqual(DchFrame.maxFrame, 8 << 20, "the Mac's own sends stay within the phone's maxFrame")
+        for (label, type, n) in [("2^31", DchFrame.putClipboard, 1 << 31), ("past", DchFrame.data, DchFrame.maxRequestFrame + 1)] {
+            let r = rig(label: label)
+            ingest(r, Self.lengthPrefix(type, n))
+            XCTAssertEqual(all(r).map(Self.type), [DchFrame.error], label)
+            XCTAssertEqual(Self.message(all(r).first), "frame too large", label)
+            XCTAssertEqual(r.frames.lock.withLock { r.frames.closed }, 1, label)
+        }
+        let at = rig(label: "at")
+        ingest(at, Self.lengthPrefix(DchFrame.putClipboard, DchFrame.maxRequestFrame))
+        XCTAssertEqual(all(at), [], "at the bound: waits for the rest")
+        XCTAssertEqual(at.frames.lock.withLock { at.frames.closed }, 0)
+
+        let r = rig(label: "data")
+        ingest(r, DchFrame.encode(DchFrame.data, [UInt8](repeating: 0x61, count: (8 << 20) + 1)), piece: 1 << 20)
+        XCTAssertEqual(all(r), [], "no pty, no upload: dropped")
+        XCTAssertEqual(r.frames.lock.withLock { r.frames.closed }, 0, "an 8 MiB + 1 data frame keeps the connection")
+        XCTAssertEqual(request(r, DchFrame.clipboardList).map(Self.type), DchFrame.clipboardResp, "and it still answers")
+    }
+
+    /// F2 U2/U3 (QA P5): DchClipboardUpload alone. begin() is parked on main (never spun here)
+    /// while 5 x 1 MB arrive from another thread: past the 4 MB backlog whenDrained holds `f`.
+    /// Once main runs and the backlog drains, `f` runs exactly once.
+    func testUploadBacklogHoldsTheReadUntilItDrainsThenResumesOnce() throws {
+        let store = ClipboardStore(dir: tempDir("store")), received = tempDir("recv")
+        var o = DchClipboardOps()
+        o.enabled = { true }
+        o.store = { store }
+        o.receivedDir = { received }
+        o.freeSpace = { _ in nil }
+        let replies = Frames(), calls = Frames()
+        let up = DchClipboardUpload(ops: o, reply: { f in replies.lock.withLock { replies.all.append(f) } }, closeConnection: {})
+        let mb = DchClipboardOps.chunk, body = Self.bytes(6 * mb), id = UUID()
+        up.start(try JSONSerialization.data(withJSONObject: header(body, id: id, kind: "file", name: "six.bin")))
+        let fed = DispatchGroup()
+        DispatchQueue.global().async(group: fed) { for i in 0..<5 { up.feed(body.subdata(in: i * mb..<(i + 1) * mb)) } }
+        fed.wait()
+        up.whenDrained { calls.lock.withLock { calls.closed += 1 } }
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(calls.lock.withLock { calls.closed }, 0, "past the backlog the read waits")
+        XCTAssertTrue(store.receiving.isEmpty, "begin() is still parked on main")
+        up.feed(body.subdata(in: 5 * mb..<6 * mb))
+        XCTAssertTrue(spin { replies.lock.withLock { replies.all.count } == 1 })
+        XCTAssertEqual(added(replies.lock.withLock { replies.all.first }), [id.uuidString])
+        XCTAssertTrue(spin { calls.lock.withLock { calls.closed } >= 1 }, "the read resumes once drained")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        up.sync()
+        XCTAssertEqual(calls.lock.withLock { calls.closed }, 1, "exactly once")
+        XCTAssertEqual(try Data(contentsOf: received.appendingPathComponent("six.bin")), body)
+        up.whenDrained { calls.lock.withLock { calls.closed += 1 } }
+        XCTAssertEqual(calls.lock.withLock { calls.closed }, 2, "an idle upload runs it at once")
+    }
+
+    /// F2 U4 (QA P4(b)): the same id on two connections; the second is a duplicate.
+    func testTheSameIdOnTwoConnectionsIsADuplicateForTheSecond() {
+        let r = rig(), p = peer(r)
+        let body = Self.bytes(10), id = UUID()
+        handle(r, DchFrame.clipboardUpload, header(body, id: id))
+        XCTAssertTrue(spin { r.store.receiving[id] != nil })
+        handle(p, DchFrame.clipboardUpload, header(Self.bytes(10, seed: 5), id: id))
+        XCTAssertEqual(skipped(final(p)), [["id": id.uuidString, "reason": "duplicate"]])
+        XCTAssertNotNil(r.store.receiving[id], "the first keeps its row")
+        feed(r, body)
+        XCTAssertEqual(added(final(r)), [id.uuidString])
+        XCTAssertEqual(r.store.items.map(\.id), [id])
+        XCTAssertEqual(r.store.text(for: r.store.items[0]), String(decoding: body, as: UTF8.self))
+        XCTAssertTrue(r.store.receiving.isEmpty)
+    }
+
+    /// F2 U5 (QA P4(a)): the same content under two ids, both past begin() before either
+    /// completes, ends in ONE row and ONE blob; the loser's blob, sealed off main, is removed.
+    func testTheSameContentUnderTwoIdsAtOnceEndsInOneRowAndOneBlob() {
+        let r = rig(), p = peer(r)
+        let body = Self.bytes(2 * DchClipboardOps.chunk + 3), (i1, i2) = (UUID(), UUID())
+        handle(r, DchFrame.clipboardUpload, header(body, id: i1))
+        handle(p, DchFrame.clipboardUpload, header(body, id: i2))
+        XCTAssertTrue(spin { r.store.receiving.count == 2 }, "both past begin()")
+        feed(r, body)
+        XCTAssertEqual(added(final(r)), [i1.uuidString])
+        feed(p, body)
+        XCTAssertEqual(skipped(final(p)), [["id": i2.uuidString, "reason": "duplicate"]])
+        XCTAssertEqual(r.store.items.map(\.id), [i1])
+        XCTAssertEqual(blobs(r).count, 1, "one blob: \(blobs(r))")
+        XCTAssertEqual(blobs(r).first, r.store.items.first?.blobFile)
+        XCTAssertTrue(r.store.receiving.isEmpty)
+    }
+
+    /// F2 U6: addClipboardHistory refuses an id still receiving; its sealed blob is removed.
+    func testAddHistoryRefusesAnIdStillReceiving() {
+        let r = rig(), p = peer(r)
+        let body = Self.bytes(10), id = UUID()
+        handle(r, DchFrame.clipboardUpload, header(body, id: id))
+        XCTAssertTrue(spin { r.store.receiving[id] != nil })
+        let f = request(p, DchFrame.addClipboardHistory, ["items": [["id": id.uuidString, "date": DchClipboardOps.wireDate(Date()),
+                                                                    "kind": "text", "text": "other"]]])
+        XCTAssertEqual(added(f), [])
+        XCTAssertEqual(skipped(f), [["id": id.uuidString, "reason": "duplicate"]])
+        XCTAssertEqual(blobs(r), [], "the refused item's sealed blob is gone")
+        feed(r, body)
+        XCTAssertEqual(added(final(r)), [id.uuidString])
+        XCTAssertEqual(r.store.items.map(\.id), [id])
+        XCTAssertEqual(r.store.text(for: r.store.items[0]), String(decoding: body, as: UTF8.self))
+        XCTAssertEqual(blobs(r).count, 1)
+    }
+
+    /// The seal runs off main now: a cancel (#632's Esc) that lands while the item is sealing or
+    /// waiting for its main hop still keeps it out of history, and its sealed blob is removed.
+    func testACancelWhileTheItemSealsKeepsItOut() {
+        let r = rig()
+        let body = Self.bytes(DchClipboardOps.chunk + 1), id = UUID()
+        handle(r, DchFrame.clipboardUpload, header(body, id: id))
+        feed(r, body, to: DchClipboardOps.chunk)
+        XCTAssertTrue(spin { r.store.receiving[id]?.bytes == DchClipboardOps.chunk })
+        feed(r, body, from: DchClipboardOps.chunk)   // complete: the seal runs while main is held here
+        Thread.sleep(forTimeInterval: 0.2)
+        r.store.cancel(id)
+        XCTAssertTrue(spin { r.frames.lock.withLock { r.frames.closed } == 1 })
+        XCTAssertTrue(spin { !r.queue.sync { r.conn.inFlight } })
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(r.store.items.isEmpty, "a cancelled upload never lands")
+        XCTAssertEqual(blobs(r), [], "its sealed blob is gone")
+        XCTAssertTrue(r.store.receiving.isEmpty)
+    }
+
+    /// F2 U8: a blank or whitespace-only streamed text is skipped bad_item and stores nothing.
+    func testABlankStreamedTextIsSkippedAndStoresNothing() {
+        for (i, text) in [" \n\t  ", ""].enumerated() {
+            let r = rig(label: "blank\(i)")
+            let body = Data(text.utf8), id = UUID()
+            handle(r, DchFrame.clipboardUpload, header(body, id: id))
+            feed(r, body)
+            XCTAssertEqual(skipped(final(r)), [["id": id.uuidString, "reason": "bad_item"]], "\(i)")
+            XCTAssertTrue(r.store.items.isEmpty, "\(i)")
+            XCTAssertEqual(blobs(r), [], "\(i)")
+            XCTAssertTrue(r.store.receiving.isEmpty, "\(i)")
+            XCTAssertEqual(dir(r.received), [], "\(i)")
+        }
+    }
+
+    /// QA #493 P3: every phone date is clamped to now BEFORE any dedupe, so a header can't
+    /// re-date a kept item into the future, and no phone item sits above later Mac copies.
+    func testPhoneDatesAreClampedToNowBeforeDedupe() {
+        let r = rig()
+        let future = Date(timeIntervalSince1970: 253_370_764_800)   // 9999-01-01
+        let body = Data("same".utf8), kept = UUID(), t = Date(timeIntervalSince1970: 1_700_000_000)
+        r.store.addRemote(id: kept, date: t, source: "iPhone", sha256: ClipboardStore.sha256(body), .text("same"))
+        let start = Date()
+        handle(r, DchFrame.clipboardUpload, header(Data("not the same".utf8), date: future, sha: ClipboardStore.sha256(body)))
+        XCTAssertEqual(skipped(final(r)).first?["reason"], "duplicate")
+        let moved = r.store.item(kept)?.createdAt ?? .distantFuture
+        XCTAssertLessThanOrEqual(moved, Date(), "never re-dated into the future")
+        XCTAssertGreaterThanOrEqual(moved, start, "to now, the newest date allowed")
+
+        let a = UUID()
+        let f = request(r, DchFrame.addClipboardHistory, ["items": [["id": a.uuidString, "date": DchClipboardOps.wireDate(future),
+                                                                    "kind": "text", "text": "from the future"]]])
+        XCTAssertEqual(added(f), [a.uuidString])
+        XCTAssertLessThanOrEqual(r.store.item(a)?.createdAt ?? .distantFuture, Date())
+        let u = UUID(), b = Self.bytes(7, seed: 2)
+        handle(r, DchFrame.clipboardUpload, header(b, id: u, date: future))
+        feed(r, b)
+        XCTAssertEqual(added(final(r, 3)), [u.uuidString])
+        XCTAssertLessThanOrEqual(r.store.item(u)?.createdAt ?? .distantFuture, Date())
+        r.store.addText("mac copy")
+        XCTAssertEqual(r.store.items.first?.preview, "mac copy", "a later Mac copy goes on top")
+    }
+
+    /// QA #493 S3: a connection that ever carried an upload never attaches or creates, even after
+    /// an early reply ended it: the phone's leftover data frames would be typed into the pty.
+    /// dch points at a path that does not exist, so a broken guard fails here and runs no dch.
+    func testAConnectionThatUploadedNeverAttachesOrCreates() {
+        let noDch = tempDir("no-dch").appendingPathComponent("no-such-dch").path
+        DchCommand.dchPathOverride = noDch
+        defer { DchCommand.dchPathOverride = nil }
+        XCTAssertEqual(DchCommand.dchPath, noDch)
+        for type in [DchFrame.attach, DchFrame.create] {
+            let r = rig(label: "type\(type)")
+            let body = Data("same".utf8)
+            r.store.addRemote(id: UUID(), date: Date(), source: "iPhone", sha256: ClipboardStore.sha256(body), .text("same"))
+            handle(r, DchFrame.clipboardUpload, header(body))
+            XCTAssertEqual(skipped(final(r)).first?["reason"], "duplicate", "the early reply")
+            XCTAssertFalse(r.queue.sync { r.conn.inFlight })
+            handle(r, type, ["name": "qa617-never", "cols": 80, "rows": 24])
+            XCTAssertEqual(Self.message(all(r).last), "clipboardUpload connections cannot attach or create", "\(type)")
+            XCTAssertNil(r.queue.sync { r.conn.attachedSession }, "no session started")
+            feed(r, body)   // the phone's leftover data frames: dropped
+            XCTAssertEqual(all(r).count, 2, "nothing else sent")
+            XCTAssertEqual(r.frames.lock.withLock { r.frames.closed }, 0)
+        }
+    }
+
+    /// QA #493 P2(d)-(f): a name cut at 200 Characters keeps its extension; a NUL maps to "-"
+    /// as "/" does, and the file is saved instead of failing the transfer.
+    func testLongReceivedNamesKeepTheirExtensionAndANulIsMapped() throws {
+        func name(_ n: String) -> String {
+            DchClipboardOps.fileName(DchClipboardOps.Upload(id: UUID(), date: Date(), kind: .file, size: 0, sha256: "", name: n, mime: nil, live: false))
+        }
+        let q = String(repeating: "q", count: 196)
+        XCTAssertEqual(name(String(repeating: "q", count: 250) + ".pdf"), q + ".pdf")
+        XCTAssertEqual(name(q + ".pdf"), q + ".pdf", "exactly 200 is kept whole")
+        XCTAssertEqual(name(String(repeating: "あ", count: 300) + ".txt"), String(repeating: "あ", count: 196) + ".txt")
+        XCTAssertEqual(name(String(repeating: "q", count: 250)), String(repeating: "q", count: 200))
+        XCTAssertEqual(name("x." + String(repeating: "z", count: 250)).count, 200, "no extension that long is kept")
+        XCTAssertEqual(name("a\u{0}b.txt"), "a-b.txt")
+        let r = rig()
+        for (i, (n, saved)) in [("a\u{0}b.txt", "a-b.txt"), (String(repeating: "q", count: 250) + ".pdf", q + ".pdf")].enumerated() {
+            let body = Self.bytes(5, seed: i), id = UUID()
+            handle(r, DchFrame.clipboardUpload, header(body, id: id, kind: "file", name: n))
+            feed(r, body)
+            XCTAssertEqual(added(final(r, finals(r).count + 1)), [id.uuidString], saved)
+            XCTAssertEqual(r.store.item(id)?.fileName, saved)
+            XCTAssertEqual(try Data(contentsOf: r.received.appendingPathComponent(saved)), body)
+        }
+    }
+
+    /// QA #493 S4: an in-memory image that spills to a file past maxPixels re-checks the room on
+    /// the received folder's volume, which can differ from the store's.
+    func testAnImageSpillRechecksTheReceivedFolderRoom() {
+        let img = Self.png(5, 4)
+        for (label, spare) in [("tight", Int64(-1)), ("room", Int64(0))] {
+            let r = rig(maxPixels: 19, label: label)
+            let recv = r.received.path, need = DchClipboardOps.minFreeAfter + Int64(img.count)
+            r.conn.clipboard.freeSpace = { $0.path == recv ? need + spare : nil }
+            let id = UUID()
+            handle(r, DchFrame.clipboardUpload, header(img, id: id, kind: "image", name: "photo.png"))
+            feed(r, img)
+            if spare < 0 {
+                XCTAssertEqual(skipped(final(r)), [["id": id.uuidString, "reason": "no_space"]])
+                XCTAssertEqual(dir(r.received), [])
+                XCTAssertTrue(r.store.items.isEmpty)
+            } else {
+                XCTAssertEqual(added(final(r)), [id.uuidString])
+                XCTAssertEqual(dir(r.received), ["photo.png"])
+            }
+            XCTAssertTrue(r.store.receiving.isEmpty, label)
+        }
     }
 }

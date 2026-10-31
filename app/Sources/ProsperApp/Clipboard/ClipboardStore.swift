@@ -217,17 +217,26 @@ final class ClipboardStore: ObservableObject {
     /// whatever their size (#617: no plaintext in the store dir). False when the write fails.
     @discardableResult
     func addRemote(id: UUID, date: Date, source: String, sha256: String, _ payload: RemotePayload) -> Bool {
+        guard let item = sealRemote(id: id, date: date, source: source, sha256: sha256, payload) else { return false }
+        insert(item)
+        return true
+    }
+
+    /// #617 fix round 1: addRemote's half that runs off main: classify, the preview and the
+    /// sealed blob, under a fresh blob name so a losing duplicate never touches a kept item's
+    /// blob. Nil when the write fails. Then insertRemote on main, or removeBlob if it loses.
+    nonisolated func sealRemote(id: UUID, date: Date, source: String, sha256: String, _ payload: RemotePayload) -> ClipboardItem? {
         let item: ClipboardItem
         switch payload {
         case .text(let s):
-            let blob = "\(id.uuidString).txt"
-            guard writeBlob(Data(s.utf8), to: blob, encrypt: true) else { return false }
+            let blob = "\(UUID().uuidString).txt"
+            guard writeBlob(Data(s.utf8), to: blob, encrypt: true) else { return nil }
             item = ClipboardItem(id: id, kind: Self.classify(s), createdAt: date, preview: Self.textPreview(s),
                                  byteCount: s.utf8.count, blobFile: blob, sourcePath: nil, fileName: nil,
                                  source: source, sha256: sha256)
         case .image(let data, let w, let h):
-            let blob = "\(id.uuidString).png"
-            guard writeBlob(data, to: blob, encrypt: true) else { return false }
+            let blob = "\(UUID().uuidString).png"
+            guard writeBlob(data, to: blob, encrypt: true) else { return nil }
             item = ClipboardItem(id: id, kind: .image, createdAt: date, preview: "Image \(w)×\(h)",
                                  byteCount: data.count, blobFile: blob, sourcePath: nil, fileName: nil,
                                  source: source, sha256: sha256)
@@ -237,8 +246,14 @@ final class ClipboardStore: ObservableObject {
                                  byteCount: size, blobFile: nil, sourcePath: url.path, fileName: url.lastPathComponent,
                                  source: source, sha256: sha256)
         }
-        insert(item)
-        return true
+        return item
+    }
+
+    func insertRemote(_ item: ClipboardItem) { insert(item) }
+
+    /// A sealed item's blob, off main, once its insert lost.
+    nonisolated func removeBlob(_ item: ClipboardItem) {
+        if let blob = item.blobFile { try? FileManager.default.removeItem(at: dir.appending(path: blob)) }
     }
 
     /// An upload starts arriving; `cancel` drops its connection (whose teardown calls endReceiving).
@@ -330,7 +345,7 @@ final class ClipboardStore: ObservableObject {
     /// sealing a big blob would require — the read path (`decryptOrPlaintext`)
     /// handles either form transparently, so both still restore. Returns false on
     /// failure.
-    private func writeBlob(_ data: Data, to name: String, encrypt: Bool) -> Bool {
+    nonisolated private func writeBlob(_ data: Data, to name: String, encrypt: Bool) -> Bool {
         do {
             let payload = encrypt ? try ClipboardCrypto.encrypt(data) : data
             let url = dir.appending(path: name)
@@ -351,7 +366,7 @@ final class ClipboardStore: ObservableObject {
 
     /// Best-effort OS-level file protection (encrypted at rest while locked),
     /// matching the typing-history store.
-    private func protect(_ url: URL) {
+    nonisolated private func protect(_ url: URL) {
         try? FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
     }
@@ -363,7 +378,7 @@ final class ClipboardStore: ObservableObject {
         persist()
     }
 
-    private static func textPreview(_ s: String, limit: Int = 140) -> String {
+    nonisolated private static func textPreview(_ s: String, limit: Int = 140) -> String {
         let collapsed = s.replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if collapsed.count <= limit { return collapsed }
@@ -372,12 +387,13 @@ final class ClipboardStore: ObservableObject {
 
     // MARK: - Content classification (Raycast parity)
 
-    private static let linkDetector = try? NSDataDetector(
+    /// #617: Sendable (an immutable NSRegularExpression); classify runs off main for phone items.
+    nonisolated private static let linkDetector = try? NSDataDetector(
         types: NSTextCheckingResult.CheckingType.link.rawValue)
 
     /// Classifies a string into a textual sub-kind. Order: color → link / email
     /// (a single detector match spanning the whole trimmed string) → plain text.
-    static func classify(_ raw: String) -> ClipboardKind {
+    nonisolated static func classify(_ raw: String) -> ClipboardKind {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         // #617: a link, an email or a color is short; a phone's 100 MB text skips the
         // detector, which runs on main.
@@ -395,7 +411,7 @@ final class ClipboardStore: ObservableObject {
 
     /// Recognizes CSS-style colors: `#rgb` / `#rgba` / `#rrggbb` / `#rrggbbaa`
     /// hex, and `rgb()/rgba()/hsl()/hsla()` functional forms.
-    static func isColor(_ s: String) -> Bool {
+    nonisolated static func isColor(_ s: String) -> Bool {
         let lower = s.lowercased()
         if lower.hasPrefix("#") {
             let hex = lower.dropFirst()
