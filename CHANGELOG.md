@@ -28,6 +28,8 @@ tag from the now-released section and put it on the new top draft.
   nothing, so a later session can still fill it in. The command is used as typed for
   every folder; clear the field to go back to the inferred one. Words split on spaces,
   and quotes group them; nothing is expanded.
+- Ships dch 1.25.0, which can pin, unpin and forget session History records (`dch --pin`,
+  `dch --unpin`, `dch --forget`, `dch --forget --all`). A pinned record is never pruned for age.
 
 ## v2.162.0
 
