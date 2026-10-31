@@ -194,6 +194,28 @@ final class ClipboardReceivingPanelTests: XCTestCase {
         XCTAssertEqual(Pasteboard.general.string(forType: .string), before)
     }
 
+    /// QA #493 V11: a second paste, here of a stale placeholder whose upload is gone, ends a
+    /// live first wait, so the first upload landing later pastes nothing.
+    func testASecondPasteEndsALiveFirstWait() throws {
+        let store = ClipboardStore(dir: tempDir())
+        let a = upload(store, kind: .text), b = upload(store)
+        let gone = try row(store, b.id)
+        store.endReceiving(b.id)
+        let waiter = ClipboardPasteWait(store: store)
+        var pasted: [UUID] = []
+        let before = marker()
+        waiter.paste(try row(store, a.id)) { store.copyToPasteboard($0); pasted.append($0.id) }
+        XCTAssertEqual(waiter.id, a.id)
+        waiter.paste(gone) { store.copyToPasteboard($0); pasted.append($0.id) }
+        XCTAssertNil(waiter.id, "the first wait ended")
+        XCTAssertFalse(waiter.escape())
+        XCTAssertNotNil(store.receiving[a.id], "Esc did not reach the first upload")
+        XCTAssertTrue(store.addRemote(id: a.id, date: a.createdAt, source: "iPhone", sha256: "s", .text("late \(UUID())")))
+        store.endReceiving(a.id)
+        XCTAssertTrue(pasted.isEmpty)
+        XCTAssertEqual(Pasteboard.general.string(forType: .string), before)
+    }
+
     /// A real DchClipboardUpload (as DchClipboardFramesTests drives it): its own insert / end
     /// order, not the store driven by hand, must land the item before the row leaves.
     func testWaitOnARealUploadPastesTheLandedItemOnce() throws {

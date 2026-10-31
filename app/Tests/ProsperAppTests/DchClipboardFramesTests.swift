@@ -1151,6 +1151,67 @@ final class DchClipboardFramesTests: XCTestCase {
         }
     }
 
+    /// QA #493 F2: a name long in UTF-16 (ZWJ family emoji, 11 units each) is cut to
+    /// `nameUnits` units with its extension kept, and saves through a full upload.
+    func testNamesLongInUTF16AreCutToFitAndSave() throws {
+        func name(_ n: String) -> String {
+            DchClipboardOps.fileName(DchClipboardOps.Upload(id: UUID(), date: Date(), kind: .file, size: 0, sha256: "", name: n, mime: nil, live: false))
+        }
+        let fam = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}"
+        XCTAssertEqual(fam.utf16.count, 11)
+        XCTAssertEqual(name(String(repeating: fam, count: 200) + ".txt"), String(repeating: fam, count: 22) + ".txt")
+        XCTAssertEqual(name(String(repeating: fam, count: 300)), String(repeating: fam, count: 22))
+        XCTAssertEqual(name(String(repeating: fam, count: 200) + ".sixteencharsxxxx"), String(repeating: fam, count: 21) + ".sixteencharsxxxx")
+        // Under 200 Characters, only the units cut applies: 254 units become 248.
+        XCTAssertEqual(name(String(repeating: "\u{1F600}", count: 127)), String(repeating: "\u{1F600}", count: 124))
+        XCTAssertEqual(name(String(repeating: "q", count: 260)).utf16.count, 200)
+        let r = rig()
+        for (i, n) in [String(repeating: fam, count: 200) + ".txt", String(repeating: fam, count: 300) + ".heic"].enumerated() {
+            let saved = name(n)
+            XCTAssertLessThanOrEqual(saved.utf16.count, DchClipboardOps.nameUnits)
+            for k in 1...3 {   // copies 2 and 3 take the " N" suffix and still fit
+                let body = Self.bytes(5, seed: i * 3 + k), id = UUID(), want = DchClipboardOps.candidate(saved, k)
+                handle(r, DchFrame.clipboardUpload, header(body, id: id, kind: "file", name: n))
+                feed(r, body)
+                XCTAssertEqual(added(final(r, finals(r).count + 1)), [id.uuidString], want)
+                XCTAssertEqual(r.store.item(id)?.fileName, want)
+                XCTAssertEqual(try Data(contentsOf: r.received.appendingPathComponent(want)), body)
+            }
+        }
+    }
+
+    /// QA #493 V7: a long name keeps a 4-16 Character extension; F3: and a .tar.gz/.bz2/.xz pair.
+    func testLongNamesKeepLongAndDoubleExtensions() {
+        func name(_ n: String) -> String {
+            DchClipboardOps.fileName(DchClipboardOps.Upload(id: UUID(), date: Date(), kind: .file, size: 0, sha256: "", name: n, mime: nil, live: false))
+        }
+        let long = String(repeating: "q", count: 250)
+        for ext in ["heic", "docx", "sixteencharsxxxx"] {
+            XCTAssertEqual(name(long + "." + ext), String(repeating: "q", count: 199 - ext.count) + "." + ext)
+        }
+        XCTAssertEqual(name(long + ".seventeencharsxxx").count, 200, "17 is not an extension")
+        XCTAssertFalse(name(long + ".seventeencharsxxx").hasSuffix(".seventeencharsxxx"))
+        for ext in ["tar.gz", "TAR.bz2", "tar.xz"] {
+            XCTAssertEqual(name(long + "." + ext), String(repeating: "q", count: 199 - ext.count) + "." + ext)
+        }
+        XCTAssertEqual(name(long + ".zip.gz"), String(repeating: "q", count: 197) + ".gz", "only .tar pairs")
+    }
+
+    /// QA #493 F2 backstop: a name the volume still refuses as too long saves as
+    /// "iPhone Clipboard.<ext>" instead of failing the upload.
+    func testPlaceFallsBackOnANameTooLong() throws {
+        let d = tempDir()
+        defer { try? FileManager.default.removeItem(at: d) }
+        for (i, ext) in ["heic", "tar.gz", ""].enumerated() {
+            let part = d.appendingPathComponent(".p\(i).part")
+            XCTAssertTrue(FileManager.default.createFile(atPath: part.path, contents: Data([UInt8(i)])))
+            let tail = ext.isEmpty ? "" : "." + ext
+            let dest = DchClipboardOps.place(part, in: d, as: String(repeating: "a", count: 300) + tail)
+            XCTAssertEqual(dest?.lastPathComponent, "iPhone Clipboard" + tail)
+            XCTAssertEqual(dest.flatMap { try? Data(contentsOf: $0) }, Data([UInt8(i)]))
+        }
+    }
+
     /// QA #493 S4: an in-memory image that spills to a file past maxPixels re-checks the room on
     /// the received folder's volume, which can differ from the store's.
     func testAnImageSpillRechecksTheReceivedFolderRoom() {

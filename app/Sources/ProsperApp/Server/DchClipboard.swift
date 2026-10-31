@@ -316,21 +316,39 @@ struct DchClipboardOps: Sendable {
                       mime: o["mime"] as? String, live: live)
     }
 
+    /// APFS caps a name at 255 UTF-16 units; " 10000" is the longest suffix `place` adds.
+    static let nameUnits = 255 - 6
+
     /// The received file's name: the phone's, as one plain path component (NUL, "/" and ":"
-    /// become "-"), cut to 200 Characters keeping a short extension, else "iPhone Clipboard"
-    /// with an extension from the mime or the kind.
+    /// become "-"), cut to 200 Characters and `nameUnits` UTF-16 units keeping a short
+    /// extension (or .tar.gz/.bz2/.xz), else "iPhone Clipboard" with an extension from the
+    /// mime or the kind.
     static func fileName(_ u: Upload) -> String {
         var n = String((u.name ?? "").map { "/:\u{0}".contains($0) || $0.isNewline ? "-" : $0 })
             .trimmingCharacters(in: .whitespacesAndNewlines)
         while n.hasPrefix(".") { n.removeFirst() }
-        if n.count > 200 {
-            let ext = (n as NSString).pathExtension, tail = (1...16).contains(ext.count) ? "." + ext : ""
-            n = String((tail.isEmpty ? n : (n as NSString).deletingPathExtension).prefix(200 - tail.count)) + tail
+        if n.count > 200 || n.utf16.count > nameUnits {
+            let (base, tail) = split(n)
+            var b = String(base.prefix(200 - tail.count))
+            while !b.isEmpty, b.utf16.count > nameUnits - tail.utf16.count { b.removeLast() }
+            n = b.isEmpty ? "" : b + tail
         }
         guard n.isEmpty else { return n }
         let ext = u.mime.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
             ?? (u.kind == .text ? "txt" : u.kind == .image ? "png" : nil)
         return ext.map { "iPhone Clipboard.\($0)" } ?? "iPhone Clipboard"
+    }
+
+    /// A name as base and a kept extension: 1-16 Characters, with a ".tar" before gz/bz2/xz.
+    static func split(_ n: String) -> (String, String) {
+        let ext = (n as NSString).pathExtension
+        guard (1...16).contains(ext.count) else { return (n, "") }
+        var base = (n as NSString).deletingPathExtension, tail = "." + ext
+        if ["gz", "bz2", "xz"].contains(ext.lowercased()), (base as NSString).pathExtension.lowercased() == "tar" {
+            tail = "." + (base as NSString).pathExtension + tail
+            base = (base as NSString).deletingPathExtension
+        }
+        return (base, tail)
     }
 
     /// Finder's "name 2.ext" for the n-th try.
@@ -345,7 +363,12 @@ struct DchClipboardOps: Sendable {
         for n in 1...10_000 {
             let dest = dir.appendingPathComponent(candidate(name, n))
             if renamex_np(part.path, dest.path, UInt32(RENAME_EXCL)) == 0 { return dest }
-            guard errno == EEXIST else { return nil }
+            let err = errno
+            guard err == EEXIST else {
+                // A name the volume still finds too long saves as "iPhone Clipboard.<ext>".
+                let fallback = "iPhone Clipboard" + split(name).1
+                return err == ENAMETOOLONG && name != fallback ? place(part, in: dir, as: fallback) : nil
+            }
         }
         return nil
     }
