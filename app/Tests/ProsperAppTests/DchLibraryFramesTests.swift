@@ -156,6 +156,24 @@ final class DchLibraryFramesTests: XCTestCase {
         XCTAssertEqual(r.json["quicklinks"] as? NSObject, Self.parsed(Self.quicklinks))
     }
 
+    /// QA #486 I1: every fd read opens is closed, for a valid file, a malformed one,
+    /// a directory and a FIFO (each opens; only the regular ones are read).
+    func testLibraryReadsLeakNoFd() throws {
+        let (a, dirA) = lib(quicklinks: nil, label: "fd-a")
+        let (b, dirB) = lib(snippets: "{\"version\":1,", quicklinks: nil, label: "fd-b")
+        try FileManager.default.createDirectory(at: dirA.appendingPathComponent("quicklinks.json"), withIntermediateDirectories: false)
+        XCTAssertEqual(Darwin.mkfifo(dirB.appendingPathComponent("quicklinks.json").path, 0o600), 0)
+        func both() {
+            XCTAssertEqual(call(a).json["errors"] as? [String: String], ["quicklinks": "unreadable"])
+            XCTAssertEqual(call(b).json["errors"] as? [String: String], ["snippets": "malformed JSON", "quicklinks": "unreadable"])
+        }
+        func fds() throws -> Int { try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count }
+        both()   // warm: anything opened once and kept is in `before`
+        let before = try fds()
+        for _ in 0..<30 { both() }   // 60 requests; a leak is 2 per request (about 120)
+        XCTAssertLessThan(try fds() - before, 10, "no fd left open by a read file or a refused one")
+    }
+
     /// Dotfile setups symlink these files: a symlink is followed.
     func testSymlinkedFileIsFollowed() throws {
         let (o, dir) = lib(snippets: nil)

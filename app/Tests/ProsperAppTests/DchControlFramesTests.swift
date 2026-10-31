@@ -398,7 +398,7 @@ final class DchControlFramesTests: XCTestCase {
 
     func testMachineInfoCarriesOps() {
         let info = DchFrame.machineInfo(deviceID: "id", hostname: "mac", wakeId: nil)
-        XCTAssertEqual(info["ops"] as? [String], ["history", "revive", "restart", "stop", "library"])
+        XCTAssertEqual(info["ops"] as? [String], ["history", "revive", "restart", "stop", "library", "pin", "forget"])
         XCTAssertEqual(info["device_id"] as? String, "id")
         XCTAssertEqual(info["hostname"] as? String, "mac")
         XCTAssertNil(info["wakeId"])
@@ -409,6 +409,7 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual([DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.historyResp],
                        [0x0b, 0x0c, 0x0d, 0x0e, 0x1b])
         XCTAssertEqual([DchFrame.ok, DchFrame.error, DchFrame.machineInfoResp], [0x14, 0x13, 0x18])
+        XCTAssertEqual([DchFrame.pin, DchFrame.forget, DchFrame.forgetAll], [0x24, 0x25, 0x26], "#620")
     }
 
     /// Through DchConnection.handle: kill and rename still ack with an empty ok, and a
@@ -465,7 +466,9 @@ final class DchControlFramesTests: XCTestCase {
     func testUnstubbedOpsRefuseUnderXCTest() {
         let o = DchControlOps()
         for (t, p) in [(DchFrame.history, Data()), (DchFrame.revive, Data("{\"all\":true}".utf8)),
-                       (DchFrame.restart, Data("{\"all\":true}".utf8)), (DchFrame.stop, Data("{\"names\":[\"a\"]}".utf8))] {
+                       (DchFrame.restart, Data("{\"all\":true}".utf8)), (DchFrame.stop, Data("{\"names\":[\"a\"]}".utf8)),
+                       (DchFrame.pin, Data("{\"name\":\"a\",\"pin\":true}".utf8)), (DchFrame.forget, Data("{\"name\":\"a\"}".utf8)),
+                       (DchFrame.forgetAll, Data())] {
             XCTAssertTrue(message(call(o, t, raw: p)).contains("needs dch"))
         }
     }
@@ -845,5 +848,154 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(call(ops(f), DchFrame.history, [String: Any]()).type, DchFrame.historyResp, "{} is history's empty payload")
         XCTAssertTrue(f.launches.isEmpty)
         XCTAssertEqual(f.reads.map(\.arg), ["--history"], "only the {} history read")
+    }
+
+    // MARK: - #620: pinned rows, pin 0x24, forget 0x25, forgetAll 0x26
+
+    private static let v125 = DchCommand.Binary(path: "/fake/dch", version: [1, 25, 0])
+
+    /// historyResp: every pinned record first (older than the 50 newest too), then
+    /// the newest unpinned up to the cap; "pinned": true only on a pinned row.
+    func testHistoryRespSendsPinnedRecordsFirstUncappedAndFlagged() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist((0..<60).map { ["name": "s\($0)", "updated": Self.now - Double($0), "end": "killed"] as [String: Any] }
+            + [["name": "p1", "updated": Self.now - 500, "end": "exit 0", "pinned": true],
+               ["name": "p2", "updated": Self.now - 600, "end": "exit 0", "pinned": true]])
+        let rows = call(ops(f), DchFrame.history, raw: Data()).json as? [[String: Any]] ?? []
+        XCTAssertEqual(rows.count, AgentIsland.historyCap)
+        XCTAssertEqual(rows.prefix(3).map { $0["name"] as? String }, ["p1", "p2", "s0"])
+        XCTAssertEqual(rows.last?["name"] as? String, "s47", "unpinned fill the rest")
+        XCTAssertEqual(rows.prefix(2).map { $0["pinned"] as? Bool }, [true, true])
+        XCTAssertTrue(rows.dropFirst(2).allSatisfy { $0["pinned"] == nil }, "no key on an unpinned row")
+    }
+
+    func testPinRunsPinOrUnpinArgsInTheRecordsDirAndRepliesTheName() {
+        let f = Fake()
+        f.hist["/e"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "exit 0"]])
+        f.out["--pin a --json"] = Self.line("a", "ok", detail: "pinned")
+        f.out["--unpin a --json"] = Self.line("a", "ok", detail: "unpinned")
+        let o = ops(f, dirs: ["/d", "/e"], binary: Self.v125)
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "a", "pin": true])), ["a"])
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "a", "pin": false])), ["a"])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.pinArgs("a", pin: true)!, AgentIsland.pinArgs("a", pin: false)!])
+        XCTAssertEqual(f.launches.map(\.dir), ["/e", "/e"], "the record's dir")
+        XCTAssertEqual(f.launches.first?.path, "/fake/dch")
+        XCTAssertEqual(f.refreshes, 2, "the island re-reads History after each")
+        f.out["--pin a --json"] = Self.line("a", "failed", reason: "io_error", detail: "Permission denied")
+        f.status = 1
+        XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "a", "pin": true])), "a: Permission denied")
+        XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "ghost", "pin": true])), "ghost: no history record of that name")
+        XCTAssertEqual(f.launches.count, 3, "an unknown name runs nothing")
+    }
+
+    func testForgetRunsForgetArgsAndRefusesAPinnedRecordBeforeDch() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "exit 0"],
+                                  ["name": "p", "updated": Self.now - 90, "end": "exit 0", "pinned": true]])
+        f.out["--forget a --json"] = Self.line("a", "ok", detail: "forgotten")
+        let o = ops(f, binary: Self.v125)
+        XCTAssertEqual(names(call(o, DchFrame.forget, ["name": "a"])), ["a"])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs("a")!])
+        XCTAssertEqual(f.launches.first?.dir, "/d")
+        XCTAssertEqual(f.refreshes, 1)
+        XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "p"])), "p: pinned, unpin it first")
+        XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "ghost"])), "ghost: no history record of that name")
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs("a")!], "no --forget for a pinned or unknown record, never -f")
+        f.out["--forget a --json"] = Self.line("a", "failed", reason: "live", detail: "session is live")
+        f.status = 1
+        XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "a"])), "a: session is live")
+    }
+
+    /// One `--forget --all --json` per History dir; the reply sums the dirs' results
+    /// (dch's tally line is not a result and adds nothing); a record's failure is
+    /// counted, an unexplained failure is an error.
+    func testForgetAllRunsOncePerHistoryDirAndRepliesTheSummedTally() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "exit 0"]])
+        f.hist["/e"] = Self.hist([["name": "b", "updated": Self.now - 60, "end": "exit 0"]])
+        f.out["--forget --all --json"] = [Self.line("a", "ok", detail: "forgotten"), Self.line("b", "ok", detail: "forgotten"),
+                                          Self.line("p", "skipped", reason: "pinned", detail: "pinned"),
+                                          Self.line("x", "failed", reason: "io_error", detail: "EIO"),
+                                          #"{"ok":2,"skipped":1,"failed":1}"#].joined(separator: "\n")
+        f.status = 1   // dch exits 1 when a record failed
+        let o = ops(f, dirs: ["/d", "/e", "/empty"], binary: Self.v125)
+        let r = call(o, DchFrame.forgetAll, raw: Data())
+        XCTAssertEqual(r.type, DchFrame.ok)
+        let tally = r.json as? [String: Int]
+        XCTAssertEqual(tally, ["cleared": 4, "skipped": 2, "failed": 2])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetAllArgs, AgentIsland.forgetAllArgs])
+        XCTAssertEqual(Set(f.launches.map(\.dir)), ["/d", "/e"], "only the dirs with history")
+        XCTAssertEqual(f.refreshes, 1)
+        f.out["--forget --all --json"] = "dch: cannot reach the history dir"
+        XCTAssertEqual(message(call(o, DchFrame.forgetAll, [String: Any]())), "Clear unpinned failed: dch: cannot reach the history dir")
+        f.hist = [:]
+        XCTAssertEqual(call(o, DchFrame.forgetAll, raw: Data()).json as? [String: Int], ["cleared": 0, "skipped": 0, "failed": 0])
+        XCTAssertEqual(f.launches.count, 4, "no history: nothing runs")
+    }
+
+    func testHistoryEditsUnderTheIslandsGateAreRefused() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "exit 0"]])
+        for binary in [Self.v1241, nil] {
+            let o = ops(f, binary: binary)
+            XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "a", "pin": true])), "Pin needs dch 1.25.0")
+            XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "a"])), "Forget needs dch 1.25.0")
+            XCTAssertEqual(message(call(o, DchFrame.forgetAll, raw: Data())), "Clear unpinned needs dch 1.25.0")
+        }
+        f.ls["/d"] = Self.ls([("live", "1.26.0")])   // a live master newer than the binary
+        XCTAssertEqual(message(call(ops(f, binary: Self.v125), DchFrame.forget, ["name": "a"])), "Forget needs dch 1.26.0")
+        XCTAssertTrue(f.launches.isEmpty)
+        XCTAssertTrue(f.historyPaths.isEmpty, "refused before the History read")
+    }
+
+    /// #627 for pin and forget: a record named "--all" or "-n" is refused, no dch run.
+    func testPinAndForgetRefuseADashLedRecordName() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "--all", "updated": Self.now - 60, "end": "exit 0"],
+                                  ["name": "-n", "updated": Self.now - 70, "end": "exit 0"]])
+        let o = ops(f, binary: Self.v125)
+        for bad in ["--all", "-n"] {
+            XCTAssertEqual(message(call(o, DchFrame.pin, ["name": bad, "pin": true])), DchControlOps.dashNameRefusal, bad)
+            XCTAssertEqual(message(call(o, DchFrame.pin, ["name": bad, "pin": false])), DchControlOps.dashNameRefusal, bad)
+            XCTAssertEqual(message(call(o, DchFrame.forget, ["name": bad])), DchControlOps.dashNameRefusal, bad)
+        }
+        XCTAssertEqual(f.launchedArgs, [])
+        XCTAssertEqual(f.refreshes, 0)
+    }
+
+    func testMalformedHistoryEditsGetAnErrorAndRunNothing() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "exit 0"]])
+        let o = ops(f, binary: Self.v125)
+        let cases: [(UInt8, String)] = [
+            (DchFrame.pin, ""), (DchFrame.pin, "{}"), (DchFrame.pin, #"{"name":"a"}"#), (DchFrame.pin, #"{"pin":true}"#),
+            (DchFrame.pin, #"{"name":"a","pin":1}"#), (DchFrame.pin, #"{"name":"a","pin":"yes"}"#),
+            (DchFrame.pin, #"{"name":"","pin":true}"#), (DchFrame.pin, #"{"name":5,"pin":true}"#),
+            (DchFrame.pin, #"{"name":"a","pin":true,"dir":"/x"}"#), (DchFrame.pin, #"{"names":["a"],"pin":true}"#),
+            (DchFrame.forget, ""), (DchFrame.forget, "{}"), (DchFrame.forget, #"{"all":true}"#), (DchFrame.forget, #"{"names":["a"]}"#),
+            (DchFrame.forget, #"{"name":5}"#), (DchFrame.forget, #"{"name":"a","f":true}"#),
+            (DchFrame.forgetAll, #"{"all":true}"#), (DchFrame.forgetAll, "[]"), (DchFrame.forgetAll, "nope"),
+        ]
+        for (t, raw) in cases {
+            XCTAssertFalse(message(call(o, t, raw: Data(raw.utf8))).isEmpty, "type \(t) payload \(raw)")
+        }
+        XCTAssertTrue(f.launches.isEmpty)
+        XCTAssertTrue(f.historyPaths.isEmpty)
+    }
+
+    /// Through DchConnection.handle: the three frames reach DchControlOps and get one reply each.
+    func testConnectionServesTheHistoryEditFrames() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "exit 0"]])
+        f.out["--pin a --json"] = Self.line("a", "ok")
+        f.out["--forget a --json"] = Self.line("a", "ok")
+        let (conn, queue, frames) = connection(ops(f, binary: Self.v125))
+        for (t, p) in [(DchFrame.pin, Self.payload(["name": "a", "pin": true])), (DchFrame.forget, Self.payload(["name": "a"])),
+                       (DchFrame.forgetAll, Data())] {
+            queue.sync { conn.handle(type: t, payload: p) }
+            waitIdle(conn, queue)
+        }
+        XCTAssertEqual(frames.lock.withLock { frames.all }.map { Self.decode($0).type }, [DchFrame.ok, DchFrame.ok, DchFrame.ok])
+        XCTAssertEqual(f.launchedArgs, [["--pin", "a", "--json"], ["--forget", "a", "--json"], AgentIsland.forgetAllArgs])
     }
 }

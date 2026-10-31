@@ -47,6 +47,10 @@ tag from the now-released section and put it on the new top draft.
   turns a button into a command for every session. Agent Island shows no Resume, Restart,
   Stop, pin or X for it, and the iPhone app's Resume, Restart, Stop and Kill refuse it
   with a message.
+- **Remote Terminal: the iPhone app can pin, remove and clear History.** The Mac now
+  sends pinned History records to the phone first, however old, marked as pinned, and
+  runs the phone's pin, unpin, remove and Clear unpinned with the same dch 1.25.0 checks
+  as the island's own buttons. A pinned record can't be removed until it is unpinned.
 
 ## v2.162.0
 

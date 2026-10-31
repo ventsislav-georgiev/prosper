@@ -300,13 +300,19 @@ extension AgentIsland {
     /// N skipped"; `empty` when dch named no session and exited 0.
     static func tally(_ r: DchActionResult, _ verb: Verb, title: String, empty: String) -> String {
         if r.stopped { return "\(title) cancelled: no answer in \(verb.minutes)m" }
-        let finals = r.json.filter(\.isFinal)
-        let failed = finals.filter(\.failed).count
-        let other = r.status != 0 && failed == 0 ? failedText(r) : nil
-        let parts = [(finals.filter { $0.result == "ok" }.count, verb.done.lowercased()), (failed, "failed"),
-                     (finals.filter { $0.result == "skipped" }.count, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+        let c = counts(r)
+        let other = r.status != 0 && c.failed == 0 ? failedText(r) : nil
+        let parts = [(c.ok, verb.done.lowercased()), (c.failed, "failed"),
+                     (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
         if parts.isEmpty { return other.map { "\(title) \($0)" } ?? empty }
         return (parts + [other].compactMap { $0 }).joined(separator: ", ")
+    }
+
+    /// #620: `tally`'s numbers, the session results by kind (dch's own --json tally line counts the same).
+    static func counts(_ r: DchActionResult) -> (ok: Int, failed: Int, skipped: Int) {
+        let finals = r.json.filter(\.isFinal)
+        return (finals.filter { $0.result == "ok" }.count, finals.filter(\.failed).count,
+                finals.filter { $0.result == "skipped" }.count)
     }
 
     // MARK: - Pin, Remove and Clear unpinned (#605)

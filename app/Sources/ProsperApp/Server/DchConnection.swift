@@ -33,6 +33,10 @@ enum DchFrame {
     static let stop: UInt8    = 0x0e  // {names: [..]} → ok {names} | error
     // #616: the phone's read-only library sync (DchLibraryOps). One reply.
     static let library: UInt8 = 0x0f  // (empty) | {} | {etag} → libraryResp | error
+    // #620: History's pin, X and Clear unpinned (DchControlOps). Each gets exactly one reply.
+    static let pin: UInt8       = 0x24  // {name, pin: Bool} → ok {names} | error
+    static let forget: UInt8    = 0x25  // {name} → ok {names} | error (a pinned record is refused)
+    static let forgetAll: UInt8 = 0x26  // (empty) | {} → ok {cleared, skipped, failed} | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -42,12 +46,12 @@ enum DchFrame {
     static let ok: UInt8       = 0x14 // (empty) ack for kill, rename, putClipboard; {names} for #591's verbs
     static let machineInfoResp: UInt8 = 0x18 // {device_id, hostname, wakeId?, ops}
     static let snapshotResp: UInt8 = 0x19 // raw ANSI screen from dch's VT mirror (empty = unavailable)
-    static let historyResp: UInt8 = 0x1b // [{name, alias?, end, last_seen, started, runtime, cwd?, command?, takes}]
+    static let historyResp: UInt8 = 0x1b // [{name, alias?, end, last_seen, started, runtime, cwd?, command?, takes, pinned?}]
     static let libraryResp: UInt8 = 0x1c // {etag, unchanged: true} | {etag, snippets, quicklinks, errors?}
 
     /// #591: the requests beyond the original set this Mac answers, in machineInfoResp's
     /// "ops" (an older phone ignores the key; a newer one hides what an older Mac lacks).
-    static let ops = ["history", "revive", "restart", "stop", "library"]
+    static let ops = ["history", "revive", "restart", "stop", "library", "pin", "forget"]
 
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set
@@ -213,7 +217,8 @@ final class DchConnection: @unchecked Sendable {
             send(DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
                 deviceID: SupporterStore.deviceID(), hostname: SupporterStore.deviceName(),
                 wakeId: LiveExtensionHostServices.currentWakeId)))
-        case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.library:
+        case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.library,
+             DchFrame.pin, DchFrame.forget, DchFrame.forgetAll:
             // #591: off this queue, unlike kill: the reads fork dch and a restart can
             // take minutes, while every connection (and each attached pty's send
             // completions) runs on this one queue. The one reply comes back here.
@@ -429,7 +434,7 @@ struct DchLibraryOps: Sendable {
 /// The phone's History tab and its Resume, Restart and Stop: the same binary,
 /// gates, env, runner and argv helpers as Agent Island's own buttons, in Remote
 /// Terminal's one socket dir. A wire name reaches argv only after it matched exactly
-/// one live session (restart, stop) or history record (revive); argv comes only from
+/// one live session (restart, stop) or history record (revive, pin, forget); argv comes only from
 /// AgentIsland's *Args helpers, run without a shell. Every request gets exactly one
 /// reply. Seamed: no test runs dch.
 struct DchControlOps: Sendable {
@@ -485,6 +490,11 @@ struct DchControlOps: Sendable {
         case DchFrame.revive: revive(o, reply)
         case DchFrame.restart: restart(o, reply)
         case DchFrame.stop: stop(o, reply)
+        case DchFrame.pin: pin(o, reply)
+        case DchFrame.forget: forget(o, reply)
+        case DchFrame.forgetAll:
+            guard o.isEmpty else { return reply(Self.error("malformed forgetAll request: send nothing or {}")) }
+            forgetAll(reply)
         default: reply(Self.error("unknown request"))
         }
     }
@@ -524,6 +534,7 @@ struct DchControlOps: Sendable {
         if !r.cwd.isEmpty { o["cwd"] = r.cwd }
         if !r.argv.isEmpty { o["command"] = r.argv }
         if let a = r.agent?.name, !a.isEmpty { o["agent_name"] = a }   // #592: the phone's title fallback
+        if r.pinned { o["pinned"] = true }   // #620: only when pinned, so an older phone sees no new key
         return o
     }
 
@@ -552,13 +563,24 @@ struct DchControlOps: Sendable {
         return AgentIsland.history(dirs: dirs()) { read($0, $1, path) }
     }
 
-    /// The History tab's rows: newest first, capped, with the binary the island reads them with.
+    /// The History tab's rows: pinned first and never capped, then the newest unpinned
+    /// up to the cap (#605), with the binary the island reads them with.
     private func history(_ reply: Reply) {
         let gate = DchCommand.gate(binary(), masters: [], minimum: AgentIsland.controlMinimum)
         guard case .ok(let path) = gate else { return reply(Self.error("History \(gate.refusal ?? "")")) }
         let t = now()
         reply(DchFrame.encode(DchFrame.historyResp,
-                              json: records(path).prefix(AgentIsland.historyCap).map { Self.historyWire($0, now: t) }))
+                              json: AgentIsland.cappedHistory(records(path)).map { Self.historyWire($0, now: t) }))
+    }
+
+    /// The one history record of `name`, else the refusal revive answers with.
+    static func record(_ name: String, in history: [DchHistoryRecord]) -> Result<DchHistoryRecord, Refusal> {
+        let matches = history.filter { $0.name == name }
+        guard matches.count == 1, let r = matches.first else {
+            return .failure(Refusal(message: matches.isEmpty ? "\(name): no history record of that name"
+                                                             : "\(name): \(matches.count) history records of that name"))
+        }
+        return .success(r)
     }
 
     /// The island's Resume (a record by name, `--as` a free name when it is live
@@ -574,10 +596,10 @@ struct DchControlOps: Sendable {
             let jobs: [(AgentSessionKey, [String]?)] = Set(history.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.reviveAllArgs) }
             run(jobs, path: path, bound: nil, reply) { Self.answer(all: Self.merged($0), .resume) }
         case .names(let names):
-            let name = names[0], matches = history.filter { $0.name == name }
-            guard matches.count == 1, let r = matches.first else {
-                return reply(Self.error(matches.isEmpty ? "\(name): no history record of that name"
-                                                        : "\(name): \(matches.count) history records of that name"))
+            let name = names[0], r: DchHistoryRecord
+            switch Self.record(name, in: history) {
+            case .failure(let why): return reply(Self.error(why.message))
+            case .success(let one): r = one
             }
             let liveNames = Set(live.filter { $0.key.dir == r.key.dir }.map(\.name))
             let others = Set(history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
@@ -627,6 +649,60 @@ struct DchControlOps: Sendable {
                 return Self.answer(named: rows.map { ($0.name, byDir[$0.key.dir] ?? DchActionResult(status: -1)) }, .stop)
             }
         }
+    }
+
+    /// #620: the island's History pin toggle, `--pin` or `--unpin` on one record in its dir.
+    private func pin(_ o: [String: Any], _ reply: @escaping Reply) {
+        guard o.count == 2, let name = o["name"] as? String, !name.isEmpty,
+              let p = o["pin"] as? NSNumber, CFGetTypeID(p) == CFBooleanGetTypeID() else {
+            return reply(Self.error("malformed pin request: send {\"name\": \"…\", \"pin\": true|false}"))
+        }
+        guard case let (path, _)? = gated("Pin", minimum: AgentIsland.historyEditMinimum, reply) else { return }
+        let on = p.boolValue
+        switch Self.record(name, in: records(path)) {
+        case .failure(let why): reply(Self.error(why.message))
+        case .success(let r):
+            run([(r.key, AgentIsland.pinArgs(r.name, pin: on))], path: path, bound: nil, reply) {
+                Self.answer(named: [(name, $0[0])], on ? .pin : .unpin)
+            }
+        }
+    }
+
+    /// #620: the island's History X, `--forget` on one record in its dir, never -f:
+    /// a pinned record is refused before dch runs, as the island shows it no X.
+    private func forget(_ o: [String: Any], _ reply: @escaping Reply) {
+        guard let req = Self.request(o, key: "name", allowAll: false), case .names(let names) = req else {
+            return reply(Self.error("malformed forget request: send {\"name\": \"…\"}"))
+        }
+        guard case let (path, _)? = gated("Forget", minimum: AgentIsland.historyEditMinimum, reply) else { return }
+        let name = names[0]
+        switch Self.record(name, in: records(path)) {
+        case .failure(let why): reply(Self.error(why.message))
+        case .success(let r) where r.pinned: reply(Self.error("\(name): pinned, unpin it first"))
+        case .success(let r):
+            run([(r.key, AgentIsland.forgetArgs(r.name))], path: path, bound: nil, reply) {
+                Self.answer(named: [(name, $0[0])], .remove)
+            }
+        }
+    }
+
+    /// #620: the island's Clear unpinned, `--forget --all` once per History dir.
+    private func forgetAll(_ reply: @escaping Reply) {
+        guard case let (path, _)? = gated("Clear unpinned", minimum: AgentIsland.historyEditMinimum, reply) else { return }
+        let jobs: [(AgentSessionKey, [String]?)] = Set(records(path).map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.forgetAllArgs) }
+        run(jobs, path: path, bound: nil, reply) { Self.answer(cleared: $0) }
+    }
+
+    /// Clear unpinned's one reply: ok {cleared, skipped, failed} summed over the dirs
+    /// (the island's counts; a non-zero exit its failed records explain is still ok),
+    /// else one error with the island's tally line for the first dir that did not finish.
+    static func answer(cleared rs: [DchActionResult]) -> Data {
+        if let bad = rs.first(where: { $0.stopped || ($0.status != 0 && AgentIsland.counts($0).failed == 0) }) {
+            return error(AgentIsland.tally(bad, .clear, title: "Clear unpinned", empty: "nothing to clear"))
+        }
+        let c = rs.map(AgentIsland.counts)
+        return DchFrame.encode(DchFrame.ok, json: ["cleared": c.map(\.ok).reduce(0, +), "skipped": c.map(\.skipped).reduce(0, +),
+                                                   "failed": c.map(\.failed).reduce(0, +)])
     }
 
     struct Refusal: Error { let message: String }
