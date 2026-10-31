@@ -64,6 +64,13 @@ tag from the now-released section and put it on the new top draft.
   plain progress bar. Pasting it waits until it has arrived, then pastes; Esc while it
   waits cancels the transfer, as ⌘⌫ on the row does. A failed or cancelled transfer
   leaves no row.
+- **Remote Terminal: chat with the Mac's local AI model from the iPhone.** When the
+  coding agent's model is downloaded, the iPhone app can send it a conversation and
+  read the reply as it is written. The phone uses the model chosen in Settings › AI
+  Models and never changes it. One phone chat runs at a time, and none while the Mac's
+  own agent is mid-turn. A model the phone loaded is unloaded again after 5 minutes
+  without a phone chat, so autocomplete comes back; the first reply after a load can
+  take 30 seconds or more.
 - Large text copies (over 64 KB) no longer stall the Mac while clipboard history checks
   them for a link, an email or a color.
 

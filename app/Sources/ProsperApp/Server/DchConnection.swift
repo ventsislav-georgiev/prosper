@@ -43,6 +43,9 @@ enum DchFrame {
     static let putClipboardText: UInt8 = 0x17     // {text} → ok | error (the live pasteboard)
     static let addClipboardHistory: UInt8 = 0x22  // {items: [..]} → ok {added, skipped} | error (small text)
     static let clipboardUpload: UInt8 = 0x23      // {id, date, kind, size, sha256, …}, data… → ok {added}|{skipped} | error
+    // #618: chat with this Mac's local agent model (DchChat), only while "chat" is in ops.
+    static let models: UInt8 = 0x1e   // (empty) | {} → modelsResp | error
+    static let chat: UInt8   = 0x1f   // {model?, messages: [{role, content}], max_tokens?} → chatDelta…, chatDone | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -56,6 +59,9 @@ enum DchFrame {
     static let libraryResp: UInt8 = 0x1c // {etag, unchanged: true} | {etag, snippets, quicklinks, errors?}
     static let clipboardItemResp: UInt8 = 0x1a // {id, date, kind, source, size, sha256, name?, mime?}, then data
     static let clipboardResp: UInt8 = 0x1d     // [{id, date, kind, source, size, text?, thumb?, name?}]
+    static let chatDelta: UInt8 = 0x20  // {text} one streamed chunk of a chat's reply
+    static let chatDone: UInt8 = 0x21   // {stop: "stop"} a chat's final reply after its deltas
+    static let modelsResp: UInt8 = 0x27 // [{id, name, loaded}] (empty: no local model on disk)
 
     /// #617: the phone's ProsperTransport.maxFrame: what the Mac sends stays within it
     /// (list paging, item checks). The Mac's receive side is bounded by maxRequestFrame.
@@ -72,8 +78,11 @@ enum DchFrame {
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set
     /// up while signed in. #617: "clipboard" joins ops only while clipboard sync is on.
-    static func machineInfo(deviceID: String, hostname: String, wakeId: String?, clipboard: Bool = false) -> [String: Any] {
-        var info: [String: Any] = ["device_id": deviceID, "hostname": hostname, "ops": ops + (clipboard ? ["clipboard"] : [])]
+    /// #618: "chat" only while the agent model is on disk.
+    static func machineInfo(deviceID: String, hostname: String, wakeId: String?, clipboard: Bool = false,
+                            chat: Bool = false) -> [String: Any] {
+        var info: [String: Any] = ["device_id": deviceID, "hostname": hostname,
+                                   "ops": ops + (clipboard ? ["clipboard"] : []) + (chat ? ["chat"] : [])]
         if let wakeId { info["wakeId"] = wakeId }
         return info
     }
@@ -122,6 +131,12 @@ final class DchConnection: @unchecked Sendable {
     /// #617 fix round 1: this connection ever started a clipboardUpload. Sticky: after an
     /// early reply the phone's leftover data frames would otherwise reach a later pty.
     private var uploaded = false
+    /// #618: the phone's chats with the local model, server-wide (DchChat.shared).
+    var chat = DchChat.shared
+    /// #618: this connection's models or chat request; closing cancels it. On `queue`.
+    private var chatTask: Task<Void, Never>?
+    /// #618: this connection ever started a chat. Sticky, as `uploaded`.
+    private var chatted = false
     /// #627: the kill frame's `dch -k <name>`; tests set a recorder so no real dch runs.
     var kill: (String) -> Void = { DchCommand.kill($0) }
     /// QA #462 M3: a history/control request of this connection awaits its reply. On `queue`.
@@ -156,6 +171,7 @@ final class DchConnection: @unchecked Sendable {
         pty?.terminate()       // kill the dch client → master daemon survives
         pty = nil
         upload?.cancel()       // #617: a dropped upload discards its partial item
+        chatTask?.cancel()     // #618: a dropped chat stops its generation
         conn.cancel()
         onClose(ObjectIdentifier(self))
     }
@@ -210,6 +226,7 @@ final class DchConnection: @unchecked Sendable {
         queue.async {
             self.inFlight = false
             self.upload = nil
+            self.chatTask = nil
             if !self.closed { self.send(frame) }
         }
     }
@@ -299,7 +316,25 @@ final class DchConnection: @unchecked Sendable {
             // server; only non-secret identity goes over the tailnet.
             send(DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
                 deviceID: SupporterStore.deviceID(), hostname: SupporterStore.deviceName(),
-                wakeId: LiveExtensionHostServices.currentWakeId, clipboard: clipboard.enabled())))
+                wakeId: LiveExtensionHostServices.currentWakeId, clipboard: clipboard.enabled(), chat: chat.available)))
+        case DchFrame.models, DchFrame.chat:
+            // #618: one request per connection, as clipboardUpload; a chat's deltas come
+            // back in order on `queue`, then the one final reply.
+            guard !closed else { return }
+            guard !inFlight else { return send(DchControlOps.error("busy with an earlier request")) }
+            if type == DchFrame.chat {
+                // Never on an attached connection, and a chat's connection never attaches.
+                guard pty == nil else { return send(DchControlOps.error("chat needs its own connection")) }
+                chatted = true
+            }
+            inFlight = true
+            let chat = chat
+            let reply: DchControlOps.Reply = { self.finalReply($0) }
+            let send: DchControlOps.Reply = { f in self.queue.async { if !self.closed { self.send(f) } } }
+            chatTask = Task {
+                if type == DchFrame.models { return await chat.models(payload, reply: reply) }
+                await chat.chat(payload, send: send, reply: reply)
+            }
         case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.library,
              DchFrame.pin, DchFrame.forget, DchFrame.forgetAll,
              DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.addClipboardHistory:
@@ -375,7 +410,10 @@ final class DchConnection: @unchecked Sendable {
     private func startSession(type: UInt8, payload: Data) {
         guard pty == nil else { return }  // one session per connection
         // #617 fix round 1: never on a connection that carried an upload (see `uploaded`).
-        guard !uploaded else { return send(DchControlOps.error("clipboardUpload connections cannot attach or create")) }
+        // #618: nor on one that chatted.
+        guard !uploaded, !chatted else {
+            return send(DchControlOps.error("\(uploaded ? "clipboardUpload" : "chat") connections cannot attach or create"))
+        }
         let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
         let name = o["name"] as? String
         sessionName = name
