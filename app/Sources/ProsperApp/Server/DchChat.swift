@@ -140,6 +140,9 @@ final class DchChat: @unchecked Sendable {
         } catch {
             return Self.error("model load error: \(error)")
         }
+        // QA #500 INFO-5: the connection closed during the acquire. phoneLoaded stays as set,
+        // so the idle timer still frees a model the phone loaded; the reply is dropped.
+        guard !Task.isCancelled else { return DchFrame.encode(DchFrame.chatDone, json: ["stop": "stop"]) }
         do {
             // Closing the connection cancels this Task; the stream ends its generation.
             let stream = engine.generateChat(messages: req.turns, tools: [], maxTokens: req.maxTokens,

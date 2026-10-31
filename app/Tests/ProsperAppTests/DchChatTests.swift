@@ -61,7 +61,7 @@ final class DchChatTests: XCTestCase {
     private final class State: @unchecked Sendable {
         let lock = NSLock()
         var onDisk = true, resident = false, macBusy = false, windowOpen = false, holdRelease = false
-        var acquires = 0, releases = 0
+        var acquires = 0, releases = 0, acquiring = 0
         var engine = FakeEngine(.chunks(["Hel", "", "lo", " world"]))
         var scheduled: [(delay: TimeInterval, fire: @Sendable () async -> Void)] = []
         func get<T>(_ f: (State) -> T) -> T { lock.withLock { f(self) } }
@@ -175,7 +175,8 @@ final class DchChatTests: XCTestCase {
                               DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.putClipboardText,
                               DchFrame.clipboardItemResp, DchFrame.clipboardResp, DchFrame.addClipboardHistory,
                               DchFrame.clipboardUpload, DchFrame.models, DchFrame.chat, DchFrame.chatDelta,
-                              DchFrame.chatDone, DchFrame.modelsResp]
+                              DchFrame.chatDone, DchFrame.modelsResp, DchFrame.commands, DchFrame.runCommand,
+                              DchFrame.commandsResp, DchFrame.commandResult]
         XCTAssertEqual(Set(every).count, every.count, "no two frames share a code")
     }
 
@@ -370,6 +371,44 @@ final class DchChatTests: XCTestCase {
         let next = connection(chat)
         let f = await self.chat(next, Self.chatBody())
         XCTAssertEqual(f.map(Self.type), DchFrame.chatDone)
+    }
+
+    /// QA #500 INFO-5: the connection closes while the acquire is suspended. The acquire
+    /// returns only once it sees the cancel; the chat never generates, frees its claim and
+    /// still arms the idle timer for the model the phone loaded.
+    func testAChatCancelledDuringTheAcquireNeverGenerates() async {
+        let s = State()
+        let chat = makeChat(s)
+        let acquire = chat.acquire
+        chat.acquire = {
+            s.set { $0.acquiring += 1 }
+            while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(5)) }
+            return try await acquire()
+        }
+        let r = connection(chat)
+        ingest(r, Self.frame(DchFrame.chat, Self.chatBody()))
+        await waitUntil("the acquire is suspended") { s.get { $0.acquiring } == 1 }
+        r.queue.sync { r.conn.close() }
+        await waitUntil("the idle timer is armed") { s.get { $0.scheduled.count } == 1 }
+        XCTAssertEqual(s.get { $0.acquires }, 1)
+        XCTAssertTrue(s.get { $0.engine }.calls.isEmpty, "no generateChat after a cancelled acquire")
+        XCTAssertTrue(all(r).isEmpty)
+        // The claim is cleared: the next chat runs, not "busy".
+        chat.acquire = acquire
+        let f = await self.chat(connection(chat), Self.chatBody())
+        XCTAssertEqual(f.map(Self.type), DchFrame.chatDone)
+        XCTAssertEqual(s.get { $0.engine }.calls.count, 1)
+    }
+
+    /// QA #500 INFO-6: a chat frame ingested after close() never reaches the chat seam.
+    func testAChatIngestedAfterCloseNeverAcquires() async {
+        let s = State()
+        let r = connection(makeChat(s))
+        r.queue.sync { r.conn.close() }
+        ingest(r, Self.frame(DchFrame.chat, Self.chatBody()))
+        XCTAssertFalse(r.queue.sync { r.conn.inFlight })
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(s.get { $0.acquires }, 0)
     }
 
     func testAnEngineErrorEndsWithOneErrorAndNoDone() async {
