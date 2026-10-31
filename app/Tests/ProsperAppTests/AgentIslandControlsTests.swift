@@ -802,7 +802,29 @@ final class AgentIslandControlsTests: XCTestCase {
         c.historyDirs = { dirs }
         c.runner = f.runner()
         c.store = AgentIslandStore(geometry: notched)
+        addTeardownBlock { @MainActor in Self.drainNewSessionCommand(c) }
         return c
+    }
+
+    /// #657: an inferred New session command is stored on main after a queue hop.
+    /// A test that returns without settling (none does today) would have it land
+    /// after its own reset, in the next test. Teardown drains the queue, then main
+    /// past the write, and only then unsets it. Bounded: a blocked queue fails the
+    /// test instead of hanging the run.
+    @MainActor
+    private static func drainNewSessionCommand(_ c: AgentIslandController) {
+        let queued = DispatchSemaphore(value: 0)
+        c.queue.async { queued.signal() }
+        guard queued.wait(timeout: .now() + 10) == .success else {
+            return XCTFail("#657: the controller's queue did not drain in 10 s")
+        }
+        // Posted only now, so it runs after the write the queue block posted (main is FIFO).
+        nonisolated(unsafe) var drained = false
+        DispatchQueue.main.async { drained = true }
+        let end = Date().addingTimeInterval(10)
+        while !drained && Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        if !drained { XCTFail("#657: main did not drain in 10 s") }
+        Preferences.agentIslandNewSessionCommand = ""
     }
 
     @MainActor
@@ -2029,6 +2051,24 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { got != nil }
         XCTAssertEqual(got, ["claude", "--chrome"])
         XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome")
+    }
+
+    /// #657: a test that returns while its ask is still inferring: the teardown drain
+    /// waits the inference out and lands the pending write before it unsets, so
+    /// nothing reaches the next test.
+    @MainActor
+    func testTeardownDrainLandsAPendingInferredCommandBeforeUnsetting() {
+        let c = opened(FakeProc(), [session("a")], history: [agentRecord("h", ended: 5, cwd: "/a", launch: ["claude", "--leak"])])
+        let gate = DispatchSemaphore(value: 0)
+        c.readLiveRecords = { _ in gate.wait(); return [] }
+        var got: [String]?
+        c.newSessionCommand { got = $0 }
+        XCTAssertNil(got, "still inferring: the test ends here")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { gate.signal() }   // inference outlives the test
+        Self.drainNewSessionCommand(c)   // what teardown runs
+        settle(c) { got != nil }         // the next test's turn on main
+        XCTAssertEqual(got, ["claude", "--leak"], "the ask did infer and store")
+        XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand"), "nothing lands after the reset")
     }
 
     /// A master newer than the control binary: every #579 verb is off, with the reason.
