@@ -67,6 +67,71 @@ final class ClipboardReceivingPanelTests: XCTestCase {
                        "pinned first, then the rest by date with the uploads among them")
     }
 
+    // MARK: - Selection after a row leaves (QA #496 LOW-1)
+
+    func testReselectPureCases() {
+        let (a, b, c) = (UUID(), UUID(), UUID())
+        XCTAssertEqual(ClipboardPanelModel.reselect(b, old: [a, b, c], new: [a, c]), c, "middle gone: the next row")
+        XCTAssertEqual(ClipboardPanelModel.reselect(c, old: [a, b, c], new: [a, b]), b, "last gone: the new last")
+        XCTAssertNil(ClipboardPanelModel.reselect(a, old: [a], new: []), "only row gone: nothing")
+        XCTAssertEqual(ClipboardPanelModel.reselect(a, old: [a, b, c], new: [a, c]), a, "still listed: unchanged")
+        XCTAssertEqual(ClipboardPanelModel.reselect(a, old: [a, b, c], new: [b, c]), b)
+        XCTAssertEqual(ClipboardPanelModel.reselect(a, old: [a, b, c], new: [c]), c, "skips a row gone with it")
+        XCTAssertNil(ClipboardPanelModel.reselect(nil, old: [a], new: [a, b]))
+    }
+
+    /// A pinned old row, a today row and two older rows across buckets, plus `upload`'s date.
+    private func bucketFixture(_ store: ClipboardStore, uploadAt: TimeInterval) throws -> (rows: [UUID], upload: UUID) {
+        let day: TimeInterval = 86_400
+        func add(_ ago: TimeInterval) -> UUID {
+            let id = UUID()
+            store.addRemote(id: id, date: Date().addingTimeInterval(-ago), source: "iPhone", sha256: id.uuidString,
+                            .text("row \(id)"))
+            return id
+        }
+        let pinned = add(20 * day)
+        store.togglePin(try XCTUnwrap(store.item(pinned)))
+        _ = add(60)
+        _ = add(10 * day)
+        _ = add(12 * day)
+        let u = upload(store, at: Date().addingTimeInterval(-uploadAt))
+        let rows = store.historyRows.map(\.id)
+        XCTAssertEqual(rows, clipboardVisualOrder(store.historyRows), "history order is the order the list draws")
+        XCTAssertEqual(rows.first, pinned)
+        return (rows, u.id)
+    }
+
+    func testCancelledMiddleRowSelectsTheNextVisualRow() throws {
+        let store = ClipboardStore(dir: tempDir())
+        let f = try bucketFixture(store, uploadAt: 5 * 86_400)   // between the today and the 10-day rows
+        let i = try XCTUnwrap(f.rows.firstIndex(of: f.upload))
+        XCTAssertEqual(i, 2, "pinned, today, upload, …")
+        store.cancel(f.upload)
+        let next = ClipboardPanelModel.reselect(f.upload, old: f.rows, new: clipboardVisualOrder(store.historyRows))
+        XCTAssertEqual(next, f.rows[i + 1])
+    }
+
+    func testCancelledLastRowSelectsTheNewLastRow() throws {
+        let store = ClipboardStore(dir: tempDir())
+        let f = try bucketFixture(store, uploadAt: 40 * 86_400)   // the "Older" bucket, last
+        XCTAssertEqual(f.rows.last, f.upload)
+        store.endReceiving(f.upload)   // failed
+        let new = clipboardVisualOrder(store.historyRows)
+        XCTAssertEqual(ClipboardPanelModel.reselect(f.upload, old: f.rows, new: new), f.rows[f.rows.count - 2])
+        XCTAssertEqual(new.last, f.rows[f.rows.count - 2])
+    }
+
+    func testLandedUploadKeepsTheSelection() throws {
+        let store = ClipboardStore(dir: tempDir())
+        let f = try bucketFixture(store, uploadAt: 5 * 86_400)
+        let r = try XCTUnwrap(store.receiving[f.upload])
+        XCTAssertTrue(store.addRemote(id: r.id, date: r.createdAt, source: "iPhone", sha256: "landed", .text("landed")))
+        store.endReceiving(r.id)
+        let new = store.historyRows.map(\.id)
+        XCTAssertEqual(new, f.rows, "the placeholder became its item: same ids, same order")
+        XCTAssertEqual(ClipboardPanelModel.reselect(f.upload, old: f.rows, new: new), f.upload)
+    }
+
     func testProgressText() {
         let r = ClipboardReceiving(id: UUID(), kind: .file, createdAt: Date(), name: nil, size: 2_000_000, bytes: 1_000_000)
         XCTAssertEqual(r.progressText, "1 MB of 2 MB")

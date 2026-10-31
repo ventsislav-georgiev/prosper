@@ -21,6 +21,7 @@ final class ClipboardPanel {
     /// mistake a programmatic restore for a user drag and overwrite the saved spot.
     private var isProgrammaticMove = false
     private var moveObserver: NSObjectProtocol?
+    private var resignKeyObserver: NSObjectProtocol?
     private static let originKey = "ClipboardPanelTopLeft"
 
     var isShown: Bool { panel.isVisible }
@@ -84,13 +85,22 @@ final class ClipboardPanel {
                 self.saveOrigin()
             }
         }
+        // #632: a paste waiting on an upload ends once the user leaves the panel (it is not
+        // hidden on deactivate), so a long upload never pastes minutes later into another app.
+        // It ends only the wait; the panel stays. Accepted: the Cmd-E rename alert on another row
+        // (runModal takes key) and a click that ever moves key off the panel end a wait too.
+        resignKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: panel, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.wait.end() }
+        }
     }
 
     private func saveOrigin() {
         let f = panel.frame
         Preferences.defaults.set(["x": f.minX, "y": f.maxY], forKey: Self.originKey)
     }
-    // ponytail: no deinit to remove moveObserver — AppDelegate holds this panel for
+    // ponytail: no deinit to remove moveObserver / resignKeyObserver — AppDelegate holds this panel for
     // the app's lifetime (lazily created, never released), so deinit never fires.
 
     func present() {
@@ -223,6 +233,17 @@ final class ClipboardPanelModel: ObservableObject {
     /// rationale; used by the paste handler to rank visible rows.
     var viewportHeight: CGFloat = 0
 
+    /// #632: the selection after the History rows changed. A selection still listed stays;
+    /// a gone one moves to the next row still listed after it, else the last, else nil.
+    /// `old` is the previous row order; `new` the rows now listed, in the same order.
+    nonisolated static func reselect(_ selected: UUID?, old: [UUID], new: [UUID]) -> UUID? {
+        guard let selected, !new.contains(selected) else { return selected }
+        if let i = old.firstIndex(of: selected), let next = old[(i + 1)...].first(where: new.contains) {
+            return next
+        }
+        return new.last
+    }
+
     func reset(selecting id: UUID?) {
         query = ""
         typeFilter = nil
@@ -349,6 +370,11 @@ private struct SectionedItems {
         var items: [ClipboardItem]
     }
     var groups: [Group]
+}
+
+/// The row ids in the order the list draws them (pinned, then the date buckets).
+func clipboardVisualOrder(_ items: [ClipboardItem]) -> [UUID] {
+    bucket(items).groups.flatMap { $0.items.map(\.id) }
 }
 
 private func bucket(_ items: [ClipboardItem]) -> SectionedItems {
@@ -529,6 +555,12 @@ struct ClipboardView: View {
         // fires the selectedId scroll handler → list snaps back to the top).
         .onChange(of: model.query) { _, _ in selectFirstIfNeeded() }
         .onChange(of: model.typeFilter) { _, _ in selectFirstIfNeeded() }
+        // #632: a selected row can leave the list without a key press (an upload cancelled,
+        // failed or landed as a duplicate, a remove from the phone); keep a row selected.
+        .onChange(of: store.historyRows.map(\.id)) { old, _ in
+            let next = ClipboardPanelModel.reselect(model.selectedId, old: old, new: filtered.map(\.id))
+            if next != model.selectedId { model.selectedId = next }
+        }
         .background(ClipboardKeyHandling(
             onCancel: onCancel,
             onEnter: { commitSelected() },

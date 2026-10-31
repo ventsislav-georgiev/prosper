@@ -61,8 +61,9 @@ tag from the now-released section and put it on the new top draft.
   would leave under 5 GB free.
 - **Clipboard History shows what is still arriving from the iPhone.** An item the
   phone is sending appears in Clipboard History at once, with its name, "x of y" and a
-  plain progress bar. Pasting it waits until it has arrived, then pastes; Esc cancels
-  the transfer, and ⌘⌫ on the row does too. A failed or cancelled transfer leaves no row.
+  plain progress bar. Pasting it waits until it has arrived, then pastes; Esc while it
+  waits cancels the transfer, as ⌘⌫ on the row does. A failed or cancelled transfer
+  leaves no row.
 - Large text copies (over 64 KB) no longer stall the Mac while clipboard history checks
   them for a link, an email or a color.
 
