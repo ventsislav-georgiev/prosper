@@ -1599,6 +1599,35 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.liveRecords(sessions, env: ["XDG_STATE_HOME": state]).map(\.name), ["own", "mb"])
     }
 
+    /// QA #482 I3: every record opened is closed, refused or read: ~50 reads over
+    /// a 0o602 record, a symlink, another sock_dir, one over 1 MB and one accepted
+    /// leave /dev/fd as it was (within a few unrelated fds).
+    func testLiveRecordsLeakNoFd() throws {
+        let state = tempDir().path, dir = "/tmp/dch-test", recs = state + "/dch/sessions/-tmp-dch-test"
+        try FileManager.default.createDirectory(atPath: recs, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        func put(_ name: String, sockDir: String = dir, size: Int = 0, mode: Int = 0o600) throws {
+            let head = "{\"name\":\"\(name)\",\"sock_dir\":\"\(sockDir)\",\"cwd\":\"/src\",\"argv\":[\"claude\"],\"end\":\"\",\"pad\":\""
+            let body = head + String(repeating: "x", count: max(0, size - head.utf8.count - 3)) + "\"}\n"
+            try Data(body.utf8).write(to: URL(fileURLWithPath: recs + "/\(name).json"))
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: recs + "/\(name).json")
+        }
+        try put("own")
+        try put("world", mode: 0o602)
+        try put("other", sockDir: "/tmp/dch/test")
+        try put("over", size: (1 << 20) + 1)
+        try FileManager.default.createSymbolicLink(atPath: recs + "/link.json", withDestinationPath: recs + "/own.json")
+        let sessions = ["own", "world", "other", "over", "link"].enumerated().map { i, n in
+            AgentSession(key: AgentSessionKey(dir: dir, name: n), alias: "", activity: TimeInterval(9 - i), state: .idle, agents: 1)
+        }
+        func read() -> [String] { AgentIsland.liveRecords(sessions, env: ["XDG_STATE_HOME": state]).map(\.name) }
+        func fds() throws -> Int { try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count }
+        XCTAssertEqual(read(), ["own"])   // warm: anything opened once and kept is in `before`
+        let before = try fds()
+        for _ in 0..<50 { XCTAssertEqual(read(), ["own"]) }
+        // A leak is 4 per read (about 200); slack for an unrelated thread's fd.
+        XCTAssertLessThan(try fds() - before, 10, "no fd left open by a refused or an accepted record")
+    }
+
     /// #608: as dch_history_dir, the records dir (and dch/, sessions/ above it)
     /// must be a real dir, ours and closed to others, or no record is read.
     func testLiveRecordsNeedTheirDirsOursAndClosed() throws {
@@ -2646,5 +2675,153 @@ final class AgentIslandControlsTests: XCTestCase {
         store.sessions = [session("prosper-main", version: "1.24.1")]
         XCTAssertNotEqual(edits, try pixels(), "under 1.25.0: no pin, X or Clear drawn")
         try render(store, "agent-island-605-history-gated-1.24.1", to: out)
+    }
+
+    // MARK: - #627: a name dch would read as a flag; Clear's question
+
+    /// dch's argv has no "--": every verb that names a session refuses a name
+    /// starting with '-' ("--all" would be `--forget --all`); a batch refuses whole.
+    func testNamedVerbsRefuseADashLedName() {
+        for bad in ["--all", "-n"] {
+            XCTAssertNil(AgentIsland.reviveArgs(record(bad), live: [], records: []), bad)
+            XCTAssertNil(AgentIsland.reviveArgs(record(bad), live: [bad], records: []), "\(bad) live: no --as either")
+            XCTAssertNil(AgentIsland.restartArgs(bad), bad)
+            XCTAssertNil(AgentIsland.stopArgs(["a", bad]), "\(bad): the whole batch, never just the rest")
+            XCTAssertNil(AgentIsland.pinArgs(bad, pin: true), bad)
+            XCTAssertNil(AgentIsland.pinArgs(bad, pin: false), bad)
+            XCTAssertNil(AgentIsland.forgetArgs(bad), bad)
+        }
+        XCTAssertEqual(AgentIsland.stopArgs(["a", "b-n"]), ["--stop", "a", "b-n", "--json"], "a dash inside a name passes")
+        XCTAssertEqual(AgentIsland.forgetArgs("x"), ["--forget", "x", "--json"])
+    }
+
+    /// History: a "--all" or "-n" record draws no Resume, pin or X, and the
+    /// controller runs nothing for it; a normal record next to them works.
+    @MainActor
+    func testDashLedHistoryRowsGetNoControlsAndRunNothing() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("--all", ended: 3), record("-n", ended: 2), record("x", ended: 1)]
+        let c = controller(f, reads, dch: Self.v125)
+        c.store?.sessions = [session("live", version: "1.25.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 3 }
+        let store = try XCTUnwrap(c.store)
+        store.historyTab = true
+        let rows = AgentIslandView(store: store, onResume: { c.resume($0) }, onPin: { c.pin($0) },
+                                   onRemove: { c.remove($0) }).historyDrawn
+        XCTAssertEqual(rows.map(\.record.name), ["--all", "-n", "x"])
+        XCTAssertEqual(rows.map(\.enabled), [false, false, true], "no Resume")
+        XCTAssertEqual(rows.map { $0.pin != nil }, [false, false, true], "no pin")
+        XCTAssertEqual(rows.map { $0.remove != nil }, [false, false, true], "no X")
+        for r in rows.prefix(2) {
+            r.resume()
+            c.pin(r.record)
+            c.remove(r.record)
+            c.pin(pinned(r.record.name))   // an unpin
+        }
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "nothing runs for a dash-led name")
+        XCTAssertEqual(f.args, [])
+        XCTAssertEqual(store.historyActions, [:])
+        XCTAssertEqual(store.actions, [:])
+        let before = reads.count
+        rows[2].remove?()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--forget", "x", "--json"]], "a normal name is unaffected")
+        f.release.signal()
+        settle(c) { reads.count > before }
+    }
+
+    /// Sessions: a live "--all" or "-n" draws no Restart or Stop, Stop all leaves
+    /// it out, and the controller runs nothing for it; "a" next to them works.
+    @MainActor
+    func testDashLedSessionsGetNoRestartOrStopAndRunNothing() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("x")]
+        let c = controller(f, reads)
+        c.store?.sessions = [session("--all", version: "1.24.1"), session("-n", version: "1.24.1"),
+                             session("a", version: "1.24.1")]
+        c.setExpanded(true)
+        settle(c) { c.store?.controlDch != nil && c.store?.history.count == 1 }
+        let store = try XCTUnwrap(c.store)
+        let drawn = AgentIslandView(store: store, onRestart: { c.restart($0) }, onStop: { c.stop($0) }).drawn
+        let bad = drawn.filter { $0.session.name.hasPrefix("-") }
+        let good = try XCTUnwrap(drawn.first { $0.session.name == "a" })
+        XCTAssertEqual(bad.count, 2)
+        for r in bad {
+            XCTAssertFalse(r.controls, r.session.name)
+            XCTAssertFalse(r.restartEnabled, r.session.name)
+            XCTAssertFalse(r.stopEnabled, r.session.name)
+            r.restart()
+            r.stop()
+        }
+        XCTAssertTrue(good.controls)
+        XCTAssertTrue(good.restartEnabled)
+        XCTAssertTrue(good.stopEnabled)
+        XCTAssertEqual(store.stopAllTargets.stop.map(\.name), ["a"])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "nothing runs for a dash-led name")
+        XCTAssertEqual(f.args, [])
+        XCTAssertEqual(store.actions, [:])
+        c.askStopAll()
+        c.confirmStopAll(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--stop", "a", "--json"]], "Stop all names only a")
+        f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != nil }
+    }
+
+    /// LOW-1: Clear's answer runs only while its question is up: never with none
+    /// asked, and never again once a Clear has finished (its dir key is free then).
+    @MainActor
+    func testClearAnswerWithNoQuestionUpRunsNothing() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("u"), pinned("p", ended: 50)]
+        let c = controller(f, reads, dch: Self.v125)
+        c.store?.sessions = [session("a", version: "1.25.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store)
+        c.showHistory()
+        settle(c)
+        XCTAssertNotNil(store.clearUnpinnedButton)
+        c.confirmClearUnpinned(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "no question asked: no --forget --all")
+        c.askClearUnpinned()
+        c.confirmClearUnpinned(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        let before = reads.count
+        f.release.signal()
+        settle(c) { reads.count > before && !store.actions.values.contains(AgentIsland.clearingText) }
+        XCTAssertFalse(c.runner.isBusy(AgentSessionKey(dir: "/d", name: "")), "the Clear finished")
+        c.confirmClearUnpinned(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "the answered question is gone")
+        XCTAssertEqual(f.args, [AgentIsland.forgetAllArgs])
+    }
+
+    /// I4: "Clear N unpinned?" goes once a re-read leaves nothing unpinned.
+    @MainActor
+    func testClearQuestionGoesWhenNothingUnpinnedIsLeft() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("u"), pinned("p", ended: 50)]
+        let c = controller(f, reads, dch: Self.v125)
+        c.store?.sessions = [session("a", version: "1.25.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store)
+        c.showHistory()
+        settle(c)
+        c.askClearUnpinned()
+        XCTAssertTrue(store.confirmingClear)
+        reads.lock.withLock { reads.records = [record("v"), pinned("p", ended: 50)] }
+        c.refreshHistory()
+        settle(c) { store.history.first?.name == "v" }
+        XCTAssertTrue(store.confirmingClear, "one left: the question stays")
+        reads.lock.withLock { reads.records = [pinned("p", ended: 50)] }
+        c.refreshHistory()
+        settle(c) { store.history.count == 1 }
+        XCTAssertEqual(store.unpinnedCount, 0)
+        XCTAssertFalse(store.confirmingClear, "no \"Clear 0 unpinned?\"")
+        c.confirmClearUnpinned(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [])
     }
 }

@@ -274,10 +274,10 @@ final class DchControlFramesTests: XCTestCase {
     func testRestartNamesRunsRestartArgsPerName() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1"), ("b", "1.24.1"), ("c", "1.24.1")])
-        f.out[AgentIsland.restartArgs("a").joined(separator: " ")] = Self.ok("a", phase: "master") + "\n" + Self.ok("a")
-        f.out[AgentIsland.restartArgs("b").joined(separator: " ")] = Self.ok("b")
+        f.out[AgentIsland.restartArgs("a")!.joined(separator: " ")] = Self.ok("a", phase: "master") + "\n" + Self.ok("a")
+        f.out[AgentIsland.restartArgs("b")!.joined(separator: " ")] = Self.ok("b")
         let r = call(ops(f), DchFrame.restart, ["names": ["a", "b", "a"]])
-        XCTAssertEqual(Set(f.launchedArgs), [AgentIsland.restartArgs("a"), AgentIsland.restartArgs("b")], "deduplicated")
+        XCTAssertEqual(Set(f.launchedArgs), [AgentIsland.restartArgs("a")!, AgentIsland.restartArgs("b")!], "deduplicated")
         XCTAssertEqual(names(r), ["a", "b"], "request order")
         XCTAssertEqual(f.refreshes, 1)
     }
@@ -319,7 +319,7 @@ final class DchControlFramesTests: XCTestCase {
     func testStopNamesRunsOneStopArgsPerDir() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1"), ("b", "1.24.0"), ("c", "1.24.1")])
-        f.out[AgentIsland.stopArgs(["a", "b"]).joined(separator: " ")] = Self.ok("a") + "\n" + Self.ok("b")
+        f.out[AgentIsland.stopArgs(["a", "b"])!.joined(separator: " ")] = Self.ok("a") + "\n" + Self.ok("b")
         let r = call(ops(f), DchFrame.stop, ["names": ["a", "b"]])
         XCTAssertEqual(f.launchedArgs, [["--stop", "a", "b", "--json"]])
         XCTAssertEqual(names(r), ["a", "b"])
@@ -332,6 +332,35 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertTrue(message(call(ops(f), DchFrame.stop, ["names": ["a", "ghost"]])).contains("ghost"))
         XCTAssertTrue(message(call(ops(f), DchFrame.stop, ["names": ["old"]])).contains("restart this session first"))
         XCTAssertTrue(f.launches.isEmpty)
+    }
+
+    // MARK: - #627: a name dch would read as a flag
+
+    /// A record or live session named "--all" or "-n" exists, so only the guard
+    /// refuses: error 0x13, no dch run; a batch with one refuses whole; a normal
+    /// name still runs.
+    func testDashLedNamesAreRefusedWholeAndRunNothing() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1"), ("--all", "1.24.1"), ("-n", "1.24.1")])
+        f.hist["/d"] = Self.hist([["name": "--all", "updated": Self.now - 60, "end": "signal 9"],
+                                  ["name": "-n", "updated": Self.now - 70, "end": "signal 9"],
+                                  ["name": "r", "updated": Self.now - 80, "end": "signal 9"]])
+        let o = ops(f)
+        for bad in ["--all", "-n"] {
+            XCTAssertEqual(message(call(o, DchFrame.revive, ["name": bad])), DchControlOps.dashNameRefusal, bad)
+            XCTAssertEqual(message(call(o, DchFrame.restart, ["names": [bad]])), DchControlOps.dashNameRefusal, bad)
+            XCTAssertEqual(message(call(o, DchFrame.restart, ["names": ["a", bad]])), DchControlOps.dashNameRefusal, bad)
+            XCTAssertEqual(message(call(o, DchFrame.stop, ["names": [bad]])), DchControlOps.dashNameRefusal, bad)
+            XCTAssertEqual(message(call(o, DchFrame.stop, ["names": ["a", bad]])), DchControlOps.dashNameRefusal, bad)
+        }
+        XCTAssertEqual(DchControlOps.dashNameRefusal, "a session name starting with - can't be passed to dch")
+        XCTAssertEqual(f.launchedArgs, [], "no dch run, not even for the normal name in a refused batch")
+        XCTAssertEqual(f.refreshes, 0)
+        f.out["--stop a --json"] = Self.ok("a")
+        XCTAssertEqual(names(call(o, DchFrame.stop, ["names": ["a"]])), ["a"])
+        f.out["--revive r --json"] = Self.ok("r")
+        XCTAssertEqual(names(call(o, DchFrame.revive, ["name": "r"])), ["r"])
+        XCTAssertEqual(f.launchedArgs, [["--stop", "a", "--json"], ["--revive", "r", "--json"]], "normal names unaffected")
     }
 
     // MARK: - malformed
@@ -395,6 +424,7 @@ final class DchControlFramesTests: XCTestCase {
             if frame.first == DchFrame.error { replied.fulfill() }
         }
         conn.ops = ops(Fake())
+        conn.kill = { _ in }
         DchCommand.dchPathOverride = "/usr/bin/true"
         defer { DchCommand.dchPathOverride = nil }
         queue.sync {
@@ -406,6 +436,29 @@ final class DchControlFramesTests: XCTestCase {
         let all = frames.lock.withLock { frames.all }
         XCTAssertEqual(all.count, 3)
         XCTAssertEqual(Array(all.prefix(2)), [DchFrame.encode(DchFrame.ok, []), DchFrame.encode(DchFrame.ok, [])])
+    }
+
+    /// #627: dch's -k reads no name starting with '-' ("-k --all" re-parses --all as a
+    /// flag): error 0x13 and no kill; a normal name is killed and acked. Kill is a recorder.
+    func testKillRefusesADashLedName() {
+        let queue = DispatchQueue(label: "test.dchconn")
+        let conn = DchConnection(conn: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), queue: queue,
+                                 log: Logger(subsystem: "test", category: "dch"), onClose: { _ in })
+        let frames = Frames(), killed = Frames()
+        conn.kill = { n in killed.lock.withLock { killed.all.append(Data(n.utf8)) } }
+        conn.sendOverride = { frame in frames.lock.withLock { frames.all.append(frame) } }
+        conn.ops = ops(Fake())
+        DchCommand.dchPathOverride = "/usr/bin/false"   // belt and braces: never a real dch
+        defer { DchCommand.dchPathOverride = nil }
+        queue.sync {
+            for n in ["--all", "-n", "a"] {
+                conn.handle(type: DchFrame.kill, payload: Data(try! JSONSerialization.data(withJSONObject: ["name": n])))
+            }
+        }
+        let all = frames.lock.withLock { frames.all }
+        XCTAssertEqual(all, [DchControlOps.error(DchControlOps.dashNameRefusal), DchControlOps.error(DchControlOps.dashNameRefusal),
+                             DchFrame.encode(DchFrame.ok, [])])
+        XCTAssertEqual(killed.lock.withLock { killed.all }, [Data("a".utf8)], "only the normal name reaches -k")
     }
 
     /// Unstubbed under XCTest: no control binary, so every verb is refused before any dch fork.
@@ -429,7 +482,7 @@ final class DchControlFramesTests: XCTestCase {
     func testRestartWhoseAgentFailedAfterAnOkMasterIsAnErrorWithTheAgentsWords() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1")])
-        let a = AgentIsland.restartArgs("a").joined(separator: " ")
+        let a = AgentIsland.restartArgs("a")!.joined(separator: " ")
         f.out[a] = Self.ok("a", phase: "master") + "\n" + Self.line("a", "failed", reason: "not_paused", detail: "a: agent did not pause")
         f.statusFor[a] = 1
         let r = call(ops(f), DchFrame.restart, ["names": ["a"]])
@@ -449,14 +502,14 @@ final class DchControlFramesTests: XCTestCase {
     func testRestartOfTwoNamesWithOneFailedNamesOnlyTheFailedOne() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1"), ("b", "1.24.1")])
-        let b = AgentIsland.restartArgs("b").joined(separator: " ")
+        let b = AgentIsland.restartArgs("b")!.joined(separator: " ")
         f.out[b] = Self.ok("b", phase: "master") + "\n" + Self.line("b", "failed", reason: "not_paused", detail: "b: agent did not pause")
         f.statusFor[b] = 1
         XCTAssertEqual(message(call(ops(f), DchFrame.restart, ["names": ["a", "b"]])), "b: agent did not pause")
         f.out[b] = "dch: b: master gone"
         XCTAssertEqual(message(call(ops(f), DchFrame.restart, ["names": ["b", "a"]])), "b: Restart failed: dch: b: master gone",
                        "no result line and a non-zero exit: rowText's failedText")
-        f.statusFor[AgentIsland.restartArgs("a").joined(separator: " ")] = 1
+        f.statusFor[AgentIsland.restartArgs("a")!.joined(separator: " ")] = 1
         XCTAssertEqual(message(call(ops(f), DchFrame.restart, ["names": ["a", "b"]])),
                        "a: Restart failed (exit 1); b: Restart failed: dch: b: master gone", "every failed name, request order")
     }
@@ -599,7 +652,7 @@ final class DchControlFramesTests: XCTestCase {
             f.hold.signal()
             wait(for: [done], timeout: 5)
         }
-        XCTAssertEqual(f.launchedArgs.filter { $0 != ["--island"] }, [AgentIsland.restartArgs("b")], "no phone job launched while busy")
+        XCTAssertEqual(f.launchedArgs.filter { $0 != ["--island"] }, [AgentIsland.restartArgs("b")!], "no phone job launched while busy")
     }
 
     /// #594 (QA #462 N7): a stop holds the dir key, not a row's, so an island job on
@@ -647,8 +700,8 @@ final class DchControlFramesTests: XCTestCase {
     func testASecondRequestWhileAVerbIsInFlightIsBusyAndTheFirstStillReplies() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1")])
-        f.out[AgentIsland.restartArgs("a").joined(separator: " ")] = Self.ok("a")
-        f.holdArgs = AgentIsland.restartArgs("a")
+        f.out[AgentIsland.restartArgs("a")!.joined(separator: " ")] = Self.ok("a")
+        f.holdArgs = AgentIsland.restartArgs("a")!
         let held = expectation(description: "restart running")
         f.held = held
         let (conn, queue, frames) = connection(ops(f))
@@ -679,7 +732,7 @@ final class DchControlFramesTests: XCTestCase {
     func testAnErrorReplyFreesTheConnectionForTheNextRequest() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1")])
-        f.out[AgentIsland.restartArgs("a").joined(separator: " ")] = Self.ok("a")
+        f.out[AgentIsland.restartArgs("a")!.joined(separator: " ")] = Self.ok("a")
         let (conn, queue, frames) = connection(ops(f))
         func next(_ type: UInt8, _ payload: Data) -> (type: UInt8, json: Any?) {
             let before = frames.lock.withLock { frames.all.count }
@@ -720,8 +773,8 @@ final class DchControlFramesTests: XCTestCase {
     func testAVerbWhoseConnectionClosedMidRunSendsNothing() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1")])
-        f.out[AgentIsland.restartArgs("a").joined(separator: " ")] = Self.ok("a")
-        f.holdArgs = AgentIsland.restartArgs("a")
+        f.out[AgentIsland.restartArgs("a")!.joined(separator: " ")] = Self.ok("a")
+        f.holdArgs = AgentIsland.restartArgs("a")!
         let held = expectation(description: "restart running"), refreshed = expectation(description: "verb finished")
         f.held = held
         f.onRefresh = refreshed
@@ -765,7 +818,7 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertTrue(f.reads.isEmpty, "refused before any listing")
         XCTAssertTrue(f.launches.isEmpty)
         XCTAssertEqual(names(call(ops(f), DchFrame.stop, ["names": many])), many, "256 pass the cap and the gate")
-        XCTAssertEqual(f.launchedArgs, [AgentIsland.stopArgs(many)])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.stopArgs(many)!])
     }
 
     func testDuplicateNamesKeepRequestOrder() {

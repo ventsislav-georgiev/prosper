@@ -102,11 +102,13 @@ extension AgentIsland {
     static func label(_ label: String, needs: String?) -> String { needs.map { "\(label) (\($0))" } ?? label }
     /// #605: --pin, --unpin and --forget (the History tab's pin, X and Clear unpinned).
     static let historyEditMinimum = [1, 25, 0]
-    /// The History tab lists at most this many unpinned records, newest first.
+    /// The History tab lists this many records in all, newest first, unless more
+    /// are pinned: pinned ones are never capped, unpinned ones fill the rest.
     static let historyCap = 50
 
     /// #605: the History tab's rows: every pinned record (never capped), then
-    /// unpinned ones up to `historyCap`; each part newest first (`history` is).
+    /// unpinned ones up to `historyCap` minus the pinned count; each part newest
+    /// first (`history` is).
     static func cappedHistory(_ history: [DchHistoryRecord]) -> [DchHistoryRecord] {
         let pinned = history.filter(\.pinned)
         return pinned + history.filter { !$0.pinned }.prefix(max(0, historyCap - pinned.count))
@@ -165,9 +167,19 @@ extension AgentIsland {
     /// `--revive <name>`; a name live now goes to `--as` the first free
     /// `<name>-2`, `-3`, … — free of live sessions and of other records in the dir
     /// (dch would overwrite that record).
-    static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>) -> [String] {
-        guard live.contains(r.name) else { return ["--revive", r.name, "--json"] }
-        return ["--revive", r.name, "--as", freeName(r.name, taken: live.union(records)), "--json"]
+    static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>) -> [String]? {
+        guard live.contains(r.name) else { return named("--revive", [r.name]) }
+        return named("--revive", [r.name], ["--as", freeName(r.name, taken: live.union(records)), "--json"])
+    }
+
+    /// #627: dch takes a session name that starts with '-' and its argv has no
+    /// "--", so a record named "--all" makes `--forget <name>` `--forget --all`.
+    static func passable(_ name: String) -> Bool { !name.hasPrefix("-") }
+
+    /// Every verb that names sessions builds its argv here: `verb names… rest`,
+    /// nil (nothing runs) when any name is not `passable`.
+    static func named(_ verb: String, _ names: [String], _ rest: [String] = ["--json"]) -> [String]? {
+        names.allSatisfy(passable) ? [verb] + names + rest : nil
     }
 
     /// Resume interrupted. dch skips stopped, killed and exit 0 records itself.
@@ -187,7 +199,7 @@ extension AgentIsland {
     static let restartAllQuestion = "Restart stale agents? Each pauses for up to minutes."
 
     /// An explicit row click: `-f`, so a current agent restarts too.
-    static func restartArgs(_ name: String) -> [String] { ["--restart", name, "--include-agents", "-f", "--json"] }
+    static func restartArgs(_ name: String) -> [String]? { named("--restart", [name], ["--include-agents", "-f", "--json"]) }
     /// No `-f`: only stale agents restart.
     static let restartAllArgs = ["--restart", "--all", "--include-agents", "--json"]
 
@@ -308,8 +320,8 @@ extension AgentIsland {
     static func clearQuestion(_ n: Int) -> String { "Clear \(n) unpinned?" }
 
     /// `--pin|--unpin <name> --json`; `--forget <name> --json`, never -f (a pin protects).
-    static func pinArgs(_ name: String, pin: Bool) -> [String] { [pin ? "--pin" : "--unpin", name, "--json"] }
-    static func forgetArgs(_ name: String) -> [String] { ["--forget", name, "--json"] }
+    static func pinArgs(_ name: String, pin: Bool) -> [String]? { named(pin ? "--pin" : "--unpin", [name]) }
+    static func forgetArgs(_ name: String) -> [String]? { named("--forget", [name]) }
     /// Every record neither live nor pinned; dch skips those (-f is a usage error here).
     static let forgetAllArgs = ["--forget", "--all", "--json"]
 
@@ -339,7 +351,7 @@ extension AgentIsland {
     }
 
     /// Named sessions only, never `--all`.
-    static func stopArgs(_ names: [String]) -> [String] { ["--stop"] + names + ["--json"] }
+    static func stopArgs(_ names: [String]) -> [String]? { named("--stop", names) }
 
     /// A row's master can stop: its --ls-json version reads >= 1.24.0, compared
     /// numerically. A 1.23.x master records a stop as a crash; "" is too old to say.
@@ -436,10 +448,11 @@ extension AgentIsland {
     /// `~/.local/state` when XDG_STATE_HOME is unset or relative; <slug> is the
     /// socket dir with each `/` as `-`). The master rewrites it while it runs,
     /// and `--history` leaves it out. Its command gets run, so as dch's
-    /// hrec_load and dch_history_dir (#608): dch/, sessions/ and the slug dir
-    /// lstat'd ours and closed to others; the record opened O_NOFOLLOW and its
-    /// fd a regular file, ours, closed to others, at most 1 MB; its sock_dir the
-    /// session's own (the slug folds / and -); and only one still running.
+    /// hrec_load (#608): the slug dir lstat'd ours and closed to others, as
+    /// dch_history_dir does (and dch/, sessions/ above it, stricter than dch);
+    /// the record opened O_NOFOLLOW and its fd a regular file, ours, closed to
+    /// others, at most 1 MB; its sock_dir the session's own (the slug folds /
+    /// and -); and only one still running.
     static func liveRecords(_ sessions: [AgentSession],
                             env: [String: String] = ProcessInfo.processInfo.environment) -> [DchHistoryRecord] {
         let xdg = env["XDG_STATE_HOME"] ?? ""

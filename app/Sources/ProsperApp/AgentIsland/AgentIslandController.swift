@@ -245,6 +245,7 @@ final class AgentIslandController {
         guard let store else { return }
         store.controlDch = dch
         store.history = records
+        if store.unpinnedCount == 0 { store.confirmingClear = false }   // #627 I4: no "Clear 0 unpinned?"
         // A record gone (revived) takes its status with it; running ones, the --all
         // lines and #579's live rows (a Restart result) stay.
         let recordKeys = Set(records.map(\.key)), live = Set(store.sessions.map(\.key))
@@ -297,7 +298,7 @@ final class AgentIslandController {
 
     /// One edit in the record's dir on the row's key (a busy row refuses); a
     /// failure goes on the dir's status line, then History is re-read.
-    private func edit(_ r: DchHistoryRecord, args: [String], _ verb: AgentIsland.Verb) {
+    private func edit(_ r: DchHistoryRecord, args: [String]?, _ verb: AgentIsland.Verb) {
         guard let store, case .ok(let dch) = store.historyEditGate else { return }
         let dir = r.key.dir, name = r.name
         run(r.key, dch: dch, args: args, running: nil) { [weak self] res in
@@ -335,12 +336,13 @@ final class AgentIslandController {
     /// One long verb on the runner with the control env (QA #445 M1), plus
     /// spawnEnv's strip for --spawn. `running` shows in the row meanwhile (a
     /// History row's with `history`); `onLine` and `done` run on main. A busy
-    /// key refuses: false, nothing shown.
+    /// key refuses: false, nothing shown; so does nil args (#627: a name dch would read as a flag).
     @discardableResult
-    private func run(_ key: AgentSessionKey, dch: String, args: [String], running: String?, cwd: String? = nil,
+    private func run(_ key: AgentSessionKey, dch: String, args: [String]?, running: String?, cwd: String? = nil,
                      bound: TimeInterval? = nil, spawn: Bool = false, history: Bool = false,
                      onLine: (@MainActor @Sendable (String) -> Void)? = nil,
                      done: @escaping @MainActor @Sendable (DchActionResult) -> Void) -> Bool {
+        guard let args else { return false }
         let env = controlEnv
         var hook: (@Sendable (String) -> Void)?
         if let onLine { hook = { line in DispatchQueue.main.async { MainActor.assumeIsolated { onLine(line) } } } }

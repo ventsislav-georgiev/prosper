@@ -95,6 +95,8 @@ final class DchConnection: @unchecked Sendable {
     var ops = DchControlOps.live
     /// #616: the library request's files (DchLibraryOps.dir).
     var library = DchLibraryOps()
+    /// #627: the kill frame's `dch -k <name>`; tests set a recorder so no real dch runs.
+    var kill: (String) -> Void = { DchCommand.kill($0) }
     /// QA #462 M3: a history/control request of this connection awaits its reply. On `queue`.
     private(set) var inFlight = false
     /// Test seam (#591): frames go here instead of the socket.
@@ -174,7 +176,9 @@ final class DchConnection: @unchecked Sendable {
         case DchFrame.kill:
             if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
                let n = o["name"] as? String {
-                DchCommand.kill(n)
+                // #627: dch's -k takes no name starting with '-'; it would re-parse "--all" as a flag.
+                guard AgentIsland.passable(n) else { return send(DchControlOps.error(DchControlOps.dashNameRefusal)) }
+                kill(n)
             }
             send(DchFrame.encode(DchFrame.ok, []))
         case DchFrame.rename:
@@ -395,16 +399,16 @@ struct DchLibraryOps: Sendable {
 
     /// Missing: empty bytes, null, no error. Over the cap: the first cap+1 bytes (for
     /// the etag), null, an error. Unreadable or not a JSON object/array: null, an error.
+    /// QA #484 I1: opened O_NONBLOCK and read only as a regular file (as #608), so a
+    /// FIFO there never blocks the reply; symlinks are followed (dotfile setups use them).
     static func read(_ url: URL) -> File {
         guard FileManager.default.fileExists(atPath: url.path) else { return File() }
-        let bytes: Data
-        do {
-            let h = try FileHandle(forReadingFrom: url)
-            defer { try? h.close() }
-            bytes = try h.read(upToCount: fileCap + 1) ?? Data()
-        } catch {
-            return File(error: "unreadable")
-        }
+        let fd = Darwin.open(url.path, O_RDONLY | O_NONBLOCK)
+        guard fd >= 0 else { return File(error: "unreadable") }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG,
+              let bytes = try? h.read(upToCount: fileCap + 1) ?? Data() else { return File(error: "unreadable") }
         guard bytes.count <= fileCap else { return File(bytes: bytes, error: "too large (over \(fileCap >> 20) MB)") }
         guard let json = try? JSONSerialization.jsonObject(with: bytes) else { return File(bytes: bytes, error: "malformed JSON") }
         return File(bytes: bytes, json: json)
@@ -567,7 +571,7 @@ struct DchControlOps: Sendable {
         let history = records(path)
         switch req {
         case .all:
-            let jobs = Set(history.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.reviveAllArgs) }
+            let jobs: [(AgentSessionKey, [String]?)] = Set(history.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.reviveAllArgs) }
             run(jobs, path: path, bound: nil, reply) { Self.answer(all: Self.merged($0), .resume) }
         case .names(let names):
             let name = names[0], matches = history.filter { $0.name == name }
@@ -591,7 +595,7 @@ struct DchControlOps: Sendable {
         guard case let (path, live)? = gated("Restart", minimum: AgentIsland.restartMinimum, reply) else { return }
         switch req {
         case .all:
-            let jobs = Set(live.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.restartAllArgs) }
+            let jobs: [(AgentSessionKey, [String]?)] = Set(live.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.restartAllArgs) }
             run(jobs, path: path, bound: DchActionRunner.restartBound, reply) { Self.answer(all: Self.merged($0), .restart) }
         case .names(let names):
             switch Self.resolve(names, live: live) {
@@ -627,6 +631,8 @@ struct DchControlOps: Sendable {
 
     struct Refusal: Error { let message: String }
 
+    static let dashNameRefusal = "a session name starting with - can't be passed to dch"
+
     /// Each name's one live session, in request order; refused whole when any name
     /// is not exactly one live session.
     static func resolve(_ names: [String], live: [AgentSession]) -> Result<[AgentSession], Refusal> {
@@ -649,10 +655,13 @@ struct DchControlOps: Sendable {
 
     /// Runs the jobs at once on the runner (a busy key reads as a failed job), then
     /// pokes the island and replies once with `answer` over the results in job order.
-    private func run(_ jobs: [(AgentSessionKey, [String])], path: String, bound: TimeInterval?, _ reply: @escaping Reply,
+    /// #627: any job with nil args (a name dch would read as a flag) refuses the whole request.
+    private func run(_ jobs: [(AgentSessionKey, [String]?)], path: String, bound: TimeInterval?, _ reply: @escaping Reply,
                      answer: @escaping @Sendable ([DchActionResult]) -> Data) {
+        let ready = jobs.compactMap { key, args in args.map { (key, $0) } }
+        guard ready.count == jobs.count else { return reply(Self.error(Self.dashNameRefusal)) }
         let group = DispatchGroup(), results = Results(jobs.count), env = env
-        for (i, (key, args)) in jobs.enumerated() {
+        for (i, (key, args)) in ready.enumerated() {
             group.enter()
             let started = runner.start(key, path: path, args: args, bound: bound, env: { env(key.dir) }) { r in
                 results.lock.withLock { results.all[i] = r }

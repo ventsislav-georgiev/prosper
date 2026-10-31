@@ -43,6 +43,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island reads a running session's dch record with the same checks dch uses: its
   folders and the record must be yours and closed to others, the record is at most 1 MB
   and never a symlink, and it must belong to that session's socket folder.
+- A dch session whose name starts with "-" (dch accepts one, such as "--all") no longer
+  turns a button into a command for every session. Agent Island shows no Resume, Restart,
+  Stop, pin or X for it, and the iPhone app's Resume, Restart, Stop and Kill refuse it
+  with a message.
 
 ## v2.162.0
 

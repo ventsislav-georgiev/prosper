@@ -327,7 +327,7 @@ final class AgentIslandStore: ObservableObject {
     /// #580: Stop all's rows, the session tab's whose master can stop, and how
     /// many it leaves for an old dch.
     var stopAllTargets: (stop: [AgentSession], skipped: Int) {
-        let rows = sessionTab.sessions, stop = rows.filter(AgentIsland.canStop)
+        let rows = sessionTab.sessions, stop = rows.filter { AgentIsland.canStop($0) && AgentIsland.passable($0.name) }
         return (stop, rows.count - stop.count)
     }
 
@@ -567,7 +567,9 @@ struct AgentIslandView: View {
         var stopTitle: String {
             canStop || needs != nil ? AgentIsland.label(AgentIsland.stopLabel, needs: needs) : AgentIsland.stopOldMasterLabel
         }
-        var restartEnabled: Bool { refused == nil && needs == nil }
+        /// #627: a name dch would read as a flag gets no Restart or Stop at all.
+        var controls: Bool { AgentIsland.passable(session.name) }
+        var restartEnabled: Bool { refused == nil && needs == nil && controls }
         var stopEnabled: Bool { restartEnabled && canStop }
     }
 
@@ -587,8 +589,10 @@ struct AgentIslandView: View {
     /// wins over Stop's "restart this session first".
     @ViewBuilder
     private func restartItem(_ r: Drawn) -> some View {
-        Button(r.restartTitle, action: r.restart).disabled(!r.restartEnabled)
-        Button(r.stopTitle, action: r.stop).disabled(!r.stopEnabled)
+        if r.controls {
+            Button(r.restartTitle, action: r.restart).disabled(!r.restartEnabled)
+            Button(r.stopTitle, action: r.stop).disabled(!r.stopEnabled)
+        }
         if let why = r.refused { Text(verbatim: "Controls \(why)") }
     }
 
@@ -660,8 +664,10 @@ struct AgentIslandView: View {
     var historyDrawn: [HistoryDrawn] {
         let on = store.resumeGate.isOK, edits = store.historyEditGate.isOK
         return store.shownHistory.map { r in
-            HistoryDrawn(record: r, enabled: on, resume: { onResume(r) }, pin: edits ? { onPin(r) } : nil,
-                         remove: edits && !r.pinned ? { onRemove(r) } : nil)
+            // #627: a name dch would read as a flag: no Resume, pin or X.
+            let ok = AgentIsland.passable(r.name)
+            return HistoryDrawn(record: r, enabled: on && ok, resume: { onResume(r) }, pin: edits && ok ? { onPin(r) } : nil,
+                                remove: edits && ok && !r.pinned ? { onRemove(r) } : nil)
         }
     }
 

@@ -130,6 +130,43 @@ final class DchLibraryFramesTests: XCTestCase {
         XCTAssertEqual(r.json["errors"] as? [String: String], ["snippets": "malformed JSON", "quicklinks": "unreadable"])
     }
 
+    /// QA #484 I1: a FIFO at snippets.json is unreadable, never a hang: the reply
+    /// comes within a second (a blocked open would pin the thread and the connection).
+    func testFifoIsUnreadableAndNeverBlocksTheReply() {
+        let (o, dir) = lib(snippets: nil)
+        let fifo = dir.appendingPathComponent("snippets.json").path
+        XCTAssertEqual(Darwin.mkfifo(fifo, 0o600), 0)
+        let frames = Frames(), got = expectation(description: "one reply")
+        DispatchQueue.global().async {
+            o.handle(Data()) { f in
+                frames.lock.withLock { frames.all.append(f) }
+                got.fulfill()
+            }
+        }
+        guard XCTWaiter().wait(for: [got], timeout: 1) == .completed else {
+            XCTFail("no reply within 1 s: opening the FIFO blocked")
+            let w = Darwin.open(fifo, O_WRONLY | O_NONBLOCK)   // frees the blocked reader
+            if w >= 0 { Darwin.close(w) }
+            return
+        }
+        let r = Self.decode(frames.lock.withLock { frames.all[0] })
+        XCTAssertEqual(r.type, DchFrame.libraryResp)
+        XCTAssertTrue(r.json["snippets"] is NSNull)
+        XCTAssertEqual(r.json["errors"] as? [String: String], ["snippets": "unreadable"])
+        XCTAssertEqual(r.json["quicklinks"] as? NSObject, Self.parsed(Self.quicklinks))
+    }
+
+    /// Dotfile setups symlink these files: a symlink is followed.
+    func testSymlinkedFileIsFollowed() throws {
+        let (o, dir) = lib(snippets: nil)
+        let real = tempDir().appendingPathComponent("real.json")
+        try Data(Self.snippets.utf8).write(to: real)
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("snippets.json"), withDestinationURL: real)
+        let r = call(o)
+        XCTAssertEqual(r.json["snippets"] as? NSObject, Self.parsed(Self.snippets))
+        XCTAssertNil(r.json["errors"])
+    }
+
     func testOverSizeFileIsRefused() {
         let big = "[" + String(repeating: "1,", count: DchLibraryOps.fileCap / 2) + "1]"
         let r = call(lib(snippets: big).0)
