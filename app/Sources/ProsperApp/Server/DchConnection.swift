@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
 import Network
@@ -30,6 +31,8 @@ enum DchFrame {
     static let revive: UInt8  = 0x0c  // {name} | {all: true} → ok {names} | error
     static let restart: UInt8 = 0x0d  // {names: [..]} | {all: true} → ok {names} | error
     static let stop: UInt8    = 0x0e  // {names: [..]} → ok {names} | error
+    // #616: the phone's read-only library sync (DchLibraryOps). One reply.
+    static let library: UInt8 = 0x0f  // (empty) | {} | {etag} → libraryResp | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -40,10 +43,11 @@ enum DchFrame {
     static let machineInfoResp: UInt8 = 0x18 // {device_id, hostname, wakeId?, ops}
     static let snapshotResp: UInt8 = 0x19 // raw ANSI screen from dch's VT mirror (empty = unavailable)
     static let historyResp: UInt8 = 0x1b // [{name, alias?, end, last_seen, started, runtime, cwd?, command?, takes}]
+    static let libraryResp: UInt8 = 0x1c // {etag, unchanged: true} | {etag, snippets, quicklinks, errors?}
 
     /// #591: the requests beyond the original set this Mac answers, in machineInfoResp's
     /// "ops" (an older phone ignores the key; a newer one hides what an older Mac lacks).
-    static let ops = ["history", "revive", "restart", "stop"]
+    static let ops = ["history", "revive", "restart", "stop", "library"]
 
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set
@@ -89,6 +93,8 @@ final class DchConnection: @unchecked Sendable {
     var attachedSession: String? { sessionName }
     /// #591: the history and control verbs' dch, server-wide (DchControlOps.live).
     var ops = DchControlOps.live
+    /// #616: the library request's files (DchLibraryOps.dir).
+    var library = DchLibraryOps()
     /// QA #462 M3: a history/control request of this connection awaits its reply. On `queue`.
     private(set) var inFlight = false
     /// Test seam (#591): frames go here instead of the socket.
@@ -203,7 +209,7 @@ final class DchConnection: @unchecked Sendable {
             send(DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
                 deviceID: SupporterStore.deviceID(), hostname: SupporterStore.deviceName(),
                 wakeId: LiveExtensionHostServices.currentWakeId)))
-        case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop:
+        case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.library:
             // #591: off this queue, unlike kill: the reads fork dch and a restart can
             // take minutes, while every connection (and each attached pty's send
             // completions) runs on this one queue. The one reply comes back here.
@@ -214,14 +220,15 @@ final class DchConnection: @unchecked Sendable {
             guard !closed else { return }
             guard !inFlight else { return send(DchControlOps.error("busy with an earlier request")) }
             inFlight = true
-            let ops = ops
+            let ops = ops, library = library
             DispatchQueue.global(qos: .userInitiated).async {
-                ops.handle(type, payload) { frame in
+                let reply: DchControlOps.Reply = { frame in
                     self.queue.async {
                         self.inFlight = false
                         if !self.closed { self.send(frame) }
                     }
                 }
+                if type == DchFrame.library { library.handle(payload, reply: reply) } else { ops.handle(type, payload, reply: reply) }
             }
         default:
             break
@@ -330,6 +337,86 @@ final class DchConnection: @unchecked Sendable {
             send(DchFrame.encode(DchFrame.error, json: ["message": "\(error)"]))
             close()
         }
+    }
+}
+
+// MARK: - Phone library sync (#616)
+
+/// The phone's "From your Mac" snippets and quicklinks, read-only. Each file is served
+/// as stored (parsed and re-emitted, keys and its "version" untouched), since the phone
+/// keeps its own copies in the same schema and merges nothing. Off the server queue;
+/// every request gets exactly one reply.
+struct DchLibraryOps: Sendable {
+    /// nil: SnippetStore's and QuicklinkStore's own files. Tests point it at a tempDir()
+    /// holding snippets.json and quicklinks.json, so no test reads ~/.config/prosper.
+    var dir: URL?
+    /// Per file. The phone refuses a frame over 8 MB (ProsperTransport.maxFrame), so
+    /// two files at the cap still fit in one libraryResp.
+    static let fileCap = 3 << 20
+    static let maxReply = 8 << 20
+
+    typealias Reply = DchControlOps.Reply
+
+    struct File {
+        var bytes = Data()
+        var json: Any?
+        var error: String?
+    }
+
+    var urls: (snippets: URL, quicklinks: URL) {
+        guard let dir else { return (SnippetStore.fileURL, QuicklinkStore.fileURL) }
+        return (dir.appendingPathComponent("snippets.json"), dir.appendingPathComponent("quicklinks.json"))
+    }
+
+    func handle(_ payload: Data, reply: Reply) {
+        let o = payload.isEmpty ? [:] : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+        guard let o, o.isEmpty || (o.count == 1 && o["etag"] is String) else {
+            return reply(DchControlOps.error("malformed library request: send nothing, {} or {\"etag\": \"<hex>\"}"))
+        }
+        let (s, q) = (Self.read(urls.snippets), Self.read(urls.quicklinks))
+        let etag = Self.etag(s.bytes, q.bytes)
+        if o["etag"] as? String == etag { return reply(Self.encode(["etag": etag, "unchanged": true])) }
+        var out: [String: Any] = ["etag": etag, "snippets": s.json ?? NSNull(), "quicklinks": q.json ?? NSNull()]
+        var errors: [String: String] = [:]
+        errors["snippets"] = s.error
+        errors["quicklinks"] = q.error
+        if !errors.isEmpty { out["errors"] = errors }
+        reply(Self.encode(out))
+    }
+
+    /// Lowercase hex sha256 of the snippets bytes, 0x00, the quicklinks bytes.
+    static func etag(_ snippets: Data, _ quicklinks: Data) -> String {
+        var h = SHA256()
+        h.update(data: snippets)
+        h.update(data: Data([0]))
+        h.update(data: quicklinks)
+        return h.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Missing: empty bytes, null, no error. Over the cap: the first cap+1 bytes (for
+    /// the etag), null, an error. Unreadable or not a JSON object/array: null, an error.
+    static func read(_ url: URL) -> File {
+        guard FileManager.default.fileExists(atPath: url.path) else { return File() }
+        let bytes: Data
+        do {
+            let h = try FileHandle(forReadingFrom: url)
+            defer { try? h.close() }
+            bytes = try h.read(upToCount: fileCap + 1) ?? Data()
+        } catch {
+            return File(error: "unreadable")
+        }
+        guard bytes.count <= fileCap else { return File(bytes: bytes, error: "too large (over \(fileCap >> 20) MB)") }
+        guard let json = try? JSONSerialization.jsonObject(with: bytes) else { return File(bytes: bytes, error: "malformed JSON") }
+        return File(bytes: bytes, json: json)
+    }
+
+    /// libraryResp through the frame encoder; an error if the phone would refuse the frame.
+    static func encode(_ o: [String: Any]) -> Data {
+        guard let data = try? JSONSerialization.data(withJSONObject: o, options: [.withoutEscapingSlashes]) else {
+            return DchControlOps.error("library could not be encoded")
+        }
+        guard data.count <= maxReply else { return DchControlOps.error("library too large for one frame") }
+        return DchFrame.encode(DchFrame.libraryResp, [UInt8](data))
     }
 }
 

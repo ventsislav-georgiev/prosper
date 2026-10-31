@@ -369,7 +369,7 @@ final class DchControlFramesTests: XCTestCase {
 
     func testMachineInfoCarriesOps() {
         let info = DchFrame.machineInfo(deviceID: "id", hostname: "mac", wakeId: nil)
-        XCTAssertEqual(info["ops"] as? [String], ["history", "revive", "restart", "stop"])
+        XCTAssertEqual(info["ops"] as? [String], ["history", "revive", "restart", "stop", "library"])
         XCTAssertEqual(info["device_id"] as? String, "id")
         XCTAssertEqual(info["hostname"] as? String, "mac")
         XCTAssertNil(info["wakeId"])

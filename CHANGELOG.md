@@ -35,6 +35,14 @@ tag from the now-released section and put it on the new top draft.
   row that is not pinned. The controls need dch 1.25.0, which Prosper now bundles.
 - Ships dch 1.25.0, which can pin, unpin and forget session History records (`dch --pin`,
   `dch --unpin`, `dch --forget`, `dch --forget --all`). A pinned record is never pruned for age.
+- **Remote Terminal: the iPhone app can read your snippets and quicklinks.** Over
+  Tailscale, the Mac serves its snippets and quicklinks files, read-only and as stored,
+  so the phone can offer them too. The phone asks with the version it already has, and
+  the Mac answers "unchanged" when nothing changed. A file over 3 MB, or one that is not
+  valid JSON, is reported to the phone instead of being sent.
+- Agent Island reads a running session's dch record with the same checks dch uses: its
+  folders and the record must be yours and closed to others, the record is at most 1 MB
+  and never a symlink, and it must belong to that session's socket folder.
 
 ## v2.162.0
 
