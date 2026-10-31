@@ -1543,7 +1543,7 @@ final class AgentIslandControlsTests: XCTestCase {
     func testLiveRecordsReadDchsRecordOfEachLiveSession() throws {
         let state = tempDir().path, dir = "/tmp/dch-test"
         let recs = state + "/dch/sessions/-tmp-dch-test"
-        try FileManager.default.createDirectory(atPath: recs, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: recs, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         func put(_ name: String, end: String, argv: String = "[\"headroom\",\"wrap\",\"claude\"]", mode: Int = 0o600) throws {
             let body = "{\"name\":\"\(name)\",\"sock_dir\":\"\(dir)\",\"cwd\":\"/src\",\"argv\":\(argv),\"started\":1,"
                 + "\"updated\":2,\"ended\":0,\"end\":\"\(end)\",\"agent\":{\"kind\":\"claude\",\"session_id\":\"s\","
@@ -1556,13 +1556,14 @@ final class AgentIslandControlsTests: XCTestCase {
         try put("new", end: "", argv: "[\"claude\",\"--chrome\"]")
         try put("ended", end: "exit 0")
         try put("open", end: "", mode: 0o620)
+        try put("world", end: "", mode: 0o602)
         try FileManager.default.createSymbolicLink(atPath: recs + "/link.json", withDestinationPath: recs + "/new.json")
         func live(_ name: String, _ activity: TimeInterval) -> AgentSession {
             AgentSession(key: AgentSessionKey(dir: dir, name: name), alias: "", activity: activity, state: .idle, agents: 1)
         }
-        let sessions = [live("old", 1), live("ended", 9), live("open", 8), live("none", 7), live("link", 6), live("new", 5)]
+        let sessions = [live("old", 1), live("ended", 9), live("open", 8), live("none", 7), live("link", 6), live("world", 6), live("new", 5)]
         let got = AgentIsland.liveRecords(sessions, env: ["XDG_STATE_HOME": state, "HOME": "/nonexistent"])
-        XCTAssertEqual(got.map(\.name), ["new", "old"], "newest first; no ended, group-writable, symlinked or missing record")
+        XCTAssertEqual(got.map(\.name), ["new", "old"], "newest first; no ended, group- or world-writable, symlinked or missing record")
         XCTAssertEqual(got.map(\.argv), [["claude", "--chrome"], ["headroom", "wrap", "claude"]])
         XCTAssertEqual(AgentIsland.inferredCommand(live: got, history: []), ["claude", "--chrome"])
         let home = tempDir().path
@@ -1570,6 +1571,74 @@ final class AgentIslandControlsTests: XCTestCase {
         try FileManager.default.createSymbolicLink(atPath: home + "/.local/state", withDestinationPath: state)
         XCTAssertEqual(AgentIsland.liveRecords(sessions, env: ["XDG_STATE_HOME": "rel", "HOME": home]).map(\.name), ["new", "old"],
                        "a relative XDG_STATE_HOME: ~/.local/state")
+    }
+
+    /// #608: as dch's hrec_load, a record of another socket dir sharing the slug
+    /// (/tmp/dch/test vs /tmp/dch-test) or without sock_dir is not this session's,
+    /// and one over 1 MB is not read.
+    func testLiveRecordsRefuseAnotherSockDirAndOverOneMB() throws {
+        let state = tempDir().path, dir = "/tmp/dch-test", recs = state + "/dch/sessions/-tmp-dch-test"
+        try FileManager.default.createDirectory(atPath: recs, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        func put(_ name: String, sockDir: String? = "/tmp/dch-test", size: Int = 0) throws {
+            let head = "{\"name\":\"\(name)\"," + (sockDir.map { "\"sock_dir\":\"\($0)\"," } ?? "")
+                + "\"cwd\":\"/src\",\"argv\":[\"claude\"],\"end\":\"\",\"pad\":\""
+            let body = head + String(repeating: "x", count: max(0, size - head.utf8.count - 3)) + "\"}\n"
+            try Data(body.utf8).write(to: URL(fileURLWithPath: recs + "/\(name).json"))
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: recs + "/\(name).json")
+        }
+        try put("own")
+        try put("other", sockDir: "/tmp/dch/test")
+        try put("none", sockDir: nil)
+        try put("mb", size: 1 << 20)
+        try put("over", size: (1 << 20) + 1)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: recs + "/mb.json")[.size] as? Int, 1 << 20)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: recs + "/over.json")[.size] as? Int, (1 << 20) + 1)
+        let sessions = ["own", "other", "none", "mb", "over"].enumerated().map { i, n in
+            AgentSession(key: AgentSessionKey(dir: dir, name: n), alias: "", activity: TimeInterval(9 - i), state: .idle, agents: 1)
+        }
+        XCTAssertEqual(AgentIsland.liveRecords(sessions, env: ["XDG_STATE_HOME": state]).map(\.name), ["own", "mb"])
+    }
+
+    /// #608: as dch_history_dir, the records dir (and dch/, sessions/ above it)
+    /// must be a real dir, ours and closed to others, or no record is read.
+    func testLiveRecordsNeedTheirDirsOursAndClosed() throws {
+        let state = tempDir().path, dirs = ["/dch", "/dch/sessions", "/dch/sessions/-tmp-dch-test"].map { state + $0 }
+        try FileManager.default.createDirectory(atPath: dirs[2], withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let body = "{\"name\":\"a\",\"sock_dir\":\"/tmp/dch-test\",\"cwd\":\"/src\",\"argv\":[\"claude\"],\"end\":\"\"}\n"
+        try Data(body.utf8).write(to: URL(fileURLWithPath: dirs[2] + "/a.json"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dirs[2] + "/a.json")
+        let a = [AgentSession(key: AgentSessionKey(dir: "/tmp/dch-test", name: "a"), alias: "", activity: 1, state: .idle, agents: 1)]
+        func names() -> [String] { AgentIsland.liveRecords(a, env: ["XDG_STATE_HOME": state]).map(\.name) }
+        XCTAssertEqual(names(), ["a"])
+        for d in dirs {
+            for mode in [0o775, 0o757] {
+                try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: d)
+                XCTAssertEqual(names(), [], "\(d) at \(String(mode, radix: 8))")
+            }
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: d)
+            XCTAssertEqual(names(), ["a"])
+        }
+        let real = state + "/real"
+        try FileManager.default.moveItem(atPath: dirs[2], toPath: real)
+        try FileManager.default.createSymbolicLink(atPath: dirs[2], withDestinationPath: real)
+        XCTAssertEqual(names(), [], "a symlinked records dir")
+    }
+
+    /// #608: the stat rule of dirs and records: the type, our uid, no group or other write.
+    func testIsOursNeedsTypeUidAndNoGroupOrOtherWrite() {
+        func st(_ mode: mode_t, uid: uid_t = getuid()) -> stat {
+            var s = stat()
+            s.st_mode = mode
+            s.st_uid = uid
+            return s
+        }
+        XCTAssertTrue(AgentIsland.isOurs(st(S_IFREG | 0o644), type: S_IFREG))
+        XCTAssertTrue(AgentIsland.isOurs(st(S_IFDIR | 0o755), type: S_IFDIR))
+        XCTAssertFalse(AgentIsland.isOurs(st(S_IFDIR | 0o700), type: S_IFREG), "a dir for a record")
+        XCTAssertFalse(AgentIsland.isOurs(st(S_IFIFO | 0o600), type: S_IFREG), "a fifo")
+        XCTAssertFalse(AgentIsland.isOurs(st(S_IFREG | 0o600, uid: getuid() + 1), type: S_IFREG), "another uid")
+        XCTAssertFalse(AgentIsland.isOurs(st(S_IFREG | 0o620), type: S_IFREG), "group-writable")
+        XCTAssertFalse(AgentIsland.isOurs(st(S_IFREG | 0o602), type: S_IFREG), "world-writable")
     }
 
     func testRecentFoldersAreDistinctAgentFoldersNewestFirstAtMostEight() {
@@ -1888,6 +1957,27 @@ final class AgentIslandControlsTests: XCTestCase {
         var got: [String]?
         c.newSessionCommand { got = $0 }
         XCTAssertEqual(got, ["headroom", "wrap", "claude", "--chrome"])
+    }
+
+    /// #608: a value the user commits while inference is still reading is
+    /// theirs; the inferred command never overwrites it.
+    @MainActor
+    func testNewSessionCommandKeepsAValueCommittedWhileInferring() throws {
+        defer { Preferences.agentIslandNewSessionCommand = "" }
+        let f = FakeProc(), reading = DispatchSemaphore(value: 0), gate = DispatchSemaphore(value: 0)
+        let c = opened(f, [session("a")])
+        var live = agentRecord("a", ended: 0, cwd: "/a", launch: ["claude"], argv: ["claude", "--inferred"])
+        live.end = ""
+        let rec = live
+        c.readLiveRecords = { _ in reading.signal(); gate.wait(); return [rec] }
+        var got: [String]?
+        c.newSessionCommand { got = $0 }
+        XCTAssertEqual(reading.wait(timeout: .now() + 5), .success, "inference is under way")
+        Preferences.agentIslandNewSessionCommand = "headroom wrap claude"
+        gate.signal()
+        settle(c) { got != nil }
+        XCTAssertNotNil(got)
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude", "the user's value stands")
     }
 
     /// #606: Settings' ask while unset infers from the history already read and

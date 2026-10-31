@@ -435,22 +435,36 @@ extension AgentIsland {
     /// README contract: `$XDG_STATE_HOME/dch/sessions/<slug>/<name>.json`,
     /// `~/.local/state` when XDG_STATE_HOME is unset or relative; <slug> is the
     /// socket dir with each `/` as `-`). The master rewrites it while it runs,
-    /// and `--history` leaves it out. Like dch, only a regular file that is ours
-    /// and closed to others (its command gets run), and only one still running.
+    /// and `--history` leaves it out. Its command gets run, so as dch's
+    /// hrec_load and dch_history_dir (#608): dch/, sessions/ and the slug dir
+    /// lstat'd ours and closed to others; the record opened O_NOFOLLOW and its
+    /// fd a regular file, ours, closed to others, at most 1 MB; its sock_dir the
+    /// session's own (the slug folds / and -); and only one still running.
     static func liveRecords(_ sessions: [AgentSession],
                             env: [String: String] = ProcessInfo.processInfo.environment) -> [DchHistoryRecord] {
         let xdg = env["XDG_STATE_HOME"] ?? ""
         let root = xdg.hasPrefix("/") ? xdg : (env["HOME"] ?? NSHomeDirectory()) + "/.local/state"
-        return sessions.sorted { $0.activity > $1.activity }.compactMap { s in
-            let path = "\(root)/dch/sessions/\(s.key.dir.replacingOccurrences(of: "/", with: "-"))/\(s.name).json"
-            guard let a = try? FileManager.default.attributesOfItem(atPath: path),
-                  a[.type] as? FileAttributeType == .typeRegular,
-                  (a[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
-                  ((a[.posixPermissions] as? NSNumber)?.intValue ?? 0o777) & 0o022 == 0,
-                  let body = FileManager.default.contents(atPath: path)
+        return sessions.sorted { $0.activity > $1.activity }.compactMap { s -> DchHistoryRecord? in
+            let dir = "\(root)/dch/sessions/\(s.key.dir.replacingOccurrences(of: "/", with: "-"))"
+            guard ["\(root)/dch", "\(root)/dch/sessions", dir].allSatisfy({ p in
+                var st = stat()
+                return lstat(p, &st) == 0 && isOurs(st, type: S_IFDIR)
+            }) else { return nil }
+            let fd = Darwin.open("\(dir)/\(s.name).json", O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+            guard fd >= 0 else { return nil }
+            let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            var st = stat()
+            guard fstat(fd, &st) == 0, isOurs(st, type: S_IFREG), st.st_size <= 1 << 20,
+                  let body = try? h.read(upToCount: Int(st.st_size)),
+                  (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["sock_dir"] as? String == s.key.dir
             else { return nil }
             return parseHistory(Data("[".utf8) + body + Data("]".utf8), dir: s.key.dir).first { $0.end.isEmpty }
         }
+    }
+
+    /// #608: of `type`, our uid's and closed to others (no group or other write).
+    static func isOurs(_ st: stat, type: mode_t) -> Bool {
+        st.st_mode & S_IFMT == type && st.st_uid == getuid() && st.st_mode & 0o022 == 0
     }
 
     /// dch's resume_argv rules, so a new session never resumes a recorded
