@@ -211,6 +211,7 @@ final class AgentIslandController {
     func showSidekicks(_ on: Bool) {
         guard let store else { return }
         store.historyTab = false
+        store.confirmingClear = false   // #605: History's question goes with its tab
         store.sidekickTab = on
         refreshCards()
         layout()
@@ -279,6 +280,56 @@ final class AgentIslandController {
                 self?.refreshHistory()
             }
         }
+    }
+
+    // MARK: - Pin, Remove and Clear unpinned (#605)
+
+    /// A History row's pin toggle: `--pin`, or `--unpin` on a pinned record.
+    func pin(_ r: DchHistoryRecord) {
+        edit(r, args: AgentIsland.pinArgs(r.name, pin: !r.pinned), r.pinned ? .unpin : .pin)
+    }
+
+    /// A History row's X: `--forget <name>` at once, no -f; a pinned row has none.
+    func remove(_ r: DchHistoryRecord) {
+        guard !r.pinned else { return }
+        edit(r, args: AgentIsland.forgetArgs(r.name), .remove)
+    }
+
+    /// One edit in the record's dir on the row's key (a busy row refuses); a
+    /// failure goes on the dir's status line, then History is re-read.
+    private func edit(_ r: DchHistoryRecord, args: [String], _ verb: AgentIsland.Verb) {
+        guard let store, case .ok(let dch) = store.historyEditGate else { return }
+        let dir = r.key.dir, name = r.name
+        run(r.key, dch: dch, args: args, running: nil) { [weak self] res in
+            if let failed = AgentIsland.editFailure(res, name: name, verb) {
+                self?.store?.actions[AgentSessionKey(dir: dir, name: "")] = failed
+            }
+            self?.refreshHistory()
+        }
+    }
+
+    /// The History header's Clear unpinned: only asks (the inline line).
+    func askClearUnpinned() {
+        guard let store, store.clearUnpinnedButton != nil else { return }
+        store.confirmingRestartAll = false
+        store.confirmingStopAll = false
+        store.confirmingClear = true
+        layout()
+    }
+
+    /// The inline answer. Clear runs `--forget --all` once per History dir; Cancel runs nothing.
+    func confirmClearUnpinned(_ yes: Bool) {
+        guard let store, store.confirmingClear else { return }
+        store.confirmingClear = false
+        guard yes, case .ok(let dch) = store.historyEditGate else { return layout() }
+        for dir in Set(store.history.map(\.key.dir)).sorted() {
+            run(AgentSessionKey(dir: dir, name: ""), dch: dch, args: AgentIsland.forgetAllArgs,
+                running: AgentIsland.clearingText) { [weak self] r in
+                self?.dirDone(dir, AgentIsland.tally(r, .clear, title: "Clear unpinned", empty: "nothing to clear"))
+                self?.refreshHistory()
+            }
+        }
+        layout()
     }
 
     /// One long verb on the runner with the control env (QA #445 M1), plus
@@ -387,6 +438,7 @@ final class AgentIslandController {
     func askStopAll() {
         guard let store, store.restartGate.isOK, !store.stopAllTargets.stop.isEmpty else { return }
         store.confirmingRestartAll = false
+        store.confirmingClear = false
         store.confirmingStopAll = true
         layout()
     }
@@ -461,6 +513,7 @@ final class AgentIslandController {
     func askRestartAll() {
         guard let store, store.restartGate.isOK, !store.sessions.isEmpty else { return }
         store.confirmingStopAll = false
+        store.confirmingClear = false
         store.confirmingRestartAll = true
         layout()
     }
@@ -593,7 +646,11 @@ final class AgentIslandController {
             onControls: { [weak self] in self?.showControlsMenu() },
             onConfirmRestartAll: { [weak self] in self?.confirmRestartAll($0) },
             onStop: { [weak self] in self?.stop($0) },
-            onConfirmStopAll: { [weak self] in self?.confirmStopAll($0) }))
+            onConfirmStopAll: { [weak self] in self?.confirmStopAll($0) },
+            onPin: { [weak self] in self?.pin($0) },
+            onRemove: { [weak self] in self?.remove($0) },
+            onClearUnpinned: { [weak self] in self?.askClearUnpinned() },
+            onConfirmClear: { [weak self] in self?.confirmClearUnpinned($0) }))
         host.sizingOptions = []
         p.contentView = host
         panel = p
@@ -610,6 +667,7 @@ final class AgentIslandController {
             store.notices = [:]; store.cards = [:]; readAt = [:]
             store.confirmingRestartAll = false
             store.confirmingStopAll = false
+            store.confirmingClear = false
             store.actions = store.actions.filter { runner.isBusy($0.key) }   // a running one keeps its "Resuming…"
             store.historyActions = store.historyActions.filter { runner.isBusy($0.key) }
         }

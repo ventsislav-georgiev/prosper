@@ -236,9 +236,10 @@ enum AgentIsland {
     }
 
     /// #592: a History row's VoiceOver text; the dch name only when the row draws it.
+    /// #605: "pinned" after the title on a pinned record.
     static func historyAccessibilityLabel(_ r: DchHistoryRecord, line2: String, age: String, cwd: String,
                                           show d: AgentIslandRowDetails) -> String {
-        ([r.title, line2, sessionNameLabel(r, show: d), age.isEmpty ? nil : "\(age) ago", cwd] as [String?])
+        ([r.title, r.pinned ? "pinned" : nil, line2, sessionNameLabel(r, show: d), age.isEmpty ? nil : "\(age) ago", cwd] as [String?])
             .compactMap { $0 }.joined(separator: ", ")
     }
 

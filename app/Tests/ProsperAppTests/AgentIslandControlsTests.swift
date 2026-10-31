@@ -2228,4 +2228,333 @@ final class AgentIslandControlsTests: XCTestCase {
         store.actions[AgentSessionKey(dir: "/d", name: "")] = "1 stopped, 1 failed"
         try render(store, "agent-island-580-stop-results", to: out)
     }
+
+    // MARK: - #605: pin, Remove from History, Clear unpinned
+
+    private static let v125 = DchCommand.Binary(path: "/fake/dch", version: [1, 25, 0])
+
+    private func pinned(_ name: String, dir: String = "/d", ended: TimeInterval = 100) -> DchHistoryRecord {
+        var r = record(name, dir: dir, ended: ended)
+        r.pinned = true
+        return r
+    }
+
+    func testPinnedParsesPresentAndAbsent() {
+        let json = #"[{"name":"keep","pinned":true},{"name":"plain"},{"name":"off","pinned":false},{"name":"odd","pinned":"yes"}]"#
+        let rows = AgentIsland.parseHistory(Data(json.utf8), dir: "/d")
+        XCTAssertEqual(rows.map(\.pinned), [true, false, false, false], "only \"pinned\":true pins; absent is false")
+        XCTAssertEqual(rows[0], DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "keep"), pinned: true))
+    }
+
+    /// Pinned first, newest first; unpinned fill up to 50; a pin is never capped.
+    @MainActor
+    func testPinnedRowsLeadAndAreNeverCapped() {
+        let unpinned = (0..<60).map { record("u\($0)", ended: TimeInterval(1000 - $0)) }
+        let pins = [pinned("p-new", ended: 500), pinned("p-old", ended: 5)]
+        // `history` is newest first: the pins sit among the unpinned records.
+        let history = (unpinned + pins).sorted { $0.lastSeen > $1.lastSeen }
+        let rows = AgentIsland.cappedHistory(history)
+        XCTAssertEqual(rows.count, AgentIsland.historyCap)
+        XCTAssertEqual(rows.prefix(2).map(\.name), ["p-new", "p-old"])
+        XCTAssertEqual(rows.dropFirst(2).map(\.name), (0..<48).map { "u\($0)" }, "unpinned newest first, up to the cap")
+        let many = (0..<55).map { pinned("p\($0)", ended: TimeInterval(900 - $0)) } + unpinned.prefix(3)
+        let all = AgentIsland.cappedHistory(many.sorted { $0.lastSeen > $1.lastSeen })
+        XCTAssertEqual(all.map(\.name), (0..<55).map { "p\($0)" }, "55 pinned: every pin, no unpinned row")
+        let store = AgentIslandStore(geometry: notched)
+        store.history = many
+        XCTAssertEqual(store.shownHistory, [], "History tab not chosen")
+        store.historyTab = true
+        XCTAssertEqual(store.shownHistory.count, 55)
+        XCTAssertEqual(store.cappedHistory.count, 55, "the tab reads History (55)")
+        XCTAssertEqual(store.unpinnedCount, 3)
+        XCTAssertEqual(AgentIsland.cappedHistory([]), [])
+    }
+
+    /// 1.25.0 for the control binary, and at least every live master (an old "" passes).
+    @MainActor
+    func testHistoryEditGateNeeds125() {
+        XCTAssertEqual(AgentIsland.historyEditMinimum, [1, 25, 0])
+        let store = AgentIslandStore(geometry: notched)
+        store.history = [record("x"), pinned("p")]
+        store.historyTab = true
+        func drawn() -> [AgentIslandView.HistoryDrawn] { AgentIslandView(store: store).historyDrawn }
+        for (dch, masters, gate) in [
+            (DchCommand.Binary(path: "/b", version: [1, 24, 2]), [""], DchCommand.Gate.refused("needs dch 1.25.0")),
+            (Self.v125, ["", "1.24.0"], .ok("/fake/dch")),
+            (Self.v125, ["1.25.0"], .ok("/fake/dch")),
+            (Self.v125, ["1.26.0"], .refused("needs dch 1.26.0")),
+            (DchCommand.Binary(path: "/b", version: [1, 26, 0]), ["1.26.0"], .ok("/b")),
+        ] {
+            store.controlDch = dch
+            store.sessions = masters.enumerated().map { session("s\($0.offset)", version: $0.element) }
+            XCTAssertEqual(store.historyEditGate, gate, "\(dch.version) \(masters)")
+            let on = gate.isOK
+            XCTAssertEqual(drawn().map { $0.pin != nil }, [on, on], "pin drawn only with the gate")
+            XCTAssertEqual(drawn().map { $0.remove != nil }, [false, on], "X never on a pin; only with the gate")
+            XCTAssertEqual(store.clearUnpinnedButton, on ? "Clear unpinned" : nil)
+        }
+        store.controlDch = DchCommand.Binary(path: "/b", version: [1, 24, 2])
+        store.sessions = []
+        XCTAssertEqual(drawn().map(\.enabled), [true, true], "1.24.x: History (Resume) stays usable")
+        XCTAssertFalse(store.showsHistoryHeader, "and no header line for Clear")
+        store.controlDch = nil
+        XCTAssertEqual(store.historyEditGate, .refused("needs dch 1.25.0"))
+    }
+
+    /// The drawn pin and X carry their own record; no X on a pinned row.
+    @MainActor
+    func testDrawnPinAndRemoveCarryTheirRecordAndPinsHaveNoX() {
+        let store = AgentIslandStore(geometry: notched)
+        store.controlDch = Self.v125
+        store.history = [record("x", ended: 3), pinned("p", ended: 2)]
+        store.historyTab = true
+        var pins: [String] = [], removes: [String] = []
+        let rows = AgentIslandView(store: store, onPin: { pins.append($0.name) }, onRemove: { removes.append($0.name) })
+            .historyDrawn
+        XCTAssertEqual(rows.map(\.record.name), ["p", "x"])
+        XCTAssertNil(rows[0].remove, "a pinned row has no X: unpin first")
+        for r in rows { r.pin?(); r.remove?() }
+        XCTAssertEqual(pins, ["p", "x"])
+        XCTAssertEqual(removes, ["x"])
+    }
+
+    /// Pin, Unpin and the X: exact args, the record's dir's control env, a busy
+    /// row refuses, History re-read after each; a pinned record never runs --forget.
+    @MainActor
+    func testPinUnpinAndRemoveRunInTheRecordsDirThenReread() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("x", dir: "/e"), pinned("y", dir: "/e", ended: 50)]
+        let c = controller(f, reads, dch: Self.v125, dirs: ["/e"])
+        c.controlEnv = { ["PATH": "/login/bin", "DCH_SOCKET_DIR": $0] }
+        c.store?.sessions = [session("live", dir: "/e")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store)
+        store.historyTab = true
+        let rows = AgentIslandView(store: store, onPin: { c.pin($0) }, onRemove: { c.remove($0) }).historyDrawn
+        XCTAssertEqual(rows.map(\.record.name), ["y", "x"])
+        func step(_ press: () -> Void, _ args: [String], line: UInt = #line) {
+            let before = reads.count, launches = f.args.count
+            press()
+            press()   // busy: refused, never queued
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, line: line)
+            XCTAssertEqual(f.args.count, launches + 1, "one launch", line: line)
+            XCTAssertEqual(f.args.last, args, line: line)
+            XCTAssertEqual(f.lock.withLock { f.envs.last }, ["PATH": "/login/bin", "DCH_SOCKET_DIR": "/e"], line: line)
+            f.release.signal()
+            settle(c) { reads.count == before + 1 }
+            XCTAssertEqual(reads.count, before + 1, "History re-read", line: line)
+        }
+        step({ rows[1].pin?() }, ["--pin", "x", "--json"])
+        step({ rows[0].pin?() }, ["--unpin", "y", "--json"])
+        step({ rows[1].remove?() }, ["--forget", "x", "--json"])
+        c.remove(pinned("y", dir: "/e", ended: 50))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "a pinned record: no --forget, no -f")
+        XCTAssertEqual(f.args.count, 3)
+        XCTAssertEqual(store.actions, [:], "ok: nothing on the status line")
+        store.sessions = [session("live", dir: "/e", version: "1.26.0")]
+        c.pin(record("x", dir: "/e"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "the gate refuses: nothing runs")
+        store.sessions = [session("live", dir: "/e")]
+        store.controlDch = Self.v1241   // Resume's gate passes, the edit gate does not
+        c.pin(record("x", dir: "/e"))
+        c.remove(record("x", dir: "/e"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "1.24.1: no --pin or --forget")
+        XCTAssertEqual(f.args.count, 3)
+    }
+
+    func testEditFailureTextPerReason() {
+        func res(_ status: Int32, _ out: String, stopped: Bool = false) -> DchActionResult {
+            AgentIsland.actionResult(status: status, output: Data(out.utf8), stopped: stopped)
+        }
+        func line(_ reason: String, _ detail: String) -> String {
+            #"{"name":"x","result":"failed","reason":"\#(reason)","detail":"\#(detail)","session_id":""}"# + "\n"
+                + #"{"ok":0,"skipped":0,"failed":1}"# + "\n"
+        }
+        XCTAssertNil(AgentIsland.editFailure(res(0, #"{"name":"x","result":"ok","reason":"","detail":"pinned","session_id":"s"}"#),
+                                             name: "x", .pin))
+        XCTAssertNil(AgentIsland.editFailure(res(0, ""), name: "x", .unpin))
+        XCTAssertEqual(AgentIsland.editFailure(res(1, line("not_found", "no history for this session")), name: "x", .pin),
+                       "Pin x failed: no history for this session")
+        XCTAssertEqual(AgentIsland.editFailure(res(1, line("live", "session is live")), name: "x", .remove),
+                       "Remove x failed: session is live")
+        XCTAssertEqual(AgentIsland.editFailure(res(1, line("pinned", "pinned (-f forgets it anyway)")), name: "x", .remove),
+                       "Remove x failed: pinned, unpin it first", "never dch's -f hint")
+        XCTAssertEqual(AgentIsland.editFailure(res(1, line("io_error", "Permission denied")), name: "x", .unpin),
+                       "Unpin x failed: Permission denied", "io_error carries the OS error")
+        XCTAssertEqual(AgentIsland.editFailure(res(1, line("io_error", "")), name: "x", .pin), "Pin x failed: io_error")
+        XCTAssertEqual(AgentIsland.editFailure(res(1, ""), name: "x", .remove), "Remove x failed (exit 1)")
+        XCTAssertEqual(AgentIsland.editFailure(res(1, "dch: --pin: unknown option\n"), name: "x", .pin),
+                       "Pin x failed: dch: --pin: unknown option")
+        XCTAssertEqual(AgentIsland.editFailure(res(143, "", stopped: true), name: "x", .remove),
+                       "Remove x cancelled: no answer in 5m")
+        XCTAssertEqual(AgentIsland.pinArgs("x", pin: true), ["--pin", "x", "--json"])
+        XCTAssertEqual(AgentIsland.pinArgs("x", pin: false), ["--unpin", "x", "--json"])
+        XCTAssertEqual(AgentIsland.forgetArgs("x"), ["--forget", "x", "--json"])
+        XCTAssertEqual(AgentIsland.forgetAllArgs, ["--forget", "--all", "--json"])
+    }
+
+    /// A failed edit lands on the dir's status line in the History header, never silently.
+    @MainActor
+    func testFailedEditShowsOnTheDirStatusLine() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("x"), record("y", ended: 50)]
+        let c = controller(f, reads, dch: Self.v125)
+        c.store?.sessions = [session("a")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store)
+        store.historyTab = true
+        let all = AgentSessionKey(dir: "/d", name: "")
+        f.status = 1
+        f.output = #"{"name":"x","result":"failed","reason":"io_error","detail":"Operation not permitted","session_id":""}"#
+            + "\n" + #"{"ok":0,"skipped":0,"failed":1}"# + "\n"
+        c.remove(record("x"))
+        f.release.signal()
+        settle(c) { store.actions[all] != nil }
+        XCTAssertEqual(store.actions[all], "Remove x failed: Operation not permitted")
+        XCTAssertEqual(store.historyStatus, "Remove x failed: Operation not permitted")
+        XCTAssertTrue(store.showsHistoryHeader)
+        f.output = ""
+        c.pin(record("y", ended: 50))
+        f.release.signal()
+        settle(c) { store.actions[all] != "Remove x failed: Operation not permitted" }
+        XCTAssertEqual(store.actions[all], "Pin y failed (exit 1)", "a non-zero exit with no lines")
+    }
+
+    func testClearTallyCountsClearedSkippedAndFailed() {
+        let out = """
+            {"name":"a","result":"ok","reason":"","detail":"forgotten","session_id":""}
+            {"name":"b","result":"ok","reason":"","detail":"forgotten","session_id":""}
+            {"name":"p","result":"skipped","reason":"pinned","detail":"pinned","session_id":""}
+            {"name":"l","result":"skipped","reason":"live","detail":"session is live","session_id":""}
+            {"name":"c","result":"failed","reason":"io_error","detail":"Permission denied","session_id":""}
+            {"ok":2,"skipped":2,"failed":1}
+
+            """
+        let r = AgentIsland.actionResult(status: 1, output: Data(out.utf8))
+        XCTAssertEqual(r.json.count, 5, "the closing count line has no name: text, not a result")
+        XCTAssertEqual(AgentIsland.tally(r, .clear, title: "Clear unpinned", empty: "nothing to clear"),
+                       "2 cleared, 1 failed, 2 skipped")
+        let none = AgentIsland.actionResult(status: 0, output: Data(#"{"ok":0,"skipped":0,"failed":0}"#.utf8))
+        XCTAssertEqual(AgentIsland.tally(none, .clear, title: "Clear unpinned", empty: "nothing to clear"), "nothing to clear")
+        XCTAssertEqual(AgentIsland.Verb.clear.minutes, 5, "the runner's default bound")
+        XCTAssertEqual(AgentIsland.Verb.stop.minutes, 15)
+    }
+
+    /// Clear unpinned: shows with an unpinned record (counted past the cap), the
+    /// first press only asks, Cancel runs nothing, Clear runs --forget --all once
+    /// per History dir, then the tally and one re-read per dir.
+    @MainActor
+    func testClearUnpinnedAsksFirstAndRunsOncePerDir() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = (0..<55).map { record("u\($0)", ended: TimeInterval(1000 - $0)) }
+            + [record("e", dir: "/e", ended: 1), pinned("p", ended: 2)]
+        let c = controller(f, reads, dch: Self.v125, dirs: ["/d", "/e"])
+        c.store?.sessions = [session("a", version: "1.25.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 57 }
+        let store = try XCTUnwrap(c.store)
+        c.showHistory()
+        settle(c)
+        XCTAssertEqual(store.unpinnedCount, 56, "every record, not the 50 shown")
+        XCTAssertEqual(store.clearUnpinnedButton, "Clear unpinned")
+        c.askClearUnpinned()
+        XCTAssertTrue(store.confirmingClear)
+        XCTAssertTrue(store.showsHistoryHeader)
+        XCTAssertEqual(AgentIsland.clearQuestion(store.unpinnedCount), "Clear 56 unpinned?")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "the first press runs nothing")
+        c.confirmClearUnpinned(false)
+        XCTAssertFalse(store.confirmingClear)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [], "Cancel: no verb")
+        c.askClearUnpinned()
+        c.askStopAll()
+        XCTAssertFalse(store.confirmingClear, "one question at a time")
+        c.askClearUnpinned()
+        XCTAssertFalse(store.confirmingStopAll)
+        let before = reads.count
+        c.confirmClearUnpinned(true)
+        c.confirmClearUnpinned(true)   // the question is gone: a second answer runs nothing
+        for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
+        XCTAssertEqual(f.args, [AgentIsland.forgetAllArgs, AgentIsland.forgetAllArgs])
+        XCTAssertEqual(Set(f.lock.withLock { f.launches.compactMap(\.dir) }), ["/d", "/e"])
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], AgentIsland.clearingText)
+        f.output = #"{"name":"u0","result":"ok","reason":"","detail":"forgotten","session_id":""}"# + "\n"
+            + #"{"name":"p","result":"skipped","reason":"pinned","detail":"pinned","session_id":""}"# + "\n"
+        f.release.signal(); f.release.signal()
+        settle(c) { reads.count >= before + 2 && !store.actions.values.contains(AgentIsland.clearingText) }
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], "1 cleared, 1 skipped")
+        XCTAssertEqual(reads.count, before + 2, "one History read per finished dir")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args.count, 2)
+        store.history = [pinned("p")]
+        XCTAssertNil(store.clearUnpinnedButton, "nothing unpinned: no Clear")
+        c.askClearUnpinned()
+        XCTAssertFalse(store.confirmingClear)
+    }
+
+    /// VoiceOver: "pinned" in the row's label, and the buttons' names.
+    @MainActor
+    func testVoiceOverLabelsForPinAndRemove() {
+        let p = pinned("p"), x = record("x")
+        func label(_ r: DchHistoryRecord) -> String {
+            AgentIsland.historyRowAccessibilityLabel(r, status: nil, end: "crashed (signal 9)", age: "2m", cwd: "/src",
+                                                     show: AgentIslandRowDetails())
+        }
+        XCTAssertEqual(label(p), "p, pinned, crashed (signal 9), 2m ago, /src")
+        XCTAssertEqual(label(x), "x, crashed (signal 9), 2m ago, /src")
+        func row(_ r: DchHistoryRecord) -> AgentIslandHistoryRow {
+            AgentIslandHistoryRow(record: r, now: 0, status: nil, enabled: true, action: {}, pin: {}, remove: nil)
+        }
+        XCTAssertEqual(row(p).pinLabel, "Unpin")
+        XCTAssertEqual(row(x).pinLabel, "Pin")
+        XCTAssertEqual(AgentIsland.removeLabel, "Remove from History")
+    }
+
+    /// Visual evidence at UI scale 0.7, 0.85 and 1.0 (the island draws at fixed
+    /// sizes): pinned and unpinned rows, the Clear confirm, and the same tab under
+    /// 1.24.1 with no pin, X or Clear (a different render). Offscreen only.
+    @MainActor
+    func testRendersHistoryPinsAndClearConfirmOffscreen() throws {
+        let now = Date().timeIntervalSince1970
+        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        store.sessions = [session("prosper-main", version: "1.25.0")]
+        store.controlDch = Self.v125
+        var a = pinned("prosper-main", ended: now - 120)
+        a.alias = "Prosper"
+        a.cwd = NSHomeDirectory() + "/personal/prosper"
+        var b = pinned("dch", ended: now - 86400 * 4)
+        b.cwd = NSHomeDirectory() + "/personal/dch"
+        var c = record("ios", ended: now - 7200, end: "exit 1")
+        c.cwd = NSHomeDirectory() + "/personal/prosper-ios"
+        let d = record("scratch", ended: now - 90000, end: "killed")
+        var e = record("review", ended: now - 600, end: "stopped")
+        e.cwd = NSHomeDirectory() + "/personal/prosper"
+        store.history = [a, e, c, d, b]
+        store.actions[AgentSessionKey(dir: "/d", name: "")] = "Remove ios failed: session is live"
+        store.historyTab = true
+        store.expanded = true
+        XCTAssertEqual(store.shownHistory.map(\.name), ["prosper-main", "dch", "review", "ios", "scratch"])
+        let out = tempDir(), saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        func pixels() throws -> Data {
+            let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
+            r.scale = 1
+            return try XCTUnwrap(try XCTUnwrap(r.cgImage).dataProvider?.data) as Data
+        }
+        for scale in [0.7, 0.85, 1.0] as [CGFloat] {
+            ThemeRuntime.scale = scale
+            store.confirmingClear = false
+            try render(store, "agent-island-605-history-pins-\(scale)", to: out)
+            store.confirmingClear = true
+            try render(store, "agent-island-605-clear-confirm-\(scale)", to: out)
+        }
+        store.confirmingClear = false
+        let edits = try pixels()
+        store.controlDch = Self.v1241
+        store.sessions = [session("prosper-main", version: "1.24.1")]
+        XCTAssertNotEqual(edits, try pixels(), "under 1.25.0: no pin, X or Clear drawn")
+        try render(store, "agent-island-605-history-gated-1.24.1", to: out)
+    }
 }

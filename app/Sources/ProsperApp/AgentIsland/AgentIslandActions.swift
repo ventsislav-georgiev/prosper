@@ -27,6 +27,8 @@ struct DchHistoryRecord: Equatable, Identifiable {
     /// ("" reads as vanished). endLabel puts them in words.
     var end = ""
     var agent: Agent?
+    /// #605: dch 1.25.0's `--pin`: kept by every prune and by `--forget --all`.
+    var pinned = false
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -98,8 +100,17 @@ extension AgentIsland {
 
     /// A risky verb's label while the control dch is under `restartMinimum`.
     static func label(_ label: String, needs: String?) -> String { needs.map { "\(label) (\($0))" } ?? label }
-    /// The History tab lists at most this many records, newest first.
+    /// #605: --pin, --unpin and --forget (the History tab's pin, X and Clear unpinned).
+    static let historyEditMinimum = [1, 25, 0]
+    /// The History tab lists at most this many unpinned records, newest first.
     static let historyCap = 50
+
+    /// #605: the History tab's rows: every pinned record (never capped), then
+    /// unpinned ones up to `historyCap`; each part newest first (`history` is).
+    static func cappedHistory(_ history: [DchHistoryRecord]) -> [DchHistoryRecord] {
+        let pinned = history.filter(\.pinned)
+        return pinned + history.filter { !$0.pinned }.prefix(max(0, historyCap - pinned.count))
+    }
 
     static func parseHistory(_ data: Data, dir: String) -> [DchHistoryRecord] {
         guard let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
@@ -115,7 +126,7 @@ extension AgentIsland {
                 agent: a.map {
                     .init(kind: $0["kind"] as? String ?? "", sessionID: $0["session_id"] as? String ?? "",
                           name: $0["name"] as? String ?? "", cwd: $0["cwd"] as? String ?? "", launch: strings($0["launch"]))
-                })
+                }, pinned: o["pinned"] as? Bool ?? false)
         }
     }
 
@@ -185,15 +196,21 @@ extension AgentIsland {
     /// A row's verb: its done word and the minutes of its bound.
     enum Verb: String {
         case restart = "Restart", stop = "Stop", resume = "Resume"
+        /// #605: a History row's pin toggle and X, and Clear unpinned.
+        case pin = "Pin", unpin = "Unpin", remove = "Remove", clear = "Clear"
 
         var done: String {
             switch self {
             case .restart: "Restarted"
             case .stop: "Stopped"
             case .resume: "Resumed"
+            case .pin: "Pinned"
+            case .unpin: "Unpinned"
+            case .remove: "Removed"
+            case .clear: "Cleared"
             }
         }
-        var minutes: Int { Int((self == .resume ? DchActionRunner.bound : DchActionRunner.restartBound) / 60) }
+        var minutes: Int { Int((self == .restart || self == .stop ? DchActionRunner.restartBound : DchActionRunner.bound) / 60) }
     }
 
     /// One output line as a --json object; nil for anything else (stderr's text,
@@ -278,6 +295,35 @@ extension AgentIsland {
                      (finals.filter { $0.result == "skipped" }.count, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
         if parts.isEmpty { return other.map { "\(title) \($0)" } ?? empty }
         return (parts + [other].compactMap { $0 }).joined(separator: ", ")
+    }
+
+    // MARK: - Pin, Remove and Clear unpinned (#605)
+
+    static let pinLabel = "Pin"
+    static let unpinLabel = "Unpin"
+    static let removeLabel = "Remove from History"
+    static let clearUnpinnedLabel = "Clear unpinned"
+    static let clearingText = "Clearing…"
+
+    static func clearQuestion(_ n: Int) -> String { "Clear \(n) unpinned?" }
+
+    /// `--pin|--unpin <name> --json`; `--forget <name> --json`, never -f (a pin protects).
+    static func pinArgs(_ name: String, pin: Bool) -> [String] { [pin ? "--pin" : "--unpin", name, "--json"] }
+    static func forgetArgs(_ name: String) -> [String] { ["--forget", name, "--json"] }
+    /// Every record neither live nor pinned; dch skips those (-f is a usage error here).
+    static let forgetAllArgs = ["--forget", "--all", "--json"]
+
+    /// A pin, unpin or remove's line for its dir's status; nil when it worked.
+    /// dch's detail for a failed result (io_error's is the OS error), else the exit.
+    static func editFailure(_ r: DchActionResult, name: String, _ verb: Verb) -> String? {
+        let what = "\(verb.rawValue) \(name)"
+        if r.stopped { return "\(what) cancelled: no answer in \(verb.minutes)m" }
+        if let f = r.json.first(where: { $0.isFinal && $0.failed }) {
+            if f.reason == "pinned" { return "\(what) failed: pinned, unpin it first" }
+            let d = f.detail ?? ""
+            return "\(what) failed: \(d.isEmpty ? f.reason ?? "" : d)"
+        }
+        return r.status == 0 ? nil : "\(what) \(failedText(r))"
     }
 
     // MARK: - Stop (#580)

@@ -282,6 +282,8 @@ final class AgentIslandStore: ObservableObject {
     @Published var confirmingRestartAll = false
     /// #580: the inline "Stop N sessions?" line is up; at most one question shows.
     @Published var confirmingStopAll = false
+    /// #605: the History header asks "Clear N unpinned?".
+    @Published var confirmingClear = false
 
     init(geometry: AgentIslandGeometry, details: AgentIslandRowDetails = .all,
          sort: AgentIslandSort = .activity, sidekickPattern: String = "") {
@@ -329,8 +331,10 @@ final class AgentIslandStore: ObservableObject {
         return (stop, rows.count - stop.count)
     }
 
+    /// #605: pinned first, then unpinned up to the cap (the tab's count too).
+    var cappedHistory: [DchHistoryRecord] { AgentIsland.cappedHistory(history) }
     /// #578: the History tab's rows, capped.
-    var shownHistory: [DchHistoryRecord] { historyTab ? Array(history.prefix(AgentIsland.historyCap)) : [] }
+    var shownHistory: [DchHistoryRecord] { historyTab ? cappedHistory : [] }
 
     /// #585: the clock reviveAllTakes reads; the tests pin it.
     var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
@@ -354,10 +358,19 @@ final class AgentIslandStore: ObservableObject {
         return resumeGate.isOK && n > 0 ? AgentIsland.resumeAllLabel(n) : nil
     }
 
+    /// #605: every unpinned record, not just the shown ones: `--forget --all` takes them all.
+    var unpinnedCount: Int { history.filter { !$0.pinned }.count }
+
+    /// #605: "Clear unpinned" with the gate open and an unpinned record to clear.
+    var clearUnpinnedButton: String? {
+        historyEditGate.isOK && unpinnedCount > 0 ? AgentIsland.clearUnpinnedLabel : nil
+    }
+
     /// #585: the line over the History rows only with something on it: the
     /// gate's refusal, the button, or a dir status.
     var showsHistoryHeader: Bool {
-        historyTab && (!resumeGate.isOK || resumeAllButton != nil || !historyStatus.isEmpty)
+        historyTab && (!resumeGate.isOK || resumeAllButton != nil || clearUnpinnedButton != nil || confirmingClear
+            || !historyStatus.isEmpty)
     }
 
     /// Every control verb's gate (Resume, #579's Restart, Restart all, New
@@ -376,6 +389,11 @@ final class AgentIslandStore: ObservableObject {
     /// refusal has its own line. With the base passing the control dch is at
     /// least every master, so this can only name `restartMinimum`.
     var restartNeeds: String? { resumeGate.isOK ? restartGate.refusal : nil }
+
+    /// #605: the pin, X and Clear unpinned's gate, 1.25.0; refused, they do not show.
+    var historyEditGate: DchCommand.Gate {
+        DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.historyEditMinimum)
+    }
 
     /// Cards show under blocked rows only.
     func card(for s: AgentSession) -> AgentCard? { s.state == .blocked ? cards[s.key] : nil }
@@ -438,6 +456,11 @@ struct AgentIslandView: View {
     /// #580: a row's Stop and the inline Stop all answer.
     var onStop: (AgentSession) -> Void = { _ in }
     var onConfirmStopAll: (Bool) -> Void = { _ in }
+    /// #605: a History row's pin toggle and X, Clear unpinned and its inline answer.
+    var onPin: (DchHistoryRecord) -> Void = { _ in }
+    var onRemove: (DchHistoryRecord) -> Void = { _ in }
+    var onClearUnpinned: () -> Void = {}
+    var onConfirmClear: (Bool) -> Void = { _ in }
 
     private var g: AgentIslandGeometry { store.geometry }
 
@@ -474,7 +497,7 @@ struct AgentIslandView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(AgentIsland.islandAccessibilityLabel(s, history: min(store.history.count, AgentIsland.historyCap)))
+        .accessibilityLabel(AgentIsland.islandAccessibilityLabel(s, history: store.cappedHistory.count))
     }
 
     // MARK: Expanded
@@ -508,7 +531,7 @@ struct AgentIslandView: View {
                 ForEach(historyDrawn) { r in
                     AgentIslandHistoryRow(record: r.record, now: ctx.date.timeIntervalSince1970,
                                           status: store.historyActions[r.record.key], enabled: r.enabled,
-                                          show: store.details, action: r.resume)
+                                          show: store.details, action: r.resume, pin: r.pin, remove: r.remove)
                 }
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
@@ -624,16 +647,22 @@ struct AgentIslandView: View {
     }
 
     /// #578: one drawn History row and its Resume; off while the gate refuses.
+    /// #605: its pin toggle and X, nil (not drawn) under 1.25.0; a pinned row has no X.
     struct HistoryDrawn: Identifiable {
         let record: DchHistoryRecord
         let enabled: Bool
         let resume: () -> Void
+        var pin: (() -> Void)? = nil
+        var remove: (() -> Void)? = nil
         var id: AgentSessionKey { record.key }
     }
 
     var historyDrawn: [HistoryDrawn] {
-        let on = store.resumeGate.isOK
-        return store.shownHistory.map { r in HistoryDrawn(record: r, enabled: on, resume: { onResume(r) }) }
+        let on = store.resumeGate.isOK, edits = store.historyEditGate.isOK
+        return store.shownHistory.map { r in
+            HistoryDrawn(record: r, enabled: on, resume: { onResume(r) }, pin: edits ? { onPin(r) } : nil,
+                         remove: edits && !r.pinned ? { onRemove(r) } : nil)
+        }
     }
 
     /// The line over the History rows: Resume interrupted (#585: only with a
@@ -643,6 +672,16 @@ struct AgentIslandView: View {
         HStack(spacing: 10) {
             if case .refused(let why) = store.resumeGate {
                 Text(verbatim: "Resume \(why)").foregroundStyle(Color.white.opacity(0.45))
+                Spacer(minLength: 0)
+            } else if store.confirmingClear {
+                // #605: #580's inline question, same look; the count is live.
+                let n = store.unpinnedCount
+                Text(verbatim: AgentIsland.clearQuestion(n)).foregroundStyle(Color.white.opacity(0.8))
+                Spacer(minLength: 0)
+                lineButton("Clear") { onConfirmClear(true) }
+                    .accessibilityLabel(Text(verbatim: "Clear \(n) unpinned"))
+                lineButton("Cancel") { onConfirmClear(false) }
+                    .accessibilityLabel(Text(verbatim: "Cancel Clear unpinned"))
             } else {
                 if let label = store.resumeAllButton {
                     Button(action: onResumeAll) {
@@ -655,9 +694,10 @@ struct AgentIslandView: View {
                     .help(Text(verbatim: AgentIsland.resumeAllHelp))
                     .accessibilityHint(Text(verbatim: AgentIsland.resumeAllHelp))
                 }
+                if let label = store.clearUnpinnedButton { lineButton(label, action: onClearUnpinned) }
                 Text(verbatim: store.historyStatus).foregroundStyle(Color.white.opacity(0.6))
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
         }
         .font(.system(size: 11))
         .lineLimit(1)
@@ -702,7 +742,7 @@ struct AgentIslandView: View {
                 tab("Sidekicks (\(split.sidekicks.count))", on: !history && shows) { onTab(true) }
             }
             if !store.history.isEmpty {
-                tab("History (\(min(store.history.count, AgentIsland.historyCap)))", on: history) { onHistory() }
+                tab("History (\(store.cappedHistory.count))", on: history) { onHistory() }
             }
             Spacer(minLength: 0)
         }
@@ -733,7 +773,13 @@ struct AgentIslandHistoryRow: View {
     /// #592: the row details toggled on (Session name).
     var show = AgentIslandRowDetails()
     let action: () -> Void
+    /// #605: the pin toggle and the X (nil: not drawn); like the PR chips, buttons
+    /// inside the row and, for VoiceOver, the row's actions.
+    var pin: (() -> Void)? = nil
+    var remove: (() -> Void)? = nil
     @State private var hover = false
+
+    var pinLabel: String { record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel }
 
     var body: some View {
         let age = record.lastSeen > 0 ? AgentIsland.age(now - record.lastSeen) : ""
@@ -756,6 +802,7 @@ struct AgentIslandHistoryRow: View {
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Color.white.opacity(0.4))
                             .fixedSize()
+                        if let pin { editControls(pin) }
                     }
                     HStack(spacing: 6) {
                         if let status {
@@ -794,6 +841,38 @@ struct AgentIslandHistoryRow: View {
         // A Resume status replaces line 2, dch name included.
         .accessibilityLabel(AgentIsland.historyRowAccessibilityLabel(record, status: status, end: end, age: age, cwd: cwd, show: show))
         .accessibilityHint(enabled ? "Resume" : "")
+        .accessibilityActions {
+            if let pin { Button(pinLabel, action: pin) }
+            if let remove { Button(AgentIsland.removeLabel, action: remove) }
+        }
+    }
+
+    /// The pin (filled while pinned) and the X; a pinned row keeps the X's room
+    /// empty, so the pins line up. Static, dim like the age.
+    private func editControls(_ pin: @escaping () -> Void) -> some View {
+        HStack(spacing: 4) {
+            iconButton(record.pinned ? "pin.fill" : "pin", opacity: record.pinned ? 0.8 : 0.35, label: pinLabel, action: pin)
+            if let remove {
+                iconButton("xmark", opacity: 0.35, label: AgentIsland.removeLabel, action: remove)
+            } else {
+                Color.clear.frame(width: Self.iconSize, height: Self.iconSize)
+            }
+        }
+    }
+
+    static let iconSize: CGFloat = 14
+
+    private func iconButton(_ symbol: String, opacity: Double, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(opacity))
+                .frame(width: Self.iconSize, height: Self.iconSize)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(Text(verbatim: label))
+        .accessibilityLabel(Text(verbatim: label))
     }
 }
 

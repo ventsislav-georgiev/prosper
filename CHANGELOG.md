@@ -28,6 +28,11 @@ tag from the now-released section and put it on the new top draft.
   nothing, so a later session can still fill it in. The command is used as typed for
   every folder; clear the field to go back to the inferred one. Words split on spaces,
   and quotes group them; nothing is expanded.
+- **Agent Island: pin, remove and clear History.** Each History row has a pin and an X.
+  A pinned row stays at the top, is never dropped from the list and is never pruned by
+  dch, however old. The X removes a row from History at once. A pinned row has no X, so
+  unpin it first. Clear unpinned, in the History header, asks once and then removes every
+  row that is not pinned. The controls need dch 1.25.0, which Prosper now bundles.
 - Ships dch 1.25.0, which can pin, unpin and forget session History records (`dch --pin`,
   `dch --unpin`, `dch --forget`, `dch --forget --all`). A pinned record is never pruned for age.
 
