@@ -347,6 +347,12 @@ final class SettingsModel: ObservableObject {
         clipboardSyncWithPhone = on
         Preferences.clipboardSyncWithPhone = on
     }
+    /// #619 "Run commands from iPhone"; read per handshake and per request.
+    @Published var runCommandsFromPhone: Bool
+    func setRunCommandsFromPhone(_ on: Bool) {
+        runCommandsFromPhone = on
+        Preferences.runCommandsFromPhone = on
+    }
     /// #523 "Live status on iPhone": off posts offline and stops, on posts the list.
     @Published var liveStatusEnabled: Bool
     func setLiveStatus(_ on: Bool) {
@@ -490,6 +496,7 @@ final class SettingsModel: ObservableObject {
         remoteTerminalEnabled = Preferences.remoteTerminalEnabled
         isolateRemoteSessions = Preferences.isolateRemoteSessions
         clipboardSyncWithPhone = Preferences.clipboardSyncWithPhone
+        runCommandsFromPhone = Preferences.runCommandsFromPhone
         liveStatusEnabled = Preferences.liveStatusEnabled
         mcpServers = Preferences.mcpServers
         hooks = Preferences.hooks
@@ -1259,6 +1266,8 @@ private struct GeneralPane: View {
                 NeonDivider()
                 ClipboardSyncToggle(model: model)
                 NeonDivider()
+                RunCommandsToggle(model: model)
+                NeonDivider()
                 NeonRow("Live status on iPhone", subtitle: liveStatusNote) {
                     Toggle("", isOn: Binding(
                         get: { SupporterClient.shared.isSignedIn && model.liveStatusEnabled },
@@ -1317,6 +1326,20 @@ struct ClipboardSyncToggle: View {
             get: { model.clipboardSyncWithPhone },
             set: { model.setClipboardSyncWithPhone($0) }))
             .disabled(!model.remoteTerminalEnabled || !model.clipboardHistoryEnabled)
+    }
+}
+
+/// #619: Remote Terminal's "Run commands from iPhone". Off by default; the phone runs its
+/// short allowlist of palette commands (DchCommandOps) only while it is on. Disabled while
+/// Remote Terminal is off.
+struct RunCommandsToggle: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        Toggle("Run commands from iPhone", isOn: Binding(
+            get: { model.runCommandsFromPhone },
+            set: { model.setRunCommandsFromPhone($0) }))
+            .disabled(!model.remoteTerminalEnabled)
     }
 }
 

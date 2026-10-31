@@ -71,6 +71,13 @@ tag from the now-released section and put it on the new top draft.
   own agent is mid-turn. A model the phone loaded is unloaded again after 5 minutes
   without a phone chat, so autocomplete comes back; the first reply after a load can
   take 30 seconds or more.
+- **Remote Terminal: run a few Prosper commands from the iPhone.** A new setting, "Run
+  commands from iPhone" (off by default), lets the iPhone app run a short, fixed list of
+  the Mac's built-in commands and show the result: Calculate, unit and currency Convert,
+  OpenLid Status, Toggle Mac Awake, Toggle Display Awake, Lock Screen, Turn Display Off,
+  Start Screen Saver, and Clear Clipboard Now when that extension is on. Nothing else
+  can run from the phone: not Shell, not your scripts, and not any command an installed
+  extension adds, even one that reuses a built-in command's name.
 - Large text copies (over 64 KB) no longer stall the Mac while clipboard history checks
   them for a link, an email or a color.
 

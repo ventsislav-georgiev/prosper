@@ -46,6 +46,9 @@ enum DchFrame {
     // #618: chat with this Mac's local agent model (DchChat), only while "chat" is in ops.
     static let models: UInt8 = 0x1e   // (empty) | {} → modelsResp | error
     static let chat: UInt8   = 0x1f   // {model?, messages: [{role, content}], max_tokens?} → chatDelta…, chatDone | error
+    // #619: allowlisted palette commands (DchCommandOps), only while "commands" is in ops. One reply.
+    static let commands: UInt8   = 0x28  // (empty) | {} → commandsResp | error
+    static let runCommand: UInt8 = 0x29  // {id, argument?} → commandResult | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -62,6 +65,8 @@ enum DchFrame {
     static let chatDelta: UInt8 = 0x20  // {text} one streamed chunk of a chat's reply
     static let chatDone: UInt8 = 0x21   // {stop: "stop"} a chat's final reply after its deltas
     static let modelsResp: UInt8 = 0x27 // [{id, name, loaded}] (empty: no local model on disk)
+    static let commandsResp: UInt8 = 0x2a  // [{id, title, subtitle?, ext, argument?, icon?}]
+    static let commandResult: UInt8 = 0x2b // {text, detail?}
 
     /// #617: the phone's ProsperTransport.maxFrame: what the Mac sends stays within it
     /// (list paging, item checks). The Mac's receive side is bounded by maxRequestFrame.
@@ -78,11 +83,13 @@ enum DchFrame {
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set
     /// up while signed in. #617: "clipboard" joins ops only while clipboard sync is on.
-    /// #618: "chat" only while the agent model is on disk.
+    /// #618: "chat" only while the agent model is on disk. #619: "commands" only while
+    /// "Run commands from iPhone" is on.
     static func machineInfo(deviceID: String, hostname: String, wakeId: String?, clipboard: Bool = false,
-                            chat: Bool = false) -> [String: Any] {
+                            chat: Bool = false, commands: Bool = false) -> [String: Any] {
         var info: [String: Any] = ["device_id": deviceID, "hostname": hostname,
-                                   "ops": ops + (clipboard ? ["clipboard"] : []) + (chat ? ["chat"] : [])]
+                                   "ops": ops + (clipboard ? ["clipboard"] : []) + (chat ? ["chat"] : [])
+                                       + (commands ? ["commands"] : [])]
         if let wakeId { info["wakeId"] = wakeId }
         return info
     }
@@ -137,6 +144,10 @@ final class DchConnection: @unchecked Sendable {
     private var chatTask: Task<Void, Never>?
     /// #618: this connection ever started a chat. Sticky, as `uploaded`.
     private var chatted = false
+    /// #619: the phone's allowlisted palette commands and their gate.
+    var commands = DchCommandOps()
+    /// #619: this connection's commands or runCommand request; closing cancels it. On `queue`.
+    private var commandTask: Task<Void, Never>?
     /// #627: the kill frame's `dch -k <name>`; tests set a recorder so no real dch runs.
     var kill: (String) -> Void = { DchCommand.kill($0) }
     /// QA #462 M3: a history/control request of this connection awaits its reply. On `queue`.
@@ -172,6 +183,7 @@ final class DchConnection: @unchecked Sendable {
         pty = nil
         upload?.cancel()       // #617: a dropped upload discards its partial item
         chatTask?.cancel()     // #618: a dropped chat stops its generation
+        commandTask?.cancel()  // #619: its reply is dropped (a handler already running finishes)
         conn.cancel()
         onClose(ObjectIdentifier(self))
     }
@@ -227,6 +239,7 @@ final class DchConnection: @unchecked Sendable {
             self.inFlight = false
             self.upload = nil
             self.chatTask = nil
+            self.commandTask = nil
             if !self.closed { self.send(frame) }
         }
     }
@@ -316,7 +329,8 @@ final class DchConnection: @unchecked Sendable {
             // server; only non-secret identity goes over the tailnet.
             send(DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
                 deviceID: SupporterStore.deviceID(), hostname: SupporterStore.deviceName(),
-                wakeId: LiveExtensionHostServices.currentWakeId, clipboard: clipboard.enabled(), chat: chat.available)))
+                wakeId: LiveExtensionHostServices.currentWakeId, clipboard: clipboard.enabled(), chat: chat.available,
+                commands: commands.enabled())))
         case DchFrame.models, DchFrame.chat:
             // #618: one request per connection, as clipboardUpload; a chat's deltas come
             // back in order on `queue`, then the one final reply.
@@ -335,6 +349,15 @@ final class DchConnection: @unchecked Sendable {
                 if type == DchFrame.models { return await chat.models(payload, reply: reply) }
                 await chat.chat(payload, send: send, reply: reply)
             }
+        case DchFrame.commands, DchFrame.runCommand:
+            // #619: one request per connection, as chat. A single reply and no data frames,
+            // so an attached connection may run one too and nothing sticky is needed.
+            guard !closed else { return }
+            guard !inFlight else { return send(DchControlOps.error("busy with an earlier request")) }
+            inFlight = true
+            let commands = commands
+            let reply: DchControlOps.Reply = { self.finalReply($0) }
+            commandTask = Task { await commands.handle(type, payload, reply: reply) }
         case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.library,
              DchFrame.pin, DchFrame.forget, DchFrame.forgetAll,
              DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.addClipboardHistory:

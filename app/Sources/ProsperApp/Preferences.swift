@@ -363,6 +363,8 @@ enum Preferences {
         static let isolateRemoteSessions = "isolateRemoteSessions"
         // #617: serve and accept clipboard history over Remote Terminal. Per Mac.
         static let clipboardSyncWithPhone = "clipboardSyncWithPhone"
+        // #619: run allowlisted palette commands from the iPhone. Per Mac.
+        static let runCommandsFromPhone = "runCommandsFromPhone"
         // #523: post dch session states to the Worker for the iPhone Live Activity.
         static let liveStatusEnabled = "liveStatusEnabled"
         // #523: POST /activate succeeded for this Mac on the signed-in account.
@@ -1036,6 +1038,12 @@ enum Preferences {
     static var clipboardSyncWithPhone: Bool {
         get { defaults.bool(forKey: Keys.clipboardSyncWithPhone) }
         set { defaults.set(newValue, forKey: Keys.clipboardSyncWithPhone) }
+    }
+
+    /// #619 "Run commands from iPhone". Off by default (absent = off).
+    static var runCommandsFromPhone: Bool {
+        get { defaults.bool(forKey: Keys.runCommandsFromPhone) }
+        set { defaults.set(newValue, forKey: Keys.runCommandsFromPhone) }
     }
 
     /// #617's gate: the phone's clipboard ops exist only while history AND the toggle are on.
