@@ -230,24 +230,76 @@ private extension String {
     }
 }
 
+/// #535: `Preferences.defaults` under XCTest. Its values live in this object, never in
+/// CFPreferences. On CI the old absolute-path suite froze mid-run (#528 probe, 7 hits): a remove
+/// reached the plist on disk, yet the removed value kept reading back for the rest of the run.
+/// cfprefsd had not restarted, the disk and modes were fine, and no app code touched the store off
+/// main. So the stale copy sat in CFPreferences' own in-process cache. Reads never fall through to
+/// CFPreferences either: a key not written here is nil, whatever the machine's global domain holds.
+final class XCTestDefaults: UserDefaults, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Any] = [:]
+    private let name: String
+
+    override init?(suiteName: String?) {
+        name = suiteName ?? ""
+        super.init(suiteName: suiteName)
+    }
+
+    /// Every typed getter (bool, integer, string, url...), value(forKey:) and @AppStorage read
+    /// comes through here.
+    override func object(forKey key: String) -> Any? {
+        lock.withLock { values[key] }
+    }
+
+    /// Every typed setter and @AppStorage write comes through here. The value is stored as a
+    /// property-list copy, as CFPreferences stores it: a non-plist value traps like the real store,
+    /// and a mutable value changed after the write does not change what reads back.
+    override func set(_ value: Any?, forKey key: String) {
+        guard let value else { return removeObject(forKey: key) }
+        let data = try! PropertyListSerialization.data(fromPropertyList: [key: value], format: .binary, options: 0)
+        let copy = (try! PropertyListSerialization.propertyList(from: data, format: nil) as! [String: Any])[key]
+        change(key) { values[key] = copy }
+    }
+
+    override func removeObject(forKey key: String) {
+        change(key) { values[key] = nil }
+    }
+
+    /// KVO (@AppStorage observes the store) and didChangeNotification (LoRATrainer.startScheduler),
+    /// as the real store sends them.
+    private func change(_ key: String, _ body: () -> Void) {
+        willChangeValue(forKey: key)
+        lock.withLock(body)
+        didChangeValue(forKey: key)
+        NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: self)
+    }
+
+    override func persistentDomain(forName domainName: String) -> [String: Any]? {
+        domainName == name ? lock.withLock { values } : super.persistentDomain(forName: domainName)
+    }
+
+    override func dictionaryRepresentation() -> [String: Any] {
+        lock.withLock { values }
+    }
+
+    override func synchronize() -> Bool { true }
+}
+
 /// Centralized UserDefaults-backed preferences.
 enum Preferences {
     /// The app's one UserDefaults store; every ProsperApp `.standard` reader goes through it.
-    /// Under XCTest it is a per-process scratch suite (pid in the path) instead of the real
-    /// `com.apple.dt.xctest.tool` domain, so a test run never writes the user's real
-    /// defaults and two concurrent `swift test` runs never share state. Removed at exit.
+    /// Under XCTest it is an in-memory per-process store named `scratchSuitePath` instead of the
+    /// real `com.apple.dt.xctest.tool` domain, so a test run never writes the user's real
+    /// defaults, two concurrent `swift test` runs never share state, and no write goes through
+    /// CFPreferences (#535, see `XCTestDefaults`).
     nonisolated(unsafe) static let defaults: UserDefaults = {
         guard NSClassFromString("XCTestCase") != nil else { return .standard }
-        let name = scratchSuitePath
-        atexit {
-            UserDefaults(suiteName: Preferences.scratchSuitePath)?
-                .removePersistentDomain(forName: Preferences.scratchSuitePath)
-            try? FileManager.default.removeItem(atPath: Preferences.scratchSuitePath + ".plist")
-        }
-        return UserDefaults(suiteName: name)!
+        return XCTestDefaults(suiteName: scratchSuitePath)!
     }()
 
-    /// In the small `prosper-test-defaults` dir (shared with the tests' `scratchDefaults`), not
+    /// The XCTest store's name (#535: no plist is written there any more). In the small
+    /// `prosper-test-defaults` dir (shared with the tests' `scratchDefaults`), not
     /// the $TMPDIR root: a path suite rewrites its plist synchronously on every `set` (temp
     /// file + rename beside it), on every keystroke via `AnalyticsStore.bumpUsage`. A create or
     /// rename in the root measured 30-100 ms on 2026-10-10 with ~2.1M entries there; QA #120's

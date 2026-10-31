@@ -265,16 +265,47 @@ final class PreferencesScratchStoreTests: XCTestCase {
         XCTAssertEqual(stale, [], "stale entries under \(testTempRoot.path) (leaked by an earlier run)")
     }
 
-    /// #342 (#305 M1): `Preferences.defaults` is the suite at `scratchSuitePath`, not just
-    /// "something other than .standard" — a probe key lands in that plist file.
-    func testPreferencesStorePersistsToTheScratchSuitePlist() throws {
-        let key = "prosper.scratchPlistProbe.\(UUID().uuidString)"
-        Preferences.defaults.set("probe", forKey: key)
-        defer { Preferences.defaults.removeObject(forKey: key); Preferences.defaults.synchronize() }
-        Preferences.defaults.synchronize()
-        let data = try Data(contentsOf: URL(fileURLWithPath: Preferences.scratchSuitePath + ".plist"))
-        let plist = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        XCTAssertEqual(plist[key] as? String, "probe", "Preferences.defaults must write the plist at scratchSuitePath")
+    private final class Observed: NSObject, @unchecked Sendable {
+        var kvo: [Any?] = [], notes = 0
+        override func observeValue(forKeyPath keyPath: String?, of object: Any?,
+                                   change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
+            kvo.append(change?[.newKey])
+        }
+    }
+
+    /// #535 (was #342 M1's plist check): the store keeps its values out of CFPreferences, whose
+    /// in-process cache froze the old path suite on CI (a remove that never read back). It is still
+    /// the store named `scratchSuitePath`, and it still acts like UserDefaults for its users:
+    /// plist-typed values, KVO for @AppStorage, didChangeNotification for LoRATrainer.
+    func testPreferencesStoreBypassesCFPreferences() throws {
+        // No dots in the key: KVO reads a dotted key as a key path.
+        let d = Preferences.defaults, key = "prosperBypassProbe\(UUID().uuidString)", seen = Observed()
+        d.addObserver(seen, forKeyPath: key, options: [.new], context: nil)
+        let token = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: d,
+                                                           queue: nil) { _ in seen.notes += 1 }
+        defer {
+            d.removeObject(forKey: key)
+            d.removeObserver(seen, forKeyPath: key)
+            NotificationCenter.default.removeObserver(token)
+        }
+        d.set(7, forKey: key)
+        XCTAssertTrue(d.synchronize())
+        XCTAssertEqual(d.object(forKey: key) as? Double, 7, "an Int reads back as a number")
+        XCTAssertEqual(d.string(forKey: key), "7")
+        XCTAssertEqual(d.persistentDomain(forName: Preferences.scratchSuitePath)?[key] as? Int, 7)
+        XCTAssertEqual(d.dictionaryRepresentation()[key] as? Int, 7, "what SyncCoordinator reads")
+        XCTAssertNil(UserDefaults(suiteName: Preferences.scratchSuitePath)?.object(forKey: key),
+                     "the value must never reach CFPreferences")
+        d.removeObject(forKey: key)
+        XCTAssertNil(d.object(forKey: key), "the remove reads back")
+        XCTAssertNil(d.persistentDomain(forName: Preferences.scratchSuitePath)?[key])
+        XCTAssertEqual(seen.kvo.count, 2, "KVO on the set and the remove")
+        XCTAssertEqual((seen.kvo.first ?? nil) as? Int, 7)
+        XCTAssertEqual(seen.notes, 2, "didChangeNotification on the set and the remove")
+        let list = NSMutableArray(array: ["a"])
+        d.set(list, forKey: key)
+        list.add("b")
+        XCTAssertEqual(d.stringArray(forKey: key), ["a"], "a property-list copy, as the real store keeps")
     }
 
     /// #342 (#305 M4): no ProsperApp source other than Preferences.swift opens its own defaults
