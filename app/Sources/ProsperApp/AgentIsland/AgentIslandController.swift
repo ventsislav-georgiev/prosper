@@ -106,6 +106,11 @@ final class AgentIslandController {
         AgentIsland.history(dirs: dirs) { DchCommand.runIsland(args: $0, env: $1, path: dch) }
     }
     var historyDirs: @MainActor () -> [String] = { AgentIsland.liveSocketDirs() }
+    /// #606 seam: the live sessions' dch records, read off main. Under XCTest
+    /// the default reads none, so no test reads the operator's records.
+    var readLiveRecords: @Sendable ([AgentSession]) -> [DchHistoryRecord] = {
+        NSClassFromString("XCTestCase") == nil ? AgentIsland.liveRecords($0) : []
+    }
     /// A control verb's env for one dir, built on the runner's thread (QA #445 M1:
     /// the user's PATH, not launchd's). Under XCTest no login shell runs: the
     /// fallback dirs only.
@@ -481,18 +486,45 @@ final class AgentIslandController {
         }
     }
 
-    /// New session in `folder`: `--spawn <name> [launch]` with the Process cwd
+    /// New session in `folder`: `--spawn <name> <command>` with the Process cwd
     /// set to it, into the island's first socket dir (it shows on the next tick).
+    /// #606: the command is the setting's, else inferred first (off main).
     func newSession(in folder: String) {
+        guard store?.resumeGate.isOK == true else { return }
+        newSessionCommand { [weak self] command in self?.spawn(in: folder, command) }
+    }
+
+    private func spawn(in folder: String, _ command: [String]) {
         guard let store, case .ok(let dch) = store.resumeGate else { return }
         let dir = historyDirs().first ?? DchCommand.defaultSocketDir
         let taken = Set(store.sessions.filter { $0.key.dir == dir }.map(\.name))
             .union(store.history.filter { $0.key.dir == dir }.map(\.name))
-        let args = AgentIsland.newSessionArgs(folder: folder, history: store.history, taken: taken)
+        let args = AgentIsland.newSessionArgs(folder: folder, command: command, taken: taken)
         let key = AgentSessionKey(dir: dir, name: args[1])
         run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: true) { [weak self] r in
             guard let store = self?.store else { return }
             if let failed = AgentIsland.spawnText(r, name: key.name) { store.actions[AgentSessionKey(dir: dir, name: "")] = failed }
+        }
+    }
+
+    /// #606: New session's command to `done`, on main: the setting as typed;
+    /// unset, inferred off main from the live sessions' records and the history
+    /// already read, and stored when a real source gave it. Nothing found: `claude`,
+    /// not stored. Settings asks too, when its field appears.
+    func newSessionCommand(_ done: @escaping @MainActor ([String]) -> Void) {
+        let typed = AgentIsland.shellWords(Preferences.agentIslandNewSessionCommand)
+        guard typed.isEmpty else { done(typed); return }
+        let sessions = store?.sessions ?? [], history = store?.history ?? [], read = readLiveRecords
+        queue.async {
+            let inferred = AgentIsland.inferredCommand(live: read(sessions), history: history)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if let inferred, Preferences.agentIslandNewSessionCommand.isEmpty {
+                        Preferences.agentIslandNewSessionCommand = AgentIsland.shellLine(inferred)
+                    }
+                    done(inferred ?? ["claude"])
+                }
+            }
         }
     }
 

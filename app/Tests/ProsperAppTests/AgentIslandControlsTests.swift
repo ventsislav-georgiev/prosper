@@ -1442,28 +1442,134 @@ final class AgentIslandControlsTests: XCTestCase {
         return r
     }
 
-    /// The newest launch for the folder, else the newest anywhere, else claude; stripped either way.
-    func testLaunchPickPrefersTheFolderThenTheNewestThenClaude() {
+    /// #606: a live session's record first, else the newest history record
+    /// overall (never per folder), else nil (claude, not stored); stripped.
+    func testInferredCommandPrefersLiveThenNewestHistoryThenNone() {
         let history = [agentRecord("n", ended: 30, cwd: "/b", launch: ["claude", "--chrome", "--resume", "s3"]),
                        agentRecord("e", ended: 25, cwd: "/a", launch: []),
-                       agentRecord("m", ended: 20, cwd: "/a", launch: ["headroom", "wrap", "claude", "--resume", "s2"]),
-                       agentRecord("o", ended: 10, cwd: "/a", launch: ["old"])]
-        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/a", history: history), ["headroom", "wrap", "claude"],
-                       "the folder's newest non-empty launch, without its --resume")
-        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/c", history: history), ["claude", "--chrome"], "the newest overall")
-        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/a", history: [record("x")]), ["claude"], "no agent launch: claude")
+                       agentRecord("m", ended: 20, cwd: "/a", launch: ["headroom", "wrap", "claude", "--resume", "s2"])]
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: history), ["claude", "--chrome"],
+                       "the newest history record overall, without its --resume")
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: Array(history.dropFirst())), ["headroom", "wrap", "claude"],
+                       "an empty launch is no source: the next record")
+        var live = agentRecord("l", ended: 0, cwd: "/z", launch: ["/opt/homebrew/bin/claude", "--continue"],
+                               argv: ["headroom", "wrap", "claude", "--chrome", "--continue"])
+        live.end = ""
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [live], history: history), ["headroom", "wrap", "claude", "--chrome"],
+                       "a live session's record wins over history")
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [record("plain", end: "")], history: history), ["claude", "--chrome"],
+                       "a live record with no agent is no source")
+        XCTAssertNil(AgentIsland.inferredCommand(live: [], history: [record("x")]), "no agent anywhere: no source")
+        XCTAssertNil(AgentIsland.inferredCommand(live: [], history: []))
         // QA #449 M1: dch's revive_spawn choice per record.
         let wrapped = agentRecord("w", ended: 5, cwd: "/w", launch: ["/opt/homebrew/bin/claude", "--resume", "X", "--chrome"],
                                   argv: ["headroom", "wrap", "claude", "--resume", "X", "--chrome"])
-        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/w", history: [wrapped]), ["headroom", "wrap", "claude", "--chrome"],
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [wrapped]), ["headroom", "wrap", "claude", "--chrome"],
                        "claude in the argv: the session's own command, wrapper kept")
         let shell = agentRecord("s", ended: 5, cwd: "/s", launch: ["headroom", "wrap", "claude", "--resume", "X"], argv: ["/bin/zsh"])
-        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/s", history: [shell]), ["headroom", "wrap", "claude"],
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [shell]), ["headroom", "wrap", "claude"],
                        "a shell session: the typed launch")
         var noAgent = record("n", ended: 9)
         noAgent.argv = ["headroom", "wrap", "claude", "--x"]
-        XCTAssertEqual(AgentIsland.launchCommand(cwd: "/src", history: [noAgent, shell]), ["headroom", "wrap", "claude"],
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [noAgent, shell]), ["headroom", "wrap", "claude"],
                        "a record with no agent is no source")
+    }
+
+    /// #606: shell words, quote-aware, no expansion; shellLine reads back exactly.
+    func testShellWordsSplitQuoteAwareWithNoExpansion() {
+        XCTAssertEqual(AgentIsland.shellWords("headroom wrap claude --chrome"), ["headroom", "wrap", "claude", "--chrome"])
+        XCTAssertEqual(AgentIsland.shellWords("  claude\t  --x \n"), ["claude", "--x"], "any whitespace run separates")
+        XCTAssertEqual(AgentIsland.shellWords("claude --append-system-prompt 'be brief' \"a \\\"b\\\" c\""),
+                       ["claude", "--append-system-prompt", "be brief", "a \"b\" c"])
+        XCTAssertEqual(AgentIsland.shellWords("a'b c'd \"\" '' e\\ f"), ["ab cd", "", "", "e f"], "quotes join, empty words count")
+        XCTAssertEqual(AgentIsland.shellWords("'it'\\''s' \"x\\y\""), ["it's", "x\\y"], "a backslash in \"\" only escapes \" and \\")
+        XCTAssertEqual(AgentIsland.shellWords("claude ~/x $HOME *.swift"), ["claude", "~/x", "$HOME", "*.swift"], "no expansion")
+        XCTAssertEqual(AgentIsland.shellWords("claude 'open"), ["claude", "open"], "an unclosed quote runs to the end")
+        XCTAssertEqual(AgentIsland.shellWords("   "), [])
+        XCTAssertEqual(AgentIsland.shellWords(""), [])
+        for argv in [["/opt/homebrew/bin/headroom", "wrap", "claude", "--chrome"], ["claude", "it's", "a b", "", "$X", "\"q\"", "x\\y"]] {
+            XCTAssertEqual(AgentIsland.shellWords(AgentIsland.shellLine(argv)), argv)
+        }
+        XCTAssertEqual(AgentIsland.shellLine(["headroom", "wrap", "claude", "--chrome"]), "headroom wrap claude --chrome")
+    }
+
+    /// #606: stored trimmed; empty (or blank) removes the key: unset again.
+    @MainActor
+    func testNewSessionCommandPreferenceTrimsAndEmptyUnsets() {
+        defer { Preferences.agentIslandNewSessionCommand = "" }
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "", "unset by default")
+        Preferences.agentIslandNewSessionCommand = "  headroom wrap claude --chrome \n"
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome")
+        Preferences.agentIslandNewSessionCommand = " \t "
+        XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand"), "blank: the key is gone")
+        XCTAssertEqual(AgentIslandPane.commit(" headroom wrap claude --chrome "), "headroom wrap claude --chrome",
+                       "the field's commit stores trimmed and shows what was stored")
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome")
+        XCTAssertEqual(AgentIslandPane.commit(""), "")
+        XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand"), "cleared: unset")
+    }
+
+    /// #606 visual evidence: the pane with the operator's command at UI scale
+    /// 0.7, 0.85 and 1.0. Offscreen only (a windowless hosting view).
+    @MainActor
+    func testRendersNewSessionCommandFieldOffscreen() throws {
+        defer { Preferences.agentIslandNewSessionCommand = "" }
+        Preferences.agentIslandNewSessionCommand = "headroom wrap claude --chrome"
+        let out = tempDir()
+        let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        for scale in [0.7, 0.85, 1.0] as [CGFloat] {
+            ThemeRuntime.scale = scale
+            let width = sz(560)
+            let h = NSHostingView(rootView: AgentIslandPane().frame(width: width).padding(sz(16))
+                .background(Color(white: 0.1)).preferredColorScheme(.dark))
+            h.frame = CGRect(origin: .zero, size: CGSize(width: width + 2 * sz(16), height: 10))
+            h.frame.size = h.fittingSize
+            h.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            h.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(h.bitmapImageRepForCachingDisplay(in: h.bounds))
+            h.cacheDisplay(in: h.bounds, to: rep)
+            let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+            try png.write(to: out.appendingPathComponent("settings-new-session-\(scale).png"))
+            if let extra { try png.write(to: extra.appendingPathComponent("settings-new-session-\(scale).png")) }
+        }
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome", "showing it changes nothing")
+    }
+
+    /// #606: a live session's dch record, at dch's documented path; only a
+    /// running record, ours and closed to others; newest activity first.
+    func testLiveRecordsReadDchsRecordOfEachLiveSession() throws {
+        let state = tempDir().path, dir = "/tmp/dch-test"
+        let recs = state + "/dch/sessions/-tmp-dch-test"
+        try FileManager.default.createDirectory(atPath: recs, withIntermediateDirectories: true)
+        func put(_ name: String, end: String, argv: String = "[\"headroom\",\"wrap\",\"claude\"]", mode: Int = 0o600) throws {
+            let body = "{\"name\":\"\(name)\",\"sock_dir\":\"\(dir)\",\"cwd\":\"/src\",\"argv\":\(argv),\"started\":1,"
+                + "\"updated\":2,\"ended\":0,\"end\":\"\(end)\",\"agent\":{\"kind\":\"claude\",\"session_id\":\"s\","
+                + "\"name\":\"\",\"cwd\":\"/src\",\"launch\":[\"claude\"]}}\n"
+            let path = recs + "/\(name).json"
+            try Data(body.utf8).write(to: URL(fileURLWithPath: path))
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
+        }
+        try put("old", end: "")
+        try put("new", end: "", argv: "[\"claude\",\"--chrome\"]")
+        try put("ended", end: "exit 0")
+        try put("open", end: "", mode: 0o620)
+        try FileManager.default.createSymbolicLink(atPath: recs + "/link.json", withDestinationPath: recs + "/new.json")
+        func live(_ name: String, _ activity: TimeInterval) -> AgentSession {
+            AgentSession(key: AgentSessionKey(dir: dir, name: name), alias: "", activity: activity, state: .idle, agents: 1)
+        }
+        let sessions = [live("old", 1), live("ended", 9), live("open", 8), live("none", 7), live("link", 6), live("new", 5)]
+        let got = AgentIsland.liveRecords(sessions, env: ["XDG_STATE_HOME": state, "HOME": "/nonexistent"])
+        XCTAssertEqual(got.map(\.name), ["new", "old"], "newest first; no ended, group-writable, symlinked or missing record")
+        XCTAssertEqual(got.map(\.argv), [["claude", "--chrome"], ["headroom", "wrap", "claude"]])
+        XCTAssertEqual(AgentIsland.inferredCommand(live: got, history: []), ["claude", "--chrome"])
+        let home = tempDir().path
+        try FileManager.default.createDirectory(atPath: home + "/.local", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: home + "/.local/state", withDestinationPath: state)
+        XCTAssertEqual(AgentIsland.liveRecords(sessions, env: ["XDG_STATE_HOME": "rel", "HOME": home]).map(\.name), ["new", "old"],
+                       "a relative XDG_STATE_HOME: ~/.local/state")
     }
 
     func testRecentFoldersAreDistinctAgentFoldersNewestFirstAtMostEight() {
@@ -1494,7 +1600,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.sessionName(folder: "/"), "session")
         XCTAssertEqual(AgentIsland.freeName("app", taken: ["app", "app-2"]), "app-3")
         XCTAssertEqual(AgentIsland.freeName("app", taken: ["app-2"]), "app")
-        XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/src/app", history: [], taken: ["app"]), ["--spawn", "app-2", "claude"])
+        XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/src/app", command: ["claude"], taken: ["app"]), ["--spawn", "app-2", "claude"])
     }
 
     func testSpawnEnvDropsTheClaudeCodeIdentity() {
@@ -1677,15 +1783,17 @@ final class AgentIslandControlsTests: XCTestCase {
 
     /// New session: --spawn <free name> [stripped launch], the Process cwd is the
     /// folder, the env is the control env minus the Claude Code identity.
+    /// #606: unset, the launch is inferred from the newest record (any folder) and stored.
     @MainActor
     func testNewSessionSpawnsInTheFolderWithAStrippedEnv() throws {
         let f = FakeProc()
         let argv = ["/opt/homebrew/bin/headroom", "wrap", "claude", "--resume", "sid", "--chrome"]
         let app = tempDir().appendingPathComponent("app").path, gone = tempDir().appendingPathComponent("gone").path
         try FileManager.default.createDirectory(atPath: app, withIntermediateDirectories: true)
-        let c = opened(f, [session("app")], history: [agentRecord("old", ended: 6, cwd: gone, launch: ["claude"]),
-                                                     agentRecord("app-2", ended: 5, cwd: app,
-                                                                 launch: ["/opt/homebrew/bin/claude", "--resume", "sid", "--chrome"], argv: argv)])
+        defer { Preferences.agentIslandNewSessionCommand = "" }
+        let c = opened(f, [session("app")], history: [agentRecord("app-2", ended: 6, cwd: app,
+                                                                 launch: ["/opt/homebrew/bin/claude", "--resume", "sid", "--chrome"], argv: argv),
+                                                     agentRecord("old", ended: 5, cwd: gone, launch: ["claude"])])
         c.controlEnv = { ["PATH": "/login/bin", "DCH_SOCKET_DIR": $0, "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
                           "CLAUDE_PID": "9", "CLAUDE_EFFORT": "high", "CLAUDE_CONFIG_DIR": "/c"] }
         let store = try XCTUnwrap(c.store)
@@ -1693,9 +1801,12 @@ final class AgentIslandControlsTests: XCTestCase {
         let sub = try XCTUnwrap(c.makeControlsMenu().items.first?.submenu)
         XCTAssertEqual(sub.items.map(\.title), [(app as NSString).abbreviatingWithTildeInPath, "", AgentIsland.chooseFolderLabel])
         press(sub.items[0])
+        settle(c) { !f.args.isEmpty }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
         XCTAssertEqual(f.args, [["--spawn", "app-3", "/opt/homebrew/bin/headroom", "wrap", "claude", "--chrome"]],
                        "app is live and app-2 a record: app-3; no --resume")
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "/opt/homebrew/bin/headroom wrap claude --chrome",
+                       "#606: a real source is stored")
         XCTAssertEqual(f.lock.withLock { f.launches[0].cwd }, app)
         XCTAssertEqual(f.lock.withLock { f.envs }, [["PATH": "/login/bin", "DCH_SOCKET_DIR": "/d", "CLAUDE_CONFIG_DIR": "/c"]])
         f.status = 1
@@ -1721,11 +1832,84 @@ final class AgentIslandControlsTests: XCTestCase {
         let sub = try XCTUnwrap(c.makeControlsMenu().items.first?.submenu)
         XCTAssertEqual(sub.items.map(\.title), [AgentIsland.chooseFolderLabel], "no agent history: the chooser only")
         press(sub.items[0])
+        settle(c) { !f.args.isEmpty }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
         XCTAssertEqual(f.args, [["--spawn", "My-Repo", "claude"]])
         XCTAssertEqual(f.lock.withLock { f.launches[0].cwd }, "/picked/My Repo")
+        XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand"),
+                     "#606: no source: claude, and nothing stored")
         f.release.signal()
         settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "My-Repo")) }
+    }
+
+    /// #606: a set command is used as typed (no resume stripping) for every
+    /// folder, over the history and the live sessions; nothing is read.
+    @MainActor
+    func testNewSessionUsesTheSettingAsTypedOverHistory() throws {
+        defer { Preferences.agentIslandNewSessionCommand = "" }
+        let f = FakeProc(), history = [agentRecord("h", ended: 5, cwd: "/a", launch: ["claude", "--x"])]
+        let c = opened(f, [session("a")], history: history)
+        c.readLiveRecords = { _ in XCTFail("a set command reads no record"); return [] }
+        Preferences.agentIslandNewSessionCommand = "headroom wrap claude --chrome 'my x' --continue"
+        c.newSession(in: "/a")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, "no inference: at once")
+        XCTAssertEqual(f.args, [["--spawn", "a-2", "headroom", "wrap", "claude", "--chrome", "my x", "--continue"]])
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome 'my x' --continue", "never rewritten")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "a-2")) }
+    }
+
+    /// #606: unset, a live session's record wins over history; it is stored once
+    /// and then used as is (no drift when the live sessions change).
+    @MainActor
+    func testNewSessionInfersFromLiveRecordsAndStoresOnce() throws {
+        defer { Preferences.agentIslandNewSessionCommand = "" }
+        let f = FakeProc()
+        let c = opened(f, [session("a"), session("b")],
+                       history: [agentRecord("h", ended: 5, cwd: "/a", launch: ["claude", "--from-history"])])
+        var live = agentRecord("b", ended: 0, cwd: "/b", launch: ["/bin/claude"], argv: ["headroom", "wrap", "claude", "--chrome", "-c"])
+        live.end = ""
+        let seen = Reads(), rec = live
+        c.readLiveRecords = { s in seen.lock.withLock { seen.calls.append(("", s.map(\.name))) }; return [rec] }
+        c.newSession(in: "/x/proj")
+        settle(c) { !f.args.isEmpty }
+        XCTAssertEqual(seen.lock.withLock { seen.calls.map(\.1) }, [["a", "b"]], "the poller's live sessions")
+        XCTAssertEqual(f.args, [["--spawn", "proj", "headroom", "wrap", "claude", "--chrome"]], "the live record, stripped")
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "proj")) }
+        c.newSession(in: "/x/two")
+        settle(c) { f.args.count == 2 }
+        XCTAssertEqual(f.args.last, ["--spawn", "two", "headroom", "wrap", "claude", "--chrome"], "stored: no second inference")
+        XCTAssertEqual(seen.count, 1)
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "two")) }
+        // Settings asks the same way: a stored value comes back at once.
+        var got: [String]?
+        c.newSessionCommand { got = $0 }
+        XCTAssertEqual(got, ["headroom", "wrap", "claude", "--chrome"])
+    }
+
+    /// #606: Settings' ask while unset infers from the history already read and
+    /// stores it; with no source it hands back claude and stores nothing.
+    @MainActor
+    func testNewSessionCommandAskInfersFromHistoryOffMain() throws {
+        defer { Preferences.agentIslandNewSessionCommand = "" }
+        let f = FakeProc()
+        let c = opened(f, [session("a")], history: [record("plain")])
+        c.readLiveRecords = { _ in XCTAssertFalse(Thread.isMainThread, "records are read off main"); return [] }
+        var got: [String]?
+        c.newSessionCommand { got = $0 }
+        XCTAssertNil(got, "never answered on the caller's turn while inferring")
+        settle(c) { got != nil }
+        XCTAssertEqual(got, ["claude"])
+        XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand"))
+        c.store?.history = [agentRecord("h", ended: 5, cwd: "/a", launch: ["claude", "--chrome", "--resume", "x"])]
+        got = nil
+        c.newSessionCommand { got = $0 }
+        settle(c) { got != nil }
+        XCTAssertEqual(got, ["claude", "--chrome"])
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome")
     }
 
     /// A master newer than the control binary: every #579 verb is off, with the reason.

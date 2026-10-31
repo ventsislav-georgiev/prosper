@@ -18,6 +18,15 @@ struct AgentIslandPane: View {
     nonisolated static let isolateKey = "isolateRemoteSessions"
     /// Internal so a test can read it through the app's store (#486 B8).
     @AppStorage(AgentIslandPane.isolateKey, store: Preferences.defaults) var isolate = false
+    /// #606: the New session command field; saved on commit.
+    @State private var command = Preferences.agentIslandNewSessionCommand
+
+    /// #606: the field's commit: stored trimmed, empty = unset; the field shows
+    /// what was stored.
+    static func commit(_ text: String) -> String {
+        Preferences.agentIslandNewSessionCommand = text
+        return Preferences.agentIslandNewSessionCommand
+    }
 
     /// #529 (QA #333 L-3): saved on every pick, not on change. With the stored
     /// terminal uninstalled the picker shows the fallback, and picking that same
@@ -56,5 +65,22 @@ struct AgentIslandPane: View {
                 .disabled(click != .open)
             }
         }
+        NeonSection("New session",
+                    footer: "What New session runs in the chosen folder, e.g. claude or headroom wrap claude --chrome.") {
+            NeonRow("Command") {
+                // Unset: inferred once from the sessions you run (and stored), else claude.
+                TextField("claude", text: $command)
+                    .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(260))
+                    .onSubmit { command = Self.commit(command) }
+            }
+        }
+        .onAppear {
+            guard command.isEmpty else { return }
+            // Typed meanwhile: the user's text stays.
+            AgentIslandController.shared.newSessionCommand { _ in
+                if command.isEmpty { command = Preferences.agentIslandNewSessionCommand }
+            }
+        }
+        .onDisappear { _ = Self.commit(command) }
     }
 }

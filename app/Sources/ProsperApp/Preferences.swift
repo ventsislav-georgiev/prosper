@@ -386,6 +386,7 @@ enum Preferences {
         static let agentIslandSort = "agentIslandSort"
         static let agentIslandSidekickTabs = "agentIslandSidekickTabs"
         static let agentIslandSidekickPattern = "agentIslandSidekickPattern"
+        static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1117,6 +1118,17 @@ enum Preferences {
     static var agentIslandSidekickPattern: String {
         get { defaults.string(forKey: Keys.agentIslandSidekickPattern) ?? AgentIsland.sidekickDefault }
         set { defaults.set(newValue, forKey: Keys.agentIslandSidekickPattern) }
+    }
+
+    /// #606: what New session runs, as typed; "" = unset (inferred, else claude).
+    /// Stored trimmed; empty removes the key.
+    static var agentIslandNewSessionCommand: String {
+        get { defaults.string(forKey: Keys.agentIslandNewSessionCommand) ?? "" }
+        set {
+            let v = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandNewSessionCommand) }
+            else { defaults.set(v, forKey: Keys.agentIslandNewSessionCommand) }
+        }
     }
 
     /// MCP servers configured for the coding agent. Stored JSON-encoded; an unreadable

@@ -329,20 +329,82 @@ extension AgentIsland {
         return FileManager.default.fileExists(atPath: path, isDirectory: &dir) && dir.boolValue
     }
 
-    /// The newest agent command recorded in `cwd`, else the newest anywhere, else
-    /// `claude`; resume flags stripped either way. Per record, dch's revive_spawn
-    /// choice: the session's argv when it holds a `claude` token (RV_ARGV, which
-    /// keeps a wrapper such as `headroom wrap claude`, since agent.launch is the
-    /// process below the session's child), else agent.launch (RV_SHELL: claude
-    /// typed into a shell). A record with no agent is no source.
-    static func launchCommand(cwd: String, history: [DchHistoryRecord]) -> [String] {
-        let launches = history.compactMap { r -> (String, [String])? in
-            guard let agent = r.agent else { return nil }
-            let argv = r.argv.contains { ($0 as NSString).lastPathComponent == "claude" } ? r.argv : agent.launch
-            return argv.isEmpty ? nil : (folder(r), argv)
+    /// A record's agent command, dch's revive_spawn choice: the session's argv
+    /// when it holds a `claude` token (RV_ARGV, which keeps a wrapper such as
+    /// `headroom wrap claude`, since agent.launch is the process below the
+    /// session's child), else agent.launch (RV_SHELL: claude typed into a shell).
+    /// A record with no agent, or an empty command, is no source.
+    static func recordCommand(_ r: DchHistoryRecord) -> [String]? {
+        guard let agent = r.agent else { return nil }
+        let argv = r.argv.contains { ($0 as NSString).lastPathComponent == "claude" } ? r.argv : agent.launch
+        return argv.isEmpty ? nil : argv
+    }
+
+    /// #606: the command the user runs, while the setting is unset: the first
+    /// live session's record with one (newest activity first), else the newest
+    /// history record's; resume flags stripped. nil: no source (New session runs
+    /// `claude` and nothing is stored).
+    static func inferredCommand(live: [DchHistoryRecord], history: [DchHistoryRecord]) -> [String]? {
+        (live + history).lazy.compactMap(recordCommand).first.map(strippingResume)
+    }
+
+    /// #606: a command line as argv, no expansion of any kind. Whitespace
+    /// separates words; '…' is literal; "…" groups, a backslash in it escaping
+    /// only " and \; outside quotes a backslash takes the next character as is
+    /// (so `shellLine`'s '\'' reads back). An unclosed quote runs to the end.
+    static func shellWords(_ s: String) -> [String] {
+        let cs = Array(s)
+        var out: [String] = [], word = "", started = false, quote: Character?, i = 0
+        while i < cs.count {
+            let c = cs[i]
+            i += 1
+            if quote == "'" {
+                if c == "'" { quote = nil } else { word.append(c) }
+            } else if c == "\\", i < cs.count, quote == nil || cs[i] == "\"" || cs[i] == "\\" {
+                word.append(cs[i])
+                i += 1
+                started = true
+            } else if quote == "\"" {
+                if c == "\"" { quote = nil } else { word.append(c) }
+            } else if c == "'" || c == "\"" {
+                quote = c
+                started = true
+            } else if c.isWhitespace {
+                if started { out.append(word) }
+                word = ""
+                started = false
+            } else {
+                word.append(c)
+                started = true
+            }
         }
-        let argv = launches.first { $0.0 == cwd }?.1 ?? launches.first?.1 ?? ["claude"]
-        return strippingResume(argv)
+        if started { out.append(word) }
+        return out
+    }
+
+    /// #606: argv as one line that `shellWords` reads back word for word.
+    static func shellLine(_ argv: [String]) -> String { argv.map(shellQuoted).joined(separator: " ") }
+
+    /// #606: dch's record of each live session, newest activity first (dch's
+    /// README contract: `$XDG_STATE_HOME/dch/sessions/<slug>/<name>.json`,
+    /// `~/.local/state` when XDG_STATE_HOME is unset or relative; <slug> is the
+    /// socket dir with each `/` as `-`). The master rewrites it while it runs,
+    /// and `--history` leaves it out. Like dch, only a regular file that is ours
+    /// and closed to others (its command gets run), and only one still running.
+    static func liveRecords(_ sessions: [AgentSession],
+                            env: [String: String] = ProcessInfo.processInfo.environment) -> [DchHistoryRecord] {
+        let xdg = env["XDG_STATE_HOME"] ?? ""
+        let root = xdg.hasPrefix("/") ? xdg : (env["HOME"] ?? NSHomeDirectory()) + "/.local/state"
+        return sessions.sorted { $0.activity > $1.activity }.compactMap { s in
+            let path = "\(root)/dch/sessions/\(s.key.dir.replacingOccurrences(of: "/", with: "-"))/\(s.name).json"
+            guard let a = try? FileManager.default.attributesOfItem(atPath: path),
+                  a[.type] as? FileAttributeType == .typeRegular,
+                  (a[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+                  ((a[.posixPermissions] as? NSNumber)?.intValue ?? 0o777) & 0o022 == 0,
+                  let body = FileManager.default.contents(atPath: path)
+            else { return nil }
+            return parseHistory(Data("[".utf8) + body + Data("]".utf8), dir: s.key.dir).first { $0.end.isEmpty }
+        }
     }
 
     /// dch's resume_argv rules, so a new session never resumes a recorded
@@ -388,8 +450,8 @@ extension AgentIsland {
 
     /// `--spawn <name> [launch argv]`; the name is free of the dir's live
     /// sessions and records (a record of that name would be overwritten).
-    static func newSessionArgs(folder: String, history: [DchHistoryRecord], taken: Set<String>) -> [String] {
-        ["--spawn", freeName(sessionName(folder: folder), taken: taken)] + launchCommand(cwd: folder, history: history)
+    static func newSessionArgs(folder: String, command: [String], taken: Set<String>) -> [String] {
+        ["--spawn", freeName(sessionName(folder: folder), taken: taken)] + command
     }
 
     /// --spawn passes its env to the session: a Claude Code identity in it

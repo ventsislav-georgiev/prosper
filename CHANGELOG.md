@@ -18,7 +18,18 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.162.0 *(unreleased)*
+## v2.163.0 *(unreleased)*
+
+- **Agent Island: set the command New session runs.** Settings › Agent Island has a
+  New session command field, for example `claude` or `headroom wrap claude --chrome`.
+  It starts out filled in with the command you already run: the first time it is
+  needed, Prosper reads it from a running agent session, else from the newest History
+  entry, and keeps it. With no session and no History it runs `claude` and keeps
+  nothing, so a later session can still fill it in. The command is used as typed for
+  every folder; clear the field to go back to the inferred one. Words split on spaces,
+  and quotes group them; nothing is expanded.
+
+## v2.162.0
 
 - **Agent Island: the dch session name is hidden unless you turn it on.** A session with
   an alias used to show its dch name (like "solution-master-7") in grey after its state.
