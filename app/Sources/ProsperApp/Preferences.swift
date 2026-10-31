@@ -361,6 +361,8 @@ enum Preferences {
         // Remote Terminal (DchTerm): serve dch sessions over Tailscale.
         static let remoteTerminalEnabled = "remoteTerminalEnabled"
         static let isolateRemoteSessions = "isolateRemoteSessions"
+        // #617: serve and accept clipboard history over Remote Terminal. Per Mac.
+        static let clipboardSyncWithPhone = "clipboardSyncWithPhone"
         // #523: post dch session states to the Worker for the iPhone Live Activity.
         static let liveStatusEnabled = "liveStatusEnabled"
         // #523: POST /activate succeeded for this Mac on the signed-in account.
@@ -1029,6 +1031,15 @@ enum Preferences {
         get { defaults.bool(forKey: Keys.isolateRemoteSessions) }
         set { defaults.set(newValue, forKey: Keys.isolateRemoteSessions) }
     }
+
+    /// #617 "Sync clipboard history with iPhone". Off by default (absent = off).
+    static var clipboardSyncWithPhone: Bool {
+        get { defaults.bool(forKey: Keys.clipboardSyncWithPhone) }
+        set { defaults.set(newValue, forKey: Keys.clipboardSyncWithPhone) }
+    }
+
+    /// #617's gate: the phone's clipboard ops exist only while history AND the toggle are on.
+    static var clipboardSyncActive: Bool { clipboardHistoryEnabled && clipboardSyncWithPhone }
 
     /// #523 "Live status on iPhone". Absent key = on: it only posts while signed in
     /// and activated, and the operator asked for it on by default.

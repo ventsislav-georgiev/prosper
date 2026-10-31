@@ -28,6 +28,15 @@ final class ClipboardMonitor {
     /// writes and nothing is persisted.
     var captureHistory = true
 
+    /// The history store a capture writes; tests point it at a ClipboardStore(dir:) of their own.
+    var store: () -> ClipboardStore = { ClipboardStore.shared }
+
+    /// #617: a change Prosper itself made with an entry already in history (an upload's
+    /// live:true), so the next poll records no second copy of it.
+    private var skipHistoryChange: Int?
+
+    func ignoreHistory(changeCount: Int) { skipHistoryChange = changeCount }
+
     /// Live gate consulted before the `clipboard.changed` payload is built, so a
     /// copy costs nothing extra when no enabled extension subscribes.
     /// nil = always emit (tests / unset), matching `SystemEventWatchers`.
@@ -63,9 +72,9 @@ final class ClipboardMonitor {
     // HARD guard — above it we keep metadata only (no bytes), so a pathological
     // clip (e.g. a 1 GB paste) can't spike memory or stall the UI.
     private static let softTextBytes = 1 * 1024 * 1024         // ≤1 MB text → encrypt
-    private static let maxTextBytes = 100 * 1024 * 1024        // >100 MB text → metadata only
+    nonisolated static let maxTextBytes = 100 * 1024 * 1024        // >100 MB text → metadata only
     private static let softImageBytes = 8 * 1024 * 1024        // ≤8 MB PNG → encrypt
-    private static let maxImagePixels = 50_000_000             // >50 MP → metadata only (no decode)
+    nonisolated static let maxImagePixels = 50_000_000             // >50 MP → metadata only (no decode)
 
     init() {
         for (name, event) in ScreenGate.notifications {
@@ -136,7 +145,8 @@ final class ClipboardMonitor {
         suppressNext = false
         // Concealed clips return nil here, so the event honours the same privacy
         // guard as history — a password copy never reaches an extension.
-        guard let captured = capture(pb) else { return }
+        let record = captureHistory && pb.changeCount != skipHistoryChange
+        guard let captured = capture(pb, record: record) else { return }
         guard !suppressed, shouldEmitChange?() ?? true, let emitChange else { return }
         emitChange(Self.changePayload(kind: captured.kind, text: captured.text))
     }
@@ -145,7 +155,7 @@ final class ClipboardMonitor {
     /// history store. Returns the event kind plus the text for `kind == "text"`, or
     /// nil when there is nothing to report (concealed, or empty).
     @discardableResult
-    private func capture(_ pb: NSPasteboard) -> (kind: String, text: String?)? {
+    private func capture(_ pb: NSPasteboard, record captureHistory: Bool) -> (kind: String, text: String?)? {
         // Respect concealed/transient markers (passwords, OTP, etc.).
         if let types = pb.types, !Self.concealedTypes.isDisjoint(with: Set(types)) {
             return nil
@@ -155,7 +165,7 @@ final class ClipboardMonitor {
         if let urls = pb.readObjects(forClasses: [NSURL.self],
                                      options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
-            if captureHistory { for url in urls { ClipboardStore.shared.addFile(url) } }
+            if captureHistory { for url in urls { store().addFile(url) } }
             return ("file", nil)
         }
 
@@ -166,13 +176,13 @@ final class ClipboardMonitor {
             // HARD guard on pixel count BEFORE decoding: a giant image's TIFF/PNG
             // would allocate hundreds of MB. Over the limit → metadata only.
             if w > 0, h > 0, w * h > Self.maxImagePixels {
-                if captureHistory { ClipboardStore.shared.addOversizeImage(width: w, height: h) }
+                if captureHistory { store().addOversizeImage(width: w, height: h) }
                 return ("image", nil)
             }
             if let png = Self.pngData(from: image) {
                 // Keep + restore at any decoded size; encrypt only the small ones.
                 if captureHistory {
-                    ClipboardStore.shared.addImage(image, pngData: png,
+                    store().addImage(image, pngData: png,
                                                    encrypt: png.count <= Self.softImageBytes)
                 }
                 return ("image", nil)
@@ -186,11 +196,11 @@ final class ClipboardMonitor {
             if captureHistory {
                 if bytes > Self.maxTextBytes {
                     // HARD guard → metadata-only marker, never persist the payload.
-                    ClipboardStore.shared.addOversizeText(byteCount: bytes,
+                    store().addOversizeText(byteCount: bytes,
                                                           preview: String(string.prefix(140)))
                 } else {
                     // Keep + restore; encrypt only below the soft threshold.
-                    ClipboardStore.shared.addText(string, encrypt: bytes <= Self.softTextBytes)
+                    store().addText(string, encrypt: bytes <= Self.softTextBytes)
                 }
             }
             return ("text", string)

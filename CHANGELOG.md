@@ -51,6 +51,16 @@ tag from the now-released section and put it on the new top draft.
   sends pinned History records to the phone first, however old, marked as pinned, and
   runs the phone's pin, unpin, remove and Clear unpinned with the same dch 1.25.0 checks
   as the island's own buttons. A pinned record can't be removed until it is unpinned.
+- **Remote Terminal: sync clipboard history with your iPhone.** A new setting, "Sync
+  clipboard history with iPhone" (off by default, needs clipboard history on), lets the
+  iPhone app browse the Mac's clipboard history and pull any item, and send its own
+  clips into it. Large items stream in parts instead of being refused, and the phone can
+  resume a pull that dropped. Text and images up to the Mac's own clipboard limits
+  join the encrypted history; anything larger, and any file, lands in Downloads, as
+  AirDrop does, and appears in history as a file. A transfer is refused only when it
+  would leave under 5 GB free.
+- Large text copies (over 64 KB) no longer stall the Mac while clipboard history checks
+  them for a link, an email or a color.
 
 ## v2.162.0
 

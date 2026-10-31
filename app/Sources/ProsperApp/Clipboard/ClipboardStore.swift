@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 
 /// Persistent store for clipboard history. Index records live in `index.json`;
 /// payload blobs (full text, image PNG) live as sibling files so huge clips
@@ -16,14 +17,28 @@ final class ClipboardStore: ObservableObject {
     /// User-configurable (Settings → General), defaults to 500.
     private var maxItems: Int { Preferences.clipboardHistoryMaxItems }
 
-    private let dir: URL
+    /// #617: uploads from the phone still arriving, by id: the History row's progress (#632).
+    /// They join `items` only once complete; a failed or cancelled one just leaves this map.
+    @Published private(set) var receiving: [UUID: ClipboardReceiving] = [:]
+    private var receivingCancel: [UUID: @Sendable () -> Void] = [:]
+
+    nonisolated let dir: URL
     private let indexURL: URL
 
-    init() {
-        let base = FileManager.default
+    /// #617: under XCTest a fixed throwaway dir, never the operator's store: ClipboardCrypto's
+    /// test key is random per process, so a stray write to `shared` would re-seal the real index.
+    static var defaultDir: URL {
+        if NSClassFromString("XCTestCase") != nil {
+            return URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "prosper-xctest-clipboard", directoryHint: .isDirectory)
+        }
+        return FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appending(path: "Prosper", directoryHint: .isDirectory)
             .appending(path: "clipboard", directoryHint: .isDirectory)
+    }
+
+    /// `dir` is a seam: tests pass a tempDir(), never the real store.
+    init(dir base: URL = ClipboardStore.defaultDir) {
         dir = base
         indexURL = base.appending(path: "index.json")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -50,7 +65,8 @@ final class ClipboardStore: ObservableObject {
         }
         let preview = Self.textPreview(string)
         insert(ClipboardItem(id: id, kind: Self.classify(string), createdAt: Date(), preview: preview,
-                             byteCount: bytes, blobFile: blob, sourcePath: nil, fileName: nil))
+                             byteCount: bytes, blobFile: blob, sourcePath: nil, fileName: nil,
+                             sha256: Self.sha256(Data(string.utf8))))
     }
 
     /// Adds an image entry, persisting PNG bytes to a blob file.
@@ -64,7 +80,8 @@ final class ClipboardStore: ObservableObject {
         let size = image.size
         let preview = "Image \(Int(size.width))×\(Int(size.height))"
         insert(ClipboardItem(id: id, kind: .image, createdAt: Date(), preview: preview,
-                             byteCount: pngData.count, blobFile: blob, sourcePath: nil, fileName: nil))
+                             byteCount: pngData.count, blobFile: blob, sourcePath: nil, fileName: nil,
+                             sha256: Self.sha256(pngData)))
     }
 
     /// Records an oversize image as a metadata-only entry: no blob is decoded or
@@ -172,6 +189,87 @@ final class ClipboardStore: ObservableObject {
         persist()
     }
 
+    // MARK: - From the phone (#617)
+
+    func item(_ id: UUID) -> ClipboardItem? { items.first { $0.id == id } }
+
+    /// Content dedupe: an entry with this sha256 is kept as the one entry, moved to
+    /// `date` when that is newer. True when there was one (the caller skips its item).
+    func dedupe(sha256: String, date: Date) -> Bool {
+        guard let i = items.firstIndex(where: { $0.sha256 == sha256 }) else { return false }
+        if date > items[i].createdAt {
+            items[i].createdAt = date
+            sort()
+            persist()
+        }
+        return true
+    }
+
+    enum RemotePayload {
+        case text(String)
+        /// Any ImageIO-decodable bytes, stored as received.
+        case image(Data, width: Int, height: Int)
+        /// A received file under the received-files folder, referenced like a copied Mac file.
+        case file(URL)
+    }
+
+    /// Inserts a phone item at its own date. Text and image are sealed through writeBlob,
+    /// whatever their size (#617: no plaintext in the store dir). False when the write fails.
+    @discardableResult
+    func addRemote(id: UUID, date: Date, source: String, sha256: String, _ payload: RemotePayload) -> Bool {
+        let item: ClipboardItem
+        switch payload {
+        case .text(let s):
+            let blob = "\(id.uuidString).txt"
+            guard writeBlob(Data(s.utf8), to: blob, encrypt: true) else { return false }
+            item = ClipboardItem(id: id, kind: Self.classify(s), createdAt: date, preview: Self.textPreview(s),
+                                 byteCount: s.utf8.count, blobFile: blob, sourcePath: nil, fileName: nil,
+                                 source: source, sha256: sha256)
+        case .image(let data, let w, let h):
+            let blob = "\(id.uuidString).png"
+            guard writeBlob(data, to: blob, encrypt: true) else { return false }
+            item = ClipboardItem(id: id, kind: .image, createdAt: date, preview: "Image \(w)×\(h)",
+                                 byteCount: data.count, blobFile: blob, sourcePath: nil, fileName: nil,
+                                 source: source, sha256: sha256)
+        case .file(let url):
+            let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int ?? 0
+            item = ClipboardItem(id: id, kind: .file, createdAt: date, preview: url.lastPathComponent,
+                                 byteCount: size, blobFile: nil, sourcePath: url.path, fileName: url.lastPathComponent,
+                                 source: source, sha256: sha256)
+        }
+        insert(item)
+        return true
+    }
+
+    /// An upload starts arriving; `cancel` drops its connection (whose teardown calls endReceiving).
+    func beginReceiving(_ r: ClipboardReceiving, cancel: @escaping @Sendable () -> Void) {
+        receiving[r.id] = r
+        receivingCancel[r.id] = cancel
+    }
+
+    /// Bytes so far; ignored once the upload has ended.
+    func receivingProgress(_ id: UUID, bytes: Int) {
+        guard receiving[id] != nil else { return }
+        receiving[id]?.bytes = bytes
+    }
+
+    func endReceiving(_ id: UUID) {
+        receiving[id] = nil
+        receivingCancel[id] = nil
+    }
+
+    /// Cancels an upload still arriving (#632's Esc): its connection closes, the partial
+    /// payload is discarded and the row leaves `receiving`.
+    func cancel(_ id: UUID) {
+        let c = receivingCancel[id]
+        endReceiving(id)
+        c?()
+    }
+
+    nonisolated static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     // MARK: - Internals
 
     private func insert(_ item: ClipboardItem) {
@@ -246,7 +344,7 @@ final class ClipboardStore: ObservableObject {
 
     /// Reads and decrypts blob `name`, or nil if missing/unreadable. Bytes
     /// written by a pre-encryption build are returned as-is (legacy migration).
-    private func readBlob(_ name: String) -> Data? {
+    nonisolated func readBlob(_ name: String) -> Data? {
         guard let raw = try? Data(contentsOf: dir.appending(path: name)) else { return nil }
         return ClipboardCrypto.decryptOrPlaintext(raw)
     }
@@ -281,7 +379,9 @@ final class ClipboardStore: ObservableObject {
     /// (a single detector match spanning the whole trimmed string) → plain text.
     static func classify(_ raw: String) -> ClipboardKind {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !s.isEmpty else { return .text }
+        // #617: a link, an email or a color is short; a phone's 100 MB text skips the
+        // detector, which runs on main.
+        guard !s.isEmpty, s.utf8.count <= 64 << 10 else { return .text }
         if isColor(s) { return .color }
         if let detector = linkDetector {
             let range = NSRange(s.startIndex..<s.endIndex, in: s)
@@ -308,4 +408,14 @@ final class ClipboardStore: ObservableObject {
         }
         return false
     }
+}
+
+/// #617: one phone upload still arriving (ClipboardStore.receiving).
+struct ClipboardReceiving: Equatable, Sendable {
+    let id: UUID
+    let kind: ClipboardKind
+    let createdAt: Date
+    let name: String?
+    let size: Int
+    var bytes: Int
 }

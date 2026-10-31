@@ -19,7 +19,10 @@ enum ClipboardCrypto {
 
     /// 256-bit key derived once from the Keychain device secret via SHA-256.
     /// Computed lazily so the Keychain isn't touched until the first clip.
+    /// #617: under XCTest a random per-process key, so no test reads or creates the
+    /// operator's device key (DatabaseKey writes it when missing).
     private static let key: SymmetricKey = {
+        if NSClassFromString("XCTestCase") != nil { return SymmetricKey(size: .bits256) }
         let secret = (try? DatabaseKey.fetchOrCreate()) ?? ""
         let digest = SHA256.hash(data: Data(secret.utf8))
         return SymmetricKey(data: digest)

@@ -26,7 +26,8 @@ enum ClipboardKind: String, Codable, Sendable, CaseIterable {
 struct ClipboardItem: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
     let kind: ClipboardKind
-    let createdAt: Date
+    /// var: #617's sha256 dedupe moves a kept entry to the newest date.
+    var createdAt: Date
     /// Short human preview: text snippet, "Image 1920×1080", or a filename.
     let preview: String
     /// Total byte size of the payload (text bytes / image bytes / file size).
@@ -41,10 +42,14 @@ struct ClipboardItem: Codable, Identifiable, Sendable, Equatable {
     var pinned: Bool
     /// Optional user-supplied title (⌘E rename); falls back to `preview`.
     var title: String?
+    /// #617: "iPhone" for an entry the phone sent; nil (old stores, Mac captures) reads as "Mac".
+    var source: String?
+    /// #617: lowercase hex sha256 of the payload, the dedupe key; nil on old entries and Mac file refs.
+    var sha256: String?
 
     init(id: UUID, kind: ClipboardKind, createdAt: Date, preview: String,
          byteCount: Int, blobFile: String?, sourcePath: String?, fileName: String?,
-         pinned: Bool = false, title: String? = nil) {
+         pinned: Bool = false, title: String? = nil, source: String? = nil, sha256: String? = nil) {
         self.id = id
         self.kind = kind
         self.createdAt = createdAt
@@ -55,7 +60,12 @@ struct ClipboardItem: Codable, Identifiable, Sendable, Equatable {
         self.fileName = fileName
         self.pinned = pinned
         self.title = title
+        self.source = source
+        self.sha256 = sha256
     }
+
+    /// The wire's "source": "Mac" unless the phone sent it.
+    var wireSource: String { source ?? "Mac" }
 
     /// Display title: the user-renamed title if set, else the preview.
     var displayTitle: String { (title?.isEmpty == false) ? title! : preview }
@@ -64,7 +74,7 @@ struct ClipboardItem: Codable, Identifiable, Sendable, Equatable {
 }
 
 extension ClipboardItem {
-    /// Backward-compatible decode: `pinned`/`title` were added later, so old
+    /// Backward-compatible decode: `pinned`/`title` (and #617's `source`/`sha256`) were added later, so old
     /// `index.json` records lack them — default rather than fail the whole load.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -78,5 +88,7 @@ extension ClipboardItem {
         fileName = try c.decodeIfPresent(String.self, forKey: .fileName)
         pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         title = try c.decodeIfPresent(String.self, forKey: .title)
+        source = try c.decodeIfPresent(String.self, forKey: .source)
+        sha256 = try c.decodeIfPresent(String.self, forKey: .sha256)
     }
 }

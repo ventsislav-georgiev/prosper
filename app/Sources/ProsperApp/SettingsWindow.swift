@@ -341,6 +341,12 @@ final class SettingsModel: ObservableObject {
         isolateRemoteSessions = on
         Preferences.isolateRemoteSessions = on
     }
+    /// #617 "Sync clipboard history with iPhone"; read per handshake and per request.
+    @Published var clipboardSyncWithPhone: Bool
+    func setClipboardSyncWithPhone(_ on: Bool) {
+        clipboardSyncWithPhone = on
+        Preferences.clipboardSyncWithPhone = on
+    }
     /// #523 "Live status on iPhone": off posts offline and stops, on posts the list.
     @Published var liveStatusEnabled: Bool
     func setLiveStatus(_ on: Bool) {
@@ -483,6 +489,7 @@ final class SettingsModel: ObservableObject {
         agentModel = Preferences.agentModel
         remoteTerminalEnabled = Preferences.remoteTerminalEnabled
         isolateRemoteSessions = Preferences.isolateRemoteSessions
+        clipboardSyncWithPhone = Preferences.clipboardSyncWithPhone
         liveStatusEnabled = Preferences.liveStatusEnabled
         mcpServers = Preferences.mcpServers
         hooks = Preferences.hooks
@@ -1250,6 +1257,8 @@ private struct GeneralPane: View {
                     set: { model.setIsolateRemoteSessions($0) }))
                     .disabled(!model.remoteTerminalEnabled)
                 NeonDivider()
+                ClipboardSyncToggle(model: model)
+                NeonDivider()
                 NeonRow("Live status on iPhone", subtitle: liveStatusNote) {
                     Toggle("", isOn: Binding(
                         get: { SupporterClient.shared.isSignedIn && model.liveStatusEnabled },
@@ -1294,6 +1303,20 @@ private struct GeneralPane: View {
             }
         }
         .onAppear { hasAccessibility = PermissionsManager.isAccessibilityTrusted() }
+    }
+}
+
+/// #617: Remote Terminal's "Sync clipboard history with iPhone". Off by default; the
+/// phone's clipboard ops run only while it and clipboard history are both on
+/// (Preferences.clipboardSyncActive). Disabled while Remote Terminal or history is off.
+struct ClipboardSyncToggle: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        Toggle("Sync clipboard history with iPhone", isOn: Binding(
+            get: { model.clipboardSyncWithPhone },
+            set: { model.setClipboardSyncWithPhone($0) }))
+            .disabled(!model.remoteTerminalEnabled || !model.clipboardHistoryEnabled)
     }
 }
 
