@@ -83,6 +83,9 @@ tag from the now-released section and put it on the new top draft.
   extension adds, even one that reuses a built-in command's name.
 - Large text copies (over 64 KB) no longer stall the Mac while clipboard history checks
   them for a link, an email or a color.
+- Agent Island: Resume interrupted, Restart all and Stop all are no longer cancelled after
+  5 or 15 minutes while dch is still reporting progress. The limit now applies to a
+  stretch of silence from dch, not to the whole batch.
 
 ## v2.162.0
 

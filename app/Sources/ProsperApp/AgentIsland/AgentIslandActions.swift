@@ -664,6 +664,8 @@ enum LoginPath {
 /// just its args: Resume, Restart and New session (#579), Stop (#580). `key.name == ""`
 /// stands for a whole socket dir (`--revive --all`, Restart all, Stop all): it and
 /// any row of its dir exclude each other. A busy request is refused, never queued.
+/// #672: the bound is an idle bound, the longest silence allowed; each output chunk
+/// restarts it, so a long `--all` batch that keeps reporting is never cut off.
 final class DchActionRunner: @unchecked Sendable {
     /// A revive waits up to dch's DCH_AGENT_STEP_MS (60 s) per agent step.
     static let bound: TimeInterval = 300
@@ -684,6 +686,7 @@ final class DchActionRunner: @unchecked Sendable {
         var pid: pid_t?
         var cancelled = false
         var signalled = false
+        var lastOutput = DispatchTime.now()   // #672: the idle bound counts from here
     }
 
     private let lock = NSLock()
@@ -735,7 +738,10 @@ final class DchActionRunner: @unchecked Sendable {
                     return job.cancelled ? self.claimSignal(job) : nil
                 }
                 if let late { self.signal(late) }
-            }, { lines.add($0) })
+            }, { chunk in
+                self.lock.withLock { job.lastOutput = .now() }
+                lines.add(chunk)
+            })
             lines.flush()
             let stopped = lock.withLock { () -> Bool in
                 jobs[key] = nil
@@ -744,15 +750,24 @@ final class DchActionRunner: @unchecked Sendable {
             }
             done(AgentIsland.actionResult(status: r.status, output: r.out, stopped: stopped))
         }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + (bound ?? self.bound)) { [weak self] in
-            self?.cancel(job)
-        }
+        arm(job, bound: bound ?? self.bound)
         return true
+    }
+
+    /// #672: fires `bound` after the last output; output since re-arms it, else
+    /// it cancels. After the reap the silence runs out and that cancel signals
+    /// nothing (claimSignal), which ends the chain.
+    private func arm(_ job: Job, bound: TimeInterval) {
+        let due = lock.withLock { job.lastOutput + bound }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: due) { [weak self] in
+            guard let self else { return }
+            if self.lock.withLock({ job.lastOutput + bound > due }) { self.arm(job, bound: bound) } else { self.cancel(job) }
+        }
     }
 
     /// Exactly one SIGTERM to the recorded dch client pid; the job's own wait
     /// carries on until it exits. Never SIGKILL and never a second signal: a
-    /// second one can leave agents paused. The bound expiring cancels too.
+    /// second one can leave agents paused. The idle bound expiring cancels too.
     func cancel(_ key: AgentSessionKey) {
         guard let job = lock.withLock({ jobs[key] }) else { return }
         cancel(job)

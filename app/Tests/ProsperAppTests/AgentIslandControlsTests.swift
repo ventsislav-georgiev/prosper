@@ -681,6 +681,42 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(res.all.map(\.stopped), [false])
     }
 
+    /// #672: the bound is an idle bound. A job that writes a line every bound/2
+    /// runs past 2x the bound unsignalled; a silent one gets its one SIGTERM at it.
+    func testTheBoundIsAnIdleBoundThatOutputRestarts() {
+        let bound: TimeInterval = 0.6, res = Results(), sent = Results()
+        let release = DispatchSemaphore(value: 0)
+        let runner = DchActionRunner(bound: bound, launch: { _, args, _, _, onPid, onOutput in
+            onPid(4242)
+            if args == ["talk"] {
+                for i in 0..<5 {   // 1.5 s, 2.5x the bound
+                    Thread.sleep(forTimeInterval: bound / 2)
+                    onOutput(Data("a: step \(i)\n".utf8))
+                }
+            } else {
+                release.wait()
+            }
+            return (0, Data())
+        }, signal: { _ in sent.add(DchActionResult(status: 15, text: [])) })
+        let start = Date()
+        XCTAssertTrue(runner.start(AgentSessionKey(dir: "/d", name: "a"), path: "/fake/dch", args: ["talk"],
+                                   env: { [:] }, done: res.add))
+        XCTAssertEqual(res.done.wait(timeout: .now() + 10), .success)
+        XCTAssertGreaterThan(Date().timeIntervalSince(start), 2 * bound)
+        XCTAssertEqual(sent.all, [], "output kept restarting the bound")
+        XCTAssertEqual(res.all.map(\.stopped), [false])
+
+        let quiet = AgentSessionKey(dir: "/d", name: "b"), t0 = Date()
+        XCTAssertTrue(runner.start(quiet, path: "/fake/dch", args: ["quiet"], env: { [:] }, done: res.add))
+        XCTAssertEqual(sent.done.wait(timeout: .now() + 10), .success, "a silent job is signalled")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(t0), bound * 0.9, "not before the bound")
+        XCTAssertLessThan(Date().timeIntervalSince(t0), bound * 1.8, "at the bound, not after a second silence")
+        XCTAssertEqual(sent.done.wait(timeout: .now() + 2 * bound), .timedOut, "exactly one SIGTERM")
+        release.signal()
+        XCTAssertEqual(res.done.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(res.all.map(\.stopped), [false, true])
+    }
+
     /// Cancelled before the pid was known: the one SIGTERM goes when it is.
     func testCancelBeforeThePidIsKnownSignalsOnceItIs() {
         let f = FakeProc(), runner = f.runner(), res = Results(), k = AgentSessionKey(dir: "/d", name: "a")
