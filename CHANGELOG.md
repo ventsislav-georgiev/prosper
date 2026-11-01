@@ -32,10 +32,12 @@ tag from the now-released section and put it on the new top draft.
   A pinned row stays at the top, is never dropped from the list and is never pruned by
   dch, however old. The X removes a row from History at once. A pinned row has no X, so
   unpin it first. Clear unpinned, in the History header, asks once and then removes every
-  row that is not pinned. The controls need dch 1.25.0 or later; Prosper now bundles 1.26.0.
-- Ships dch 1.26.0, which can pin, unpin and forget session History records (`dch --pin`,
+  row that is not pinned. The controls need dch 1.25.0 or later; Prosper now bundles 1.26.2.
+- Ships dch 1.26.2, which can pin, unpin and forget session History records (`dch --pin`,
   `dch --unpin`, `dch --forget`, `dch --forget --all`). A pinned record is never pruned for age.
   Its terminal parser now comes from Ghostty 1.4.0.
+  `DCH_SCROLLBACK` counts lines again, so `dch --read --recent` and `dch --wait --match`
+  reach about 2000 lines back by default instead of about 250 in a wide terminal.
 - **Remote Terminal: the iPhone app can read your snippets and quicklinks.** Over
   Tailscale, the Mac serves its snippets and quicklinks files, read-only and as stored,
   so the phone can offer them too. The phone asks with the version it already has, and
