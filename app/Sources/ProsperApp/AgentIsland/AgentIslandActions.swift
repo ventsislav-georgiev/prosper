@@ -102,6 +102,8 @@ extension AgentIsland {
     static func label(_ label: String, needs: String?) -> String { needs.map { "\(label) (\($0))" } ?? label }
     /// #605: --pin, --unpin and --forget (the History tab's pin, X and Clear unpinned).
     static let historyEditMinimum = [1, 25, 0]
+    /// #669: `--revive … --no-message` (Resume without the resume message), dch 1.27.0.
+    static let reviveNoMessageMinimum = [1, 27, 0]
     /// The History tab lists this many records in all, newest first, unless more
     /// are pinned: pinned ones are never capped, unpinned ones fill the rest.
     static let historyCap = 50
@@ -166,10 +168,12 @@ extension AgentIsland {
 
     /// `--revive <name>`; a name live now goes to `--as` the first free
     /// `<name>-2`, `-3`, … — free of live sessions and of other records in the dir
-    /// (dch would overwrite that record).
-    static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>) -> [String]? {
-        guard live.contains(r.name) else { return named("--revive", [r.name]) }
-        return named("--revive", [r.name], ["--as", freeName(r.name, taken: live.union(records)), "--json"])
+    /// (dch would overwrite that record). #669: `noMessage` adds `--no-message`.
+    static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>,
+                           noMessage: Bool = false) -> [String]? {
+        let tail = (noMessage ? ["--no-message"] : []) + ["--json"]
+        guard live.contains(r.name) else { return named("--revive", [r.name], tail) }
+        return named("--revive", [r.name], ["--as", freeName(r.name, taken: live.union(records))] + tail)
     }
 
     /// #627: dch takes a session name that starts with '-' and its argv has no
@@ -184,6 +188,8 @@ extension AgentIsland {
 
     /// Resume interrupted. dch skips stopped, killed and exit 0 records itself.
     static let reviveAllArgs = ["--revive", "--all", "--json"]
+    /// #669: the same without the resume message.
+    static let reviveAllNoMessageArgs = ["--revive", "--all", "--no-message", "--json"]
 
     /// `name` when free, else the first free `<name>-2`, `-3`, ….
     static func freeName(_ name: String, taken: Set<String>) -> String {
@@ -208,6 +214,8 @@ extension AgentIsland {
     /// A row's verb: its done word and the minutes of its bound.
     enum Verb: String {
         case restart = "Restart", stop = "Stop", resume = "Resume"
+        /// #669: Resume (no message); its results read like Resume's, saying the message was skipped.
+        case resumeNoMessage = "Resume (no message)"
         /// #605: a History row's pin toggle and X, and Clear unpinned.
         case pin = "Pin", unpin = "Unpin", remove = "Remove", clear = "Clear"
 
@@ -216,6 +224,7 @@ extension AgentIsland {
             case .restart: "Restarted"
             case .stop: "Stopped"
             case .resume: "Resumed"
+            case .resumeNoMessage: "Resumed without the message"
             case .pin: "Pinned"
             case .unpin: "Unpinned"
             case .remove: "Removed"
@@ -251,10 +260,12 @@ extension AgentIsland {
     /// without a leading "<name>: ".
     static func finalText(_ o: DchJSONLine, _ verb: Verb) -> String {
         if o.result == "ok" {
-            guard verb == .resume else { return verb.done }
-            if o.reason == "no_screen" { return "Resumed (resume message not typed)" }   // dch-lite
-            if let a = o.revivedAs, !a.isEmpty, a != o.name { return "Resumed as \(a)" }
-            return "Resumed"
+            guard verb == .resume || verb == .resumeNoMessage else { return verb.done }
+            if verb == .resume, o.reason == "no_screen" { return "Resumed (resume message not typed)" }   // dch-lite
+            if let a = o.revivedAs, !a.isEmpty, a != o.name {
+                return "Resumed as \(a)" + (verb == .resume ? "" : " without the message")
+            }
+            return verb.done
         }
         if o.reason == "pinned" { return pinnedRefusal }   // QA #489 I5: never dch's -f hint
         let detail = o.detail ?? ""
@@ -567,6 +578,10 @@ extension AgentIsland {
     static let resumingText = "Resuming…"
     /// #585: shown only with n > 0 records reviveAllTakes.
     static func resumeAllLabel(_ n: Int) -> String { "Resume interrupted (\(n))" }
+    /// #669: a History row's icon and VoiceOver action, and the header's choice next to Resume interrupted.
+    static let resumeNoMessageLabel = "Resume (no message)"
+    static let resumeAllNoMessageLabel = "(no message)"
+    static func resumeAllNoMessageAccessibility(_ n: Int) -> String { "Resume interrupted (\(n)) without the message" }
     /// QA #445 I2: `--revive --all` takes every abnormal end, not only signals.
     /// #580: never a stopped or closed session (dch skips them).
     static let resumeAllHelp = "Brings back the sessions that ended on a signal, crashed, exited with an error "

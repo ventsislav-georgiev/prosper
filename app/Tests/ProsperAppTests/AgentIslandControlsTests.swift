@@ -2864,4 +2864,180 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
         XCTAssertEqual(f.args, [])
     }
+
+    // MARK: - #669: Resume (no message)
+
+    private static let v126 = DchCommand.Binary(path: "/fake/dch", version: [1, 26, 9])
+    private static let v127 = DchCommand.Binary(path: "/fake/dch", version: [1, 27, 0])
+
+    /// `--no-message` after the name (and `--as`), before `--json`; without it, the argv is unchanged.
+    func testReviveNoMessageArgsWithAndWithoutAs() {
+        XCTAssertEqual(AgentIsland.reviveArgs(record("a"), live: [], records: [], noMessage: true),
+                       ["--revive", "a", "--no-message", "--json"])
+        XCTAssertEqual(AgentIsland.reviveArgs(record("a"), live: ["a"], records: ["a-2"], noMessage: true),
+                       ["--revive", "a", "--as", "a-3", "--no-message", "--json"])
+        XCTAssertEqual(AgentIsland.reviveArgs(record("a"), live: [], records: []), ["--revive", "a", "--json"])
+        XCTAssertEqual(AgentIsland.reviveArgs(record("a"), live: ["a"], records: []), ["--revive", "a", "--as", "a-2", "--json"])
+        XCTAssertNil(AgentIsland.reviveArgs(record("--all"), live: [], records: [], noMessage: true), "#627 holds")
+        XCTAssertEqual(AgentIsland.reviveAllNoMessageArgs, ["--revive", "--all", "--no-message", "--json"])
+        XCTAssertEqual(AgentIsland.reviveAllArgs, ["--revive", "--all", "--json"])
+    }
+
+    /// 1.27.0 for the control dch and every live master ("" passes); a 1.26 master
+    /// does not block a 1.27 control dch. Refused: no row icon, no header choice; Resume stays.
+    @MainActor
+    func testReviveNoMessageGateNeeds127AndHidesItsControls() {
+        XCTAssertEqual(AgentIsland.reviveNoMessageMinimum, [1, 27, 0])
+        let store = AgentIslandStore(geometry: notched)
+        let now = Date().timeIntervalSince1970
+        store.now = { now }
+        store.history = [record("x", ended: now - 600), pinned("p", ended: now - 700), record("--all", ended: now - 800)]
+        store.historyTab = true
+        func drawn() -> [AgentIslandView.HistoryDrawn] { AgentIslandView(store: store).historyDrawn }
+        for (dch, masters, gate) in [
+            (Self.v126, [""], DchCommand.Gate.refused("needs dch 1.27.0")),
+            (Self.v126, ["1.26.0"], .refused("needs dch 1.27.0")),
+            (Self.v127, ["", "1.26.0"], .ok("/fake/dch")),
+            (Self.v127, ["1.27.0"], .ok("/fake/dch")),
+            (Self.v127, ["1.28.0"], .refused("needs dch 1.28.0")),
+        ] {
+            store.controlDch = dch
+            store.sessions = masters.enumerated().map { session("s\($0.offset)", version: $0.element) }
+            XCTAssertEqual(store.reviveNoMessageGate, gate, "\(dch.version) \(masters)")
+            let on = gate.isOK
+            XCTAssertEqual(drawn().map { $0.resumeNoMessage != nil }, [on, on, false], "drawn only with the gate; #627 never")
+            XCTAssertEqual(drawn().map(\.enabled), [store.resumeGate.isOK, store.resumeGate.isOK, false], "Resume unchanged")
+        }
+        store.controlDch = Self.v126
+        store.sessions = []
+        XCTAssertTrue(store.resumeGate.isOK)
+        XCTAssertNotNil(store.resumeAllButton, "1.26: Resume interrupted stays")
+        store.controlDch = nil
+        XCTAssertEqual(store.reviveNoMessageGate, .refused("needs dch 1.27.0"))
+    }
+
+    /// The drawn icon and the row's VoiceOver action run the row's own record with no message.
+    @MainActor
+    func testDrawnResumeNoMessageCarriesItsRecordAndIsAVoiceOverAction() {
+        let store = AgentIslandStore(geometry: notched)
+        store.controlDch = Self.v127
+        store.history = [record("x", ended: 3), record("y", ended: 2)]
+        store.historyTab = true
+        var quiet: [String] = [], plain: [String] = []
+        let view = AgentIslandView(store: store, onResume: { plain.append($0.name) },
+                                   onResumeNoMessage: { quiet.append($0.name) })
+        for r in view.historyDrawn { r.resumeNoMessage?() }
+        XCTAssertEqual(quiet, ["x", "y"])
+        XCTAssertEqual(plain, [], "never the plain Resume")
+        XCTAssertEqual(AgentIsland.resumeNoMessageLabel, "Resume (no message)")
+        XCTAssertEqual(AgentIsland.resumeAllNoMessageAccessibility(2), "Resume interrupted (2) without the message")
+    }
+
+    /// The JSON has no "resuming" phase: "starting", then an ok result; the row says
+    /// the message was skipped, under the 1.27.0 gate; a 1.26 control dch runs nothing.
+    @MainActor
+    func testRowResumeNoMessageRunsNoMessageArgsAndSaysSo() throws {
+        let f = FakeProc(), reads = Reads()
+        let x = record("x"), y = record("y")
+        reads.records = [x, y]
+        let c = controller(f, reads, dch: Self.v126)
+        c.store?.sessions = [session("live", version: "1.26.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store)
+        c.resume(x, noMessage: true)
+        c.resumeCrashed(noMessage: true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "1.26: refused")
+        XCTAssertEqual(f.args, [])
+        XCTAssertEqual(store.historyActions, [:])
+        c.controlDch = { Self.v127 }
+        c.refreshHistory()
+        settle(c) { store.controlDch == Self.v127 }
+        f.progress = #"{"name":"x","phase":"starting"}"# + "\n"
+        c.resume(x, noMessage: true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--revive", "x", "--no-message", "--json"]])
+        settle(c) { store.historyActions[x.key] == "Starting…" }
+        f.output = #"{"name":"x","result":"ok","reason":"","detail":"revived x; resume message not sent","session_id":"s"}"# + "\n"
+        f.release.signal()
+        settle(c) { store.historyActions[x.key] != "Starting…" }
+        XCTAssertEqual(store.historyActions[x.key], "Resumed without the message")
+    }
+
+    /// Resume interrupted's "(no message)": `--revive --all --no-message --json` per dir;
+    /// the row and the dir tally say the message was skipped.
+    @MainActor
+    func testResumeAllNoMessageRunsPerDirAndTallies() throws {
+        let f = FakeProc(), reads = Reads()
+        let x = record("x")
+        reads.records = [x]
+        let c = controller(f, reads, dch: Self.v127)
+        c.store?.sessions = [session("x", version: "1.27.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 1 }
+        let store = try XCTUnwrap(c.store)
+        f.progress = #"{"name":"x","phase":"starting"}"# + "\n"
+        c.resumeCrashed(noMessage: true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--revive", "--all", "--no-message", "--json"]])
+        settle(c) { store.historyActions[x.key] == "Starting…" }
+        f.output = #"{"name":"x","as":"x-2","result":"ok","reason":"","detail":"resume message not sent","session_id":""}"# + "\n"
+        f.release.signal()
+        let all = AgentSessionKey(dir: "/d", name: "")
+        settle(c) { store.actions[all] != AgentIsland.resumingText }
+        XCTAssertEqual(store.actions[all], "1 resumed without the message")
+        XCTAssertEqual(store.historyActions[x.key], "Resumed as x-2 without the message")
+    }
+
+    /// Texts: a no-message result never reads as dch-lite's "not typed"; failures name the verb.
+    func testNoMessageResultTexts() {
+        func row(_ out: String, status: Int32 = 0) -> String { AgentIsland.rowText(result(out, status: status), name: "a", .resumeNoMessage) }
+        XCTAssertEqual(row(#"{"name":"a","phase":"starting"}"# + "\n" + #"{"name":"a","result":"ok","reason":"","detail":"","session_id":""}"#),
+                       "Resumed without the message")
+        XCTAssertEqual(row(#"{"name":"a","result":"ok","reason":"no_screen","detail":"","session_id":""}"#), "Resumed without the message")
+        XCTAssertEqual(row("dch: unknown option --no-message", status: 2), "Resume (no message) failed: dch: unknown option --no-message")
+        XCTAssertEqual(row(#"{"name":"a","result":"failed","reason":"no_history","detail":"a: no history for this session","session_id":""}"#, status: 1),
+                       "no history for this session", "failure reasons unchanged")
+        XCTAssertEqual(AgentIsland.rowText(result("", status: 143, stopped: true), name: "a", .resumeNoMessage),
+                       "Resume (no message) cancelled: no answer in 5m")
+    }
+
+    /// Visual evidence at UI scale 0.7, 0.85 and 1.0: History rows with the no-message
+    /// icon beside the pin and X, and the header's "(no message)" next to Resume
+    /// interrupted; then the same under 1.26 (no icon, no choice: a different render). Offscreen only.
+    @MainActor
+    func testRendersResumeNoMessageOffscreen() throws {
+        let now = Date().timeIntervalSince1970
+        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        store.sessions = [session("prosper-main", version: "1.27.0")]
+        store.controlDch = Self.v127
+        var a = pinned("prosper-main", ended: now - 120)
+        a.alias = "Prosper"
+        a.cwd = NSHomeDirectory() + "/personal/prosper"
+        var c = record("ios", ended: now - 7200, end: "signal 9")
+        c.cwd = NSHomeDirectory() + "/personal/prosper-ios"
+        var e = record("review", ended: now - 600, end: "exit 1")
+        e.cwd = NSHomeDirectory() + "/personal/prosper"
+        store.history = [a, e, c]
+        store.historyActions[e.key] = "Resumed without the message"
+        store.historyTab = true
+        store.expanded = true
+        XCTAssertNotNil(store.resumeAllButton)
+        let out = tempDir(), saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        func pixels() throws -> Data {
+            let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
+            r.scale = 1
+            return try XCTUnwrap(try XCTUnwrap(r.cgImage).dataProvider?.data) as Data
+        }
+        for scale in [0.7, 0.85, 1.0] as [CGFloat] {
+            ThemeRuntime.scale = scale
+            try render(store, "agent-island-669-no-message-\(scale)", to: out)
+        }
+        let quiet = try pixels()
+        store.controlDch = Self.v126
+        store.sessions = [session("prosper-main", version: "1.26.0")]
+        XCTAssertNotEqual(quiet, try pixels(), "under 1.27.0: no icon, no header choice")
+        try render(store, "agent-island-669-gated-1.26", to: out)
+    }
 }

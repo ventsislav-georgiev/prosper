@@ -256,28 +256,32 @@ final class AgentIslandController {
 
     /// A History row's click. A name that is live now revives under the first
     /// free `<name>-N`. A busy row refuses (the runner never queues).
-    func resume(_ r: DchHistoryRecord) {
-        guard let store, case .ok(let dch) = store.resumeGate else { return }
+    /// #669: `noMessage` is the row's Resume (no message), on its own 1.27.0 gate.
+    func resume(_ r: DchHistoryRecord, noMessage: Bool = false) {
+        guard let store, case .ok(let dch) = noMessage ? store.reviveNoMessageGate : store.resumeGate else { return }
         let live = Set(store.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))
         let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
-        let key = r.key
-        run(key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records), running: AgentIsland.resumingText,
+        let key = r.key, verb: AgentIsland.Verb = noMessage ? .resumeNoMessage : .resume
+        run(key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage),
+            running: AgentIsland.resumingText,
             history: true, onLine: { [weak self] in self?.rowLine($0, key: key, history: true) }) { [weak self] res in
-            self?.store?.historyActions[key] = AgentIsland.rowText(res, name: key.name, .resume)
+            self?.store?.historyActions[key] = AgentIsland.rowText(res, name: key.name, verb)
             self?.refreshHistory()
         }
     }
 
     /// The Resume interrupted button, and nothing else: `--revive --all` in each dir
     /// with history. Never on launch, a timer or a reconnect — after a reboot
-    /// every session reads "vanished" and would qualify.
-    func resumeCrashed() {
-        guard let store, case .ok(let dch) = store.resumeGate else { return }
+    /// every session reads "vanished" and would qualify. #669: `noMessage` is its "(no message)".
+    func resumeCrashed(noMessage: Bool = false) {
+        guard let store, case .ok(let dch) = noMessage ? store.reviveNoMessageGate : store.resumeGate else { return }
+        let verb: AgentIsland.Verb = noMessage ? .resumeNoMessage : .resume
         for dir in Set(store.history.map(\.key.dir)).sorted() {
             let key = AgentSessionKey(dir: dir, name: "")
-            run(key, dch: dch, args: AgentIsland.reviveAllArgs, running: AgentIsland.resumingText,
-                onLine: { [weak self] in self?.dirLine($0, dir: dir, .resume) }) { [weak self] r in
-                self?.dirDone(dir, AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume"))
+            run(key, dch: dch, args: noMessage ? AgentIsland.reviveAllNoMessageArgs : AgentIsland.reviveAllArgs,
+                running: AgentIsland.resumingText,
+                onLine: { [weak self] in self?.dirLine($0, dir: dir, verb) }) { [weak self] r in
+                self?.dirDone(dir, AgentIsland.tally(r, verb, title: verb.rawValue, empty: "nothing to resume"))
                 self?.refreshHistory()
             }
         }
@@ -383,7 +387,7 @@ final class AgentIslandController {
     /// Restart all's summary only.
     private func dirLine(_ line: String, dir: String, _ verb: AgentIsland.Verb) {
         guard let store, let o = AgentIsland.jsonLine(line) else { return }
-        let key = AgentSessionKey(dir: dir, name: o.name), history = verb == .resume
+        let key = AgentSessionKey(dir: dir, name: o.name), history = verb == .resume || verb == .resumeNoMessage
         guard history ? store.history.contains(where: { $0.key == key }) : store.sessions.contains(where: { $0.key == key })
         else { return }
         let now = history ? store.historyActions[key] : store.actions[key]
@@ -644,6 +648,8 @@ final class AgentIslandController {
             onHistory: { [weak self] in self?.showHistory() },
             onResume: { [weak self] in self?.resume($0) },
             onResumeAll: { [weak self] in self?.resumeCrashed() },
+            onResumeNoMessage: { [weak self] in self?.resume($0, noMessage: true) },
+            onResumeAllNoMessage: { [weak self] in self?.resumeCrashed(noMessage: true) },
             onRestart: { [weak self] in self?.restart($0) },
             onControls: { [weak self] in self?.showControlsMenu() },
             onConfirmRestartAll: { [weak self] in self?.confirmRestartAll($0) },

@@ -1049,4 +1049,80 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(message(call(ops(f, binary: Self.v125), DchFrame.forget, ["name": "a"])), "a: pinned, unpin it first")
         XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs("a")!])
     }
+
+    // MARK: - #669: revive with "no_message"
+
+    private static let v126 = DchCommand.Binary(path: "/fake/dch", version: [1, 26, 9])
+    private static let v127 = DchCommand.Binary(path: "/fake/dch", version: [1, 27, 0])
+
+    /// "no_message": true reaches argv as --no-message, by name (with and without --as) and all;
+    /// false is a plain revive (an explicit "no", still a JSON bool).
+    func testReviveNoMessagePassesThroughAndFalseIsAPlainRevive() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("b", "1.26.0")])   // a 1.26 master does not block a 1.27 control dch
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"],
+                                  ["name": "b", "updated": Self.now - 90, "end": "signal 9"]])
+        f.out["--revive a --no-message --json"] = Self.ok("a")
+        f.out["--revive b --as b-2 --no-message --json"] = Self.ok("b", as: "b-2")
+        f.out["--revive a --json"] = Self.ok("a")
+        let o = ops(f, binary: Self.v127)
+        XCTAssertEqual(names(call(o, DchFrame.revive, ["name": "a", "no_message": true])), ["a"])
+        XCTAssertEqual(names(call(o, DchFrame.revive, ["name": "b", "no_message": true])), ["b-2"])
+        XCTAssertEqual(names(call(o, DchFrame.revive, ["all": true, "no_message": true])), [])
+        XCTAssertEqual(names(call(o, DchFrame.revive, ["name": "a", "no_message": false])), ["a"])
+        XCTAssertEqual(f.launchedArgs, [["--revive", "a", "--no-message", "--json"],
+                                        ["--revive", "b", "--as", "b-2", "--no-message", "--json"],
+                                        AgentIsland.reviveAllNoMessageArgs, ["--revive", "a", "--json"]])
+    }
+
+    /// QA #462 L2 strictness: "no_message" must be a JSON bool (1, "yes", null are malformed),
+    /// never alone, and an extra key beside it is refused. Nothing runs.
+    func testReviveNoMessageMustBeAJSONBoolWithNoExtraKey() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        let o = ops(f, binary: Self.v127)
+        for raw in [#"{"name":"a","no_message":1}"#, #"{"name":"a","no_message":"yes"}"#, #"{"name":"a","no_message":null}"#,
+                    #"{"all":true,"no_message":1}"#, #"{"no_message":true}"#, #"{"name":"a","no_message":true,"x":1}"#,
+                    #"{"all":true,"no_message":true,"name":"a"}"#, #"{"name":"a","no_message":[true]}"#] {
+            XCTAssertTrue(message(call(o, DchFrame.revive, raw: Data(raw.utf8))).hasPrefix("malformed revive request"), raw)
+        }
+        XCTAssertTrue(f.launches.isEmpty)
+        XCTAssertTrue(f.historyPaths.isEmpty, "refused before any read")
+    }
+
+    /// Under 1.27.0 (the control dch or a live master), "no_message" is refused in the existing
+    /// error shape, never run as a plain revive (that would type the message); plain Resume still runs.
+    func testReviveNoMessageUnder127IsRefusedNeverAPlainRevive() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        f.out["--revive a --json"] = Self.ok("a")
+        for binary in [Self.v126, Self.v1241, nil] {
+            let o = ops(f, binary: binary)
+            XCTAssertEqual(message(call(o, DchFrame.revive, ["name": "a", "no_message": true])), "Resume (no message) needs dch 1.27.0")
+            XCTAssertEqual(message(call(o, DchFrame.revive, ["all": true, "no_message": true])), "Resume (no message) needs dch 1.27.0")
+        }
+        f.ls["/d"] = Self.ls([("x", "1.28.0")])
+        XCTAssertEqual(message(call(ops(f, binary: Self.v127), DchFrame.revive, ["name": "a", "no_message": true])),
+                       "Resume (no message) needs dch 1.28.0")
+        XCTAssertTrue(f.launches.isEmpty, "no fallback to a plain revive")
+        XCTAssertTrue(f.historyPaths.isEmpty, "refused before the history read")
+        f.ls["/d"] = "[]"
+        XCTAssertEqual(names(call(ops(f, binary: Self.v126), DchFrame.revive, ["name": "a"])), ["a"], "plain Resume unchanged on 1.26")
+        XCTAssertEqual(f.launchedArgs, [["--revive", "a", "--json"]])
+    }
+
+    /// machineInfoResp's ops: "revive_no_message" only while the control dch passes 1.27.0.
+    func testMachineInfoAdvertisesReviveNoMessageOnlyFrom127() {
+        func ops(_ info: [String: Any]) -> [String] { info["ops"] as? [String] ?? [] }
+        XCTAssertEqual(ops(DchFrame.machineInfo(deviceID: "d", hostname: "h", wakeId: nil, reviveNoMessage: true)),
+                       DchFrame.ops + ["revive_no_message"])
+        XCTAssertFalse(ops(DchFrame.machineInfo(deviceID: "d", hostname: "h", wakeId: nil)).contains("revive_no_message"))
+        for (binary, on) in [(Self.v127, true), (DchCommand.Binary(path: "/b", version: [1, 28, 0]), true),
+                             (Self.v126, false), (nil, false)] as [(DchCommand.Binary?, Bool)] {
+            let (conn, queue, frames) = connection(self.ops(Fake(), binary: binary))
+            queue.sync { conn.handle(type: DchFrame.machineInfo, payload: Data()) }
+            let info = frames.lock.withLock { frames.all }.map(Self.decode).first { $0.type == DchFrame.machineInfoResp }
+            XCTAssertEqual(ops(info?.json as? [String: Any] ?? [:]).contains("revive_no_message"), on, "\(String(describing: binary))")
+        }
+    }
 }

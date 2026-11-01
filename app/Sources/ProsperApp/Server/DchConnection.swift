@@ -84,12 +84,13 @@ enum DchFrame {
     /// comes authenticated from the server. wakeId is nil until remote wake was set
     /// up while signed in. #617: "clipboard" joins ops only while clipboard sync is on.
     /// #618: "chat" only while the agent model is on disk. #619: "commands" only while
-    /// "Run commands from iPhone" is on.
+    /// "Run commands from iPhone" is on. #669: "revive_no_message" only while the control
+    /// dch passes 1.27.0 (historyResp is a bare array, so the capability lives here).
     static func machineInfo(deviceID: String, hostname: String, wakeId: String?, clipboard: Bool = false,
-                            chat: Bool = false, commands: Bool = false) -> [String: Any] {
+                            chat: Bool = false, commands: Bool = false, reviveNoMessage: Bool = false) -> [String: Any] {
         var info: [String: Any] = ["device_id": deviceID, "hostname": hostname,
-                                   "ops": ops + (clipboard ? ["clipboard"] : []) + (chat ? ["chat"] : [])
-                                       + (commands ? ["commands"] : [])]
+                                   "ops": ops + (reviveNoMessage ? ["revive_no_message"] : []) + (clipboard ? ["clipboard"] : [])
+                                       + (chat ? ["chat"] : []) + (commands ? ["commands"] : [])]
         if let wakeId { info["wakeId"] = wakeId }
         return info
     }
@@ -330,7 +331,8 @@ final class DchConnection: @unchecked Sendable {
             send(DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
                 deviceID: SupporterStore.deviceID(), hostname: SupporterStore.deviceName(),
                 wakeId: LiveExtensionHostServices.currentWakeId, clipboard: clipboard.enabled(), chat: chat.available,
-                commands: commands.enabled())))
+                commands: commands.enabled(),
+                reviveNoMessage: DchCommand.gate(ops.binary(), masters: [], minimum: AgentIsland.reviveNoMessageMinimum).isOK)))
         case DchFrame.models, DchFrame.chat:
             // #618: one request per connection, as clipboardUpload; a chat's deltas come
             // back in order on `queue`, then the one final reply.
@@ -737,15 +739,25 @@ struct DchControlOps: Sendable {
 
     /// The island's Resume (a record by name, `--as` a free name when it is live
     /// again) or Resume interrupted (`--revive --all` in each dir with history).
+    /// #669: an optional JSON-bool "no_message" beside either (false is a plain revive);
+    /// true is gated on 1.27.0 and refused there, never run as a plain revive (that types the message).
     private func revive(_ o: [String: Any], _ reply: @escaping Reply) {
-        guard let req = Self.request(o, key: "name", allowAll: true) else {
+        var o = o
+        let flag = o.removeValue(forKey: "no_message")
+        let bool = flag as? NSNumber
+        guard flag == nil || bool.map({ CFGetTypeID($0) == CFBooleanGetTypeID() }) == true,
+              let req = Self.request(o, key: "name", allowAll: true) else {
             return reply(Self.error("malformed revive request: send {\"name\": \"…\"} or {\"all\": true}"))
         }
-        guard case let (path, live)? = gated("Resume", minimum: AgentIsland.controlMinimum, reply) else { return }
+        let noMessage = bool?.boolValue == true
+        guard case let (path, live)? = noMessage
+            ? gated(AgentIsland.resumeNoMessageLabel, minimum: AgentIsland.reviveNoMessageMinimum, reply)
+            : gated("Resume", minimum: AgentIsland.controlMinimum, reply) else { return }
         let history = records(path)
         switch req {
         case .all:
-            let jobs: [(AgentSessionKey, [String]?)] = Set(history.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.reviveAllArgs) }
+            let args = noMessage ? AgentIsland.reviveAllNoMessageArgs : AgentIsland.reviveAllArgs
+            let jobs: [(AgentSessionKey, [String]?)] = Set(history.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), args) }
             run(jobs, path: path, bound: nil, reply) { Self.answer(all: Self.merged($0), .resume) }
         case .names(let names):
             let name = names[0], r: DchHistoryRecord
@@ -755,7 +767,8 @@ struct DchControlOps: Sendable {
             }
             let liveNames = Set(live.filter { $0.key.dir == r.key.dir }.map(\.name))
             let others = Set(history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
-            run([(r.key, AgentIsland.reviveArgs(r, live: liveNames, records: others))], path: path, bound: nil, reply) {
+            run([(r.key, AgentIsland.reviveArgs(r, live: liveNames, records: others, noMessage: noMessage))],
+                path: path, bound: nil, reply) {
                 Self.answer(named: [(name, $0[0])], .resume)
             }
         }
