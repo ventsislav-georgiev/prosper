@@ -199,6 +199,7 @@ final class DchClipboardFramesTests: XCTestCase {
         for on in [false, true] {
             let r = rig(on: on)
             handle(r, DchFrame.machineInfo, raw: Data())
+            XCTAssertTrue(spin { !all(r).isEmpty }, "machineInfoResp")   // #671: sent after an off-queue probe
             let ops = Self.object(all(r).first)["ops"] as? [String] ?? []
             XCTAssertEqual(ops.contains("clipboard"), on)
         }

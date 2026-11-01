@@ -175,7 +175,7 @@ final class DchCommandsTests: XCTestCase {
                        [0x28, 0x29, 0x2a, 0x2b])
     }
 
-    func testHandshakeAdvertisesCommandsOnlyWhenOn() throws {
+    func testHandshakeAdvertisesCommandsOnlyWhenOn() async throws {
         func ops(_ info: [String: Any]) -> [String] { info["ops"] as? [String] ?? [] }
         XCTAssertTrue(ops(DchFrame.machineInfo(deviceID: "d", hostname: "h", wakeId: nil, commands: true)).contains("commands"))
         XCTAssertFalse(ops(DchFrame.machineInfo(deviceID: "d", hostname: "h", wakeId: nil)).contains("commands"))
@@ -183,6 +183,7 @@ final class DchCommandsTests: XCTestCase {
         for on in [true, false] {
             let rig = connection(DchCommandOps(enabled: { on }, registry: { nil }))
             rig.queue.sync { rig.conn.ingest(DchFrame.encode(DchFrame.machineInfo, [])) }
+            await waitUntil("machineInfoResp") { rig.frames.snapshot.contains { Self.type($0) == DchFrame.machineInfoResp } }   // #671
             let info = rig.frames.snapshot.first { Self.type($0) == DchFrame.machineInfoResp }
             XCTAssertEqual(ops(Self.object(info)).contains("commands"), on, "toggle \(on)")
         }

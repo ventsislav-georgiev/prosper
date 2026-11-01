@@ -328,11 +328,19 @@ final class DchConnection: @unchecked Sendable {
             // wake the right Mac later regardless of which address was dialed. The
             // wake config itself (enabled/cadence) is fetched authenticated from the
             // server; only non-secret identity goes over the tailnet.
-            send(DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
-                deviceID: SupporterStore.deviceID(), hostname: SupporterStore.deviceName(),
-                wakeId: LiveExtensionHostServices.currentWakeId, clipboard: clipboard.enabled(), chat: chat.available,
-                commands: commands.enabled(),
-                reviveNoMessage: DchCommand.gate(ops.binary(), masters: [], minimum: AgentIsland.reviveNoMessageMinimum).isOK)))
+            // #671: the revive_no_message bit probes `dch --version` (4 s per hung candidate),
+            // so it runs off this queue as #591's verbs do; the rest is read here, as before.
+            // The phone sends 0x08 alone on its own connection, so the reply may trail others.
+            let deviceID = SupporterStore.deviceID(), hostname = SupporterStore.deviceName()
+            let wakeId = LiveExtensionHostServices.currentWakeId, clip = clipboard.enabled()
+            let chat = chat.available, commands = commands.enabled(), ops = ops
+            DispatchQueue.global(qos: .userInitiated).async {
+                let revive = DchCommand.gate(ops.binary(), masters: [], minimum: AgentIsland.reviveNoMessageMinimum).isOK
+                let frame = DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
+                    deviceID: deviceID, hostname: hostname, wakeId: wakeId, clipboard: clip, chat: chat,
+                    commands: commands, reviveNoMessage: revive))
+                self.queue.async { if !self.closed { self.send(frame) } }
+            }
         case DchFrame.models, DchFrame.chat:
             // #618: one request per connection, as clipboardUpload; a chat's deltas come
             // back in order on `queue`, then the one final reply.

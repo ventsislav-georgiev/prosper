@@ -208,6 +208,7 @@ final class DchChatTests: XCTestCase {
             await waitUntil("modelsResp") { !finals(r).isEmpty }
             XCTAssertEqual((finals(r).first.flatMap(Self.json) as? [Any])?.count, onDisk ? 1 : 0)
             ingest(r, DchFrame.encode(DchFrame.machineInfo, []))
+            await waitUntil("machineInfoResp") { all(r).last?.first == DchFrame.machineInfoResp }   // #671: off-queue probe
             let ops = Self.object(all(r).last)["ops"] as? [String] ?? []
             XCTAssertEqual(ops.contains("chat"), onDisk)
         }

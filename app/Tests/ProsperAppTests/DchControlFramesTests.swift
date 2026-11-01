@@ -1121,8 +1121,56 @@ final class DchControlFramesTests: XCTestCase {
                              (Self.v126, false), (nil, false)] as [(DchCommand.Binary?, Bool)] {
             let (conn, queue, frames) = connection(self.ops(Fake(), binary: binary))
             queue.sync { conn.handle(type: DchFrame.machineInfo, payload: Data()) }
-            let info = frames.lock.withLock { frames.all }.map(Self.decode).first { $0.type == DchFrame.machineInfoResp }
-            XCTAssertEqual(ops(info?.json as? [String: Any] ?? [:]).contains("revive_no_message"), on, "\(String(describing: binary))")
+            let info = machineInfoResp(frames)
+            XCTAssertEqual(ops(info ?? [:]).contains("revive_no_message"), on, "\(String(describing: binary))")
         }
+    }
+
+    /// The machineInfoResp among `frames`, waiting up to 5 s (#671: it is sent after an off-queue probe).
+    private func machineInfoResp(_ frames: Frames, timeout: TimeInterval = 5) -> [String: Any]? {
+        let end = Date().addingTimeInterval(timeout)
+        repeat {
+            if let f = frames.lock.withLock({ frames.all }).map(Self.decode).first(where: { $0.type == DchFrame.machineInfoResp }) {
+                return f.json as? [String: Any]
+            }
+            usleep(5_000)
+        } while Date() < end
+        return nil
+    }
+
+    /// #671: a control-dch probe that hangs (a `dch --version` bounded at 4 s per candidate)
+    /// never holds the server queue, which every connection and attached pty share. The
+    /// reply still carries the probe's bit once it returns.
+    func testMachineInfoProbeDoesNotHoldTheQueue() {
+        let gate = DispatchSemaphore(value: 0), probing = expectation(description: "probe started")
+        var o = ops(Fake())
+        o.binary = { probing.fulfill(); gate.wait(); return Self.v127 }
+        let (conn, queue, frames) = connection(o)
+        queue.async { conn.handle(type: DchFrame.machineInfo, payload: Data()) }
+        wait(for: [probing], timeout: 5)
+        let marker = DispatchSemaphore(value: 0)
+        queue.async { marker.signal() }   // a marker behind the handshake
+        let held = marker.wait(timeout: .now() + 0.1) == .timedOut
+        XCTAssertFalse(held, "the probe held the queue")
+        XCTAssertNil(machineInfoResp(frames, timeout: 0), "no reply before the probe returns")
+        gate.signal()
+        if held { marker.wait() }
+        XCTAssertTrue((machineInfoResp(frames)?["ops"] as? [String] ?? []).contains("revive_no_message"))
+    }
+
+    /// #671: a connection that closed while its probe ran sends nothing.
+    func testMachineInfoSendsNothingAfterClose() {
+        let gate = DispatchSemaphore(value: 0), probing = expectation(description: "probe started"),
+            probed = expectation(description: "probe returned")
+        var o = ops(Fake())
+        o.binary = { probing.fulfill(); gate.wait(); defer { probed.fulfill() }; return Self.v127 }
+        let (conn, queue, frames) = connection(o)
+        queue.async { conn.handle(type: DchFrame.machineInfo, payload: Data()) }
+        wait(for: [probing], timeout: 5)
+        queue.async { conn.close() }   // async: queued ahead of the reply hop, never waiting on the probe
+        gate.signal()
+        wait(for: [probed], timeout: 5)
+        XCTAssertNil(machineInfoResp(frames, timeout: 0.3))
+        XCTAssertTrue(frames.lock.withLock { frames.all }.isEmpty)
     }
 }
