@@ -1150,7 +1150,7 @@ final class DchControlFramesTests: XCTestCase {
         wait(for: [probing], timeout: 5)
         let marker = DispatchSemaphore(value: 0)
         queue.async { marker.signal() }   // a marker behind the handshake
-        let held = marker.wait(timeout: .now() + 0.1) == .timedOut
+        let held = marker.wait(timeout: .now() + 2) == .timedOut   // a held queue waits for gate.signal()
         XCTAssertFalse(held, "the probe held the queue")
         XCTAssertNil(machineInfoResp(frames, timeout: 0), "no reply before the probe returns")
         gate.signal()
