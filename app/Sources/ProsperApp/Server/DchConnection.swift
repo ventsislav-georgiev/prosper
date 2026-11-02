@@ -788,7 +788,7 @@ struct DchControlOps: Sendable {
             let others = Set(history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
             run([(r.id, AgentIsland.reviveArgs(r, live: liveNames, records: others, noMessage: noMessage))],
                 path: path, bound: nil, reply) {
-                Self.answer(named: [(name, $0[0])], .resume)
+                Self.answer(named: [(name, Self.renamed($0[0], r.target, to: name))], .resume)   // #716 L-3
             }
         }
     }
@@ -879,7 +879,8 @@ struct DchControlOps: Sendable {
     }
 
     /// #714: dch names a pin's result line, and a not_found, after its argument (a file
-    /// here); the reply reads them under the requested name.
+    /// here); the reply reads them under the requested name. #716: a revive's
+    /// no_history too, on the phone and the island.
     static func renamed(_ r: DchActionResult, _ arg: String, to name: String) -> DchActionResult {
         var r = r
         r.json = r.json.map { o in

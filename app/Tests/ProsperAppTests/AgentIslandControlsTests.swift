@@ -3248,10 +3248,12 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { reads.count == 10 }
     }
 
-    /// Resume interrupted's line names only "work": it shows on the name's newest
-    /// record's row, never on every row of the name.
+    /// Resume interrupted's line names only "work": it shows on the row of the record
+    /// dch's --all takes (#716 L-1: rv_all_takes skips the stopped own record and
+    /// revives the crashed aside one), the newest such; with none, the name's newest.
+    /// Never on every row of the name.
     @MainActor
-    func testResumeAllLineLandsOnTheNamesNewestRowOnly() throws {
+    func testResumeAllLineLandsOnTheRecordDchRevives() throws {
         let f = FakeProc(), reads = Reads()
         let rows = Self.asideRecords
         reads.records = rows
@@ -3260,19 +3262,34 @@ final class AgentIslandControlsTests: XCTestCase {
         c.setExpanded(true)
         settle(c) { c.store?.history.count == 3 }
         let store = try XCTUnwrap(c.store)
+        store.now = { 1_762_003_060 }   // the crashed aside (ended 1762000000, ran 10000 s) is --all's
+        f.progress = #"{"name":"work","phase":"starting"}"# + "\n"
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        settle(c) { store.historyActions[rows[1].id] == "Starting…" }
+        XCTAssertEqual(store.historyActions, [rows[1].id: "Starting…"], "the crashed aside's row, not the stopped own one")
+        f.progress = ""
+        f.output = #"{"name":"work","as":"work","result":"ok","reason":"","detail":"","session_id":"mid"}"# + "\n"
+        f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
+        XCTAssertEqual(store.historyActions[rows[1].id], "Resumed")
+        XCTAssertNil(store.historyActions[rows[0].id])
+        f.output = ""
+        // No record of the name is --all's by the Mac's clock: the name's newest row.
+        store.now = { 1_762_003_060 + 4 * 86_400 }
+        store.historyActions = [:]
         f.progress = #"{"name":"work","phase":"starting"}"# + "\n"
         c.resumeCrashed()
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
         settle(c) { store.historyActions[rows[0].id] == "Starting…" }
-        XCTAssertEqual(store.historyActions[rows[0].id], "Starting…")
-        XCTAssertNil(store.historyActions[rows[1].id])
-        XCTAssertNil(store.historyActions[rows[2].id])
+        XCTAssertEqual(store.historyActions, [rows[0].id: "Starting…"])
         f.release.signal()
         settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
-        // work is live again: History holds only its aside records; the line lands on the newest.
+        // work is live again: History holds only its aside records; the line lands on the one --all takes.
         reads.records = Array(rows.dropFirst())
         c.refreshHistory()
         settle(c) { store.history.count == 2 }
+        store.now = { 1_762_003_060 }
         store.historyActions = [:]
         c.resumeCrashed()
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
@@ -3284,6 +3301,7 @@ final class AgentIslandControlsTests: XCTestCase {
 
     /// A pin or X on the name's own row says it covers the name's older records too
     /// (dch 1.28.0 matches them all by the bare name); an aside row's says nothing more.
+    /// #716 L-2: the X's count leaves out a pinned aside record (dch keeps it).
     @MainActor
     func testOwnRowsPinAndXSayTheyCoverOlderRecords() throws {
         let store = AgentIslandStore(geometry: notched)
@@ -3293,13 +3311,16 @@ final class AgentIslandControlsTests: XCTestCase {
         let drawn = AgentIslandView(store: store).historyDrawn
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: drawn.map { ($0.id.name, $0.older) }),
                        ["work": 2, "work.1762000000": 0, "work.1761000000": 0])
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: drawn.map { ($0.id.name, $0.olderUnpinned) }),
+                       ["work": 1, "work.1762000000": 0, "work.1761000000": 0])
         func row(_ file: String) throws -> AgentIslandHistoryRow {
             let d = try XCTUnwrap(drawn.first { $0.id.name == file })
             return AgentIslandHistoryRow(record: d.record, now: 0, status: nil, enabled: true, action: {}, pin: {}, remove: {},
-                                         older: d.older)
+                                         older: d.older, olderUnpinned: d.olderUnpinned)
         }
         XCTAssertEqual(try row("work").pinLabel, "Pin (also 2 older records of this name)")
-        XCTAssertEqual(try row("work").removeLabel, "Remove from History (also 2 older records of this name)")
+        XCTAssertEqual(try row("work").removeLabel, "Remove from History (also 1 older record of this name)",
+                       "the pinned work.1762000000 stays")
         XCTAssertEqual(try row("work.1762000000").pinLabel, "Unpin")
         XCTAssertEqual(try row("work.1761000000").removeLabel, "Remove from History")
         XCTAssertEqual(AgentIsland.editLabel("Unpin", older: 1), "Unpin (also 1 older record of this name)")
@@ -3364,7 +3385,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(old[0].editTarget(exact: true), "work", "no file: the name")
     }
 
-    /// The "(also N older …)" note shows only under 1.28.1 (the bare name covers
+    /// The "(also N older …)" note shows only below 1.28.1 (the bare name covers
     /// them); from 1.28.1 every edit is one record's, so no row has it.
     @MainActor
     func testOlderRecordsNoteOnlyBelow1281() {
@@ -3422,5 +3443,74 @@ final class AgentIslandControlsTests: XCTestCase {
             XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], "Pin work failed: Permission denied", version)
             XCTAssertEqual(f.args.count, 7)
         }
+    }
+
+    // MARK: - #716: QA #530 follow-ups
+
+    /// L-2: below 1.28.1 the own row's X forgets the name's records by the bare name;
+    /// dch refuses a pinned aside one (its line carries that record's Claude id) and
+    /// exits 1. The row went: no failure on the dir line. A pinned refusal of the
+    /// row's own record (pinned since the read) still reads as one.
+    @MainActor
+    func testOwnRowsXIsNoFailureWhenDchKeepsAPinnedAside() throws {
+        let f = FakeProc(), reads = Reads()
+        let rows = Self.asideRecords
+        reads.records = rows
+        let c = controller(f, reads, dch: Self.v125)
+        c.store?.sessions = [session("b", version: "1.25.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 3 }
+        let store = try XCTUnwrap(c.store)
+        let dirKey = AgentSessionKey(dir: "/d", name: "")
+        func line(_ result: String, _ reason: String, _ detail: String, _ sid: String) -> String {
+            #"{"name":"work","result":"\#(result)","reason":"\#(reason)","detail":"\#(detail)","session_id":"\#(sid)"}"#
+        }
+        func remove(_ lines: [String], line: UInt = #line) {
+            let before = reads.count
+            f.output = lines.joined(separator: "\n") + "\n"
+            f.status = 1
+            c.remove(rows[0])
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, line: line)
+            XCTAssertEqual(f.args.last, ["--forget", "work", "--json"], line: line)
+            f.release.signal()
+            settle(c) { reads.count == before + 1 }
+        }
+        // dch 1.28.0 (dch.c:7126-7159): one line per record of the name, newest first.
+        remove([line("ok", "", "forgotten", "new"), line("failed", "pinned", "pinned (-f forgets it anyway)", "mid"),
+                line("ok", "", "forgotten", "old")])
+        XCTAssertNil(store.actions[dirKey], "the pinned aside is not this row")
+        remove([line("failed", "pinned", "pinned (-f forgets it anyway)", "new"),
+                line("failed", "pinned", "pinned (-f forgets it anyway)", "mid"), line("ok", "", "forgotten", "old")])
+        XCTAssertEqual(store.actions[dirKey], "Remove work failed: \(AgentIsland.pinnedRefusal)", "its own record refused")
+        store.actions[dirKey] = nil
+        remove([line("ok", "", "forgotten", "new"), line("failed", "pinned", "pinned (-f forgets it anyway)", "mid"),
+                line("failed", "io_error", "Permission denied", "old")])
+        XCTAssertEqual(store.actions[dirKey], "Remove work failed: Permission denied", "another failure still reads")
+        store.actions[dirKey] = nil
+        remove([line("failed", "pinned", "pinned (-f forgets it anyway)", "")])
+        XCTAssertEqual(store.actions[dirKey], "Remove work failed: \(AgentIsland.pinnedRefusal)", "no id: never taken for another record's")
+    }
+
+    /// L-3: a revive that matches nothing names its line after the argument (dch
+    /// 1.28.0:6973-6977), the aside row's file: the row reads dch's detail.
+    @MainActor
+    func testAsideRowsNoHistoryReadsDchsDetail() throws {
+        let f = FakeProc(), reads = Reads()
+        let rows = Self.asideRecords
+        reads.records = rows
+        let c = controller(f, reads, dch: Self.v125)
+        c.store?.sessions = [session("b", version: "1.25.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 3 }
+        let store = try XCTUnwrap(c.store)
+        f.output = #"{"name":"work.1761000000","as":"work.1761000000","result":"failed","reason":"no_history","#
+            + #""detail":"no history for this session","session_id":""}"# + "\n"
+        f.status = 1
+        c.resume(rows[2])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, ["--revive", "work.1761000000", "--json"])
+        f.release.signal()
+        settle(c) { store.historyActions[rows[2].id] != AgentIsland.resumingText && reads.count == 2 }
+        XCTAssertEqual(store.historyActions[rows[2].id], "no history for this session")
     }
 }

@@ -401,15 +401,20 @@ extension AgentIsland {
 
     /// A pin, unpin or remove's line for its dir's status; nil when it worked.
     /// dch's detail for a failed result (io_error's is the OS error), else the exit.
-    static func editFailure(_ r: DchActionResult, name: String, _ verb: Verb) -> String? {
+    /// #716 L-2: `sid`, the row's Claude id. Below 1.28.1 an X by the bare name
+    /// forgets every record of the name, and dch refuses a pinned aside one, whose
+    /// line carries that record's id: not this row's failure.
+    static func editFailure(_ r: DchActionResult, name: String, _ verb: Verb, sid: String? = nil) -> String? {
         let what = "\(verb.rawValue) \(name)"
         if r.stopped { return "\(what) cancelled: no answer in \(verb.minutes)m" }
-        if let f = r.json.first(where: { $0.isFinal && $0.failed }) {
+        let failed = r.json.filter { $0.isFinal && $0.failed }
+        let another = { (o: DchJSONLine) in o.reason == "pinned" && sid != nil && !(o.sessionID ?? "").isEmpty && o.sessionID != sid }
+        if let f = failed.first(where: { !another($0) }) {
             if f.reason == "pinned" { return "\(what) failed: \(pinnedRefusal)" }
             let d = f.detail ?? ""
             return "\(what) failed: \(d.isEmpty ? f.reason ?? "" : d)"
         }
-        return r.status == 0 ? nil : "\(what) \(failedText(r))"
+        return r.status == 0 || !failed.isEmpty ? nil : "\(what) \(failedText(r))"
     }
 
     // MARK: - Stop (#580)

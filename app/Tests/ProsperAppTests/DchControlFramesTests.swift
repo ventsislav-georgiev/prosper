@@ -957,6 +957,18 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "a", "pin": true])), "a: Permission denied")
     }
 
+    /// #716 L-3: the phone's revive of an aside record that matches nothing: dch names
+    /// the line after the file (1.28.0:6973-6977); the reply carries dch's detail.
+    func testAsideRecordsNoHistoryReachesThePhoneInDchsWords() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "stopped", "file": "a.1762000000"]])
+        f.out["--revive a.1762000000 --json"] = Self.line("a.1762000000", "failed", reason: "no_history",
+                                                          detail: "no history for this session")
+        f.status = 1
+        XCTAssertEqual(message(call(ops(f, binary: Self.v125), DchFrame.revive, ["name": "a"])), "a: no history for this session")
+        XCTAssertEqual(f.launchedArgs, [["--revive", "a.1762000000", "--json"]])
+    }
+
     /// One `--forget --all --json` per History dir; the reply sums the dirs' results
     /// (dch's tally line is not a result and adds nothing); a record's failure is
     /// counted, an unexplained failure is an error.

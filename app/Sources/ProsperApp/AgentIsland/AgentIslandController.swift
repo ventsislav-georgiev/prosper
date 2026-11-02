@@ -266,7 +266,8 @@ final class AgentIslandController {
         run(key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage),
             running: AgentIsland.resumingText,
             history: true, onLine: { [weak self] in self?.rowLine($0, key: key, name: name, history: true) }) { [weak self] res in
-            self?.store?.historyActions[key] = AgentIsland.rowText(res, name: name, verb)
+            // #716 L-3: dch names a no_history line after the argument (an aside file).
+            self?.store?.historyActions[key] = AgentIsland.rowText(DchControlOps.renamed(res, r.target, to: name), name: name, verb)
             self?.refreshHistory()
         }
     }
@@ -308,9 +309,9 @@ final class AgentIslandController {
     /// failure goes on the dir's status line, then History is re-read.
     private func edit(_ r: DchHistoryRecord, args: [String]?, _ verb: AgentIsland.Verb) {
         guard let store, case .ok(let dch) = store.historyEditGate else { return }
-        let dir = r.key.dir, name = r.name
+        let dir = r.key.dir, name = r.name, sid = r.agent?.sessionID ?? ""
         run(r.id, dch: dch, args: args, running: nil) { [weak self] res in
-            if let failed = AgentIsland.editFailure(res, name: name, verb) {
+            if let failed = AgentIsland.editFailure(res, name: name, verb, sid: sid) {
                 self?.store?.actions[AgentSessionKey(dir: dir, name: "")] = failed
             }
             self?.refreshHistory()
@@ -394,8 +395,10 @@ final class AgentIslandController {
         let history = verb == .resume || verb == .resumeNoMessage
         var key = AgentSessionKey(dir: dir, name: o.name)
         if history {
-            // #714: a line names no aside file: the name's newest record's row.
-            guard let r = store.history.first(where: { $0.key == key }) else { return }
+            // #714: a line names no aside file. #716 L-1: the row of the name's newest
+            // record --all takes (dch skips a stopped one), else the name's newest.
+            let named = store.history.filter { $0.key == key }, t = store.now()
+            guard let r = named.first(where: { AgentIsland.reviveAllTakes($0, now: t) }) ?? named.first else { return }
             key = r.id
         } else {
             guard store.sessions.contains(where: { $0.key == key }) else { return }

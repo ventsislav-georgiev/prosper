@@ -547,7 +547,8 @@ struct AgentIslandView: View {
                     AgentIslandHistoryRow(record: r.record, now: ctx.date.timeIntervalSince1970,
                                           status: r.status, enabled: r.enabled,
                                           show: store.details, action: r.resume, pin: r.pin, remove: r.remove,
-                                          resumeNoMessage: r.resumeNoMessage, older: r.older)
+                                          resumeNoMessage: r.resumeNoMessage, older: r.older,
+                                          olderUnpinned: r.olderUnpinned)
                 }
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
@@ -679,6 +680,8 @@ struct AgentIslandView: View {
         var resumeNoMessage: (() -> Void)? = nil
         /// #714: a name's own record: its aside records, which its pin and X act on too.
         var older = 0
+        /// #716 L-2: of those, the unpinned ones, the ones its X removes (dch keeps a pinned one).
+        var olderUnpinned = 0
         /// The row's Resume status, by its record's id (never a namesake's).
         var status: String? = nil
         var id: AgentSessionKey { record.id }
@@ -691,11 +694,11 @@ struct AgentIslandView: View {
             // #627: a name dch would read as a flag: no Resume, pin or X.
             let ok = AgentIsland.passable(r.name)
             // #714: under 1.28.0 the own row's pin and X hit its aside records too; 1.28.1 acts per record.
-            let older = exact || r.isAside ? 0 : store.history.filter { $0.key == r.key && $0.isAside }.count
+            let asides = exact || r.isAside ? [] : store.history.filter { $0.key == r.key && $0.isAside }
             return HistoryDrawn(record: r, enabled: on && ok, resume: { onResume(r) }, pin: edits && ok ? { onPin(r) } : nil,
                                 remove: edits && ok && !r.pinned ? { onRemove(r) } : nil,
-                                resumeNoMessage: quiet && ok ? { onResumeNoMessage(r) } : nil, older: older,
-                                status: store.historyActions[r.id])
+                                resumeNoMessage: quiet && ok ? { onResumeNoMessage(r) } : nil, older: asides.count,
+                                olderUnpinned: asides.filter { !$0.pinned }.count, status: store.historyActions[r.id])
         }
     }
 
@@ -826,10 +829,12 @@ struct AgentIslandHistoryRow: View {
     var resumeNoMessage: (() -> Void)? = nil
     /// #714: the aside records of this name its pin and X act on too (0 on an aside row).
     var older = 0
+    /// #716 L-2: the unpinned ones of `older`, the ones its X removes.
+    var olderUnpinned = 0
     @State private var hover = false
 
     var pinLabel: String { AgentIsland.editLabel(record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel, older: older) }
-    var removeLabel: String { AgentIsland.editLabel(AgentIsland.removeLabel, older: older) }
+    var removeLabel: String { AgentIsland.editLabel(AgentIsland.removeLabel, older: olderUnpinned) }
 
     var body: some View {
         let age = record.lastSeen > 0 ? AgentIsland.age(now - record.lastSeen) : ""
