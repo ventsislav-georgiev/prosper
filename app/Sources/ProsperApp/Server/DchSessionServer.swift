@@ -76,9 +76,30 @@ final class DchSessionServer: @unchecked Sendable {
     static let port: UInt16 = 8771
 
     private let log = Logger(subsystem: "com.prosper.app", category: "DchServer")
-    private let queue = DispatchQueue(label: "com.prosper.dchserver")
+    /// Connections, keep-awake and everything they touch. It runs dch forks with no
+    /// timeout, so main must never wait on it.
+    let queue = DispatchQueue(label: "com.prosper.dchserver")
+    /// Owns `listener`, `wanted`, `retry` and `retryAttempt`, and runs the listener's
+    /// handlers. Only short work runs here, so start()/stop()/isRunning may sync on it
+    /// from main (QA #532 F1: syncing on `queue` froze main behind a hung dch call).
+    let lifecycle = DispatchQueue(label: "com.prosper.dchserver.listener")
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: DchConnection] = [:]
+
+    // Bind recovery (#715). `wanted` = start() was asked and stop() was not; while it
+    // holds, a failed bind (EADDRINUSE) or a missing Tailscale address retries after
+    // `retryDelay`. All touched only on `lifecycle`.
+    // ponytail: timer backoff only; a network-path-change retry would bring the server
+    // up sooner when Tailscale connects, add it if the 60 s cap proves too slow.
+    private var wanted = false
+    private(set) var retry: DispatchWorkItem?
+    private var retryAttempt = 0
+
+    // Seams (tests bind loopback on their own port and never sweep real dch clients).
+    private let bindHost: @Sendable () -> String?
+    private let bindPort: UInt16
+    private let retryBase: Double
+    private let onReady: @Sendable () -> Void
 
     // Keep-awake: while any client is attached — OR a detached session is still
     // producing output — the Mac must not sleep mid-command. A single repeating
@@ -94,21 +115,71 @@ final class DchSessionServer: @unchecked Sendable {
     /// ticks as idle. Each tick re-evaluates AND refreshes the TTL.
     private static let tickSeconds = KeepAwakePolicy.activeWindowSeconds
 
-    private init() {}
+    init(bindHost: @escaping @Sendable () -> String? = { DchSessionServer.tailscaleIPv4() },
+         port: UInt16 = DchSessionServer.port,
+         retryBase: Double = 2,
+         // Detach any dch client left behind by a previous Prosper (crash / force quit).
+         // Those clients still hold a pty and keep reporting ITS window size to the
+         // master, which narrows the session for whoever attaches next.
+         onReady: @escaping @Sendable () -> Void = { DchCommand.sweepOrphanedClients() }) {
+        self.bindHost = bindHost
+        self.bindPort = port
+        self.retryBase = retryBase
+        self.onReady = onReady
+    }
 
-    var isRunning: Bool { listener != nil }
+    /// Never call from `lifecycle`.
+    var isRunning: Bool { lifecycle.sync { listener != nil } }
+
+    /// 2, 4, 8 … seconds (for base 2), capped at 60.
+    static func retryDelay(attempt: Int, base: Double = 2) -> Double {
+        min(base * Double(1 << min(attempt, 6)), 60)
+    }
 
     // MARK: - Lifecycle
 
     /// Bind to the Tailscale interface and accept connections. Idempotent. Throws
     /// `ServerError.noTailscale` when no Tailscale address exists — we never fall
-    /// back to a wider bind.
+    /// back to a wider bind. Either failure (no address, failed bind) retries with
+    /// backoff until `stop()`. Waits up to 5 s for the first bind result.
     func start() throws {
-        if listener != nil { return }
-        guard let tsIP = Self.tailscaleIPv4() else {
-            log.error("dch server: no Tailscale address — refusing to bind")
-            throw ServerError.noTailscale
+        let sem = DispatchSemaphore(value: 0)
+        let bound: Bool = try lifecycle.sync {
+            wanted = true
+            if listener != nil { return false }
+            retry?.cancel(); retry = nil
+            retryAttempt = 0
+            try bind(signal: sem)
+            return true
         }
+        if bound { _ = sem.wait(timeout: .now() + 5) }
+    }
+
+    /// On `lifecycle`. Creates and starts a listener, or schedules a retry and rethrows.
+    private func bind(signal sem: DispatchSemaphore?) throws {
+        do {
+            guard let host = bindHost() else {
+                logFailure("dch server: no Tailscale address — refusing to bind")
+                throw ServerError.noTailscale
+            }
+            let listener = try makeListener(host: host)
+            self.listener = listener
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener else { return }
+                self.listenerStateChanged(state, of: listener, signal: sem)
+            }
+            listener.newConnectionHandler = { [weak self, weak listener] conn in
+                guard let self, let listener, self.listener === listener else { conn.cancel(); return }
+                self.queue.async { self.accept(conn) }
+            }
+            listener.start(queue: lifecycle)
+        } catch {
+            scheduleRetry()
+            throw error
+        }
+    }
+
+    private func makeListener(host: String) throws -> NWListener {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         // A phone that leaves the network (sleep, tunnel switch, no signal) never sends
@@ -127,35 +198,71 @@ final class DchSessionServer: @unchecked Sendable {
         // connection dies before the handshake. allowLocalEndpointReuse is SO_REUSEADDR,
         // which does not cover an actively LISTENing port. The listening port goes in `on:`.
         params.requiredLocalEndpoint = NWEndpoint.hostPort(
-            host: NWEndpoint.Host(tsIP), port: .any)
-
-        let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: Self.port)!)
-        self.listener = listener
-        let sem = DispatchSemaphore(value: 0)
-        listener.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                self.log.info("dch server ready on \(tsIP, privacy: .public):\(Self.port)")
-                sem.signal()
-            case .failed(let e):
-                self.log.error("dch server failed: \(String(describing: e), privacy: .public)")
-                sem.signal()
-            default: break
-            }
-        }
-        listener.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
-        listener.start(queue: queue)
-        _ = sem.wait(timeout: .now() + 5)
-        // Detach any dch client left behind by a previous Prosper (crash / force quit).
-        // Those clients still hold a pty and keep reporting ITS window size to the
-        // master, which narrows the session for whoever attaches next.
-        queue.async { DchCommand.sweepOrphanedClients() }
+            host: NWEndpoint.Host(host), port: .any)
+        return try NWListener(using: params, on: NWEndpoint.Port(rawValue: bindPort)!)
     }
 
+    /// On `lifecycle`. A `.failed` clears the listener — only if it is still the current one,
+    /// so a stale handler never clears a newer listener — and schedules a retry.
+    func listenerStateChanged(_ state: NWListener.State, of l: NWListener, signal sem: DispatchSemaphore?) {
+        dispatchPrecondition(condition: .onQueue(lifecycle))
+        switch state {
+        case .ready:
+            sem?.signal()
+            guard listener === l else { return }
+            log.info("dch server ready on port \(self.bindPort)")
+            retryAttempt = 0
+            queue.async(execute: onReady)   // the sweep runs ps + a 0.3 s sleep: not here
+        case .failed(let e):
+            logFailure("dch server failed on port \(bindPort): \(String(describing: e))")
+            l.cancel()
+            if listener === l {
+                listener = nil
+                scheduleRetry()
+            }
+            sem?.signal()
+        default: break
+        }
+    }
+
+    /// First failure of a streak at error, repeats at debug: a Tailscale that never comes
+    /// up would otherwise log twice a minute forever (QA #532 F3). On `lifecycle`.
+    private func logFailure(_ message: String) {
+        if retryAttempt == 0 {
+            log.error("\(message, privacy: .public)")
+        } else {
+            log.debug("\(message, privacy: .public)")
+        }
+    }
+
+    /// On `lifecycle`. One pending retry at most; none once stop() cleared `wanted`.
+    private func scheduleRetry() {
+        guard wanted, retry == nil else { return }
+        let delay = Self.retryDelay(attempt: retryAttempt, base: retryBase)
+        if retryAttempt == 0 {
+            log.info("dch server: retrying bind in \(delay, privacy: .public) s")
+        } else {
+            log.debug("dch server: retrying bind in \(delay, privacy: .public) s")
+        }
+        retryAttempt += 1
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.retry = nil
+            guard self.wanted, self.listener == nil else { return }
+            try? self.bind(signal: nil)
+        }
+        retry = item
+        lifecycle.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    /// Frees the port before returning, even while `queue` is stuck in a dch call.
     func stop() {
-        listener?.cancel()
-        listener = nil
+        lifecycle.sync {
+            wanted = false
+            retry?.cancel(); retry = nil
+            listener?.cancel()
+            listener = nil
+        }
         queue.async { [weak self] in
             guard let self else { return }
             self.connections.values.forEach { $0.close() }

@@ -40,6 +40,11 @@ tag from the now-released section and put it on the new top draft.
     say so.
   - Resume and Stop failures that dch 1.28 adds read in plain words. A session that
     could not be resumed still shows the `claude --resume` id to recover it by hand.
+- **Remote Terminal comes back on its own after a failed start.** If port 8771 was busy
+  when Prosper started, or Tailscale was not connected yet, the iPhone could not connect
+  until Remote Terminal was turned off and on again in Settings. Prosper now tries again
+  every few seconds, backing off to once a minute, until it succeeds or you turn Remote
+  Terminal off.
 - **Command runner: the usual text editing keys work in the search field.** ⌘⌫ deletes
   back to the start of the line again; a hidden Delete Quicklink shortcut had taken it,
   even with no quicklink selected. ↑ and ↓ with ⇧, ⌥, ⌘ or ⌃ now move the caret or
