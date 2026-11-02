@@ -234,16 +234,21 @@ final class AgentIslandController {
     func refreshHistory() {
         guard store != nil else { return }
         let dirs = historyDirs(), probe = controlDch, read = readHistory
+        let live = readLiveRecords, sessions = store?.sessions ?? []
         queue.async { [weak self] in
             let dch = probe()
             let records = dch.map { DchCommand.isAtLeast($0.version, AgentIsland.controlMinimum) ? read($0.path, dirs) : [] } ?? []
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.setHistory(records, dch) } }
+            // #719: the Claude ids dch 1.28.2's --revive --all holds; never read below it.
+            let held = dch.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveFileMinimum) } == true
+                ? Set(live(sessions).compactMap { $0.agent?.sessionID }.filter { !$0.isEmpty }) : []
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.setHistory(records, dch, held) } }
         }
     }
 
-    private func setHistory(_ records: [DchHistoryRecord], _ dch: DchCommand.Binary?) {
+    private func setHistory(_ records: [DchHistoryRecord], _ dch: DchCommand.Binary?, _ held: Set<String>) {
         guard let store else { return }
         store.controlDch = dch
+        store.liveSIDs = held
         store.history = records
         if store.unpinnedCount == 0 { store.confirmingClear = false }   // #627 I4: no "Clear 0 unpinned?"
         // A record gone (revived) takes its status with it; running ones, the --all
@@ -263,11 +268,14 @@ final class AgentIslandController {
         let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
         // #714: the row's own id (an aside record's is its file); dch's lines carry the name.
         let key = r.id, name = r.name, verb: AgentIsland.Verb = noMessage ? .resumeNoMessage : .resume
-        run(key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage),
+        // #719: `<file>.json` from dch 1.28.2.
+        let exact = store.reviveFileGate.isOK, arg = r.editTarget(exact: exact)
+        run(key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage, exact: exact),
             running: AgentIsland.resumingText,
             history: true, onLine: { [weak self] in self?.rowLine($0, key: key, name: name, history: true) }) { [weak self] res in
-            // #716 L-3: dch names a no_history line after the argument (an aside file).
-            self?.store?.historyActions[key] = AgentIsland.rowText(DchControlOps.renamed(res, r.target, to: name), name: name, verb)
+            // #716 L-3: dch names a no_history line after the argument (an aside file; #719 `<file>.json`).
+            let text = AgentIsland.rowText(DchControlOps.renamed(res, arg, to: name), name: name, verb)
+            self?.store?.historyActions[key] = AgentIsland.byHand(text, r)
             self?.refreshHistory()
         }
     }
@@ -393,12 +401,19 @@ final class AgentIslandController {
     private func dirLine(_ line: String, dir: String, _ verb: AgentIsland.Verb) {
         guard let store, let o = AgentIsland.jsonLine(line) else { return }
         let history = verb == .resume || verb == .resumeNoMessage
-        var key = AgentSessionKey(dir: dir, name: o.name)
+        var key = AgentSessionKey(dir: dir, name: o.name), record: DchHistoryRecord?, named = false
         if history {
-            // #714: a line names no aside file. #716 L-1: the row of the name's newest
-            // record --all takes (dch skips a stopped one), else the name's newest.
-            let named = store.history.filter { $0.key == key }, t = store.now()
-            guard let r = named.first(where: { AgentIsland.reviveAllTakes($0, now: t) }) ?? named.first else { return }
+            // #719 L-1: dch 1.28.2 names a skip's record, "(record <file>)": that row, always shown.
+            if let file = AgentIsland.recordFile(o), let r = store.history.first(where: { $0.key.dir == dir && $0.file == file }) {
+                record = r
+                named = true
+            } else {
+                // #714: a line names no aside file. #716 L-1: the row of the name's newest
+                // record --all takes (dch skips a stopped one; #719 a held Claude id), else the name's newest.
+                let mine = store.history.filter { $0.key == key }, taken = store.reviveAllTaken
+                record = mine.first { taken.contains($0.id) } ?? mine.first
+            }
+            guard let r = record else { return }
             key = r.id
         } else {
             guard store.sessions.contains(where: { $0.key == key }) else { return }
@@ -407,8 +422,8 @@ final class AgentIslandController {
         let text: String
         if let t = AgentIsland.phaseText(o) {
             text = t
-        } else if o.isFinal, o.failed || o.reason == "in_shell" || AgentIsland.runningTexts.contains(now ?? "") {
-            text = AgentIsland.finalText(o, verb)
+        } else if o.isFinal, named || o.failed || o.reason == "in_shell" || AgentIsland.runningTexts.contains(now ?? "") {
+            text = AgentIsland.byHand(AgentIsland.finalText(o, verb), record)
         } else { return }
         if history { store.historyActions[key] = text } else { store.actions[key] = text }
         layout()

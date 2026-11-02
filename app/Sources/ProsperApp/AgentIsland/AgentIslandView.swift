@@ -271,6 +271,9 @@ final class AgentIslandStore: ObservableObject {
     @Published var historyTab = false
     /// The control binary (DchCommand.controlDch), probed with the history.
     @Published var controlDch: DchCommand.Binary?
+    /// #719: the live sessions' Claude ids (their dch records), read with the history
+    /// while the control dch is 1.28.2 or later: what its --revive --all holds.
+    @Published var liveSIDs: Set<String> = []
     /// A long verb's static status in its row: "Resuming…", then the result.
     /// Keyed by row; a dir's `--revive --all` is `(dir, "")`.
     /// #579: a session row's Restart too; `(dir, "")` also holds Restart all and a failed New session.
@@ -343,9 +346,13 @@ final class AgentIslandStore: ObservableObject {
 
     /// #585: how many records `--revive --all` would take: every record, not
     /// just the `historyCap` shown, as dch takes them all.
-    var resumableCount: Int {
-        let t = now()
-        return history.filter { AgentIsland.reviveAllTakes($0, now: t) }.count
+    var resumableCount: Int { reviveAllTaken.count }
+
+    /// #719 (QA #533 F1): the records --revive --all takes, by id; from dch 1.28.2
+    /// the ones whose Claude id no live session or newer record holds.
+    var reviveAllTaken: Set<AgentSessionKey> {
+        let ended = controlDch.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveEndedHoldMinimum) } ?? false
+        return AgentIsland.reviveAllTaken(history, now: now(), held: reviveFileGate.isOK ? liveSIDs : nil, endedHolds: ended)
     }
 
     /// Each History dir's last --all status, by dir.
@@ -400,6 +407,11 @@ final class AgentIslandStore: ObservableObject {
     /// #714: 1.28.1: pin, unpin and forget take `<file>.json`, one record each.
     var recordFileGate: DchCommand.Gate {
         DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.recordFileMinimum)
+    }
+
+    /// #719: 1.28.2: Resume takes `<file>.json`; --revive --all holds live and newer Claude ids.
+    var reviveFileGate: DchCommand.Gate {
+        DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.reviveFileMinimum)
     }
 
     /// #669: Resume (no message)'s gate, 1.27.0; refused, its controls do not show (Resume stays).

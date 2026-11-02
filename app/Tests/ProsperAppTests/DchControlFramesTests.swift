@@ -1315,4 +1315,94 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertNil(machineInfoResp(frames, timeout: 0.3))
         XCTAssertTrue(frames.lock.withLock { frames.all }.isEmpty)
     }
+
+    // MARK: - #719: dch 1.28.2 / 1.28.3
+
+    private static let v1282 = DchCommand.Binary(path: "/fake/dch", version: [1, 28, 2])
+    private static let v1283 = DchCommand.Binary(path: "/fake/dch", version: [1, 28, 3])
+
+    /// A crashed record --all would take by the Mac's clock (an hour long, a minute ago and older).
+    private static func taker(_ name: String, sid: String, ago: TimeInterval, end: String = "signal 9") -> [String: Any] {
+        ["name": name, "file": name, "started": now - 7200, "updated": now - ago, "ended": now - ago, "end": end,
+         "agent": ["kind": "claude", "session_id": sid]]
+    }
+
+    /// QA #533 F1: from 1.28.2 "takes" is dch's --revive --all, which holds Claude ids: a
+    /// live session's (here "L"), each taken one ("X": the older record of X is a dup),
+    /// and from 1.28.3 a newer record's that ended on purpose ("S" stopped: its older
+    /// crash stays down). Below 1.28.2 every crash takes, ids or not.
+    func testHistoryTakesSkipHeldClaudeIdsFrom1282() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([Self.taker("new", sid: "X", ago: 60), Self.taker("held", sid: "L", ago: 70),
+                                  Self.taker("stop", sid: "S", ago: 80, end: "stopped"), Self.taker("old", sid: "X", ago: 90),
+                                  Self.taker("crash", sid: "S", ago: 100), Self.taker("free", sid: "", ago: 110)])
+        func takes(_ dch: DchCommand.Binary, _ master: String, line: UInt = #line) -> [String: Bool] {
+            f.ls["/d"] = Self.ls([("b", master)])
+            var o = ops(f, binary: dch)
+            o.liveRecords = { s in
+                XCTAssertEqual(s.map(\.name), ["b"], line: line)
+                var r = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "b"))
+                r.agent = .init(kind: "claude", sessionID: "L")
+                return [r]
+            }
+            let rows = call(o, DchFrame.history, raw: Data()).json as? [[String: Any]] ?? []
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0["name"] as? String ?? "", $0["takes"] as? Bool ?? false) })
+        }
+        XCTAssertEqual(takes(Self.v1283, "1.28.3"),
+                       ["new": true, "held": false, "stop": false, "old": false, "crash": false, "free": true])
+        XCTAssertEqual(takes(Self.v1282, "1.28.2"),
+                       ["new": true, "held": false, "stop": false, "old": false, "crash": true, "free": true], "1.28.2 holds no ended id")
+        XCTAssertEqual(takes(Self.v1281, "1.28.1"),
+                       ["new": true, "held": true, "stop": false, "old": true, "crash": true, "free": true], "below 1.28.2: unchanged")
+        XCTAssertEqual(takes(Self.v1283, "1.29.0"),
+                       ["new": true, "held": true, "stop": false, "old": true, "crash": true, "free": true],
+                       "a newer master: the island's gate refuses, the old count")
+    }
+
+    private static let v1281 = DchCommand.Binary(path: "/fake/dch", version: [1, 28, 1])
+
+    /// From 1.28.2 the phone's Resume passes `<file>.json`; dch's failure lines, named
+    /// after that argument, read in words (live_sid, ambiguous), and the by-hand hint
+    /// carries the record's config_dir. Below it, #716's argument.
+    func testReviveByNamePassesTheRecordFileFrom1282() {
+        let f = Fake()
+        var a = Self.taker("a", sid: "S", ago: 60)
+        a["agent"] = ["kind": "claude", "session_id": "S", "config_dir": "/Users/me/.claude work"]
+        f.hist["/d"] = Self.hist([a, Self.taker("b", sid: "T", ago: 70).merging(["file": "b.1762000000"]) { $1 }])
+        f.out["--revive a.json --json"] = Self.ok("a")
+        f.out["--revive b.1762000000.json --json"] = Self.ok("b")
+        let o = ops(f, binary: Self.v1282)
+        XCTAssertEqual(names(call(o, DchFrame.revive, ["name": "a"])), ["a"])
+        XCTAssertEqual(names(call(o, DchFrame.revive, ["name": "b"])), ["b"])
+        f.out["--revive b.1762000000 --json"] = Self.ok("b")
+        XCTAssertEqual(names(call(ops(f, binary: Self.v1281), DchFrame.revive, ["name": "b"])), ["b"])
+        XCTAssertEqual(f.launchedArgs, [["--revive", "a.json", "--json"], ["--revive", "b.1762000000.json", "--json"],
+                                        ["--revive", "b.1762000000", "--json"]])
+        f.status = 1
+        f.out["--revive a.json --json"] = Self.json(["name": "a", "as": "a", "result": "failed", "reason": "live_sid",
+                                                     "detail": "claude S already runs in live session c", "session_id": "S"])
+        XCTAssertEqual(message(call(o, DchFrame.revive, ["name": "a"])), "a: Not resumed: claude S already runs in live session c")
+        f.out["--revive a.json --json"] = Self.json(["name": "a.json", "as": "a.json", "result": "failed", "reason": "ambiguous",
+                                                     "detail": "ambiguous: a.json matches more than one session's records", "session_id": ""])
+        XCTAssertEqual(message(call(o, DchFrame.revive, ["name": "a"])), "a: Not resumed: \(AgentIsland.ambiguousText)")
+        f.out["--revive a.json --json"] = Self.json(["name": "a", "as": "a", "result": "failed", "reason": "relaunch_failed",
+                                                     "detail": "revived as a in /src, but claude could not be started; resume by hand: claude --resume S",
+                                                     "session_id": "S"])
+        XCTAssertEqual(message(call(o, DchFrame.revive, ["name": "a"])),
+                       "a: revived as a in /src, but claude could not be started; resume by hand: "
+                       + "CLAUDE_CONFIG_DIR='/Users/me/.claude work' claude --resume S")
+    }
+
+    /// dch 1.28.2's unpin of a record that is gone fails not_found (exit 1): the phone
+    /// hears ok, as nothing is pinned. A pin's not_found still fails.
+    func testUnpinOfAGoneRecordIsOkFrom1282() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "file": "a", "updated": Self.now - 60, "end": "exit 0", "pinned": true]])
+        f.out["--unpin a.json --json"] = Self.line("a.json", "failed", reason: "not_found", detail: "no history for this session")
+        f.out["--pin a.json --json"] = Self.line("a.json", "failed", reason: "not_found", detail: "no history for this session")
+        f.status = 1
+        let o = ops(f, binary: Self.v1282)
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "a", "pin": false])), ["a"])
+        XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "a", "pin": true])), "a: no history for this session")
+    }
 }

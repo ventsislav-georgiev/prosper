@@ -41,7 +41,12 @@ tag from the now-released section and put it on the new top draft.
     pin and × on the row that holds the name also cover its older rows, and their tooltips
     say so.
   - Resume and Stop failures that dch 1.28 adds read in plain words. A session that
-    could not be resumed still shows the `claude --resume` id to recover it by hand.
+    could not be resumed still shows the `claude --resume` id to recover it by hand,
+    with the session's own `CLAUDE_CONFIG_DIR` when it has one.
+  - With dch 1.28.2 or later, Resume interrupted (N) counts only the sessions dch would
+    actually bring back: not one whose Claude is already running, and not an older record
+    of a session that a newer record already covers. The iPhone app's count agrees, and
+    Resume all shows why a session was skipped on that session's own row.
 - **Remote Terminal comes back on its own after a failed start.** If port 8771 was busy
   when Prosper started, or Tailscale was not connected yet, the iPhone could not connect
   until Remote Terminal was turned off and on again in Settings. Prosper now tries again

@@ -13,6 +13,8 @@ struct DchHistoryRecord: Equatable, Identifiable {
     struct Agent: Equatable {
         var kind = "", sessionID = "", name = "", cwd = ""
         var launch: [String] = []
+        /// #719: dch 1.28.2's "config_dir", the Claude's own CLAUDE_CONFIG_DIR ("" = the default).
+        var configDir = ""
     }
 
     let key: AgentSessionKey
@@ -121,6 +123,11 @@ extension AgentIsland {
     static let reviveNoMessageMinimum = [1, 27, 0]
     /// #714: `--pin|--unpin|--forget <file>.json`, exactly one record file, dch 1.28.1.
     static let recordFileMinimum = [1, 28, 1]
+    /// #719: `--revive <file>.json`, exactly one record file, and --revive --all's held
+    /// Claude ids (live_sid, dup_sid), dch 1.28.2.
+    static let reviveFileMinimum = [1, 28, 2]
+    /// #719: 1.28.3's --all also holds the id of a record that ended on purpose.
+    static let reviveEndedHoldMinimum = [1, 28, 3]
     /// The History tab lists this many records in all, newest first, unless more
     /// are pinned: pinned ones are never capped, unpinned ones fill the rest.
     static let historyCap = 50
@@ -146,7 +153,8 @@ extension AgentIsland {
                 updated: num(o["updated"]), ended: num(o["ended"]), end: o["end"] as? String ?? "",
                 agent: a.map {
                     .init(kind: $0["kind"] as? String ?? "", sessionID: $0["session_id"] as? String ?? "",
-                          name: $0["name"] as? String ?? "", cwd: $0["cwd"] as? String ?? "", launch: strings($0["launch"]))
+                          name: $0["name"] as? String ?? "", cwd: $0["cwd"] as? String ?? "", launch: strings($0["launch"]),
+                          configDir: $0["config_dir"] as? String ?? "")
                 }, pinned: o["pinned"] as? Bool ?? false, file: o["file"] as? String ?? "")
         }
     }
@@ -179,19 +187,44 @@ extension AgentIsland {
     /// abnormal end (not exit 0, killed or stopped; vanished counts), last seen
     /// within 3 days, after running at least 5 minutes (last seen minus started).
     static func reviveAllTakes(_ r: DchHistoryRecord, now: TimeInterval) -> Bool {
-        !["exit 0", "killed", "stopped"].contains(r.end)
-            && r.lastSeen >= now - 3 * 86400 && r.lastSeen - r.started >= 5 * 60
+        !endedOnPurpose.contains(r.end) && r.lastSeen >= now - 3 * 86400 && r.lastSeen - r.started >= 5 * 60
+    }
+
+    static let endedOnPurpose = ["exit 0", "killed", "stopped"]
+
+    /// #719 (QA #533 F1): the records `--revive --all` takes, by id. `held` nil (control
+    /// dch below 1.28.2): reviveAllTakes alone. Else dch's do_revive_verb: per dir, newest
+    /// first (`history` is), a record whose Claude id is held is skipped (live_sid,
+    /// dup_sid). `held` starts as the live sessions' Claude ids and gains each taken
+    /// record's; with `endedHolds` (1.28.3) also the id of a record that ended on purpose.
+    static func reviveAllTaken(_ history: [DchHistoryRecord], now: TimeInterval, held: Set<String>?,
+                               endedHolds: Bool) -> Set<AgentSessionKey> {
+        guard let held else { return Set(history.filter { reviveAllTakes($0, now: now) }.map(\.id)) }
+        var taken = Set<AgentSessionKey>()
+        for dir in Set(history.map(\.key.dir)) {
+            var ids = held
+            for r in history where r.key.dir == dir {
+                let sid = r.agent?.sessionID ?? ""
+                guard reviveAllTakes(r, now: now) else {
+                    if endedHolds, endedOnPurpose.contains(r.end), !sid.isEmpty { ids.insert(sid) }
+                    continue
+                }
+                if sid.isEmpty || ids.insert(sid).inserted { taken.insert(r.id) }
+            }
+        }
+        return taken
     }
 
     /// `--revive <name>`; a name live now goes to `--as` the first free
     /// `<name>-2`, `-3`, … — free of live sessions and of other records in the dir
     /// (dch would overwrite that record). #669: `noMessage` adds `--no-message`.
     /// #714: an aside record by its file; it comes back under its name (or `--as`).
+    /// #719: `exact` (dch 1.28.2): `<file>.json`, this one record file.
     static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>,
-                           noMessage: Bool = false) -> [String]? {
-        let tail = (noMessage ? ["--no-message"] : []) + ["--json"]
-        guard live.contains(r.name) else { return named("--revive", [r.target], tail) }
-        return named("--revive", [r.target], ["--as", freeName(r.name, taken: live.union(records))] + tail)
+                           noMessage: Bool = false, exact: Bool = false) -> [String]? {
+        let tail = (noMessage ? ["--no-message"] : []) + ["--json"], arg = r.editTarget(exact: exact)
+        guard live.contains(r.name) else { return named("--revive", [arg], tail) }
+        return named("--revive", [arg], ["--as", freeName(r.name, taken: live.union(records))] + tail)
     }
 
     /// #627: dch takes a session name that starts with '-' and its argv has no
@@ -309,6 +342,16 @@ extension AgentIsland {
             return "Not resumed: its record has bytes that are not UTF-8" + (sid.isEmpty ? "" : "; claude --resume \(sid)")
         case "live" where resume:
             return "Not resumed: \(o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name) is running"
+        case "live_sid", "dup_sid":
+            // #719: dch 1.28.2 never runs two Claudes on one conversation. Its detail
+            // says where the id is; "skipped — " and "(record <file>)" go.
+            var d = o.detail ?? ""
+            if d.hasPrefix("skipped — ") { d.removeFirst(10) }
+            if let file = recordFile(o) { d = String(d.dropLast(file.count + 10)) }
+            if d.isEmpty { d = o.reason == "live_sid" ? "its Claude already runs" : "a newer record holds its Claude" }
+            return (o.result == "skipped" ? "Skipped: " : "Not resumed: ") + d
+        case "ambiguous":
+            return (resume ? "Not resumed: " : "\(verb.rawValue) failed: ") + ambiguousText
         case "claude_unreadable":
             return "Not stopped: its Claude session record can't be read; left running"
         case "signal" where o.result == "interrupted":
@@ -318,6 +361,24 @@ extension AgentIsland {
         default:
             return nil
         }
+    }
+
+    /// #719: dch 1.28.2's "ambiguous": the `<file>.json` argument is another session's name.
+    static let ambiguousText = "another session's name matches its record file"
+
+    /// #719 L-1: dch 1.28.2's skip detail ends "(record <file>)"; that file, else nil.
+    static func recordFile(_ o: DchJSONLine) -> String? {
+        guard let d = o.detail, d.hasSuffix(")"), let r = d.range(of: " (record ", options: .backwards) else { return nil }
+        let file = String(d[r.upperBound...].dropLast())
+        return file.isEmpty ? nil : file
+    }
+
+    /// #719: dch's (and our) by-hand `claude --resume <id>` under the record's own
+    /// CLAUDE_CONFIG_DIR, when its agent has one.
+    static func byHand(_ text: String, _ r: DchHistoryRecord?) -> String {
+        guard let a = r?.agent, !a.configDir.isEmpty, !a.sessionID.isEmpty else { return text }
+        let hint = "claude --resume \(a.sessionID)"
+        return text.replacingOccurrences(of: hint, with: "CLAUDE_CONFIG_DIR=\(shellQuoted(a.configDir)) \(hint)")
     }
 
     /// "failed: <last dch: line>", else "failed (exit N)".
@@ -407,15 +468,20 @@ extension AgentIsland {
     static func editFailure(_ r: DchActionResult, name: String, _ verb: Verb, sid: String? = nil) -> String? {
         let what = "\(verb.rawValue) \(name)"
         if r.stopped { return "\(what) cancelled: no answer in \(verb.minutes)m" }
-        let failed = r.json.filter { $0.isFinal && $0.failed }
+        // #719: an unpin that finds nothing (dch 1.28.2: not_found, exit 1): the record went; the re-read drops its row.
+        let failed = r.json.filter { $0.isFinal && $0.failed && !unpinGone($0, verb) }
         let another = { (o: DchJSONLine) in o.reason == "pinned" && sid != nil && !(o.sessionID ?? "").isEmpty && o.sessionID != sid }
         if let f = failed.first(where: { !another($0) }) {
             if f.reason == "pinned" { return "\(what) failed: \(pinnedRefusal)" }
+            if f.reason == "ambiguous" { return "\(what) failed: \(ambiguousText)" }
             let d = f.detail ?? ""
             return "\(what) failed: \(d.isEmpty ? f.reason ?? "" : d)"
         }
-        return r.status == 0 || !failed.isEmpty ? nil : "\(what) \(failedText(r))"
+        return r.status == 0 || !failed.isEmpty || r.json.contains(where: { unpinGone($0, verb) }) ? nil : "\(what) \(failedText(r))"
     }
+
+    /// #719: dch 1.28.2's unpin of a record that is gone (and its pin with it).
+    static func unpinGone(_ o: DchJSONLine, _ verb: Verb) -> Bool { verb == .unpin && o.reason == "not_found" }
 
     // MARK: - Stop (#580)
 

@@ -626,6 +626,10 @@ struct DchControlOps: Sendable {
     /// expiry): a phone job and an island job on one row or dir exclude each other.
     var runner = DchActionRunner.shared
     var now: @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }
+    /// #719: the live sessions' dch records (their Claude ids); none under XCTest.
+    var liveRecords: @Sendable ([AgentSession]) -> [DchHistoryRecord] = {
+        NSClassFromString("XCTestCase") == nil ? AgentIsland.liveRecords($0) : []
+    }
     /// After a verb: the island re-reads its history, as after its own Resume and Stop
     /// (its live rows follow on the next poll tick).
     var refresh: @Sendable () -> Void = {
@@ -694,11 +698,12 @@ struct DchControlOps: Sendable {
     }
 
     /// historyResp's object for one record. Seconds are whole; a value no Int holds reads 0.
-    static func historyWire(_ r: DchHistoryRecord, now: TimeInterval) -> [String: Any] {
+    /// #719: `taken`, AgentIsland.reviveAllTaken's ids (nil: reviveAllTakes alone).
+    static func historyWire(_ r: DchHistoryRecord, now: TimeInterval, taken: Set<AgentSessionKey>? = nil) -> [String: Any] {
         func secs(_ t: TimeInterval) -> Int { t.isFinite && abs(t) < 1e15 ? Int(t) : 0 }
         var o: [String: Any] = ["name": r.name, "end": r.end, "last_seen": secs(r.lastSeen), "started": secs(r.started),
                                 "runtime": max(0, secs(r.lastSeen - r.started)),
-                                "takes": AgentIsland.reviveAllTakes(r, now: now)]
+                                "takes": taken?.contains(r.id) ?? AgentIsland.reviveAllTakes(r, now: now)]
         if !r.alias.isEmpty { o["alias"] = r.alias }
         if !r.cwd.isEmpty { o["cwd"] = r.cwd }
         if !r.argv.isEmpty { o["command"] = r.argv }
@@ -739,11 +744,20 @@ struct DchControlOps: Sendable {
     /// (QA #489 I6). Fix if pins ever get that many: past DchLibraryOps.maxReply drop the argv, then
     /// the oldest unpinned rows.
     private func history(_ reply: Reply) {
-        let gate = DchCommand.gate(binary(), masters: [], minimum: AgentIsland.controlMinimum)
+        let bin = binary(), gate = DchCommand.gate(bin, masters: [], minimum: AgentIsland.controlMinimum)
         guard case .ok(let path) = gate else { return reply(Self.error("History \(gate.refusal ?? "")")) }
-        let t = now()
+        let t = now(), all = records(path)
+        // #719 (QA #533 F1): "takes" as dch 1.28.2's --revive --all, which skips a Claude id
+        // a live session or a newer record holds; the island's reviveFileGate.
+        var held: Set<String>?
+        if let bin, DchCommand.isAtLeast(bin.version, AgentIsland.reviveFileMinimum) {
+            let live = sessions()
+            if Self.reviveExact(bin, live) { held = Set(liveRecords(live).compactMap { $0.agent?.sessionID }.filter { !$0.isEmpty }) }
+        }
+        let ended = bin.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveEndedHoldMinimum) } ?? false
+        let taken = AgentIsland.reviveAllTaken(all, now: t, held: held, endedHolds: ended)
         reply(DchFrame.encode(DchFrame.historyResp,
-                              json: AgentIsland.cappedHistory(records(path)).map { Self.historyWire($0, now: t) }))
+                              json: AgentIsland.cappedHistory(all).map { Self.historyWire($0, now: t, taken: taken) }))
     }
 
     /// The one history record of `name`, else the refusal revive answers with.
@@ -786,9 +800,11 @@ struct DchControlOps: Sendable {
             }
             let liveNames = Set(live.filter { $0.key.dir == r.key.dir }.map(\.name))
             let others = Set(history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
-            run([(r.id, AgentIsland.reviveArgs(r, live: liveNames, records: others, noMessage: noMessage))],
+            // #719: `<file>.json` from dch 1.28.2; the by-hand hint under the record's config dir.
+            let exact = Self.reviveExact(binary(), live), arg = r.editTarget(exact: exact)
+            run([(r.id, AgentIsland.reviveArgs(r, live: liveNames, records: others, noMessage: noMessage, exact: exact))],
                 path: path, bound: nil, reply) {
-                Self.answer(named: [(name, Self.renamed($0[0], r.target, to: name))], .resume)   // #716 L-3
+                Self.answer(named: [(name, Self.renamed($0[0], arg, to: name))], .resume, record: r)   // #716 L-3
             }
         }
     }
@@ -876,6 +892,11 @@ struct DchControlOps: Sendable {
     /// #714: the island's recordFileGate: `<file>.json` pins and forgets one record (1.28.1).
     static func exact(_ bin: DchCommand.Binary?, _ live: [AgentSession]) -> Bool {
         DchCommand.gate(bin, masters: live.map(\.version), minimum: AgentIsland.recordFileMinimum).isOK
+    }
+
+    /// #719: the island's reviveFileGate: `--revive <file>.json` and --all's held ids (1.28.2).
+    static func reviveExact(_ bin: DchCommand.Binary?, _ live: [AgentSession]) -> Bool {
+        DchCommand.gate(bin, masters: live.map(\.version), minimum: AgentIsland.reviveFileMinimum).isOK
     }
 
     /// #714: dch names a pin's result line, and a not_found, after its argument (a file
@@ -978,14 +999,16 @@ struct DchControlOps: Sendable {
     /// {"names"} in request order (a revive's under its `as` name). Else one error,
     /// "<name>: <rowText>" per failed name joined by "; " (a cancelled job's names
     /// carry rowText's cancelled text).
-    static func answer(named: [(String, DchActionResult)], _ verb: AgentIsland.Verb) -> Data {
+    /// #719: an unpin dch finds nothing for (1.28.2's not_found) is ok: the record went.
+    /// `record`: a revive's, for the by-hand hint's CLAUDE_CONFIG_DIR.
+    static func answer(named: [(String, DchActionResult)], _ verb: AgentIsland.Verb, record: DchHistoryRecord? = nil) -> Data {
         var ok: [String] = [], failed: [String] = []
         for (n, r) in named {
             let last = r.json.last { $0.name == n && ($0.isFinal || $0.isMaster) }
-            if !r.stopped, last.map(isOK) ?? (r.status == 0) {
+            if !r.stopped, last.map({ isOK($0) || AgentIsland.unpinGone($0, verb) }) ?? (r.status == 0) {
                 ok.append(last?.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? n)
             } else {
-                failed.append("\(n): \(AgentIsland.rowText(r, name: n, verb))")
+                failed.append("\(n): \(AgentIsland.byHand(AgentIsland.rowText(r, name: n, verb), record))")
             }
         }
         return failed.isEmpty ? DchFrame.encode(DchFrame.ok, json: ["names": ok]) : error(failed.joined(separator: "; "))
