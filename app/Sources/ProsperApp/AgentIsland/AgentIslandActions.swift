@@ -201,13 +201,19 @@ extension AgentIsland {
     static let restartingText = "Restarting…"
     static let restartAllRunningText = "Restarting stale agents…"
     static let restartLabel = "Restart agent"
-    static let restartAllLabel = "Restart all agents"
+    static let restartAllLabel = "Restart stale agents"
     static let restartAllQuestion = "Restart stale agents? Each pauses for up to minutes."
+    /// #700: the "⋯" menu's forced Restart all: every agent, current and busy ones too.
+    static let restartAllForceLabel = "Restart all agents (force)"
+    static let restartAllForceQuestion = "Restart every agent, busy ones too? Each pauses for up to minutes."
+    static let restartAllForceRunningText = "Restarting all agents…"
 
     /// An explicit row click: `-f`, so a current agent restarts too.
     static func restartArgs(_ name: String) -> [String]? { named("--restart", [name], ["--include-agents", "-f", "--json"]) }
     /// No `-f`: only stale agents restart.
     static let restartAllArgs = ["--restart", "--all", "--include-agents", "--json"]
+    /// #700: `-f`: current agents restart too.
+    static let restartAllForceArgs = ["--restart", "--all", "--include-agents", "-f", "--json"]
 
     // MARK: - --json results (#580)
 

@@ -280,6 +280,8 @@ final class AgentIslandStore: ObservableObject {
     @Published var historyActions: [AgentSessionKey: String] = [:]
     /// #579: the inline "Restart stale agents?" line is up (never a modal).
     @Published var confirmingRestartAll = false
+    /// #700: the question up is the forced one ("Restart every agent…").
+    @Published var restartAllForce = false
     /// #580: the inline "Stop N sessions?" line is up; at most one question shows.
     @Published var confirmingStopAll = false
     /// #605: the History header asks "Clear N unpinned?".
@@ -625,7 +627,8 @@ struct AgentIslandView: View {
     private var controlLine: some View {
         HStack(spacing: 10) {
             if store.confirmingRestartAll {
-                Text(verbatim: AgentIsland.restartAllQuestion).foregroundStyle(Color.white.opacity(0.8))
+                Text(verbatim: store.restartAllForce ? AgentIsland.restartAllForceQuestion : AgentIsland.restartAllQuestion)
+                    .foregroundStyle(Color.white.opacity(0.8))
                 Spacer(minLength: 0)
                 lineButton("Restart") { onConfirmRestartAll(true) }
                 lineButton("Cancel") { onConfirmRestartAll(false) }

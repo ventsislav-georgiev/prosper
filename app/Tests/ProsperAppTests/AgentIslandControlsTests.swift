@@ -482,6 +482,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.reviveAllArgs, ["--revive", "--all", "--json"])
         XCTAssertEqual(AgentIsland.restartArgs("a"), ["--restart", "a", "--include-agents", "-f", "--json"], "a row restarts even when current")
         XCTAssertEqual(AgentIsland.restartAllArgs, ["--restart", "--all", "--include-agents", "--json"], "no -f: stale agents only")
+        XCTAssertEqual(AgentIsland.restartAllForceArgs, ["--restart", "--all", "--include-agents", "-f", "--json"], "#700: -f")
         XCTAssertEqual(AgentIsland.stopArgs(["a", "b"]), ["--stop", "a", "b", "--json"])
     }
 
@@ -1937,6 +1938,71 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.dirStatus, "1 agent restarted, 1 failed · 1 agent restarted, 1 failed")
     }
 
+    /// #700: Restart all agents (force) asks its own question; it and the stale
+    /// one never show together; Cancel runs nothing; closing drops it.
+    @MainActor
+    func testRestartAllForceAsksItsOwnQuestionAndCancelRunsNothing() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a")])
+        let store = try XCTUnwrap(c.store)
+        let menu = c.makeControlsMenu()
+        XCTAssertEqual(menu.items.map(\.title), ["New session", "Restart stale agents", "Restart all agents (force)", "Stop all in Sessions…"])
+        press(menu.items[1])
+        XCTAssertTrue(store.confirmingRestartAll)
+        XCTAssertFalse(store.restartAllForce, "the stale question")
+        press(menu.items[2])
+        XCTAssertTrue(store.confirmingRestartAll)
+        XCTAssertTrue(store.restartAllForce, "the forced question replaces the stale one")
+        XCTAssertTrue(store.showsControlLine)
+        XCTAssertEqual(AgentIsland.restartAllForceQuestion, "Restart every agent, busy ones too? Each pauses for up to minutes.")
+        press(menu.items[1])
+        XCTAssertFalse(store.restartAllForce, "and back: one restart question at a time")
+        press(menu.items[2])
+        c.confirmRestartAll(false)
+        XCTAssertFalse(store.confirmingRestartAll)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [], "Cancel: no verb")
+        c.confirmRestartAll(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "an answer with no question runs nothing")
+        press(menu.items[2])
+        c.setExpanded(false)
+        XCTAssertFalse(store.confirmingRestartAll, "closing drops the question")
+        XCTAssertEqual(f.args, [])
+    }
+
+    /// #700: confirmed, the forced item runs -f once per dir with a live session;
+    /// the dir shows its own running text (a dir under it refuses a row's verb), then the summary.
+    @MainActor
+    func testRestartAllForceRunsPerDirWithForce() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a"), session("q"), session("c", dir: "/e")], dirs: ["/d", "/e"])
+        let store = try XCTUnwrap(c.store)
+        f.progress = #"{"name":"a","phase":"pausing"}"# + "\n"
+        press(c.makeControlsMenu().items[2])
+        c.confirmRestartAll(true)
+        for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
+        XCTAssertEqual(f.args, [AgentIsland.restartAllForceArgs, AgentIsland.restartAllForceArgs])
+        XCTAssertEqual(Set(f.lock.withLock { f.launches.compactMap(\.dir) }), ["/d", "/e"])
+        let d = AgentSessionKey(dir: "/d", name: ""), e = AgentSessionKey(dir: "/e", name: ""), a = AgentSessionKey(dir: "/d", name: "a")
+        XCTAssertEqual(store.actions[d], "Restarting all agents…")
+        XCTAssertEqual(store.actions[e], AgentIsland.restartAllForceRunningText)
+        XCTAssertEqual(store.dirStatus, "Restarting all agents… · Restarting all agents…")
+        settle(c) { store.actions[a] == "Pausing…" }
+        c.restart(session("q"))
+        c.askRestartAll()
+        c.confirmRestartAll(true)
+        XCTAssertEqual(f.args.count, 2, "a dir under the forced Restart all refuses a row and a second Restart all")
+        f.output = """
+            {"name":"a","result":"ok","reason":"","detail":"claude 2.1.0 -> 2.1.0, resumed abc","session_id":"abc"}
+
+            """
+        f.release.signal(); f.release.signal()
+        settle(c) { store.actions[d] != AgentIsland.restartAllForceRunningText && store.actions[e] != AgentIsland.restartAllForceRunningText }
+        XCTAssertEqual(store.actions[a], "Restarted")
+        XCTAssertEqual(store.actions[d], "1 agent restarted")
+        XCTAssertEqual(f.args.count, 2)
+    }
+
     /// New session: --spawn <free name> [stripped launch], the Process cwd is the
     /// folder, the env is the control env minus the Claude Code identity.
     /// #606: unset, the launch is inferred from the newest record (any folder) and stored.
@@ -2116,6 +2182,7 @@ final class AgentIslandControlsTests: XCTestCase {
         c.chooseFolder = { _ in XCTFail("no chooser while refused") }
         c.restart(session("a"))
         c.askRestartAll()
+        c.askRestartAll(force: true)
         c.newSession(in: "/src")
         c.chooseNewSessionFolder()
         XCTAssertFalse(store.confirmingRestartAll)
@@ -2129,17 +2196,18 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.controlsMenu.refused, "needs dch 1.25.0")
         XCTAssertEqual(AgentIslandView(store: store).drawn.map(\.refused), ["needs dch 1.25.0"])
         let menu = c.makeControlsMenu()
-        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, "Stop all in Sessions…",
-                                                 "", "Controls needs dch 1.25.0"])
-        XCTAssertEqual(menu.items.map(\.isEnabled), [false, false, false, false, false], "off, with the reason under them")
+        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, AgentIsland.restartAllForceLabel,
+                                                 "Stop all in Sessions…", "", "Controls needs dch 1.25.0"])
+        XCTAssertEqual(menu.items.map(\.isEnabled), [false, false, false, false, false, false], "off, with the reason under them")
         press(menu.items[1])
         press(menu.items[2])
+        press(menu.items[3])
         XCTAssertFalse(store.confirmingRestartAll, "the action re-checks the gate")
         XCTAssertFalse(store.confirmingStopAll)
         store.sessions = [session("a", version: "1.24.0")]
         XCTAssertNil(store.controlsMenu.refused)
         XCTAssertEqual(AgentIslandView(store: store).drawn.map(\.refused), [nil])
-        XCTAssertEqual(c.makeControlsMenu().items.map(\.isEnabled), [true, true, true])
+        XCTAssertEqual(c.makeControlsMenu().items.map(\.isEnabled), [true, true, true, true])
     }
 
     /// #580 addendum 2: a 1.24.0 control dch types /exit into a shell that ran
@@ -2163,12 +2231,14 @@ final class AgentIslandControlsTests: XCTestCase {
                        "one hint: the dch one wins over \"restart this session first\"")
         XCTAssertEqual(drawn.map(\.restartEnabled) + drawn.map(\.stopEnabled), [false, false, false, false])
         let menu = c.makeControlsMenu()
-        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, "Restart all agents (needs dch 1.24.1)",
+        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, "Restart stale agents (needs dch 1.24.1)",
+                                                 "Restart all agents (force) (needs dch 1.24.1)",
                                                  "Stop all in Sessions… (needs dch 1.24.1)"])
-        XCTAssertEqual(menu.items.map(\.isEnabled), [true, false, false])
+        XCTAssertEqual(menu.items.map(\.isEnabled), [true, false, false, false])
         drawn[0].restart()
         drawn[0].stop()
         c.askRestartAll()
+        c.askRestartAll(force: true)
         c.askStopAll()
         XCTAssertFalse(store.confirmingRestartAll || store.confirmingStopAll)
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
@@ -2186,8 +2256,8 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(on.map(\.stopTitle), [AgentIsland.stopLabel, AgentIsland.stopOldMasterLabel])
         XCTAssertEqual(on.map(\.restartEnabled) + on.map(\.stopEnabled), [true, true, true, false])
         XCTAssertEqual(c.makeControlsMenu().items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel,
-                                                                 "Stop all in Sessions…"])
-        XCTAssertEqual(c.makeControlsMenu().items.map(\.isEnabled), [true, true, true])
+                                                                 AgentIsland.restartAllForceLabel, "Stop all in Sessions…"])
+        XCTAssertEqual(c.makeControlsMenu().items.map(\.isEnabled), [true, true, true, true])
         on[0].restart()
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
         XCTAssertEqual(f.args.last, AgentIsland.restartArgs("a"), "on at 1.24.1")
@@ -2203,7 +2273,7 @@ final class AgentIslandControlsTests: XCTestCase {
         var shown: [[String]] = []
         c.popUpMenu = { shown.append($0.items.map(\.title)) }
         c.showControlsMenu()
-        XCTAssertEqual(shown, [[AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, "Stop all in Sessions…"]])
+        XCTAssertEqual(shown, [["New session", "Restart stale agents", "Restart all agents (force)", "Stop all in Sessions…"]])
         XCTAssertEqual(f.args, [])
     }
 
@@ -2221,9 +2291,11 @@ final class AgentIslandControlsTests: XCTestCase {
         c.setExpanded(true)
         XCTAssertNil(store.controlsMenu.refused)
         let menu = c.makeControlsMenu()
-        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, "Stop all in Sessions…"])
-        XCTAssertEqual(menu.items.map(\.isEnabled), [true, false, false], "nothing live: nothing to stop")
+        XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel,
+                                                 AgentIsland.restartAllForceLabel, "Stop all in Sessions…"])
+        XCTAssertEqual(menu.items.map(\.isEnabled), [true, false, false, false], "nothing live: nothing to stop")
         c.askRestartAll()
+        c.askRestartAll(force: true)
         XCTAssertFalse(store.confirmingRestartAll)
         XCTAssertEqual(f.args, [])
     }
@@ -2302,12 +2374,17 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.stopAllTargets.stop.map(\.name), ["main"])
         XCTAssertEqual(store.stopAllTargets.skipped, 1)
         var menu = c.makeControlsMenu()
-        XCTAssertEqual(menu.items[2].title, "Stop all in Sessions…")
-        XCTAssertTrue(menu.items[2].isEnabled)
+        XCTAssertEqual(menu.items[3].title, "Stop all in Sessions…")
+        XCTAssertTrue(menu.items[3].isEnabled)
         c.askRestartAll()
-        press(menu.items[2])
+        press(menu.items[3])
         XCTAssertTrue(store.confirmingStopAll)
         XCTAssertFalse(store.confirmingRestartAll, "one question at a time")
+        c.confirmStopAll(false)
+        c.askRestartAll(force: true)
+        press(menu.items[3])
+        XCTAssertTrue(store.confirmingStopAll)
+        XCTAssertFalse(store.confirmingRestartAll, "the forced question too")
         XCTAssertTrue(store.showsControlLine)
         XCTAssertEqual(AgentIsland.stopAllQuestion(1, skipped: 1), "Stop 1 session? 1 on an old dch skipped.")
         XCTAssertEqual(AgentIsland.stopAllQuestion(3, skipped: 0), "Stop 3 sessions?")
@@ -2317,9 +2394,9 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.args, [], "Cancel: no verb")
         c.showSidekicks(true)
         menu = c.makeControlsMenu()
-        XCTAssertEqual(menu.items[2].title, "Stop all in Sidekicks…")
+        XCTAssertEqual(menu.items[3].title, "Stop all in Sidekicks…")
         f.progress = #"{"name":"x-qa","phase":"ending"}"# + "\n"
-        press(menu.items[2])
+        press(menu.items[3])
         c.confirmStopAll(true)
         for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
         XCTAssertEqual(Set(f.args), [["--stop", "x-qa", "--json"], ["--stop", "z-qa", "--json"]],
@@ -2360,7 +2437,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let store = try XCTUnwrap(c.store)
         XCTAssertEqual(store.stopAllTargets.stop, [])
         XCTAssertEqual(store.stopAllTargets.skipped, 2)
-        let item = c.makeControlsMenu().items[2]
+        let item = c.makeControlsMenu().items[3]
         XCTAssertEqual(item.title, "Stop all in Sessions…")
         XCTAssertFalse(item.isEnabled)
         c.askStopAll()

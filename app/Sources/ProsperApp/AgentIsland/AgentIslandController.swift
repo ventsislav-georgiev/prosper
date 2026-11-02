@@ -482,7 +482,7 @@ final class AgentIslandController {
         popUpMenu(makeControlsMenu())
     }
 
-    /// New session ▸ recent folders, Choose folder…; Restart all agents. Off,
+    /// New session ▸ recent folders, Choose folder…; Restart stale agents, Restart all agents (force). Off,
     /// with the gate's reason under them, while the gate refuses.
     func makeControlsMenu() -> NSMenu {
         let m = store?.controlsMenu ?? .init(recent: [], refused: nil), on = m.refused == nil
@@ -503,6 +503,9 @@ final class AgentIslandController {
         menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.restartAllLabel, needs: needs), enabled: risky && live) {
             [weak self] in self?.askRestartAll()
         })
+        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.restartAllForceLabel, needs: needs), enabled: risky && live) {
+            [weak self] in self?.askRestartAll(force: true)
+        })
         // #580: the shown tab's sessions; off when none of them can stop.
         let tab = store?.sessionTab.label ?? "Sessions", stoppable = !(store?.stopAllTargets.stop.isEmpty ?? true)
         menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.stopAllLabel(tab: tab), needs: needs), enabled: risky && stoppable) {
@@ -515,11 +518,13 @@ final class AgentIslandController {
         return menu
     }
 
-    /// The "⋯" menu's Restart all agents: only asks (the inline line).
-    func askRestartAll() {
+    /// The "⋯" menu's Restart stale agents, or (#700) Restart all agents (force):
+    /// only asks (the inline line); one restart question at a time.
+    func askRestartAll(force: Bool = false) {
         guard let store, store.restartGate.isOK, !store.sessions.isEmpty else { return }
         store.confirmingStopAll = false
         store.confirmingClear = false
+        store.restartAllForce = force
         store.confirmingRestartAll = true
         layout()
     }
@@ -528,17 +533,19 @@ final class AgentIslandController {
     func confirmRestartAll(_ yes: Bool) {
         guard let store, store.confirmingRestartAll else { return }
         store.confirmingRestartAll = false
-        if yes { restartAll() } else { layout() }
+        if yes { restartAll(force: store.restartAllForce) } else { layout() }
     }
 
-    /// `--restart --all --include-agents --json` (no -f: stale agents only), one
-    /// job per dir with a live session under the dir-wide key. A row shows dch's
-    /// phases once it reaches it ("Pausing…"), then its result; the dir gets the summary.
-    private func restartAll() {
+    /// `--restart --all --include-agents --json` (no -f: stale agents only; #700:
+    /// `force` adds -f), one job per dir with a live session under the dir-wide key.
+    /// A row shows dch's phases once it reaches it ("Pausing…"), then its result;
+    /// the dir gets the summary.
+    private func restartAll(force: Bool) {
         guard let store, case .ok(let dch) = store.restartGate else { return }
         for dir in Set(store.sessions.map(\.key.dir)).sorted() {
             let key = AgentSessionKey(dir: dir, name: "")
-            run(key, dch: dch, args: AgentIsland.restartAllArgs, running: AgentIsland.restartAllRunningText,
+            run(key, dch: dch, args: force ? AgentIsland.restartAllForceArgs : AgentIsland.restartAllArgs,
+                running: force ? AgentIsland.restartAllForceRunningText : AgentIsland.restartAllRunningText,
                 bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.dirLine($0, dir: dir, .restart) }) {
                 [weak self] r in self?.dirDone(dir, AgentIsland.restartAllSummary(r))
             }
