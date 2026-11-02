@@ -18,7 +18,13 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.163.0 *(unreleased)*
+## v2.164.0 *(unreleased)*
+
+- Ships dch 1.27.1. Resume, Stop and `dch --say` deliver their message again: since
+  dch 1.26.0 (Prosper 2.163.0) every one was typed but never sent ("not typed"). A
+  resumed session also gets the PATH and environment of your login shell.
+
+## v2.163.0
 
 - **Agent Island: set the command New session runs.** Settings › Agent Island has a
   New session command field, for example `claude` or `headroom wrap claude --chrome`.
