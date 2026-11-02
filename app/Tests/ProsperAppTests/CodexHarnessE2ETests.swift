@@ -24,9 +24,10 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// Polls: shutdown unregisters off-thread once the group is empty (escalate, ≤ grace + 1 s).
     private var groupsBefore: Set<pid_t> = []
     override func tearDown() async throws {
-        let deadline = Date().addingTimeInterval(5)
+        var polls = 100   // 5 s of polls, not wall time (#709, see `wait`)
         var leaked = Set(CodexHarness.livePGIDs.withLock { $0.keys }).subtracting(groupsBefore)
-        while !leaked.isEmpty, Date() < deadline {
+        while !leaked.isEmpty, polls > 0 {
+            polls -= 1
             try await Task.sleep(nanoseconds: 50_000_000)
             leaked = Set(CodexHarness.livePGIDs.withLock { $0.keys }).subtracting(groupsBefore)
         }
@@ -790,8 +791,9 @@ final class CodexHarnessE2ETests: XCTestCase {
 
         // An interrupt codex never answers is in flight when it dies.
         let abort = Task { try await harness.abort(session: session, turn: turn, timeout: 10) }
-        let deadline = Date().addingTimeInterval(5)
-        while (try? Self.received("turn/interrupt", exe: exe))?.isEmpty != false, Date() < deadline {
+        var polls = 250   // 5 s of polls, not wall time (#709)
+        while (try? Self.received("turn/interrupt", exe: exe))?.isEmpty != false, polls > 0 {
+            polls -= 1
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         let pid = try XCTUnwrap(parsePid(try String(contentsOf: exe.deletingLastPathComponent().appendingPathComponent("pid"), encoding: .utf8)))
@@ -857,8 +859,9 @@ final class CodexHarnessE2ETests: XCTestCase {
         try Data().write(to: dir.appendingPathComponent("spawn-child"))
         try await harness.start()
         let childFile = dir.appendingPathComponent("child-pid")
-        let deadline = Date().addingTimeInterval(5)
-        while !FileManager.default.fileExists(atPath: childFile.path), Date() < deadline {
+        var polls = 250   // 5 s of polls, not wall time (#709)
+        while !FileManager.default.fileExists(atPath: childFile.path), polls > 0 {
+            polls -= 1
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         let codex = try XCTUnwrap(parsePid(String(contentsOf: dir.appendingPathComponent("pid"), encoding: .utf8)))
@@ -870,8 +873,9 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     /// Waits up to 8 s (3 s SIGTERM grace + SIGKILL + launchd's reap) for `pid` to be gone.
     private static func waitGone(_ pid: pid_t, file: StaticString = #filePath, line: UInt = #line) async throws {
-        let deadline = Date().addingTimeInterval(8)
-        while kill(pid, 0) == 0, Date() < deadline {
+        var polls = 80   // 8 s of polls, not wall time (#709)
+        while kill(pid, 0) == 0, polls > 0 {
+            polls -= 1
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         if kill(pid, 0) == 0 {
@@ -1006,22 +1010,39 @@ final class CodexHarnessE2ETests: XCTestCase {
         return (controller, store)
     }
 
-    /// Polls every 10 ms until `condition` holds or `seconds` pass (never hangs);
+    /// Polls every 10 ms until `condition` holds or `seconds` worth of polls pass (never hangs);
     /// `sample` runs on every tick, to catch a value that must never show up.
+    /// #709: a budget of polls, not a wall-clock deadline (every wait in this file): the Mac
+    /// asleep mid-wait freezes the mock with the test, and a Date deadline expired on the first
+    /// tick after wake, before the thawed mock could answer. A tick only ever runs long.
     @MainActor
     private static func wait(_ seconds: TimeInterval = 10, sample: () -> Void = {},
                              until condition: () -> Bool) async -> Bool {
-        let deadline = Date().addingTimeInterval(seconds)
-        while true {
+        for _ in 0..<Int(seconds * 100) {
             sample()
             if condition() { return true }
-            if Date() >= deadline { return false }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+        sample()
+        return condition()
     }
 
     private static func count(_ method: String, exe: URL) -> Int {
         (try? received(method, exe: exe).count) ?? 0
+    }
+
+    /// #709: the Mac slept 12 min mid-wait in a full suite, freezing the waiter and the mock
+    /// alike. Frozen past its whole budget, the wait must still see the work that lands once
+    /// both thaw, instead of expiring on its first tick after the freeze.
+    @MainActor
+    func testWaitDoesNotSpendTimeTheProcessWasFrozen() async {
+        var landed = false
+        Task { @MainActor in landed = true }   // the work: frozen with the waiter until it yields
+        var frozen = false
+        let seen = await Self.wait(0.2, sample: {
+            if !frozen { frozen = true; usleep(500_000) }   // the sleep, longer than the budget
+        }) { landed }
+        XCTAssertTrue(seen, "time the process was frozen expired the wait")
     }
 
     /// #168: the pinned codex wins over a Homebrew/PATH one unless the dev override is on;
@@ -1428,13 +1449,7 @@ final class CodexHarnessE2ETests: XCTestCase {
 
         let (controller, store) = makeController(exe: exe, home: home)
         controller.submit(goal: "EXIT0 mid-turn")
-        // `harnessEnded` saves the transcript right after dropping the dead harness.
-        var resumable = false
-        let deadline = Date().addingTimeInterval(10)
-        while !resumable, Date() < deadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
-            resumable = !(await store.loadTranscript(id: "thread-1")).isEmpty
-        }
+        let resumable = await Self.harnessEnded(store)
         XCTAssertTrue(resumable, "codex exit was not handled")
         guard case .error = controller.phase else { return XCTFail("expected an error, got \(controller.phase)") }
 
@@ -1467,13 +1482,9 @@ final class CodexHarnessE2ETests: XCTestCase {
     }
 
     /// `harnessEnded` ran: it saves the transcript right after dropping the dead harness.
+    @MainActor
     private static func harnessEnded(_ store: AgentSessionStore) async -> Bool {
-        let deadline = Date().addingTimeInterval(10)
-        while Date() < deadline {
-            if !(await store.loadTranscript(id: "thread-1")).isEmpty { return true }
-            try? await Task.sleep(nanoseconds: 20_000_000)
-        }
-        return false
+        await waitAsync(10) { !(await store.loadTranscript(id: "thread-1")).isEmpty }
     }
 
     private static let died = "Agent error: codex app-server exited with code 0"
@@ -2219,8 +2230,9 @@ final class CodexHarnessE2ETests: XCTestCase {
         try server.run()
         defer { server.terminate() }
         let portFile = dir.appendingPathComponent("port")
-        let deadline = Date().addingTimeInterval(10)
-        while !FileManager.default.fileExists(atPath: portFile.path), Date() < deadline {
+        var polls = 200   // 10 s of polls, not wall time (#709)
+        while !FileManager.default.fileExists(atPath: portFile.path), polls > 0 {
+            polls -= 1
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         let port = try String(contentsOf: portFile, encoding: .utf8)
@@ -2772,12 +2784,11 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// `wait` for a condition that needs an await (the session store is an actor).
     @MainActor
     private static func waitAsync(_ seconds: TimeInterval = 2, until condition: () async -> Bool) async -> Bool {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !(await condition()) {
-            if Date() >= deadline { return false }
+        for _ in 0..<Int(seconds * 100) {   // polls, not wall time (#709, see `wait`)
+            if await condition() { return true }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        return true
+        return await condition()
     }
 
     private static func errorCount(_ items: [AgentItem]) -> Int {
