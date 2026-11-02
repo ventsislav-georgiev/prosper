@@ -46,6 +46,11 @@ tag from the now-released section and put it on the new top draft.
   - Open App's `o ` no longer searches apps.
 
   Re-enabling one brings it back with its settings unchanged.
+- **iPhone clipboard sync: smaller image downloads.** The iPhone app can ask the Mac for
+  a clipboard image at most 1024 pixels on its long side, the size it keeps anyway. The
+  Mac shrinks it and keeps its format and transparency. A smaller image is sent as is.
+  Syncing images is much quicker and gets cut off less often when you switch apps. It
+  needs an iPhone app that asks for it; older ones still get full-size images.
 
 ## v2.163.0
 

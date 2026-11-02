@@ -39,7 +39,7 @@ enum DchFrame {
     static let forgetAll: UInt8 = 0x26  // (empty) | {} → ok {cleared, skipped, failed} | error
     // #617: clipboard history both ways (DchClipboardOps), only while "clipboard" is in ops.
     static let clipboardList: UInt8 = 0x15        // {limit?, before?, since?} → clipboardResp | error
-    static let clipboardItem: UInt8 = 0x16        // {id, offset?} → clipboardItemResp, data…, ok | error
+    static let clipboardItem: UInt8 = 0x16        // {id, offset?, max_side?} → clipboardItemResp, data…, ok | error
     static let putClipboardText: UInt8 = 0x17     // {text} → ok | error (the live pasteboard)
     static let addClipboardHistory: UInt8 = 0x22  // {items: [..]} → ok {added, skipped} | error (small text)
     static let clipboardUpload: UInt8 = 0x23      // {id, date, kind, size, sha256, …}, data… → ok {added}|{skipped} | error
@@ -82,14 +82,15 @@ enum DchFrame {
 
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set
-    /// up while signed in. #617: "clipboard" joins ops only while clipboard sync is on.
+    /// up while signed in. #617: "clipboard" joins ops only while clipboard sync is on, and
+    /// #707's "clipboard_max_side" (clipboardItem's max_side) only beside it.
     /// #618: "chat" only while the agent model is on disk. #619: "commands" only while
     /// "Run commands from iPhone" is on. #669: "revive_no_message" only while the control
     /// dch passes 1.27.0 (historyResp is a bare array, so the capability lives here).
     static func machineInfo(deviceID: String, hostname: String, wakeId: String?, clipboard: Bool = false,
                             chat: Bool = false, commands: Bool = false, reviveNoMessage: Bool = false) -> [String: Any] {
         var info: [String: Any] = ["device_id": deviceID, "hostname": hostname,
-                                   "ops": ops + (reviveNoMessage ? ["revive_no_message"] : []) + (clipboard ? ["clipboard"] : [])
+                                   "ops": ops + (reviveNoMessage ? ["revive_no_message"] : []) + (clipboard ? ["clipboard", "clipboard_max_side"] : [])
                                        + (chat ? ["chat"] : []) + (commands ? ["commands"] : [])]
         if let wakeId { info["wakeId"] = wakeId }
         return info

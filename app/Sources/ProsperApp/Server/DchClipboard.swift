@@ -193,23 +193,26 @@ struct DchClipboardOps: Sendable {
 
     private func item(_ o: [String: Any], _ send: Send, _ reply: Reply) {
         let start = Date()
-        guard let id = (o["id"] as? String).flatMap(UUID.init(uuidString:)), o.count <= 2,
-              o.count == 1 || o["offset"] != nil else {
-            return reply(Self.error("malformed clipboardItem request: send {\"id\": \"…\", \"offset\"?: n}"))
+        guard let id = (o["id"] as? String).flatMap(UUID.init(uuidString:)),
+              Set(o.keys).isSubset(of: ["id", "offset", "max_side"]) else {
+            return reply(Self.error("malformed clipboardItem request: send {\"id\": \"…\", \"offset\"?: n, \"max_side\"?: px}"))
         }
         var offset = 0
         if let v = o["offset"] {
             guard let n = Self.int(v) else { return reply(Self.error("bad offset")) }
             offset = n
         }
+        // #707: a positive integer, else the original as before (never an error).
+        let maxSide = Self.int(o["max_side"]).flatMap { $0 > 0 ? $0 : nil }
         let (found, store) = onMain { s in (s.item(id), s) }
         guard let it = found else { return reply(Self.error("gone")) }
         if it.kind == .file {
             guard let path = it.sourcePath else { return reply(Self.error("gone")) }
-            return streamFile(it, path: path, offset: offset, start: start, send, reply)
+            return streamFile(it, path: path, offset: offset, maxSide: maxSide, start: start, send, reply)
         }
         guard let blob = it.blobFile else { return reply(Self.error("not stored")) }
-        guard let data = store.readBlob(blob) else { return reply(Self.error("gone")) }
+        guard let original = store.readBlob(blob) else { return reply(Self.error("gone")) }
+        let data = it.kind == .image ? maxSide.flatMap { Self.downsample(original, maxSide: $0) } ?? original : original
         guard offset <= data.count else { return reply(Self.error("bad offset")) }
         guard send(Self.itemHeader(it, size: data.count, sha256: ClipboardStore.sha256(data), mime: Self.mime(it, data))) else {
             return reply(Self.error("gone"))
@@ -220,14 +223,33 @@ struct DchClipboardOps: Sendable {
             guard send(DchFrame.encode(DchFrame.data, [UInt8](data[at..<end]))) else { return reply(Self.error("gone")) }
             at = end
         }
-        logItem(it, bytes: data.count - offset, offset: offset, start: start)
+        logItem(it, bytes: data.count - offset, offset: offset, start: start, maxSide: maxSide, before: original.count, after: data.count)
         reply(DchFrame.encode(DchFrame.ok, []))
+    }
+
+    /// #707: `data` with its long side cut to `maxSide` px, in its own format (alpha kept,
+    /// EXIF orientation applied to the pixels); nil = send the original: already small
+    /// enough, animated, unreadable, a format ImageIO cannot write, or a re-encode no smaller. The same input
+    /// encodes to the same bytes, so a resumed pull's offset and sha256 still hold.
+    static func downsample(_ data: Data, maxSide: Int) -> Data? {
+        guard let (w, h) = DchClipboardUpload.pixels(data), max(w, h) > maxSide,
+              let src = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(src) == 1,
+              let type = CGImageSourceGetType(src) else { return nil }
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: maxSide,
+                                     kCGImageSourceCreateThumbnailWithTransform: true]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        let out = NSMutableData()
+        guard let dst = CGImageDestinationCreateWithData(out, type, 1, nil) else { return nil }
+        // ponytail: one fixed JPEG/HEIC quality; PNG and other lossless formats ignore it.
+        CGImageDestinationAddImage(dst, cg, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+        // A low-quality JPEG/HEIC just over maxSide can grow at 0.85 (QA #524 LOW-1).
+        return CGImageDestinationFinalize(dst) && out.length < data.count ? out as Data : nil
     }
 
     /// A file entry's source file: opened O_NONBLOCK and only as a regular file (#608,
     /// #627), hashed in a first pass, then sent from `offset`. A file that changes
     /// between the passes ends in error "changed".
-    private func streamFile(_ it: ClipboardItem, path: String, offset: Int, start: Date, _ send: Send, _ reply: Reply) {
+    private func streamFile(_ it: ClipboardItem, path: String, offset: Int, maxSide: Int?, start: Date, _ send: Send, _ reply: Reply) {
         let fd = Darwin.open(path, O_RDONLY | O_NONBLOCK)
         guard fd >= 0 else { return reply(Self.error(errno == ENOENT ? "gone" : "unreadable")) }
         let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
@@ -251,12 +273,15 @@ struct DchClipboardOps: Sendable {
             guard send(DchFrame.encode(DchFrame.data, [UInt8](d))) else { return reply(Self.error("gone")) }
             at += d.count
         }
-        logItem(it, bytes: size - offset, offset: offset, start: start)
+        logItem(it, bytes: size - offset, offset: offset, start: start, maxSide: maxSide, before: size, after: size)
         reply(DchFrame.encode(DchFrame.ok, []))
     }
 
-    private func logItem(_ it: ClipboardItem, bytes: Int, offset: Int, start: Date) {
+    /// #707: a request's max_side adds the item's bytes before and after it (equal when
+    /// nothing was cut: text, a file, a small image).
+    private func logItem(_ it: ClipboardItem, bytes: Int, offset: Int, start: Date, maxSide: Int?, before: Int, after: Int) {
         log(.default, "clipboardItem: \(Self.wireKind(it.kind)), \(bytes) bytes from \(offset), "
+            + (maxSide.map { "max_side \($0), \(before) to \(after) bytes, " } ?? "")
             + String(format: "%.1f s", Date().timeIntervalSince(start)))
     }
 

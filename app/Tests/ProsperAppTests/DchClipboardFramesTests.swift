@@ -198,10 +198,13 @@ final class DchClipboardFramesTests: XCTestCase {
         XCTAssertFalse(Preferences.clipboardSyncActive, "history off closes it too")
         XCTAssertFalse(DchClipboardOps().enabled())
 
-        XCTAssertFalse((DchFrame.machineInfo(deviceID: "i", hostname: "h", wakeId: nil)["ops"] as? [String] ?? []).contains("clipboard"))
+        let off = DchFrame.machineInfo(deviceID: "i", hostname: "h", wakeId: nil)["ops"] as? [String] ?? []
+        XCTAssertFalse(off.contains("clipboard"))
+        XCTAssertFalse(off.contains("clipboard_max_side"), "#707: never without clipboard")
         XCTAssertEqual(DchFrame.machineInfo(deviceID: "i", hostname: "h", wakeId: nil, clipboard: true)["ops"] as? [String],
-                       DchFrame.ops + ["clipboard"])
+                       DchFrame.ops + ["clipboard", "clipboard_max_side"])
         XCTAssertFalse(DchFrame.ops.contains("clipboard"))
+        XCTAssertFalse(DchFrame.ops.contains("clipboard_max_side"))
     }
 
     /// Through handle: the handshake's ops follow the connection's gate.
@@ -212,6 +215,7 @@ final class DchClipboardFramesTests: XCTestCase {
             XCTAssertTrue(spin { !all(r).isEmpty }, "machineInfoResp")   // #671: sent after an off-queue probe
             let ops = Self.object(all(r).first)["ops"] as? [String] ?? []
             XCTAssertEqual(ops.contains("clipboard"), on)
+            XCTAssertEqual(ops.contains("clipboard_max_side"), on, "#707: only while clipboard is listed")
             XCTAssertEqual(r.lines.snapshot, ["notice: machineInfo: clipboard \(on ? "advertised" : "not advertised")"], "#701")
         }
     }
@@ -648,6 +652,156 @@ final class DchClipboardFramesTests: XCTestCase {
         XCTAssertEqual(Self.message(request(r, DchFrame.clipboardItem, ["id": UUID().uuidString])), "gone")
         XCTAssertTrue(Self.message(request(r, DchFrame.clipboardItem, ["id": "x"])).contains("malformed clipboardItem"))
         XCTAssertTrue(Self.message(request(r, DchFrame.clipboardItem, ["id": fid.uuidString, "x": 1])).contains("malformed clipboardItem"))
+    }
+
+    // MARK: - clipboardItem max_side (#707)
+
+    /// A `type` image (PNG or JPEG): an opaque orange left half and, unless the format drops
+    /// alpha, a fully clear right half.
+    private static func image(_ w: Int, _ h: Int, _ type: UTType) -> Data {
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(CGColor(red: 1, green: 0.5, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w / 2, height: h))
+        let out = NSMutableData()
+        let dst = CGImageDestinationCreateWithData(out, type.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(dst, ctx.makeImage()!, nil)
+        CGImageDestinationFinalize(dst)
+        return out as Data
+    }
+
+    /// The alpha of the pixel at (x, y) from the top left, decoded from `data`.
+    private static func alpha(_ data: Data, x: Int, y: Int) throws -> UInt8 {
+        let src = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+        let cg = try XCTUnwrap(CGImageSourceCreateImageAtIndex(src, 0, nil))
+        let ctx = try XCTUnwrap(CGContext(data: nil, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: cg.width * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        let p = try XCTUnwrap(ctx.data).assumingMemoryBound(to: UInt8.self)
+        return p[y * cg.width * 4 + x * 4 + 3]
+    }
+
+    private func addImage(_ r: Rig, _ data: Data) -> UUID {
+        let id = UUID()
+        XCTAssertTrue(r.store.addRemote(id: id, date: Date(), source: "iPhone", sha256: id.uuidString, .image(data, width: 1, height: 1)))
+        return id
+    }
+
+    /// One clipboardItem request's pull; its final reply must be ok.
+    private func pull(_ r: Rig, _ o: [String: Any], file: StaticString = #filePath, line: UInt = #line)
+        -> (header: [String: Any], chunks: [Int], data: Data) {
+        let from = all(r).count
+        XCTAssertEqual(request(r, DchFrame.clipboardItem, o, file: file, line: line), DchFrame.encode(DchFrame.ok, []), file: file, line: line)
+        return pulled(r, from: from)
+    }
+
+    func testMaxSideDownsamplesPNGAndJPEGKeepingTheFormatAlphaAndAResumableStream() throws {
+        let r = rig()
+        for (type, w, h, want) in [(UTType.png, 3000, 1500, (1024, 512)), (.jpeg, 1200, 2400, (512, 1024))] {
+            let original = Self.image(w, h, type), id = addImage(r, original)
+            let n = r.lines.snapshot.count
+            let p = pull(r, ["id": id.uuidString, "max_side": 1024])
+            let px = try XCTUnwrap(DchClipboardUpload.pixels(p.data), "\(type)")
+            XCTAssertEqual(px.0, want.0, "\(type): the long side is max_side, the aspect kept")
+            XCTAssertEqual(px.1, want.1, "\(type)")
+            let src = try XCTUnwrap(CGImageSourceCreateWithData(p.data as CFData, nil))
+            XCTAssertEqual(CGImageSourceGetType(src) as String?, type.identifier, "the format is kept")
+            XCTAssertEqual(p.header["mime"] as? String, type.preferredMIMEType)
+            XCTAssertEqual(p.header["size"] as? Int, p.data.count, "size and sha256 describe the bytes sent")
+            XCTAssertEqual(p.header["sha256"] as? String, ClipboardStore.sha256(p.data))
+            XCTAssertEqual(r.lines.snapshot.dropFirst(n).count, 1)
+            let line = r.lines.snapshot.last ?? ""
+            XCTAssertTrue(line.hasPrefix("notice: clipboardItem: image, \(p.data.count) bytes from 0, max_side 1024, "
+                + "\(original.count) to \(p.data.count) bytes, "), line)
+            if type == .png {
+                XCTAssertEqual(try Self.alpha(p.data, x: 10, y: 10), 255, "the opaque half stays opaque")
+                XCTAssertEqual(try Self.alpha(p.data, x: 1014, y: 10), 0, "alpha is kept")
+            }
+            // A resumed pull gets the rest of the same bytes, under the same sha256.
+            let off = p.data.count / 2
+            let rest = pull(r, ["id": id.uuidString, "max_side": 1024, "offset": off])
+            XCTAssertEqual(rest.data, p.data.subdata(in: off..<p.data.count), "\(type)")
+            XCTAssertEqual(rest.header["sha256"] as? String, p.header["sha256"] as? String)
+            XCTAssertEqual(Self.message(request(r, DchFrame.clipboardItem, ["id": id.uuidString, "max_side": 1024, "offset": p.data.count + 1])),
+                           "bad offset", "the offset bound is the downsampled size")
+        }
+    }
+
+    func testMaxSideKeepsAnOriginalAlreadyWithinItByteForByte() {
+        let r = rig()
+        for (original, side) in [(Self.image(1024, 600, .png), 1024), (Self.image(300, 200, .jpeg), 1024), (Self.image(40, 1024, .png), 1024)] {
+            let id = addImage(r, original)
+            let p = pull(r, ["id": id.uuidString, "max_side": side])
+            XCTAssertEqual(p.data, original, "a long side of at most max_side comes back unchanged")
+            XCTAssertEqual(p.header["sha256"] as? String, ClipboardStore.sha256(original))
+            XCTAssertTrue(r.lines.snapshot.last?.contains("max_side \(side), \(original.count) to \(original.count) bytes, ") == true,
+                          r.lines.snapshot.last ?? "")
+        }
+    }
+
+    /// QA #524 LOW-1: a q0.3 JPEG just over max_side re-encodes larger at 0.85, so it goes as is.
+    func testAReEncodeNoSmallerThanTheOriginalSendsTheOriginal() {
+        let w = 1100, h = 733
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        var seed: UInt32 = 7   // fixed noise: detail a low quality throws away
+        for y in stride(from: 0, to: h, by: 4) {
+            for x in stride(from: 0, to: w, by: 4) {
+                seed = seed &* 1_664_525 &+ 1_013_904_223
+                ctx.setFillColor(CGColor(red: CGFloat(seed >> 24) / 255, green: CGFloat((seed >> 16) & 255) / 255,
+                                         blue: CGFloat((seed >> 8) & 255) / 255, alpha: 1))
+                ctx.fill(CGRect(x: x, y: y, width: 4, height: 4))
+            }
+        }
+        let out = NSMutableData()
+        let dst = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(dst, ctx.makeImage()!, [kCGImageDestinationLossyCompressionQuality: 0.3] as CFDictionary)
+        CGImageDestinationFinalize(dst)
+        let original = out as Data
+        let r = rig(), id = addImage(r, original)
+        let p = pull(r, ["id": id.uuidString, "max_side": 1024])
+        XCTAssertEqual(p.data, original, "a re-encode that would not shrink the clip sends the original")
+        XCTAssertEqual(p.header["sha256"] as? String, ClipboardStore.sha256(original))
+    }
+
+    func testAnAbsentOrInvalidMaxSideSendsTheOriginal() throws {
+        let r = rig()
+        let original = Self.image(2000, 1000, .png), id = addImage(r, original)
+        let bad: [Any?] = [nil, 0, -5, 1.5, "1024", true, NSNull(), [1024], ["px": 1024]]
+        for v in bad {
+            var o: [String: Any] = ["id": id.uuidString]
+            if let v { o["max_side"] = v }
+            let p = pull(r, o)
+            XCTAssertEqual(p.data, original, "\(String(describing: v))")
+            XCTAssertEqual(p.header["size"] as? Int, original.count)
+            XCTAssertFalse(r.lines.snapshot.last?.contains("max_side") ?? true, "\(String(describing: v)): logged as a plain pull")
+        }
+        // An animated image keeps its frames: the original, never its first frame alone.
+        let gif = NSMutableData(), frame = try XCTUnwrap(CGImageSourceCreateImageAtIndex(
+            try XCTUnwrap(CGImageSourceCreateWithData(original as CFData, nil)), 0, nil))
+        let dst = try XCTUnwrap(CGImageDestinationCreateWithData(gif, UTType.gif.identifier as CFString, 2, nil))
+        CGImageDestinationAddImage(dst, frame, nil)
+        CGImageDestinationAddImage(dst, frame, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(dst))
+        XCTAssertEqual(pull(r, ["id": addImage(r, gif as Data).uuidString, "max_side": 1024]).data, gif as Data)
+        // A file entry streams its file as is: max_side is for image clips.
+        let d = tempDir(), file = d.appendingPathComponent("photo.png")
+        try original.write(to: file)
+        r.store.addFile(file)
+        let fid = try XCTUnwrap(r.store.items.first?.id)
+        XCTAssertEqual(pull(r, ["id": fid.uuidString, "max_side": 16]).data, original)
+        XCTAssertTrue(r.lines.snapshot.last?.contains("max_side 16, \(original.count) to \(original.count) bytes") == true)
+    }
+
+    func testATextClipIgnoresMaxSide() {
+        let r = rig()
+        let id = UUID(), body = Self.bytes(5000)
+        r.store.addRemote(id: id, date: Date(), source: "iPhone", sha256: "t", .text(String(decoding: body, as: UTF8.self)))
+        let p = pull(r, ["id": id.uuidString, "max_side": 1])
+        XCTAssertEqual(p.data, body)
+        XCTAssertEqual(p.header["mime"] as? String, "text/plain; charset=utf-8")
+        XCTAssertTrue(r.lines.snapshot.last?.hasPrefix("notice: clipboardItem: text, 5000 bytes from 0, max_side 1, 5000 to 5000 bytes, ") == true,
+                      r.lines.snapshot.last ?? "")
     }
 
     func testItemStreamStopsWhenTheConnectionCloses() {
