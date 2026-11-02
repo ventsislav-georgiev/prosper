@@ -1518,7 +1518,7 @@ private struct RunnerView: View {
             }
         }
         .background(
-            KeyHandling(
+            RunnerKeyHandling(
                 onCancel: {
                     // Esc in a locked mode, or with any typed text, first clears the
                     // field and drops back to the universal launcher (Raycast-style)
@@ -1964,7 +1964,7 @@ private struct InputHeader: View {
 /// `==` is true and the vertical field is not re-measured → the caret holds still.
 /// `placeholder` is included in `==` so a mode switch (which changes it) re-renders.
 /// Closures are excluded (identity is irrelevant to layout).
-private struct GatedField: View, Equatable {
+struct GatedField: View, Equatable {
     let placeholder: String
     let textValue: String            // snapshot of model.input, for == only
     @Binding var text: String        // live binding, drives the TextField
@@ -1994,10 +1994,16 @@ private struct GatedField: View, Equatable {
             .focused(focus)
             .onSubmit(onSubmit)
             .onChange(of: text) { _, _ in onChange() }
-            // ↑/↓ switch results only — never move the caret (a multi-line TextField
-            // acts on the arrows itself; `.handled` suppresses that).
-            .onKeyPress(.upArrow) { onUp(); return .handled }
-            .onKeyPress(.downArrow) { onDown(); return .handled }
+            // Plain ↑/↓ switch results only — never move the caret (a multi-line
+            // TextField acts on the arrows itself; `.handled` suppresses that). With
+            // any modifier (⌘↑ ⇧↑ ⌥↑ ⇧⌘↓ …) the arrow is a caret/selection move and
+            // goes to the field editor (#702); the key-only overload matched them all.
+            .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+                guard press.modifiers.isDisjoint(with: [.shift, .control, .option, .command])
+                else { return .ignored }
+                if press.key == .upArrow { onUp() } else { onDown() }
+                return .handled
+            }
             // Belt-and-braces: never let an implicit animation interpolate the field's
             // layout/caret on a surrounding result change.
             .transaction { $0.disablesAnimations = true }
@@ -2578,7 +2584,7 @@ private func currencyUpdatedSubtitle() -> String? {
 
 // MARK: - Actions menu button
 
-private struct ActionMenuButton: View {
+struct ActionMenuButton: View {
     /// The selected row's declared actions (e.g. the `files` finder's Open / Reveal
     /// / Quick Look / Copy Path / …); listed first when present.
     var fileActions: [RowAction] = []
@@ -2620,8 +2626,8 @@ private struct ActionMenuButton: View {
                 Divider()
                 Button("Edit Quicklink\u{2026}") { onEdit(hit) }
                     .keyboardShortcut("e", modifiers: .command)
+                // No accelerator: ⌘⌫ is the input field's delete-to-line-start (#702).
                 Button("Delete Quicklink", role: .destructive) { onDelete(hit) }
-                    .keyboardShortcut(.delete, modifiers: .command)
             }
         } label: {
             HStack(spacing: sz(6)) {
@@ -2636,7 +2642,10 @@ private struct ActionMenuButton: View {
         .keyboardShortcut("k", modifiers: .command)
         // The real accelerators, one per advertised menu item, so each works without
         // opening the menu first: ⌘⇧C copies, ⌘E edits the selected quicklink
-        // (Raycast parity), ⌘⇧K binds a global hotkey to the selected row, ⌘⌫ deletes.
+        // (Raycast parity), ⌘⇧K binds a global hotkey to the selected row. None may
+        // take a text-editing key (#702): ⌘⌫ is the field's delete-to-line-start, and
+        // the hidden ⌘⌫ "Delete Quicklink" that was here could claim it — a silent
+        // no-op whenever no quicklink row was selected.
         // Each guards on the same state its menu item is gated by, so a shortcut for
         // an item that isn't showing does nothing.
         .background(
@@ -2653,8 +2662,6 @@ private struct ActionMenuButton: View {
                     .keyboardShortcut("e", modifiers: .command)
                 Button("") { if let target = assignTarget { onAssignShortcut(target) } }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
-                Button("") { if let hit = quicklink { onDelete(hit) } }
-                    .keyboardShortcut(.delete, modifiers: .command)
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -2785,7 +2792,7 @@ private struct RunnerSlotLadderOverlay: View {
 /// the input `TextField` is always first responder, so a background view never
 /// receives key events. The monitor intercepts navigation/commit keys (returns
 /// nil to consume) and lets typing fall through. Scoped to this panel's window.
-private struct KeyHandling: NSViewRepresentable {
+struct RunnerKeyHandling: NSViewRepresentable {
     let onCancel: () -> Void
     let onCommit: () -> Void
     /// Returns true if Backspace was handled (consumed) — used to leave a locked
@@ -2843,11 +2850,19 @@ private struct KeyHandling: NSViewRepresentable {
         weak var window: NSWindow?
         private var monitor: Any?
 
+        /// The monitor's body, kept as a value so tests run the exact closure the
+        /// monitor gets without installing one. Resolve self first:
+        /// `self?.handle(event) ?? event` flattens "consumed" (nil) into "self is
+        /// gone" and hands every consumed key on to the field as well (#702; the
+        /// same trap ClipboardPanel's monitor documents).
+        lazy var monitorHandler: (NSEvent) -> NSEvent? = { [weak self] event in
+            guard let self else { return event }
+            return self.handle(event)
+        }
+
         func start() {
             guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                self?.handle(event) ?? event
-            }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: monitorHandler)
         }
 
         func stop() {
@@ -2858,6 +2873,9 @@ private struct KeyHandling: NSViewRepresentable {
         private func handle(_ e: NSEvent) -> NSEvent? {
             guard let h = handlers else { return e }
             guard let w = window, e.window === w else { return e }
+            // An input method composing text owns Return/Esc/⌫ (confirm, cancel,
+            // edit the composition); only act once nothing is marked.
+            if let editor = w.firstResponder as? NSTextView, editor.hasMarkedText() { return e }
             let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
             // ⌘A/⌘C/⌘V/⌘X are deliberately NOT handled here. The app installs a real
             // Edit menu (AppDelegate.installEditMenu), which dispatches them to the

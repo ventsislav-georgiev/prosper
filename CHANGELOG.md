@@ -29,6 +29,11 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.27.1. Resume, Stop and `dch --say` deliver their message again: since
   dch 1.26.0 (Prosper 2.163.0) every one was typed but never sent ("not typed"). A
   resumed session also gets the PATH and environment of your login shell.
+- **Command runner: the usual text editing keys work in the search field.** ⌘⌫ deletes
+  back to the start of the line again; a hidden Delete Quicklink shortcut had taken it,
+  even with no quicklink selected. ↑ and ↓ with ⇧, ⌥, ⌘ or ⌃ now move the caret or
+  select text, as in any text field; only plain ↑ and ↓ move between results. Delete
+  Quicklink stays in the ⌘K actions menu, without a shortcut.
 
 ## v2.163.0
 
