@@ -333,6 +333,7 @@ final class DchConnection: @unchecked Sendable {
             // The phone sends 0x08 alone on its own connection, so the reply may trail others.
             let deviceID = SupporterStore.deviceID(), hostname = SupporterStore.deviceName()
             let wakeId = LiveExtensionHostServices.currentWakeId, clip = clipboard.enabled()
+            clipboard.log(.default, "machineInfo: clipboard \(clip ? "advertised" : "not advertised")")   // #701
             let chat = chat.available, commands = commands.enabled(), ops = ops
             DispatchQueue.global(qos: .userInitiated).async {
                 let revive = DchCommand.gate(ops.binary(), masters: [], minimum: AgentIsland.reviveNoMessageMinimum).isOK

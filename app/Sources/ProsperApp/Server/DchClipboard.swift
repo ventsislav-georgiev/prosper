@@ -3,6 +3,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import ImageIO
+import os
 import UniformTypeIdentifiers
 
 // MARK: - Phone clipboard history sync (#617)
@@ -30,6 +31,12 @@ struct DchClipboardOps: Sendable {
     /// capture limits (an image's PNG of maxImagePixels RGBA at most). Anything larger is a file.
     var memoryMax: @Sendable (_ image: Bool) -> Int = { $0 ? ClipboardMonitor.maxImagePixels * 4 : ClipboardMonitor.maxTextBytes }
     var maxPixels = ClipboardMonitor.maxImagePixels
+    /// #701: one line per request (and the handshake's flag): its type, counts and reasons,
+    /// never a clip's content, text or name. A seam, so tests read the lines.
+    var log: @Sendable (OSLogType, String) -> Void = { level, line in
+        DchClipboardOps.logger.log(level: level, "\(line, privacy: .public)")
+    }
+    static let logger = Logger(subsystem: "eu.illegible.prosper", category: "clipboard")
 
     typealias Reply = DchControlOps.Reply
     /// A stream's non-final frame; false once the connection is gone.
@@ -49,28 +56,42 @@ struct DchClipboardOps: Sendable {
 
     /// clipboardList, clipboardItem, addClipboardHistory. `send` carries a stream's frames.
     func handle(_ type: UInt8, _ payload: Data, send: @escaping Send, reply: Reply) {
-        guard enabled() else { return reply(Self.error(Self.offMessage)) }
+        let name = type == DchFrame.clipboardList ? "clipboardList" : type == DchFrame.clipboardItem ? "clipboardItem"
+            : type == DchFrame.addClipboardHistory ? "addClipboardHistory" : "0x\(String(type, radix: 16))"
+        @Sendable func done(_ f: Data) { reply(logRefusal(name, f)) }
+        guard enabled() else { return done(Self.error(Self.offMessage)) }
         let o = payload.isEmpty ? [:] : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
-        guard let o else { return reply(Self.error("malformed request: not a JSON object")) }
+        guard let o else { return done(Self.error("malformed request: not a JSON object")) }
         switch type {
-        case DchFrame.clipboardList: list(o, reply)
-        case DchFrame.clipboardItem: item(o, send, reply)
-        case DchFrame.addClipboardHistory: addHistory(o, reply)
-        default: reply(Self.error("unknown request"))
+        case DchFrame.clipboardList: list(o, done)
+        case DchFrame.clipboardItem: item(o, send, done)
+        case DchFrame.addClipboardHistory: addHistory(o, done)
+        default: done(Self.error("unknown request"))
         }
+    }
+
+    /// #701: `frame`, a request's final reply; a refusal (error 0x13) is logged with its
+    /// message, which is always one of this file's fixed strings, never a clip's content.
+    @discardableResult
+    func logRefusal(_ request: String, _ frame: Data) -> Data {
+        guard frame.first == DchFrame.error else { return frame }
+        let o = (try? JSONSerialization.jsonObject(with: frame.dropFirst(5))) as? [String: Any]
+        log(.error, "\(request) refused: \(o?["message"] as? String ?? "")")
+        return frame
     }
 
     /// putClipboardText {text}: the live pasteboard, as "send to Mac now". On the server
     /// queue, as putClipboard: the phone's ctrl-V can be the very next frame.
     func putText(_ payload: Data) -> Data {
-        guard enabled() else { return Self.error(Self.offMessage) }
+        guard enabled() else { return logRefusal("putClipboardText", Self.error(Self.offMessage)) }
         guard let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any], o.count == 1,
               let text = o["text"] as? String else {
-            return Self.error("malformed putClipboardText request: send {\"text\": \"…\"}")
+            return logRefusal("putClipboardText", Self.error("malformed putClipboardText request: send {\"text\": \"…\"}"))
         }
         let pb = Pasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
+        log(.default, "putClipboardText: \(text.utf8.count) bytes")
         return DchFrame.encode(DchFrame.ok, [])
     }
 
@@ -114,6 +135,10 @@ struct DchClipboardOps: Sendable {
         while true {
             let data = (try? JSONSerialization.data(withJSONObject: wire, options: [.withoutEscapingSlashes])) ?? Data()
             if data.count <= DchFrame.maxFrame || wire.count <= 1 {
+                if data.count <= DchFrame.maxFrame {
+                    log(.default, "clipboardList: \(wire.count) of \(rows.count) rows, \(data.count) bytes"
+                        + (since == nil ? "" : ", since") + (before == nil ? "" : ", before"))
+                }
                 return reply(data.count <= DchFrame.maxFrame ? DchFrame.encode(DchFrame.clipboardResp, [UInt8](data))
                                                              : Self.error("clipboard item too large for one frame"))
             }
@@ -167,6 +192,7 @@ struct DchClipboardOps: Sendable {
     // MARK: clipboardItem 0x16 → clipboardItemResp 0x1a, data frames, ok
 
     private func item(_ o: [String: Any], _ send: Send, _ reply: Reply) {
+        let start = Date()
         guard let id = (o["id"] as? String).flatMap(UUID.init(uuidString:)), o.count <= 2,
               o.count == 1 || o["offset"] != nil else {
             return reply(Self.error("malformed clipboardItem request: send {\"id\": \"…\", \"offset\"?: n}"))
@@ -180,7 +206,7 @@ struct DchClipboardOps: Sendable {
         guard let it = found else { return reply(Self.error("gone")) }
         if it.kind == .file {
             guard let path = it.sourcePath else { return reply(Self.error("gone")) }
-            return streamFile(it, path: path, offset: offset, send, reply)
+            return streamFile(it, path: path, offset: offset, start: start, send, reply)
         }
         guard let blob = it.blobFile else { return reply(Self.error("not stored")) }
         guard let data = store.readBlob(blob) else { return reply(Self.error("gone")) }
@@ -194,13 +220,14 @@ struct DchClipboardOps: Sendable {
             guard send(DchFrame.encode(DchFrame.data, [UInt8](data[at..<end]))) else { return reply(Self.error("gone")) }
             at = end
         }
+        logItem(it, bytes: data.count - offset, offset: offset, start: start)
         reply(DchFrame.encode(DchFrame.ok, []))
     }
 
     /// A file entry's source file: opened O_NONBLOCK and only as a regular file (#608,
     /// #627), hashed in a first pass, then sent from `offset`. A file that changes
     /// between the passes ends in error "changed".
-    private func streamFile(_ it: ClipboardItem, path: String, offset: Int, _ send: Send, _ reply: Reply) {
+    private func streamFile(_ it: ClipboardItem, path: String, offset: Int, start: Date, _ send: Send, _ reply: Reply) {
         let fd = Darwin.open(path, O_RDONLY | O_NONBLOCK)
         guard fd >= 0 else { return reply(Self.error(errno == ENOENT ? "gone" : "unreadable")) }
         let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
@@ -224,7 +251,13 @@ struct DchClipboardOps: Sendable {
             guard send(DchFrame.encode(DchFrame.data, [UInt8](d))) else { return reply(Self.error("gone")) }
             at += d.count
         }
+        logItem(it, bytes: size - offset, offset: offset, start: start)
         reply(DchFrame.encode(DchFrame.ok, []))
+    }
+
+    private func logItem(_ it: ClipboardItem, bytes: Int, offset: Int, start: Date) {
+        log(.default, "clipboardItem: \(Self.wireKind(it.kind)), \(bytes) bytes from \(offset), "
+            + String(format: "%.1f s", Date().timeIntervalSince(start)))
     }
 
     static func itemHeader(_ it: ClipboardItem, size: Int, sha256: String, mime: String?) -> Data {
@@ -279,6 +312,10 @@ struct DchClipboardOps: Sendable {
             }
             if let why { store.removeBlob(sealed); skip(why) } else { added.append(idText) }
         }
+        let reasons = Dictionary(skipped.map { ($0["reason"] ?? "", 1) }, uniquingKeysWith: +)
+            .sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", ")
+        log(.default, "addClipboardHistory: \(arr.count) items, \(added.count) added, \(skipped.count) skipped"
+            + (reasons.isEmpty ? "" : " (\(reasons))"))
         reply(DchFrame.encode(DchFrame.ok, json: ["added": added, "skipped": skipped]))
     }
 
@@ -465,6 +502,9 @@ final class DchClipboardUpload: @unchecked Sendable {
     private var memory = Data()
     private var file: FileHandle?
     private var part: URL?
+    private let start = Date()
+    /// The parsed header, for the log line: `u` is set only once this upload owns its row.
+    private var header: DchClipboardOps.Upload?
 
     init(ops: DchClipboardOps, reply: @escaping DchControlOps.Reply, closeConnection: @escaping @Sendable () -> Void) {
         self.ops = ops
@@ -508,6 +548,7 @@ final class DchClipboardUpload: @unchecked Sendable {
     private func begin(_ header: Data) {
         guard ops.enabled() else { return finish(DchClipboardOps.error(DchClipboardOps.offMessage)) }
         guard let u = DchClipboardOps.upload(header) else { return finish(DchClipboardOps.error(DchClipboardOps.uploadShape)) }
+        self.header = u
         let close = closeConnection
         let r = ClipboardReceiving(id: u.id, kind: u.kind, createdAt: u.date, name: u.name, size: u.size, bytes: 0)
         // One hop: the duplicate check and the row, so no second upload of this id gets past here.
@@ -522,7 +563,7 @@ final class DchClipboardUpload: @unchecked Sendable {
             s.beginReceiving(r, cancel: close)
             return s
         }
-        guard let store else { return finish(DchClipboardOps.skipped(u.id, "duplicate")) }
+        guard let store else { return finish(DchClipboardOps.skipped(u.id, "duplicate"), "skipped duplicate") }
         (self.u, self.store) = (u, store)   // from here a refusal ends the row (cleanup)
         let toFile = u.kind == .file || u.size > ops.memoryMax(u.kind == .image)
         guard let dir = toFile ? ops.receivedDir() : store.dir else { return fail("no folder for received files") }
@@ -616,15 +657,15 @@ final class DchClipboardUpload: @unchecked Sendable {
             if let live { DchClipboardOps.setLive(it, s, live) }
             return nil
         }
-        guard let result else { return finish(DchFrame.encode(DchFrame.ok, json: ["added": [u.id.uuidString]])) }
+        guard let result else { return finish(DchFrame.encode(DchFrame.ok, json: ["added": [u.id.uuidString]]), "added") }
         store.removeBlob(item)   // too_old: eviction already removed it
         undo()
-        finish(result == "cancelled" ? DchClipboardOps.error(result) : DchClipboardOps.skipped(u.id, result))
+        finish(result == "cancelled" ? DchClipboardOps.error(result) : DchClipboardOps.skipped(u.id, result), "skipped \(result)")
     }
 
     private func skip(_ why: String) {
         cleanup()
-        finish(DchClipboardOps.skipped(u?.id ?? UUID(), why))
+        finish(DchClipboardOps.skipped(u?.id ?? UUID(), why), "skipped \(why)")
     }
 
     private func fail(_ message: String) {
@@ -642,10 +683,16 @@ final class DchClipboardUpload: @unchecked Sendable {
         if let id = u?.id { ops.onMain { $0.endReceiving(id) } }
     }
 
-    private func finish(_ frame: Data) {
+    /// The one reply, and its one log line (#701): a refusal with its message, else the
+    /// kind, the bytes taken and `outcome`. Never the item's content or name.
+    private func finish(_ frame: Data, _ outcome: String = "") {
         guard !done else { return }
         done = true
-        reply(frame)
+        if frame.first != DchFrame.error, let u = header {
+            ops.log(.default, "clipboardUpload: \(u.kind.rawValue), \(received) of \(u.size) bytes, "
+                + String(format: "%.1f s", Date().timeIntervalSince(start)) + ": \(outcome)")
+        }
+        reply(ops.logRefusal("clipboardUpload", frame))
     }
 
     static func pixels(_ data: Data) -> (Int, Int)? {

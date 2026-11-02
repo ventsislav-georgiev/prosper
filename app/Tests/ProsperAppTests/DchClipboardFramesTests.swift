@@ -22,12 +22,20 @@ final class DchClipboardFramesTests: XCTestCase {
         var closed = 0
     }
 
+    /// #701: what DchClipboardOps.log wrote, as "<level>: <line>" (error or notice).
+    private final class Lines: @unchecked Sendable {
+        let lock = NSLock()
+        var all: [String] = []
+        var snapshot: [String] { lock.withLock { all } }
+    }
+
     private struct Rig {
         let conn: DchConnection
         let queue: DispatchQueue
         let frames: Frames
         let store: ClipboardStore
         let received: URL
+        let lines: Lines
     }
 
     private func rig(on: Bool = true, free: Int64? = nil, memoryMax: Int? = nil, maxPixels: Int? = nil,
@@ -41,10 +49,12 @@ final class DchClipboardFramesTests: XCTestCase {
         o.freeSpace = { _ in free }
         if let memoryMax { o.memoryMax = { _ in memoryMax } }
         if let maxPixels { o.maxPixels = maxPixels }
-        return wire(o, store: store, received: received)
+        let lines = Lines()
+        o.log = { level, line in lines.lock.withLock { lines.all.append("\(level == .error ? "error" : "notice"): \(line)") } }
+        return wire(o, store: store, received: received, lines: lines)
     }
 
-    private func wire(_ o: DchClipboardOps, store: ClipboardStore, received: URL) -> Rig {
+    private func wire(_ o: DchClipboardOps, store: ClipboardStore, received: URL, lines: Lines) -> Rig {
         let queue = DispatchQueue(label: "test.dchconn.clipboard")
         let frames = Frames()
         let conn = DchConnection(conn: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), queue: queue,
@@ -52,11 +62,11 @@ final class DchClipboardFramesTests: XCTestCase {
                                  onClose: { @Sendable _ in frames.lock.withLock { frames.closed += 1 } })
         conn.sendOverride = { f in frames.lock.withLock { frames.all.append(f) } }
         conn.clipboard = o
-        return Rig(conn: conn, queue: queue, frames: frames, store: store, received: received)
+        return Rig(conn: conn, queue: queue, frames: frames, store: store, received: received, lines: lines)
     }
 
     /// QA #493 P4: a second connection on the same store, folders and gate.
-    private func peer(_ r: Rig) -> Rig { wire(r.conn.clipboard, store: r.store, received: r.received) }
+    private func peer(_ r: Rig) -> Rig { wire(r.conn.clipboard, store: r.store, received: r.received, lines: r.lines) }
 
     // MARK: Frame helpers
 
@@ -202,6 +212,7 @@ final class DchClipboardFramesTests: XCTestCase {
             XCTAssertTrue(spin { !all(r).isEmpty }, "machineInfoResp")   // #671: sent after an off-queue probe
             let ops = Self.object(all(r).first)["ops"] as? [String] ?? []
             XCTAssertEqual(ops.contains("clipboard"), on)
+            XCTAssertEqual(r.lines.snapshot, ["notice: machineInfo: clipboard \(on ? "advertised" : "not advertised")"], "#701")
         }
     }
 
@@ -227,6 +238,73 @@ final class DchClipboardFramesTests: XCTestCase {
         XCTAssertTrue(r.store.receiving.isEmpty)
         XCTAssertEqual(Pasteboard.general.changeCount, count, "nothing reached the pasteboard")
         XCTAssertEqual(all(r).count, requests.count, "no stream frame either")
+        XCTAssertEqual(r.lines.snapshot, ["clipboardList", "clipboardItem", "putClipboardText", "addClipboardHistory", "clipboardUpload"]
+            .map { "error: \($0) refused: clipboard sync is off" }, "#701: one refusal line per request, with its reason")
+    }
+
+    /// #701: one log line per request, with its counts and reasons, and never a clip's content
+    /// or name: the Mac's side of a sync is readable from `log show` alone.
+    func testEachRequestLogsOneLineWithCountsAndNoContent() throws {
+        let r = rig()
+        let secret = "secret-\(UUID().uuidString)", t = Date(timeIntervalSince1970: 1_700_000_000)
+        let kept = UUID()
+        r.store.addRemote(id: kept, date: t, source: "iPhone", sha256: "k", .text(secret + " kept"))
+        r.store.addRemote(id: UUID(), date: t + 1, source: "iPhone", sha256: "p", .image(Self.png(40, 20), width: 40, height: 20))
+        func lines(after n: Int) -> [String] { Array(r.lines.snapshot.dropFirst(n)) }
+
+        var n = r.lines.snapshot.count
+        let rows = try XCTUnwrap(request(r, DchFrame.clipboardList, ["limit": 1]))
+        XCTAssertEqual(lines(after: n), ["notice: clipboardList: 1 of 2 rows, \(Self.payload(rows).count) bytes"])
+        n = r.lines.snapshot.count
+        _ = request(r, DchFrame.clipboardList, ["since": DchClipboardOps.wireDate(t), "before": UUID().uuidString])
+        XCTAssertEqual(lines(after: n), ["error: clipboardList refused: before: no such item"])
+
+        n = r.lines.snapshot.count
+        _ = request(r, DchFrame.clipboardItem, ["id": kept.uuidString, "offset": 3])
+        let item = lines(after: n)
+        XCTAssertEqual(item.count, 1)
+        XCTAssertTrue(item.first?.hasPrefix("notice: clipboardItem: text, \((secret + " kept").utf8.count - 3) bytes from 3, ") == true, "\(item)")
+        n = r.lines.snapshot.count
+        _ = request(r, DchFrame.clipboardItem, ["id": UUID().uuidString])
+        XCTAssertEqual(lines(after: n), ["error: clipboardItem refused: gone"])
+
+        n = r.lines.snapshot.count
+        func entry(_ text: String, kind: String = "text") -> [String: Any] {
+            ["id": UUID().uuidString, "date": DchClipboardOps.wireDate(t), "kind": kind, "text": text]
+        }
+        _ = request(r, DchFrame.addClipboardHistory, ["items": [entry(secret + " added"), entry(secret + " added"), entry("x", kind: "image"),
+                                                                ["id": "nope"]]])
+        XCTAssertEqual(lines(after: n), ["notice: addClipboardHistory: 4 items, 1 added, 3 skipped (bad_item 1, duplicate 1, use_upload 1)"])
+
+        let body = Data((secret + " uploaded").utf8), id = UUID()
+        n = r.lines.snapshot.count
+        var f = finals(r).count
+        handle(r, DchFrame.clipboardUpload, header(body, id: id, kind: "file", name: secret + ".txt"))
+        feed(r, body)
+        XCTAssertEqual(added(final(r, f + 1)), [id.uuidString])
+        f = finals(r).count
+        handle(r, DchFrame.clipboardUpload, header(body, id: id))
+        final(r, f + 1)
+        f = finals(r).count
+        handle(r, DchFrame.clipboardUpload, header(body, sha: String(repeating: "0", count: 64)))
+        feed(r, body)
+        final(r, f + 1)
+        let up = lines(after: n)
+        XCTAssertEqual(up.count, 3, "\(up)")
+        XCTAssertTrue(up.first?.hasPrefix("notice: clipboardUpload: file, \(body.count) of \(body.count) bytes, ") == true, "\(up)")
+        XCTAssertTrue(up.first?.hasSuffix(" s: added") == true, "\(up)")
+        XCTAssertTrue(up.dropFirst().first?.hasPrefix("notice: clipboardUpload: text, 0 of \(body.count) bytes, ") == true, "\(up)")
+        XCTAssertTrue(up.dropFirst().first?.hasSuffix(" s: skipped duplicate") == true, "\(up)")
+        XCTAssertEqual(up.last, "error: clipboardUpload refused: hash mismatch")
+
+        n = r.lines.snapshot.count
+        XCTAssertEqual(r.conn.clipboard.putText(try JSONSerialization.data(withJSONObject: ["text": secret])).first, DchFrame.ok)
+        XCTAssertEqual(r.conn.clipboard.putText(Data("{}".utf8)).first, DchFrame.error)
+        XCTAssertEqual(lines(after: n).first, "notice: putClipboardText: \(secret.utf8.count) bytes")
+        XCTAssertEqual(lines(after: n).count, 2)
+        XCTAssertTrue(lines(after: n).last?.hasPrefix("error: putClipboardText refused: malformed putClipboardText") == true)
+
+        XCTAssertEqual(r.lines.snapshot.filter { $0.contains("secret-") }, [], "no content, text or name in any line")
     }
 
     /// Settings › General › Remote Terminal: the row's label fits on one line inside the
