@@ -26,7 +26,7 @@ tag from the now-released section and put it on the new top draft.
   agents, and a new Restart all agents (force) beside it restarts every agent, busy ones
   too, after asking. The iPhone app's Restart all still restarts stale agents only.
 
-- Ships dch 1.28.0. Resume, Stop and `dch --say` deliver their message again: since
+- Ships dch 1.28.1. Resume, Stop and `dch --say` deliver their message again: since
   dch 1.26.0 (Prosper 2.163.0) every one was typed but never sent ("not typed"). A
   resumed session also gets the PATH and environment of your login shell. Stopping or
   reviving a session no longer loses its resume id, and starting a new session under the
