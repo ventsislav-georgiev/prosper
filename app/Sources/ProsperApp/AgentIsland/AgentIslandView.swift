@@ -397,6 +397,11 @@ final class AgentIslandStore: ObservableObject {
         DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.historyEditMinimum)
     }
 
+    /// #714: 1.28.1: pin, unpin and forget take `<file>.json`, one record each.
+    var recordFileGate: DchCommand.Gate {
+        DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.recordFileMinimum)
+    }
+
     /// #669: Resume (no message)'s gate, 1.27.0; refused, its controls do not show (Resume stays).
     var reviveNoMessageGate: DchCommand.Gate {
         DchCommand.gate(controlDch, masters: sessions.map(\.version), minimum: AgentIsland.reviveNoMessageMinimum)
@@ -540,9 +545,9 @@ struct AgentIslandView: View {
                 if store.showsHistoryHeader { historyHeader }
                 ForEach(historyDrawn) { r in
                     AgentIslandHistoryRow(record: r.record, now: ctx.date.timeIntervalSince1970,
-                                          status: store.historyActions[r.record.key], enabled: r.enabled,
+                                          status: r.status, enabled: r.enabled,
                                           show: store.details, action: r.resume, pin: r.pin, remove: r.remove,
-                                          resumeNoMessage: r.resumeNoMessage)
+                                          resumeNoMessage: r.resumeNoMessage, older: r.older)
                 }
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
@@ -672,17 +677,25 @@ struct AgentIslandView: View {
         var remove: (() -> Void)? = nil
         /// #669: Resume (no message), nil (not drawn) under 1.27.0.
         var resumeNoMessage: (() -> Void)? = nil
-        var id: AgentSessionKey { record.key }
+        /// #714: a name's own record: its aside records, which its pin and X act on too.
+        var older = 0
+        /// The row's Resume status, by its record's id (never a namesake's).
+        var status: String? = nil
+        var id: AgentSessionKey { record.id }
     }
 
     var historyDrawn: [HistoryDrawn] {
         let on = store.resumeGate.isOK, edits = store.historyEditGate.isOK, quiet = store.reviveNoMessageGate.isOK
+        let exact = store.recordFileGate.isOK
         return store.shownHistory.map { r in
             // #627: a name dch would read as a flag: no Resume, pin or X.
             let ok = AgentIsland.passable(r.name)
+            // #714: under 1.28.0 the own row's pin and X hit its aside records too; 1.28.1 acts per record.
+            let older = exact || r.isAside ? 0 : store.history.filter { $0.key == r.key && $0.isAside }.count
             return HistoryDrawn(record: r, enabled: on && ok, resume: { onResume(r) }, pin: edits && ok ? { onPin(r) } : nil,
                                 remove: edits && ok && !r.pinned ? { onRemove(r) } : nil,
-                                resumeNoMessage: quiet && ok ? { onResumeNoMessage(r) } : nil)
+                                resumeNoMessage: quiet && ok ? { onResumeNoMessage(r) } : nil, older: older,
+                                status: store.historyActions[r.id])
         }
     }
 
@@ -811,9 +824,12 @@ struct AgentIslandHistoryRow: View {
     var remove: (() -> Void)? = nil
     /// #669: Resume (no message), drawn before the pin; nil: not drawn.
     var resumeNoMessage: (() -> Void)? = nil
+    /// #714: the aside records of this name its pin and X act on too (0 on an aside row).
+    var older = 0
     @State private var hover = false
 
-    var pinLabel: String { record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel }
+    var pinLabel: String { AgentIsland.editLabel(record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel, older: older) }
+    var removeLabel: String { AgentIsland.editLabel(AgentIsland.removeLabel, older: older) }
 
     var body: some View {
         let age = record.lastSeen > 0 ? AgentIsland.age(now - record.lastSeen) : ""
@@ -881,7 +897,7 @@ struct AgentIslandHistoryRow: View {
         .accessibilityActions {
             if let resumeNoMessage { Button(AgentIsland.resumeNoMessageLabel, action: resumeNoMessage) }
             if let pin { Button(pinLabel, action: pin) }
-            if let remove { Button(AgentIsland.removeLabel, action: remove) }
+            if let remove { Button(removeLabel, action: remove) }
         }
     }
 
@@ -891,7 +907,7 @@ struct AgentIslandHistoryRow: View {
         HStack(spacing: 4) {
             iconButton(record.pinned ? "pin.fill" : "pin", opacity: record.pinned ? 0.8 : 0.35, label: pinLabel, action: pin)
             if let remove {
-                iconButton("xmark", opacity: 0.35, label: AgentIsland.removeLabel, action: remove)
+                iconButton("xmark", opacity: 0.35, label: removeLabel, action: remove)
             } else {
                 Color.clear.frame(width: Self.iconSize, height: Self.iconSize)
             }

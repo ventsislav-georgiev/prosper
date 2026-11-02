@@ -248,7 +248,7 @@ final class AgentIslandController {
         if store.unpinnedCount == 0 { store.confirmingClear = false }   // #627 I4: no "Clear 0 unpinned?"
         // A record gone (revived) takes its status with it; running ones, the --all
         // lines and #579's live rows (a Restart result) stay.
-        let recordKeys = Set(records.map(\.key)), live = Set(store.sessions.map(\.key))
+        let recordKeys = Set(records.map(\.id)), live = Set(store.sessions.map(\.key))
         store.historyActions = store.historyActions.filter { recordKeys.contains($0.key) || runner.isBusy($0.key) }
         store.actions = store.actions.filter { $0.key.name.isEmpty || live.contains($0.key) || runner.isBusy($0.key) }
         layout()
@@ -261,11 +261,12 @@ final class AgentIslandController {
         guard let store, case .ok(let dch) = noMessage ? store.reviveNoMessageGate : store.resumeGate else { return }
         let live = Set(store.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))
         let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
-        let key = r.key, verb: AgentIsland.Verb = noMessage ? .resumeNoMessage : .resume
+        // #714: the row's own id (an aside record's is its file); dch's lines carry the name.
+        let key = r.id, name = r.name, verb: AgentIsland.Verb = noMessage ? .resumeNoMessage : .resume
         run(key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage),
             running: AgentIsland.resumingText,
-            history: true, onLine: { [weak self] in self?.rowLine($0, key: key, history: true) }) { [weak self] res in
-            self?.store?.historyActions[key] = AgentIsland.rowText(res, name: key.name, verb)
+            history: true, onLine: { [weak self] in self?.rowLine($0, key: key, name: name, history: true) }) { [weak self] res in
+            self?.store?.historyActions[key] = AgentIsland.rowText(res, name: name, verb)
             self?.refreshHistory()
         }
     }
@@ -291,21 +292,24 @@ final class AgentIslandController {
 
     /// A History row's pin toggle: `--pin`, or `--unpin` on a pinned record.
     func pin(_ r: DchHistoryRecord) {
-        edit(r, args: AgentIsland.pinArgs(r.name, pin: !r.pinned), r.pinned ? .unpin : .pin)
+        edit(r, args: AgentIsland.pinArgs(editTarget(r), pin: !r.pinned), r.pinned ? .unpin : .pin)
     }
 
     /// A History row's X: `--forget <name>` at once, no -f; a pinned row has none.
     func remove(_ r: DchHistoryRecord) {
         guard !r.pinned else { return }
-        edit(r, args: AgentIsland.forgetArgs(r.name), .remove)
+        edit(r, args: AgentIsland.forgetArgs(editTarget(r)), .remove)
     }
+
+    /// #714: `<file>.json` (this record alone) once the control dch is 1.28.1.
+    private func editTarget(_ r: DchHistoryRecord) -> String { r.editTarget(exact: store?.recordFileGate.isOK == true) }
 
     /// One edit in the record's dir on the row's key (a busy row refuses); a
     /// failure goes on the dir's status line, then History is re-read.
     private func edit(_ r: DchHistoryRecord, args: [String]?, _ verb: AgentIsland.Verb) {
         guard let store, case .ok(let dch) = store.historyEditGate else { return }
         let dir = r.key.dir, name = r.name
-        run(r.key, dch: dch, args: args, running: nil) { [weak self] res in
+        run(r.id, dch: dch, args: args, running: nil) { [weak self] res in
             if let failed = AgentIsland.editFailure(res, name: name, verb) {
                 self?.store?.actions[AgentSessionKey(dir: dir, name: "")] = failed
             }
@@ -374,8 +378,8 @@ final class AgentIslandController {
     /// A one-row job's line: a phase is the row's running text; the result
     /// comes with `done`. Both lists refresh after a Resume: the history in
     /// `done`, the sessions on the poller's next tick.
-    private func rowLine(_ line: String, key: AgentSessionKey, history: Bool = false) {
-        guard let store, let o = AgentIsland.jsonLine(line), o.name == key.name, let t = AgentIsland.phaseText(o) else { return }
+    private func rowLine(_ line: String, key: AgentSessionKey, name: String? = nil, history: Bool = false) {
+        guard let store, let o = AgentIsland.jsonLine(line), o.name == name ?? key.name, let t = AgentIsland.phaseText(o) else { return }
         if history { store.historyActions[key] = t } else { store.actions[key] = t }
         layout()
     }
@@ -387,9 +391,15 @@ final class AgentIslandController {
     /// Restart all's summary only.
     private func dirLine(_ line: String, dir: String, _ verb: AgentIsland.Verb) {
         guard let store, let o = AgentIsland.jsonLine(line) else { return }
-        let key = AgentSessionKey(dir: dir, name: o.name), history = verb == .resume || verb == .resumeNoMessage
-        guard history ? store.history.contains(where: { $0.key == key }) : store.sessions.contains(where: { $0.key == key })
-        else { return }
+        let history = verb == .resume || verb == .resumeNoMessage
+        var key = AgentSessionKey(dir: dir, name: o.name)
+        if history {
+            // #714: a line names no aside file: the name's newest record's row.
+            guard let r = store.history.first(where: { $0.key == key }) else { return }
+            key = r.id
+        } else {
+            guard store.sessions.contains(where: { $0.key == key }) else { return }
+        }
         let now = history ? store.historyActions[key] : store.actions[key]
         let text: String
         if let t = AgentIsland.phaseText(o) {

@@ -906,6 +906,57 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "a"])), "a: session is live")
     }
 
+    /// #714: dch 1.28.0 moved a's stopped record aside when a started again, so
+    /// History's only record of a is that one, with its "file". Resume, pin and
+    /// forget pass the file (it matches that record alone); the bare name would
+    /// pin and forget the live a's record too.
+    func testAsideRecordIsRevivedPinnedAndForgottenByItsFile() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.25.0")])
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "stopped", "file": "a.1762000000"]])
+        f.out["--revive a.1762000000 --as a-2 --json"] = Self.ok("a", as: "a-2")
+        f.out["--pin a.1762000000 --json"] = Self.line("a.1762000000", "ok", detail: "pinned")
+        f.out["--forget a.1762000000 --json"] = Self.line("a", "ok", detail: "forgotten")
+        let o = ops(f, binary: Self.v125)
+        // The live a's row busy (an island Restart) never holds its moved-aside record: another record.
+        f.holdArgs = ["--island"]
+        let held = expectation(description: "island job running"), done = expectation(description: "island job done")
+        f.held = held
+        XCTAssertTrue(o.runner.start(AgentSessionKey(dir: "/d", name: "a"), path: "/fake/dch", args: ["--island"], env: { [:] }) { _ in
+            done.fulfill()
+        })
+        wait(for: [held], timeout: 5)
+        XCTAssertEqual(names(call(o, DchFrame.revive, ["name": "a"])), ["a-2"])
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "a", "pin": true])), ["a"])
+        XCTAssertEqual(names(call(o, DchFrame.forget, ["name": "a"])), ["a"])
+        f.hold.signal()
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(f.launchedArgs, [["--island"], ["--revive", "a.1762000000", "--as", "a-2", "--json"],
+                                        ["--pin", "a.1762000000", "--json"], ["--forget", "a.1762000000", "--json"]])
+    }
+
+    /// #714 round 2: under dch 1.28.1 the phone's pin and forget pass `<file>.json`
+    /// (the own record's too); a pin's failure, its line named after that argument,
+    /// still carries dch's detail. Below 1.28.1, round 1's bare name.
+    func testPinAndForgetPassTheRecordFileFrom1281() {
+        let v1281 = DchCommand.Binary(path: "/fake/dch", version: [1, 28, 1])
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "stopped", "file": "a"],
+                                  ["name": "b", "updated": Self.now - 90, "end": "stopped", "file": "b.1762000000"]])
+        f.out["--pin a.json --json"] = Self.line("a.json", "ok", detail: "pinned")
+        f.out["--forget b.1762000000.json --json"] = Self.line("b", "ok", detail: "forgotten")
+        f.out["--pin a --json"] = Self.line("a", "ok", detail: "pinned")
+        let o = ops(f, binary: v1281)
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "a", "pin": true])), ["a"])
+        XCTAssertEqual(names(call(o, DchFrame.forget, ["name": "b"])), ["b"])
+        XCTAssertEqual(names(call(ops(f, binary: Self.v125), DchFrame.pin, ["name": "a", "pin": true])), ["a"])
+        XCTAssertEqual(f.launchedArgs, [["--pin", "a.json", "--json"], ["--forget", "b.1762000000.json", "--json"],
+                                        ["--pin", "a", "--json"]])
+        f.out["--pin a.json --json"] = Self.line("a.json", "failed", reason: "io_error", detail: "Permission denied")
+        f.status = 1
+        XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "a", "pin": true])), "a: Permission denied")
+    }
+
     /// One `--forget --all --json` per History dir; the reply sums the dirs' results
     /// (dch's tally line is not a result and adds nothing); a record's failure is
     /// counted, an unexplained failure is an error.

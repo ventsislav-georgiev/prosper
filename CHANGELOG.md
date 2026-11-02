@@ -31,6 +31,15 @@ tag from the now-released section and put it on the new top draft.
   resumed session also gets the PATH and environment of your login shell. Stopping or
   reviving a session no longer loses its resume id, and starting a new session under the
   name of a stopped or crashed one keeps the old one in history.
+- **Agent Island history: one row per session, even when names repeat.** With dch 1.28,
+  a session started under the name of an ended one keeps the ended one as its own History
+  row:
+  - Resume brings back the session of the row you picked.
+  - With dch 1.28.1 or later, the pin and × act on that row alone. With 1.28.0, the
+    pin and × on the row that holds the name also cover its older rows, and their tooltips
+    say so.
+  - Resume and Stop failures that dch 1.28 adds read in plain words. A session that
+    could not be resumed still shows the `claude --resume` id to recover it by hand.
 - **Command runner: the usual text editing keys work in the search field.** ⌘⌫ deletes
   back to the start of the line again; a hidden Delete Quicklink shortcut had taken it,
   even with no quicklink selected. ↑ and ↓ with ⇧, ⌥, ⌘ or ⌃ now move the caret or

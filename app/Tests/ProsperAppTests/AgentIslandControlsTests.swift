@@ -3153,4 +3153,274 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertNotEqual(quiet, try pixels(), "under 1.27.0: no icon, no header choice")
         try render(store, "agent-island-669-gated-1.26", to: out)
     }
+
+    // MARK: - #714: dch 1.28.0 aside records ("file")
+
+    /// dch 1.28.0's --history --json (do_history_verb): the name's own record, then
+    /// two a cold start under "work" moved aside, each the stored body plus
+    /// "pinned" (when pinned), then "file".
+    private static let asideJSON = #"""
+    [{"name":"work","sock_dir":"/d","alias":"","cwd":"/src","argv":["claude"],"started":1762000500,"updated":1762003000,"ended":1762003000,"end":"stopped","agent":{"kind":"claude","session_id":"new","name":"","cwd":"/src","launch":[]}},
+     {"name":"work","sock_dir":"/d","alias":"","cwd":"/src","argv":["claude"],"started":1761990000,"updated":1762000000,"ended":1762000000,"end":"signal 9","agent":{"kind":"claude","session_id":"mid","name":"","cwd":"/src","launch":[]},"pinned":true,"file":"work.1762000000"},
+     {"name":"work","sock_dir":"/d","alias":"","cwd":"/src","argv":["claude"],"started":1760990000,"updated":1761000000,"ended":1761000000,"end":"stopped","agent":{"kind":"claude","session_id":"old","name":"","cwd":"/src","launch":[]},"file":"work.1761000000"}]
+    """#
+
+    private static var asideRecords: [DchHistoryRecord] { AgentIsland.parseHistory(Data(asideJSON.utf8), dir: "/d") }
+
+    /// Three records of one name: one id each (an aside record's is its file), so
+    /// SwiftUI draws three rows, and History keeps all three.
+    @MainActor
+    func testAsideRecordsParseWithAnIdEach() {
+        let rows = Self.asideRecords
+        XCTAssertEqual(rows.map(\.name), ["work", "work", "work"])
+        XCTAssertEqual(rows.map(\.id), [AgentSessionKey(dir: "/d", name: "work"), AgentSessionKey(dir: "/d", name: "work.1762000000"),
+                                        AgentSessionKey(dir: "/d", name: "work.1761000000")])
+        XCTAssertEqual(rows.map(\.pinned), [false, true, false])
+        XCTAssertEqual(rows.map { $0.agent?.sessionID }, ["new", "mid", "old"])
+        XCTAssertEqual(AgentIsland.history(dirs: ["/d"]) { _, _ in Data(Self.asideJSON.utf8) }.map(\.id), rows.map(\.id))
+        let store = AgentIslandStore(geometry: notched)
+        store.controlDch = Self.v125
+        store.history = rows
+        store.historyTab = true
+        let drawn = AgentIslandView(store: store).historyDrawn
+        XCTAssertEqual(Set(drawn.map(\.id)).count, 3, "no two rows share a SwiftUI id")
+    }
+
+    /// Resume, pin, unpin and the X of an aside row pass its file; the name's own
+    /// row passes the name. The status shows on the row acted on, never its namesakes.
+    @MainActor
+    func testAsideRowActionsTargetTheirFileAndStatusStaysOnTheRow() throws {
+        let f = FakeProc(), reads = Reads()
+        let rows = Self.asideRecords
+        reads.records = rows
+        let c = controller(f, reads, dch: Self.v125)
+        c.store?.sessions = [session("b", version: "1.25.0")]   // an island to open; work is not live
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 3 }
+        let store = try XCTUnwrap(c.store)
+        func step(_ press: () -> Void, _ args: [String], line: UInt = #line) {
+            let before = reads.count
+            press()
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, line: line)
+            XCTAssertEqual(f.args.last, args, line: line)
+            f.release.signal()
+            settle(c) { reads.count == before + 1 }
+        }
+        f.progress = #"{"name":"work","phase":"starting"}"# + "\n"
+        c.resume(rows[2])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, ["--revive", "work.1761000000", "--json"], "work is not live: it comes back as work")
+        settle(c) { store.historyActions[rows[2].id] == "Starting…" }
+        XCTAssertEqual(store.historyActions[rows[2].id], "Starting…", "dch's line names work; the row is the file's")
+        XCTAssertNil(store.historyActions[rows[0].id], "never on the name's own row")
+        f.progress = ""
+        f.output = #"{"name":"work","as":"work","result":"ok","reason":"","detail":"revived as work in /src","session_id":"old"}"# + "\n"
+        f.release.signal()
+        settle(c) { store.historyActions[rows[2].id] == "Resumed" && reads.count == 2 }
+        settle(c)   // the re-read lands: the status stays on its record's id
+        XCTAssertEqual(store.historyActions[rows[2].id], "Resumed")
+        XCTAssertNil(store.historyActions[rows[0].id])
+        XCTAssertNil(store.historyActions[rows[1].id])
+        f.output = ""
+        store.sessions = [session("b", version: "1.25.0"), session("work", version: "1.25.0")]
+        f.output = #"{"name":"work","as":"work-2","result":"ok","reason":"","detail":"","session_id":"mid"}"# + "\n"
+        step({ c.resume(rows[1]) }, ["--revive", "work.1762000000", "--as", "work-2", "--json"])
+        XCTAssertEqual(store.historyActions[rows[1].id], "Resumed as work-2", "dch's result line, read by the record's name")
+        f.output = ""
+        step({ c.pin(rows[1]) }, ["--unpin", "work.1762000000", "--json"])
+        step({ c.pin(rows[2]) }, ["--pin", "work.1761000000", "--json"])
+        step({ c.remove(rows[2]) }, ["--forget", "work.1761000000", "--json"])
+        step({ c.pin(rows[0]) }, ["--pin", "work", "--json"])
+        step({ c.remove(rows[0]) }, ["--forget", "work", "--json"])
+        XCTAssertEqual(f.args.count, 7)
+        store.historyActions = [rows[2].id: "Resumed"]
+        store.historyTab = true
+        XCTAssertEqual(AgentIslandView(store: store).historyDrawn.map { $0.status }, [nil, nil, "Resumed"],
+                       "each row shows its own record's status (pinned work.1762000000 leads)")
+        // One record busy never blocks its namesakes: they are other records.
+        c.resume(rows[0])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        c.pin(rows[2])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, "the aside row's pin runs beside its name's Resume")
+        XCTAssertEqual(Set(f.args.suffix(2)), [["--revive", "work", "--as", "work-2", "--json"], ["--pin", "work.1761000000", "--json"]])
+        f.release.signal()
+        f.release.signal()
+        settle(c) { reads.count == 10 }
+    }
+
+    /// Resume interrupted's line names only "work": it shows on the name's newest
+    /// record's row, never on every row of the name.
+    @MainActor
+    func testResumeAllLineLandsOnTheNamesNewestRowOnly() throws {
+        let f = FakeProc(), reads = Reads()
+        let rows = Self.asideRecords
+        reads.records = rows
+        let c = controller(f, reads)
+        c.store?.sessions = [session("b", version: "1.24.1")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 3 }
+        let store = try XCTUnwrap(c.store)
+        f.progress = #"{"name":"work","phase":"starting"}"# + "\n"
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        settle(c) { store.historyActions[rows[0].id] == "Starting…" }
+        XCTAssertEqual(store.historyActions[rows[0].id], "Starting…")
+        XCTAssertNil(store.historyActions[rows[1].id])
+        XCTAssertNil(store.historyActions[rows[2].id])
+        f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
+        // work is live again: History holds only its aside records; the line lands on the newest.
+        reads.records = Array(rows.dropFirst())
+        c.refreshHistory()
+        settle(c) { store.history.count == 2 }
+        store.historyActions = [:]
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        settle(c) { store.historyActions[rows[1].id] == "Starting…" }
+        XCTAssertEqual(store.historyActions, [rows[1].id: "Starting…"])
+        f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
+    }
+
+    /// A pin or X on the name's own row says it covers the name's older records too
+    /// (dch 1.28.0 matches them all by the bare name); an aside row's says nothing more.
+    @MainActor
+    func testOwnRowsPinAndXSayTheyCoverOlderRecords() throws {
+        let store = AgentIslandStore(geometry: notched)
+        store.controlDch = Self.v125
+        store.history = Self.asideRecords
+        store.historyTab = true
+        let drawn = AgentIslandView(store: store).historyDrawn
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: drawn.map { ($0.id.name, $0.older) }),
+                       ["work": 2, "work.1762000000": 0, "work.1761000000": 0])
+        func row(_ file: String) throws -> AgentIslandHistoryRow {
+            let d = try XCTUnwrap(drawn.first { $0.id.name == file })
+            return AgentIslandHistoryRow(record: d.record, now: 0, status: nil, enabled: true, action: {}, pin: {}, remove: {},
+                                         older: d.older)
+        }
+        XCTAssertEqual(try row("work").pinLabel, "Pin (also 2 older records of this name)")
+        XCTAssertEqual(try row("work").removeLabel, "Remove from History (also 2 older records of this name)")
+        XCTAssertEqual(try row("work.1762000000").pinLabel, "Unpin")
+        XCTAssertEqual(try row("work.1761000000").removeLabel, "Remove from History")
+        XCTAssertEqual(AgentIsland.editLabel("Unpin", older: 1), "Unpin (also 1 older record of this name)")
+    }
+
+    /// dch 1.28.0's new revive and stop reasons read in words; a line's Claude id
+    /// shows where dch's detail does not carry it. Remove's "live" stays dch's.
+    func testNewReviveAndStopReasonsReadInWords() {
+        func row(_ o: [String: String], _ verb: AgentIsland.Verb, name: String = "a") -> String {
+            let line = String(decoding: try! JSONSerialization.data(withJSONObject: o), as: UTF8.self)
+            return AgentIsland.rowText(result(line, status: 1), name: name, verb)
+        }
+        let lossy = "NOT revived — its command had bytes that are not UTF-8, recorded as U+FFFD: it would run "
+            + "something else; resume by hand: claude --resume abc"
+        XCTAssertEqual(row(["name": "a", "as": "a", "result": "failed", "reason": "not_utf8", "detail": lossy, "session_id": "abc"], .resume),
+                       "Not resumed: its record has bytes that are not UTF-8; claude --resume abc")
+        XCTAssertEqual(row(["name": "a", "as": "a", "result": "failed", "reason": "not_utf8", "detail": "", "session_id": ""], .resumeNoMessage),
+                       "Not resumed: its record has bytes that are not UTF-8")
+        XCTAssertEqual(row(["name": "a", "as": "a", "result": "failed", "reason": "live", "detail": "session a is live",
+                            "session_id": "abc"], .resume), "Not resumed: a is running")
+        XCTAssertEqual(row(["name": "a", "as": "a-2", "result": "failed", "reason": "live", "detail": "", "session_id": ""], .resume),
+                       "Not resumed: a-2 is running")
+        XCTAssertEqual(row(["name": "a", "result": "failed", "reason": "claude_unreadable",
+                            "detail": "a claude runs in it, but no session record of it can be read; left running", "session_id": ""], .stop),
+                       "Not stopped: its Claude session record can't be read; left running")
+        XCTAssertEqual(row(["name": "a", "result": "interrupted", "reason": "signal",
+                            "detail": "interrupted (signal 15) while waiting for it to pause; resume message typed",
+                            "session_id": "abc"], .stop),
+                       "interrupted (signal 15) while waiting for it to pause; resume message typed (claude --resume abc)")
+        XCTAssertEqual(row(["name": "a", "result": "interrupted", "reason": "signal", "detail": "", "session_id": "abc"], .stop),
+                       "Stop interrupted (claude --resume abc)")
+        let exited = "interrupted (signal 2) after /exit; resume by hand: claude --resume abc"
+        XCTAssertEqual(row(["name": "a", "result": "interrupted", "reason": "signal", "detail": exited, "session_id": "abc"], .stop),
+                       exited, "the id once")
+        XCTAssertEqual(row(["name": "a", "result": "failed", "reason": "live", "detail": "session is live", "session_id": ""], .remove),
+                       "session is live", "forget's live is no Resume")
+    }
+
+    // MARK: - #714 round 2: dch 1.28.1 "file" on every record, `<file>.json` edits
+
+    private static let v1281 = DchCommand.Binary(path: "/fake/dch", version: [1, 28, 1])
+
+    /// dch 1.28.1's --history --json (do_history_verb): the same three records, the
+    /// name's own now with its file too ("work").
+    private static let fileJSON = asideJSON.replacingOccurrences(
+        of: #""session_id":"new","name":"","cwd":"/src","launch":[]}}"#,
+        with: #""session_id":"new","name":"","cwd":"/src","launch":[]},"file":"work"}"#)
+
+    private static var fileRecords: [DchHistoryRecord] { AgentIsland.parseHistory(Data(fileJSON.utf8), dir: "/d") }
+
+    /// The own record's file is its name: not aside. Ids match 1.28.0's; an edit
+    /// target is `<file>.json` when exact, else round 1's (name, or the aside file).
+    func testRecordFileOnEveryRecordKeepsTheOwnRowAndItsId() {
+        let rows = Self.fileRecords, old = Self.asideRecords
+        XCTAssertEqual(rows.map(\.file), ["work", "work.1762000000", "work.1761000000"])
+        XCTAssertEqual(rows.map(\.id), old.map(\.id), "1.28.0 and 1.28.1 output give the same ids")
+        XCTAssertEqual(rows.map(\.isAside), [false, true, true])
+        XCTAssertEqual(old.map(\.isAside), [false, true, true])
+        XCTAssertEqual(rows.map(\.target), ["work", "work.1762000000", "work.1761000000"], "revive: unchanged")
+        XCTAssertEqual(rows.map { $0.editTarget(exact: true) }, ["work.json", "work.1762000000.json", "work.1761000000.json"])
+        XCTAssertEqual(rows.map { $0.editTarget(exact: false) }, ["work", "work.1762000000", "work.1761000000"])
+        XCTAssertEqual(old[0].editTarget(exact: true), "work", "no file: the name")
+    }
+
+    /// The "(also N older …)" note shows only under 1.28.1 (the bare name covers
+    /// them); from 1.28.1 every edit is one record's, so no row has it.
+    @MainActor
+    func testOlderRecordsNoteOnlyBelow1281() {
+        for (dch, older) in [(Self.v125, 2), (DchCommand.Binary(path: "/fake/dch", version: [1, 28, 0]), 2), (Self.v1281, 0)] {
+            for records in [Self.asideRecords, Self.fileRecords] {
+                let store = AgentIslandStore(geometry: notched)
+                store.controlDch = dch
+                store.history = records
+                store.historyTab = true
+                let drawn = AgentIslandView(store: store).historyDrawn
+                XCTAssertEqual(Dictionary(uniqueKeysWithValues: drawn.map { ($0.id.name, $0.older) }),
+                               ["work": older, "work.1762000000": 0, "work.1761000000": 0], "\(dch.version) \(records.map(\.file))")
+            }
+        }
+        let store = AgentIslandStore(geometry: notched)
+        store.controlDch = Self.v1281
+        store.sessions = [session("b", version: "1.29.0")]   // a newer live master: the gate refuses, round 1's note
+        store.history = Self.fileRecords
+        store.historyTab = true
+        XCTAssertEqual(AgentIslandView(store: store).historyDrawn.first { $0.id.name == "work" }?.older, 2)
+    }
+
+    /// Every row's pin, unpin and X pass `<file>.json` under 1.28.1, the own row's
+    /// too; below it round 1's args. Resume stays name / aside file at both tiers.
+    /// A failed pin's line, named after its argument, still reads dch's detail.
+    @MainActor
+    func testEditsPassTheRecordFileFrom1281() throws {
+        for (dch, version, exact) in [(Self.v1281, "1.28.1", true), (Self.v125, "1.25.0", false)] {
+            let f = FakeProc(), reads = Reads()
+            let rows = Self.fileRecords
+            reads.records = rows
+            let c = controller(f, reads, dch: dch)
+            c.store?.sessions = [session("b", version: version)]
+            c.setExpanded(true)
+            settle(c) { c.store?.history.count == 3 }
+            let store = try XCTUnwrap(c.store)
+            func step(_ press: () -> Void, _ args: [String], line: UInt = #line) {
+                let before = reads.count
+                press()
+                XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, line: line)
+                XCTAssertEqual(f.args.last, args, "\(version)", line: line)
+                f.release.signal()
+                settle(c) { reads.count == before + 1 }
+            }
+            let j = exact ? ".json" : ""
+            step({ c.resume(rows[0]) }, ["--revive", "work", "--json"])
+            step({ c.resume(rows[2]) }, ["--revive", "work.1761000000", "--json"])
+            step({ c.pin(rows[0]) }, ["--pin", "work" + j, "--json"])
+            step({ c.pin(rows[1]) }, ["--unpin", "work.1762000000" + j, "--json"])
+            step({ c.remove(rows[2]) }, ["--forget", "work.1761000000" + j, "--json"])
+            step({ c.remove(rows[0]) }, ["--forget", "work" + j, "--json"])
+            f.output = #"{"name":"work\#(j)","result":"failed","reason":"io_error","detail":"Permission denied"}"# + "\n"
+            f.status = 1
+            step({ c.pin(rows[0]) }, ["--pin", "work" + j, "--json"])
+            XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], "Pin work failed: Permission denied", version)
+            XCTAssertEqual(f.args.count, 7)
+        }
+    }
 }

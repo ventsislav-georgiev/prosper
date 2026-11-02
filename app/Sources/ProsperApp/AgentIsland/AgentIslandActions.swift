@@ -29,9 +29,24 @@ struct DchHistoryRecord: Equatable, Identifiable {
     var agent: Agent?
     /// #605: dch 1.25.0's `--pin`: kept by every prune and by `--forget --all`.
     var pinned = false
+    /// #714: dch's "file", the record file without ".json": 1.28.0 sends it only on a
+    /// record a cold start under its name moved aside (`<name>.<ended>`), 1.28.1 on
+    /// every record (the name's own: the name). One name can have several records.
+    var file = ""
 
-    var id: AgentSessionKey { key }
+    /// #714: moved aside: a file that is not the name (1.28.0 and 1.28.1 alike).
+    var isAside: Bool { !file.isEmpty && file != key.name }
+    /// #714: unique per record and the same under 1.28.0 and 1.28.1: an aside record
+    /// by its file, else by its name.
+    var id: AgentSessionKey { isAside ? AgentSessionKey(dir: key.dir, name: file) : key }
     var name: String { key.name }
+    /// #714: what --revive takes: the file matches only this aside record; the bare
+    /// name, the name's newest ended record.
+    var target: String { isAside ? file : key.name }
+    /// #714: what --pin, --unpin and --forget take. `exact` (dch 1.28.1): `<file>.json`,
+    /// this one record file; else `target`, where the bare name matches every record
+    /// of the name (1.28.0 cannot pick the name's own record alone).
+    func editTarget(exact: Bool) -> String { exact && !file.isEmpty ? file + ".json" : target }
     /// #592: display only (revive, keys and sorting use `name`): the alias, else
     /// the agent's session name, else the dch name, like a Sessions row's title.
     var title: String {
@@ -104,6 +119,8 @@ extension AgentIsland {
     static let historyEditMinimum = [1, 25, 0]
     /// #669: `--revive … --no-message` (Resume without the resume message), dch 1.27.0.
     static let reviveNoMessageMinimum = [1, 27, 0]
+    /// #714: `--pin|--unpin|--forget <file>.json`, exactly one record file, dch 1.28.1.
+    static let recordFileMinimum = [1, 28, 1]
     /// The History tab lists this many records in all, newest first, unless more
     /// are pinned: pinned ones are never capped, unpinned ones fill the rest.
     static let historyCap = 50
@@ -130,7 +147,7 @@ extension AgentIsland {
                 agent: a.map {
                     .init(kind: $0["kind"] as? String ?? "", sessionID: $0["session_id"] as? String ?? "",
                           name: $0["name"] as? String ?? "", cwd: $0["cwd"] as? String ?? "", launch: strings($0["launch"]))
-                }, pinned: o["pinned"] as? Bool ?? false)
+                }, pinned: o["pinned"] as? Bool ?? false, file: o["file"] as? String ?? "")
         }
     }
 
@@ -169,11 +186,12 @@ extension AgentIsland {
     /// `--revive <name>`; a name live now goes to `--as` the first free
     /// `<name>-2`, `-3`, … — free of live sessions and of other records in the dir
     /// (dch would overwrite that record). #669: `noMessage` adds `--no-message`.
+    /// #714: an aside record by its file; it comes back under its name (or `--as`).
     static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>,
                            noMessage: Bool = false) -> [String]? {
         let tail = (noMessage ? ["--no-message"] : []) + ["--json"]
-        guard live.contains(r.name) else { return named("--revive", [r.name], tail) }
-        return named("--revive", [r.name], ["--as", freeName(r.name, taken: live.union(records))] + tail)
+        guard live.contains(r.name) else { return named("--revive", [r.target], tail) }
+        return named("--revive", [r.target], ["--as", freeName(r.name, taken: live.union(records))] + tail)
     }
 
     /// #627: dch takes a session name that starts with '-' and its argv has no
@@ -274,9 +292,32 @@ extension AgentIsland {
             return verb.done
         }
         if o.reason == "pinned" { return pinnedRefusal }   // QA #489 I5: never dch's -f hint
+        if let w = reasonWords(o, verb) { return w }
         let detail = o.detail ?? ""
         let d = detail.hasPrefix(o.name + ": ") ? String(detail.dropFirst(o.name.count + 2)) : detail
         return d.isEmpty ? "\(verb.rawValue) \(o.result ?? "failed") (\(o.reason ?? ""))" : d
+    }
+
+    /// #714: dch 1.28.0's new revive and stop reasons in words; nil: dch's detail.
+    /// not_utf8 names the Claude id in a short line (dch's runs long and ends with
+    /// it). An interruption keeps dch's detail (it says which step), plus the id
+    /// when the detail lacks it, as dch's own text line does.
+    static func reasonWords(_ o: DchJSONLine, _ verb: Verb) -> String? {
+        let sid = o.sessionID ?? "", resume = verb == .resume || verb == .resumeNoMessage
+        switch o.reason {
+        case "not_utf8" where resume:
+            return "Not resumed: its record has bytes that are not UTF-8" + (sid.isEmpty ? "" : "; claude --resume \(sid)")
+        case "live" where resume:
+            return "Not resumed: \(o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name) is running"
+        case "claude_unreadable":
+            return "Not stopped: its Claude session record can't be read; left running"
+        case "signal" where o.result == "interrupted":
+            let d = o.detail ?? "", bare = d.hasPrefix(o.name + ": ") ? String(d.dropFirst(o.name.count + 2)) : d
+            let id = sid.isEmpty || d.contains(sid) ? "" : " (claude --resume \(sid))"
+            return (bare.isEmpty ? "\(verb.rawValue) interrupted" : bare) + id
+        default:
+            return nil
+        }
     }
 
     /// "failed: <last dch: line>", else "failed (exit N)".
@@ -343,7 +384,14 @@ extension AgentIsland {
 
     static func clearQuestion(_ n: Int) -> String { "Clear \(n) unpinned?" }
 
+    /// #714: a pin or X on a name's own record also acts on the name's `older`
+    /// aside records under dch 1.28.0, which matches them all by the bare name.
+    static func editLabel(_ label: String, older: Int) -> String {
+        older == 0 ? label : "\(label) (also \(older) older record\(older == 1 ? "" : "s") of this name)"
+    }
+
     /// `--pin|--unpin <name> --json`; `--forget <name> --json`, never -f (a pin protects).
+    /// #714: callers pass a record's `editTarget`.
     static func pinArgs(_ name: String, pin: Bool) -> [String]? { named(pin ? "--pin" : "--unpin", [name]) }
     static func forgetArgs(_ name: String) -> [String]? { named("--forget", [name]) }
     /// Every record neither live nor pinned; dch skips those (-f is a usage error here).
