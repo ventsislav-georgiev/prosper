@@ -190,7 +190,8 @@ final class DchSessionServerBindTests: XCTestCase {
         defer { wedge.signal() }
         let started = DispatchSemaphore(value: 0)
         DispatchQueue.global().async { try? s.start(); started.signal() }
-        XCTAssertEqual(started.wait(timeout: .now() + 6), .success, "start() blocked past its 5 s bound")
+        // 2 s, not 5: start() also waits up to 5 s for .ready, so a missed ready signal must fail here (QA #532 R2-F2).
+        XCTAssertEqual(started.wait(timeout: .now() + 2), .success, "start() blocked on the connection queue or missed .ready")
         XCTAssertTrue(eventually { portHeld(port) }, "start() did not bind")
         let stopped = DispatchSemaphore(value: 0)
         DispatchQueue.global().async { s.stop(); stopped.signal() }
