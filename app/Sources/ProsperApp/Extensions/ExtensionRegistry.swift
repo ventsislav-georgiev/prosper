@@ -350,7 +350,17 @@ final class ExtensionRegistry: ObservableObject {
         asyncRuntimes.invalidateAll()   // drop stale off-main VMs on rescan
     }
 
+    /// Live (enabled + trusted) state of the extensions whose behaviour runs natively
+    /// on a per-keystroke path, cached so that path reads a Bool instead of scanning
+    /// `records`: the runner's web-search rows (`fallbackRows`) and inline snippet
+    /// expansion (`SnippetExpander`). Refreshed in `rebuildRoutes`, which every
+    /// discover / enable / disable / trust change runs. False until `discover()`.
+    private(set) var fallbackSearchLive = false
+    private(set) var snippetsLive = false
+
     private func rebuildRoutes() {
+        fallbackSearchLive = record(id: FallbackSearchStore.extensionID)?.isLive ?? false
+        snippetsLive = record(id: SnippetStore.extensionID)?.isLive ?? false
         cachedCommandEntries = nil   // live command set changed → drop discovery memo
         commandByID.removeAll(keepingCapacity: true)
         matchRoutes.removeAll(keepingCapacity: true)
@@ -471,7 +481,9 @@ final class ExtensionRegistry: ObservableObject {
                 }
             }
         }
-        out.append(contentsOf: dynamicModeProvider?() ?? [])
+        // A dynamic trigger lives only while the command it locks into does: a
+        // disabled Quickdirs drops every per-quickdir prefix with its `qd ` one.
+        out.append(contentsOf: (dynamicModeProvider?() ?? []).filter { commandByID[$0.commandID] != nil })
         return out.sorted { $0.prefix.count > $1.prefix.count }
     }
 

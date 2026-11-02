@@ -56,6 +56,15 @@ final class SnippetExpander {
 
     private init() {}
 
+    /// Inline auto-expansion is on: the Snippets extension is live (disabling it in
+    /// Settings › Extensions stops expansion, not just its Lua side) and the user's own
+    /// toggles allow it. A cached Bool on the registry: this runs on every keyDown.
+    /// No registry (tests; the app sets one at launch) = ungated by the extension.
+    static var autoExpandActive: Bool {
+        (CommandRouter.registry?.snippetsLive ?? true)
+            && Preferences.snippetsEnabled && Preferences.snippetsAutoExpand
+    }
+
     // MARK: - Tap hook
 
     /// Called by `AutocompleteEngine.handle` for every keyDown (before its own
@@ -88,8 +97,8 @@ final class SnippetExpander {
         guard didAppend else { return false }
 
         // Gating — independent of autocomplete's per-app denylist.
-        guard Preferences.snippetsEnabled, Preferences.snippetsAutoExpand else {
-            Self.e2elog("bail: snippets disabled (enabled=\(Preferences.snippetsEnabled) auto=\(Preferences.snippetsAutoExpand))")
+        guard Self.autoExpandActive else {
+            Self.e2elog("bail: snippets disabled (ext=\(CommandRouter.registry?.snippetsLive ?? true) enabled=\(Preferences.snippetsEnabled) auto=\(Preferences.snippetsAutoExpand))")
             return false
         }
         if let bundleId, Preferences.snippetsIgnoredBundleIds.contains(bundleId) {

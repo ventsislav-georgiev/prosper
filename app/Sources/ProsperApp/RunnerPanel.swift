@@ -233,7 +233,10 @@ final class RunnerPanel {
         // ponytail: a first keystroke landing before the walk finishes shows no
         // menu rows; the next one has them. Upgrade path is a change token on the
         // index that `inputChanged()` observes, if that ever reads as a bug.
-        MenuCommandIndex.shared.warm(pid: previousApp?.processIdentifier)
+        // Only while Menu Commands is on: disabled, it walks no menu bar at all.
+        if CommandRouter.extensionLive(CommandRouter.menusID) {
+            MenuCommandIndex.shared.warm(pid: previousApp?.processIdentifier)
+        }
     }
 
     func dismiss() {
@@ -1082,10 +1085,12 @@ private func launcherRows(_ hits: [ExtLaunchHit], startID: Int) -> [ResultRow] {
 /// cached provider list + string-substitute the query — no I/O, no allocation beyond
 /// the result rows. Keep it that way; if it ever regresses, memoize on (query,
 /// provider revision) rather than adding work here.
+///   - `extensionLive` false (Fallback Search disabled in Settings › Extensions)
+///     means no fallbacks at all; the store's providers are left untouched.
 @MainActor
 func fallbackRows(base: [ResultRow], outcome: RunnerOutcome?, query: String,
-                  mode: RunnerMode, store: FallbackSearchStore) -> [ResultRow] {
-    guard mode == .universal, !query.isEmpty else { return base }
+                  mode: RunnerMode, store: FallbackSearchStore, extensionLive: Bool) -> [ResultRow] {
+    guard extensionLive, mode == .universal, !query.isEmpty else { return base }
     switch outcome {
     case .search, .apps, .noResults: break
     default: return base
@@ -1375,8 +1380,10 @@ private struct RunnerView: View {
     private var rows: [ResultRow] {
         let base = model.outcome.map(buildRows) ?? []
         let q = model.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        // No registry (never in the app: set at launch) = ungated, like the router.
         return fallbackRows(base: base, outcome: model.outcome, query: q, mode: model.mode,
-                            store: FallbackSearchStore.shared)
+                            store: FallbackSearchStore.shared,
+                            extensionLive: CommandRouter.registry?.fallbackSearchLive ?? true)
     }
 
     /// Move the result selection up/down (wrapping). Driven by `.onKeyPress` on the

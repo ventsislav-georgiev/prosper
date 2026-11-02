@@ -34,6 +34,18 @@ tag from the now-released section and put it on the new top draft.
   even with no quicklink selected. ↑ and ↓ with ⇧, ⌥, ⌘ or ⌃ now move the caret or
   select text, as in any text field; only plain ↑ and ↓ move between results. Delete
   Quicklink stays in the ⌘K actions menu, without a shortcut.
+- **Disabling a built-in extension now turns it off completely.** Several built-in
+  extensions do their work in Prosper itself, and disabling them in Settings › Extensions
+  left that part running. Now, once disabled:
+  - Fallback Search shows no "Search Google for …" rows.
+  - Snippets no longer expands keywords as you type.
+  - Quicklinks and Menu Commands add no rows to the search, and Menu Commands no longer
+    reads the menu bar each time the runner opens.
+  - Quickdirs' `qd` and each quickdir's own prefix do nothing.
+  - Run Shell no longer runs a command typed after `>`.
+  - Open App's `o ` no longer searches apps.
+
+  Re-enabling one brings it back with its settings unchanged.
 
 ## v2.163.0
 

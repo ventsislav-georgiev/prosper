@@ -69,14 +69,14 @@ final class FallbackSearchTests: XCTestCase {
         let store = makeStore(providers: [provider("google")])
         let base: [ResultRow] = []
         let out = fallbackRows(base: base, outcome: .noResults(query: "q"), query: "q",
-                               mode: .ext(id: "x", title: "X", icon: "i", arg: nil), store: store)
+                               mode: .ext(id: "x", title: "X", icon: "i", arg: nil), store: store, extensionLive: true)
         XCTAssertTrue(out.isEmpty)
     }
 
     func testEmptyQueryGetsNoFallbacks() {
         let store = makeStore(providers: [provider("google")])
         let out = fallbackRows(base: [], outcome: .noResults(query: ""), query: "",
-                               mode: .universal, store: store)
+                               mode: .universal, store: store, extensionLive: true)
         XCTAssertTrue(out.isEmpty)
     }
 
@@ -85,7 +85,7 @@ final class FallbackSearchTests: XCTestCase {
         let calc = fallbackRows(base: [.init(id: 0, icon: "f", primary: "4", secondary: "2+2",
                                              category: "Calculator", copyValue: "4", isMeta: false)],
                                 outcome: .calc(expression: "2+2", value: "4"), query: "2+2",
-                                mode: .universal, store: store)
+                                mode: .universal, store: store, extensionLive: true)
         XCTAssertEqual(calc.count, 1)
         XCTAssertEqual(calc.first?.category, "Calculator")
     }
@@ -95,7 +95,7 @@ final class FallbackSearchTests: XCTestCase {
         let placeholder: [ResultRow] = [.init(id: 0, icon: "magnifyingglass", primary: "No results",
                                               secondary: "", category: "", copyValue: "", isMeta: false)]
         let out = fallbackRows(base: placeholder, outcome: .noResults(query: "zzz"), query: "zzz",
-                               mode: .universal, store: store)
+                               mode: .universal, store: store, extensionLive: true)
         XCTAssertEqual(out.count, 2)
         XCTAssertEqual(out.map { $0.category }, ["Web Search", "Web Search"])
         XCTAssertEqual(out.first?.openTarget, "https://x/search?q=zzz")
@@ -106,7 +106,7 @@ final class FallbackSearchTests: XCTestCase {
         let real: [ResultRow] = [.init(id: 0, icon: "app.dashed", primary: "Safari", secondary: "",
                                        category: "Application", copyValue: "Safari", isMeta: false)]
         let out = fallbackRows(base: real, outcome: .apps([]), query: "saf",
-                               mode: .universal, store: store)
+                               mode: .universal, store: store, extensionLive: true)
         XCTAssertEqual(out.count, 2)
         XCTAssertEqual(out.first?.category, "Application")
         XCTAssertEqual(out.last?.category, "Web Search")
@@ -117,7 +117,7 @@ final class FallbackSearchTests: XCTestCase {
         let real: [ResultRow] = [.init(id: 0, icon: "app.dashed", primary: "Safari", secondary: "",
                                        category: "Application", copyValue: "Safari", isMeta: false)]
         let out = fallbackRows(base: real, outcome: .apps([]), query: "saf",
-                               mode: .universal, store: store)
+                               mode: .universal, store: store, extensionLive: true)
         XCTAssertEqual(out.count, 1)
         XCTAssertEqual(out.first?.category, "Application")
     }
@@ -132,7 +132,7 @@ final class FallbackSearchTests: XCTestCase {
                         .emoji(name: "fire", emoji: "🔥"),
                         .ext(kind: "k", value: "v", detail: "d")] {
             let out = fallbackRows(base: real, outcome: outcome, query: "x",
-                                   mode: .universal, store: store)
+                                   mode: .universal, store: store, extensionLive: true)
             XCTAssertEqual(out.count, 1, "\(outcome) should pass base through unchanged")
             XCTAssertFalse(out.contains { $0.category == "Web Search" },
                            "\(outcome) must not get a Web Search fallback")
@@ -144,7 +144,7 @@ final class FallbackSearchTests: XCTestCase {
         let real: [ResultRow] = [.init(id: 0, icon: "x", primary: "hit", secondary: "",
                                        category: "Search", copyValue: "v", isMeta: false)]
         let out = fallbackRows(base: real, outcome: .search([]), query: "x",
-                               mode: .universal, store: store)
+                               mode: .universal, store: store, extensionLive: true)
         XCTAssertEqual(out.count, 2)
         XCTAssertEqual(out.last?.category, "Web Search")
     }
@@ -219,9 +219,60 @@ final class FallbackSearchTests: XCTestCase {
     func testDisabledProvidersAreSkipped() {
         let store = makeStore(providers: [provider("google", enabled: false), provider("bing")])
         let out = fallbackRows(base: [], outcome: .noResults(query: "q"), query: "q",
-                               mode: .universal, store: store)
+                               mode: .universal, store: store, extensionLive: true)
         XCTAssertEqual(out.count, 1)
         XCTAssertEqual(out.first?.primary, "Search Bing for \u{2018}q\u{2019}")
+    }
+
+    // MARK: extension enabled gate (#703)
+
+    func testDisabledExtensionGetsNoFallbacks() {
+        let store = makeStore(append: true, providers: [provider("google")])
+        let placeholder: [ResultRow] = [.init(id: 0, icon: "magnifyingglass", primary: "No results",
+                                              secondary: "", category: "", copyValue: "", isMeta: false)]
+        let none = fallbackRows(base: placeholder, outcome: .noResults(query: "zzz"), query: "zzz",
+                                mode: .universal, store: store, extensionLive: false)
+        XCTAssertEqual(none.map(\.primary), ["No results"], "disabled: the placeholder stays, no Web Search rows")
+        let real: [ResultRow] = [.init(id: 0, icon: "app.dashed", primary: "Safari", secondary: "",
+                                       category: "Application", copyValue: "Safari", isMeta: false)]
+        let appended = fallbackRows(base: real, outcome: .apps([]), query: "saf",
+                                    mode: .universal, store: store, extensionLive: false)
+        XCTAssertEqual(appended.map(\.category), ["Application"], "disabled: append mode adds nothing")
+    }
+
+    /// Toggling the extension flips the rows through the registry's cached flag, on
+    /// the same store instance, and never rewrites the providers.
+    func testTogglingTheExtensionGatesRowsWithoutTouchingTheStore() throws {
+        let store = makeStore(append: true, providers: [provider("google"), provider("bing", enabled: false)])
+        let before = store.providers
+        let reg = try gateFixture([(FallbackSearchStore.extensionID, [])]).registry()
+        func webRows() -> [ResultRow] {
+            fallbackRows(base: [], outcome: .noResults(query: "q"), query: "q", mode: .universal,
+                         store: store, extensionLive: reg.fallbackSearchLive)
+                .filter { $0.category == "Web Search" }
+        }
+        let enabledRows = webRows()
+        XCTAssertEqual(enabledRows.map(\.primary), ["Search Google for \u{2018}q\u{2019}"])
+
+        try reg.setEnabled(false, id: FallbackSearchStore.extensionID)
+        XCTAssertTrue(webRows().isEmpty, "disabled: no Web Search rows, at once")
+        XCTAssertEqual(store.providers, before, "disable must not clear or rewrite providers")
+
+        try reg.setEnabled(true, id: FallbackSearchStore.extensionID)
+        XCTAssertEqual(webRows().map(\.primary), enabledRows.map(\.primary), "re-enabled: the same rows come back")
+        XCTAssertEqual(webRows().map(\.openTarget), enabledRows.map(\.openTarget))
+        XCTAssertEqual(store.providers, before)
+    }
+
+    func testDisabledExtensionStaysGatedAfterRelaunch() throws {
+        let fx = try gateFixture([(FallbackSearchStore.extensionID, [])])
+        try fx.registry().setEnabled(false, id: FallbackSearchStore.extensionID)
+        let relaunched = fx.registry()
+        XCTAssertFalse(relaunched.fallbackSearchLive)
+        let store = makeStore(providers: [provider("google")])
+        let out = fallbackRows(base: [], outcome: .noResults(query: "q"), query: "q", mode: .universal,
+                               store: store, extensionLive: relaunched.fallbackSearchLive)
+        XCTAssertTrue(out.isEmpty)
     }
 
     // MARK: hot-path budgets
@@ -232,10 +283,13 @@ final class FallbackSearchTests: XCTestCase {
     // is set with ~3× headroom so CI noise can't flake a µs-level bound. The number is
     // printed for tracking — these assert the order of magnitude, not a tight bound.
 
-    func testFallbackRowsHotPathBudget() {
+    func testFallbackRowsHotPathBudget() throws {
         // 4 enabled providers (the shipped default count) + a realistic 8-hit base,
-        // append mode — the worst case the getter sees on a normal keystroke.
+        // append mode — the worst case the getter sees on a normal keystroke. The
+        // enabled gate is read off a registry per call, like the `rows` getter.
         let store = makeStore(providers: FallbackSearchStore.seeded)
+        let reg = try gateFixture([(FallbackSearchStore.extensionID, [])]).registry()
+        XCTAssertTrue(reg.fallbackSearchLive)
         let base: [ResultRow] = (0 ..< 8).map {
             .init(id: $0, icon: "app.dashed", primary: "Result \($0)", secondary: "",
                   category: "Application", copyValue: "r\($0)", isMeta: false)
@@ -243,11 +297,11 @@ final class FallbackSearchTests: XCTestCase {
         let n = 100_000
         // Warm the cached provider read + percent-encoder fast path before timing.
         _ = fallbackRows(base: base, outcome: .apps([]), query: "warm up",
-                         mode: .universal, store: store)
+                         mode: .universal, store: store, extensionLive: true)
         let start = DispatchTime.now().uptimeNanoseconds
         for i in 0 ..< n {
             _ = fallbackRows(base: base, outcome: .apps([]), query: "query \(i % 97)",
-                             mode: .universal, store: store)
+                             mode: .universal, store: store, extensionLive: reg.fallbackSearchLive)
         }
         let perCall = Double(DispatchTime.now().uptimeNanoseconds - start) / Double(n)
         print("fallbackRows: \(String(format: "%.0f", perCall)) ns/call")

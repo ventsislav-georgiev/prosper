@@ -20,6 +20,9 @@ struct FallbackProvider: Codable, Equatable {
 @MainActor
 final class FallbackSearchStore {
     static let shared = FallbackSearchStore()
+    /// The extension that owns this store. Its enabled state gates the rows, never
+    /// the stored providers: disabling hides them, re-enabling brings them back as-is.
+    static let extensionID = "com.prosper.fallback-search"
 
     /// UserDefaults keys. Namespaced under `fallback.` like the other native stores.
     private enum Key {

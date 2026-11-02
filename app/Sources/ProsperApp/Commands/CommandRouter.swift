@@ -206,6 +206,22 @@ enum CommandRouter {
     /// implementation remains as a fallback.
     @MainActor static var registry: ExtensionRegistry?
 
+    /// System extensions whose runner behaviour is native code in this router (or,
+    /// for menus, in RunnerPanel's menu walk). Each path runs only while its
+    /// extension is live, so disabling one in Settings › Extensions stops it.
+    static let quicklinksID = "com.prosper.quicklinks"
+    static let quickdirsID = "com.prosper.quickdirs"
+    static let menusID = "com.prosper.menus"
+    static let shellID = "com.prosper.shell"
+    static let openID = "com.prosper.open"
+
+    /// Whether extension `id` is live (enabled + trusted). No registry (tests and
+    /// direct callers; the app sets one at launch) = ungated.
+    @MainActor static func extensionLive(_ id: String) -> Bool {
+        guard let registry else { return true }
+        return registry.record(id: id)?.isLive ?? false
+    }
+
     /// Calc via the `calc.eval` system extension, falling back to native `Calc`.
     private static func calcResult(_ query: String) async -> String? {
         if let viaExtension = await MainActor.run(body: {
@@ -420,27 +436,28 @@ enum CommandRouter {
         // 0a3. Quicklinks listing. `ql` alone lists all; `ql <text>` filters by
         //      name/description. Management verbs (add/rm/...) are NOT handled here
         //      — they fall through to the Lua extension (step 3.5) / meta (`ql new`).
-        if let ql = quicklinksListing(trimmed) {
+        if let ql = quicklinksListing(trimmed), await MainActor.run(body: { extensionLive(quicklinksID) }) {
             return await attachLaunchers(ql, query: trimmed)
         }
 
         // 0a4. Quickdirs. `qd` alone shows the picker; `qd <name|prefix> <filter>`
         //      browses that quickdir's subdirectories. Management verbs (add/rm/...)
         //      fall through to the Lua extension (step 3.5).
-        if let qd = quickdirsUniversal(trimmed) {
+        if let qd = quickdirsUniversal(trimmed), await MainActor.run(body: { extensionLive(quickdirsID) }) {
             return await attachLaunchers(qd, query: trimmed)
         }
 
         // 0b. App launch (`o <app>`). Defensive: normally the UI strips this into
         //     openApp mode, but keep inline routing for direct/test callers.
-        if trimmed.lowercased().hasPrefix("o ") {
+        if trimmed.lowercased().hasPrefix("o "), await MainActor.run(body: { extensionLive(openID) }) {
             let name = String(trimmed.dropFirst(2))
             let matches = await MainActor.run { AppIndex.shared.search(name) }
             return matches.isEmpty ? .noResults(query: name) : .apps(matches)
         }
 
-        // 0c. Shell (`> <cmd>`).
-        if trimmed.hasPrefix(">") {
+        // 0c. Shell (`> <cmd>`). With Run Shell off its `> ` prefix is no longer
+        //     stripped into a mode, so without the gate the typed text would run here.
+        if trimmed.hasPrefix(">"), await MainActor.run(body: { extensionLive(shellID) }) {
             let cmd = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
             let output = await ShellRunner.run(cmd)
             return .shell(command: cmd, output: output)
@@ -526,10 +543,12 @@ enum CommandRouter {
             // Plain synchronous reads of the already-warmed menu index — no new
             // hop, no await. Empty until the first walk lands.
             let menus = MenuCommandIndex.shared
-            return Snapshot(apps: apps, lower: lower, links: QuicklinkStore.all(),
+            return Snapshot(apps: apps, lower: lower,
+                            links: extensionLive(quicklinksID) ? QuicklinkStore.all() : [],
                             registry: reg, bookmarksEnabled: bmOn,
                             commands: reg?.commandSearchEntries() ?? [],
-                            menus: menus.cached(), menuApp: menus.appName)
+                            menus: extensionLive(menusID) ? menus.cached() : [],
+                            menuApp: menus.appName)
         }
         let alias = AppIndex.aliasTarget(for: q) // nonisolated static — no hop
 
