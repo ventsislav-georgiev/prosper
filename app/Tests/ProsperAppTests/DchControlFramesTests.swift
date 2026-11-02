@@ -1139,23 +1139,102 @@ final class DchControlFramesTests: XCTestCase {
     }
 
     /// #671: a control-dch probe that hangs (a `dch --version` bounded at 4 s per candidate)
-    /// never holds the server queue, which every connection and attached pty share. The
-    /// reply still carries the probe's bit once it returns.
-    func testMachineInfoProbeDoesNotHoldTheQueue() {
-        let gate = DispatchSemaphore(value: 0), probing = expectation(description: "probe started")
+    /// never holds the server queue, which every connection and attached pty share.
+    /// #704: nor the reply: the phone waits 2 s, so a probe hung 5 s still gets one in
+    /// under 0.5 s, without the bit; the probe's late answer sends no second frame, and
+    /// once it has returned (cached, as probedVersion caches) the next handshake has the bit.
+    func testMachineInfoProbeHoldsNeitherTheQueueNorTheReply() {
+        let gate = DispatchSemaphore(value: 0), probing = expectation(description: "probe started"),
+            probed = expectation(description: "probe returned")
+        let calls = OSAllocatedUnfairLock(initialState: 0)
         var o = ops(Fake())
-        o.binary = { probing.fulfill(); gate.wait(); return Self.v127 }
+        o.binary = {
+            guard calls.withLock({ $0 += 1; return $0 }) == 1 else { return Self.v127 }   // cached once returned
+            probing.fulfill(); _ = gate.wait(timeout: .now() + 5); probed.fulfill(); return Self.v127
+        }
         let (conn, queue, frames) = connection(o)
+        let start = Date()
         queue.async { conn.handle(type: DchFrame.machineInfo, payload: Data()) }
         wait(for: [probing], timeout: 5)
         let marker = DispatchSemaphore(value: 0)
         queue.async { marker.signal() }   // a marker behind the handshake
         let held = marker.wait(timeout: .now() + 2) == .timedOut   // a held queue waits for gate.signal()
         XCTAssertFalse(held, "the probe held the queue")
-        XCTAssertNil(machineInfoResp(frames, timeout: 0), "no reply before the probe returns")
+        let info = machineInfoResp(frames, timeout: 0.5)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5, "the reply waited on the probe")
+        XCTAssertNotNil(info, "no reply while the probe hangs")
+        XCTAssertFalse((info?["ops"] as? [String] ?? []).contains("revive_no_message"))
         gate.signal()
         if held { marker.wait() }
-        XCTAssertTrue((machineInfoResp(frames)?["ops"] as? [String] ?? []).contains("revive_no_message"))
+        wait(for: [probed], timeout: 5)
+        let (conn2, queue2, frames2) = connection(o)
+        queue2.async { conn2.handle(type: DchFrame.machineInfo, payload: Data()) }
+        XCTAssertTrue((machineInfoResp(frames2)?["ops"] as? [String] ?? []).contains("revive_no_message"),
+                      "the returned probe's bit on the next handshake")
+        queue.sync {}
+        XCTAssertEqual(frames.lock.withLock { frames.all }.count, 1, "one reply per handshake")
+    }
+
+    /// #704: through the real probe (a script that hangs, never dch): a `--version`
+    /// that timed out is cached, so the very next handshake answers at once and runs
+    /// nothing; a new mtime probes again, and its answer carries the bit.
+    func testATimedOutProbeIsNotRerunOnTheNextHandshake() throws {
+        let dir = tempDir(), script = dir.appendingPathComponent("dch").path, count = dir.appendingPathComponent("count").path
+        let timeout = DchCommand.islandTimeout
+        DchCommand.islandTimeout = 1
+        defer { DchCommand.islandTimeout = timeout }
+        func install(_ body: String, mtime: TimeInterval) throws {
+            try "#!/bin/sh\necho \"$1\" >> '\(count)'\n\(body)\n".write(toFile: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755, .modificationDate: Date(timeIntervalSince1970: mtime)],
+                                                  ofItemAtPath: script)
+        }
+        func runs() -> Int { ((try? String(contentsOfFile: count, encoding: .utf8)) ?? "").split(separator: "\n").count }
+        try install("exec /bin/sleep 5", mtime: 1_000)
+        /// The reply's ops, the seconds to the reply and to the probe's return.
+        func handshake() -> (ops: [String], reply: TimeInterval, probe: TimeInterval) {
+            let probed = expectation(description: "probe returned")
+            var o = ops(Fake())
+            o.binary = { defer { probed.fulfill() }; return DchCommand.newest([script], version: DchCommand.probedVersion) }
+            let (conn, queue, frames) = connection(o)
+            let start = Date()
+            queue.async { conn.handle(type: DchFrame.machineInfo, payload: Data()) }
+            let info = machineInfoResp(frames, timeout: 2)
+            let reply = Date().timeIntervalSince(start)
+            wait(for: [probed], timeout: 5)
+            return (info?["ops"] as? [String] ?? ["no reply"], reply, Date().timeIntervalSince(start))
+        }
+        let first = handshake()
+        XCTAssertLessThan(first.reply, 0.5, "the reply waited on the hung probe")
+        XCTAssertFalse(first.ops.contains("revive_no_message"))
+        XCTAssertGreaterThanOrEqual(first.probe, 1, "the probe timed out")
+        let ran = runs()   // 1, or 0 when a fresh script's first exec outlasts the timeout
+        let next = handshake()
+        XCTAssertLessThan(next.reply, 0.5)
+        XCTAssertFalse(next.ops.contains("revive_no_message"))
+        XCTAssertLessThan(next.probe, 0.5, "the timed-out probe ran again")
+        XCTAssertEqual(runs(), ran, "the timed-out probe ran again")
+        try install("echo 'dch 1.27.0'", mtime: 2_000)
+        _ = handshake()   // a new mtime probes again; its bit may miss this reply's 0.25 s under load
+        XCTAssertEqual(runs(), ran + 1, "a new mtime probes again")
+        XCTAssertTrue(handshake().ops.contains("revive_no_message"), "the new mtime's answer")
+        XCTAssertEqual(runs(), ran + 1)
+    }
+
+    /// #704: a timed-out probe stays cached only for probeTimeoutTTL; past it, the next call runs it again.
+    func testATimedOutProbeIsRerunOnceItsTTLHasPassed() throws {
+        let script = tempDir().appendingPathComponent("dch").path
+        let (timeout, ttl) = (DchCommand.islandTimeout, DchCommand.probeTimeoutTTL)
+        DchCommand.islandTimeout = 0.3
+        DchCommand.probeTimeoutTTL = 0
+        defer { (DchCommand.islandTimeout, DchCommand.probeTimeoutTTL) = (timeout, ttl) }
+        try "#!/bin/sh\nexec /bin/sleep 5\n".write(toFile: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
+        for call in 1...2 {
+            let start = Date()
+            XCTAssertNil(DchCommand.probedVersion(script))
+            XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 0.3, "call \(call) ran no probe")
+        }
+        XCTAssertEqual(ttl, 60, "the shipped TTL")
     }
 
     /// #671: a connection that closed while its probe ran sends nothing.

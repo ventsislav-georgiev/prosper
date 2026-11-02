@@ -335,13 +335,22 @@ final class DchConnection: @unchecked Sendable {
             let wakeId = LiveExtensionHostServices.currentWakeId, clip = clipboard.enabled()
             clipboard.log(.default, "machineInfo: clipboard \(clip ? "advertised" : "not advertised")")   // #701
             let chat = chat.available, commands = commands.enabled(), ops = ops
-            DispatchQueue.global(qos: .userInitiated).async {
-                let revive = DchCommand.gate(ops.binary(), masters: [], minimum: AgentIsland.reviveNoMessageMinimum).isOK
+            // #704: the phone gives up after 2 s and a cold probe can take 4 s per hung
+            // candidate, so the reply waits at most 0.25 s for it (a cached probe is a stat
+            // per candidate). Past that it goes without the bit; the probe runs on and fills
+            // probedVersion's cache, timeouts included, for the next handshake.
+            let answered = OSAllocatedUnfairLock(initialState: false)
+            let answer: @Sendable (Bool) -> Void = { revive in
+                guard answered.withLock({ done in defer { done = true }; return !done }) else { return }
                 let frame = DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
                     deviceID: deviceID, hostname: hostname, wakeId: wakeId, clipboard: clip, chat: chat,
                     commands: commands, reviveNoMessage: revive))
                 self.queue.async { if !self.closed { self.send(frame) } }
             }
+            DispatchQueue.global(qos: .userInitiated).async {
+                answer(DchCommand.gate(ops.binary(), masters: [], minimum: AgentIsland.reviveNoMessageMinimum).isOK)
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.25) { answer(false) }
         case DchFrame.models, DchFrame.chat:
             // #618: one request per connection, as clipboardUpload; a chat's deltas come
             // back in order on `queue`, then the one final reply.
@@ -1199,22 +1208,36 @@ enum DchCommand {
 
     private final class VersionCache: @unchecked Sendable {
         let lock = NSLock()
-        var map: [String: (mtime: TimeInterval, version: [Int]?)] = [:]
+        /// `until`: a timed-out probe's expiry; nil for an answer, kept for the mtime.
+        var map: [String: (mtime: TimeInterval, version: [Int]?, until: Date?)] = [:]
     }
     private static let versionCache = VersionCache()
 
+    /// #704: how long a timed-out probe stays nil before it is run again. A var only
+    /// so tests can shorten it. ponytail: no in-flight dedupe, so calls during a hung
+    /// candidate's first 4 s each probe it; add one if a hung dch is ever seen.
+    nonisolated(unsafe) static var probeTimeoutTTL: TimeInterval = 60
+
     /// `path --version`, cached per resolved path and mtime (a brew upgrade
     /// retargets the symlink, a rebuild moves the mtime), never per call. A
-    /// missing or non-executable path is nil; a timed-out probe is not cached.
+    /// missing or non-executable path is nil; a timed-out probe is nil for
+    /// `probeTimeoutTTL` (#704), or until the mtime moves.
     static func probedVersion(_ path: String) -> [Int]? {
         let real = (path as NSString).resolvingSymlinksInPath
         guard FileManager.default.isExecutableFile(atPath: real), let m = AgentDirScanner.mtime(real) else { return nil }
-        if let hit = versionCache.lock.withLock({ versionCache.map[real] }), hit.mtime == m { return hit.version }
+        if let hit = versionCache.lock.withLock({ versionCache.map[real] }), hit.mtime == m,
+           hit.until.map({ Date() < $0 }) ?? true { return hit.version }
         guard let out = bounded(islandTimeout, { onPid in
             runCapturingBoth(args: ["--version"], env: AgentIsland.listEnv(dir: defaultSocketDir), path: real, onPid: onPid).out
-        }) else { return nil }
+        }) else {
+            versionCache.lock.withLock {   // never over an overlapping call's answer (QA #518 LOW-1)
+                if let e = versionCache.map[real], e.mtime == m, e.until == nil { return }
+                versionCache.map[real] = (m, nil, Date().addingTimeInterval(probeTimeoutTTL))
+            }
+            return nil
+        }
         let v = parseVersion(String(decoding: out, as: UTF8.self))
-        versionCache.lock.withLock { versionCache.map[real] = (m, v) }
+        versionCache.lock.withLock { versionCache.map[real] = (m, v, nil) }
         return v
     }
 
