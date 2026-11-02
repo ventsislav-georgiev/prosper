@@ -280,6 +280,7 @@ final class RemoteWakeCoreTests: XCTestCase {
 /// decision (sans the injected network poll) must stay near-free. Budget per the
 /// doc comment on `onWake`: **< 1 µs/call** decision-only. Generous CI ceiling.
 final class RemoteWakeCorePerfTests: XCTestCase {
+    override func setUpWithError() throws { try requireHeavyTests() }
     func testOnWakeDecisionIsSubMicrosecond() {
         let fixed = Date(timeIntervalSince1970: 1_000_000)
         // debounce 0 so every iteration runs the full decide+re-arm path (not the

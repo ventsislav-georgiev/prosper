@@ -296,6 +296,7 @@ final class AnalyticsSnapshotTests: XCTestCase {
     /// live-id-Set optimization against an accidental return to per-id linear scans:
     /// a 60-extension registry must build within ~8× a 2-extension one, not ~30×.
     func testBuildScalesLinearlyWithExtensionCount() throws {
+        try requireHeavyTests()
         Preferences.agentEnabled = false   // exclude the FS-touching pluginCount() path
 
         func avgNanos(_ reg: ExtensionRegistry, iterations: Int) -> Double {

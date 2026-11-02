@@ -45,7 +45,8 @@ final class StatsPopupGateTests: XCTestCase {
         XCTAssertGreaterThan(lock.withLock { rails }, 0, "open popup reads the power rails")
     }
 
-    func testPingThreadRunsOnlyWhilePopupOpen() {
+    func testPingThreadRunsOnlyWhilePopupOpen() throws {
+        try requireHeavyTests()
         // An open popup refreshes the public IP (api.country.is); keep it in-process.
         URLProtocol.registerClass(NoNetwork.self)
         let lock = NSLock()
@@ -72,7 +73,8 @@ final class StatsPopupGateTests: XCTestCase {
         XCTAssertEqual(lock.withLock { pings }, 1, "closing the popup stops the ping thread")
     }
 
-    func testPauseStopsPingAndResumeRestartsItOnlyForOpenPopup() {
+    func testPauseStopsPingAndResumeRestartsItOnlyForOpenPopup() throws {
+        try requireHeavyTests()
         URLProtocol.registerClass(NoNetwork.self)
         let lock = NSLock()
         var pings = 0

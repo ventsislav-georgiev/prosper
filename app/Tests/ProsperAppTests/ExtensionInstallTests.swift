@@ -359,6 +359,7 @@ final class ExtensionInstallTests: XCTestCase {
     /// no regex compilation, no allocations beyond one NSRange. Asserts a non-matching
     /// worst-case query (scans every route) stays well under budget over 200 routes.
     func testRoutePerformance() throws {
+        try requireHeavyTests()
         let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         defer { try? FileManager.default.removeItem(at: tmp) }

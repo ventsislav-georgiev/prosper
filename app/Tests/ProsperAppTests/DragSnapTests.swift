@@ -140,7 +140,8 @@ final class DragSnapTests: XCTestCase {
     // sneaking back onto the hot path (those cost 100µs–ms each → blow the budget by
     // orders of magnitude).
     @MainActor
-    func testHotPathBudget() {
+    func testHotPathBudget() throws {
+        try requireHeavyTests()
         let v = CGRect(x: 0, y: 25, width: 1440, height: 875)
         let iterations = 200_000
         var sink = CGRect.zero

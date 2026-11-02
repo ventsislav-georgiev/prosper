@@ -8,6 +8,7 @@ import XCTest
 /// showing up as typing lag. Ceilings are generous (guarding shape, not jitter);
 /// the comment on each states the requirement it encodes.
 final class AutocompleteHotPathBudgetTests: XCTestCase {
+    override func setUpWithError() throws { try requireHeavyTests() }
 
     /// REQUIREMENT: `sanitizeCompletion` runs once per candidate per ladder rung
     /// on every keystroke's completion — its guards (echo, script, repeat) must

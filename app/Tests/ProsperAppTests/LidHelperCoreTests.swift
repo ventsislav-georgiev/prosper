@@ -278,7 +278,8 @@ final class LidHelperCoreTests: XCTestCase {
     /// regression guard (an accidental per-call alloc or lock lands 10-100x over),
     /// not a micro-benchmark. Measured on a DEBUG build (no optimization); release
     /// is several times faster, and the real op (XPC + pmset) dwarfs this anyway.
-    func testTransitionThroughputUnderBudget() {
+    func testTransitionThroughputUnderBudget() throws {
+        try requireHeavyTests()
         // No-op apply: measure the core's transitions, not a recording spy whose
         // array growth would dominate the timing.
         let core = LidHelperCore(apply: { _ in true }, onIdle: {})

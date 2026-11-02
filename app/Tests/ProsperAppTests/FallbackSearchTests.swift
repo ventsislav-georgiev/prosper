@@ -284,6 +284,7 @@ final class FallbackSearchTests: XCTestCase {
     // printed for tracking — these assert the order of magnitude, not a tight bound.
 
     func testFallbackRowsHotPathBudget() throws {
+        try requireHeavyTests()
         // 4 enabled providers (the shipped default count) + a realistic 8-hit base,
         // append mode — the worst case the getter sees on a normal keystroke. The
         // enabled gate is read off a registry per call, like the `rows` getter.
@@ -308,7 +309,8 @@ final class FallbackSearchTests: XCTestCase {
         XCTAssertLessThan(perCall, 45_000, "fallbackRows exceeded the 45µs hot-path budget")
     }
 
-    func testExpandHotPathBudget() {
+    func testExpandHotPathBudget() throws {
+        try requireHeavyTests()
         let store = makeStore()
         let n = 200_000
         _ = store.expand(template: "https://www.google.com/search?q={query}", query: "warm")

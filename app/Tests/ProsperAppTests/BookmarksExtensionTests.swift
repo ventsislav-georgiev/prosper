@@ -553,6 +553,7 @@ final class BookmarksExtensionTests: XCTestCase {
     /// (CI noise) but ~10× under the old per-keystroke cost; actual is printed.
     @MainActor
     func testSearchHotPathBudget() async throws {
+        try requireHeavyTests()
         let n = 5000
         let fake = BookmarkFakeServices()
         fake.granted = ["full-disk-access"]   // no Safari data staged → import stays Chrome-only, no skip note

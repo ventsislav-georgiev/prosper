@@ -137,7 +137,8 @@ final class AutocompleteReconcileTests: XCTestCase {
     // stay trivial on realistic inputs (long field text + a sentence-length ghost).
     // Budget: < 25µs average. Generous vs. measured (~1µs) to avoid CI flake while
     // still catching an accidental O(n²) regression.
-    func testReconcilePerformanceBudget() {
+    func testReconcilePerformanceBudget() throws {
+        try requireHeavyTests()
         let anchor = String(repeating: "lorem ipsum dolor sit amet ", count: 8) // ~216 chars
         let live = anchor + "th"
         let suggestion = "the next several words the user would plausibly type next"

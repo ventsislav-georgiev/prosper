@@ -98,6 +98,9 @@ jobs:
           # Line-buffered xctest output through the tee pipe, so the last test
           # that started is in the log when the step is killed.
           NSUnbufferedIO: "YES"
+          # #710: run the tests a local `swift test` skips (HeavyTests.swift); the
+          # timing budgets among them still fall to --skip below.
+          PROSPER_HEAVY_TESTS: "1"
           # The --skip regex (#172 survey); see the header comment for each group.
           SKIP: 'LogitProcessorTests|ScreenToolsTests/test(VisionOCR|Prewarm|RejectedRequest|Accurate)|AutocompleteContinuationTests/test(CompleteButUnspacedWordStillGetsItsSpace|LastWordEchoWithStraySpaceStripped|NewWordAfterCompleteWordGetsSpaced|NewWordWhenModelAlreadySpacedStaysSingleSpaced|MidWordContinuationNoSpace|MidWordWholeWordRepeatLowercaseDeduped|MidWordContinuationFromBareFragment|MidWordNewWordAgainstUnfinishedFragmentSuppressed|WholeRestatementStripped)|AutocompleteWordBoundaryTests/test(NewWordAfterCompleteWordGetsSpace|MidWordContinuationKeepsNoSpace|CrossLanguageGlueStillGetsSpace)|CompletionCandidatesTests/testDeriveIncludesTypoCorrection|CoreBridgeSanitizeTests/testRussianOnlyWordGate|RussianGateFragmentTests/testStandaloneRussianWordStillRejected|MidWordCyrillicTests/|ModelIdleUnloaderTests/test(FireWithDefaultUnloadActionDrivesRealTeardown|UnloadIdleEnginesIsSafeAndIdempotentWithNothingLoaded|MallocPressureReliefIsCallableAndFast)|(ExtensionPerf|StatsHotPathBudget|AutocompleteHotPathBudget|RemoteWakeCorePerf)Tests/|/test\w*(HotPath|Performance|_perf|IsFast|(BiasesLookup|Builder)IsCheap|ScalesLinearlyWith|(Under|Meets|Lookup|Render|Perf|Accumulation|Index|Frames|DidMove)Budget|DispatchBudgetAborts)'
         run: |

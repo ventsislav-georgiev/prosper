@@ -382,8 +382,10 @@ final class CodexHarnessE2ETests: XCTestCase {
     """#
 
     /// Writes the mock to an executable temp file and returns its URL + the temp
-    /// CODEX_HOME directory. Skips the test if python3 is unavailable.
+    /// CODEX_HOME directory. Skips the test if python3 is unavailable, or without
+    /// PROSPER_HEAVY_TESTS=1 (#710: every mock spawn is a heavy row).
     private func makeMock() throws -> (executable: URL, codexHome: URL) {
+        try requireHeavyTests()
         let python = ["/usr/bin/python3", "/opt/homebrew/bin/python3", "/usr/local/bin/python3"]
             .first { FileManager.default.isExecutableFile(atPath: $0) }
         guard let python else { throw XCTSkip("python3 not available for the mock app-server") }

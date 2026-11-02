@@ -203,7 +203,8 @@ final class MarketplaceBrowseModelTests: XCTestCase {
 
     // MARK: hot path — per-render install-state lookup
 
-    func testInstalledMembershipRenderBudget() {
+    func testInstalledMembershipRenderBudget() throws {
+        try requireHeavyTests()
         let installed = Set((0..<200).map { "installed.\($0)" })
         let pageIDs = (0..<5_000).map { "pkg.\($0)" }
         let renders = 1_000

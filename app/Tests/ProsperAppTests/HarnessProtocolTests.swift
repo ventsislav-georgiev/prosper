@@ -185,6 +185,7 @@ final class HarnessProtocolTests: XCTestCase {
     /// #174: a line over `maxLineBytes` is dropped with an error log, whether it arrives in one
     /// read or streams in; streaming, it is dropped (and the buffer freed) before its newline.
     func testFramerDropsOverCapLineAndKeepsReading() throws {
+        try requireHeavyTests()
         let since = Self.logMark()
         let huge = Data((#"{"a":""# + String(repeating: "x", count: JSONLineFramer.maxLineBytes + (1 << 20)) + #""}"#).utf8)
         let next = Data(("\n" + #"{"ok":true}"# + "\n").utf8)
