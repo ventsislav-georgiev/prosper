@@ -9,10 +9,12 @@ import SwiftUI
 @MainActor
 final class ClipboardPanel {
 
-    private let panel: KeyablePanel
-    private let store = ClipboardStore.shared
-    private let model = ClipboardPanelModel()
-    private let wait = ClipboardPasteWait(store: .shared)
+    /// `panel` and `model` are internal for the offscreen drag-area tests (#713); the
+    /// panel is never ordered front there.
+    let panel: KeyablePanel
+    private let store: ClipboardStore
+    let model = ClipboardPanelModel()
+    private let wait: ClipboardPasteWait
     private var previousApp: NSRunningApplication?
     /// Opens the Settings window so the user can grant the Accessibility permission
     /// the auto-paste needs. Wired by AppDelegate to its shared settings opener.
@@ -34,7 +36,10 @@ final class ClipboardPanel {
         return (x, top)
     }
 
-    init(onOpenSettings: @escaping () -> Void = {}) {
+    /// `store` is a seam: tests pass a ClipboardStore(dir: tempDir()).
+    init(store: ClipboardStore = .shared, onOpenSettings: @escaping () -> Void = {}) {
+        self.store = store
+        wait = ClipboardPasteWait(store: store)
         self.onOpenSettings = onOpenSettings
         panel = KeyablePanel(
             contentRect: NSRect(x: 0, y: 0, width: 750, height: 480),
@@ -513,6 +518,7 @@ struct ClipboardView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(Neon.blue)
                     .font(Neon.font(14))
+                    .allowsHitTesting(false)   // #713: grabbable like the padding
                 TextField("Type to filter entries\u{2026}", text: $model.query)
                     .textFieldStyle(.plain)
                     .font(Neon.font(14))
@@ -522,6 +528,8 @@ struct ClipboardView: View {
             }
             .padding(.horizontal, sz(14))
             .padding(.vertical, sz(10))
+            // #713: the bar's padding and gaps drag the panel (see WindowDragHandle).
+            .background(WindowDragHandle())
 
             Divider()
 
@@ -968,6 +976,7 @@ struct ClipboardView: View {
                     .font(Neon.font(11, weight: .medium))
                     .foregroundColor(Neon.textSecondary)
             }
+            .allowsHitTesting(false)   // #713: the label is a grab area
 
             Spacer()
 
@@ -1041,6 +1050,7 @@ struct ClipboardView: View {
         }
         .padding(.horizontal, sz(14))
         .padding(.vertical, sz(8))
+        .background(WindowDragHandle())   // #713: the bar's label and gap drag the panel
     }
 
     // MARK: - Helpers

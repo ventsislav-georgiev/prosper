@@ -12,8 +12,10 @@ final class KeyablePanel: NSPanel {
 @MainActor
 final class RunnerPanel {
 
-    private let panel: KeyablePanel
-    private let model: RunnerModel
+    /// `panel` and `model` are internal for the offscreen drag-area tests (#713); the
+    /// panel is never ordered front there.
+    let panel: KeyablePanel
+    let model: RunnerModel
     private var previousApp: NSRunningApplication?
     /// Guards saving the origin while we move the panel programmatically (resize
     /// keeps the top edge fixed, which fires didMove).
@@ -1786,6 +1788,7 @@ private struct RunnerView: View {
             Image(systemName: "command")
                 .font(Neon.font(13, weight: .semibold))
                 .foregroundColor(Neon.blue.opacity(0.8))
+                .allowsHitTesting(false)   // #713: grab area
 
             Spacer()
 
@@ -1796,6 +1799,7 @@ private struct RunnerView: View {
                     .foregroundColor(Neon.textSecondary)
                 KeyCap("\u{21A9}")
             }
+            .allowsHitTesting(false)   // #713: a hint, not a button: grab area
 
             Divider().frame(height: sz(14))
 
@@ -1822,6 +1826,8 @@ private struct RunnerView: View {
         }
         .padding(.horizontal, sz(14))
         .padding(.vertical, sz(8))
+        // #713: above the tint, so the bar's label and gap drag the runner.
+        .background(WindowDragHandle())
         .background(Neon.bgBottom.opacity(0.55))
     }
 
@@ -1948,6 +1954,7 @@ private struct InputHeader: View {
                     ModeChip(mode: mode, isLoading: isLoading)
                 }
             }
+            .allowsHitTesting(false)   // #713: the icon / mode chip is a grab area
             GatedField(
                 placeholder: mode.placeholder,
                 textValue: text,
@@ -1959,6 +1966,7 @@ private struct InputHeader: View {
         }
         .padding(.horizontal, sz(16))
         .padding(.vertical, sz(16))
+        .background(WindowDragHandle())   // #713: the padding drags the runner
     }
 }
 

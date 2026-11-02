@@ -51,6 +51,14 @@ tag from the now-released section and put it on the new top draft.
   Mac shrinks it and keeps its format and transparency. A smaller image is sent as is.
   Syncing images is much quicker and gets cut off less often when you switch apps. It
   needs an iPhone app that asks for it; older ones still get full-size images.
+- **Clipboard History and the command runner can be moved.** Drag either panel by
+  its bars:
+  - Clipboard History: the bottom bar (its icon, its label or the empty space), or the
+    search bar's edges and magnifier.
+  - The command runner: the edges around the search field, or its icon or mode chip; with
+    a result showing, also the bottom bar (the ⌘ glyph, the empty space or the ↩ hint).
+
+  Each panel reopens where you left it while the pointer is on that screen.
 
 ## v2.163.0
 
