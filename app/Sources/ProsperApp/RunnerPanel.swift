@@ -2842,7 +2842,9 @@ struct RunnerKeyHandling: NSViewRepresentable {
               number: onNumber)
     }
 
-    final class Coordinator {
+    /// @MainActor: every caller is main — SwiftUI's representable hooks, and the
+    /// local NSEvent monitor, which AppKit runs inside -[NSApplication sendEvent:].
+    @MainActor final class Coordinator {
         struct Handlers {
             let cancel: () -> Void
             let commit: () -> Void
@@ -2855,7 +2857,8 @@ struct RunnerKeyHandling: NSViewRepresentable {
         }
         var handlers: Handlers?
         weak var window: NSWindow?
-        private var monitor: Any?
+        /// nonisolated(unsafe) only so deinit can read it; every other access is on main.
+        nonisolated(unsafe) private var monitor: Any?
 
         /// The monitor's body, kept as a value so tests run the exact closure the
         /// monitor gets without installing one. Resolve self first:
@@ -2927,6 +2930,7 @@ struct RunnerKeyHandling: NSViewRepresentable {
             }
         }
 
-        deinit { stop() }
+        // Inlined stop(): a nonisolated deinit can't call the main-actor method.
+        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
     }
 }
