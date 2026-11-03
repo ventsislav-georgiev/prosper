@@ -188,18 +188,32 @@ enum TextReplacements {
         NSClassFromString("XCTestCase") == nil ? NSSpellChecker.shared.userReplacementsDictionary : [:]
     }
 
+    /// The clock seam for the throttle (#733): a test drives a fake clock.
+    nonisolated(unsafe) static var now: @MainActor () -> Date = Date.init
+    /// A menu-bar app can go hours without an activation; the expander re-reads this often.
+    static let staleAfter: TimeInterval = 30
+
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cached: [String: String] = [:]
+    @MainActor private static var lastRefresh: Date?
 
     /// Re-reads (app activation, every expander keyword rebuild). A change bumps SnippetStore's
     /// token so the expander rebuilds its keywords.
     @MainActor static func refresh() {
-        let now = Preferences.snippetsTextReplacements ? read() : [:]   // off: no read at all
+        lastRefresh = now()
+        let fresh = Preferences.snippetsTextReplacements ? read() : [:]   // off: no read at all
         let changed = lock.withLock { () -> Bool in
-            defer { cached = now }
-            return cached != now
+            defer { cached = fresh }
+            return cached != fresh
         }
         if changed { SnippetStore.touch() }
+    }
+
+    /// #733: refresh() once the last one is `staleAfter` old, so an entry added in System Settings
+    /// expands without an app activation. Called on every expander keystroke, before its token guard.
+    @MainActor static func refreshIfStale() {
+        if let last = lastRefresh, now().timeIntervalSince(last) < staleAfter { return }
+        refresh()
     }
 
     /// The last read, or none while Settings > Snippets "Include macOS Text Replacements" is off.

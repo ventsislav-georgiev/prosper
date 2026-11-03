@@ -4,12 +4,20 @@ import XCTest
 
 /// #732: the macOS Text Replacements as a read-only snippet source. The dictionary always comes
 /// through the `TextReplacements.read` seam or as a value: no test calls the real NSSpellChecker.
+/// A seam closure reads a test's mutable state through this, so no captured var is mutated (Swift 6).
+@MainActor private final class Box<T> {
+    var value: T
+    init(_ value: T) { self.value = value }
+}
+
 @MainActor
 final class TextReplacementsTests: XCTestCase {
     private var savedRead: (@MainActor () -> [String: String])!
+    private var savedNow: (@MainActor () -> Date)!
 
     override func setUp() async throws {
         savedRead = TextReplacements.read
+        savedNow = TextReplacements.now
         Preferences.defaults.removeObject(forKey: "snippetsTextReplacements")
     }
 
@@ -17,6 +25,7 @@ final class TextReplacementsTests: XCTestCase {
         TextReplacements.read = { [:] }
         TextReplacements.refresh()   // empty the cache for the next test
         TextReplacements.read = savedRead
+        TextReplacements.now = savedNow
         Preferences.defaults.removeObject(forKey: "snippetsTextReplacements")
     }
 
@@ -160,32 +169,91 @@ final class TextReplacementsTests: XCTestCase {
         XCTAssertNil(PhoneSnippetStore.lookup(id, mac: { _ in nil }))
         XCTAssertEqual(LiveExtensionHostServices.shared.snippetsTextReplacements(), "[]", "palette search too")
 
-        var reads = 0
-        TextReplacements.read = { reads += 1; return ["zq732": "Phrase"] }
+        let reads = Box(0)
+        TextReplacements.read = { reads.value += 1; return ["zq732": "Phrase"] }
         TextReplacements.refresh()
-        XCTAssertEqual(reads, 0, "off: no read at all")
+        XCTAssertEqual(reads.value, 0, "off: no read at all")
         Preferences.snippetsTextReplacements = true
         TextReplacements.refresh()
-        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(reads.value, 1)
         XCTAssertEqual(triggers(), ["zq732"])
     }
 
     func testRefreshBumpsTheTokenOnlyOnAChange() {
-        var dict = ["zq732": "One"]
-        TextReplacements.read = { dict }
+        let dict = Box(["zq732": "One"])
+        TextReplacements.read = { dict.value }
         TextReplacements.refresh()
         var token = SnippetStore.changeToken
         TextReplacements.refresh()
         XCTAssertEqual(SnippetStore.changeToken, token, "unchanged: the expander keeps its cache")
-        dict["zq732"] = "Two"
+        dict.value["zq732"] = "Two"
         TextReplacements.refresh()
         XCTAssertNotEqual(SnippetStore.changeToken, token, "changed: the expander rebuilds")
         XCTAssertEqual(TextReplacements.items(), ["zq732": "Two"])
         token = SnippetStore.changeToken
-        dict = [:]
+        dict.value = [:]
         TextReplacements.refresh()
         XCTAssertNotEqual(SnippetStore.changeToken, token)
         XCTAssertEqual(TextReplacements.items(), [:])
+    }
+
+    // MARK: - Throttled refresh (#733): no app activation needed
+
+    func testExpanderPicksUpAChangeAfterTheThrottleWindowAndNotBefore() {
+        let clock = Box(Date(timeIntervalSince1970: 1_000_000))
+        TextReplacements.now = { clock.value }
+        let dict = Box(["zq733a": "A"]), reads = Box(0)
+        TextReplacements.read = { reads.value += 1; return dict.value }
+        let expander = SnippetExpander.shared
+        func triggers() -> Set<String> { Set(expander.cachedKeywords.map(\.trigger)) }
+
+        TextReplacements.refresh()   // an app activation at `clock`
+        expander.refreshKeywordsIfNeeded()
+        XCTAssertTrue(triggers().contains("zq733a"))
+
+        dict.value["zq733b"] = "B"   // added in System Settings
+        reads.value = 0
+        clock.value += TextReplacements.staleAfter - 1
+        expander.refreshKeywordsIfNeeded()
+        XCTAssertEqual(reads.value, 0, "inside the window: no read")
+        XCTAssertFalse(triggers().contains("zq733b"), "not before the window")
+
+        clock.value += 1
+        expander.refreshKeywordsIfNeeded()
+        XCTAssertGreaterThan(reads.value, 0)
+        XCTAssertTrue(triggers().contains("zq733b"), "a trigger once the window is up, no activation")
+
+        dict.value["zq733c"] = "C"
+        reads.value = 0
+        clock.value += TextReplacements.staleAfter - 1
+        expander.refreshKeywordsIfNeeded()
+        XCTAssertEqual(reads.value, 0, "the window restarts at the last read")
+        XCTAssertFalse(triggers().contains("zq733c"))
+
+        Preferences.snippetsTextReplacements = false
+        clock.value += 10 * TextReplacements.staleAfter
+        expander.refreshKeywordsIfNeeded()
+        expander.refreshKeywordsIfNeeded()
+        XCTAssertEqual(reads.value, 0, "off: no read at all")
+        XCTAssertTrue(triggers().isDisjoint(with: ["zq733a", "zq733b", "zq733c"]), "off: the source is gone")
+    }
+
+    func testLiteralHitSkipsTheLiveContextOtherHitsKeepIt() {
+        Pasteboard.general.clearContents()   // the per-process test pasteboard, never the user's
+        Pasteboard.general.setString("clip733", forType: .string)
+        defer { Pasteboard.general.clearContents() }
+        let expander = SnippetExpander.shared
+        let rep = SnippetHit(name: "On my way", keyword: "omw", text: "On my way", collection: TextReplacements.label, literal: true)
+        let mac = SnippetHit(name: "Clip", keyword: "cc", text: "{clipboard}")
+        XCTAssertNil(expander.context(for: rep).clipboard(), "a Text Replacement never snapshots the clipboard")
+        XCTAssertEqual(expander.context(for: mac).clipboard(), "clip733", "a Mac snippet keeps the live context")
+        // plan() output is unchanged for the literal hit: it never reads the context.
+        let keywords = [(trigger: "omw", id: TextReplacements.id("omw"))]
+        let lookup: (String) -> SnippetHit? = { _ in rep }
+        XCTAssertEqual(SnippetExpander.plan(buffer: "x omw ", keywords: keywords, lookup: lookup,
+                                            context: expander.context(for: rep), wordBoundaryMode: false),
+                       SnippetExpander.plan(buffer: "x omw ", keywords: keywords, lookup: lookup,
+                                            context: expander.context(for: mac), wordBoundaryMode: false))
     }
 
     // MARK: - Lua bridge

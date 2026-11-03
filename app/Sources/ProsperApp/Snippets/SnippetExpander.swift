@@ -44,7 +44,7 @@ final class SnippetExpander {
     /// Printable characters typed since the last caret-moving key (its own rules,
     /// independent of the autocomplete shadow which is tuned for stale-AX).
     private var buffer = ""
-    private var cachedKeywords: [(trigger: String, id: String)] = []
+    private(set) var cachedKeywords: [(trigger: String, id: String)] = []
     private var cachedToken: Int = -1
 
     // e2e tracing — gated on PROSPER_E2E, no-op otherwise. The expansion suite runs
@@ -124,7 +124,7 @@ final class SnippetExpander {
             buffer: buffer,
             keywords: cachedKeywords,
             lookup: { PhoneSnippetStore.lookup($0) },
-            context: liveContext(template: hit.literal ? "" : hit.text),
+            context: context(for: hit),
             wordBoundaryMode: Preferences.snippetsExpandOnWordBoundary
         )
 
@@ -192,6 +192,12 @@ final class SnippetExpander {
 
     // MARK: - Live placeholder context
 
+    /// The plan's context for `hit`. A Text Replacement inserts literally and plan() never reads
+    /// its context, so it gets an empty one: no clipboard-history decrypt per expansion (#733).
+    func context(for hit: SnippetHit) -> PlaceholderContext {
+        hit.literal ? PlaceholderContext() : liveContext(template: hit.text)
+    }
+
     /// Snapshots the MainActor-isolated state (clipboard history, snippet bodies,
     /// pre-resolved custom placeholders for `template`) into plain values so the
     /// resulting context's closures stay pure — safe to call from the `nonisolated`
@@ -222,7 +228,8 @@ final class SnippetExpander {
         return ctx
     }
 
-    private func refreshKeywordsIfNeeded() {
+    func refreshKeywordsIfNeeded() {
+        TextReplacements.refreshIfStale()   // #733: a change bumps the token, so before the guard
         guard cachedToken != SnippetStore.changeToken else { return }
         TextReplacements.refresh()   // #732: re-read with every rebuild (a change bumps the token again)
         cachedKeywords = SnippetStore.effectiveKeywords()
