@@ -107,6 +107,8 @@ list_on_empty   = true                    # run on an empty query so the mode op
 launches_window = false                   # surface as a row that opens a window on Enter (no per-keystroke run)
 runs_on_select  = false                   # discovery-list pick runs immediately (for parameterless toggles)
 bindable_items  = true                    # each listed row becomes its own bindable global shortcut
+phone           = true                    # offer it on the iPhone's Commands screen (plain no-view commands only, see below)
+phone_argument  = "github"                # argument hint the phone shows (absent = tap to run)
 ```
 
 | Field | Effect |
@@ -121,6 +123,8 @@ bindable_items  = true                    # each listed row becomes its own bind
 | `launches_window` | Surface as a row that opens its own window on Enter instead of running per keystroke. |
 | `runs_on_select` | Picking the command from the discovery list runs the handler immediately rather than entering its input mode. Reserve for **parameterless, non-destructive** actions (toggles/status, e.g. [`openlid`](app/Sources/ProsperApp/Resources/extensions/openlid/)'s "Toggle Mac Awake"). It never auto-fires on a keystroke — only on an explicit Enter on the selected row. |
 | `bindable_items` | With `list_on_empty`, expand the command in Settings › Shortcuts into **one bindable global shortcut per listed row**, so a hotkey can open one specific [`sysprefs`](app/Sources/ProsperApp/Resources/extensions/sysprefs/) pane or run one saved [`scripts`](app/Sources/ProsperApp/Resources/extensions/scripts/) entry. Firing sends `prefix + row title` to the handler and then performs that row's `url` / `launch` / first action. Opt in only when the rows are **stable and individually addressable** — a listing of live processes or of thousands of bookmarks makes for dead or unusable bindings. |
+| `phone` | Offer the command on the iPhone's Commands screen (Remote Terminal). It shows there only while **Run commands from iPhone** is on and the user ticks **Allow on iPhone** on your extension's row in Settings › Extensions (off by default). The phone sends `"<extension id>/<command id>"`, asks before running it, and runs your handler headless on your extension's async lane with the phone's argument (your `prefix`, if any, goes back on first, like the locked runner mode). The handler must return text (`"value"` or `"value\tdetail"`); a view tree is refused. Ignored, with a load-log warning, on a command that is not `mode = "no-view"`, or sets `launches_window`, `requires = ["model"]` or `list_on_empty`. Ignored on system extensions. **An update that adds, removes or renames a phone command, or changes a `phone_argument`, turns Allow on iPhone off** until the user ticks it again. |
+| `phone_argument` | The argument hint the phone shows (e.g. `"2+2"`). Absent or `""` = the command takes no argument: a tap runs it. Ignored without `phone = true`. |
 
 Other contribution arrays under `[contributes]`: `keybindings` (`{ command, key, when }` — a default global hotkey that runs the command with no visible runner; every one of them is listed, rebindable, and clearable in Settings › Shortcuts › Extension Commands, where the user's override wins over the manifest key), `views`, `placeholders` (snippet tokens, §6), `events` (§5), `themes` (§7), `settings_sections` (§8).
 

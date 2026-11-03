@@ -18,7 +18,18 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.165.1 *(unreleased)*
+## v2.166.0 *(unreleased)*
+
+- **Your extensions on the iPhone.** An extension can now offer its plain text commands on
+  the phone's Commands screen by marking them `phone = true` (with an optional
+  `phone_argument` hint). They show there only after you tick **Allow on iPhone** on the
+  extension's row in Settings › Extensions, and only while "Run commands from iPhone" is on.
+  The phone asks before running one. An update that adds, removes or renames a phone
+  command, or changes its hint, turns Allow on iPhone off until you tick it again. Commands
+  that open a window, need the AI model, show a view or list rows stay off the phone.
+  See `extensions.md`.
+
+## v2.165.1
 
 - **Fan control from the iPhone.** The phone's Commands screen gains "Fans: Auto", which
   hands the fans back to macOS, and "Fans: Manual", which sets every fan to a percent of its

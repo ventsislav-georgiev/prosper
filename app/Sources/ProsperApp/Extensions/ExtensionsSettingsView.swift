@@ -98,6 +98,13 @@ struct ExtensionsPane: View {
         }
     }
 
+    /// #726: the row's "Allow on iPhone" toggle shows only for a trusted user or market
+    /// extension that offers phone commands, while "Run commands from iPhone" is on.
+    static func showsPhoneToggle(_ record: ExtensionRecord, commandsFromPhone: Bool) -> Bool {
+        commandsFromPhone && !record.isSystem && record.trusted
+            && !(record.manifest.contributes?.phoneCommands ?? []).isEmpty
+    }
+
     private func checkUpdates() {
         checkingUpdates = true
         Task {
@@ -163,6 +170,16 @@ private struct ExtensionRow: View {
             if record.privileged && !record.isSystem {
                 Text("System access granted: this extension can run shell commands, the coding-agent, and delete files as you. Revoke if unsure.")
                     .font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
+            }
+
+            if ExtensionsPane.showsPhoneToggle(record, commandsFromPhone: Preferences.runCommandsFromPhone) {
+                Toggle("Allow on iPhone", isOn: Binding(
+                    get: { registry.isPhoneApproved(id: record.id) },
+                    set: { registry.setPhoneApproved($0, id: record.id) }))
+                    .toggleStyle(.checkbox)
+                    .font(Neon.font(.caption))
+                    .help("List " + (record.manifest.contributes?.phoneCommands ?? []).map(\.title).joined(separator: ", ")
+                          + " on the iPhone's Commands screen. An update that changes these commands turns this off again.")
             }
 
             HStack(spacing: sz(12)) {

@@ -11,6 +11,8 @@ import Foundation
 /// namespaced (ExtensionRegistry.rebuildRoutes is last-writer-wins), so a command counts only
 /// while its extension is live, is a system extension, and has the table's extension id.
 /// #724: the two fan ids are native Swift, matched exactly before any registry lookup.
+/// #726: user and market extensions offer `phone = true` commands once the user allows the
+/// extension on iPhone, as "<extension id>/<command id>", resolved on that record alone.
 struct DchCommandOps: Sendable {
     var enabled: @Sendable () -> Bool = { Preferences.runCommandsFromPhone }
     var registry: @Sendable @MainActor () -> ExtensionRegistry? = { CommandRouter.registry }
@@ -79,6 +81,41 @@ struct DchCommandOps: Sendable {
         return hit
     }
 
+    /// #726: the wire id of a user or market extension's command. The phone confirms every id
+    /// with a "/" before running it (iOS #727); allowlist and fan ids never contain one.
+    static func phoneID(_ extID: String, _ commandID: String) -> String { "\(extID)/\(commandID)" }
+
+    /// #726: "<ext>/<cmd>" (split on the first "/", both halves non-empty; the command id may
+    /// hold more "/") → that extension's own phone command, while it is live, allowed on iPhone
+    /// (isPhoneApproved: never a system extension, never after its phone commands changed) and
+    /// still offers `cmd` to the phone. Never through the route table, so a same-id command in
+    /// another extension can't stand in.
+    @MainActor static func resolveUser(_ id: String, in reg: ExtensionRegistry) -> (record: ExtensionRecord, command: CommandContribution)? {
+        guard let slash = id.firstIndex(of: "/") else { return nil }
+        let extID = String(id[..<slash]), cmdID = String(id[id.index(after: slash)...])
+        guard !extID.isEmpty, !cmdID.isEmpty, let record = reg.record(id: extID), record.isLive,
+              reg.isPhoneApproved(id: extID),
+              let cmd = record.manifest.contributes?.phoneCommands.first(where: { $0.id == cmdID }) else { return nil }
+        return (record, cmd)
+    }
+
+    /// #726: the user rows, grouped by extension title. A row is listed only if run() would
+    /// resolve its id back to the same record.
+    @MainActor static func userRows(in reg: ExtensionRegistry) -> [[String: String]] {
+        let titled = reg.records.sorted { ($0.manifest.extension.title, $0.id) < ($1.manifest.extension.title, $1.id) }
+        return titled.flatMap { record in
+            (record.manifest.contributes?.phoneCommands ?? []).compactMap { cmd -> [String: String]? in
+                let id = phoneID(record.id, cmd.id)
+                guard resolveUser(id, in: reg)?.record === record else { return nil }
+                var row = ["id": id, "title": cmd.title, "ext": record.manifest.extension.title]
+                row["subtitle"] = cmd.description
+                row["argument"] = cmd.phoneArgument
+                row["icon"] = cmd.icon
+                return row
+            }
+        }
+    }
+
     /// commands or runCommand; `reply` gets one frame.
     func handle(_ type: UInt8, _ payload: Data, reply: Reply) async {
         guard enabled() else { return reply(Self.error(Self.offMessage)) }
@@ -90,19 +127,19 @@ struct DchCommandOps: Sendable {
         let o = payload.isEmpty ? [:] : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
         guard o?.isEmpty == true else { return reply(Self.error("malformed")) }
         let registry = registry
-        let rows: [[String: String]] = await MainActor.run {
-            guard let reg = registry() else { return [] }
-            return Self.allowlist.compactMap { a in
+        let (rows, userRows): ([[String: String]], [[String: String]]) = await MainActor.run {
+            guard let reg = registry() else { return ([], []) }
+            return (Self.allowlist.compactMap { a in
                 guard let (record, cmd) = Self.resolve(a.id, in: reg) else { return nil }
                 var row = ["id": cmd.id, "title": cmd.title, "ext": record.manifest.extension.title]
                 row["subtitle"] = cmd.description
                 row["argument"] = a.argument
                 row["icon"] = cmd.icon
                 return row
-            }
+            }, Self.userRows(in: reg))
         }
         let fanRows = fans.read().contains { $0.max > $0.min } ? Self.fanRows : []
-        reply(DchFrame.encode(DchFrame.commandsResp, json: rows + fanRows))
+        reply(DchFrame.encode(DchFrame.commandsResp, json: rows + fanRows + userRows))
     }
 
     /// 0x29: `{id, argument?}` → commandResult `{text, detail?}`. Unknown keys are ignored.
@@ -163,8 +200,12 @@ struct DchCommandOps: Sendable {
     /// the record between them. Lua then runs on the extension's own lane, never on main.
     @MainActor static func invoke(_ id: String, _ argument: String,
                                   _ registry: @Sendable @MainActor () -> ExtensionRegistry?) async -> Data {
-        guard let reg = registry(), resolve(id, in: reg) != nil else { return error("not allowed") }
-        return shape(await reg.invokeAsync(commandID: id, query: argument))
+        guard let reg = registry() else { return error("not allowed") }
+        if resolve(id, in: reg) != nil { return shape(await reg.invokeAsync(commandID: id, query: argument)) }
+        guard let (record, cmd) = resolveUser(id, in: reg) else { return error("not allowed") }
+        // #726: the record's own command. Its manifest prefix goes back on first, as in the
+        // palette's locked mode (CommandRouter.runExtension): a third-party handler may parse it.
+        return shape(await reg.invokeAsync(record, cmd, query: (cmd.prefix ?? "") + argument))
     }
 
     /// A handler's string as commandResult: "from\tto\tvalue" (units) → {value, "from → to"},

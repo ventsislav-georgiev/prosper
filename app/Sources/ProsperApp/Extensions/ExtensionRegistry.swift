@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import LuaRuntime
 import os
@@ -172,6 +173,8 @@ final class ExtensionRegistry: ObservableObject {
     private static let enabledKey = "enabledExtensionIDs"
     private static let trustedKey = "trustedExtensionIDs"
     private static let privilegedKey = "privilegedExtensionIDs"
+    /// #726: "Allow on iPhone" — [extension id: phoneApprovalHash at approval].
+    static let phoneApprovedKey = "phoneApprovedExtensions"
 
     /// Command routing: id → record, plus an ordered list carrying compiled
     /// `match` regexes for query-prefix dispatch.
@@ -311,6 +314,11 @@ final class ExtensionRegistry: ObservableObject {
                     continue
                 }
                 seen.insert(loaded.id)
+                if !isSystem {
+                    for w in loaded.manifest.contributes?.phoneWarnings ?? [] {
+                        log.warning("extension \(loaded.id, privacy: .public): \(w, privacy: .public)")
+                    }
+                }
                 // Opt-in extensions are off unless the user turned them on; everything
                 // else is on unless the user turned it off.
                 let isEnabled = loaded.manifest.extension.defaultDisabled
@@ -346,6 +354,7 @@ final class ExtensionRegistry: ObservableObject {
         }
 
         records = found
+        dropStalePhoneApprovals()
         rebuildRoutes()
         asyncRuntimes.invalidateAll()   // drop stale off-main VMs on rescan
     }
@@ -600,7 +609,14 @@ final class ExtensionRegistry: ObservableObject {
     /// its worker thread, which must never be the main thread. The async lane
     /// keeps a separate VM cache (see `AsyncExtensionRuntimes`).
     func invokeAsync(commandID: String, query: String) async -> String? {
-        guard let (record, command) = command(id: commandID), record.isLive else { return nil }
+        guard let (record, command) = command(id: commandID) else { return nil }
+        return await invokeAsync(record, command, query: query)
+    }
+
+    /// #726: `record`'s own `command`, never through the last-writer-wins route table, so
+    /// another extension declaring the same command id can't stand in for it.
+    func invokeAsync(_ record: ExtensionRecord, _ command: CommandContribution, query: String) async -> String? {
+        guard record.isLive else { return nil }
         let spec = AsyncExtensionRuntimes.Spec(
             extensionID: record.id,
             entryURL: record.loaded.entryURL,
@@ -916,6 +932,7 @@ final class ExtensionRegistry: ObservableObject {
         // re-grant. (In-place upgrades go through installLocal's overwrite, not here,
         // so an update of a privileged extension keeps its privilege.)
         clearPrivilege(id: id)
+        setPhoneApproved(false, id: id)
         // Same teardown as disabling. `discover()` below only rebuilds the record
         // list — it does not reach into the host, so without this an uninstalled
         // extension's key rules, menubar items, watches and timers all outlive it.
@@ -1168,6 +1185,7 @@ final class ExtensionRegistry: ObservableObject {
         // extension is never privileged-but-untrusted and a later re-trust must be an
         // explicit re-grant.
         clearPrivilege(id: id)
+        setPhoneApproved(false, id: id)
         record.runtime = nil
         asyncRuntimes.invalidate(id: id)
         TimerScheduler.shared.cancelAll(extID: id)
@@ -1233,5 +1251,52 @@ final class ExtensionRegistry: ObservableObject {
         rebuildRoutes()
         objectWillChange.send()
         onEnabledChanged?()
+    }
+
+    // MARK: - Phone approval (#726)
+
+    /// What "Allow on iPhone" approved: the sorted (id, title, argument hint) of the phone
+    /// commands. The rest of an update (version, code, descriptions) keeps the approval; a new,
+    /// removed or renamed phone command, or a changed hint, drops it.
+    nonisolated static func phoneApprovalHash(_ manifest: ExtensionManifest) -> String {
+        let rows = (manifest.contributes?.phoneCommands ?? []).sorted { $0.id < $1.id }
+            .map { [$0.id, $0.title, $0.phoneArgument] }
+        let data = (try? JSONEncoder().encode(rows)) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func phoneApprovals() -> [String: String] {
+        defaults.dictionary(forKey: Self.phoneApprovedKey) as? [String: String] ?? [:]
+    }
+
+    /// The user allowed this extension on iPhone and its phone commands are still the ones
+    /// they allowed. Never a system extension: the allowlist is their only path.
+    func isPhoneApproved(id: String) -> Bool {
+        guard let record = record(id: id), !record.isSystem else { return false }
+        return phoneApprovals()[id] == Self.phoneApprovalHash(record.manifest)
+    }
+
+    /// Approve the extension's current phone commands, or withdraw.
+    func setPhoneApproved(_ on: Bool, id: String) {
+        var all = phoneApprovals()
+        if on, let record = record(id: id), !record.isSystem {
+            all[id] = Self.phoneApprovalHash(record.manifest)
+        } else {
+            guard all.removeValue(forKey: id) != nil else { return }
+        }
+        defaults.set(all, forKey: Self.phoneApprovedKey)
+        objectWillChange.send()
+    }
+
+    /// An update that changed the phone commands drops the approval for good: a later update
+    /// that reverts them doesn't bring it back. A missing record keeps its entry (a manifest
+    /// that fails to load for a while is not an update; uninstall clears it explicitly).
+    private func dropStalePhoneApprovals() {
+        let all = phoneApprovals()
+        let kept = all.filter { id, hash in
+            guard let r = record(id: id) else { return true }
+            return hash == Self.phoneApprovalHash(r.manifest)
+        }
+        if kept.count != all.count { defaults.set(kept, forKey: Self.phoneApprovedKey) }
     }
 }

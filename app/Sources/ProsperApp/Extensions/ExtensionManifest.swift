@@ -114,6 +114,23 @@ struct Contributes: Codable, Sendable, Equatable {
     var allPlaceholders: [PlaceholderContribution] { placeholders ?? [] }
     var allEvents: [EventSubscription] { events ?? [] }
     var allThemes: [ThemeContribution] { themes ?? [] }
+
+    /// #726: the commands this manifest offers to the phone, in manifest order.
+    var phoneCommands: [CommandContribution] { allCommands.filter(\.isPhoneCommand) }
+
+    /// #726: one line per ignored phone key, for the load log. A refused command still loads
+    /// for the palette; it just never reaches the phone.
+    var phoneWarnings: [String] {
+        allCommands.compactMap { c in
+            if c.phone == true, let why = c.phoneRefusal {
+                return "command \(c.id): phone = true ignored (\(why))"
+            }
+            if c.phone != true, c.phone_argument != nil {
+                return "command \(c.id): phone_argument ignored without phone = true"
+            }
+            return nil
+        }
+    }
 }
 
 /// One `[[contributes.themes]]` row: a selectable color theme. `path` is a theme
@@ -225,6 +242,29 @@ struct CommandContribution: Codable, Sendable, Equatable {
     /// titles are the snippet bodies themselves. Binding those would either fill
     /// the picker with noise or hand the user a shortcut that no longer resolves.
     let bindable_items: Bool?
+
+    /// #726: offer this command on the phone's Commands screen (Remote Terminal). Only a
+    /// user or marketplace extension's flag counts (system commands reach the phone through
+    /// DchCommandOps.allowlist alone), and only after the user allows the extension on iPhone.
+    let phone: Bool?
+    /// #726: the phone's argument hint (e.g. "2+2"); absent = tap to run with no argument.
+    let phone_argument: String?
+
+    /// #726: why a `phone = true` command can't run on the phone, or nil. The phone shows one
+    /// line of text: no window, no model load, no view tree or listing.
+    var phoneRefusal: String? {
+        if launchesWindow { return "launches_window" }
+        if requiresModel { return "requires model" }
+        if mode != .noView { return "mode \"\(mode.rawValue)\"" }
+        if listsOnEmpty { return "list_on_empty" }
+        return nil
+    }
+
+    /// #726: declared for the phone and allowed there.
+    var isPhoneCommand: Bool { phone == true && phoneRefusal == nil }
+
+    /// #726: the hint the phone shows; "" counts as none.
+    var phoneArgument: String? { phone_argument.flatMap { $0.isEmpty ? nil : $0 } }
 
     /// True when this command depends on the local AI model (`host.llm`).
     var requiresModel: Bool { (requires ?? []).contains("model") }
