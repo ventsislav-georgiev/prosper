@@ -117,7 +117,8 @@ final class DchCommandsTests: XCTestCase {
     }
 
     private func ops(_ reg: ExtensionRegistry?, enabled: Bool = true) -> DchCommandOps {
-        DchCommandOps(enabled: { enabled }, registry: { reg })
+        // #724: no fans here, so the native fan rows never join these listings.
+        DchCommandOps(enabled: { enabled }, registry: { reg }, fans: .init(read: { [] }))
     }
 
     // MARK: Frame helpers

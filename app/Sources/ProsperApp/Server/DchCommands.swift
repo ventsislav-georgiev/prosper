@@ -10,9 +10,23 @@ import Foundation
 /// main-thread VM), never CommandRouter.run (it can start a model load). Command ids are not
 /// namespaced (ExtensionRegistry.rebuildRoutes is last-writer-wins), so a command counts only
 /// while its extension is live, is a system extension, and has the table's extension id.
+/// #724: the two fan ids are native Swift, matched exactly before any registry lookup.
 struct DchCommandOps: Sendable {
     var enabled: @Sendable () -> Bool = { Preferences.runCommandsFromPhone }
     var registry: @Sendable @MainActor () -> ExtensionRegistry? = { CommandRouter.registry }
+    var fans = FanOps()
+
+    /// #724: the fan commands' hardware side. Every member is a test seam; the shared popup
+    /// paths they feed (StatsPopupView.engageManual / selectAuto) are not.
+    struct FanOps: Sendable {
+        /// Unprivileged SMC read; [] on a Mac with no fans.
+        var read: @Sendable () -> [FanReading] = { FanInfo.read() }
+        /// The first fan's engage (the popup's setManualReply at the cold ceiling).
+        var firstReply: @Sendable (Int, Double) async -> FanManualReply = {
+            await FanControlHelper.setManualReply($0, rpm: $1, timeout: FanControlHelper.firstEngageTimeout) }
+        /// Every other fan's engage (the popup's setManual).
+        var engage: @Sendable @MainActor (Int, Double) async -> Bool = { await FanControlHelper.setManual($0, rpm: $1) }
+    }
 
     typealias Reply = DchControlOps.Reply
 
@@ -38,6 +52,17 @@ struct DchCommandOps: Sendable {
         Allowed(id: "toggles.screensaver", ext: "com.prosper.toggles"),
         Allowed(id: "clipclear.now", ext: "com.prosper.clipclear"),
     ]
+
+    /// #724: native Swift commands, not Lua: run by exact id before the Lua path, listed after
+    /// the Lua rows while the Mac has an adjustable fan. Nothing else reaches native code.
+    static let fanAuto = "fans.auto", fanManual = "fans.manual"
+    static let fanRows: [[String: String]] = [
+        ["id": fanAuto, "title": "Fans: Auto", "subtitle": "Hand every fan back to macOS",
+         "ext": "System Stats", "icon": "fan"],
+        ["id": fanManual, "title": "Fans: Manual", "subtitle": "Every fan at a percent of its min-max speed",
+         "ext": "System Stats", "argument": "60%", "icon": "fan"],
+    ]
+    static let badSpeed = "speed must be 0-100%"
 
     /// UTF-8 bytes of a runCommand argument.
     static let maxArgument = 1 << 10
@@ -75,7 +100,8 @@ struct DchCommandOps: Sendable {
                 return row
             }
         }
-        reply(DchFrame.encode(DchFrame.commandsResp, json: rows))
+        let fanRows = fans.read().contains { $0.max > $0.min } ? Self.fanRows : []
+        reply(DchFrame.encode(DchFrame.commandsResp, json: rows + fanRows))
     }
 
     /// 0x29: `{id, argument?}` → commandResult `{text, detail?}`. Unknown keys are ignored.
@@ -88,9 +114,42 @@ struct DchCommandOps: Sendable {
             argument = s
         }
         guard argument.utf8.count <= Self.maxArgument else { return reply(Self.error("argument too long")) }
+        if id == Self.fanAuto || id == Self.fanManual { return reply(await runFans(id, argument)) }
         // ponytail: no manifest prefix is restored before the call (CommandRouter.runExtension
         // does); no allowlisted command reads its argument after one. Add it with the first that does.
         reply(await Self.invoke(id, argument, registry))
+    }
+
+    /// #724: "60", "60%", " 60 % " → 60; nil when not a number in 0...100.
+    static func percent(_ s: String) -> Double? {
+        var t = s.trimmingCharacters(in: .whitespaces)
+        if t.hasSuffix("%") { t = String(t.dropLast()).trimmingCharacters(in: .whitespaces) }
+        guard let v = Double(t), (0...100).contains(v) else { return nil }
+        return v
+    }
+
+    /// #724: the popup's own Automatic and Manual paths. Manual maps the percent onto each fan's
+    /// min...max like the popup's slider and replies with the target rpm: the fans ramp for
+    /// seconds after the engage, so a read here would still show the old speed.
+    func runFans(_ id: String, _ argument: String) async -> Data {
+        let fans = self.fans
+        let adjustable = fans.read().filter { $0.max > $0.min }.sorted { $0.id < $1.id }
+        guard !adjustable.isEmpty else { return Self.error("no adjustable fans") }
+        if id == Self.fanAuto {
+            await StatsPopupView.selectAuto(fanIDs: adjustable.map(\.id)).value
+            return Self.shape("Auto")
+        }
+        guard let pct = Self.percent(argument) else { return Self.error(Self.badSpeed) }
+        let rpms = adjustable.map { ($0.id, $0.min + pct / 100 * ($0.max - $0.min)) }
+        let (saved, reply) = await Self.engage(Dictionary(uniqueKeysWithValues: rpms), fans)
+        guard saved else { return Self.error(reply.errorText ?? "fans stayed automatic") }
+        let each = rpms.map { String(Int($0.1.rounded())) }
+        let shown = Set(each).count == 1 ? each[0] : each.joined(separator: " / ")
+        return Self.shape("Manual · \(shown) rpm\ttarget at \(String(format: "%g", pct))%")
+    }
+
+    @MainActor static func engage(_ targets: [Int: Double], _ fans: FanOps) async -> (saved: Bool, reply: FanManualReply) {
+        await StatsPopupView.engageManual(targets, firstReply: fans.firstReply, engage: fans.engage)
     }
 
     /// The check and invokeAsync's own lookup in one main-actor turn: no discover() can swap

@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.165.0 *(unreleased)*
+## v2.165.1 *(unreleased)*
+
+- **Fan control from the iPhone.** The phone's Commands screen gains "Fans: Auto", which
+  hands the fans back to macOS, and "Fans: Manual", which sets every fan to a percent of its
+  speed range (for example "60%") and replies with the target speed. Both run the same
+  path as the fan controls in the System Stats popup, with the same overheat cut-off and
+  the same reset on sleep. They show only on a Mac with adjustable fans, and only while
+  "Run commands from iPhone" is on.
+
+## v2.165.0
 
 - **Agent Island: Resume interrupted counts Claudes running in either session folder.**
   With Remote Terminal isolation on, the iPhone app's Resume count, and the island's when

@@ -962,7 +962,7 @@ struct StatsPopupView: View {
         for f in fansAdjustable { t[f.id] = clampRPM(f.current, f) }
         let targets = t
         Task {
-            guard let first = targets.first else { fanBusy = false; return }
+            guard !targets.isEmpty else { fanBusy = false; return }
             // Engage ONE fan first. This is what registers/approves the helper and runs
             // the daemon's full AS unlock (Ftst + 3s thermalmonitord yield + spaced mode-
             // key retries) — far slower than a steady commit, so give it a ceiling that
@@ -980,12 +980,7 @@ struct StatsPopupView: View {
             // pin below macOS's speed, #586), not a missing helper.
             // popupEngage captures the generation and the sleeping flag at the click: a sleep
             // anywhere after it, or a click while asleep, leaves the pref unsaved (#345, #390).
-            let (saved, reply) = await FanControlHelper.popupEngage(targets, first: first.key) {
-                await Self.withFanTimeout(45) {
-                    await FanControlHelper.setManualReply(first.key, rpm: first.value,
-                                                          timeout: FanControlHelper.firstEngageTimeout)
-                }
-            }
+            let (saved, reply) = await Self.engageManual(targets)
             fanBusy = false
             guard saved else {
                 fanError = reply.errorText   // nil for an engage abandoned after a sleep: silently back on auto
@@ -1003,16 +998,39 @@ struct StatsPopupView: View {
     /// near-instant (the daemon supervises the held unlock like a pin).
     private func selectAutoAll() {
         fanManual = false
-        Preferences.fanManualEnabled = false
-        Preferences.fanTargets = [:]; fanTargets = [:]
+        fanTargets = [:]
         fanOwner = FanTargetOwner()
+        Self.selectAuto(fanIDs: fansAdjustable.map(\.id))
+    }
+
+    /// The popup's Automatic without the view state, shared with the phone's "Fans: Auto"
+    /// (#724): manual intent off, saved targets cleared, then every fan back to macOS. The
+    /// Task is the helper half; the popup leaves it running, the phone awaits it.
+    @discardableResult
+    @MainActor static func selectAuto(fanIDs ids: [Int]) -> Task<Void, Never> {
+        Preferences.fanManualEnabled = false
+        Preferences.fanTargets = [:]
         FanControlHelper.userAdjusting = false
         if Preferences.fanHoldUnlock {
-            let ids = fansAdjustable.map(\.id)
-            Task { for i in ids { _ = await FanControlHelper.setAuto(i) } }
-        } else {
-            Task { await FanControlHelper.resetAll(teardown: true) }
+            return Task { for i in ids { _ = await FanControlHelper.setAuto(i) } }
         }
+        return Task { await FanControlHelper.resetAll(teardown: true) }
+    }
+
+    /// The popup's Manual engage, from the targets to the saved pref, shared with the phone's
+    /// "Fans: Manual" (#724) so both get the same lifecycle: popupEngage's sleep/generation
+    /// checks, the 45 s ceiling and its late release, the recovery lifecycle setManualReply arms.
+    /// `firstReply`/`engage` are the test seams (the first fan's engage and every other fan's).
+    @MainActor static func engageManual(
+        _ targets: [Int: Double],
+        firstReply: @escaping @Sendable (Int, Double) async -> FanManualReply = {
+            await FanControlHelper.setManualReply($0, rpm: $1, timeout: FanControlHelper.firstEngageTimeout) },
+        engage: (Int, Double) async -> Bool = { await FanControlHelper.setManual($0, rpm: $1) }
+    ) async -> (saved: Bool, reply: FanManualReply) {
+        guard let first = targets.first else { return (false, .unavailable) }
+        return await FanControlHelper.popupEngage(targets, first: first.key, engageFirst: {
+            await Self.withFanTimeout(45) { await firstReply(first.key, first.value) }
+        }, engage: engage)
     }
 
     /// Map a single 0…1 fraction onto every fan's own range and commit them together.
