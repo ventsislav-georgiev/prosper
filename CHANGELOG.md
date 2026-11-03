@@ -18,7 +18,16 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.164.0 *(unreleased)*
+## v2.165.0 *(unreleased)*
+
+- **Agent Island: Resume interrupted counts Claudes running in either session folder.**
+  With Remote Terminal isolation on, the iPhone app's Resume count, and the island's when
+  it showed only Mac terminal or only Remote Terminal sessions, could include a session
+  whose Claude was already running in the other folder; dch then skipped it. They now leave it out, as dch does. When
+  Resume all brings back two records of one name, each result shows on its own row, and
+  a by-hand resume hint for a Claude config folder starting with `=` pastes correctly in zsh.
+
+## v2.164.0
 
 - **Agent Island: Restart stale agents, and Restart all agents (force).** The "⋯" menu's
   Restart all agents only ever restarted agents running an older Claude Code than the one

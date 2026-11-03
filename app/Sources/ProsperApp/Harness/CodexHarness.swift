@@ -749,9 +749,11 @@ actor CodexHarness: CodingHarness {
         }.joined(separator: " "))
     }
 
+    /// #720 (QA #535 L-3): a word that starts with `=` or holds `:=` is quoted: zsh expands
+    /// `=cmd` there (at a word's start, and after `:` in an assignment's value).
     static func shellQuoted(_ word: String) -> String {
         let bare = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-+=/.,:@%")
-        if !word.isEmpty && word.allSatisfy(bare.contains) { return word }
+        if !word.isEmpty && word.allSatisfy(bare.contains) && !word.hasPrefix("=") && !word.contains(":=") { return word }
         return "'" + word.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 

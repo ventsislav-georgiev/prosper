@@ -620,6 +620,17 @@ extension AgentIsland {
         }
     }
 
+    /// #720 (QA #535 M-1): dch 1.28.2's --revive --all holds a Claude that runs in any
+    /// dir (sid_live), so the held seed lists both of Prosper's socket dirs, not only the
+    /// ones a view lists. Only a dir that exists: dch's --ls-json would create it.
+    static func seedSocketDirs(_ dirs: [String] = seedSocketDirCandidates,
+                               exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String] {
+        dirs.reduce(into: []) { if !$0.contains($1), exists($1) { $0.append($1) } }
+    }
+
+    /// #720: Prosper's two socket dirs, the Mac's and Remote Terminal's isolated one.
+    static var seedSocketDirCandidates: [String] { [DchCommand.defaultSocketDir, DchCommand.isolatedSocketDir] }
+
     /// #608: of `type`, our uid's and closed to others (no group or other write).
     static func isOurs(_ st: stat, type: mode_t) -> Bool {
         st.st_mode & S_IFMT == type && st.st_uid == getuid() && st.st_mode & 0o022 == 0

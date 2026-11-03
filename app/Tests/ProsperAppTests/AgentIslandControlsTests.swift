@@ -3558,6 +3558,17 @@ final class AgentIslandControlsTests: XCTestCase {
                        "below 1.28.2: unchanged")
         XCTAssertEqual(taken(Self.v1281, "1.28.1").0, 7)
         XCTAssertEqual(taken(Self.v1283, "1.29.0").0, 7, "a newer master: the gate refuses, the old count")
+        // QA #535 M2: an older master (right after an update) leaves the gate open: --revive
+        // runs in the control dch, so its held count.
+        XCTAssertEqual(taken(Self.v1283, "1.28.1").1, ["new", "free", "free2", "other"], "an older master: control 1.28.3's count")
+        // QA #535 M1: an ended record holds its id only from where the loop reaches it: a
+        // crash newer than its id's stop is taken (and then holds the older crash).
+        let order = AgentIslandStore(geometry: notched)
+        order.now = { Self.t719 }
+        order.controlDch = Self.v1283
+        order.history = [rec719("again", sid: "S", ago: 50), rec719("stop", sid: "S", ago: 80, end: "stopped"),
+                         rec719("crash", sid: "S", ago: 100)]
+        XCTAssertEqual(Set(order.reviveAllTaken.map(\.name)), ["again"])
         // The repro: claude --resume L by hand in a new session; after it exits 0, its record holds L.
         let store = AgentIslandStore(geometry: notched)
         store.now = { Self.t719 }
@@ -3597,6 +3608,44 @@ final class AgentIslandControlsTests: XCTestCase {
             XCTAssertEqual(c.store?.liveSIDs, want, version)
             XCTAssertEqual(seen.lock.withLock { seen.calls.map(\.1) }, want.isEmpty ? [] : [["b", "c"]], version)
         }
+    }
+
+    /// QA #535 M-1: dch holds a Claude that runs in any dir, so the seed also lists the
+    /// socket dirs the view does not ("Mac only" here: /e), off main and from 1.28.2 only.
+    @MainActor
+    func testHeldSeedListsTheOtherSocketDirFrom1282() throws {
+        for (dch, version, want) in [(Self.v1283, "1.28.3", ["B", "M"] as Set), (Self.v1281, "1.28.1", [])] {
+            let f = FakeProc(), reads = Reads(), listed = Reads()
+            reads.records = [rec719("work", sid: "M", ago: 300)]
+            let c = controller(f, reads, dch: dch)
+            c.store?.sessions = [session("b", version: version)]
+            c.store?.now = { Self.t719 }
+            c.seedDirs = { ["/d", "/e"] }
+            c.listSessions = { dirs in
+                XCTAssertFalse(Thread.isMainThread)
+                listed.lock.withLock { listed.calls.append(("", dirs)) }
+                return dirs.map { AgentSession(key: AgentSessionKey(dir: $0, name: "m"), alias: "", activity: 0, state: .idle, agents: 0) }
+            }
+            c.readLiveRecords = { s in
+                s.map { var r = DchHistoryRecord(key: $0.key); r.agent = .init(kind: "claude", sessionID: $0.name.uppercased()); return r }
+            }
+            c.store?.liveSIDs = ["stale"]
+            c.setExpanded(true)
+            settle(c) { reads.count == 1 && c.store?.liveSIDs != ["stale"] }
+            XCTAssertEqual(c.store?.liveSIDs, want, version)
+            XCTAssertEqual(listed.lock.withLock { listed.calls.map(\.1) }, want.isEmpty ? [] : [["/e"]], "only the dir not listed")
+            XCTAssertEqual(c.store?.resumableCount, want.isEmpty ? 1 : 0, "its Claude runs in /e: --revive --all skips it")
+        }
+    }
+
+    /// The seed's dirs: each once, only ones on disk (dch's --ls-json would create one).
+    func testSeedSocketDirsAreTheOnesOnDisk() {
+        let dir = tempDir().path
+        XCTAssertEqual(AgentIsland.seedSocketDirs([dir, dir + "/missing", dir]), [dir])
+        // The production candidates: both dirs (compared as strings; nothing on disk is touched).
+        XCTAssertEqual(AgentIsland.seedSocketDirCandidates, [DchCommand.defaultSocketDir, DchCommand.isolatedSocketDir])
+        XCTAssertEqual(AgentIsland.seedSocketDirs(exists: { _ in true }), [DchCommand.defaultSocketDir, DchCommand.isolatedSocketDir],
+                       "the default: both candidates")
     }
 
     /// From 1.28.2 Resume passes `<file>.json` for every row, the own one too, with
@@ -3725,6 +3774,91 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
     }
 
+    /// QA #535 M3: a skip line's "(record <file>)" is its own dir's record: own records
+    /// named "work" in /d and /e each get their dir's line.
+    @MainActor
+    func testResumeAllSkipLineFindsItsRecordInItsOwnDir() throws {
+        let f = FakeProc(), reads = Reads()
+        let rows = [rec719("work", sid: "A", ago: 60), rec719("work", dir: "/e", sid: "B", ago: 90)]
+        reads.records = rows
+        let c = controller(f, reads, dch: Self.v1283, dirs: ["/d", "/e"])
+        c.store?.sessions = [session("b", version: "1.28.3")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store)
+        store.now = { Self.t719 }
+        f.progress = #"{"name":"work","as":"work","result":"skipped","reason":"live_sid","detail":"skipped — claude X already runs in live session b (record work)","session_id":"X"}"# + "\n"
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        let skipped = "Skipped: claude X already runs in live session b"
+        settle(c) { store.historyActions[rows[0].id] == skipped && store.historyActions[rows[1].id] == skipped }
+        XCTAssertEqual(store.historyActions, [rows[0].id: skipped, rows[1].id: skipped])
+        f.release.signal()
+        f.release.signal()
+        settle(c) { ["/d", "/e"].allSatisfy { store.actions[AgentSessionKey(dir: $0, name: "")] != AgentIsland.resumingText } }
+    }
+
+    /// #720 review S-m2: a final with no Claude id keeps the fallback, the name's newest
+    /// taken row (where its phase put the running text), not a taken record whose id is "".
+    @MainActor
+    func testResumeAllFinalWithNoClaudeIdKeepsTheNewestTakenRow() throws {
+        let f = FakeProc(), reads = Reads()
+        let rows = [rec719("work", sid: "A", ago: 60), rec719("work.1762099880", name: "work", sid: "", ago: 120)]
+        reads.records = rows
+        let c = controller(f, reads, dch: Self.v1283)
+        c.store?.sessions = [session("b", version: "1.28.3")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store)
+        store.now = { Self.t719 }
+        XCTAssertEqual(store.resumableCount, 2)
+        let ok = #"{"name":"work","as":"work","result":"ok","reason":"","detail":"revived as work in /src","session_id":""}"#
+        f.progress = #"{"name":"work","phase":"starting"}"# + "\n"
+        f.output = ok + "\n"
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        settle(c) { store.historyActions[rows[0].id] == "Starting…" }
+        f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
+        XCTAssertEqual(store.historyActions[rows[0].id], AgentIsland.finalText(try XCTUnwrap(AgentIsland.jsonLine(ok)), .resume))
+        XCTAssertNil(store.historyActions[rows[1].id])
+    }
+
+    /// QA #535 L-4: two taken records of one name: a final names its Claude id and lands
+    /// on that row, and shows there, so the newer row keeps its own failure and the older
+    /// one its own Resumed; not on a newer record of that id --all does not take (ran
+    /// under 5 minutes). Phases (name only) stay on the newest taken row.
+    @MainActor
+    func testResumeAllFinalsLandOnTheRowOfTheirClaudeId() throws {
+        let f = FakeProc(), reads = Reads()
+        var short = rec719("work.1762099990", name: "work", sid: "B", ago: 10)
+        short.started = Self.t719 - 60
+        let rows = [rec719("work", sid: "A", ago: 60), rec719("work.1762099880", name: "work", sid: "B", ago: 120)]
+        reads.records = [short] + rows
+        let c = controller(f, reads, dch: Self.v1283)
+        c.store?.sessions = [session("b", version: "1.28.3")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 3 }
+        let store = try XCTUnwrap(c.store)
+        store.now = { Self.t719 }
+        XCTAssertEqual(store.resumableCount, 2)
+        let failed = #"{"name":"work","as":"work","result":"failed","reason":"relaunch_failed","detail":"revived as work in /src, but claude could not be started; resume by hand: claude --resume A","session_id":"A"}"#
+        let ok = #"{"name":"work","as":"work-2","result":"ok","reason":"","detail":"revived as work-2 in /src, claude B resumed","session_id":"B"}"#
+        f.progress = #"{"name":"work","phase":"starting"}"# + "\n" + #"{"name":"work","phase":"starting"}"# + "\n"
+        f.output = failed + "\n" + ok + "\n"
+        f.status = 1
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        settle(c) { store.historyActions[rows[0].id] == "Starting…" }
+        XCTAssertEqual(store.historyActions, [rows[0].id: "Starting…"])
+        f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
+        XCTAssertEqual(store.historyActions[rows[0].id], AgentIsland.finalText(try XCTUnwrap(AgentIsland.jsonLine(failed)), .resume))
+        XCTAssertEqual(store.historyActions[rows[1].id], AgentIsland.finalText(try XCTUnwrap(AgentIsland.jsonLine(ok)), .resume))
+        XCTAssertNil(store.historyActions[short.id])
+    }
+
     /// The new reasons in words: live_sid by name (failed) and under --all (skipped),
     /// dup_sid's 1.28.2 and 1.28.3 forms, ambiguous; an unpin dch finds nothing for
     /// (1.28.2: not_found, exit 1) is no failure, a pin's or remove's still is.
@@ -3754,6 +3888,8 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertNil(AgentIsland.recordFile(DchJSONLine(name: "a", detail: "revived as a in /src (record)")))
         XCTAssertEqual(AgentIsland.recordFile(DchJSONLine(name: "a", detail: "skipped — claude x already runs in w (record y) (record a)")), "a",
                        "the last one is dch's")
+        XCTAssertNil(AgentIsland.recordFile(DchJSONLine(name: "a", detail: "skipped — x (record a) and more")),
+                     "QA #535 M4: dch's \"(record <file>)\" ends the detail")
         func edit(_ verb: AgentIsland.Verb, _ reason: String, detail: String = "no history for this session") -> String? {
             AgentIsland.editFailure(result(#"{"name":"a","result":"failed","reason":"\#(reason)","detail":"\#(detail)","session_id":""}"#,
                                            status: 1), name: "a", verb)
@@ -3781,6 +3917,15 @@ final class AgentIslandControlsTests: XCTestCase {
         odd.agent?.configDir = "/tmp/it's here"
         XCTAssertEqual(AgentIsland.byHand("claude --resume S", odd), #"CLAUDE_CONFIG_DIR='/tmp/it'\''s here' claude --resume S"#)
         XCTAssertEqual(AgentIsland.byHand("claude --resume Z", odd), "claude --resume Z", "another id: untouched")
+        // QA #535 L-3: zsh expands `=cmd` at a value's start and after ':' in an assignment.
+        odd.agent?.configDir = "=claude"
+        XCTAssertEqual(AgentIsland.byHand("claude --resume S", odd), "CLAUDE_CONFIG_DIR='=claude' claude --resume S")
+        odd.agent?.configDir = "/a:=claude"
+        XCTAssertEqual(AgentIsland.byHand("claude --resume S", odd), "CLAUDE_CONFIG_DIR='/a:=claude' claude --resume S")
+        XCTAssertEqual(AgentIsland.attachCommand(AgentSessionKey(dir: "=d", name: "=n"), defaultDir: "/d"), "DCH_SOCKET_DIR='=d' dch -n '=n'")
+        XCTAssertEqual(["k=v", "--x=y", "/a:b", "a=:b"].map(AgentIsland.shellQuoted), ["k=v", "--x=y", "/a:b", "a=:b"],
+                       "any other = or : stays bare")
+        XCTAssertEqual(AgentIsland.shellWords(AgentIsland.shellLine(["=x", "a:=b"])), ["=x", "a:=b"])
     }
 
     /// QA #534 S1: an own row with no agent (a plain shell) has Claude id "": below

@@ -111,6 +111,12 @@ final class AgentIslandController {
     var readLiveRecords: @Sendable ([AgentSession]) -> [DchHistoryRecord] = {
         NSClassFromString("XCTestCase") == nil ? AgentIsland.liveRecords($0) : []
     }
+    /// #720 seams: the socket dirs whose live sessions seed the held Claude ids (none
+    /// under XCTest), and their listing.
+    var seedDirs: @Sendable () -> [String] = {
+        NSClassFromString("XCTestCase") == nil ? AgentIsland.seedSocketDirs() : []
+    }
+    var listSessions: @Sendable ([String]) -> [AgentSession] = { AgentIsland.list(dirs: $0) }
     /// A control verb's env for one dir, built on the runner's thread (QA #445 M1:
     /// the user's PATH, not launchd's). Under XCTest no login shell runs: the
     /// fallback dirs only.
@@ -234,13 +240,15 @@ final class AgentIslandController {
     func refreshHistory() {
         guard store != nil else { return }
         let dirs = historyDirs(), probe = controlDch, read = readHistory
-        let live = readLiveRecords, sessions = store?.sessions ?? []
+        let live = readLiveRecords, sessions = store?.sessions ?? [], seed = seedDirs, list = listSessions
         queue.async { [weak self] in
             let dch = probe()
             let records = dch.map { DchCommand.isAtLeast($0.version, AgentIsland.controlMinimum) ? read($0.path, dirs) : [] } ?? []
             // #719: the Claude ids dch 1.28.2's --revive --all holds; never read below it.
+            // #720 (QA #535 M-1): also the sessions of a socket dir the view does not list.
             let held = dch.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveFileMinimum) } == true
-                ? Set(live(sessions).compactMap { $0.agent?.sessionID }.filter { !$0.isEmpty }) : []
+                ? Set(live(sessions + list(seed().filter { !dirs.contains($0) })).compactMap { $0.agent?.sessionID }.filter { !$0.isEmpty })
+                : []
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.setHistory(records, dch, held) } }
         }
     }
@@ -410,8 +418,15 @@ final class AgentIslandController {
             } else {
                 // #714: a line names no aside file. #716 L-1: the row of the name's newest
                 // record --all takes (dch skips a stopped one; #719 a held Claude id), else the name's newest.
-                let mine = store.history.filter { $0.key == key }, taken = store.reviveAllTaken
-                record = mine.first { taken.contains($0.id) } ?? mine.first
+                let mine = store.history.filter { $0.key == key }, taken = store.reviveAllTaken, sid = o.sessionID ?? ""
+                // #720 (QA #535 L-4): a final names its Claude id (dch's rv_say); from 1.28.2 no two
+                // taken records of a dir share one, so it lands on its own row, and shows there.
+                if !sid.isEmpty, let r = mine.first(where: { taken.contains($0.id) && $0.agent?.sessionID == sid }) {
+                    record = r
+                    named = true
+                } else {
+                    record = mine.first { taken.contains($0.id) } ?? mine.first
+                }
             }
             guard let r = record else { return }
             key = r.id

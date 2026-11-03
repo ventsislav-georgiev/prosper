@@ -1357,6 +1357,32 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(takes(Self.v1283, "1.29.0"),
                        ["new": true, "held": true, "stop": false, "old": true, "crash": true, "free": true],
                        "a newer master: the island's gate refuses, the old count")
+        XCTAssertEqual(takes(Self.v1283, "1.28.1"), takes(Self.v1283, "1.28.3"),
+                       "QA #535 M2: an older master leaves the gate open; --revive runs in the control dch")
+    }
+
+    /// QA #535 M-1: with Remote Terminal isolation the phone lists only the isolated dir,
+    /// but dch holds a Claude from any dir: the seed lists the other socket dir's
+    /// sessions too (a by-hand `claude --resume M` at the Mac), from 1.28.2 only.
+    func testHistoryTakesHoldAClaudeInTheOtherSocketDirFrom1282() {
+        let f = Fake()
+        f.hist["/iso"] = Self.hist([Self.taker("phone", sid: "M", ago: 60)])
+        f.ls["/iso"] = Self.ls([("p", "1.28.3")])
+        f.ls["/mac"] = Self.ls([("m", "1.28.3")])
+        func takes(_ dch: DchCommand.Binary) -> (Bool, [String]) {
+            var o = ops(f, dirs: ["/iso"], binary: dch)
+            o.seedDirs = { ["/mac", "/iso"] }
+            o.liveRecords = { s in
+                s.map { var r = DchHistoryRecord(key: $0.key); r.agent = .init(kind: "claude", sessionID: $0.name.uppercased()); return r }
+            }
+            f.lock.withLock { f.reads = [] }
+            let rows = call(o, DchFrame.history, raw: Data()).json as? [[String: Any]] ?? []
+            return (rows.first?["takes"] as? Bool ?? true, f.lock.withLock { f.reads.filter { $0.arg == "--ls-json" }.map(\.dir) })
+        }
+        XCTAssertEqual(takes(Self.v1283).0, false, "M runs in /mac")
+        XCTAssertEqual(takes(Self.v1283).1, ["/iso", "/mac"], "the other dir once; the listed one is not listed again")
+        XCTAssertEqual(takes(Self.v1281).0, true)
+        XCTAssertEqual(takes(Self.v1281).1, [], "below 1.28.2 no listing")
     }
 
     private static let v1281 = DchCommand.Binary(path: "/fake/dch", version: [1, 28, 1])

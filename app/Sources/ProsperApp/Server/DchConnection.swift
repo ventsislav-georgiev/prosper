@@ -198,7 +198,10 @@ final class DchConnection: @unchecked Sendable {
             guard !self.closed else { return }
             // #617: an upload's unwritten backlog pauses reading until its disk catches up.
             guard let upload = self.upload else { return self.receive() }
-            upload.whenDrained { [weak self] in self?.queue.async { if self?.closed == false { self?.receive() } } }
+            upload.whenDrained { [weak self] in
+                guard let self else { return }
+                self.queue.async { [weak self] in if self?.closed == false { self?.receive() } }
+            }
         }
     }
 
@@ -320,7 +323,10 @@ final class DchConnection: @unchecked Sendable {
             inFlight = true
             uploaded = true
             let up = DchClipboardUpload(ops: clipboard, reply: { self.finalReply($0) },
-                                        closeConnection: { [weak self] in self?.queue.async { self?.close() } })
+                                        closeConnection: { [weak self] in
+                                            guard let self else { return }
+                                            self.queue.async { [weak self] in self?.close() }
+                                        })
             upload = up
             up.start(payload)
         case DchFrame.machineInfo:
@@ -630,6 +636,10 @@ struct DchControlOps: Sendable {
     var liveRecords: @Sendable ([AgentSession]) -> [DchHistoryRecord] = {
         NSClassFromString("XCTestCase") == nil ? AgentIsland.liveRecords($0) : []
     }
+    /// #720: the socket dirs whose live sessions seed those ids (`dirs` and the rest); none under XCTest.
+    var seedDirs: @Sendable () -> [String] = {
+        NSClassFromString("XCTestCase") == nil ? AgentIsland.seedSocketDirs() : []
+    }
     /// After a verb: the island re-reads its history, as after its own Resume and Stop
     /// (its live rows follow on the next poll tick).
     var refresh: @Sendable () -> Void = {
@@ -752,7 +762,12 @@ struct DchControlOps: Sendable {
         var held: Set<String>?
         if let bin, DchCommand.isAtLeast(bin.version, AgentIsland.reviveFileMinimum) {
             let live = sessions()
-            if Self.reviveExact(bin, live) { held = Set(liveRecords(live).compactMap { $0.agent?.sessionID }.filter { !$0.isEmpty }) }
+            if Self.reviveExact(bin, live) {
+                // #720 (QA #535 M-1): and the sessions of the other socket dir, as dch holds a Claude from any dir.
+                let listed = dirs(), read = read
+                let other = AgentIsland.list(dirs: seedDirs().filter { !listed.contains($0) }) { read($0, $1, nil) }
+                held = Set(liveRecords(live + other).compactMap { $0.agent?.sessionID }.filter { !$0.isEmpty })
+            }
         }
         let ended = bin.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveEndedHoldMinimum) } ?? false
         let taken = AgentIsland.reviveAllTaken(all, now: t, held: held, endedHolds: ended)
