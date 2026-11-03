@@ -137,19 +137,23 @@ enum SnippetStore {
     /// Effective triggers for every snippet that has a keyword AND opts into
     /// auto-expansion, paired with the snippet name. Feeds `SnippetMatcher`.
     /// #731: then the phones' read-only keywords (PhoneSnippetStore.triggers): the Mac's own wins.
+    /// #732: then the macOS Text Replacements, behind both.
     static func effectiveKeywords() -> [(trigger: String, id: String)] {
-        effectiveKeywords(all(), collections: collectionAffixes(), phone: PhoneSnippetStore.live.sets())
+        effectiveKeywords(all(), collections: collectionAffixes(), phone: PhoneSnippetStore.live.sets(),
+                          replacements: TextReplacements.items())
     }
 
     static func effectiveKeywords(_ hits: [SnippetHit], collections: [String: (prefix: String, suffix: String)],
-                                  phone: [(device: String, set: PhoneSnippetStore.DeviceSet)]) -> [(trigger: String, id: String)] {
+                                  phone: [(device: String, set: PhoneSnippetStore.DeviceSet)],
+                                  replacements: [String: String] = [:]) -> [(trigger: String, id: String)] {
         let keyed = hits.filter { !$0.keyword.isEmpty }.map {
             (hit: $0, trigger: effectiveTrigger(keyword: $0.keyword, collection: $0.collection, collections: collections))
         }
         let mac = keyed.compactMap { k -> (trigger: String, id: String)? in
             k.hit.autoExpand && !k.trigger.isEmpty ? (k.trigger, k.hit.name) : nil
         }
-        return PhoneSnippetStore.triggers(mac: mac, macKeywords: Set(keyed.map(\.trigger)), sets: phone)
+        return PhoneSnippetStore.triggers(mac: mac, macKeywords: Set(keyed.map(\.trigger)), sets: phone,
+                                          replacements: replacements)
     }
 
     /// `prefix + keyword + suffix` using the named collection's affixes (empty

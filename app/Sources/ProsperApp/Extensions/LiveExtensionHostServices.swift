@@ -391,6 +391,14 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         PhoneSnippetStore.live.remove(deviceID: deviceID)
     }
 
+    /// #732: the macOS Text Replacements, read-only, by phrase: [{id, name, keyword, text}]
+    /// (name = text = the phrase, keyword = the shortcut). None while the toggle is off.
+    func snippetsTextReplacements() -> String {
+        Self.jsonString(TextReplacements.items().sorted { $0.value < $1.value }.map {
+            ["id": TextReplacements.id($0.key), "name": $0.value, "keyword": $0.key, "text": $0.value]
+        }) ?? "[]"
+    }
+
     // MARK: Snippet settings surface (Tier-B management page)
 
     func snippetConfig() -> String {
@@ -399,6 +407,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             "autoExpand": Preferences.snippetsAutoExpand,
             "wordBoundary": Preferences.snippetsExpandOnWordBoundary,
             "restoreClipboard": Preferences.snippetsRestoreClipboard,
+            "textReplacements": Preferences.snippetsTextReplacements,
         ]) ?? "{}"
     }
 
@@ -409,6 +418,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         if let v = obj["autoExpand"] as? Bool { Preferences.snippetsAutoExpand = v }
         if let v = obj["wordBoundary"] as? Bool { Preferences.snippetsExpandOnWordBoundary = v }
         if let v = obj["restoreClipboard"] as? Bool { Preferences.snippetsRestoreClipboard = v }
+        if let v = obj["textReplacements"] as? Bool { Preferences.snippetsTextReplacements = v }
         if let cb = snippetConfigChanged { Task { @MainActor in cb() } }
     }
 

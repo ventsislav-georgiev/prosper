@@ -26,6 +26,11 @@ local function phone_sets()
     return host.snippets.phone and host.snippets.phone() or {}
 end
 
+-- #732: the macOS Text Replacements, read-only (none when the toggle is off or the host lacks them).
+local function text_replacements()
+    return host.snippets.replacements and host.snippets.replacements() or {}
+end
+
 -- Build the "Add Snippet" form node (reused by the opener and the validation
 -- re-render path so typed values survive a failed submit). The body is a
 -- multi-line `textarea`; rich (RTF) authoring lives in Settings → Snippets.
@@ -145,8 +150,21 @@ function snippets_run(query)
             end
         end
     end
+    -- #732: then the macOS Text Replacements. The title is the phrase as typed: never expanded.
+    local reps = text_replacements()
+    for _, r in ipairs(reps) do
+        if #rest == 0 or contains_ci(r.name, rest) or contains_ci(r.keyword, rest) then
+            items[#items + 1] = {
+                id = tostring(#items),
+                title = r.text,
+                subtitle = r.name .. "  ·  " .. r.keyword,
+                icon = "character.cursor.ibeam",
+                accessory = "Text Replacements",
+            }
+        end
+    end
     if #items == 0 then
-        if #all == 0 and #phone == 0 then return "No snippets yet. Add one: sn add" end
+        if #all == 0 and #phone == 0 and #reps == 0 then return "No snippets yet. Add one: sn add" end
         return "No snippet matches '" .. rest .. "'"
     end
     return host.ui.render(host.ui.list{ title = "Snippets", items = items })
@@ -192,7 +210,9 @@ function settings_render(section_id, state)
         footer = "Auto-expansion types the snippet in place when you type its keyword in any app. "
             .. "Keywords can't contain spaces or quotes. Use a symbol prefix (e.g. ;;addr) so everyday "
             .. "words don't trigger. Placeholders: {cursor} {clipboard} {date} {date +1d} {time} {uuid} "
-            .. "{snippet:keyword} {argument} — with modifiers like {clipboard | uppercase}.",
+            .. "{snippet:keyword} {argument} — with modifiers like {clipboard | uppercase}. "
+            .. "macOS Text Replacements are read-only here: they come after your snippets and your "
+            .. "iPhone's, and are typed exactly as written.",
         rows = {
             s.row{ kind = "toggle", key = "enabled", title = "Enable Snippets",
                    value = b2s(cfg.enabled) },
@@ -204,6 +224,10 @@ function settings_render(section_id, state)
             s.row{ kind = "toggle", key = "restoreClipboard",
                    title = "Restore the clipboard after a paste-based expansion",
                    value = b2s(cfg.restoreClipboard) },
+            -- #732: on unless explicitly off (a host without the key keeps the default).
+            s.row{ kind = "toggle", key = "textReplacements",
+                   title = "Include macOS Text Replacements",
+                   value = b2s(cfg.textReplacements ~= false) },
         },
     }
 

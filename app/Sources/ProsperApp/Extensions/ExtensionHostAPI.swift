@@ -127,6 +127,8 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     // #731: the phones' read-only sets (JSON array) and Settings' Remove of one device's set.
     func snippetsPhone() -> String
     func snippetRemovePhone(deviceID: String)
+    // #732: the macOS Text Replacements (JSON array), read-only.
+    func snippetsTextReplacements() -> String
     // Snippet management surface used by the extension's Settings page (Tier B):
     // the four expansion toggles (global `Preferences`), collections, ignored apps,
     // and a native "import from file" picker. JSON in/out, decoded Lua-side.
@@ -238,6 +240,7 @@ extension ExtensionHostServices {
     func snippetExpand(keyword: String, argsJSON: String?) -> String { "" }
     func snippetsPhone() -> String { "[]" }
     func snippetRemovePhone(deviceID: String) {}
+    func snippetsTextReplacements() -> String { "[]" }
 
     /// Default: no quicklink store (test / minimal hosts). The live host
     /// (`LiveExtensionHostServices`) overrides these with the real `QuicklinkStore`.
@@ -681,6 +684,10 @@ struct ExtensionHost {
         lua.register("__h_snippets_remove_phone") { rt in
             services.snippetRemovePhone(deviceID: rt.stringArgument(1) ?? "")
             return 0
+        }
+        lua.register("__h_snippets_replacements") { rt in
+            rt.push(services.snippetsTextReplacements())
+            return 1
         }
         lua.register("__h_snippets_config") { rt in
             rt.push(services.snippetConfig())
@@ -1575,9 +1582,11 @@ struct ExtensionHost {
     --   host.snippets.expand(keyword [, args]) -> string
     --   host.snippets.phone()                  -> { { device_id=, device=, count=, updated=, snippets={ { id=, name=, keyword=, text=, group= } } } }
     --   host.snippets.remove_phone(device_id)
+    --   host.snippets.replacements()           -> { { id=, name=, keyword=, text= } }  (macOS Text Replacements)
     local raw_sn_all    = __h_snippets_all
     local raw_sn_phone  = __h_snippets_phone
     local raw_sn_remove_phone = __h_snippets_remove_phone
+    local raw_sn_replacements = __h_snippets_replacements
     local raw_sn_get    = __h_snippets_get
     local raw_sn_save   = __h_snippets_save
     local raw_sn_remove = __h_snippets_remove
@@ -1609,6 +1618,11 @@ struct ExtensionHost {
             return raw and json_decode(raw) or {}
         end,
         remove_phone = function(device_id) raw_sn_remove_phone(device_id or "") end,
+        -- #732: read-only, inserted literally (the text is the phrase as typed).
+        replacements = function()
+            local raw = raw_sn_replacements()
+            return raw and json_decode(raw) or {}
+        end,
         -- Settings-page surface (Tier B). config()/collections()/ignored() return
         -- Lua tables; the set_* counterparts replace the whole value natively (so
         -- SnippetStore's file mirror + change token stay in sync). import_file()
@@ -1637,6 +1651,7 @@ struct ExtensionHost {
     __h_snippets_expand = nil
     __h_snippets_phone = nil
     __h_snippets_remove_phone = nil
+    __h_snippets_replacements = nil
     __h_snippets_config = nil
     __h_snippets_set_config = nil
     __h_snippets_collections = nil

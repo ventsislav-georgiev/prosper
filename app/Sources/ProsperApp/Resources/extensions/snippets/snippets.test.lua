@@ -96,4 +96,45 @@ do
     h.eq(still, false, "no phone section once every set is removed")
 end
 
+-- ── #732: macOS Text Replacements — read-only, literal palette rows + toggle ──
+do
+    local g, e = fresh{ { name = "omw", keyword = ";;omw", text = "mac {date}", expanded = "mac Nov 4" } }
+    local reps = { { id = "\1textreplacement\1omw", name = "On my way {date}", keyword = "omw",
+                     text = "On my way {date}" } }
+    local expanded = {}
+    local expand = e.host.snippets.expand
+    e.host.snippets.expand = function(k) expanded[#expanded + 1] = k; return expand(k) end
+    e.host.snippets.replacements = function() return reps end
+    local out = g.snippets_run("sn omw")
+    h.eq(#out.items, 2, "the Mac snippet and the replacement both list")
+    h.eq(out.items[1].title, "mac Nov 4", "Mac row first, expanded")
+    h.eq(out.items[2].title, "On my way {date}", "the replacement's title is the phrase as typed")
+    h.eq(out.items[2].subtitle, "On my way {date}  ·  omw", "phrase + shortcut")
+    h.eq(out.items[2].accessory, "Text Replacements", "grouped as Text Replacements")
+    h.eq(#expanded, 1, "only the Mac row went through expand")
+    h.eq(#g.snippets_run("sn way").items, 1, "searchable by phrase")
+    e.snippets = {}
+    h.eq(g.snippets_run("sn").kind, "list", "replacements alone are not 'No snippets yet'")
+
+    local page = g.settings_render("main", "{}")
+    local toggle
+    for _, sec in ipairs(page.sections) do
+        if sec.id == "expansion" then
+            for _, r in ipairs(sec.rows) do if r.key == "textReplacements" then toggle = r end end
+        end
+        if sec.id == "library" then h.eq(#sec.rows[1].records, 0, "replacements are never editable records") end
+    end
+    h.eq(toggle ~= nil, true, "Settings has the Text Replacements toggle")
+    h.eq(toggle.title, "Include macOS Text Replacements", "toggle title")
+    h.eq(toggle.value, "true", "on by default (no key in the config)")
+    g.settings_action("main", "set:textReplacements", "false", "{}")
+    h.eq(e.snippetConfig.textReplacements, false, "the toggle writes the config key")
+    page = g.settings_render("main", "{}")
+    for _, sec in ipairs(page.sections) do
+        if sec.id == "expansion" then
+            for _, r in ipairs(sec.rows) do if r.key == "textReplacements" then h.eq(r.value, "false", "off renders off") end end
+        end
+    end
+end
+
 print("ok snippets")

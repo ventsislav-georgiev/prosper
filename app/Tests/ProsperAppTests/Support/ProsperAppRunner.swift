@@ -78,6 +78,7 @@ final class ProsperAppRunner: @unchecked Sendable {   // mutable state guarded b
             "-snippetsAutoExpand", "YES",
             "-snippetsExpandOnWordBoundary", "NO",
             "-snippetsRestoreClipboard", "YES",
+            "-snippetsTextReplacements", "NO",     // #732: never the operator's own Text Replacements
             // Use the clipboard-paste insertion path for the E2EHost field. The default
             // `typeString` posts a single keycode-0 + keyboardSetUnicodeString CGEvent;
             // a minimal NSTextView routes that through TSM, which re-translates by

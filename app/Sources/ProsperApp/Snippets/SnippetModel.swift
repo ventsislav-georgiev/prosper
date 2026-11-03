@@ -19,12 +19,14 @@ struct SnippetHit: Sendable, Equatable, Identifiable {
     let description: String
     let autoExpand: Bool
     let richText: Bool
+    /// #732: inserted exactly as stored, never through `PlaceholderEngine` (macOS Text Replacements).
+    let literal: Bool
 
     /// Identity is the (unique) name — the same convention `QuicklinkHit` uses.
     var id: String { name }
 
     init(name: String, keyword: String = "", text: String, collection: String = "",
-         description: String = "", autoExpand: Bool = true, richText: Bool = false) {
+         description: String = "", autoExpand: Bool = true, richText: Bool = false, literal: Bool = false) {
         self.name = name
         self.keyword = keyword
         self.text = text
@@ -32,6 +34,7 @@ struct SnippetHit: Sendable, Equatable, Identifiable {
         self.description = description
         self.autoExpand = autoExpand
         self.richText = richText
+        self.literal = literal
     }
 }
 

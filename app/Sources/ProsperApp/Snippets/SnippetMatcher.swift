@@ -32,7 +32,12 @@ enum SnippetMatcher {
         if wordBoundaryMode {
             return matchWordBoundary(buffer: buffer, keywords: keywords)
         }
-        return matchImmediate(buffer: buffer, keywords: keywords)
+        // #732: a macOS Text Replacement fires only at a word boundary, as macOS does, so a bare
+        // shortcut ("em") never fires inside a word ("them"). Everything else stays immediate.
+        let replacements = keywords.filter { TextReplacements.isID($0.id) }
+        guard !replacements.isEmpty else { return matchImmediate(buffer: buffer, keywords: keywords) }
+        return matchImmediate(buffer: buffer, keywords: keywords.filter { !TextReplacements.isID($0.id) })
+            ?? matchWordBoundary(buffer: buffer, keywords: replacements)
     }
 
     // MARK: - Immediate suffix match (default)

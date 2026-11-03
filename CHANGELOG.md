@@ -25,6 +25,12 @@ tag from the now-released section and put it on the new top draft.
   Mac's own, grouped under the phone, and stay read-only here: you edit them on the phone.
   A Mac snippet always wins a keyword the phone also uses. Settings › Snippets › From iPhone
   lists each phone's set with a Remove button. Needs the matching Prosper iOS update.
+- **macOS Text Replacements in snippets.** Your Text Replacements (System Settings ›
+  Keyboard, synced with your iPhone through iCloud) now show in snippet search (`sn`) and
+  expand by their shortcut, read-only. They fire only at a word boundary, the way macOS
+  does, and are typed exactly as written. Your Mac snippets and your iPhone's win any
+  shortcut they share. Turn them off with Settings › Snippets › "Include macOS Text
+  Replacements".
 
 ## v2.166.0
 

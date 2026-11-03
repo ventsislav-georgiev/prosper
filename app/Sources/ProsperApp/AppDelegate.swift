@@ -1035,6 +1035,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HyperKey.shared.reconcile(tapRunning: autocomplete.isRunning)
     }
 
+    /// #732: the palette activates the app, so `sn` searches the current Text Replacements.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        TextReplacements.refresh()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         // #523: the phone's card goes offline (waited on up to 1.5 s).
         LiveStatusPublisher.shared.pause()

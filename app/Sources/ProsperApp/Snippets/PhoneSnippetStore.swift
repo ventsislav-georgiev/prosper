@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// #731: the snippets each phone owns and pushes with 0x2c putPhoneSnippets, shown on this
 /// Mac read-only (palette, keyword expansion, Settings). Stored in phone-snippets.json beside
@@ -123,17 +123,21 @@ struct PhoneSnippetStore: Sendable {
         return nil
     }
 
-    /// The expander's id lookup: a phone id resolves only among the phone sets, any other id
-    /// only among the Mac's own snippets.
+    /// The expander's id lookup: a phone id resolves only among the phone sets, a #732 Text
+    /// Replacement id only among the replacements, any other id only among the Mac's own snippets.
     static func lookup(_ id: String, phone: PhoneSnippetStore = .live,
-                       mac: (String) -> SnippetHit? = SnippetStore.byName) -> SnippetHit? {
-        id.hasPrefix(idPrefix) ? phone.hit(id: id) : mac(id)
+                       mac: (String) -> SnippetHit? = SnippetStore.byName,
+                       replacements: [String: String] = TextReplacements.items()) -> SnippetHit? {
+        if TextReplacements.isID(id) { return TextReplacements.hit(id: id, in: replacements) }
+        return id.hasPrefix(idPrefix) ? phone.hit(id: id) : mac(id)
     }
 
     /// Mac triggers as given, then each phone keyword that no Mac keyword (auto-expanding or not)
-    /// and no newer phone set already holds. `macKeywords` is every Mac effective trigger.
+    /// and no newer phone set already holds, then (#732) each Text Replacement shortcut nothing
+    /// above holds. `macKeywords` is every Mac effective trigger.
     static func triggers(mac: [(trigger: String, id: String)], macKeywords: Set<String>,
-                         sets: [(device: String, set: DeviceSet)]) -> [(trigger: String, id: String)] {
+                         sets: [(device: String, set: DeviceSet)],
+                         replacements: [String: String] = [:]) -> [(trigger: String, id: String)] {
         var taken = macKeywords, out = mac
         for (device, set) in sets {
             for s in set.snippets {
@@ -141,6 +145,12 @@ struct PhoneSnippetStore: Sendable {
                 guard !kw.isEmpty, taken.insert(kw).inserted else { continue }
                 out.append((kw, id(device: device, name: s.name)))
             }
+        }
+        // A shortcut with a space or quote is not typeable as a keyword: search only, never sanitized
+        // into a different trigger.
+        for shortcut in replacements.keys.sorted()
+        where !shortcut.isEmpty && SnippetStore.sanitizeKeyword(shortcut) == shortcut && taken.insert(shortcut).inserted {
+            out.append((shortcut, TextReplacements.id(shortcut)))
         }
         return out
     }
@@ -160,5 +170,48 @@ struct PhoneSnippetStore: Sendable {
         }
         SnippetStore.touch()   // the expander rebuilds its keyword cache
         return true
+    }
+}
+
+/// #732: the user's macOS Text Replacements (iCloud-synced, so the iPhone's too), read-only:
+/// palette search, keyword expansion after the Mac snippets and the phone sets, inserted literally.
+/// Read through NSSpellChecker's public [shortcut: phrase] dictionary, never the KeyboardServices db;
+/// nothing here writes. Never in SnippetStore, so never in snippets.json, the export or the 0x0f payload.
+enum TextReplacements {
+    static let idPrefix = "\u{1}textreplacement\u{1}"
+    static let label = "Text Replacements"
+    static func id(_ shortcut: String) -> String { idPrefix + shortcut }
+    static func isID(_ id: String) -> Bool { id.hasPrefix(idPrefix) }
+
+    /// The read seam. Never the real NSSpellChecker under XCTest: a test swaps this.
+    nonisolated(unsafe) static var read: @MainActor () -> [String: String] = {
+        NSClassFromString("XCTestCase") == nil ? NSSpellChecker.shared.userReplacementsDictionary : [:]
+    }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cached: [String: String] = [:]
+
+    /// Re-reads (app activation, every expander keyword rebuild). A change bumps SnippetStore's
+    /// token so the expander rebuilds its keywords.
+    @MainActor static func refresh() {
+        let now = Preferences.snippetsTextReplacements ? read() : [:]   // off: no read at all
+        let changed = lock.withLock { () -> Bool in
+            defer { cached = now }
+            return cached != now
+        }
+        if changed { SnippetStore.touch() }
+    }
+
+    /// The last read, or none while Settings > Snippets "Include macOS Text Replacements" is off.
+    static func items() -> [String: String] {
+        Preferences.snippetsTextReplacements ? lock.withLock { cached } : [:]
+    }
+
+    /// The replacement behind an id: name = phrase, keyword = shortcut, text = the phrase, literal.
+    static func hit(id: String, in items: [String: String]) -> SnippetHit? {
+        guard isID(id) else { return nil }
+        let shortcut = String(id.dropFirst(idPrefix.count))
+        guard let phrase = items[shortcut] else { return nil }
+        return SnippetHit(name: phrase, keyword: shortcut, text: phrase, collection: label, literal: true)
     }
 }

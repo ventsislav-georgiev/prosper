@@ -124,7 +124,7 @@ final class SnippetExpander {
             buffer: buffer,
             keywords: cachedKeywords,
             lookup: { PhoneSnippetStore.lookup($0) },
-            context: liveContext(template: hit.text),
+            context: liveContext(template: hit.literal ? "" : hit.text),
             wordBoundaryMode: Preferences.snippetsExpandOnWordBoundary
         )
 
@@ -170,14 +170,19 @@ final class SnippetExpander {
             return .insertRich(name: hit.name, backspaces: backspaces)
         }
 
+        // Re-append the consumed delimiter so the user's word break survives.
+        let delimiter = match.consumedDelimiter ? String(buffer.last ?? " ") : ""
+        // #732: a Text Replacement types its phrase as written ("{date}" stays), no caret move.
+        if hit.literal {
+            return .insertPlain(name: hit.name, backspaces: backspaces, insertText: hit.text + delimiter, leftArrows: 0)
+        }
+
         // A required (default-less) argument can't be collected inline.
         let needsArg = PlaceholderEngine.arguments(in: hit.text).contains {
             $0.required && context.arguments[$0.name] == nil
         }
         if needsArg { return .needsArguments(name: hit.name) }
 
-        // Re-append the consumed delimiter so the user's word break survives.
-        let delimiter = match.consumedDelimiter ? String(buffer.last ?? " ") : ""
         let (resolved, cursorOffset) = PlaceholderEngine.render(hit.text, context)
         let insertText = resolved + delimiter
         let leftArrows = cursorOffset.map { insertText.count - $0 } ?? 0
@@ -219,6 +224,7 @@ final class SnippetExpander {
 
     private func refreshKeywordsIfNeeded() {
         guard cachedToken != SnippetStore.changeToken else { return }
+        TextReplacements.refresh()   // #732: re-read with every rebuild (a change bumps the token again)
         cachedKeywords = SnippetStore.effectiveKeywords()
         cachedToken = SnippetStore.changeToken
     }

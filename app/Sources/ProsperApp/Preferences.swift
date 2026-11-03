@@ -485,6 +485,7 @@ enum Preferences {
         static let snippetsAutoExpand = "snippetsAutoExpand"
         static let snippetsExpandOnWordBoundary = "snippetsExpandOnWordBoundary"
         static let snippetsRestoreClipboard = "snippetsRestoreClipboard"
+        static let snippetsTextReplacements = "snippetsTextReplacements"
         static let snippetsIgnoredBundleIds = "snippetsIgnoredBundleIds"
     }
 
@@ -1851,6 +1852,19 @@ enum Preferences {
             return defaults.bool(forKey: Keys.snippetsRestoreClipboard)
         }
         set { defaults.set(newValue, forKey: Keys.snippetsRestoreClipboard) }
+    }
+
+    /// #732: macOS Text Replacements join snippet search and expansion (read-only). **On by default.**
+    /// A change bumps the snippet token so the expander rebuilds its keywords.
+    static var snippetsTextReplacements: Bool {
+        get {
+            if defaults.object(forKey: Keys.snippetsTextReplacements) == nil { return true }
+            return defaults.bool(forKey: Keys.snippetsTextReplacements)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.snippetsTextReplacements)
+            SnippetStore.touch()
+        }
     }
 
     /// Bundle ids where inline snippet expansion is suppressed. Seeded with the
