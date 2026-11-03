@@ -26,6 +26,9 @@ tag from the now-released section and put it on the new top draft.
   path as the fan controls in the System Stats popup, with the same overheat cut-off and
   the same reset on sleep. They show only on a Mac with adjustable fans, and only while
   "Run commands from iPhone" is on.
+- **Links in a Remote Terminal snapshot can be tapped.** Bundled dch 1.28.4 keeps the
+  clickable links (such as a pull request link in Claude's status line) when it redraws
+  a session, so they stay links on the iPhone after reconnecting.
 
 ## v2.165.0
 
