@@ -114,7 +114,7 @@ final class SnippetExpander {
         // extension registry; doing it eagerly keeps the pure planner isolation-free).
         guard let match = SnippetMatcher.match(buffer: buffer, keywords: cachedKeywords,
                                                wordBoundaryMode: Preferences.snippetsExpandOnWordBoundary),
-              let hit = SnippetStore.byName(match.id) else {
+              let hit = PhoneSnippetStore.lookup(match.id) else {
             Self.e2elog("no match for buffer=\"\(buffer.suffix(16))\" (\(cachedKeywords.count) keywords)")
             return false
         }
@@ -123,7 +123,7 @@ final class SnippetExpander {
         let decision = Self.plan(
             buffer: buffer,
             keywords: cachedKeywords,
-            lookup: { SnippetStore.byName($0) },
+            lookup: { PhoneSnippetStore.lookup($0) },
             context: liveContext(template: hit.text),
             wordBoundaryMode: Preferences.snippetsExpandOnWordBoundary
         )
@@ -196,7 +196,7 @@ final class SnippetExpander {
         let history: [String] = ClipboardStore.shared.items
             .filter { $0.kind.isTextual }
             .compactMap { ClipboardStore.shared.text(for: $0) ?? $0.preview }
-        let snippets = SnippetStore.all()
+        let snippets = SnippetStore.all(), phone = PhoneSnippetStore.live.sets()
         // Pre-resolve extension-contributed placeholders this template uses, keyed
         // by raw token body (what PlaceholderEngine passes to `custom`).
         var customs: [String: String] = [:]
@@ -211,7 +211,7 @@ final class SnippetExpander {
         ctx.clipboard = { clip }
         ctx.clipboardHistory = { n in (n >= 0 && n < history.count) ? history[n] : nil }
         ctx.snippetByKeyword = { key in
-            snippets.first { $0.keyword == key || $0.name == key }?.text
+            snippets.first { $0.keyword == key || $0.name == key }?.text ?? PhoneSnippetStore.text(forKey: key, in: phone)
         }
         ctx.custom = { _, raw in customs[raw] }
         return ctx

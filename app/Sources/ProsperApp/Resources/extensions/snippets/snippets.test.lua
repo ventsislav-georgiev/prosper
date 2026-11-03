@@ -56,4 +56,44 @@ do
     h.eq(e.windowClosed, 1, "invalid save does not close again")
 end
 
+-- ── #731: phone sets — read-only palette rows + Settings Remove ──────────────
+do
+    local g, e = fresh{ { name = "addr", keyword = ";;addr", text = "1 Loop", expanded = "1 Infinite Loop" } }
+    local removed = {}
+    local sets = {
+        { device_id = "dev-AB12", device = "Kitchen", count = 1, updated = "Nov 3, 2026",
+          snippets = { { id = "\1phone\1dev-AB12\1addr", name = "addr", keyword = "pa", text = "phone addr",
+                         group = "Home" } } },
+    }
+    e.host.snippets.phone = function() return sets end
+    e.host.snippets.remove_phone = function(id)
+        removed[#removed + 1] = id
+        sets = {}
+    end
+    local out = g.snippets_run("sn addr")
+    h.eq(#out.items, 2, "Mac and phone snippet named alike both list")
+    h.eq(out.items[1].subtitle, "addr  ·  ;;addr", "Mac row first, untouched")
+    h.eq(out.items[2].title, "phone addr", "phone row resolves (text fallback)")
+    h.eq(out.items[2].subtitle, "addr  ·  pa  ·  Home", "phone group rides in the subtitle")
+    h.eq(out.items[2].accessory, "Kitchen", "grouped under the device")
+    h.eq(#g.snippets_run("sn home").items, 1, "group is searchable")
+
+    local page = g.settings_render("main", "{}")
+    local phone
+    for _, sec in ipairs(page.sections) do if sec.id == "phone" then phone = sec end end
+    h.eq(phone ~= nil, true, "Settings lists phone sets")
+    h.eq(phone.rows[1].title, "Kitchen · AB12", "title is device name + last 4 of device_id")
+    h.eq(phone.rows[1].subtitle, "1 snippets · updated Nov 3, 2026", "count + updated")
+    h.eq(phone.rows[2].actionID, "phone.remove:dev-AB12", "Remove button per device")
+    h.eq(phone.rows[2].subtitle, "It comes back when that iPhone's snippets change.", "Remove help text")
+    for _, sec in ipairs(page.sections) do
+        if sec.id == "library" then h.eq(#sec.rows[1].records, 1, "phone snippets are never editable records") end
+    end
+    local after = g.settings_action("main", "phone.remove:dev-AB12", "", "{}")
+    h.eq(removed[1], "dev-AB12", "Remove deletes that device's set")
+    local still = false
+    for _, sec in ipairs(after.sections) do if sec.id == "phone" then still = true end end
+    h.eq(still, false, "no phone section once every set is removed")
+end
+
 print("ok snippets")

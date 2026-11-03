@@ -18,7 +18,15 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.166.0 *(unreleased)*
+## v2.167.0 *(unreleased)*
+
+- **Your iPhone's snippets on the Mac.** With "Sync library" on, the phone now sends its own
+  snippets to the Mac. They show in snippet search (`sn`) and expand by keyword like the
+  Mac's own, grouped under the phone, and stay read-only here: you edit them on the phone.
+  A Mac snippet always wins a keyword the phone also uses. Settings › Snippets › From iPhone
+  lists each phone's set with a Remove button. Needs the matching Prosper iOS update.
+
+## v2.166.0
 
 - **Your extensions on the iPhone.** An extension can now offer its plain text commands on
   the phone's Commands screen by marking them `phone = true` (with an optional

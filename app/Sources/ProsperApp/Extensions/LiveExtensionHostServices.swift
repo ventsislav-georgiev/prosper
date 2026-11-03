@@ -333,7 +333,9 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     }
 
     func snippetExpand(keyword: String, argsJSON: String?) -> String {
-        guard let hit = SnippetStore.all().first(where: { $0.keyword == keyword || $0.name == keyword })
+        // #731: a phone snippet comes by its namespaced id (host.snippets.phone()).
+        guard let hit = keyword.hasPrefix(PhoneSnippetStore.idPrefix) ? PhoneSnippetStore.live.hit(id: keyword)
+                : SnippetStore.all().first(where: { $0.keyword == keyword || $0.name == keyword })
         else { return "" }
         var args: [String: String] = [:]
         if let argsJSON, let data = argsJSON.data(using: .utf8),
@@ -349,7 +351,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             let history: [String] = ClipboardStore.shared.items
                 .filter { $0.kind.isTextual }
                 .compactMap { ClipboardStore.shared.text(for: $0) ?? $0.preview }
-            let snippets = SnippetStore.all()
+            let snippets = SnippetStore.all(), phone = PhoneSnippetStore.live.sets()
             var customs: [String: String] = [:]
             if let registry = CommandRouter.registry {
                 for token in PlaceholderEngine.customTokens(in: template) {
@@ -363,11 +365,30 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             ctx.clipboardHistory = { n in (n >= 0 && n < history.count) ? history[n] : nil }
             ctx.arguments = args
             ctx.snippetByKeyword = { key in
-                snippets.first { $0.keyword == key || $0.name == key }?.text
+                snippets.first { $0.keyword == key || $0.name == key }?.text ?? PhoneSnippetStore.text(forKey: key, in: phone)
             }
             ctx.custom = { _, raw in customs[raw] }
             return PlaceholderEngine.render(template, ctx).text
         }
+    }
+
+    /// #731: the phones' read-only sets, newest first, for the palette and Settings:
+    /// [{device_id, device, count, updated, snippets: [{id, name, keyword, text, group}]}].
+    func snippetsPhone() -> String {
+        Self.jsonString(PhoneSnippetStore.live.sets().map { device, set in
+            [
+                "device_id": device, "device": set.label, "count": set.snippets.count,
+                "updated": Date(timeIntervalSince1970: set.updated).formatted(date: .abbreviated, time: .shortened),
+                "snippets": set.snippets.map {
+                    ["id": PhoneSnippetStore.id(device: device, name: $0.name), "name": $0.name,
+                     "keyword": $0.keyword ?? "", "text": $0.text, "group": $0.group ?? ""]
+                },
+            ] as [String: Any]
+        }) ?? "[]"
+    }
+
+    func snippetRemovePhone(deviceID: String) {
+        PhoneSnippetStore.live.remove(deviceID: deviceID)
     }
 
     // MARK: Snippet settings surface (Tier-B management page)

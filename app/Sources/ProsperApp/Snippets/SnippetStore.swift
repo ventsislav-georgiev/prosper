@@ -136,14 +136,20 @@ enum SnippetStore {
 
     /// Effective triggers for every snippet that has a keyword AND opts into
     /// auto-expansion, paired with the snippet name. Feeds `SnippetMatcher`.
+    /// #731: then the phones' read-only keywords (PhoneSnippetStore.triggers): the Mac's own wins.
     static func effectiveKeywords() -> [(trigger: String, id: String)] {
-        let collections = collectionAffixes()
-        return all().compactMap { hit in
-            guard hit.autoExpand, !hit.keyword.isEmpty else { return nil }
-            let trigger = effectiveTrigger(keyword: hit.keyword, collection: hit.collection,
-                                           collections: collections)
-            return trigger.isEmpty ? nil : (trigger, hit.name)
+        effectiveKeywords(all(), collections: collectionAffixes(), phone: PhoneSnippetStore.live.sets())
+    }
+
+    static func effectiveKeywords(_ hits: [SnippetHit], collections: [String: (prefix: String, suffix: String)],
+                                  phone: [(device: String, set: PhoneSnippetStore.DeviceSet)]) -> [(trigger: String, id: String)] {
+        let keyed = hits.filter { !$0.keyword.isEmpty }.map {
+            (hit: $0, trigger: effectiveTrigger(keyword: $0.keyword, collection: $0.collection, collections: collections))
         }
+        let mac = keyed.compactMap { k -> (trigger: String, id: String)? in
+            k.hit.autoExpand && !k.trigger.isEmpty ? (k.trigger, k.hit.name) : nil
+        }
+        return PhoneSnippetStore.triggers(mac: mac, macKeywords: Set(keyed.map(\.trigger)), sets: phone)
     }
 
     /// `prefix + keyword + suffix` using the named collection's affixes (empty
@@ -299,6 +305,11 @@ enum SnippetStore {
         storeArray(entries, itemsKey)
         storeArray(collections, collectionsKey)
         writeFile(entries: entries, collections: collections)
+        touch()
+    }
+
+    /// Bumps `changeToken` (also on a #731 phone set change, which the expander's keywords include).
+    static func touch() {
         defaults.set(changeToken &+ 1, forKey: changeTokenKey)
     }
 

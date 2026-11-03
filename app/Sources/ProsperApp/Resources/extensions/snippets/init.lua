@@ -21,6 +21,11 @@ local function contains_ci(hay, needle)
     return hay:lower():find(needle:lower(), 1, true) ~= nil
 end
 
+-- #731: the phones' own sets, read-only here, newest first (a host without them: none).
+local function phone_sets()
+    return host.snippets.phone and host.snippets.phone() or {}
+end
+
 -- Build the "Add Snippet" form node (reused by the opener and the validation
 -- re-render path so typed values survive a failed submit). The body is a
 -- multi-line `textarea`; rich (RTF) authoring lives in Settings → Snippets.
@@ -117,8 +122,31 @@ function snippets_run(query)
             }
         end
     end
+    -- #731: then each phone's snippets, read-only, labelled with the device; the phone's
+    -- group rides in the subtitle, never as a Mac collection.
+    local phone = phone_sets()
+    for _, set in ipairs(phone) do
+        for _, p in ipairs(set.snippets or {}) do
+            if #rest == 0 or contains_ci(p.name, rest) or contains_ci(p.keyword, rest)
+                or contains_ci(p.group, rest) then
+                -- ponytail: only templated text is resolved (each expand re-reads the phone file);
+                -- a cache in PhoneSnippetStore if a 5000-snippet set ever makes `sn` slow.
+                local resolved = (p.text or ""):find("{", 1, true) and host.snippets.expand(p.id) or nil
+                if resolved == nil or #resolved == 0 then resolved = p.text end
+                local kw = (p.keyword and #p.keyword > 0) and ("  ·  " .. p.keyword) or ""
+                local grp = (p.group and #p.group > 0) and ("  ·  " .. p.group) or ""
+                items[#items + 1] = {
+                    id = tostring(#items),
+                    title = resolved,
+                    subtitle = p.name .. kw .. grp,
+                    icon = "iphone",
+                    accessory = set.device,
+                }
+            end
+        end
+    end
     if #items == 0 then
-        if #all == 0 then return "No snippets yet. Add one: sn add" end
+        if #all == 0 and #phone == 0 then return "No snippets yet. Add one: sn add" end
         return "No snippet matches '" .. rest .. "'"
     end
     return host.ui.render(host.ui.list{ title = "Snippets", items = items })
@@ -205,6 +233,23 @@ function settings_render(section_id, state)
         },
     }
 
+    -- #731: each phone's set, read-only; Remove drops that device's set from this Mac.
+    local phone_rows = {}
+    for _, set in ipairs(phone_sets()) do
+        local id = set.device_id or ""
+        phone_rows[#phone_rows + 1] = s.row{ kind = "info", id = "phone:" .. id,
+            title = (set.device or "iPhone") .. " · " .. id:sub(-4),
+            subtitle = tostring(set.count or 0) .. " snippets · updated " .. (set.updated or "") }
+        phone_rows[#phone_rows + 1] = s.row{ kind = "button", id = "phone.remove:" .. id,
+            actionID = "phone.remove:" .. id, title = "Remove", style = "destructive",
+            subtitle = "It comes back when that iPhone's snippets change." }
+    end
+    local from_phone = s.section{
+        id = "phone", title = "From iPhone",
+        footer = "Snippets your phones sent. They search and expand here but are edited on the phone.",
+        rows = phone_rows,
+    }
+
     local col_recs = {}
     for _, c in ipairs(host.snippets.collections()) do
         local affix = (c.prefix or "") .. "…" .. (c.suffix or "")
@@ -254,7 +299,8 @@ function settings_render(section_id, state)
 
     return s.render(s.ui{
         title = "Snippets", subtitle = "Reusable text with dynamic placeholders",
-        sections = { permissions, expansion, library, collections, ignored },
+        sections = #phone_rows > 0 and { permissions, expansion, library, from_phone, collections, ignored }
+            or { permissions, expansion, library, collections, ignored },
     })
 end
 
@@ -335,6 +381,9 @@ function settings_action(section_id, action, value, form_json)
         end
         return settings_render(section_id, "{}")
     end
+
+    local pdel = action:match("^phone%.remove:(.*)$")
+    if pdel then host.snippets.remove_phone(pdel); return settings_render(section_id, "{}") end
 
     if action == "import" then
         host.snippets.import_file()

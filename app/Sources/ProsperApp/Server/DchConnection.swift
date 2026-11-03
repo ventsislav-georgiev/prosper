@@ -49,6 +49,8 @@ enum DchFrame {
     // #619: allowlisted palette commands (DchCommandOps), only while "commands" is in ops. One reply.
     static let commands: UInt8   = 0x28  // (empty) | {} → commandsResp | error
     static let runCommand: UInt8 = 0x29  // {id, argument?} → commandResult | error
+    // #731: the phone's own snippets, shown here read-only (DchLibraryOps.put). One reply.
+    static let putPhoneSnippets: UInt8 = 0x2c  // {device_id, device_name?, hash, snippets} → ok {count, hash} | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -78,7 +80,7 @@ enum DchFrame {
 
     /// #591: the requests beyond the original set this Mac answers, in machineInfoResp's
     /// "ops" (an older phone ignores the key; a newer one hides what an older Mac lacks).
-    static let ops = ["history", "revive", "restart", "stop", "library", "pin", "forget"]
+    static let ops = ["history", "revive", "restart", "stop", "library", "pin", "forget", "snippets_put"]
 
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set
@@ -386,7 +388,7 @@ final class DchConnection: @unchecked Sendable {
             let reply: DchControlOps.Reply = { self.finalReply($0) }
             commandTask = Task { await commands.handle(type, payload, reply: reply) }
         case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.library,
-             DchFrame.pin, DchFrame.forget, DchFrame.forgetAll,
+             DchFrame.putPhoneSnippets, DchFrame.pin, DchFrame.forget, DchFrame.forgetAll,
              DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.addClipboardHistory:
             // #591: off this queue, unlike kill: the reads fork dch and a restart can
             // take minutes, while every connection (and each attached pty's send
@@ -403,6 +405,7 @@ final class DchConnection: @unchecked Sendable {
                 let reply: DchControlOps.Reply = { self.finalReply($0) }
                 switch type {
                 case DchFrame.library: library.handle(payload, reply: reply)
+                case DchFrame.putPhoneSnippets: library.put(payload, reply: reply)
                 case DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.addClipboardHistory:
                     clipboard.handle(type, payload, send: { self.sendStreamed($0) }, reply: reply)
                 default: ops.handle(type, payload, reply: reply)
@@ -545,6 +548,19 @@ struct DchLibraryOps: Sendable {
         var bytes = Data()
         var json: Any?
         var error: String?
+    }
+
+    /// #731: the phones' own sets, beside snippets.json and never inside it (so not in the etag).
+    var phone: PhoneSnippetStore {
+        dir.map { PhoneSnippetStore(url: $0.appendingPathComponent(PhoneSnippetStore.fileName)) } ?? .live
+    }
+
+    /// #731: 0x2c putPhoneSnippets → ok {count, hash} | error {message}.
+    func put(_ payload: Data, reply: Reply) {
+        switch phone.put(payload) {
+        case let .ok(count, hash): reply(DchFrame.encode(DchFrame.ok, json: ["count": count, "hash": hash]))
+        case let .refused(message): reply(DchControlOps.error(message))
+        }
     }
 
     var urls: (snippets: URL, quicklinks: URL) {
