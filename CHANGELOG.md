@@ -26,6 +26,12 @@ tag from the now-released section and put it on the new top draft.
   whose Claude was already running in the other folder; dch then skipped it. They now leave it out, as dch does. When
   Resume all brings back two records of one name, each result shows on its own row, and
   a by-hand resume hint for a Claude config folder starting with `=` pastes correctly in zsh.
+- **Prosper as the default browser opens local HTML files and never loses a link.** With
+  Prosper set as the default browser, a .html file opened from Finder or another app did
+  nothing, and so did every link while the URL Dispatcher extension was off, or the link
+  that launched Prosper. Opened files now go through the URL Dispatcher like any link
+  (its rules can match them). Without the URL Dispatcher, Prosper opens the link in your
+  fallback browser, or Safari, and never in itself.
 
 ## v2.164.0
 

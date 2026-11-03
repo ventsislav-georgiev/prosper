@@ -2,8 +2,9 @@
 --
 -- Flow: make Prosper the default browser (Settings → URL Dispatcher, or the
 -- "Make Prosper the Default Browser" command). macOS then hands every clicked
--- http/https link to Prosper as a `url.open` event { url = "..." }. `on_url`
--- picks a browser by domain rule and re-opens the link there.
+-- http/https link to Prosper as a `url.open` event { url = "..." }, and every
+-- opened .html file as a file:// URL. `on_url` picks a browser by rule (a rule
+-- matches a file URL like any link) and re-opens the link there.
 --
 -- Nothing is hardcoded: the domain rules and the fallback browser live in
 -- host.prefs and are edited in the settings pane below. With no rules set, every
@@ -184,7 +185,8 @@ function on_url(payload)
     if type(data) ~= "table" then return end
     local url = data.url
     if type(url) ~= "string" or #url == 0 then return end
-    if load_clean() then url = clean_url(url) end
+    -- A file:// URL's query is the page's own (local app state), never a tracker.
+    if load_clean() and url:sub(1, 7):lower() ~= "file://" then url = clean_url(url) end
     local browser = pick(url) or load_fallback()
     -- Loop guard: Prosper IS the system default now, so opening with a nil/own
     -- bundle id would bounce the link straight back to us forever. Fall back to a

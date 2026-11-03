@@ -530,11 +530,28 @@ enum URLServices {
     static func open(_ urlString: String, bundleID: String?) -> Bool {
         guard let url = URL(string: normalizeScheme(urlString)) else { return false }
         let ws = NSWorkspace.shared
-        if let bundleID, let appURL = ws.urlForApplication(withBundleIdentifier: bundleID) {
+        if let appURL = openTarget(for: url, bundleID: bundleID) {
             ws.open([url], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration())
             return true
         }
         return ws.open(url)
+    }
+
+    /// The app to open `url` with; nil = let macOS pick its default. The requested
+    /// browser when installed. Otherwise the default — unless that is Prosper itself
+    /// (it is whenever Prosper is the default browser): handing the link to it would
+    /// come straight back as url.open, route to the same missing browser, and loop
+    /// forever. Then Safari. Resolution closures are the test seam.
+    static func openTarget(
+        for url: URL, bundleID: String?,
+        appFor: (String) -> URL? = { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) },
+        defaultAppID: (URL) -> String? = {
+            NSWorkspace.shared.urlForApplication(toOpen: $0).flatMap { Bundle(url: $0)?.bundleIdentifier }
+        }
+    ) -> URL? {
+        if let bundleID, let app = appFor(bundleID) { return app }
+        guard defaultAppID(url) == OpenedLinkRouter.selfBundleID else { return nil }
+        return appFor(OpenedLinkRouter.safeFallback)
     }
 
     /// A scheme-less link (e.g. "github.com") parses into a URL with `scheme == nil`,
@@ -570,6 +587,57 @@ enum URLServices {
         let http = LSSetDefaultHandlerForURLScheme("http" as CFString, bundleID as CFString)
         let https = LSSetDefaultHandlerForURLScheme("https" as CFString, bundleID as CFString)
         return http == noErr && https == noErr
+    }
+}
+
+/// Every link Prosper receives as the default browser goes through here: a GURL
+/// event, an opened .html file (odoc -> application(_:open:), as a file:// URL), or
+/// either one arriving at a cold launch. Never drops a link: with no enabled
+/// `url.open` subscriber (the url-dispatcher is opt-in) Prosper opens it itself in
+/// the dispatcher's saved fallback browser, else Safari, never Prosper (that would
+/// bounce the link straight back here forever).
+@MainActor
+final class OpenedLinkRouter {
+    nonisolated static let selfBundleID = "eu.illegible.prosper"
+    nonisolated static let safeFallback = "com.apple.Safari"
+
+    private let hasHandler: () -> Bool
+    private let broadcast: (_ payloadJSON: String) -> Void
+    private let fallbackBrowser: () -> String?
+    /// Native open seam; tests replace it so nothing is ever opened.
+    private let open: (_ url: String, _ bundleID: String) -> Void
+    /// Links delivered before the extensions are loaded (a cold launch by a link or
+    /// file arrives before applicationDidFinishLaunching). nil once `ready()` ran.
+    private var pending: [String]? = []
+
+    init(hasHandler: @escaping () -> Bool,
+         broadcast: @escaping (_ payloadJSON: String) -> Void,
+         fallbackBrowser: @escaping () -> String?,
+         open: @escaping (_ url: String, _ bundleID: String) -> Void = { URLServices.open($0, bundleID: $1) }) {
+        self.hasHandler = hasHandler
+        self.broadcast = broadcast
+        self.fallbackBrowser = fallbackBrowser
+        self.open = open
+    }
+
+    func receive(_ urlString: String) {
+        if pending != nil { pending?.append(urlString); return }
+        guard hasHandler() else {
+            var browser = fallbackBrowser() ?? ""
+            if browser.isEmpty || browser == Self.selfBundleID { browser = Self.safeFallback }
+            open(urlString, browser)
+            return
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: ["url": urlString]),
+              let payload = String(data: data, encoding: .utf8) else { return }
+        broadcast(payload)
+    }
+
+    /// Extensions are loaded: deliver anything that arrived before, in order.
+    func ready() {
+        let queued = pending ?? []
+        pending = nil
+        queued.forEach(receive)
     }
 }
 

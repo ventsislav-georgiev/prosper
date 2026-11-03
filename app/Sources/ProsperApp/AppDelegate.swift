@@ -314,6 +314,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
             forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+        // Extensions are discovered: deliver links that cold-launched us.
+        openedLinks.ready()
         // One-shot startup event so a stateless extension can render its menubar /
         // restore its session at launch (the equivalent of openlid's M.start()).
         extensions.broadcastEvent("system.launch")
@@ -647,13 +649,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// slot), Translate (⌥L), Open Settings (⌥\), clipboard, window management —
     /// is rebindable and clearable. Safe to call again after a rebind — it tears
     /// down and rebuilds the whole set.
-    /// GURL Apple Event (a link opened while Prosper is the default browser). Forward
-    /// the URL to extensions as `url.open`; a url-dispatcher extension then rewrites or
-    /// re-opens it in the real browser. With no handler extension the link is dropped
-    /// — only set Prosper default once such an extension is enabled.
+    /// GURL Apple Event (a link opened while Prosper is the default browser).
     @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent: NSAppleEventDescriptor) {
         guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue
         else { return }
+        handleOpenedLink(urlString)
+    }
+
+    /// Opened documents (odoc): macOS hands public.html to the default browser, so a
+    /// .html file opened from Finder, `open`, or another app lands here as a file://
+    /// URL. Also every GURL/odoc that cold-launches Prosper, before the GURL handler
+    /// above is installed.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach { handleOpenedLink($0.absoluteString) }
+    }
+
+    /// Forward a link to extensions as `url.open` (a url-dispatcher rewrites/re-opens
+    /// it in the real browser); with no handler, OpenedLinkRouter opens it natively.
+    private func handleOpenedLink(_ urlString: String) {
         // prosper:// is our own control scheme (e.g. `prosper://sleep`, the remote
         // sleep command). Handle it here, never broadcast it to extensions as a link.
         if let u = URL(string: urlString), u.scheme == "prosper" {
@@ -663,10 +676,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: ["url": urlString]),
-              let payload = String(data: data, encoding: .utf8) else { return }
-        extensions.broadcastEvent("url.open", payloadJSON: payload)
+        openedLinks.receive(urlString)
     }
+
+    private lazy var openedLinks = OpenedLinkRouter(
+        hasHandler: { [weak self] in self?.extensions.hasSubscribers("url.open") ?? false },
+        broadcast: { [weak self] in self?.extensions.broadcastEvent("url.open", payloadJSON: $0) },
+        fallbackBrowser: { [weak self] in
+            self?.extensions.prefValue(extensionID: "com.prosper.url-dispatcher", key: "fallback")
+        })
 
     /// Re-register this bundle with LaunchServices so its declared http/https
     /// URL-scheme handling is enumerated in the Default-web-browser picker.

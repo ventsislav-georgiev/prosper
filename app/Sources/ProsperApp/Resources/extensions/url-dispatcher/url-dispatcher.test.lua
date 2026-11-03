@@ -190,6 +190,34 @@ h.eq(env.prefs["clean_tracking"], "true", "set:clean_tracking on")
 G.settings_action("url-dispatcher", "set:clean_tracking", "false")
 h.eq(env.prefs["clean_tracking"], "false", "set:clean_tracking off")
 
+-- ── opened local files (#721): .html arrives as a file:// url.open ──────────
+-- 23. a rule matches a file URL like any link
+host.prefs.set("routes", J{ { match = "/Sites/", browser = "org.mozilla.firefox" } })
+host.prefs.set("fallback", "com.google.Chrome")
+reset()
+on_url(payload("file:///Users/me/Sites/index.html"))
+h.eq(lastBrowser(), "org.mozilla.firefox", "file URL routed by rule")
+h.eq(env.urlOpened.url, "file:///Users/me/Sites/index.html", "file URL forwarded intact")
+
+-- 24. unmatched file URL -> fallback browser
+reset()
+on_url(payload("file:///tmp/page.htm"))
+h.eq(lastBrowser(), "com.google.Chrome", "unmatched file URL -> fallback")
+
+-- 25. tracker cleaning never rewrites a file URL (its query is the page's own)
+host.prefs.set("clean_tracking", "true")
+reset()
+on_url(payload("file:///tmp/r.xhtml?utm_source=report&fbclid=x#top"))
+h.eq(env.urlOpened.url, "file:///tmp/r.xhtml?utm_source=report&fbclid=x#top", "clean on: file URL untouched")
+reset()
+on_url(payload("FILE:///tmp/r.html?utm_source=report"))
+h.eq(env.urlOpened.url, "FILE:///tmp/r.html?utm_source=report", "clean on: uppercase FILE scheme untouched")
+reset()
+on_url(payload("https://x.com/a?utm_source=z"))
+h.eq(env.urlOpened.url, "https://x.com/a", "clean on: web link still cleaned next to the file guard")
+host.prefs.set("clean_tracking", "false")
+host.prefs.set("routes", J{ { match = "github.com", browser = "com.google.Chrome" } })
+
 -- ── performance: on_url hot path ─────────────────────────────────────────────
 host.prefs.set("routes", J{
     { match = "github.com", browser = "com.google.Chrome" },
