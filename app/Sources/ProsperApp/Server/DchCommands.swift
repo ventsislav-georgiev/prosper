@@ -21,11 +21,12 @@ struct DchCommandOps: Sendable {
     struct FanOps: Sendable {
         /// Unprivileged SMC read; [] on a Mac with no fans.
         var read: @Sendable () -> [FanReading] = { FanInfo.read() }
-        /// The first fan's engage (the popup's setManualReply at the cold ceiling).
+        /// The first fan's engage (the popup's setManualReply at the cold ceiling). Never the
+        /// approval modal (#728): an unapproved helper replies `.needsApproval`.
         var firstReply: @Sendable (Int, Double) async -> FanManualReply = {
-            await FanControlHelper.setManualReply($0, rpm: $1, timeout: FanControlHelper.firstEngageTimeout) }
-        /// Every other fan's engage (the popup's setManual).
-        var engage: @Sendable @MainActor (Int, Double) async -> Bool = { await FanControlHelper.setManual($0, rpm: $1) }
+            await FanControlHelper.setManualReply($0, rpm: $1, timeout: FanControlHelper.firstEngageTimeout, presentModal: false) }
+        /// Every other fan's engage (the popup's setManual), also without the modal.
+        var engage: @Sendable @MainActor (Int, Double) async -> Bool = { await FanControlHelper.setManual($0, rpm: $1, presentModal: false) }
     }
 
     typealias Reply = DchControlOps.Reply
@@ -120,13 +121,17 @@ struct DchCommandOps: Sendable {
         reply(await Self.invoke(id, argument, registry))
     }
 
-    /// #724: "60", "60%", " 60 % " → 60; nil when not a number in 0...100.
+    /// #724: "60", "60.5", "60%", " 60 % " → the number; nil unless plain decimal digits in
+    /// 0...100. #728: no sign, hex, exponent, nan or inf (Double("…") takes them all).
     static func percent(_ s: String) -> Double? {
         var t = s.trimmingCharacters(in: .whitespaces)
         if t.hasSuffix("%") { t = String(t.dropLast()).trimmingCharacters(in: .whitespaces) }
-        guard let v = Double(t), (0...100).contains(v) else { return nil }
+        guard t.wholeMatch(of: /[0-9]+(\.[0-9]+)?/) != nil, let v = Double(t), v <= 100 else { return nil }
         return v
     }
+
+    /// #728: the phone's text for an unapproved helper, in place of the popup's modal.
+    static let needsApproval = "Prosper's fan helper needs approval on the Mac: System Settings › General › Login Items"
 
     /// #724: the popup's own Automatic and Manual paths. Manual maps the percent onto each fan's
     /// min...max like the popup's slider and replies with the target rpm: the fans ramp for
@@ -136,13 +141,15 @@ struct DchCommandOps: Sendable {
         let adjustable = fans.read().filter { $0.max > $0.min }.sorted { $0.id < $1.id }
         guard !adjustable.isEmpty else { return Self.error("no adjustable fans") }
         if id == Self.fanAuto {
-            await StatsPopupView.selectAuto(fanIDs: adjustable.map(\.id)).value
+            await StatsPopupView.selectAuto(fanIDs: adjustable.map(\.id), presentModal: false).value
             return Self.shape("Auto")
         }
         guard let pct = Self.percent(argument) else { return Self.error(Self.badSpeed) }
         let rpms = adjustable.map { ($0.id, $0.min + pct / 100 * ($0.max - $0.min)) }
         let (saved, reply) = await Self.engage(Dictionary(uniqueKeysWithValues: rpms), fans)
-        guard saved else { return Self.error(reply.errorText ?? "fans stayed automatic") }
+        guard saved else {
+            return Self.error(reply == .needsApproval ? Self.needsApproval : reply.errorText ?? "fans stayed automatic")
+        }
         let each = rpms.map { String(Int($0.1.rounded())) }
         let shown = Set(each).count == 1 ? each[0] : each.joined(separator: " / ")
         return Self.shape("Manual · \(shown) rpm\ttarget at \(String(format: "%g", pct))%")

@@ -83,6 +83,7 @@ enum FanManualReply: Equatable {
     case refused       // live helper replied false; the target is below macOS's speed
     case settling      // live helper replied false; the target is at or above it (#586)
     case unavailable   // no reply from the helper
+    case needsApproval // the helper's Login Items switch is off (#728); the popup words it as unavailable
 
     /// Collapse one burst of per-fan replies: any refusal wins (the latch is global),
     /// then any unreachable fan; all engaged → engaged.
@@ -114,7 +115,7 @@ enum FanManualReply: Equatable {
         case .settling:
             return "The overheat cut-off just handed the fans to macOS. "
                 + "Try again in a few seconds."
-        case .unavailable:
+        case .unavailable, .needsApproval:
             return "Couldn’t enable manual control — the Prosper helper isn’t "
                 + "running or wasn’t approved. Turn on “Prosper” under System Settings ▸ "
                 + "General ▸ Login Items ▸ Allow in the Background, then try again."
@@ -234,12 +235,14 @@ enum FanControlHelper {
 
     /// Open (or reuse) the daemon connection, lazily registering the shared helper.
     /// Returns nil when registration isn't available (e.g. unsigned dev build) — the
-    /// caller then leaves fans on auto.
-    private static func ensureConnection() async -> NSXPCConnection? {
-        guard await LidSleepHelper.ensureRegistered(feature: "Manual fan control") else { return nil }
+    /// caller then leaves fans on auto. `presentModal: false` is the phone's (#728): an
+    /// unapproved helper comes back as `.needsApproval`, never as a modal on an unattended Mac.
+    private static func ensureConnection(presentModal: Bool = true) async -> (NSXPCConnection?, LidSleepHelper.RegisterOutcome) {
+        let outcome = await LidSleepHelper.ensureRegisteredOutcome(feature: "Manual fan control", presentModal: presentModal)
+        guard outcome == .enabled else { return (nil, outcome) }
         let c = connection ?? makeConnection()
         connection = c
-        return c
+        return (c, outcome)
     }
 
     // MARK: - Public ops (called from the settings pane + wake/sleep)
@@ -247,19 +250,20 @@ enum FanControlHelper {
     /// Force one fan to a manual RPM. Holds the connection open so the daemon keeps
     /// the manual pin alive; a drop (crash/disable) resets it. Returns success.
     @discardableResult
-    static func setManual(_ index: Int, rpm: Double, timeout: TimeInterval = 12) async -> Bool {
-        await setManualReply(index, rpm: rpm, timeout: timeout) == .engaged
+    static func setManual(_ index: Int, rpm: Double, timeout: TimeInterval = 12, presentModal: Bool = true) async -> Bool {
+        await setManualReply(index, rpm: rpm, timeout: timeout, presentModal: presentModal) == .engaged
     }
 
     /// `setManual` keeping the helper's refusal apart from an unreachable helper.
     /// `macOSRPM` (the test seam) is read off-main, and only on a refusal.
-    static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12,
+    static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12, presentModal: Bool = true,
                                macOSRPM: @escaping @Sendable (Int) -> Double? = { FanInfo.macOSRPM($0) }) async -> FanManualReply {
         // In flight from before the registration await: a willSleep while this engage
         // waits there must still reset the fans an earlier engage pinned (#343).
         engagesInFlight += 1
         defer { engagesInFlight -= 1 }
-        guard let c = await ensureConnection() else { return .unavailable }
+        let (opened, outcome) = await ensureConnection(presentModal: presentModal)
+        guard let c = opened else { return outcome == .needsApproval ? .needsApproval : .unavailable }
         // A manual write is manual intent, even before the popup saves the pref (it
         // saves it only after the first engage lands), so this arms unconditionally.
         armRecoveryLifecycle()
@@ -371,10 +375,10 @@ enum FanControlHelper {
     /// opt-in fast-re-engage pref: the daemon keeps the controller unlock held (and
     /// supervised) so the next manual engage skips the ~8 s thermalmonitord yield.
     @discardableResult
-    static func setAuto(_ index: Int) async -> Bool {
+    static func setAuto(_ index: Int, presentModal: Bool = true) async -> Bool {
         let c: NSXPCConnection
         if let existing = connection { c = existing }
-        else if let opened = await ensureConnection() { c = opened }
+        else if let opened = await ensureConnection(presentModal: presentModal).0 { c = opened }
         else { return false }
         let hold = Preferences.fanHoldUnlock
         if !Preferences.fanManualEnabled { removeReclaimMonitor() }   // hold-unlock "Automatic" keeps the connection

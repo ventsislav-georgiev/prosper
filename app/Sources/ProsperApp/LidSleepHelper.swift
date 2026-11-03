@@ -250,21 +250,25 @@ enum LidSleepHelper {
     /// permission row's Open button — always on explicit action or launch re-apply.
     @discardableResult
     static func ensureRegistered(feature: String = "This feature", presentModal: Bool = true) async -> Bool {
+        await ensureRegisteredOutcome(feature: feature, presentModal: presentModal) == .enabled
+    }
+
+    /// `ensureRegistered` keeping `.needsApproval` apart from `.failed`: the phone's fan
+    /// commands name the Login Items fix instead of showing the modal (#728).
+    static func ensureRegisteredOutcome(feature: String, presentModal: Bool) async -> RegisterOutcome {
         let outcome = await sharedRegistration().value
         switch outcome {
         case .enabled:
             storeCache(true)
-            return true
         case .needsApproval:
             storeCache(false)
             // The settings "Background Helper → Open" row opens Login Items itself, so
             // it suppresses the modal (presentModal: false) to avoid double-prompting.
             if presentModal { HelperApproval.presentNeedsApproval(feature: feature) }
-            return false
         case .failed:
             storeCache(false)
-            return false
         }
+        return outcome
     }
 
     // MARK: - Legacy label migration (one-time, on launch)

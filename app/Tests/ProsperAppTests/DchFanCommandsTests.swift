@@ -49,7 +49,7 @@ final class DchFanCommandsTests: XCTestCase {
     }
 
     /// Two adjustable fans and one with no range (never a target).
-    private static let twoFans = [
+    nonisolated private static let twoFans = [
         FanReading(id: 1, min: 1000, max: 5000, current: 1500, manual: false),
         FanReading(id: 0, min: 1200, max: 6000, current: 1800, manual: false),
         FanReading(id: 2, min: 2000, max: 2000, current: 2000, manual: false),
@@ -81,6 +81,36 @@ final class DchFanCommandsTests: XCTestCase {
         FanControlHelper.inject(sleeping: false)
         try await body()
     }
+
+    /// #728: a first engage that fails, or lands while asleep, releases on a Task of its own
+    /// (firstEngageLanded). The test hands that release this fake and waits until it reset and
+    /// tore down, so nothing the test started can outlive it and reset a sibling's fake.
+    private func releaseSink() -> FakeConnection {
+        let fake = FakeConnection()
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        return fake
+    }
+
+    private func awaitRelease(_ fake: FakeConnection, line: UInt = #line) async {
+        for _ in 0..<300 where FanControlHelper.connection != nil { try? await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(fake.proxy.resets, 1, "the release reset the fans", line: line)
+        XCTAssertTrue(FanControlHelper.connection == nil, "the release tore down", line: line)
+    }
+
+    /// #728: fakes the helper registration's outcome and records the approval modal instead of
+    /// showing it. `log` gets "register" per registration and "modal <feature>" per modal.
+    private func withRegistration(_ outcome: LidSleepHelper.RegisterOutcome, _ body: (Log) async throws -> Void) async rethrows {
+        let registration = LidSleepHelper.registration, present = HelperApproval.present
+        defer { LidSleepHelper.registration = registration; HelperApproval.present = present; HelperApproval.lastShown = .distantPast }
+        let log = Log()
+        LidSleepHelper.registration = { log.add("register"); return outcome }
+        HelperApproval.present = { log.add("modal \($0)") }
+        HelperApproval.lastShown = .distantPast
+        try await body(log)
+    }
+
+    /// The phone's ops with the real FanOps engages (only the SMC read faked).
+    private static let realEngages = DchCommandOps(enabled: { true }, registry: { nil }, fans: .init(read: { twoFans }))
 
     // MARK: Frames
 
@@ -135,12 +165,16 @@ final class DchFanCommandsTests: XCTestCase {
     // MARK: Argument
 
     func testPercentParsing() {
-        for (s, want) in [("60", 60.0), ("60%", 60), (" 60 % ", 60), ("0", 0), ("100%", 100), ("12.5", 12.5)] {
+        for (s, want) in [("60", 60.0), ("60%", 60), (" 60 % ", 60), ("0", 0), ("100%", 100), ("12.5", 12.5),
+                          ("60.5", 60.5), ("0.0", 0), ("007", 7), ("100.0%", 100)] {
             XCTAssertEqual(DchCommandOps.percent(s), want, s)
         }
-        for s in ["", "%", "abc", "-1", "101", "100.5", "60%%", "nan", "inf", "6 0"] {
+        // #728: plain decimal digits only. Double("…") took every one of the signed, hex and exponent forms.
+        for s in ["", "%", "abc", "-1", "101", "100.5", "60%%", "nan", "inf", "6 0",
+                  "-0", "-0%", "-0.0", "+60", "+0", "0x40", "0x1p4", "1e1", "6e1%", "60.", ".5", "60,5", "\u{0666}\u{0660}"] {
             XCTAssertNil(DchCommandOps.percent(s), s)
         }
+        XCTAssertEqual(DchCommandOps.percent("0")?.sign, .plus, "zero is never negative")
     }
 
     func testBadSpeedIsAPlainErrorAndEngagesNothing() async {
@@ -189,10 +223,12 @@ final class DchFanCommandsTests: XCTestCase {
     func testManualWhileAsleepSavesNothing() async {
         await withFanState {
             FanControlHelper.inject(sleeping: true)
+            let sink = releaseSink()
             let f = await run(ops(log: Log()), "fans.manual", "60")
             XCTAssertEqual(Self.message(f), "fans stayed automatic")
             XCTAssertFalse(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, [9: 1])
+            await awaitRelease(sink)   // the engage landed asleep: released, and done before the test ends
         }
     }
 
@@ -203,11 +239,79 @@ final class DchFanCommandsTests: XCTestCase {
             for (manual, reply) in [(false, FanManualReply.refused), (false, .settling), (false, .unavailable), (true, .refused)] {
                 Preferences.fanManualEnabled = manual
                 let log = Log()
+                let sink = manual ? nil : releaseSink()   // manual intent kept: nothing is released
                 let f = await run(ops(log: log, first: reply), "fans.manual", "60%")
                 XCTAssertEqual(Self.message(f), try XCTUnwrap(reply.errorText), "\(reply)")
                 XCTAssertEqual(Preferences.fanManualEnabled, manual)
                 XCTAssertEqual(Preferences.fanTargets, [9: 1])
                 XCTAssertFalse(log.calls.contains { $0.hasPrefix("engage") }, "the rest engaged after a refusal")
+                if let sink { await awaitRelease(sink) }
+            }
+        }
+    }
+
+    // MARK: Helper approval (#728)
+
+    /// The phone's Manual on an unapproved helper: a plain error naming the fix, never the modal.
+    func testManualNeedsApprovalNamesTheFixWithoutTheModal() async {
+        await withRegistration(.needsApproval) { log in
+            await withFanState {
+                let sink = releaseSink()
+                let f = await run(Self.realEngages, "fans.manual", "60")
+                XCTAssertEqual(Self.message(f), "Prosper's fan helper needs approval on the Mac: System Settings › General › Login Items")
+                XCTAssertEqual(log.calls, ["register"], "the modal came up, or the engage never asked")
+                XCTAssertFalse(Preferences.fanManualEnabled)
+                XCTAssertEqual(Preferences.fanTargets, [9: 1])
+                await awaitRelease(sink)
+
+                // The other fans' engage registers again on its own: no modal there either.
+                let firstLanded = DchCommandOps(enabled: { true }, registry: { nil },
+                                                fans: .init(read: { Self.twoFans }, firstReply: { _, _ in .engaged }))
+                _ = await run(firstLanded, "fans.manual", "60")
+                XCTAssertEqual(log.calls, ["register", "register"])
+            }
+        }
+    }
+
+    /// Any other unavailability keeps the popup's "unavailable" text; still no modal.
+    func testManualRegistrationFailureKeepsTheUnavailableText() async throws {
+        try await withRegistration(.failed) { log in
+            try await withFanState {
+                let sink = releaseSink()
+                let f = await run(Self.realEngages, "fans.manual", "60")
+                XCTAssertEqual(Self.message(f), try XCTUnwrap(FanManualReply.unavailable.errorText))
+                XCTAssertEqual(log.calls, ["register"])
+                await awaitRelease(sink)
+            }
+        }
+    }
+
+    /// The popup's own engage keeps its modal and its words: the default stays presentModal true.
+    func testPopupEngageStillPresentsTheModal() async {
+        await withRegistration(.needsApproval) { log in
+            await withFanState {
+                let sink = releaseSink()
+                let (saved, reply) = await StatsPopupView.engageManual([0: 3000])
+                XCTAssertFalse(saved)
+                XCTAssertEqual(reply, .needsApproval)
+                XCTAssertEqual(reply.errorText, FanManualReply.unavailable.errorText, "the popup's text changed")
+                XCTAssertEqual(log.calls, ["register", "modal Manual fan control"])
+                await awaitRelease(sink)
+            }
+        }
+    }
+
+    /// Auto with hold-unlock and no connection registers through setAuto: the phone's run shows no
+    /// modal and still replies Auto (no connection holds no pin); the popup's selectAuto shows it.
+    func testAutoWithHoldUnlockNeedsApprovalShowsNoModal() async {
+        await withRegistration(.needsApproval) { log in
+            await withFanState {
+                Preferences.fanHoldUnlock = true
+                let f = await run(Self.realEngages, "fans.auto")
+                XCTAssertEqual(Self.result(f), ["text": "Auto"])
+                XCTAssertEqual(log.calls, ["register", "register"], "one setAuto per adjustable fan")
+                await StatsPopupView.selectAuto(fanIDs: [0]).value
+                XCTAssertEqual(log.calls, ["register", "register", "register", "modal Manual fan control"])
             }
         }
     }

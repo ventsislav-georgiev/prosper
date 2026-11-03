@@ -1005,14 +1005,15 @@ struct StatsPopupView: View {
 
     /// The popup's Automatic without the view state, shared with the phone's "Fans: Auto"
     /// (#724): manual intent off, saved targets cleared, then every fan back to macOS. The
-    /// Task is the helper half; the popup leaves it running, the phone awaits it.
+    /// Task is the helper half; the popup leaves it running, the phone awaits it. The phone
+    /// passes `presentModal: false` (#728): no approval modal on an unattended Mac.
     @discardableResult
-    @MainActor static func selectAuto(fanIDs ids: [Int]) -> Task<Void, Never> {
+    @MainActor static func selectAuto(fanIDs ids: [Int], presentModal: Bool = true) -> Task<Void, Never> {
         Preferences.fanManualEnabled = false
         Preferences.fanTargets = [:]
         FanControlHelper.userAdjusting = false
         if Preferences.fanHoldUnlock {
-            return Task { for i in ids { _ = await FanControlHelper.setAuto(i) } }
+            return Task { for i in ids { _ = await FanControlHelper.setAuto(i, presentModal: presentModal) } }
         }
         return Task { await FanControlHelper.resetAll(teardown: true) }
     }
