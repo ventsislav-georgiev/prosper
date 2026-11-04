@@ -860,9 +860,9 @@ final class FanReclaimRecoveryTests: XCTestCase {
         let reclaimed = [0, 1].map { FanReading(id: $0, min: 1000, max: 5000, current: 3000, manual: false) }
         let t = Date()
         var resets: [Bool] = []
+        let fraction = try XCTUnwrap(FanReclaimRecovery.manualFraction(targets: low, readings: reclaimed))
         FanControlHelper.savePreset(low, now: t, reset: {})
         XCTAssertTrue(FanControlHelper.presetPending)
-        let fraction = try XCTUnwrap(FanReclaimRecovery.manualFraction(targets: Preferences.fanTargets, readings: reclaimed))
         XCTAssertLessThan(fraction, FanReclaimRecovery.minimumManualFraction)
 
         // Latched: the re-apply is refused; intent and the preset stay, one plain reset.

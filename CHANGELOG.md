@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.168.0 *(unreleased)*
+## v2.168.0
 
 - **Preset manual fan speed after an overheat cut-off.** While macOS holds the fans after
   the overheat cut-off, you can still pick Manual and a speed in the Sensors popup (or
