@@ -51,7 +51,7 @@ enum FanReclaimRecovery {
     static func pendingText(manualIntent: Bool, readings: [FanReading], targets: [Int: Double]) -> String? {
         guard manualIntent, reclaimDetected(readings),
               let fraction = manualFraction(targets: targets, readings: readings) else { return nil }
-        return "Waiting for macOS to hand back the fans (the overheat cut-off tripped). "
+        return "Waiting for macOS to hand back the fans. "
             + "Prosper sets \(StatsFormat.percent(fraction)) as soon as it can."
     }
 

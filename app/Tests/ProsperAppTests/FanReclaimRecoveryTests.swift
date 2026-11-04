@@ -797,7 +797,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
                     FanReading(id: 2, min: 2000, max: 2000, current: 2000, manual: true)]   // no range: ignored
         let preset: [Int: Double] = [0: 3400, 1: 3400]   // 60 %
         let line = try XCTUnwrap(FanReclaimRecovery.pendingText(manualIntent: true, readings: auto, targets: preset))
-        XCTAssertEqual(line, "Waiting for macOS to hand back the fans (the overheat cut-off tripped). "
+        XCTAssertEqual(line, "Waiting for macOS to hand back the fans. "
                        + "Prosper sets 60% as soon as it can.")
         XCTAssertNil(FanReclaimRecovery.pendingText(manualIntent: false, readings: auto, targets: preset))
         var taken = auto
