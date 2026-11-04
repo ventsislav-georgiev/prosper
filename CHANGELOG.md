@@ -18,7 +18,14 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.167.0 *(unreleased)*
+## v2.168.0 *(unreleased)*
+
+- **Preset manual fan speed after an overheat cut-off.** While macOS holds the fans after
+  the overheat cut-off, you can still pick Manual and a speed in the Sensors popup (or
+  from your iPhone). Prosper keeps it as a preset, shows that it's waiting, and applies it
+  on its own as soon as macOS hands the fans back. You no longer have to keep retrying.
+
+## v2.167.0
 
 - **Your iPhone's snippets on the Mac.** With "Sync library" on, the phone now sends its own
   snippets to the Mac. They show in snippet search (`sn`) and expand by keyword like the

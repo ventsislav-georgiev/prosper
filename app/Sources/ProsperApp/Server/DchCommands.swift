@@ -189,7 +189,12 @@ struct DchCommandOps: Sendable {
         }
         let each = rpms.map { String(Int($0.1.rounded())) }
         let shown = Set(each).count == 1 ? each[0] : each.joined(separator: " / ")
-        return Self.shape("Manual · \(shown) rpm\ttarget at \(String(format: "%g", pct))%")
+        let target = "target at \(String(format: "%g", pct))%"
+        // #737: the helper's latch refused it; saved as the preset, applied by the Mac's recovery.
+        guard !reply.isLatchRefusal else {
+            return Self.shape("Manual pending · \(shown) rpm\t\(target), applies when the Mac cools down")
+        }
+        return Self.shape("Manual · \(shown) rpm\t\(target)")
     }
 
     @MainActor static func engage(_ targets: [Int: Double], _ fans: FanOps) async -> (saved: Bool, reply: FanManualReply) {

@@ -830,6 +830,10 @@ struct StatsPopupView: View {
 
         if let err = fanError {
             Text(err).font(Neon.font(10)).foregroundStyle(.red).padding(.top, sz(2))
+        } else if fanManual, !fanBusy, let wait = FanReclaimRecovery.pendingText(
+            manualIntent: Preferences.fanManualEnabled, readings: fans, targets: fanTargets) {
+            // #737: a preset the overheat latch refused; recovery applies it, no click needed.
+            Text(wait).font(Neon.font(10)).foregroundStyle(Neon.textSecondary).padding(.top, sz(2))
         }
     }
 
@@ -989,6 +993,7 @@ struct StatsPopupView: View {
             fanManual = true
             fanTargets = targets
             fanOwner = FanTargetOwner()
+            refreshFans()   // the pending line reads the fans: no stale pre-engage frame
         }
     }
 
@@ -1046,6 +1051,19 @@ struct StatsPopupView: View {
         commitAll(t)
     }
 
+    /// #737: a commit the helper's latch refused keeps `targets` as the pending preset instead of
+    /// reverting (savePreset hands macOS every fan; recovery applies the preset when the helper
+    /// accepts). Never after Automatic (here or from the phone) turned manual off meanwhile.
+    /// Engaged: the targets landed. `reset` is the test seam. True = kept, no revert.
+    @discardableResult
+    @MainActor static func commitKeptAsPreset(_ reply: FanManualReply, _ targets: [Int: Double],
+                                              reset: @escaping @MainActor () async -> Void = { _ = await FanControlHelper.resetAll() }) -> Bool {
+        if reply == .engaged { FanControlHelper.presetPending = false }
+        guard reply.isLatchRefusal, Preferences.fanManualEnabled else { return false }
+        FanControlHelper.savePreset(targets, reset: reset)
+        return true
+    }
+
     private func clampRPM(_ v: Double, _ fan: FanReading) -> Double {
         Swift.min(Swift.max(v, fan.min), fan.max)
     }
@@ -1068,8 +1086,9 @@ struct StatsPopupView: View {
                 // A newer drag/commit owns the slider (and the status line) now.
                 guard fanTargets == targets, !fanOwner.isDragging else { return }
                 let reply = FanManualReply.combine(replies)
+                guard !Self.commitKeptAsPreset(reply, targets) else { fanError = nil; return }
                 fanError = reply.errorText
-                // Refused: the hardware isn't running these targets — revert once to the
+                // Unavailable: the hardware isn't running these targets — revert once to the
                 // last committed ones.
                 guard reply != .engaged else { return }
                 Preferences.fanTargets = previous

@@ -39,6 +39,19 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
     }
 
+    /// #737: the launch re-apply marks saved intent pending before it starts, so a refused
+    /// launch re-apply keeps a low preset instead of the floor dropping it.
+    @MainActor
+    func testLaunchReapplyMarksThePresetPending() {
+        let previousManualIntent = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = previousManualIntent; FanControlHelper.presetPending = false }
+        Preferences.fanManualEnabled = true
+        FanControlHelper.presetPending = false
+        var pendingAtStart: Bool?
+        FanControlHelper.reapplyFromPreferences(start: { pendingAtStart = FanControlHelper.presetPending })
+        XCTAssertEqual(pendingAtStart, true, "the re-apply started without the preset marked pending")
+    }
+
     /// Disabling fan control removes the timer, even with no helper connection open.
     @MainActor
     func testDisableRemovesTheReclaimTimer() async {
@@ -648,11 +661,14 @@ final class FanReclaimRecoveryTests: XCTestCase {
             XCTAssertFalse(saved, "the popup saved the pref after engageRest stopped")
             XCTAssertFalse(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, sentinel)
+            FanControlHelper.presetPending = true   // #737: a saved preset the engage now lands
+            defer { FanControlHelper.presetPending = false }
             (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
                 engage: { _, _ in true }, landed: { _ in true })
             XCTAssertTrue(saved)
             XCTAssertTrue(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, targets)
+            XCTAssertFalse(FanControlHelper.presetPending, "a landed popup engage kept the floor exemption")
         }
     }
 
@@ -681,6 +697,195 @@ final class FanReclaimRecoveryTests: XCTestCase {
         for _ in 0..<200 where FanControlHelper.connection != nil {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+    }
+
+    // MARK: - #737 preset while the overheat latch holds
+
+    /// Drops what a pending save armed (timer, observers, cooldown, flag) so no real reclaim
+    /// tick can reapply the saved targets later in the xctest process.
+    @MainActor
+    private func disarmPreset() async {
+        Preferences.fanManualEnabled = false
+        FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        await FanControlHelper.resetAll(teardown: true)
+        FanControlHelper.removeSleepObservers()
+        FanControlHelper.deferReclaimRetry(now: .distantPast)
+        FanControlHelper.presetPending = false
+    }
+
+    /// The latch's refusal (.refused below macOS's speed, .settling inside the window) saves
+    /// intent and the targets, arms recovery with the next attempt one settle window out, hands
+    /// macOS every fan (no teardown), and engages no other fan.
+    @MainActor
+    func testLatchRefusalSavesThePresetAndArmsRecovery() async {
+        for refusal in [FanManualReply.refused, .settling] {
+            await withPopupFakes { targets, _ in
+                FanControlHelper.presetPending = false
+                let fake = FakeHelperConnection()
+                FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+                var restEngaged: [Int] = []
+                let start = Date()
+                let (saved, reply) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { refusal },
+                    engage: { i, _ in restEngaged.append(i); return true })
+                XCTAssertTrue(saved, "\(refusal)")
+                XCTAssertEqual(reply, refusal)
+                XCTAssertTrue(Preferences.fanManualEnabled, "\(refusal): intent not saved")
+                XCTAssertEqual(Preferences.fanTargets, targets)
+                XCTAssertTrue(FanControlHelper.presetPending)
+                XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed, "\(refusal): recovery not armed")
+                XCTAssertEqual(restEngaged, [], "the rest engaged after a refusal")
+                XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: start.addingTimeInterval(1)), "retry not deferred")
+                XCTAssertTrue(FanControlHelper.reclaimTickAllowed(now: Date().addingTimeInterval(FanReclaimRecovery.retryCooldown)))
+                for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+                XCTAssertEqual(fake.proxy.resets, 1, "macOS was not handed every fan")
+                XCTAssertTrue(FanControlHelper.connection === fake, "a pending preset tore the connection down")
+                await disarmPreset()
+            }
+        }
+    }
+
+    /// No reply from the helper (.unavailable, the 45 s ceiling's answer too, or .needsApproval)
+    /// stays a failure: nothing saved, the timer the engage armed dropped, released.
+    @MainActor
+    func testUnavailableSavesNoPreset() async {
+        for failure in [FanManualReply.unavailable, .needsApproval] {
+            await withPopupFakes { targets, sentinel in
+                FanControlHelper.presetPending = false
+                FanControlHelper.armRecoveryLifecycle()   // what setManualReply does before the call
+                let (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { failure },
+                    engage: { _, _ in XCTFail("engaged after a failure"); return true })
+                XCTAssertFalse(saved, "\(failure)")
+                XCTAssertFalse(Preferences.fanManualEnabled, "\(failure) saved intent")
+                XCTAssertEqual(Preferences.fanTargets, sentinel)
+                XCTAssertFalse(FanControlHelper.presetPending)
+                XCTAssertFalse(FanControlHelper.recoveryLifecycleArmed)
+                await waitForTeardown()
+                await disarmPreset()
+            }
+        }
+    }
+
+    /// The sleep checks hold for a refusal too (#345, #390): a willSleep during the engage, or a
+    /// click taken asleep, saves no preset.
+    @MainActor
+    func testLatchRefusalAcrossASleepSavesNoPreset() async {
+        let sleepDuring: () async -> FanManualReply = {
+            FanControlHelper.willSleep(); FanControlHelper.inject(sleeping: false); return .refused
+        }
+        let clickedAsleep: () async -> FanManualReply = { FanControlHelper.inject(sleeping: false); return .settling }
+        for (name, engageFirst) in [("sleep during", sleepDuring), ("clicked asleep", clickedAsleep)] {
+            await withPopupFakes { targets, sentinel in
+                FanControlHelper.presetPending = false
+                if name == "clicked asleep" { FanControlHelper.willSleep() }
+                let (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: engageFirst,
+                    engage: { _, _ in XCTFail("engaged after a sleep"); return true })
+                XCTAssertFalse(saved, name)
+                XCTAssertFalse(Preferences.fanManualEnabled, "\(name): saved intent")
+                XCTAssertEqual(Preferences.fanTargets, sentinel, name)
+                XCTAssertFalse(FanControlHelper.presetPending, name)
+                await waitForTeardown()
+                await disarmPreset()
+            }
+        }
+    }
+
+    /// The popup's pending line: manual intent on and macOS holding every adjustable fan, with
+    /// the preset's percent; nothing once the helper has any of them, or with intent off.
+    func testPendingLineOnlyWhileMacOSHoldsEveryFan() throws {
+        let auto = [FanReading(id: 0, min: 1000, max: 5000, current: 4000, manual: false),
+                    FanReading(id: 1, min: 1000, max: 5000, current: 4000, manual: false),
+                    FanReading(id: 2, min: 2000, max: 2000, current: 2000, manual: true)]   // no range: ignored
+        let preset: [Int: Double] = [0: 3400, 1: 3400]   // 60 %
+        let line = try XCTUnwrap(FanReclaimRecovery.pendingText(manualIntent: true, readings: auto, targets: preset))
+        XCTAssertEqual(line, "Waiting for macOS to hand back the fans (the overheat cut-off tripped). "
+                       + "Prosper sets 60% as soon as it can.")
+        XCTAssertNil(FanReclaimRecovery.pendingText(manualIntent: false, readings: auto, targets: preset))
+        var taken = auto
+        taken[1] = FanReading(id: 1, min: 1000, max: 5000, current: 3400, manual: true)
+        XCTAssertNil(FanReclaimRecovery.pendingText(manualIntent: true, readings: taken, targets: preset),
+                     "the helper has a fan: not pending")
+        XCTAssertNil(FanReclaimRecovery.pendingText(manualIntent: true, readings: [], targets: preset))
+        XCTAssertNil(FanReclaimRecovery.pendingText(manualIntent: true, readings: auto, targets: [:]))
+    }
+
+    /// A slider commit the latch refused keeps the new targets as the preset (no revert) and
+    /// hands macOS every fan; an unreachable helper, or Automatic landing first, does not.
+    @MainActor
+    func testCommitRefusalKeepsThePreset() async {
+        let previousManualIntent = Preferences.fanManualEnabled, previousTargets = Preferences.fanTargets
+        defer { Preferences.fanManualEnabled = previousManualIntent; Preferences.fanTargets = previousTargets }
+        let dragged: [Int: Double] = [0: 1100, 1: 1200]
+        for refusal in [FanManualReply.refused, .settling] {
+            Preferences.fanManualEnabled = true
+            Preferences.fanTargets = dragged   // the commit's own persist
+            FanControlHelper.presetPending = false
+            let reset = expectation(description: "\(refusal): every fan handed to macOS")
+            XCTAssertTrue(StatsPopupView.commitKeptAsPreset(refusal, dragged, reset: { reset.fulfill() }))
+            await fulfillment(of: [reset], timeout: 1)
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, dragged, "\(refusal) reverted the preset")
+            XCTAssertTrue(FanControlHelper.presetPending)
+            XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
+            await disarmPreset()
+        }
+        let none = expectation(description: "no reset")
+        none.isInverted = true
+        Preferences.fanManualEnabled = true
+        XCTAssertFalse(StatsPopupView.commitKeptAsPreset(.unavailable, dragged, reset: { none.fulfill() }),
+                       "an unreachable helper kept the preset")
+        Preferences.fanManualEnabled = false   // Automatic (popup or phone) landed during the commit
+        XCTAssertFalse(StatsPopupView.commitKeptAsPreset(.refused, dragged, reset: { none.fulfill() }))
+        XCTAssertFalse(Preferences.fanManualEnabled, "a late refusal turned manual back on")
+        FanControlHelper.presetPending = true
+        Preferences.fanManualEnabled = true
+        XCTAssertFalse(StatsPopupView.commitKeptAsPreset(.engaged, dragged, reset: { none.fulfill() }))
+        XCTAssertFalse(FanControlHelper.presetPending, "an engaged commit landed the targets")
+        await fulfillment(of: [none], timeout: 0.3)
+        await disarmPreset()
+    }
+
+    /// The floor: a pending preset under 20 % is held (refused → retry, accepted → restored), never
+    /// dropped; a pin that already ran keeps the floor. Then recovery applies it once the seam
+    /// accepts, and the flag clears, so a later reclaim of that pin has the floor again.
+    @MainActor
+    func testPendingPresetUnderTheFloorIsHeldAndApplied() async throws {
+        XCTAssertEqual(FanReclaimRecovery.disposition(manualFraction: 0.05, reengaged: false, pending: true), .retry)
+        XCTAssertEqual(FanReclaimRecovery.disposition(manualFraction: 0.05, reengaged: true, pending: true), .restored)
+        XCTAssertEqual(FanReclaimRecovery.disposition(manualFraction: 0.05, reengaged: true), .abandonManualIntent)
+        XCTAssertEqual(FanReclaimRecovery.disposition(manualFraction: .nan, reengaged: true, pending: true), .abandonManualIntent)
+
+        let previousManualIntent = Preferences.fanManualEnabled, previousTargets = Preferences.fanTargets
+        defer { Preferences.fanManualEnabled = previousManualIntent; Preferences.fanTargets = previousTargets }
+        let low: [Int: Double] = [0: 1200, 1: 1200]   // 5 % of 1000...5000
+        let reclaimed = [0, 1].map { FanReading(id: $0, min: 1000, max: 5000, current: 3000, manual: false) }
+        let t = Date()
+        var resets: [Bool] = []
+        FanControlHelper.savePreset(low, now: t, reset: {})
+        XCTAssertTrue(FanControlHelper.presetPending)
+        let fraction = try XCTUnwrap(FanReclaimRecovery.manualFraction(targets: Preferences.fanTargets, readings: reclaimed))
+        XCTAssertLessThan(fraction, FanReclaimRecovery.minimumManualFraction)
+
+        // Latched: the re-apply is refused; intent and the preset stay, one plain reset.
+        var engaged: [Int: Double] = [:]
+        let refused = await FanControlHelper.applySavedTargets(reclaimGeneration: FanControlHelper.reclaimGeneration,
+            engage: { _, _, _ in false }, reset: { resets.append($0); return true })
+        XCTAssertFalse(refused)
+        await FanControlHelper.settleReclaim(FanReclaimRecovery.disposition(manualFraction: fraction, reengaged: refused,
+                                                                            pending: FanControlHelper.presetPending),
+                                             now: t) { resets.append($0); return true }
+        XCTAssertTrue(Preferences.fanManualEnabled, "the floor dropped a pending preset")
+        XCTAssertEqual(Preferences.fanTargets, low)
+        XCTAssertEqual(resets, [false])
+        XCTAssertTrue(FanControlHelper.presetPending)
+
+        // The Mac cooled: the helper accepts, the preset lands on every fan with no click.
+        let accepted = await FanControlHelper.applySavedTargets(reclaimGeneration: FanControlHelper.reclaimGeneration,
+            engage: { i, rpm, _ in engaged[i] = rpm; return true }, reset: { resets.append($0); return true })
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(engaged, low)
+        XCTAssertFalse(FanControlHelper.presetPending, "a landed preset kept its floor exemption")
+        XCTAssertEqual(resets, [false])
+        await disarmPreset()
     }
 
     /// QA #103 M8: the reclaim tick does not run while asleep, even with manual on.

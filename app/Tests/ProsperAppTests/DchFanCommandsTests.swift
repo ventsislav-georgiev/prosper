@@ -79,7 +79,20 @@ final class DchFanCommandsTests: XCTestCase {
         Preferences.fanTargets = [9: 1]
         Preferences.fanHoldUnlock = false
         FanControlHelper.inject(sleeping: false)
-        try await body()
+        FanControlHelper.presetPending = false
+        do { try await body() } catch { await disarm(); throw error }
+        await disarm()
+    }
+
+    /// #737: a pending preset arms the real reclaim timer and sleep observers with manual on;
+    /// drop them, the cooldown and the flag before the next test.
+    private func disarm() async {
+        Preferences.fanManualEnabled = false
+        FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        await FanControlHelper.resetAll(teardown: true)
+        FanControlHelper.removeSleepObservers()
+        FanControlHelper.deferReclaimRetry(now: .distantPast)
+        FanControlHelper.presetPending = false
     }
 
     /// #728: a first engage that fails, or lands while asleep, releases on a Task of its own
@@ -232,21 +245,40 @@ final class DchFanCommandsTests: XCTestCase {
         }
     }
 
-    /// A refusal is the command's error in the popup's words; nothing is saved and an existing
-    /// manual intent is kept as it was (the popup's commit revert).
-    func testRefusalComesBackAsThePopupErrorText() async throws {
-        try await withFanState {
-            for (manual, reply) in [(false, FanManualReply.refused), (false, .settling), (false, .unavailable), (true, .refused)] {
+    /// #737: the helper's latch refusing is a pending preset, as in the popup: intent and the
+    /// targets saved (over any earlier ones), recovery armed, and the reply says it applies when
+    /// the Mac cools down. No other fan engaged.
+    func testLatchRefusalRepliesPendingAndSavesThePreset() async {
+        await withFanState {
+            for (manual, reply) in [(false, FanManualReply.refused), (false, .settling), (true, .refused)] {
                 Preferences.fanManualEnabled = manual
+                Preferences.fanTargets = [9: 1]
                 let log = Log()
-                let sink = manual ? nil : releaseSink()   // manual intent kept: nothing is released
                 let f = await run(ops(log: log, first: reply), "fans.manual", "60%")
-                XCTAssertEqual(Self.message(f), try XCTUnwrap(reply.errorText), "\(reply)")
-                XCTAssertEqual(Preferences.fanManualEnabled, manual)
-                XCTAssertEqual(Preferences.fanTargets, [9: 1])
+                XCTAssertEqual(Self.result(f), ["text": "Manual pending · 4080 / 3400 rpm",
+                                                "detail": "target at 60%, applies when the Mac cools down"], "\(reply)")
+                XCTAssertTrue(Preferences.fanManualEnabled, "\(reply)")
+                XCTAssertEqual(Preferences.fanTargets, [0: 4080, 1: 3400], "\(reply)")
+                XCTAssertTrue(FanControlHelper.presetPending)
+                XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
                 XCTAssertFalse(log.calls.contains { $0.hasPrefix("engage") }, "the rest engaged after a refusal")
-                if let sink { await awaitRelease(sink) }
+                await disarm()
             }
+        }
+    }
+
+    /// No reply from the helper is still the popup's error; nothing is saved, the engage is released.
+    func testUnavailableComesBackAsThePopupErrorText() async throws {
+        try await withFanState {
+            let log = Log()
+            let sink = releaseSink()
+            let f = await run(ops(log: log, first: .unavailable), "fans.manual", "60%")
+            XCTAssertEqual(Self.message(f), try XCTUnwrap(FanManualReply.unavailable.errorText))
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [9: 1])
+            XCTAssertFalse(FanControlHelper.presetPending)
+            XCTAssertFalse(log.calls.contains { $0.hasPrefix("engage") }, "the rest engaged after a failure")
+            await awaitRelease(sink)
         }
     }
 

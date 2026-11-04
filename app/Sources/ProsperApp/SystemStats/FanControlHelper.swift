@@ -35,11 +35,24 @@ enum FanReclaimRecovery {
         case retry
     }
 
-    static func disposition(manualFraction: Double, reengaged: Bool) -> Disposition {
-        guard manualFraction.isFinite, manualFraction >= minimumManualFraction else {
+    /// `pending` = the saved targets have not landed since they were saved (#737: a preset made
+    /// while the helper's latch refused it, or saved intent at launch). The floor guards against
+    /// re-pinning a low speed macOS took back; a preset that never ran is held instead, and the
+    /// helper's own gate keeps it off a hot Mac (nothing below macOS's speed until it re-arms).
+    static func disposition(manualFraction: Double, reengaged: Bool, pending: Bool = false) -> Disposition {
+        guard manualFraction.isFinite, manualFraction >= minimumManualFraction || pending else {
             return .abandonManualIntent
         }
         return reengaged ? .restored : .retry
+    }
+
+    /// #737: the popup's pending line. Manual intent is on and macOS still has every adjustable
+    /// fan, so the saved preset is waiting for recovery; nil once the helper takes the fans.
+    static func pendingText(manualIntent: Bool, readings: [FanReading], targets: [Int: Double]) -> String? {
+        guard manualIntent, reclaimDetected(readings),
+              let fraction = manualFraction(targets: targets, readings: readings) else { return nil }
+        return "Waiting for macOS to hand back the fans (the overheat cut-off tripped). "
+            + "Prosper sets \(StatsFormat.percent(fraction)) as soon as it can."
     }
 
     /// `userAdjusting` = a slider drag / quick-button commit is in flight. The saved
@@ -92,6 +105,10 @@ enum FanManualReply: Equatable {
         if replies.contains(.settling) { return .settling }
         return replies.allSatisfy { $0 == .engaged } ? .engaged : .unavailable
     }
+
+    /// #737: a live helper's refusal (its latch) makes the user's speed a pending preset;
+    /// no reply (.unavailable / .needsApproval) stays a failure.
+    var isLatchRefusal: Bool { self == .refused || self == .settling }
 
     /// Name a live helper's `false` by the helper's rule (#586): after a trip it lets a
     /// pin at or above macOS's speed for the fan (`FanControlCore.macOSSpeed`) take the
@@ -218,6 +235,12 @@ enum FanControlHelper {
     /// reclaim recovery can't reapply the stale saved target on top of the gesture.
     static var userAdjusting = false
 
+    /// #737: the saved targets have not landed since they were saved (a preset the latch
+    /// refused, or saved intent at launch). Exempts them from the 20 % floor until a re-apply
+    /// lands; cleared by any engage of the saved targets.
+    // ponytail: in-memory; a relaunch re-sets it through reapplyFromPreferences.
+    static var presetPending = false
+
     // MARK: - Connection
 
     private static func makeConnection() -> NSXPCConnection {
@@ -329,6 +352,9 @@ enum FanControlHelper {
     /// while asleep (willSleep fired, the Mac not yet asleep) is refused even when its reply
     /// lands after didWake cleared the flag (#390). No await between the last check and the save.
     /// `engageFirst` is the first engage; `firstLanded`/`engage`/`landed` are the test seams.
+    /// #737: a live helper refusing the first engage (its overheat latch) saves the targets as a
+    /// pending preset — `saved` with the refusal as `reply` — under the same sleep checks; the
+    /// reclaim recovery applies it once the helper accepts. The refusal pinned nothing.
     static func popupEngage(_ targets: [Int: Double], first: Int,
                             engageFirst: () async -> FanManualReply,
                             firstLanded: (FanManualReply, Int, Bool) -> Bool = {
@@ -338,11 +364,31 @@ enum FanControlHelper {
         async -> (saved: Bool, reply: FanManualReply) {
         let generation = reclaimGeneration, asleepAtClick = sleeping
         let reply = await engageFirst()
+        if reply.isLatchRefusal, generation == reclaimGeneration, !asleepAtClick, !sleeping {
+            savePreset(targets)
+            return (true, reply)
+        }
         guard firstLanded(reply, generation, asleepAtClick) else { return (false, reply) }
         guard await engageRest(targets, skipping: first, since: generation, engage: engage, landed: landed) else { return (false, reply) }
         Preferences.fanManualEnabled = true
         Preferences.fanTargets = targets
+        presetPending = false
         return (true, reply)
+    }
+
+    /// #737: the helper's latch refused `targets`: keep them as manual intent and let the
+    /// recovery lifecycle apply them when it can, the next attempt one settle window out
+    /// (the refusal just happened). The refusal pinned nothing, but `reset` (no teardown) hands
+    /// macOS any fan still pinned (a sibling that took the speed, an older pin): recovery and
+    /// the pending line both need every fan back on auto. The helper gates every re-apply.
+    static func savePreset(_ targets: [Int: Double], now: Date = Date(),
+                           reset: @escaping @MainActor () async -> Void = { _ = await resetAll() }) {
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = targets
+        presetPending = true
+        deferReclaimRetry(now: now)
+        armRecoveryLifecycle()
+        Task { await reset() }
     }
 
     /// An engage replied after `callReply` already gave up on it (timeout / XPC error):
@@ -415,10 +461,11 @@ enum FanControlHelper {
     /// Called at launch; wake and reclaim use the same path. With no saved manual
     /// intent it installs nothing: no observers, no 2 s timer (the timer used to run
     /// for the app's whole lifetime even for users who never touched fan control).
-    static func reapplyFromPreferences() {
+    /// `start` is the test seam for the arm + re-apply (real observers, timer and XPC).
+    static func reapplyFromPreferences(start: () -> Void = { armRecoveryLifecycle(); startReapply() }) {
         guard Preferences.fanManualEnabled else { return }
-        armRecoveryLifecycle()
-        startReapply()
+        presetPending = true   // not landed this launch: a refused launch re-apply keeps a low preset (#737)
+        start()
     }
 
     /// Kept ahead of helper registration: registration can fail transiently, but saved
@@ -456,6 +503,7 @@ enum FanControlHelper {
             reengaged = reengaged && ok
             first = false
         }
+        if reengaged { presetPending = false }
         return reengaged
     }
 
@@ -520,7 +568,8 @@ enum FanControlHelper {
             Task { await resetAll(teardown: true) }
             return
         }
-        if case .abandonManualIntent = FanReclaimRecovery.disposition(manualFraction: fraction, reengaged: true) {
+        if case .abandonManualIntent = FanReclaimRecovery.disposition(manualFraction: fraction, reengaged: true,
+                                                                      pending: presetPending) {
             Preferences.fanManualEnabled = false
             Task { await resetAll(teardown: true) }
             return
@@ -534,7 +583,7 @@ enum FanControlHelper {
                                                    recoveryInFlight: reclaimRecoveryInFlight,
                                                    userAdjusting: userAdjusting) else { return }
         reclaimRecoveryInFlight = true
-        let generation = reclaimGeneration
+        let generation = reclaimGeneration, pending = presetPending   // before the apply clears it
         Task {
             let reengaged = await applySavedTargets(reclaimGeneration: generation)
             guard generation == reclaimGeneration, !sleeping else {
@@ -544,7 +593,8 @@ enum FanControlHelper {
                 return
             }
             if let manualFraction {
-                await settleReclaim(FanReclaimRecovery.disposition(manualFraction: manualFraction, reengaged: reengaged))
+                await settleReclaim(FanReclaimRecovery.disposition(manualFraction: manualFraction, reengaged: reengaged,
+                                                                   pending: pending))
             } else if !reengaged {
                 await resetAll()
             }
