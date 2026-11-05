@@ -22,7 +22,7 @@ tag from the now-released section and put it on the new top draft.
 
 - **Both ways to resume from History are visible.** Each History row in Agent Island
   now has a right-click menu with Resume (dch types its "resume all work" message) and
-  Resume without message, plus Pin and Remove. A filled play icon next to the plain
+  Resume (no message), plus Pin and Remove. A filled play icon next to the plain
   one resumes with the message.
 - **No more duplicate History rows.** Starting a session again by hand under a name
   that is already in History used to leave two rows for that name (both pinned, if it

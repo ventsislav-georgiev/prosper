@@ -787,11 +787,11 @@ struct AgentIslandView: View {
         var status: String? = nil
         var id: AgentSessionKey { record.id }
         /// #742: the right-click menu, only the items its gates draw: Resume (with
-        /// dch's message), Resume without message, Pin/Unpin, Remove.
+        /// dch's message), Resume (no message), Pin/Unpin, Remove.
         struct MenuItem { let title: String; let action: () -> Void }
         var menu: [MenuItem] {
             [enabled ? MenuItem(title: AgentIsland.resumeLabel, action: resume) : nil,
-             resumeNoMessage.map { MenuItem(title: AgentIsland.resumeWithoutMessageLabel, action: $0) },
+             resumeNoMessage.map { MenuItem(title: AgentIsland.resumeNoMessageLabel, action: $0) },
              pin.map { MenuItem(title: AgentIsland.editLabel(record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel,
                                                               older: older), action: $0) },
              remove.map { MenuItem(title: AgentIsland.editLabel(AgentIsland.removeLabel, older: olderUnpinned), action: $0) },

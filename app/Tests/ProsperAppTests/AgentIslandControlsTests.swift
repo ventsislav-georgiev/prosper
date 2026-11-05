@@ -3676,7 +3676,7 @@ final class AgentIslandControlsTests: XCTestCase {
     }
 
     /// #742: a History row's right-click menu draws each item only under its own
-    /// gate: Resume (resumeGate), Resume without message (1.27.0), Pin/Unpin and
+    /// gate: Resume (resumeGate), Resume (no message) (1.27.0), Pin/Unpin and
     /// Remove (1.25.0, no Remove on a pin); a dash-led name gets nothing.
     @MainActor
     func testHistoryMenuItemsFollowTheirGates() {
@@ -3686,7 +3686,7 @@ final class AgentIslandControlsTests: XCTestCase {
         store.history = [record("x", ended: now - 600), pinned("p", ended: now - 700), record("--all", ended: now - 800)]
         store.historyTab = true
         func menus() -> [[String]] { AgentIslandView(store: store).historyDrawn.map { $0.menu.map(\.title) } }
-        let both = ["Resume", "Resume without message"]
+        let both = ["Resume", "Resume (no message)"]
         store.controlDch = Self.v127
         XCTAssertEqual(menus(), [both + ["Unpin"], both + ["Pin", "Remove from History"], []], "a pin leads")
         store.controlDch = Self.v125
@@ -3699,7 +3699,7 @@ final class AgentIslandControlsTests: XCTestCase {
     }
 
     /// #742: each menu item runs its own verb: Resume is `--revive x --json` (dch
-    /// types its carry-on message), Resume without message adds `--no-message`.
+    /// types its carry-on message), Resume (no message) adds `--no-message`.
     @MainActor
     func testHistoryMenuItemsRunTheirArgs() throws {
         let f = FakeProc(), reads = Reads()
@@ -3715,7 +3715,7 @@ final class AgentIslandControlsTests: XCTestCase {
                                                 onPin: { c.pin($0) }, onRemove: { c.remove($0) }).historyDrawn.first)
         let item = Dictionary(uniqueKeysWithValues: row.menu.map { ($0.title, $0.action) })
         for (title, args) in [("Resume", ["--revive", "x", "--json"]),
-                              ("Resume without message", ["--revive", "x", "--no-message", "--json"]),
+                              ("Resume (no message)", ["--revive", "x", "--no-message", "--json"]),
                               ("Pin", ["--pin", "x", "--json"]), ("Remove from History", ["--forget", "x", "--json"])] {
             let before = reads.count
             try XCTUnwrap(item[title], title)()

@@ -801,12 +801,12 @@ extension AgentIsland {
     /// #585: shown only with n > 0 records reviveAllTakes.
     static func resumeAllLabel(_ n: Int) -> String { "Resume interrupted (\(n))" }
     /// #669: a History row's icon and VoiceOver action, and the header's choice next to Resume interrupted.
+    /// #747: also the row's right-click menu item (one action, one name).
     static let resumeNoMessageLabel = "Resume (no message)"
     /// #742: a row click is dch's own `--revive`, which types its carry-on message
     /// ("resume all work. This session ended … Re-read your ledger and task list, …").
     /// The row's menu items, its play.fill icon and its tooltip name both kinds.
     static let resumeLabel = "Resume"
-    static let resumeWithoutMessageLabel = "Resume without message"
     static let resumeWithMessageHelp = "Resume with dch's carry-on message"
     static let resumeAllNoMessageLabel = "(no message)"
     static func resumeAllNoMessageAccessibility(_ n: Int) -> String { "Resume interrupted (\(n)) without the message" }
