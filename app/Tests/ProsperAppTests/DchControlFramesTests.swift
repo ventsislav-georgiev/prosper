@@ -270,7 +270,7 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(call(ops(f), DchFrame.revive, ["name": "--all"]).type, DchFrame.error)
         f.hist["/e"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
         XCTAssertEqual(message(call(ops(f, dirs: ["/d", "/e"]), DchFrame.revive, ["name": "a"])),
-                       "a: history records of that name in 2 socket dirs", "#746: two sessions, not one folded row")
+                       "a: history records of that name in 2 socket dirs; use the Mac's Agent Island", "#746: two sessions, not one folded row")
         XCTAssertTrue(f.launches.isEmpty)
     }
 
@@ -1543,10 +1543,53 @@ final class DchControlFramesTests: XCTestCase {
         let f = Fake()
         f.hist["/d"] = Self.folded()
         f.hist["/e"] = Self.hist([["name": "work", "file": "work", "updated": Self.now - 40, "end": "exit 0"]])
-        let o = ops(f, dirs: ["/d", "/e"], binary: Self.v1282), why = "work: history records of that name in 2 socket dirs"
+        let o = ops(f, dirs: ["/d", "/e"], binary: Self.v1282), why = "work: history records of that name in 2 socket dirs; use the Mac's Agent Island"
         XCTAssertEqual(message(call(o, DchFrame.revive, ["name": "work"])), why)
         XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "work", "pin": true])), why)
         XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "work"])), why)
         XCTAssertTrue(f.launches.isEmpty)
+    }
+
+    /// QA #573 INFO-1: below 1.28.1 a forget by the bare name removes the unpinned records
+    /// and answers "pinned" for each pinned one (exit 1): ok with a note. A "pinned" with
+    /// nothing gone, or any other failure beside it, is still the answer.
+    func testABareNameForgetThatKeptAPinnedOlderRecordIsOk() {
+        let f = Fake()
+        f.hist["/d"] = Self.folded(asidePinned: true)
+        f.status = 1
+        let o = ops(f, binary: Self.v125), pinned = Self.line("work", "failed", reason: "pinned", detail: "pinned (-f forgets it anyway)")
+        f.out["--forget work --json"] = [Self.line("work", "ok", detail: "forgotten"), pinned].joined(separator: "\n")
+        let r = call(o, DchFrame.forget, ["name": "work"])
+        XCTAssertEqual(names(r), ["work"])
+        XCTAssertEqual((r.json as? [String: Any])?["message"] as? String, "work: removed the unpinned runs, kept the pinned ones")
+        f.out["--forget work --json"] = pinned
+        XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "work"])), "work: pinned, unpin it first", "nothing went")
+        f.out["--forget work --json"] = [Self.line("work", "ok", detail: "forgotten"), pinned,
+                                         Self.line("work", "failed", reason: "io_error", detail: "EIO")].joined(separator: "\n")
+        XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "work"])), "work: EIO")
+        XCTAssertEqual(f.launchedArgs, Array(repeating: AgentIsland.forgetArgs(["work"])!, count: 3))
+    }
+
+    /// QA #573 INFO-4: a forget's not_found is a failure even when an ok line follows
+    /// (only an unpin's means the record went).
+    func testAFoldedForgetsNotFoundIsAnError() {
+        let f = Fake(), files = ["work.json", "\(Self.aside).json"]
+        f.hist["/d"] = Self.folded()
+        f.status = 1
+        f.out["--forget \(files.joined(separator: " ")) --json"] = [Self.line(files[1], "failed", reason: "not_found", detail: "no history for this session"),
+                                                                    Self.line("work", "ok", detail: "forgotten")].joined(separator: "\n")
+        XCTAssertEqual(message(call(ops(f, binary: Self.v1281), DchFrame.forget, ["name": "work"])), "work: no history for this session")
+    }
+
+    /// QA #573 INFO-4: a failed line of another name (not one of the row's targets) is not
+    /// the row's answer.
+    func testAFoldedEditIgnoresAnotherNamesFailedLine() {
+        let f = Fake(), files = ["work.json", "\(Self.aside).json"]
+        f.hist["/d"] = Self.folded()
+        f.status = 1
+        f.out["--pin \(files.joined(separator: " ")) --json"] = [Self.line("other", "failed", reason: "io_error", detail: "EIO"),
+                                                                 Self.line(files[0], "ok", detail: "pinned"),
+                                                                 Self.line(files[1], "ok", detail: "pinned")].joined(separator: "\n")
+        XCTAssertEqual(names(call(ops(f, binary: Self.v1281), DchFrame.pin, ["name": "work", "pin": true])), ["work"])
     }
 }

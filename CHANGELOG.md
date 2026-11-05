@@ -28,7 +28,7 @@ tag from the now-released section and put it on the new top draft.
   that is already in History used to leave two rows for that name (both pinned, if it
   was pinned). History now shows one row per name, with the older runs folded into it.
   Pin and Unpin act on all of them; Remove clears the unpinned ones. On the phone,
-  Resume, Pin and Remove now work on such a name; they used to refuse it.
+  Resume, Pin, Unpin and Remove now work on such a name; they used to refuse it.
 - **Stop all across tabs, and Kill.** The Agent Island "⋯" menu has a Stop all that
   covers every tab, next to the per-tab one. Kill (right-click a session) and Kill all
   (per tab or every tab) end sessions at once, without the pause message: a turn in

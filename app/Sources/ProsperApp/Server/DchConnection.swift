@@ -798,7 +798,7 @@ struct DchControlOps: Sendable {
         let matches = history.filter { $0.name == name }, dirs = Set(matches.map(\.key.dir))
         guard dirs.count == 1, let r = matches.first else {
             return .failure(Refusal(message: matches.isEmpty ? "\(name): no history record of that name"
-                                                             : "\(name): history records of that name in \(dirs.count) socket dirs"))
+                                                             : "\(name): history records of that name in \(dirs.count) socket dirs; use the Mac's Agent Island"))
         }
         return .success(r)
     }
@@ -813,6 +813,22 @@ struct DchControlOps: Sendable {
             r.json = [f]
         }
         return r
+    }
+
+    /// QA #573 INFO-1: a forget by the bare name (below 1.28.1) removes every unpinned record
+    /// of it and answers "pinned" for each pinned older one (exit 1): done, once one went.
+    /// Ok with a note, as the Mac drops those lines; a "pinned" with nothing gone still fails.
+    static let keptPinnedText = "removed the unpinned runs, kept the pinned ones"
+    static func forgotten(_ r: DchActionResult, _ targets: [String], to name: String) -> Data {
+        var r = targets.reduce(r) { renamed($0, $1, to: name) }
+        let kept = { (o: DchJSONLine) in o.name == name && o.isFinal && o.failed && o.reason == "pinned" }
+        if !r.stopped, r.json.contains(where: { $0.name == name && $0.isFinal && $0.result == "ok" }), r.json.contains(where: kept) {
+            r.json.removeAll(where: kept)   // another failure beside them is the answer
+            if !r.json.contains(where: { $0.name == name && $0.isFinal && $0.failed }) {
+                return DchFrame.encode(DchFrame.ok, json: ["names": [name], "message": "\(name): \(keptPinnedText)"])
+            }
+        }
+        return answer(named: [(name, edited(r, targets, to: name, .remove))], .remove)
     }
 
     /// The island's Resume (a record by name, `--as` a free name when it is live
@@ -933,7 +949,7 @@ struct DchControlOps: Sendable {
             let targets = AgentIsland.editTargets(r, older: AgentIsland.older(r, in: history),
                                                   exact: Self.exact(binary(), live), forget: true)
             run([(r.id, AgentIsland.forgetArgs(targets))], path: path, bound: nil, reply) {
-                Self.answer(named: [(name, Self.edited($0[0], targets, to: name, .remove))], .remove)
+                Self.forgotten($0[0], targets, to: name)
             }
         }
     }
