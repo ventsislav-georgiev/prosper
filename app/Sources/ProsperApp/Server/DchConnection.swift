@@ -895,7 +895,7 @@ struct DchControlOps: Sendable {
         case .success(let r):
             // #714: this record alone where dch can (1.28.1 `<file>.json`, an aside file).
             let arg = r.editTarget(exact: Self.exact(binary(), live))
-            run([(r.id, AgentIsland.pinArgs(arg, pin: on))], path: path, bound: nil, reply) {
+            run([(r.id, AgentIsland.pinArgs([arg], pin: on))], path: path, bound: nil, reply) {
                 Self.answer(named: [(name, Self.renamed($0[0], arg, to: name))], on ? .pin : .unpin)
             }
         }
@@ -914,7 +914,7 @@ struct DchControlOps: Sendable {
         case .success(let r) where r.pinned: reply(Self.error("\(name): \(AgentIsland.pinnedRefusal)"))
         case .success(let r):
             let arg = r.editTarget(exact: Self.exact(binary(), live))
-            run([(r.id, AgentIsland.forgetArgs(arg))], path: path, bound: nil, reply) {
+            run([(r.id, AgentIsland.forgetArgs([arg]))], path: path, bound: nil, reply) {
                 Self.answer(named: [(name, Self.renamed($0[0], arg, to: name))], .remove)
             }
         }

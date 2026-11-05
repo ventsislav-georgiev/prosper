@@ -691,11 +691,11 @@ struct AgentIslandView: View {
         var remove: (() -> Void)? = nil
         /// #669: Resume (no message), nil (not drawn) under 1.27.0.
         var resumeNoMessage: (() -> Void)? = nil
-        /// #714: a name's own record: its aside records, which its pin and X act on too.
+        /// #714, #743: the older records of the row's name, folded in; its pin and X act on them too.
         var older = 0
         /// #716 L-2: of those, the unpinned ones, the ones its X removes (dch keeps a pinned one).
         var olderUnpinned = 0
-        /// The row's Resume status, by its record's id (never a namesake's).
+        /// The row's Resume status, by its record's id; #743: else its newest older record's that has one.
         var status: String? = nil
         var id: AgentSessionKey { record.id }
         /// #742: the right-click menu, only the items its gates draw: Resume (with
@@ -713,16 +713,17 @@ struct AgentIslandView: View {
 
     var historyDrawn: [HistoryDrawn] {
         let on = store.resumeGate.isOK, edits = store.historyEditGate.isOK, quiet = store.reviveNoMessageGate.isOK
-        let exact = store.recordFileGate.isOK
         return store.shownHistory.map { r in
             // #627: a name dch would read as a flag: no Resume, pin or X.
             let ok = AgentIsland.passable(r.name)
-            // #714: under 1.28.0 the own row's pin and X hit its aside records too; 1.28.1 acts per record.
-            let asides = exact || r.isAside ? [] : store.history.filter { $0.key == r.key && $0.isAside }
+            // #743: the name's older records fold into its one row; its pin and X act on them too, at every gate.
+            let asides = AgentIsland.older(r, in: store.history)
             return HistoryDrawn(record: r, enabled: on && ok, resume: { onResume(r) }, pin: edits && ok ? { onPin(r) } : nil,
                                 remove: edits && ok && !r.pinned ? { onRemove(r) } : nil,
                                 resumeNoMessage: quiet && ok ? { onResumeNoMessage(r) } : nil, older: asides.count,
-                                olderUnpinned: asides.filter { !$0.pinned }.count, status: store.historyActions[r.id])
+                                olderUnpinned: asides.filter { !$0.pinned }.count,
+                                // #743: statuses stay per record (--all lands on the one dch took); its own first.
+                                status: ([r] + asides).lazy.compactMap { store.historyActions[$0.id] }.first)
         }
     }
 
@@ -851,7 +852,7 @@ struct AgentIslandHistoryRow: View {
     var remove: (() -> Void)? = nil
     /// #669: Resume (no message), drawn before the pin; nil: not drawn.
     var resumeNoMessage: (() -> Void)? = nil
-    /// #714: the aside records of this name its pin and X act on too (0 on an aside row).
+    /// #714, #743: the older records of this name folded into the row, its pin and X act on them too.
     var older = 0
     /// #716 L-2: the unpinned ones of `older`, the ones its X removes.
     var olderUnpinned = 0

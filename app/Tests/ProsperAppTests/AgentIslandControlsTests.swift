@@ -2660,9 +2660,9 @@ final class AgentIslandControlsTests: XCTestCase {
                        "Pin x failed: dch: --pin: unknown option")
         XCTAssertEqual(AgentIsland.editFailure(res(143, "", stopped: true), name: "x", .remove),
                        "Remove x cancelled: no answer in 5m")
-        XCTAssertEqual(AgentIsland.pinArgs("x", pin: true), ["--pin", "x", "--json"])
-        XCTAssertEqual(AgentIsland.pinArgs("x", pin: false), ["--unpin", "x", "--json"])
-        XCTAssertEqual(AgentIsland.forgetArgs("x"), ["--forget", "x", "--json"])
+        XCTAssertEqual(AgentIsland.pinArgs(["x"], pin: true), ["--pin", "x", "--json"])
+        XCTAssertEqual(AgentIsland.pinArgs(["x"], pin: false), ["--unpin", "x", "--json"])
+        XCTAssertEqual(AgentIsland.forgetArgs(["x"]), ["--forget", "x", "--json"])
         XCTAssertEqual(AgentIsland.forgetAllArgs, ["--forget", "--all", "--json"])
     }
 
@@ -2840,12 +2840,12 @@ final class AgentIslandControlsTests: XCTestCase {
             XCTAssertNil(AgentIsland.reviveArgs(record(bad), live: [bad], records: []), "\(bad) live: no --as either")
             XCTAssertNil(AgentIsland.restartArgs(bad), bad)
             XCTAssertNil(AgentIsland.stopArgs(["a", bad]), "\(bad): the whole batch, never just the rest")
-            XCTAssertNil(AgentIsland.pinArgs(bad, pin: true), bad)
-            XCTAssertNil(AgentIsland.pinArgs(bad, pin: false), bad)
-            XCTAssertNil(AgentIsland.forgetArgs(bad), bad)
+            XCTAssertNil(AgentIsland.pinArgs([bad], pin: true), bad)
+            XCTAssertNil(AgentIsland.pinArgs([bad], pin: false), bad)
+            XCTAssertNil(AgentIsland.forgetArgs([bad]), bad)
         }
         XCTAssertEqual(AgentIsland.stopArgs(["a", "b-n"]), ["--stop", "a", "b-n", "--json"], "a dash inside a name passes")
-        XCTAssertEqual(AgentIsland.forgetArgs("x"), ["--forget", "x", "--json"])
+        XCTAssertEqual(AgentIsland.forgetArgs(["x"]), ["--forget", "x", "--json"])
     }
 
     /// History: a "--all" or "-n" record draws no Resume, pin or X, and the
@@ -3219,8 +3219,8 @@ final class AgentIslandControlsTests: XCTestCase {
 
     private static var asideRecords: [DchHistoryRecord] { AgentIsland.parseHistory(Data(asideJSON.utf8), dir: "/d") }
 
-    /// Three records of one name: one id each (an aside record's is its file), so
-    /// SwiftUI draws three rows, and History keeps all three.
+    /// Three records of one name: one id each (an aside record's is its file), and
+    /// History keeps all three. #743: it draws one row, the name's newest, the others folded.
     @MainActor
     func testAsideRecordsParseWithAnIdEach() {
         let rows = Self.asideRecords
@@ -3235,11 +3235,14 @@ final class AgentIslandControlsTests: XCTestCase {
         store.history = rows
         store.historyTab = true
         let drawn = AgentIslandView(store: store).historyDrawn
-        XCTAssertEqual(Set(drawn.map(\.id)).count, 3, "no two rows share a SwiftUI id")
+        XCTAssertEqual(drawn.map(\.id), [rows[0].id], "#743: one row per name")
+        XCTAssertEqual(drawn.map(\.older), [2])
     }
 
-    /// Resume, pin, unpin and the X of an aside row pass its file; the name's own
-    /// row passes the name. The status shows on the row acted on, never its namesakes.
+    /// Resume of an aside record passes its file; the name's own record passes the name.
+    /// The status stays on the record acted on, never its namesakes. #743: the pin and X
+    /// are the one row's, the bare name below 1.28.1; the row shows its own record's
+    /// status, else an older one's.
     @MainActor
     func testAsideRowActionsTargetTheirFileAndStatusStaysOnTheRow() throws {
         let f = FakeProc(), reads = Reads()
@@ -3279,25 +3282,17 @@ final class AgentIslandControlsTests: XCTestCase {
         step({ c.resume(rows[1]) }, ["--revive", "work.1762000000", "--as", "work-2", "--json"])
         XCTAssertEqual(store.historyActions[rows[1].id], "Resumed as work-2", "dch's result line, read by the record's name")
         f.output = ""
-        step({ c.pin(rows[1]) }, ["--unpin", "work.1762000000", "--json"])
-        step({ c.pin(rows[2]) }, ["--pin", "work.1761000000", "--json"])
-        step({ c.remove(rows[2]) }, ["--forget", "work.1761000000", "--json"])
         step({ c.pin(rows[0]) }, ["--pin", "work", "--json"])
         step({ c.remove(rows[0]) }, ["--forget", "work", "--json"])
-        XCTAssertEqual(f.args.count, 7)
+        XCTAssertEqual(f.args.count, 4)
         store.historyActions = [rows[2].id: "Resumed"]
         store.historyTab = true
-        XCTAssertEqual(AgentIslandView(store: store).historyDrawn.map { $0.status }, [nil, nil, "Resumed"],
-                       "each row shows its own record's status (pinned work.1762000000 leads)")
-        // One record busy never blocks its namesakes: they are other records.
-        c.resume(rows[0])
-        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        c.pin(rows[2])
-        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, "the aside row's pin runs beside its name's Resume")
-        XCTAssertEqual(Set(f.args.suffix(2)), [["--revive", "work", "--as", "work-2", "--json"], ["--pin", "work.1761000000", "--json"]])
-        f.release.signal()
-        f.release.signal()
-        settle(c) { reads.count == 10 }
+        func statuses() -> [String?] { AgentIslandView(store: store).historyDrawn.map { $0.status } }
+        XCTAssertEqual(statuses(), ["Resumed"], "an older record's status, while the row's own has none")
+        store.historyActions[rows[1].id] = "Resumed as work-2"
+        XCTAssertEqual(statuses(), ["Resumed as work-2"], "the newest older record's first")
+        store.historyActions[rows[0].id] = "Resuming…"
+        XCTAssertEqual(statuses(), ["Resuming…"], "the row's own record's first")
     }
 
     /// Resume interrupted's line names only "work": it shows on the row of the record
@@ -3351,8 +3346,8 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
     }
 
-    /// A pin or X on the name's own row says it covers the name's older records too
-    /// (dch 1.28.0 matches them all by the bare name); an aside row's says nothing more.
+    /// A pin or X on the name's row says it covers the name's older records too
+    /// (dch 1.28.0 matches them all by the bare name). #743: the only row of the name.
     /// #716 L-2: the X's count leaves out a pinned aside record (dch keeps it).
     @MainActor
     func testOwnRowsPinAndXSayTheyCoverOlderRecords() throws {
@@ -3361,10 +3356,9 @@ final class AgentIslandControlsTests: XCTestCase {
         store.history = Self.asideRecords
         store.historyTab = true
         let drawn = AgentIslandView(store: store).historyDrawn
-        XCTAssertEqual(Dictionary(uniqueKeysWithValues: drawn.map { ($0.id.name, $0.older) }),
-                       ["work": 2, "work.1762000000": 0, "work.1761000000": 0])
-        XCTAssertEqual(Dictionary(uniqueKeysWithValues: drawn.map { ($0.id.name, $0.olderUnpinned) }),
-                       ["work": 1, "work.1762000000": 0, "work.1761000000": 0])
+        XCTAssertEqual(drawn.map(\.id.name), ["work"])
+        XCTAssertEqual(drawn.map(\.older), [2])
+        XCTAssertEqual(drawn.map(\.olderUnpinned), [1])
         func row(_ file: String) throws -> AgentIslandHistoryRow {
             let d = try XCTUnwrap(drawn.first { $0.id.name == file })
             return AgentIslandHistoryRow(record: d.record, now: 0, status: nil, enabled: true, action: {}, pin: {}, remove: {},
@@ -3373,8 +3367,6 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(try row("work").pinLabel, "Pin (also 2 older records of this name)")
         XCTAssertEqual(try row("work").removeLabel, "Remove from History (also 1 older record of this name)",
                        "the pinned work.1762000000 stays")
-        XCTAssertEqual(try row("work.1762000000").pinLabel, "Unpin")
-        XCTAssertEqual(try row("work.1761000000").removeLabel, "Remove from History")
         XCTAssertEqual(AgentIsland.editLabel("Unpin", older: 1), "Unpin (also 1 older record of this name)")
     }
 
@@ -3437,21 +3429,20 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(old[0].editTarget(exact: true), "work", "no file: the name")
     }
 
-    /// The "(also N older …)" note shows only below 1.28.1 (the bare name covers
-    /// them); from 1.28.1 every edit is one record's, so no row has it.
+    /// #743: the "(also N older …)" note shows at every gate: the one row of the name
+    /// acts on all its records (the bare name below 1.28.1, each `<file>.json` from it).
     @MainActor
-    func testOlderRecordsNoteOnlyBelow1281() {
-        for (dch, older) in [(Self.v125, 2), (DchCommand.Binary(path: "/fake/dch", version: [1, 28, 0]), 2), (Self.v1281, 0)] {
+    func testOlderRecordsNoteAtEveryGate() {
+        for dch in [Self.v125, DchCommand.Binary(path: "/fake/dch", version: [1, 28, 0]), Self.v1281] {
             for records in [Self.asideRecords, Self.fileRecords] {
                 let store = AgentIslandStore(geometry: notched)
                 store.controlDch = dch
                 store.history = records
                 store.historyTab = true
                 let drawn = AgentIslandView(store: store).historyDrawn
-                XCTAssertEqual(Dictionary(uniqueKeysWithValues: drawn.map { ($0.id.name, $0.older) }),
-                               ["work": older, "work.1762000000": 0, "work.1761000000": 0], "\(dch.version) \(records.map(\.file))")
+                XCTAssertEqual(drawn.map { [$0.id.name: $0.older] }, [["work": 2]], "\(dch.version) \(records.map(\.file))")
                 // QA #534 S3: the X's count too (the pinned work.1762000000 is never removed).
-                XCTAssertEqual(drawn.first { $0.id.name == "work" }?.olderUnpinned, older == 0 ? 0 : 1, "\(dch.version)")
+                XCTAssertEqual(drawn.map(\.olderUnpinned), [1], "\(dch.version)")
             }
         }
         let store = AgentIslandStore(geometry: notched)
@@ -3462,9 +3453,10 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIslandView(store: store).historyDrawn.first { $0.id.name == "work" }?.older, 2)
     }
 
-    /// Every row's pin, unpin and X pass `<file>.json` under 1.28.1, the own row's
-    /// too; below it round 1's args. Resume stays name / aside file at both tiers.
-    /// A failed pin's line, named after its argument, still reads dch's detail.
+    /// The row's pin and X pass `<file>.json` under 1.28.1, one per record of the name
+    /// (#743: the X only the unpinned ones); below it the bare name. Resume stays name /
+    /// aside file at both tiers. A failed pin's line, named after its argument, still
+    /// reads dch's detail.
     @MainActor
     func testEditsPassTheRecordFileFrom1281() throws {
         for (dch, version, exact) in [(Self.v1281, "1.28.1", true), (Self.v125, "1.25.0", false)] {
@@ -3484,18 +3476,20 @@ final class AgentIslandControlsTests: XCTestCase {
                 f.release.signal()
                 settle(c) { reads.count == before + 1 }
             }
-            let j = exact ? ".json" : ""
+            store.historyTab = true
+            let row = try XCTUnwrap(AgentIslandView(store: store, onPin: { c.pin($0) }, onRemove: { c.remove($0) }).historyDrawn.first)
+            XCTAssertEqual(row.id, rows[0].id)
+            let all = exact ? ["work.json", "work.1762000000.json", "work.1761000000.json"] : ["work"]
+            let unpinned = exact ? ["work.json", "work.1761000000.json"] : ["work"]
             step({ c.resume(rows[0]) }, ["--revive", "work", "--json"])
             step({ c.resume(rows[2]) }, ["--revive", "work.1761000000", "--json"])
-            step({ c.pin(rows[0]) }, ["--pin", "work" + j, "--json"])
-            step({ c.pin(rows[1]) }, ["--unpin", "work.1762000000" + j, "--json"])
-            step({ c.remove(rows[2]) }, ["--forget", "work.1761000000" + j, "--json"])
-            step({ c.remove(rows[0]) }, ["--forget", "work" + j, "--json"])
-            f.output = #"{"name":"work\#(j)","result":"failed","reason":"io_error","detail":"Permission denied"}"# + "\n"
+            step({ row.pin?() }, ["--pin"] + all + ["--json"])
+            step({ row.remove?() }, ["--forget"] + unpinned + ["--json"])
+            f.output = #"{"name":"\#(all[0])","result":"failed","reason":"io_error","detail":"Permission denied"}"# + "\n"
             f.status = 1
-            step({ c.pin(rows[0]) }, ["--pin", "work" + j, "--json"])
+            step({ row.pin?() }, ["--pin"] + all + ["--json"])
             XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], "Pin work failed: Permission denied", version)
-            XCTAssertEqual(f.args.count, 7)
+            XCTAssertEqual(f.args.count, 5)
         }
     }
 
@@ -4010,5 +4004,167 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertNil(store.actions[dirKey], "the aside's refusal")
         remove([#"{"name":"work","result":"failed","reason":"pinned","detail":"pinned (-f forgets it anyway)","session_id":""}"#])
         XCTAssertEqual(store.actions[dirKey], "Remove work failed: \(AgentIsland.pinnedRefusal)")
+    }
+
+    // MARK: - #743: one History row per name
+
+    /// One dch record as `--history --json` prints it (dch.c do_history_verb). `file`: nil
+    /// is 1.28.0's own record (no "file"); 1.28.1 sends it on every record.
+    private static func rec743(_ name: String, file: String?, ended: Int, sid: String, pinned: Bool = false,
+                               cwd: String = "/src", argv: [String] = ["claude"]) -> [String: Any] {
+        var o: [String: Any] = ["name": name, "alias": "", "cwd": cwd, "argv": argv, "started": ended - 3600,
+                                "updated": ended, "ended": ended, "end": "stopped"]
+        if !sid.isEmpty { o["agent"] = ["kind": "claude", "session_id": sid, "name": "", "cwd": cwd, "launch": [String]()] }
+        if pinned { o["pinned"] = true }
+        if let file { o["file"] = file }
+        return o
+    }
+
+    /// The records Prosper reads (AgentIsland.history: per dir, newest first) from each dir's JSON.
+    private static func history743(_ dirs: [String: [[String: Any]]]) -> [DchHistoryRecord] {
+        AgentIsland.history(dirs: dirs.keys.sorted()) { _, env in
+            try? JSONSerialization.data(withJSONObject: dirs[env["DCH_SOCKET_DIR"] ?? ""] ?? [])
+        }
+    }
+
+    /// The shapes a by-hand `dch <name>` leaves (master.c rec_aside: a cold start moves the
+    /// name's record to `<name>.<ended>` and copies its pin; --revive carries the record on,
+    /// no aside), as 1.28.0 and 1.28.1 print them.
+    private static func shapes743(fileOnOwn: Bool) -> [(String, [String: [[String: Any]]])] {
+        let own = fileOnOwn ? "work" : nil
+        return [
+            ("pinned name started again by hand, ended twice", ["/d": [
+                rec743("work", file: own, ended: 2000, sid: "new", pinned: true),
+                rec743("work", file: "work.1000", ended: 1000, sid: "old", pinned: true)]]),
+            ("another cwd, argv and no agent", ["/d": [
+                rec743("work", file: own, ended: 2000, sid: "", cwd: "/b", argv: ["zsh"]),
+                rec743("work", file: "work.1000", ended: 1000, sid: "old", cwd: "/a")]]),
+            ("the name live again: its own record is not listed, two asides", ["/d": [
+                rec743("work", file: "work.2000", ended: 2000, sid: "mid"),
+                rec743("work", file: "work.1000", ended: 1000, sid: "old", pinned: true)]]),
+            ("revived from Prosper: one record", ["/d": [rec743("work", file: own, ended: 2000, sid: "old")]]),
+        ]
+    }
+
+    /// Every shape draws one row for "work", its newest record, the rest as its older
+    /// count; the other names stay, in order. A name in another socket dir is another
+    /// session (its own records and --revive): its own row.
+    @MainActor
+    func testHistoryDrawsOneRowPerNameForEveryDuplicateShape() {
+        for fileOnOwn in [false, true] {
+            for (what, dirs) in Self.shapes743(fileOnOwn: fileOnOwn) {
+                var dirs = dirs
+                dirs["/d"]! += [Self.rec743("a", file: fileOnOwn ? "a" : nil, ended: 3000, sid: "a"),
+                                Self.rec743("b", file: fileOnOwn ? "b" : nil, ended: 1500, sid: "b")]
+                dirs["/e"] = [Self.rec743("work", file: fileOnOwn ? "work" : nil, ended: 2500, sid: "e")]
+                let history = Self.history743(dirs), records = dirs["/d"]!.count - 2
+                let store = AgentIslandStore(geometry: notched)
+                store.controlDch = Self.v1281
+                store.history = history
+                store.historyTab = true
+                let drawn = AgentIslandView(store: store).historyDrawn, label = "\(what), file on own: \(fileOnOwn)"
+                // Pinned rows lead (#605): the pinned-twice name first.
+                let lead = drawn.first?.record.pinned == true
+                XCTAssertEqual(drawn.map { "\($0.record.key.dir) \($0.record.name)" },
+                               lead ? ["/d work", "/d a", "/e work", "/d b"] : ["/d a", "/e work", "/d work", "/d b"], label)
+                let work = drawn[lead ? 0 : 2]
+                XCTAssertEqual(work.record.lastSeen, 2000, "the newest record: \(label)")
+                XCTAssertEqual(work.older, records - 1, label)
+                XCTAssertEqual(work.olderUnpinned, history.filter { $0.key == work.record.key && $0.id != work.id && !$0.pinned }.count, label)
+                XCTAssertEqual(drawn.map(\.older).reduce(0, +), records - 1, "only work's: \(label)")
+                XCTAssertEqual(Set(drawn.map(\.id)).count, drawn.count, label)
+                XCTAssertEqual(store.cappedHistory.count, 4, "the tab's count: \(label)")
+                XCTAssertEqual(store.history.count, records + 3, "the records stay: \(label)")
+            }
+        }
+        // Pinned twice: the pin shows once, on the one row.
+        let pinned = Self.history743(Self.shapes743(fileOnOwn: true)[0].1)
+        XCTAssertEqual(AgentIsland.cappedHistory(pinned).map { [$0.name: $0.pinned] }, [["work": true]])
+    }
+
+    /// The cap counts rows, not records: 60 names with an aside each give 50 rows, the
+    /// newest names; pinned names first and never capped.
+    func testHistoryCapCountsRowsNotRecords() {
+        var d: [[String: Any]] = []
+        for i in 0..<60 {
+            d.append(Self.rec743("s\(i)", file: "s\(i)", ended: 100_000 - i * 10, sid: "n\(i)", pinned: i == 59))
+            d.append(Self.rec743("s\(i)", file: "s\(i).\(i)", ended: 100_000 - i * 10 - 5, sid: "o\(i)", pinned: i == 59))
+        }
+        let rows = AgentIsland.cappedHistory(Self.history743(["/d": d]))
+        XCTAssertEqual(rows.count, AgentIsland.historyCap)
+        XCTAssertEqual(rows.map(\.name), ["s59"] + (0..<49).map { "s\($0)" })
+        XCTAssertTrue(rows.allSatisfy { !$0.isAside }, "each the name's newest")
+    }
+
+    /// A row's pin, unpin and X act on every record it folds, and on no other: 1.28.1 each
+    /// `<file>.json` (the X the unpinned ones); below it the bare name while the name's own
+    /// record is listed, else (the name is live, its record not listed) each aside file, so
+    /// the bare name never reaches the live session's record.
+    func testHistoryRowEditTargetsCoverEveryRecordOfTheName() {
+        func targets(_ fileOnOwn: Bool, _ shape: Int, exact: Bool, forget: Bool) -> [String] {
+            let rows = AgentIsland.cappedHistory(Self.history743(Self.shapes743(fileOnOwn: fileOnOwn)[shape].1))
+            let all = Self.history743(Self.shapes743(fileOnOwn: fileOnOwn)[shape].1)
+            XCTAssertEqual(rows.count, 1)
+            return AgentIsland.editTargets(rows[0], older: AgentIsland.older(rows[0], in: all), exact: exact, forget: forget)
+        }
+        for fileOnOwn in [false, true] {
+            XCTAssertEqual(targets(fileOnOwn, 0, exact: false, forget: false), ["work"])
+            XCTAssertEqual(targets(fileOnOwn, 1, exact: false, forget: true), ["work"])
+            XCTAssertEqual(targets(fileOnOwn, 2, exact: false, forget: false), ["work.2000", "work.1000"])
+            XCTAssertEqual(targets(fileOnOwn, 2, exact: false, forget: true), ["work.2000"], "the pinned one stays")
+            XCTAssertEqual(targets(fileOnOwn, 2, exact: true, forget: false), ["work.2000.json", "work.1000.json"])
+            XCTAssertEqual(targets(fileOnOwn, 2, exact: true, forget: true), ["work.2000.json"])
+            XCTAssertEqual(targets(fileOnOwn, 3, exact: false, forget: true), ["work"])
+        }
+        XCTAssertEqual(targets(true, 0, exact: true, forget: false), ["work.json", "work.1000.json"])
+        XCTAssertEqual(targets(true, 1, exact: true, forget: true), ["work.json", "work.1000.json"])
+        XCTAssertEqual(targets(true, 3, exact: true, forget: true), ["work.json"])
+        XCTAssertEqual(targets(false, 0, exact: true, forget: false), ["work", "work.1000.json"], "1.28.0 output: the own record has no file")
+        XCTAssertEqual(AgentIsland.pinArgs(["work.json", "work.1000.json"], pin: false), ["--unpin", "work.json", "work.1000.json", "--json"])
+        XCTAssertNil(AgentIsland.forgetArgs(["w", "-x"]), "#627: any dash-led target, nothing runs")
+    }
+
+    /// The operator's "pinned twice", pressed on the drawn row: one row, pinned; its pin
+    /// unpins both records under 1.25.0 (bare name) and 1.28.1 (each file); no X. The name
+    /// live again (asides only): the X forgets the unpinned aside alone, never by the name.
+    @MainActor
+    func testPinnedTwiceRowActsOnEveryRecordOfTheNameUnderBothGates() throws {
+        for (dch, version, exact) in [(Self.v1281, "1.28.1", true), (Self.v125, "1.25.0", false)] {
+            let f = FakeProc(), reads = Reads()
+            reads.records = Self.history743(Self.shapes743(fileOnOwn: exact)[0].1)
+            let c = controller(f, reads, dch: dch)
+            c.store?.sessions = [session("b", version: version)]
+            c.setExpanded(true)
+            settle(c) { c.store?.history.count == 2 }
+            let store = try XCTUnwrap(c.store)
+            store.historyTab = true
+            func drawn() -> [AgentIslandView.HistoryDrawn] {
+                AgentIslandView(store: store, onPin: { c.pin($0) }, onRemove: { c.remove($0) }).historyDrawn
+            }
+            func step(_ press: () -> Void, _ args: [String], line: UInt = #line) {
+                let before = reads.count
+                press()
+                XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, line: line)
+                XCTAssertEqual(f.args.last, args, version, line: line)
+                f.release.signal()
+                settle(c) { reads.count == before + 1 }
+            }
+            let row = try XCTUnwrap(drawn().first)
+            XCTAssertEqual(drawn().count, 1, version)
+            XCTAssertTrue(row.record.pinned)
+            XCTAssertNil(row.remove, "a pinned row has no X")
+            XCTAssertEqual(row.menu.map(\.title).filter { $0.hasPrefix("Unpin") }, ["Unpin (also 1 older record of this name)"])
+            step({ row.pin?() }, ["--unpin"] + (exact ? ["work.json", "work.1000.json"] : ["work"]) + ["--json"])
+            reads.records = Self.history743(Self.shapes743(fileOnOwn: exact)[2].1)
+            c.refreshHistory()
+            settle(c) { store.history.first?.file == "work.2000" }
+            let live = try XCTUnwrap(drawn().first)
+            XCTAssertEqual(drawn().count, 1, version)
+            XCTAssertEqual(live.older, 1)
+            XCTAssertEqual(live.olderUnpinned, 0)
+            step({ live.remove?() }, ["--forget", exact ? "work.2000.json" : "work.2000", "--json"])
+            step({ live.pin?() }, ["--pin"] + (exact ? ["work.2000.json", "work.1000.json"] : ["work.2000", "work.1000"]) + ["--json"])
+            XCTAssertEqual(f.args.count, 3)
+        }
     }
 }

@@ -135,9 +135,35 @@ extension AgentIsland {
     /// #605: the History tab's rows: every pinned record (never capped), then
     /// unpinned ones up to `historyCap` minus the pinned count; each part newest
     /// first (`history` is).
+    /// #743: one row per name in a dir, its newest record (`newestPerName`).
     static func cappedHistory(_ history: [DchHistoryRecord]) -> [DchHistoryRecord] {
-        let pinned = history.filter(\.pinned)
-        return pinned + history.filter { !$0.pinned }.prefix(max(0, historyCap - pinned.count))
+        let rows = newestPerName(history)
+        let pinned = rows.filter(\.pinned)
+        return pinned + rows.filter { !$0.pinned }.prefix(max(0, historyCap - pinned.count))
+    }
+
+    /// #743: a cold start under a name (`dch <name>` by hand, never --revive) moves the
+    /// name's record aside and copies its pin, so one name can have several records:
+    /// the row is the newest (`history` is newest first), the others fold into it.
+    /// A name in another socket dir is another session (its own records, its own --revive).
+    static func newestPerName(_ history: [DchHistoryRecord]) -> [DchHistoryRecord] {
+        var seen = Set<AgentSessionKey>()
+        return history.filter { seen.insert($0.key).inserted }
+    }
+
+    /// #743: the records a row folds in: its name's others in its dir, newest first.
+    static func older(_ r: DchHistoryRecord, in history: [DchHistoryRecord]) -> [DchHistoryRecord] {
+        history.filter { $0.key == r.key && $0.id != r.id }
+    }
+
+    /// #743: what a row's pin, unpin or X passes: every record it folds, as dch's pin
+    /// follows the name. 1.28.1 (`exact`): each `<file>.json`. Below it the bare name,
+    /// which matches them all, while the name's own record is among them; else (it is
+    /// live, or gone) each aside file. `forget`: the unpinned ones (dch refuses a pinned one).
+    static func editTargets(_ r: DchHistoryRecord, older: [DchHistoryRecord], exact: Bool, forget: Bool) -> [String] {
+        let all = [r] + older
+        if !exact, all.contains(where: { !$0.isAside }) { return [r.name] }
+        return (forget ? all.filter { !$0.pinned } : all).map { $0.editTarget(exact: exact) }
     }
 
     static func parseHistory(_ data: Data, dir: String) -> [DchHistoryRecord] {
@@ -452,9 +478,9 @@ extension AgentIsland {
     }
 
     /// `--pin|--unpin <name> --json`; `--forget <name> --json`, never -f (a pin protects).
-    /// #714: callers pass a record's `editTarget`.
-    static func pinArgs(_ name: String, pin: Bool) -> [String]? { named(pin ? "--pin" : "--unpin", [name]) }
-    static func forgetArgs(_ name: String) -> [String]? { named("--forget", [name]) }
+    /// #714: callers pass a record's `editTarget`. #743: a History row, its `editTargets`.
+    static func pinArgs(_ names: [String], pin: Bool) -> [String]? { named(pin ? "--pin" : "--unpin", names) }
+    static func forgetArgs(_ names: [String]) -> [String]? { named("--forget", names) }
     /// Every record neither live nor pinned; dch skips those (-f is a usage error here).
     static let forgetAllArgs = ["--forget", "--all", "--json"]
     /// dch's reason "pinned" for a remove, in the island's words and the phone's (never dch's -f hint).

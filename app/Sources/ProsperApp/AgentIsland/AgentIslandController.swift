@@ -309,17 +309,21 @@ final class AgentIslandController {
 
     /// A History row's pin toggle: `--pin`, or `--unpin` on a pinned record.
     func pin(_ r: DchHistoryRecord) {
-        edit(r, args: AgentIsland.pinArgs(editTarget(r), pin: !r.pinned), r.pinned ? .unpin : .pin)
+        edit(r, args: AgentIsland.pinArgs(editTargets(r, forget: false), pin: !r.pinned), r.pinned ? .unpin : .pin)
     }
 
     /// A History row's X: `--forget <name>` at once, no -f; a pinned row has none.
     func remove(_ r: DchHistoryRecord) {
         guard !r.pinned else { return }
-        edit(r, args: AgentIsland.forgetArgs(editTarget(r)), .remove)
+        edit(r, args: AgentIsland.forgetArgs(editTargets(r, forget: true)), .remove)
     }
 
-    /// #714: `<file>.json` (this record alone) once the control dch is 1.28.1.
-    private func editTarget(_ r: DchHistoryRecord) -> String { r.editTarget(exact: store?.recordFileGate.isOK == true) }
+    /// #714: `<file>.json` (one record each) once the control dch is 1.28.1.
+    /// #743: the row's record and every older one of its name it folds.
+    private func editTargets(_ r: DchHistoryRecord, forget: Bool) -> [String] {
+        AgentIsland.editTargets(r, older: AgentIsland.older(r, in: store?.history ?? []),
+                                exact: store?.recordFileGate.isOK == true, forget: forget)
+    }
 
     /// One edit in the record's dir on the row's key (a busy row refuses); a
     /// failure goes on the dir's status line, then History is re-read.

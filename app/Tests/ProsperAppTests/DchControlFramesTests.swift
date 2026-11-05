@@ -195,6 +195,21 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(rows.first?["name"] as? String, "s0")
     }
 
+    /// #743: a name a by-hand start left two records of (its own and the aside one) is one
+    /// row on the phone too, its newest record's; another name stays.
+    func testHistoryFoldsANamesOlderRecordsLikeTheTab() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([
+            ["name": "work", "updated": Self.now - 10, "ended": Self.now - 10, "end": "stopped", "pinned": true, "file": "work"],
+            ["name": "other", "updated": Self.now - 20, "end": "killed", "file": "other"],
+            ["name": "work", "updated": Self.now - 30, "ended": Self.now - 30, "end": "signal 9", "pinned": true,
+             "file": "work.\(Int(Self.now) - 30)"],
+        ])
+        let rows = call(ops(f), DchFrame.history, raw: Data()).json as? [[String: Any]] ?? []
+        XCTAssertEqual(rows.map { $0["name"] as? String }, ["work", "other"])
+        XCTAssertEqual(rows.first?["end"] as? String, "stopped", "the newest record")
+    }
+
     func testHistoryWithoutAControlBinaryIsAnError() {
         let f = Fake()
         XCTAssertTrue(message(call(ops(f, binary: nil), DchFrame.history, raw: Data())).contains("needs dch 1.24.0"))
@@ -877,7 +892,7 @@ final class DchControlFramesTests: XCTestCase {
         let o = ops(f, dirs: ["/d", "/e"], binary: Self.v125)
         XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "a", "pin": true])), ["a"])
         XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "a", "pin": false])), ["a"])
-        XCTAssertEqual(f.launchedArgs, [AgentIsland.pinArgs("a", pin: true)!, AgentIsland.pinArgs("a", pin: false)!])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.pinArgs(["a"], pin: true)!, AgentIsland.pinArgs(["a"], pin: false)!])
         XCTAssertEqual(f.launches.map(\.dir), ["/e", "/e"], "the record's dir")
         XCTAssertEqual(f.launches.first?.path, "/fake/dch")
         XCTAssertEqual(f.refreshes, 2, "the island re-reads History after each")
@@ -895,12 +910,12 @@ final class DchControlFramesTests: XCTestCase {
         f.out["--forget a --json"] = Self.line("a", "ok", detail: "forgotten")
         let o = ops(f, binary: Self.v125)
         XCTAssertEqual(names(call(o, DchFrame.forget, ["name": "a"])), ["a"])
-        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs("a")!])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs(["a"])!])
         XCTAssertEqual(f.launches.first?.dir, "/d")
         XCTAssertEqual(f.refreshes, 1)
         XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "p"])), "p: pinned, unpin it first")
         XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "ghost"])), "ghost: no history record of that name")
-        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs("a")!], "no --forget for a pinned or unknown record, never -f")
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs(["a"])!], "no --forget for a pinned or unknown record, never -f")
         f.out["--forget a --json"] = Self.line("a", "failed", reason: "live", detail: "session is live")
         f.status = 1
         XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "a"])), "a: session is live")
@@ -1110,7 +1125,7 @@ final class DchControlFramesTests: XCTestCase {
         f.out["--forget a --json"] = Self.line("a", "failed", reason: "pinned", detail: "pinned (-f forgets it anyway)")
         f.status = 1
         XCTAssertEqual(message(call(ops(f, binary: Self.v125), DchFrame.forget, ["name": "a"])), "a: pinned, unpin it first")
-        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs("a")!])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs(["a"])!])
     }
 
     // MARK: - #669: revive with "no_message"

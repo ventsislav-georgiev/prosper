@@ -24,6 +24,10 @@ tag from the now-released section and put it on the new top draft.
   now has a right-click menu with Resume (dch types its "resume all work" message) and
   Resume without message, plus Pin and Remove. A filled play icon next to the plain
   one resumes with the message.
+- **No more duplicate History rows.** Starting a session again by hand under a name
+  that is already in History used to leave two rows for that name (both pinned, if it
+  was pinned). History now shows one row per name, with the older runs folded into it,
+  and Pin, Unpin and Remove act on all of them.
 
 ## v2.168.0
 
