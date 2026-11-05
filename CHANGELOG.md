@@ -28,6 +28,8 @@ tag from the now-released section and put it on the new top draft.
   that is already in History used to leave two rows for that name (both pinned, if it
   was pinned). History now shows one row per name, with the older runs folded into it,
   and Pin, Unpin and Remove act on all of them.
+- Ships dch 1.28.5. `dch --say` now types into a busy Claude Code, which queues the
+  message instead of skipping it as busy.
 
 ## v2.168.0
 
