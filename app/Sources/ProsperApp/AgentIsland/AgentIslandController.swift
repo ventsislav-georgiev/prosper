@@ -92,6 +92,9 @@ final class AgentIslandController {
     private(set) var ghosttyDenied = false
     /// Sessions whose terminal is still launching: a double click opens one window.
     private var opening: Set<AgentSessionKey> = []
+    /// #744 (QA #572 INFO-1): rows a Kill started on since their last other job: a
+    /// Stop or Restart it cut through leaves the row's text to the Kill.
+    private var killedRows: Set<AgentSessionKey> = []
     /// #523: every published list, on main, and nil when the island stops.
     /// LiveStatusPublisher listens (set by AppDelegate; tests leave it nil).
     var onSessions: (@MainActor ([AgentSession]?) -> Void)?
@@ -186,12 +189,12 @@ final class AgentIslandController {
         if store.actions.contains(where: { !$0.key.name.isEmpty && !live.contains($0.key) }) {
             store.actions = store.actions.filter { $0.key.name.isEmpty || live.contains($0.key) || runner.isBusy($0.key) }
         }
+        killedRows = killedRows.filter { live.contains($0) || runner.isBusy($0) }
         // #581: the last session gone: one history read, so its record can keep the
         // island. On that edge only, never per tick.
         // ponytail: with no history yet the collapsed ear hides for the ~100 ms the
         // read takes, then shows; keep the island up meanwhile if that ever flickers.
         if wasLive, sessions.isEmpty { refreshHistory() }
-        if store.confirmingKill != nil, store.killTarget == nil { store.confirmingKill = nil }   // #744: its row went
         refreshCards()
         layout()
     }
@@ -219,7 +222,6 @@ final class AgentIslandController {
         guard let store else { return }
         store.historyTab = false
         store.confirmingClear = false   // #605: History's question goes with its tab
-        if !store.killAllGlobal { store.confirmingKillAll = false }   // #744: never kill another tab's rows than asked
         store.sidekickTab = on
         refreshCards()
         layout()
@@ -367,16 +369,19 @@ final class AgentIslandController {
     /// spawnEnv's strip for --spawn. `running` shows in the row meanwhile (a
     /// History row's with `history`); `onLine` and `done` run on main. A busy
     /// key refuses: false, nothing shown; so does nil args (#627: a name dch would read as a flag).
+    /// #744: `yields` (a Stop or Restart) lets a `kill` run beside it; any other job
+    /// starting hands its rows' text back from an earlier Kill.
     @discardableResult
     private func run(_ key: AgentSessionKey, dch: String, args: [String]?, running: String?, cwd: String? = nil,
                      bound: TimeInterval? = nil, spawn: Bool = false, history: Bool = false,
+                     yields: Bool = false, kill: Bool = false,
                      onLine: (@MainActor @Sendable (String) -> Void)? = nil,
                      done: @escaping @MainActor @Sendable (DchActionResult) -> Void) -> Bool {
         guard let args else { return false }
         let env = controlEnv
         var hook: (@Sendable (String) -> Void)?
         if let onLine { hook = { line in DispatchQueue.main.async { MainActor.assumeIsolated { onLine(line) } } } }
-        let started = runner.start(key, path: dch, args: args, cwd: cwd, bound: bound,
+        let started = runner.start(key, path: dch, args: args, cwd: cwd, bound: bound, yields: yields, kill: kill,
                                    env: { spawn ? AgentIsland.spawnEnv(env(key.dir)) : env(key.dir) },
                                    onLine: hook) { [weak self] r in
             DispatchQueue.main.async {
@@ -388,6 +393,11 @@ final class AgentIslandController {
             }
         }
         guard started else { return false }
+        if kill {
+            killedRows.insert(key)
+        } else {
+            killedRows = killedRows.filter { $0 != key && !(key.name.isEmpty && $0.dir == key.dir) }
+        }
         if let running {
             if history { store?.historyActions[key] = running } else { store?.actions[key] = running }
         }
@@ -402,7 +412,7 @@ final class AgentIslandController {
     /// `done`, the sessions on the poller's next tick.
     private func rowLine(_ line: String, key: AgentSessionKey, name: String? = nil, history: Bool = false) {
         guard let store, let o = AgentIsland.jsonLine(line), o.name == name ?? key.name, let t = AgentIsland.phaseText(o) else { return }
-        if history { store.historyActions[key] = t } else { store.actions[key] = t }
+        if history { store.historyActions[key] = t } else { setRow(key, t) }
         layout()
     }
 
@@ -445,8 +455,14 @@ final class AgentIslandController {
         } else if o.isFinal, named || o.failed || o.reason == "in_shell" || AgentIsland.runningTexts.contains(now ?? "") {
             text = AgentIsland.byHand(AgentIsland.finalText(o, verb), record)
         } else { return }
-        if history { store.historyActions[key] = text } else { store.actions[key] = text }
+        if history { store.historyActions[key] = text } else { setRow(key, text) }
         layout()
+    }
+
+    /// QA #572 INFO-1: a Stop's or Restart's row text, unless a Kill cut through it:
+    /// then the row keeps the Kill's outcome.
+    private func setRow(_ key: AgentSessionKey, _ text: String) {
+        if !killedRows.contains(key) { store?.actions[key] = text }
     }
 
     /// A dir job's end: the summary on the dir line; a row left on a running
@@ -468,8 +484,8 @@ final class AgentIslandController {
         guard let store, case .ok(let dch) = store.restartGate else { return }
         let key = s.key
         run(key, dch: dch, args: AgentIsland.restartArgs(s.name), running: AgentIsland.restartingText,
-            bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.rowLine($0, key: key) }) { [weak self] r in
-            self?.store?.actions[key] = AgentIsland.rowText(r, name: key.name, .restart)
+            bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) }) { [weak self] r in
+            self?.setRow(key, AgentIsland.rowText(r, name: key.name, .restart))
         }
     }
 
@@ -482,39 +498,42 @@ final class AgentIslandController {
         guard let store, case .ok(let dch) = store.restartGate, AgentIsland.canStop(s) else { return }
         let key = s.key
         run(key, dch: dch, args: AgentIsland.stopArgs([s.name]), running: AgentIsland.stoppingText,
-            bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.rowLine($0, key: key) }) { [weak self] r in
-            self?.store?.actions[key] = AgentIsland.rowText(r, name: key.name, .stop)
+            bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) }) { [weak self] r in
+            self?.setRow(key, AgentIsland.rowText(r, name: key.name, .stop))
             self?.refreshHistory()
         }
     }
 
     /// The "⋯" menu's Stop all in <tab>, or (#744 `global`) Stop all: only asks (the inline line).
+    /// QA #572 F2: the rows are fixed now; the answer acts on no other row.
     func askStopAll(global: Bool = false) {
-        guard let store, store.restartGate.isOK, !store.stopTargets(global: global).stop.isEmpty else { return }
+        guard let store, store.restartGate.isOK else { return }
+        let t = store.stopTargets(global: global)
+        guard !t.stop.isEmpty else { return }
         store.dropQuestions()
-        store.stopAllGlobal = global
+        store.ask(t.stop, skipped: t.skipped, global: global)
         store.confirmingStopAll = true
         layout()
     }
 
-    /// The inline answer. Stop recounts the shown tab and runs; Cancel runs nothing.
+    /// The inline answer. Stop runs on the asked rows still live; Cancel runs nothing.
     func confirmStopAll(_ yes: Bool) {
         guard let store, store.confirmingStopAll else { return }
         store.confirmingStopAll = false
         if yes { stopAll() } else { layout() }
     }
 
-    /// The shown tab's (#744: or every tab's) stoppable sessions by name, never `--all`: one job per
+    /// The asked rows (the shown tab's or, #744, every tab's stoppable ones) by name, never `--all`: one job per
     /// dir under the dir-wide key, like Restart all, so a dir with any job
     /// running is refused whole. Each row shows "Stopping…", then its result;
     /// the dir gets "N stopped, N failed, N skipped".
     private func stopAll() {
         guard let store, case .ok(let dch) = store.restartGate else { return }
-        let byDir = Dictionary(grouping: store.stopAllTargets.stop, by: \.key.dir)
+        let byDir = Dictionary(grouping: store.stopAllTargets, by: \.key.dir)
         for (dir, rows) in byDir.sorted(by: { $0.key < $1.key }) {
             let key = AgentSessionKey(dir: dir, name: "")
             let started = run(key, dch: dch, args: AgentIsland.stopArgs(rows.map(\.name)), running: AgentIsland.stoppingText,
-                              bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.dirLine($0, dir: dir, .stop) }) {
+                              bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.dirLine($0, dir: dir, .stop) }) {
                 [weak self] r in
                 self?.dirDone(dir, AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped"))
                 self?.refreshHistory()
@@ -537,73 +556,91 @@ final class AgentIslandController {
     }
 
     /// The inline answer: Kill runs `dch -k <name>` on the row, if still live; Cancel runs nothing.
+    /// QA #572 INFO-1: it cuts through the row's Stop or Restart; any other job (or a Kill
+    /// already running) refuses it, and the row says so unless it reads "Killing…".
     func confirmKill(_ yes: Bool) {
         guard let store, store.confirmingKill != nil else { return }
         let target = store.killTarget
         store.confirmingKill = nil
         guard yes, let target, case .ok(let dch) = store.resumeGate else { return layout() }
-        killRow(target, dch: dch) { _ in }
+        if !killRow(target, dch: dch, done: { _ in }), store.actions[target.key] != AgentIsland.killingText {
+            store.actions[target.key] = AgentIsland.killBusyText
+        }
         layout()
     }
 
-    /// `dch -k <name>` with its dir's control env, on the row's key (a busy row refuses:
-    /// false). "Killing…", then "Killed" or why not, and one History re-read; the row
-    /// itself goes on the poller's next tick. `done` gets whether dch said killed.
+    /// `dch -k <name>` with its dir's control env, on the row's key, beside a Stop or
+    /// Restart there (else a busy row refuses: false). "Killing…", then "Killed" or why
+    /// not, and (`refresh`) one History re-read; the row itself goes on the poller's
+    /// next tick. `done` gets dch's result.
     @discardableResult
-    private func killRow(_ s: AgentSession, dch: String, done: @escaping @MainActor @Sendable (Bool) -> Void) -> Bool {
+    private func killRow(_ s: AgentSession, dch: String, refresh: Bool = true,
+                         done: @escaping @MainActor @Sendable (DchActionResult) -> Void) -> Bool {
         let key = s.key
-        return run(key, dch: dch, args: AgentIsland.killArgs(s.name), running: AgentIsland.killingText) { [weak self] r in
+        return run(key, dch: dch, args: AgentIsland.killArgs(s.name), running: AgentIsland.killingText, kill: true) { [weak self] r in
             self?.store?.actions[key] = AgentIsland.killText(r)
-            self?.refreshHistory()
-            done(AgentIsland.killed(r))
+            if refresh { self?.refreshHistory() }
+            done(r)
         }
     }
 
     /// The "⋯" menu's Kill all in <tab>, or Kill all (`global`): only asks.
+    /// QA #572 F1: the rows are fixed now; the answer acts on no other row.
     func askKillAll(global: Bool = false) {
-        guard let store, store.resumeGate.isOK, !store.killTargets(global: global).kill.isEmpty else { return }
+        guard let store, store.resumeGate.isOK else { return }
+        let t = store.killTargets(global: global)
+        guard !t.kill.isEmpty else { return }
         store.dropQuestions()
-        store.killAllGlobal = global
+        store.ask(t.kill, skipped: t.skipped, global: global)
         store.confirmingKillAll = true
         layout()
     }
 
-    /// The inline answer. Kill recounts the scope and runs; Cancel runs nothing.
+    /// The inline answer. Kill runs on the asked rows still live; Cancel runs nothing.
     func confirmKillAll(_ yes: Bool) {
         guard let store, store.confirmingKillAll else { return }
         store.confirmingKillAll = false
         if yes { killAll() } else { layout() }
     }
 
-    /// The scope's sessions by name, never `-kl` (it kills every session in the dir,
-    /// listed or not). dch -k takes one name, so one call per row on the row's key,
-    /// with its dir's env; a row with a job running is left alone (busy). Each dir
-    /// gets "N killed, N failed, N busy" once its last call is back.
+    /// The asked rows by name, never `-kl` (it kills every session in the dir, listed
+    /// or not). dch -k takes one name, so one call per row on the row's key, with its
+    /// dir's env; a row running a job Kill may not cut through is left alone (busy).
+    /// Each dir gets "N killed, N already ended, N failed, N busy" once its last call
+    /// is back, unless a dir-wide job's text is up there (QA #572 INFO-2: the rows say
+    /// their own). One History re-read once every call is back (INFO-3).
     private func killAll() {
         guard let store, case .ok(let dch) = store.resumeGate else { return }
-        for (dir, rows) in Dictionary(grouping: store.killAllTargets.kill, by: \.key.dir).sorted(by: { $0.key < $1.key }) {
-            let tally = KillTally(left: rows.count)
+        let all = KillTally(left: 0)
+        for (dir, rows) in Dictionary(grouping: store.killAllTargets, by: \.key.dir).sorted(by: { $0.key < $1.key }) {
+            let tally = KillTally(left: rows.count), dirKey = AgentSessionKey(dir: dir, name: "")
             let finish = { @MainActor @Sendable [weak self] in
-                if tally.left == 0 { self?.store?.actions[AgentSessionKey(dir: dir, name: "")] = tally.line }
+                guard tally.left == 0, let self, !self.runner.hasJob(dirKey) else { return }
+                self.store?.actions[dirKey] = tally.line
             }
             for s in rows {
-                let started = killRow(s, dch: dch) { ok in
-                    if ok { tally.killed += 1 } else { tally.failed += 1 }
+                let started = killRow(s, dch: dch, refresh: false) { [weak self] r in
+                    tally.count(r)
                     tally.left -= 1
                     finish()
+                    all.left -= 1
+                    if all.left == 0 { self?.refreshHistory() }
                 }
-                if !started { tally.busy += 1; tally.left -= 1 }
+                if started { all.left += 1 } else { tally.busy += 1; tally.left -= 1 }
             }
             finish()
         }
         layout()
     }
 
-    /// One Kill all dir's count, on main.
+    /// One Kill all dir's count (or every dir's calls left), on main.
     @MainActor private final class KillTally {
-        var left: Int, killed = 0, failed = 0, busy = 0
+        var left: Int, killed = 0, gone = 0, failed = 0, busy = 0
         init(left: Int) { self.left = left }
-        var line: String { AgentIsland.killTally(killed: killed, failed: failed, busy: busy) }
+        func count(_ r: DchActionResult) {
+            if AgentIsland.killed(r) { killed += 1 } else if AgentIsland.killGone(r) { gone += 1 } else { failed += 1 }
+        }
+        var line: String { AgentIsland.killTally(killed: killed, gone: gone, failed: failed, busy: busy) }
     }
 
     /// The header "⋯".
@@ -686,7 +723,7 @@ final class AgentIslandController {
             let key = AgentSessionKey(dir: dir, name: "")
             run(key, dch: dch, args: force ? AgentIsland.restartAllForceArgs : AgentIsland.restartAllArgs,
                 running: force ? AgentIsland.restartAllForceRunningText : AgentIsland.restartAllRunningText,
-                bound: DchActionRunner.restartBound, onLine: { [weak self] in self?.dirLine($0, dir: dir, .restart) }) {
+                bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.dirLine($0, dir: dir, .restart) }) {
                 [weak self] r in self?.dirDone(dir, AgentIsland.restartAllSummary(r))
             }
         }

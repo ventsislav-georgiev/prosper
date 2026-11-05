@@ -519,9 +519,12 @@ extension AgentIsland {
     /// #744: every tab's sessions.
     static let stopAllGlobalLabel = "Stop all…"
 
-    static func stopAllQuestion(_ n: Int, skipped: Int) -> String {
-        "Stop \(n) session\(n == 1 ? "" : "s")?" + (skipped > 0 ? " \(skipped) on an old dch skipped." : "")
+    /// QA #572 INFO-4: the question names its scope, the asked tab or every tab (`tab` nil).
+    static func stopAllQuestion(_ n: Int, skipped: Int, tab: String?) -> String {
+        "Stop \(n) session\(n == 1 ? "" : "s") \(scope(tab))?" + (skipped > 0 ? " \(skipped) on an old dch skipped." : "")
     }
+
+    static func scope(_ tab: String?) -> String { tab.map { "in \($0)" } ?? "in every tab" }
 
     /// Named sessions only, never `--all`.
     static func stopArgs(_ names: [String]) -> [String]? { named("--stop", names) }
@@ -538,12 +541,16 @@ extension AgentIsland {
     static let killingText = "Killing…"
     static func killAllLabel(tab: String) -> String { "Kill all in \(tab)…" }
     static let killAllGlobalLabel = "Kill all…"
-    static let killWarning = "without the pause message."
+    /// QA #572 INFO-5: what Stop does and Kill does not (Stop messages Claude to pause first).
+    /// Short: the inline line is one line, ~350 pt.
+    static let killWarning = "Claude gets no pause message."
 
-    static func killQuestion(_ name: String) -> String { "Kill \(name)? It ends now, \(killWarning)" }
+    static func killQuestion(_ name: String) -> String { "Kill \(name)? \(killWarning)" }
 
-    static func killAllQuestion(_ n: Int, skipped: Int) -> String {
-        "Kill \(n) session\(n == 1 ? "" : "s")? They end now, \(killWarning)" + (skipped > 0 ? " \(skipped) skipped." : "")
+    /// QA #572 INFO-4/5: the scope, and why a row is skipped (killArgs refuses a "-" name).
+    static func killAllQuestion(_ n: Int, skipped: Int, tab: String?) -> String {
+        "Kill \(n) session\(n == 1 ? "" : "s") \(scope(tab))? \(killWarning)"
+            + (skipped > 0 ? " \(skipped) skipped: name starts with “-”." : "")
     }
 
     /// `-k <name>`: one name per call, no --json (dch rejects it). Never `-kl` (every
@@ -558,16 +565,28 @@ extension AgentIsland {
         !r.stopped && r.status == 0 && r.text.contains { $0.hasPrefix("killed: ") }
     }
 
-    /// A Kill's row text: "Killed", else why not.
+    /// QA #572 INFO-7: "no session: <name>" (exit 1): it ended before the kill reached it.
+    static func killGone(_ r: DchActionResult) -> Bool {
+        !r.stopped && r.status != 0 && r.text.contains { $0.hasPrefix("no session: ") }
+    }
+
+    static let alreadyEndedText = "Already ended"
+    /// QA #572 INFO-1: the row runs a job a Kill may not cut through (only a Stop or Restart).
+    static let killBusyText = "Kill not run: another job is running"
+
+    /// A Kill's row text: "Killed", "Already ended", else why not.
     static func killText(_ r: DchActionResult) -> String {
         if r.stopped { return "Kill cancelled: no answer in \(Int(DchActionRunner.bound / 60))m" }
         if killed(r) { return "Killed" }
+        if killGone(r) { return alreadyEndedText }
         return r.line.isEmpty ? "Kill failed (exit \(r.status))" : "Kill failed: \(r.line)"
     }
 
-    /// Kill all's dir line: "N killed, N failed, N busy"; busy rows had a job running and were not asked.
-    static func killTally(killed: Int, failed: Int, busy: Int) -> String {
-        let parts = [(killed, "killed"), (failed, "failed"), (busy, "busy")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+    /// Kill all's dir line: "N killed, N already ended, N failed, N busy"; busy rows ran a job
+    /// a Kill may not cut through (or a Kill already) and were not asked.
+    static func killTally(killed: Int, gone: Int, failed: Int, busy: Int) -> String {
+        let parts = [(killed, "killed"), (gone, "already ended"), (failed, "failed"), (busy, "busy")]
+            .filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
         return parts.isEmpty ? "nothing killed" : parts.joined(separator: ", ")
     }
 
@@ -892,6 +911,7 @@ final class DchActionRunner: @unchecked Sendable {
                                   _ onOutput: @escaping @Sendable (Data) -> Void) -> (status: Int32, out: Data)
 
     private final class Job: @unchecked Sendable {   // touched under `lock` only
+        var yields = false   // #744: a Stop or Restart, which a Kill may cut through
         var pid: pid_t?
         var cancelled = false
         var signalled = false
@@ -900,6 +920,9 @@ final class DchActionRunner: @unchecked Sendable {
 
     private let lock = NSLock()
     private var jobs: [AgentSessionKey: Job] = [:]
+    /// #744 (QA #572 INFO-1): Kills, apart from `jobs`: one may run beside its row's
+    /// (or its dir's) Stop or Restart, as dch -k only SIGTERMs the master.
+    private var kills: [AgentSessionKey: Job] = [:]
     private let bound: TimeInterval
     private let launch: Launch
     private let signal: @Sendable (pid_t) -> Void
@@ -919,23 +942,34 @@ final class DchActionRunner: @unchecked Sendable {
     func isBusy(_ key: AgentSessionKey) -> Bool { lock.withLock { conflicts(key) } }
 
     private func conflicts(_ key: AgentSessionKey) -> Bool {
-        jobs[key] != nil || jobs[AgentSessionKey(dir: key.dir, name: "")] != nil
-            || (key.name.isEmpty && jobs.keys.contains { $0.dir == key.dir })
+        jobs[key] != nil || jobs[AgentSessionKey(dir: key.dir, name: "")] != nil || kills[key] != nil
+            || (key.name.isEmpty && (jobs.keys.contains { $0.dir == key.dir } || kills.keys.contains { $0.dir == key.dir }))
     }
+
+    /// #744: a Kill refuses a second Kill on its row, and any job but a Stop or Restart on the row or its dir.
+    private func killConflicts(_ key: AgentSessionKey) -> Bool {
+        kills[key] != nil || [key, AgentSessionKey(dir: key.dir, name: "")].contains { jobs[$0].map { !$0.yields } ?? false }
+    }
+
+    /// #744: a job of the key's own (a dir-wide one for `(dir, "")`), not one of its rows.
+    func hasJob(_ key: AgentSessionKey) -> Bool { lock.withLock { jobs[key] != nil } }
 
     /// false: the row (or its dir's --all) is busy and nothing ran. `done` runs
     /// on the runner's thread once the process has exited.
     /// `env` is built on the job's thread (it may probe the login shell).
     /// #579: `cwd` for --spawn, `bound` overrides the runner's, and `onLine` gets
     /// each non-empty output line (trimmed) as it comes, all before `done`.
+    /// #744: `yields` marks a Stop or Restart, which a `kill` job may run beside.
     @discardableResult
     func start(_ key: AgentSessionKey, path: String, args: [String], cwd: String? = nil, bound: TimeInterval? = nil,
+               yields: Bool = false, kill: Bool = false,
                env: @escaping @Sendable () -> [String: String], onLine: (@Sendable (String) -> Void)? = nil,
                done: @escaping @Sendable (DchActionResult) -> Void) -> Bool {
         let job = Job()
         guard lock.withLock({ () -> Bool in
-            guard !conflicts(key) else { return false }
-            jobs[key] = job
+            guard !(kill ? killConflicts(key) : conflicts(key)) else { return false }
+            job.yields = yields
+            if kill { kills[key] = job } else { jobs[key] = job }
             return true
         }) else { return false }
         let launch = launch, lines = LineSplitter(onLine)
@@ -953,7 +987,7 @@ final class DchActionRunner: @unchecked Sendable {
             })
             lines.flush()
             let stopped = lock.withLock { () -> Bool in
-                jobs[key] = nil
+                if kill { kills[key] = nil } else { jobs[key] = nil }
                 job.pid = nil   // reaped: never signalled again (the pid may be reused)
                 return job.cancelled
             }

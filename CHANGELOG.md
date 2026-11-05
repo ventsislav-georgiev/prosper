@@ -32,7 +32,9 @@ tag from the now-released section and put it on the new top draft.
 - **Stop all across tabs, and Kill.** The Agent Island "⋯" menu has a Stop all that
   covers every tab, next to the per-tab one. Kill (right-click a session) and Kill all
   (per tab or every tab) end sessions at once, without the pause message: a turn in
-  progress is cut off. Each asks first. A killed session can still be resumed from History.
+  progress is cut off. Kill also works on a session whose Stop or Restart is still
+  waiting. Each asks first, and the question names its scope. A killed session can still
+  be resumed from History.
 - Ships dch 1.28.5. `dch --say` now types into a busy Claude Code, which queues the
   message instead of skipping it as busy.
 
