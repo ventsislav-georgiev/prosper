@@ -269,8 +269,8 @@ final class DchControlFramesTests: XCTestCase {
                       "a live name with no record is not revivable")
         XCTAssertEqual(call(ops(f), DchFrame.revive, ["name": "--all"]).type, DchFrame.error)
         f.hist["/e"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
-        XCTAssertEqual(message(call(ops(f, dirs: ["/d", "/e"]), DchFrame.revive, ["name": "a"])), "a: 2 history records of that name",
-                       "exact-one-match still holds (only a multi-dir seam can show two)")
+        XCTAssertEqual(message(call(ops(f, dirs: ["/d", "/e"]), DchFrame.revive, ["name": "a"])),
+                       "a: history records of that name in 2 socket dirs", "#746: two sessions, not one folded row")
         XCTAssertTrue(f.launches.isEmpty)
     }
 
@@ -1445,5 +1445,108 @@ final class DchControlFramesTests: XCTestCase {
         let o = ops(f, binary: Self.v1282)
         XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "a", "pin": false])), ["a"])
         XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "a", "pin": true])), "a: no history for this session")
+    }
+
+    // MARK: - #746: a folded name (QA #570 F1)
+
+    private static let aside = "work.\(Int(now) - 30)"
+
+    /// A by-hand `dch work` left work's own record and the aside one: one phone row (#743).
+    private static func folded(newestPinned: Bool = false, asidePinned: Bool = false) -> String {
+        hist([["name": "work", "file": "work", "updated": now - 10, "ended": now - 10, "end": "stopped", "pinned": newestPinned],
+              ["name": "other", "file": "other", "updated": now - 20, "end": "killed"],
+              ["name": "work", "file": aside, "updated": now - 30, "ended": now - 30, "end": "signal 9", "pinned": asidePinned]])
+    }
+
+    /// Resume takes the newest record of the name, as the Mac row: its file from 1.28.2,
+    /// the bare name below (dch's newest ended record of it).
+    func testFoldedNameIsRevivedByItsNewestRecord() {
+        let f = Fake()
+        f.hist["/d"] = Self.folded()
+        f.out["--revive work.json --json"] = Self.ok("work")
+        f.out["--revive work --json"] = Self.ok("work")
+        XCTAssertEqual(names(call(ops(f, binary: Self.v1282), DchFrame.revive, ["name": "work"])), ["work"])
+        XCTAssertEqual(names(call(ops(f, binary: Self.v125), DchFrame.revive, ["name": "work"])), ["work"])
+        XCTAssertEqual(f.launchedArgs, [["--revive", "work.json", "--json"], ["--revive", "work", "--json"]])
+    }
+
+    /// Pin and unpin pass every record the row folds in one call (1.28.1: each file; below
+    /// it the bare name, which matches them all); dch names each line after its argument.
+    func testFoldedNameIsPinnedAndUnpinnedWhole() {
+        let f = Fake(), files = ["work.json", "\(Self.aside).json"]
+        f.hist["/d"] = Self.folded()
+        for (verb, word) in [("--pin", "pinned"), ("--unpin", "unpinned")] {
+            f.out[([verb] + files + ["--json"]).joined(separator: " ")] = files.map { Self.line($0, "ok", detail: word) }.joined(separator: "\n")
+        }
+        f.out["--pin work --json"] = Self.line("work", "ok", detail: "pinned")
+        let o = ops(f, binary: Self.v1281)
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "work", "pin": true])), ["work"])
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "work", "pin": false])), ["work"])
+        XCTAssertEqual(names(call(ops(f, binary: Self.v125), DchFrame.pin, ["name": "work", "pin": true])), ["work"])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.pinArgs(files, pin: true)!, AgentIsland.pinArgs(files, pin: false)!,
+                                        AgentIsland.pinArgs(["work"], pin: true)!])
+    }
+
+    /// One call, several results: a failed one is the answer even when an ok one follows
+    /// (never a partial run read as done); an unpin's not_found is the record gone, ok.
+    func testAFoldedEditThatFailedForOneRecordIsAnError() {
+        let f = Fake(), files = ["work.json", "\(Self.aside).json"]
+        f.hist["/d"] = Self.folded(newestPinned: true, asidePinned: true)
+        f.status = 1
+        f.out["--pin work.json \(files[1]) --json"] = [Self.line(files[0], "failed", reason: "io_error", detail: "Permission denied"),
+                                                       Self.line(files[1], "ok", detail: "pinned")].joined(separator: "\n")
+        f.out["--unpin work.json \(files[1]) --json"] = [Self.line(files[0], "ok", detail: "unpinned"),
+                                                         Self.line(files[1], "failed", reason: "not_found",
+                                                                   detail: "no history for this session")].joined(separator: "\n")
+        let o = ops(f, binary: Self.v1281)
+        XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "work", "pin": true])), "work: Permission denied")
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "work", "pin": false])), ["work"])
+        f.out["--unpin work.json \(files[1]) --json"] = [Self.line(files[0], "failed", reason: "not_found",
+                                                                   detail: "no history for this session"),
+                                                         Self.line(files[1], "failed", reason: "io_error", detail: "EACCES")].joined(separator: "\n")
+        XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "work", "pin": false])), "work: EACCES",
+                       "the older record's failure, past a gone one")
+        f.hist["/d"] = Self.folded()
+        f.out["--forget work.json \(files[1]) --json"] = [Self.line("work", "failed", reason: "io_error", detail: "EIO"),
+                                                          Self.line("work", "ok", detail: "forgotten")].joined(separator: "\n")
+        XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "work"])), "work: EIO")
+    }
+
+    /// Remove forgets the row's unpinned records (dch names each line after the record's
+    /// name); a pinned older one stays, as the Mac row's X. Below 1.28.1 the bare name.
+    func testFoldedNameIsForgottenWhole() {
+        let f = Fake()
+        f.hist["/d"] = Self.folded()
+        f.out["--forget work.json \(Self.aside).json --json"] = [Self.line("work", "ok", detail: "forgotten"),
+                                                                 Self.line("work", "ok", detail: "forgotten")].joined(separator: "\n")
+        f.out["--forget work.json --json"] = Self.line("work", "ok", detail: "forgotten")
+        f.out["--forget work --json"] = Self.line("work", "ok", detail: "forgotten")
+        let o = ops(f, binary: Self.v1281)
+        XCTAssertEqual(names(call(o, DchFrame.forget, ["name": "work"])), ["work"])
+        XCTAssertEqual(names(call(ops(f, binary: Self.v125), DchFrame.forget, ["name": "work"])), ["work"])
+        f.hist["/d"] = Self.folded(asidePinned: true)
+        XCTAssertEqual(names(call(o, DchFrame.forget, ["name": "work"])), ["work"])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.forgetArgs(["work.json", "\(Self.aside).json"])!, AgentIsland.forgetArgs(["work"])!,
+                                        AgentIsland.forgetArgs(["work.json"])!])
+    }
+
+    /// Remove of a row whose newest record is pinned is refused before dch, as before.
+    func testFoldedNameWithAPinnedNewestRecordIsNotForgotten() {
+        let f = Fake()
+        f.hist["/d"] = Self.folded(newestPinned: true)
+        XCTAssertEqual(message(call(ops(f, binary: Self.v1281), DchFrame.forget, ["name": "work"])), "work: pinned, unpin it first")
+        XCTAssertTrue(f.launches.isEmpty)
+    }
+
+    /// The name in two socket dirs is two sessions: Resume, Pin and Remove refuse, run nothing.
+    func testANameInTwoSocketDirsIsRefused() {
+        let f = Fake()
+        f.hist["/d"] = Self.folded()
+        f.hist["/e"] = Self.hist([["name": "work", "file": "work", "updated": Self.now - 40, "end": "exit 0"]])
+        let o = ops(f, dirs: ["/d", "/e"], binary: Self.v1282), why = "work: history records of that name in 2 socket dirs"
+        XCTAssertEqual(message(call(o, DchFrame.revive, ["name": "work"])), why)
+        XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "work", "pin": true])), why)
+        XCTAssertEqual(message(call(o, DchFrame.forget, ["name": "work"])), why)
+        XCTAssertTrue(f.launches.isEmpty)
     }
 }

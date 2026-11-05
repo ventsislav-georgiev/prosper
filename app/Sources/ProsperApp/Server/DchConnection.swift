@@ -791,14 +791,28 @@ struct DchControlOps: Sendable {
                               json: AgentIsland.cappedHistory(all).map { Self.historyWire($0, now: t, taken: taken) }))
     }
 
-    /// The one history record of `name`, else the refusal revive answers with.
+    /// #746: the newest record of `name` (`history` is newest first): the phone's row, as
+    /// newestPerName folds a by-hand start's aside records into it. Refused when the name
+    /// is in two socket dirs (two sessions, the phone cannot say which), or in none.
     static func record(_ name: String, in history: [DchHistoryRecord]) -> Result<DchHistoryRecord, Refusal> {
-        let matches = history.filter { $0.name == name }
-        guard matches.count == 1, let r = matches.first else {
+        let matches = history.filter { $0.name == name }, dirs = Set(matches.map(\.key.dir))
+        guard dirs.count == 1, let r = matches.first else {
             return .failure(Refusal(message: matches.isEmpty ? "\(name): no history record of that name"
-                                                             : "\(name): \(matches.count) history records of that name"))
+                                                             : "\(name): history records of that name in \(dirs.count) socket dirs"))
         }
         return .success(r)
+    }
+
+    /// #746: a folded row's pin, unpin or forget, every target in one dch call. dch names a
+    /// pin's line after its argument (a forget's after the record's name): all read under
+    /// `name`. A failed line is the result even when an ok one follows it (answer(named:)
+    /// reads the last), so a partial run never reads as done; an unpin's not_found is no failure.
+    static func edited(_ r: DchActionResult, _ targets: [String], to name: String, _ verb: AgentIsland.Verb) -> DchActionResult {
+        var r = targets.reduce(r) { renamed($0, $1, to: name) }
+        if let f = r.json.first(where: { $0.name == name && $0.isFinal && $0.failed && !AgentIsland.unpinGone($0, verb) }) {
+            r.json = [f]
+        }
+        return r
     }
 
     /// The island's Resume (a record by name, `--as` a free name when it is live
@@ -882,40 +896,44 @@ struct DchControlOps: Sendable {
         }
     }
 
-    /// #620: the island's History pin toggle, `--pin` or `--unpin` on one record in its dir.
+    /// #620: the island's History pin toggle, `--pin` or `--unpin` on one row in its dir (#746: every record it folds).
     private func pin(_ o: [String: Any], _ reply: @escaping Reply) {
         guard o.count == 2, let name = o["name"] as? String, !name.isEmpty,
               let p = o["pin"] as? NSNumber, CFGetTypeID(p) == CFBooleanGetTypeID() else {
             return reply(Self.error("malformed pin request: send {\"name\": \"…\", \"pin\": true|false}"))
         }
         guard case let (path, live)? = gated("Pin", minimum: AgentIsland.historyEditMinimum, reply) else { return }
-        let on = p.boolValue
-        switch Self.record(name, in: records(path)) {
+        let verb: AgentIsland.Verb = p.boolValue ? .pin : .unpin, history = records(path)
+        switch Self.record(name, in: history) {
         case .failure(let why): reply(Self.error(why.message))
         case .success(let r):
-            // #714: this record alone where dch can (1.28.1 `<file>.json`, an aside file).
-            let arg = r.editTarget(exact: Self.exact(binary(), live))
-            run([(r.id, AgentIsland.pinArgs([arg], pin: on))], path: path, bound: nil, reply) {
-                Self.answer(named: [(name, Self.renamed($0[0], arg, to: name))], on ? .pin : .unpin)
+            // #714: these records alone where dch can (1.28.1 `<file>.json`, an aside file).
+            // #746: every record the row folds, as the Mac row's pin.
+            let targets = AgentIsland.editTargets(r, older: AgentIsland.older(r, in: history),
+                                                  exact: Self.exact(binary(), live), forget: false)
+            run([(r.id, AgentIsland.pinArgs(targets, pin: verb == .pin))], path: path, bound: nil, reply) {
+                Self.answer(named: [(name, Self.edited($0[0], targets, to: name, verb))], verb)
             }
         }
     }
 
-    /// #620: the island's History X, `--forget` on one record in its dir, never -f:
+    /// #620: the island's History X, `--forget` on one row in its dir (#746: its unpinned records), never -f:
     /// a pinned record is refused before dch runs, as the island shows it no X.
     private func forget(_ o: [String: Any], _ reply: @escaping Reply) {
         guard let req = Self.request(o, key: "name", allowAll: false), case .names(let names) = req else {
             return reply(Self.error("malformed forget request: send {\"name\": \"…\"}"))
         }
         guard case let (path, live)? = gated("Forget", minimum: AgentIsland.historyEditMinimum, reply) else { return }
-        let name = names[0]
-        switch Self.record(name, in: records(path)) {
+        let name = names[0], history = records(path)
+        switch Self.record(name, in: history) {
         case .failure(let why): reply(Self.error(why.message))
         case .success(let r) where r.pinned: reply(Self.error("\(name): \(AgentIsland.pinnedRefusal)"))
         case .success(let r):
-            let arg = r.editTarget(exact: Self.exact(binary(), live))
-            run([(r.id, AgentIsland.forgetArgs([arg]))], path: path, bound: nil, reply) {
-                Self.answer(named: [(name, Self.renamed($0[0], arg, to: name))], .remove)
+            // #746: the row's unpinned records, as the Mac row's X.
+            let targets = AgentIsland.editTargets(r, older: AgentIsland.older(r, in: history),
+                                                  exact: Self.exact(binary(), live), forget: true)
+            run([(r.id, AgentIsland.forgetArgs(targets))], path: path, bound: nil, reply) {
+                Self.answer(named: [(name, Self.edited($0[0], targets, to: name, .remove))], .remove)
             }
         }
     }
