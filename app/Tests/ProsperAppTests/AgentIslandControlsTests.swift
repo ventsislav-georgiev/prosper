@@ -3046,6 +3046,58 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.resumeAllNoMessageAccessibility(2), "Resume interrupted (2) without the message")
     }
 
+    /// #742: a History row's right-click menu draws each item only under its own
+    /// gate: Resume (resumeGate), Resume without message (1.27.0), Pin/Unpin and
+    /// Remove (1.25.0, no Remove on a pin); a dash-led name gets nothing.
+    @MainActor
+    func testHistoryMenuItemsFollowTheirGates() {
+        let store = AgentIslandStore(geometry: notched)
+        let now = Date().timeIntervalSince1970
+        store.now = { now }
+        store.history = [record("x", ended: now - 600), pinned("p", ended: now - 700), record("--all", ended: now - 800)]
+        store.historyTab = true
+        func menus() -> [[String]] { AgentIslandView(store: store).historyDrawn.map { $0.menu.map(\.title) } }
+        let both = ["Resume", "Resume without message"]
+        store.controlDch = Self.v127
+        XCTAssertEqual(menus(), [both + ["Unpin"], both + ["Pin", "Remove from History"], []], "a pin leads")
+        store.controlDch = Self.v125
+        XCTAssertEqual(menus(), [["Resume", "Unpin"], ["Resume", "Pin", "Remove from History"], []], "1.25: no no-message")
+        store.controlDch = Self.v1241
+        XCTAssertEqual(menus(), [["Resume"], ["Resume"], []], "1.24.1: Resume only")
+        store.controlDch = nil
+        XCTAssertEqual(menus(), [[], [], []], "Resume refused: an empty menu")
+        XCTAssertEqual(AgentIsland.resumeWithMessageHelp, "Resume with dch's carry-on message")
+    }
+
+    /// #742: each menu item runs its own verb: Resume is `--revive x --json` (dch
+    /// types its carry-on message), Resume without message adds `--no-message`.
+    @MainActor
+    func testHistoryMenuItemsRunTheirArgs() throws {
+        let f = FakeProc(), reads = Reads()
+        reads.records = [record("x")]
+        let c = controller(f, reads, dch: Self.v127)
+        c.store?.sessions = [session("live", version: "1.27.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 1 }
+        let store = try XCTUnwrap(c.store)
+        store.historyTab = true
+        let row = try XCTUnwrap(AgentIslandView(store: store, onResume: { c.resume($0) },
+                                                onResumeNoMessage: { c.resume($0, noMessage: true) },
+                                                onPin: { c.pin($0) }, onRemove: { c.remove($0) }).historyDrawn.first)
+        let item = Dictionary(uniqueKeysWithValues: row.menu.map { ($0.title, $0.action) })
+        for (title, args) in [("Resume", ["--revive", "x", "--json"]),
+                              ("Resume without message", ["--revive", "x", "--no-message", "--json"]),
+                              ("Pin", ["--pin", "x", "--json"]), ("Remove from History", ["--forget", "x", "--json"])] {
+            let before = reads.count
+            try XCTUnwrap(item[title], title)()
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, title)
+            XCTAssertEqual(f.args.last, args, title)
+            f.release.signal()
+            settle(c) { reads.count > before }
+        }
+        XCTAssertEqual(f.args.count, 4)
+    }
+
     /// The JSON has no "resuming" phase: "starting", then an ok result; the row says
     /// the message was skipped, under the 1.27.0 gate; a 1.26 control dch runs nothing.
     @MainActor

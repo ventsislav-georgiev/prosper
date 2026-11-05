@@ -2167,6 +2167,31 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(hOff, hOn, "same height")
     }
 
+    /// #742: an enabled History row draws its Resume-with-message icon (play.fill) at
+    /// the trailing end of line 1; a disabled one draws nothing there. Offscreen render.
+    @MainActor
+    func testHistoryRowDrawsTheResumeWithMessageIconOnlyWhenEnabled() throws {
+        let r = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "x"), cwd: "/src")   // no age text
+        let width = AgentIslandGeometry.rowTextWidth + 60
+        func lit(_ enabled: Bool) throws -> Int {
+            let ir = ImageRenderer(content: AgentIslandHistoryRow(record: r, now: 112, status: nil, enabled: enabled) {}
+                .frame(width: width).background(Color.black))
+            ir.scale = 1
+            let cg = try XCTUnwrap(ir.cgImage)
+            let data = try XCTUnwrap(cg.dataProvider?.data) as Data, bpp = cg.bitsPerPixel / 8
+            XCTAssertEqual(cg.bitsPerComponent, 8)
+            let x1 = Int(width - AgentIslandGeometry.rowTrail) + 1, x0 = x1 - Int(AgentIslandHistoryRow.iconSize) - 3
+            var n = 0
+            for y in 0..<cg.height / 2 { for x in x0..<x1 {
+                let o = y * cg.bytesPerRow + x * bpp
+                if (0..<3).map({ data[o + $0] }).max()! > 25 { n += 1 }
+            } }
+            return n
+        }
+        XCTAssertGreaterThan(try lit(true), 5, "enabled: the icon is drawn")
+        XCTAssertEqual(try lit(false), 0, "disabled: no icon")
+    }
+
     /// #594 (QA #464 T6): a Resume status replaces line 2, so the VoiceOver label drops the dch name with it.
     func testHistoryRowLabelDropsTheDchNameWhileAStatusShows() {
         let r = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dobby-main"), cwd: "/src", ended: 100,

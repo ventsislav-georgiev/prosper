@@ -18,6 +18,13 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.169.0 *(unreleased)*
+
+- **Both ways to resume from History are visible.** Each History row in Agent Island
+  now has a right-click menu with Resume (dch types its "resume all work" message) and
+  Resume without message, plus Pin and Remove. A filled play icon next to the plain
+  one resumes with the message.
+
 ## v2.168.0
 
 - **Preset manual fan speed after an overheat cut-off.** While macOS holds the fans after

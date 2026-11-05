@@ -561,6 +561,7 @@ struct AgentIslandView: View {
                                           show: store.details, action: r.resume, pin: r.pin, remove: r.remove,
                                           resumeNoMessage: r.resumeNoMessage, older: r.older,
                                           olderUnpinned: r.olderUnpinned)
+                    .contextMenu { ForEach(r.menu, id: \.title) { Button($0.title, action: $0.action) } }   // #742
                 }
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
@@ -697,6 +698,17 @@ struct AgentIslandView: View {
         /// The row's Resume status, by its record's id (never a namesake's).
         var status: String? = nil
         var id: AgentSessionKey { record.id }
+        /// #742: the right-click menu, only the items its gates draw: Resume (with
+        /// dch's message), Resume without message, Pin/Unpin, Remove.
+        struct MenuItem { let title: String; let action: () -> Void }
+        var menu: [MenuItem] {
+            [enabled ? MenuItem(title: AgentIsland.resumeLabel, action: resume) : nil,
+             resumeNoMessage.map { MenuItem(title: AgentIsland.resumeWithoutMessageLabel, action: $0) },
+             pin.map { MenuItem(title: AgentIsland.editLabel(record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel,
+                                                              older: older), action: $0) },
+             remove.map { MenuItem(title: AgentIsland.editLabel(AgentIsland.removeLabel, older: olderUnpinned), action: $0) },
+            ].compactMap { $0 }
+        }
     }
 
     var historyDrawn: [HistoryDrawn] {
@@ -869,6 +881,9 @@ struct AgentIslandHistoryRow: View {
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Color.white.opacity(0.4))
                             .fixedSize()
+                        if enabled {   // #742: the row click's Resume, with dch's message, made visible
+                            iconButton("play.fill", opacity: 0.35, label: AgentIsland.resumeWithMessageHelp, action: action)
+                        }
                         if let resumeNoMessage {
                             iconButton("play", opacity: 0.35, label: AgentIsland.resumeNoMessageLabel, action: resumeNoMessage)
                         }
@@ -908,9 +923,10 @@ struct AgentIslandHistoryRow: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .onHover { hover = $0 }
+        .help(Text(verbatim: enabled ? AgentIsland.resumeWithMessageHelp : ""))
         // A Resume status replaces line 2, dch name included.
         .accessibilityLabel(AgentIsland.historyRowAccessibilityLabel(record, status: status, end: end, age: age, cwd: cwd, show: show))
-        .accessibilityHint(enabled ? "Resume" : "")
+        .accessibilityHint(enabled ? AgentIsland.resumeWithMessageHelp : "")
         .accessibilityActions {
             if let resumeNoMessage { Button(AgentIsland.resumeNoMessageLabel, action: resumeNoMessage) }
             if let pin { Button(pinLabel, action: pin) }
