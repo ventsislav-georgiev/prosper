@@ -191,6 +191,7 @@ final class AgentIslandController {
         // ponytail: with no history yet the collapsed ear hides for the ~100 ms the
         // read takes, then shows; keep the island up meanwhile if that ever flickers.
         if wasLive, sessions.isEmpty { refreshHistory() }
+        if store.confirmingKill != nil, store.killTarget == nil { store.confirmingKill = nil }   // #744: its row went
         refreshCards()
         layout()
     }
@@ -218,6 +219,7 @@ final class AgentIslandController {
         guard let store else { return }
         store.historyTab = false
         store.confirmingClear = false   // #605: History's question goes with its tab
+        if !store.killAllGlobal { store.confirmingKillAll = false }   // #744: never kill another tab's rows than asked
         store.sidekickTab = on
         refreshCards()
         layout()
@@ -341,8 +343,7 @@ final class AgentIslandController {
     /// The History header's Clear unpinned: only asks (the inline line).
     func askClearUnpinned() {
         guard let store, store.clearUnpinnedButton != nil else { return }
-        store.confirmingRestartAll = false
-        store.confirmingStopAll = false
+        store.dropQuestions()
         store.confirmingClear = true
         layout()
     }
@@ -487,11 +488,11 @@ final class AgentIslandController {
         }
     }
 
-    /// The "⋯" menu's Stop all in <tab>: only asks (the inline line).
-    func askStopAll() {
-        guard let store, store.restartGate.isOK, !store.stopAllTargets.stop.isEmpty else { return }
-        store.confirmingRestartAll = false
-        store.confirmingClear = false
+    /// The "⋯" menu's Stop all in <tab>, or (#744 `global`) Stop all: only asks (the inline line).
+    func askStopAll(global: Bool = false) {
+        guard let store, store.restartGate.isOK, !store.stopTargets(global: global).stop.isEmpty else { return }
+        store.dropQuestions()
+        store.stopAllGlobal = global
         store.confirmingStopAll = true
         layout()
     }
@@ -503,7 +504,7 @@ final class AgentIslandController {
         if yes { stopAll() } else { layout() }
     }
 
-    /// The shown tab's stoppable sessions by name, never `--all`: one job per
+    /// The shown tab's (#744: or every tab's) stoppable sessions by name, never `--all`: one job per
     /// dir under the dir-wide key, like Restart all, so a dir with any job
     /// running is refused whole. Each row shows "Stopping…", then its result;
     /// the dir gets "N stopped, N failed, N skipped".
@@ -523,16 +524,99 @@ final class AgentIslandController {
         layout()
     }
 
+    // MARK: - Kill (#744)
+
+    /// A row's Kill: only asks (the inline "Kill <name>?" line). Base gate only:
+    /// dch -k needs no newer flag and works on any master.
+    func askKill(_ s: AgentSession) {
+        guard let store, store.resumeGate.isOK, AgentIsland.killArgs(s.name) != nil,
+              store.sessions.contains(where: { $0.key == s.key }) else { return }
+        store.dropQuestions()
+        store.confirmingKill = s.key
+        layout()
+    }
+
+    /// The inline answer: Kill runs `dch -k <name>` on the row, if still live; Cancel runs nothing.
+    func confirmKill(_ yes: Bool) {
+        guard let store, store.confirmingKill != nil else { return }
+        let target = store.killTarget
+        store.confirmingKill = nil
+        guard yes, let target, case .ok(let dch) = store.resumeGate else { return layout() }
+        killRow(target, dch: dch) { _ in }
+        layout()
+    }
+
+    /// `dch -k <name>` with its dir's control env, on the row's key (a busy row refuses:
+    /// false). "Killing…", then "Killed" or why not, and one History re-read; the row
+    /// itself goes on the poller's next tick. `done` gets whether dch said killed.
+    @discardableResult
+    private func killRow(_ s: AgentSession, dch: String, done: @escaping @MainActor @Sendable (Bool) -> Void) -> Bool {
+        let key = s.key
+        return run(key, dch: dch, args: AgentIsland.killArgs(s.name), running: AgentIsland.killingText) { [weak self] r in
+            self?.store?.actions[key] = AgentIsland.killText(r)
+            self?.refreshHistory()
+            done(AgentIsland.killed(r))
+        }
+    }
+
+    /// The "⋯" menu's Kill all in <tab>, or Kill all (`global`): only asks.
+    func askKillAll(global: Bool = false) {
+        guard let store, store.resumeGate.isOK, !store.killTargets(global: global).kill.isEmpty else { return }
+        store.dropQuestions()
+        store.killAllGlobal = global
+        store.confirmingKillAll = true
+        layout()
+    }
+
+    /// The inline answer. Kill recounts the scope and runs; Cancel runs nothing.
+    func confirmKillAll(_ yes: Bool) {
+        guard let store, store.confirmingKillAll else { return }
+        store.confirmingKillAll = false
+        if yes { killAll() } else { layout() }
+    }
+
+    /// The scope's sessions by name, never `-kl` (it kills every session in the dir,
+    /// listed or not). dch -k takes one name, so one call per row on the row's key,
+    /// with its dir's env; a row with a job running is left alone (busy). Each dir
+    /// gets "N killed, N failed, N busy" once its last call is back.
+    private func killAll() {
+        guard let store, case .ok(let dch) = store.resumeGate else { return }
+        for (dir, rows) in Dictionary(grouping: store.killAllTargets.kill, by: \.key.dir).sorted(by: { $0.key < $1.key }) {
+            let tally = KillTally(left: rows.count)
+            let finish = { @MainActor @Sendable [weak self] in
+                if tally.left == 0 { self?.store?.actions[AgentSessionKey(dir: dir, name: "")] = tally.line }
+            }
+            for s in rows {
+                let started = killRow(s, dch: dch) { ok in
+                    if ok { tally.killed += 1 } else { tally.failed += 1 }
+                    tally.left -= 1
+                    finish()
+                }
+                if !started { tally.busy += 1; tally.left -= 1 }
+            }
+            finish()
+        }
+        layout()
+    }
+
+    /// One Kill all dir's count, on main.
+    @MainActor private final class KillTally {
+        var left: Int, killed = 0, failed = 0, busy = 0
+        init(left: Int) { self.left = left }
+        var line: String { AgentIsland.killTally(killed: killed, failed: failed, busy: busy) }
+    }
+
     /// The header "⋯".
     func showControlsMenu() {
         guard store != nil else { return }
         popUpMenu(makeControlsMenu())
     }
 
-    /// New session ▸ recent folders, Choose folder…; Restart stale agents, Restart all agents (force). Off,
+    /// New session ▸ recent folders, Choose folder…; Restart stale agents, Restart all agents (force);
+    /// Stop all in <tab>, Stop all, Kill all in <tab>, Kill all (#744). Off,
     /// with the gate's reason under them, while the gate refuses.
     func makeControlsMenu() -> NSMenu {
-        let m = store?.controlsMenu ?? .init(recent: [], refused: nil), on = m.refused == nil
+        let store = self.store, m = store?.controlsMenu ?? .init(recent: [], refused: nil), on = m.refused == nil
         let menu = NSMenu(), sub = NSMenu()
         menu.autoenablesItems = false
         sub.autoenablesItems = false
@@ -554,9 +638,19 @@ final class AgentIslandController {
             [weak self] in self?.askRestartAll(force: true)
         })
         // #580: the shown tab's sessions; off when none of them can stop.
-        let tab = store?.sessionTab.label ?? "Sessions", stoppable = !(store?.stopAllTargets.stop.isEmpty ?? true)
-        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.stopAllLabel(tab: tab), needs: needs), enabled: risky && stoppable) {
-            [weak self] in self?.askStopAll()
+        let tab = store?.sessionTab.label ?? "Sessions"
+        let stoppable = { (global: Bool) in !(store?.stopTargets(global: global).stop.isEmpty ?? true) }
+        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.stopAllLabel(tab: tab), needs: needs),
+                                         enabled: risky && stoppable(false)) { [weak self] in self?.askStopAll() })
+        // #744: every tab's; then the non-graceful Kill all, per tab and every tab (base gate only).
+        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.stopAllGlobalLabel, needs: needs),
+                                         enabled: risky && stoppable(true)) { [weak self] in self?.askStopAll(global: true) })
+        let killable = { (global: Bool) in !(store?.killTargets(global: global).kill.isEmpty ?? true) }
+        menu.addItem(AgentIslandMenuItem(AgentIsland.killAllLabel(tab: tab), enabled: on && killable(false)) {
+            [weak self] in self?.askKillAll()
+        })
+        menu.addItem(AgentIslandMenuItem(AgentIsland.killAllGlobalLabel, enabled: on && killable(true)) {
+            [weak self] in self?.askKillAll(global: true)
         })
         if let why = m.refused {
             menu.addItem(.separator())
@@ -569,8 +663,7 @@ final class AgentIslandController {
     /// only asks (the inline line); one restart question at a time.
     func askRestartAll(force: Bool = false) {
         guard let store, store.restartGate.isOK, !store.sessions.isEmpty else { return }
-        store.confirmingStopAll = false
-        store.confirmingClear = false
+        store.dropQuestions()
         store.restartAllForce = force
         store.confirmingRestartAll = true
         layout()
@@ -709,6 +802,9 @@ final class AgentIslandController {
             onConfirmRestartAll: { [weak self] in self?.confirmRestartAll($0) },
             onStop: { [weak self] in self?.stop($0) },
             onConfirmStopAll: { [weak self] in self?.confirmStopAll($0) },
+            onKill: { [weak self] in self?.askKill($0) },
+            onConfirmKill: { [weak self] in self?.confirmKill($0) },
+            onConfirmKillAll: { [weak self] in self?.confirmKillAll($0) },
             onPin: { [weak self] in self?.pin($0) },
             onRemove: { [weak self] in self?.remove($0) },
             onClearUnpinned: { [weak self] in self?.askClearUnpinned() },
@@ -727,9 +823,7 @@ final class AgentIslandController {
         if on, store.sessions.isEmpty, !store.history.isEmpty { store.historyTab = true }
         if !on {
             store.notices = [:]; store.cards = [:]; readAt = [:]
-            store.confirmingRestartAll = false
-            store.confirmingStopAll = false
-            store.confirmingClear = false
+            store.dropQuestions()
             store.actions = store.actions.filter { runner.isBusy($0.key) }   // a running one keeps its "Resuming…"
             store.historyActions = store.historyActions.filter { runner.isBusy($0.key) }
         }

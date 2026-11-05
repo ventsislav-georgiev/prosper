@@ -28,6 +28,10 @@ tag from the now-released section and put it on the new top draft.
   that is already in History used to leave two rows for that name (both pinned, if it
   was pinned). History now shows one row per name, with the older runs folded into it,
   and Pin, Unpin and Remove act on all of them.
+- **Stop all across tabs, and Kill.** The Agent Island "⋯" menu has a Stop all that
+  covers every tab, next to the per-tab one. Kill (right-click a session) and Kill all
+  (per tab or every tab) end sessions at once, without the pause message: a turn in
+  progress is cut off. Each asks first. A killed session can still be resumed from History.
 - Ships dch 1.28.5. `dch --say` now types into a busy Claude Code, which queues the
   message instead of skipping it as busy.
 

@@ -287,8 +287,24 @@ final class AgentIslandStore: ObservableObject {
     @Published var restartAllForce = false
     /// #580: the inline "Stop N sessions?" line is up; at most one question shows.
     @Published var confirmingStopAll = false
+    /// #744: the Stop all question up covers every tab ("Stop all…"), not just the shown one.
+    @Published var stopAllGlobal = false
+    /// #744: the inline "Kill N sessions?" line is up; `killAllGlobal` like `stopAllGlobal`.
+    @Published var confirmingKillAll = false
+    @Published var killAllGlobal = false
+    /// #744: a row's Kill asks first: the row whose "Kill <name>?" line is up.
+    @Published var confirmingKill: AgentSessionKey?
     /// #605: the History header asks "Clear N unpinned?".
     @Published var confirmingClear = false
+
+    /// At most one inline question shows: every ask drops the others first.
+    func dropQuestions() {
+        confirmingRestartAll = false
+        confirmingStopAll = false
+        confirmingKillAll = false
+        confirmingKill = nil
+        confirmingClear = false
+    }
 
     init(geometry: AgentIslandGeometry, details: AgentIslandRowDetails = .all,
          sort: AgentIslandSort = .activity, sidekickPattern: String = "") {
@@ -331,10 +347,26 @@ final class AgentIslandStore: ObservableObject {
 
     /// #580: Stop all's rows, the session tab's whose master can stop, and how
     /// many it leaves for an old dch.
-    var stopAllTargets: (stop: [AgentSession], skipped: Int) {
-        let rows = sessionTab.sessions, stop = rows.filter { AgentIsland.canStop($0) && AgentIsland.passable($0.name) }
+    /// #744: the question's scope, `stopAllGlobal`: every tab's sessions.
+    var stopAllTargets: (stop: [AgentSession], skipped: Int) { stopTargets(global: stopAllGlobal) }
+
+    func stopTargets(global: Bool) -> (stop: [AgentSession], skipped: Int) {
+        let rows = global ? sessions : sessionTab.sessions
+        let stop = rows.filter { AgentIsland.canStop($0) && AgentIsland.passable($0.name) }
         return (stop, rows.count - stop.count)
     }
+
+    /// #744: Kill all's rows, the shown tab's or (`killAllGlobal`) every tab's. Any
+    /// master can be killed (dch's own SIGTERM); only a name killArgs refuses is skipped.
+    var killAllTargets: (kill: [AgentSession], skipped: Int) { killTargets(global: killAllGlobal) }
+
+    func killTargets(global: Bool) -> (kill: [AgentSession], skipped: Int) {
+        let rows = global ? sessions : sessionTab.sessions, kill = rows.filter { AgentIsland.killArgs($0.name) != nil }
+        return (kill, rows.count - kill.count)
+    }
+
+    /// #744: the session the row Kill question names, while it is still live.
+    var killTarget: AgentSession? { confirmingKill.flatMap { k in sessions.first { $0.key == k } } }
 
     /// #605: pinned first, then unpinned up to the cap (the tab's count too).
     var cappedHistory: [DchHistoryRecord] { AgentIsland.cappedHistory(history) }
@@ -434,7 +466,10 @@ final class AgentIslandStore: ObservableObject {
 
     /// #579: the line over the rows: the Restart all question on any tab, else
     /// under Sessions the dir-wide status (History's header has its own).
-    var showsControlLine: Bool { confirmingRestartAll || confirmingStopAll || (!historyTab && !dirStatus.isEmpty) }
+    var showsControlLine: Bool {
+        confirmingRestartAll || confirmingStopAll || confirmingKillAll || killTarget != nil
+            || (!historyTab && !dirStatus.isEmpty)
+    }
 
     /// #579: the header "⋯" menu's content: recent folders for New session,
     /// and the gate's reason when its items are off.
@@ -483,6 +518,10 @@ struct AgentIslandView: View {
     /// #580: a row's Stop and the inline Stop all answer.
     var onStop: (AgentSession) -> Void = { _ in }
     var onConfirmStopAll: (Bool) -> Void = { _ in }
+    /// #744: a row's Kill (it only asks), and the inline row Kill and Kill all answers.
+    var onKill: (AgentSession) -> Void = { _ in }
+    var onConfirmKill: (Bool) -> Void = { _ in }
+    var onConfirmKillAll: (Bool) -> Void = { _ in }
     /// #605: a History row's pin toggle and X, Clear unpinned and its inline answer.
     var onPin: (DchHistoryRecord) -> Void = { _ in }
     var onRemove: (DchHistoryRecord) -> Void = { _ in }
@@ -591,6 +630,8 @@ struct AgentIslandView: View {
         var canStop = false
         /// #580 addendum 2: Restart agent and Stop off, reading "(needs dch 1.24.1)".
         var needs: String? = nil
+        /// #744: its Kill (asks first); any master, only the base gate and a passable name.
+        var kill: () -> Void = {}
         var id: AgentSessionKey { session.key }
         var restartTitle: String { AgentIsland.label(AgentIsland.restartLabel, needs: needs) }
         /// One hint, never both: the dch one wins over "restart this session first".
@@ -601,6 +642,7 @@ struct AgentIslandView: View {
         var controls: Bool { AgentIsland.passable(session.name) }
         var restartEnabled: Bool { refused == nil && needs == nil && controls }
         var stopEnabled: Bool { restartEnabled && canStop }
+        var killEnabled: Bool { refused == nil && AgentIsland.killArgs(session.name) != nil }
     }
 
     var drawn: [Drawn] {
@@ -608,7 +650,7 @@ struct AgentIslandView: View {
         return store.visible.map { s in
             Drawn(session: s, card: store.card(for: s), open: { onRow(s) }, answer: { onAnswer(s, $0, $1) },
                   restart: { onRestart(s) }, refused: refused, stop: { onStop(s) }, canStop: AgentIsland.canStop(s),
-                  needs: needs)
+                  needs: needs, kill: { onKill(s) })
         }
     }
 
@@ -622,6 +664,7 @@ struct AgentIslandView: View {
         if r.controls {
             Button(r.restartTitle, action: r.restart).disabled(!r.restartEnabled)
             Button(r.stopTitle, action: r.stop).disabled(!r.stopEnabled)
+            Button(AgentIsland.killLabel, action: r.kill).disabled(!r.killEnabled)   // #744
         }
         if let why = r.refused { Text(verbatim: "Controls \(why)") }
     }
@@ -660,6 +703,22 @@ struct AgentIslandView: View {
                     .accessibilityLabel(Text(verbatim: "Stop \(n) session\(n == 1 ? "" : "s")"))
                 lineButton("Cancel") { onConfirmStopAll(false) }
                     .accessibilityLabel(Text(verbatim: "Cancel Stop all"))
+            } else if store.confirmingKillAll {
+                // #744: like Stop all's; the count is live, as the answer recounts.
+                let t = store.killAllTargets, n = t.kill.count
+                Text(verbatim: AgentIsland.killAllQuestion(n, skipped: t.skipped)).foregroundStyle(Color.white.opacity(0.8))
+                Spacer(minLength: 0)
+                lineButton("Kill") { onConfirmKillAll(true) }
+                    .accessibilityLabel(Text(verbatim: "Kill \(n) session\(n == 1 ? "" : "s")"))
+                lineButton("Cancel") { onConfirmKillAll(false) }
+                    .accessibilityLabel(Text(verbatim: "Cancel Kill all"))
+            } else if let s = store.killTarget {
+                Text(verbatim: AgentIsland.killQuestion(s.title)).foregroundStyle(Color.white.opacity(0.8))
+                Spacer(minLength: 0)
+                lineButton("Kill") { onConfirmKill(true) }
+                    .accessibilityLabel(Text(verbatim: "Kill \(s.title)"))
+                lineButton("Cancel") { onConfirmKill(false) }
+                    .accessibilityLabel(Text(verbatim: "Cancel Kill"))
             } else {
                 Text(verbatim: store.dirStatus).foregroundStyle(Color.white.opacity(0.6))
                 Spacer(minLength: 0)

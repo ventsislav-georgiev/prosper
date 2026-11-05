@@ -516,6 +516,8 @@ extension AgentIsland {
     static let stoppingText = "Stopping…"
 
     static func stopAllLabel(tab: String) -> String { "Stop all in \(tab)…" }
+    /// #744: every tab's sessions.
+    static let stopAllGlobalLabel = "Stop all…"
 
     static func stopAllQuestion(_ n: Int, skipped: Int) -> String {
         "Stop \(n) session\(n == 1 ? "" : "s")?" + (skipped > 0 ? " \(skipped) on an old dch skipped." : "")
@@ -528,6 +530,45 @@ extension AgentIsland {
     /// numerically. A 1.23.x master records a stop as a crash; "" is too old to say.
     static func canStop(_ s: AgentSession) -> Bool {
         !s.version.isEmpty && DchCommand.isAtLeast(DchCommand.masterVersion(s.version), controlMinimum)
+    }
+
+    // MARK: - Kill (#744)
+
+    static let killLabel = "Kill…"
+    static let killingText = "Killing…"
+    static func killAllLabel(tab: String) -> String { "Kill all in \(tab)…" }
+    static let killAllGlobalLabel = "Kill all…"
+    static let killWarning = "without the pause message."
+
+    static func killQuestion(_ name: String) -> String { "Kill \(name)? It ends now, \(killWarning)" }
+
+    static func killAllQuestion(_ n: Int, skipped: Int) -> String {
+        "Kill \(n) session\(n == 1 ? "" : "s")? They end now, \(killWarning)" + (skipped > 0 ? " \(skipped) skipped." : "")
+    }
+
+    /// `-k <name>`: one name per call, no --json (dch rejects it). Never `-kl` (every
+    /// session in the dir), never without a name: `-k` alone, `-k -x` and `-k ""` all
+    /// make dch pick one itself (its picker, or the cwd's auto-name). nil: nothing runs.
+    static func killArgs(_ name: String) -> [String]? { name.isEmpty ? nil : named("-k", [name], []) }
+
+    /// dch's kill_session: "killed: <name>" on stdout and exit 0; anything else failed
+    /// ("no session: <name>" on stderr, exit 1). dch canonicalises the name (an alias,
+    /// a hashed name), so the printed one may differ from ours: any "killed: " line.
+    static func killed(_ r: DchActionResult) -> Bool {
+        !r.stopped && r.status == 0 && r.text.contains { $0.hasPrefix("killed: ") }
+    }
+
+    /// A Kill's row text: "Killed", else why not.
+    static func killText(_ r: DchActionResult) -> String {
+        if r.stopped { return "Kill cancelled: no answer in \(Int(DchActionRunner.bound / 60))m" }
+        if killed(r) { return "Killed" }
+        return r.line.isEmpty ? "Kill failed (exit \(r.status))" : "Kill failed: \(r.line)"
+    }
+
+    /// Kill all's dir line: "N killed, N failed, N busy"; busy rows had a job running and were not asked.
+    static func killTally(killed: Int, failed: Int, busy: Int) -> String {
+        let parts = [(killed, "killed"), (failed, "failed"), (busy, "busy")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+        return parts.isEmpty ? "nothing killed" : parts.joined(separator: ", ")
     }
 
     // MARK: - New session (#579)
