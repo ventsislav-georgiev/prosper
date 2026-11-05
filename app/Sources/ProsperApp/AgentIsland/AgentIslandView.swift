@@ -294,6 +294,8 @@ final class AgentIslandStore: ObservableObject {
         var keys: Set<AgentSessionKey> = []
         /// The scope's rows it leaves out (an old dch, a "-" name).
         var skipped = 0
+        /// #749 (QA #572 INFO-R6): of those, Stop all's for a "-" name.
+        var dashed = 0
         /// The tab asked about; nil: every tab ("Stop all…", "Kill all…").
         var tab: String?
     }
@@ -364,11 +366,11 @@ final class AgentIslandStore: ObservableObject {
     }
 
     /// #580: Stop all's rows, the session tab's (#744: or every tab's) whose master can
-    /// stop, and how many it leaves for an old dch.
-    func stopTargets(global: Bool) -> (stop: [AgentSession], skipped: Int) {
+    /// stop, and how many it leaves out; #749: `dashed` of those for a "-" name (the rest, an old dch).
+    func stopTargets(global: Bool) -> (stop: [AgentSession], skipped: Int, dashed: Int) {
         let rows = global ? sessions : sessionTab.sessions
         let stop = rows.filter { AgentIsland.canStop($0) && AgentIsland.passable($0.name) }
-        return (stop, rows.count - stop.count)
+        return (stop, rows.count - stop.count, rows.filter { AgentIsland.canStop($0) && !AgentIsland.passable($0.name) }.count)
     }
 
     /// #744: Kill all's rows, the shown tab's or every tab's. Any master can be killed
@@ -388,8 +390,18 @@ final class AgentIslandStore: ObservableObject {
     }
 
     /// Records a Stop all or Kill all question's rows; the caller sets its flag.
-    func ask(_ rows: [AgentSession], skipped: Int, global: Bool) {
-        asked = Asked(keys: Set(rows.map(\.key)), skipped: skipped, tab: global ? nil : sessionTab.label)
+    func ask(_ rows: [AgentSession], skipped: Int, dashed: Int = 0, global: Bool) {
+        asked = Asked(keys: Set(rows.map(\.key)), skipped: skipped, dashed: dashed, tab: global ? nil : sessionTab.label)
+    }
+
+    /// The Stop all and Kill all lines, from what was asked. #749 (QA #572 INFO-R6):
+    /// "every tab" only while the tabs are on.
+    var stopAllQuestion: String {
+        AgentIsland.stopAllQuestion(asked.keys.count, skipped: asked.skipped, dashed: asked.dashed, tab: asked.tab,
+                                    tabs: !sidekickPattern.isEmpty)
+    }
+    var killAllQuestion: String {
+        AgentIsland.killAllQuestion(asked.keys.count, skipped: asked.skipped, tab: asked.tab, tabs: !sidekickPattern.isEmpty)
     }
 
     /// #744: the session the row Kill question names, while it is still live.
@@ -724,7 +736,7 @@ struct AgentIslandView: View {
             } else if store.confirmingStopAll {
                 // #580: same line, same look. QA #572: the rows named when asked (a change drops it).
                 let n = store.asked.keys.count
-                Text(verbatim: AgentIsland.stopAllQuestion(n, skipped: store.asked.skipped, tab: store.asked.tab))
+                Text(verbatim: store.stopAllQuestion)
                     .foregroundStyle(Color.white.opacity(0.8))
                 Spacer(minLength: 0)
                 lineButton("Stop") { onConfirmStopAll(true) }
@@ -734,7 +746,7 @@ struct AgentIslandView: View {
             } else if store.confirmingKillAll {
                 // #744: like Stop all's.
                 let n = store.asked.keys.count
-                Text(verbatim: AgentIsland.killAllQuestion(n, skipped: store.asked.skipped, tab: store.asked.tab))
+                Text(verbatim: store.killAllQuestion)
                     .foregroundStyle(Color.white.opacity(0.8))
                 Spacer(minLength: 0)
                 lineButton("Kill") { onConfirmKillAll(true) }

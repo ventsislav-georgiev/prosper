@@ -30,6 +30,8 @@ final class DchControlFramesTests: XCTestCase {
         /// fulfils `held` and waits on `hold` (outside the lock).
         var holdArgs: [String]?
         var holdHistory = false
+        /// #749: any launch holds, as `holdArgs`.
+        var holdAny = false
         let hold = DispatchSemaphore(value: 0)
         var held: XCTestExpectation?
         var onRefresh: XCTestExpectation?
@@ -61,7 +63,7 @@ final class DchControlFramesTests: XCTestCase {
             onPid(4242)
             let holding = f.lock.withLock { () -> Bool in
                 f.launches.append((path, args, env["DCH_SOCKET_DIR"]))
-                return args == f.holdArgs
+                return args == f.holdArgs || f.holdAny
             }
             if holding { f.held?.fulfill(); f.hold.wait() }
             return f.lock.withLock {
@@ -690,6 +692,38 @@ final class DchControlFramesTests: XCTestCase {
         f.hold.signal()
         wait(for: [done], timeout: 5)
         XCTAssertEqual(f.launchedArgs, [["--island"]], "no stop launched while busy")
+    }
+
+    /// #749 (QA #572 INFO-R1): an island Kill on a row cuts through the phone's Stop, Restart
+    /// and Restart all there, as through the island's own; never its Resume, Pin or Remove.
+    func testAnIslandKillCutsThroughOnlyThePhonesStopAndRestart() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.25.0")])
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        let o = ops(f, binary: DchCommand.Binary(path: "/fake/dch", version: [1, 25, 0]))
+        let row = AgentSessionKey(dir: "/d", name: "a")
+        let cases: [(UInt8, [String: Any], Bool)] = [
+            (DchFrame.stop, ["names": ["a"]], true), (DchFrame.restart, ["names": ["a"]], true),
+            (DchFrame.restart, ["all": true], true), (DchFrame.revive, ["name": "a"], false),
+            (DchFrame.revive, ["all": true], false), (DchFrame.pin, ["name": "a", "pin": true], false),
+            (DchFrame.forget, ["name": "a"], false), (DchFrame.forgetAll, [String: Any](), false),
+        ]
+        for (type, req, yields) in cases {
+            let what = "frame \(type) \(req)"
+            let held = expectation(description: "phone job running"), replied = expectation(description: "reply")
+            f.lock.withLock { f.holdAny = true; f.held = held }
+            o.handle(type, try! JSONSerialization.data(withJSONObject: req)) { _ in replied.fulfill() }
+            wait(for: [held], timeout: 5)
+            f.lock.withLock { f.holdAny = false }
+            let killed = expectation(description: "kill done")
+            let started = o.runner.start(row, path: "/fake/dch", args: ["-k", "a"], kill: true, env: { [:] }) { _ in killed.fulfill() }
+            XCTAssertEqual(started, yields, what)
+            if !started { killed.fulfill() }
+            wait(for: [killed], timeout: 5)
+            f.hold.signal()
+            wait(for: [replied], timeout: 5)
+        }
+        XCTAssertEqual(f.launchedArgs.filter { $0 == ["-k", "a"] }.count, 3, "one Kill beside each Stop or Restart")
     }
 
     // MARK: - r2: the connection (QA #462 M3)

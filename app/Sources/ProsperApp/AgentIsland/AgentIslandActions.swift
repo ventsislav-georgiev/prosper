@@ -444,11 +444,16 @@ extension AgentIsland {
 
     /// Resume interrupted's and Stop all's one line: "N resumed|stopped, N failed,
     /// N skipped"; `empty` when dch named no session and exited 0.
-    static func tally(_ r: DchActionResult, _ verb: Verb, title: String, empty: String) -> String {
+    /// #749 (QA #572 INFO-R5): a failed session in `killed` (a Kill cut through it) counts as "killed".
+    static func tally(_ r: DchActionResult, _ verb: Verb, title: String, empty: String, killed: Set<String> = []) -> String {
         if r.stopped { return "\(title) cancelled: no answer in \(verb.minutes)m" }
+        var r = r
+        let cut = { (o: DchJSONLine) in o.isFinal && o.failed && killed.contains(o.name) }
+        let k = r.json.filter(cut).count
+        r.json.removeAll(where: cut)
         let c = counts(r)
-        let other = r.status != 0 && c.failed == 0 ? failedText(r) : nil
-        let parts = [(c.ok, verb.done.lowercased()), (c.failed, "failed"),
+        let other = r.status != 0 && c.failed + k == 0 ? failedText(r) : nil
+        let parts = [(c.ok, verb.done.lowercased()), (k, "killed"), (c.failed, "failed"),
                      (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
         if parts.isEmpty { return other.map { "\(title) \($0)" } ?? empty }
         return (parts + [other].compactMap { $0 }).joined(separator: ", ")
@@ -520,11 +525,18 @@ extension AgentIsland {
     static let stopAllGlobalLabel = "Stop all…"
 
     /// QA #572 INFO-4: the question names its scope, the asked tab or every tab (`tab` nil).
-    static func stopAllQuestion(_ n: Int, skipped: Int, tab: String?) -> String {
-        "Stop \(n) session\(n == 1 ? "" : "s") \(scope(tab))?" + (skipped > 0 ? " \(skipped) on an old dch skipped." : "")
+    /// #749 (QA #572 INFO-R6): `dashed` of the `skipped` rows for their "-" name, the rest for an old dch.
+    static func stopAllQuestion(_ n: Int, skipped: Int, dashed: Int = 0, tab: String?, tabs: Bool = true) -> String {
+        "Stop \(n) session\(n == 1 ? "" : "s")\(scope(tab, tabs: tabs))?"
+            + (skipped > dashed ? " \(skipped - dashed) on an old dch skipped." : "") + dashSkipped(dashed)
     }
 
-    static func scope(_ tab: String?) -> String { tab.map { "in \($0)" } ?? "in every tab" }
+    /// #749 (QA #572 INFO-R6): no scope for every tab while the tabs are off (`tabs` false).
+    static func scope(_ tab: String?, tabs: Bool = true) -> String {
+        tab.map { " in \($0)" } ?? (tabs ? " in every tab" : "")
+    }
+
+    static func dashSkipped(_ n: Int) -> String { n > 0 ? " \(n) skipped: name starts with “-”." : "" }
 
     /// Named sessions only, never `--all`.
     static func stopArgs(_ names: [String]) -> [String]? { named("--stop", names) }
@@ -542,15 +554,15 @@ extension AgentIsland {
     static func killAllLabel(tab: String) -> String { "Kill all in \(tab)…" }
     static let killAllGlobalLabel = "Kill all…"
     /// QA #572 INFO-5: what Stop does and Kill does not (Stop messages Claude to pause first).
-    /// Short: the inline line is one line, ~350 pt.
-    static let killWarning = "Claude gets no pause message."
+    /// Short: the inline line is one line, ~350 pt. #749 (QA #572 INFO-R6): names no agent,
+    /// as the session may run none, or another.
+    static let killWarning = "No pause message first."
 
     static func killQuestion(_ name: String) -> String { "Kill \(name)? \(killWarning)" }
 
     /// QA #572 INFO-4/5: the scope, and why a row is skipped (killArgs refuses a "-" name).
-    static func killAllQuestion(_ n: Int, skipped: Int, tab: String?) -> String {
-        "Kill \(n) session\(n == 1 ? "" : "s") \(scope(tab))? \(killWarning)"
-            + (skipped > 0 ? " \(skipped) skipped: name starts with “-”." : "")
+    static func killAllQuestion(_ n: Int, skipped: Int, tab: String?, tabs: Bool = true) -> String {
+        "Kill \(n) session\(n == 1 ? "" : "s")\(scope(tab, tabs: tabs))? \(killWarning)" + dashSkipped(skipped)
     }
 
     /// `-k <name>`: one name per call, no --json (dch rejects it). Never `-kl` (every

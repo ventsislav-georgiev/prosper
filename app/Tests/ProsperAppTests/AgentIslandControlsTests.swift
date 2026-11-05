@@ -2433,6 +2433,12 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertTrue(store.showsControlLine)
         XCTAssertEqual(AgentIsland.stopAllQuestion(1, skipped: 1, tab: "Sessions"), "Stop 1 session in Sessions? 1 on an old dch skipped.")
         XCTAssertEqual(AgentIsland.stopAllQuestion(3, skipped: 0, tab: nil), "Stop 3 sessions in every tab?")
+        XCTAssertEqual(AgentIsland.stopAllQuestion(3, skipped: 0, tab: nil, tabs: false), "Stop 3 sessions?",
+                       "#749: no tabs, no \"every tab\"")
+        XCTAssertEqual(AgentIsland.stopAllQuestion(2, skipped: 3, dashed: 1, tab: "Sessions"),
+                       "Stop 2 sessions in Sessions? 2 on an old dch skipped. 1 skipped: name starts with “-”.")
+        XCTAssertEqual(AgentIsland.stopAllQuestion(2, skipped: 1, dashed: 1, tab: "Sessions"),
+                       "Stop 2 sessions in Sessions? 1 skipped: name starts with “-”.", "#749: a \"-\" name is no old dch")
         XCTAssertEqual(store.asked, .init(keys: [AgentSessionKey(dir: "/d", name: "main")], skipped: 1, tab: "Sessions"),
                        "the line's count, skips and tab, fixed when asked")
         c.confirmStopAll(false)
@@ -2566,11 +2572,14 @@ final class AgentIslandControlsTests: XCTestCase {
             XCTAssertNil(AgentIsland.killArgs(bad), "never without a name dch takes as one: \(bad)")
         }
         XCTAssertEqual(AgentIsland.killArgs("a")?.count, 2, "no --json, no -f, nothing after the name")
-        XCTAssertEqual(AgentIsland.killQuestion("main"), "Kill main? Claude gets no pause message.")
+        XCTAssertEqual(AgentIsland.killQuestion("main"), "Kill main? No pause message first.")
         XCTAssertEqual(AgentIsland.killAllQuestion(1, skipped: 0, tab: "Sidekicks"),
-                       "Kill 1 session in Sidekicks? Claude gets no pause message.")
+                       "Kill 1 session in Sidekicks? No pause message first.")
         XCTAssertEqual(AgentIsland.killAllQuestion(3, skipped: 2, tab: nil),
-                       "Kill 3 sessions in every tab? Claude gets no pause message. 2 skipped: name starts with “-”.")
+                       "Kill 3 sessions in every tab? No pause message first. 2 skipped: name starts with “-”.")
+        XCTAssertEqual(AgentIsland.killAllQuestion(3, skipped: 0, tab: nil, tabs: false), "Kill 3 sessions? No pause message first.")
+        XCTAssertEqual(AgentIsland.killAllQuestion(3, skipped: 0, tab: "Sessions", tabs: false),
+                       "Kill 3 sessions in Sessions? No pause message first.", "a tab asked for is still named")
         XCTAssertEqual(AgentIsland.stopAllGlobalLabel, "Stop all…")
         XCTAssertEqual(AgentIsland.killAllLabel(tab: "Sidekicks"), "Kill all in Sidekicks…")
         XCTAssertEqual(AgentIsland.killAllGlobalLabel, "Kill all…")
@@ -2686,6 +2695,7 @@ final class AgentIslandControlsTests: XCTestCase {
         drawn[0].kill()
         c.confirmKill(true)
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "a busy row refuses")
+        XCTAssertEqual(store.actions[a], AgentIsland.killingText, "#749 (QA #572 INFO-R7): a second Kill leaves \"Killing…\"")
         f.output = "killed: a\n"
         f.release.signal()
         settle(c) { store.actions[a] != AgentIsland.killingText && reads.count > before }
@@ -2797,7 +2807,8 @@ final class AgentIslandControlsTests: XCTestCase {
         c.showSidekicks(true)
         press(c.makeControlsMenu().items[5])
         XCTAssertEqual(AgentIsland.killAllQuestion(store.asked.keys.count, skipped: store.asked.skipped, tab: store.asked.tab),
-                       "Kill 2 sessions in Sidekicks? Claude gets no pause message.")
+                       "Kill 2 sessions in Sidekicks? No pause message first.")
+        XCTAssertEqual(store.killAllQuestion, "Kill 2 sessions in Sidekicks? No pause message first.")
         c.confirmKillAll(true)
         for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
@@ -3000,13 +3011,22 @@ final class AgentIslandControlsTests: XCTestCase {
         let open = DispatchSemaphore(value: 0), lock = NSLock()
         var args: [[String]] = []
         var output = "dch: master gone\n"
+        /// #749: `-k` exits 1 with this line instead; with `holdKill`, only once `killGate` is signalled.
+        var killFail: String?
+        var holdKill = false
+        let killGate = DispatchSemaphore(value: 0)
         var kills: [[String]] { lock.withLock { args.filter { $0.first == "-k" } } }
 
         func runner() -> DchActionRunner {
             DchActionRunner(launch: { _, args, _, _, onPid, onOutput in
                 self.lock.withLock { self.args.append(args) }
                 onPid(4243)
-                if args.first == "-k" { return (0, Data("killed: \(args[1])\n".utf8)) }
+                if args.first == "-k" {
+                    let (hold, fail) = self.lock.withLock { (self.holdKill, self.killFail) }
+                    if hold { self.killGate.wait() }
+                    if let fail { return (1, Data("\(fail)\n".utf8)) }
+                    return (0, Data("killed: \(args[1])\n".utf8))
+                }
                 self.open.wait()
                 let out = self.lock.withLock { Data(self.output.utf8) }
                 onOutput(out)
@@ -3058,6 +3078,8 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { store.actions[a.key] != AgentIsland.stoppingText && !c.runner.isBusy(p.key) }
         XCTAssertNotEqual(store.actions[a.key], "Killed")
         XCTAssertNotEqual(store.actions[a.key], AgentIsland.stoppingText, "the new Stop's result is shown")
+        settle(c) { store.actions[p.key] == nil }
+        XCTAssertNil(store.actions[p.key], "#749 (QA #572 INFO-R2): the refusal goes with the job")
     }
 
     /// QA #572 INFO-1, INFO-2: Kill all cuts through a running Stop all and leaves its
@@ -3085,7 +3107,7 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { store.actions[d] != AgentIsland.stoppingText }
         XCTAssertEqual(store.actions[a.key], "Killed", "Stop all's late lines do not overwrite the kills")
         XCTAssertEqual(store.actions[b.key], "Killed")
-        XCTAssertNotEqual(store.actions[d], AgentIsland.stoppingText, "Stop all's own summary")
+        XCTAssertEqual(store.actions[d], "2 killed", "#749 (QA #572 INFO-R5): Stop all counts the rows killed, not failed")
         XCTAssertTrue(c.runner.start(d, path: "/fake/dch", args: ["--forget", "--all"], env: { [:] }) { _ in })
         store.actions[d] = AgentIsland.clearingText
         c.askKillAll(global: true)
@@ -3093,8 +3115,12 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c)
         XCTAssertEqual(h.kills.count, 2, "nothing killed under a Clear")
         XCTAssertEqual(store.actions[d], AgentIsland.clearingText, "not \"2 busy\" over the Clear's text")
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killBusyText, "#749 (QA #572 INFO-R3): the rows say why, as a row Kill")
+        XCTAssertEqual(store.actions[b.key], AgentIsland.killBusyText)
         h.open.signal()
-        settle(c) { !c.runner.isBusy(d) }
+        settle(c) { !c.runner.isBusy(d) && store.actions[a.key] == nil && store.actions[b.key] == nil }
+        XCTAssertNil(store.actions[a.key], "#749 (QA #572 INFO-R2): the note goes once the Clear ended")
+        XCTAssertNil(store.actions[b.key])
         // Restart all yields too.
         c.askRestartAll()
         c.confirmRestartAll(true)
@@ -3106,6 +3132,145 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.actions[a.key], "Killed")
         h.open.signal()
         settle(c) { !c.runner.isBusy(d) }
+    }
+
+    /// #749 (QA #572 INFO-R4): a Kill that fails hands the row back to the Stop or Restart it
+    /// cut through. Still running: the Kill's failure shows until their result. Already done:
+    /// their held-back result, then the Kill's failure.
+    @MainActor
+    func testAFailedKillLetsTheStopOrRestartResultThrough() throws {
+        let h = Hang()
+        h.killFail = "dch: permission denied"
+        let a = session("a", version: "1.24.1"), b = session("b", version: "1.24.1")
+        let c = opened(FakeProc(), [a, b])
+        c.runner = h.runner()
+        let store = try XCTUnwrap(c.store)
+        let gone = AgentIsland.actionResult(status: 1, output: Data("dch: master gone\n".utf8))
+        let failed = "Kill failed: dch: permission denied"
+        c.restart(b)
+        c.askKill(b)
+        c.confirmKill(true)
+        settle(c) { store.actions[b.key] == failed }
+        XCTAssertEqual(store.actions[b.key], failed)
+        XCTAssertNil(c.killedRows[b.key], "the row is the Restart's again")
+        h.open.signal()
+        let restarted = AgentIsland.rowText(gone, name: "b", .restart)
+        settle(c) { store.actions[b.key] == restarted }
+        XCTAssertEqual(store.actions[b.key], restarted, "the Restart's result shows")
+        h.lock.withLock { h.holdKill = true }
+        c.stop(a)
+        c.askKill(a)
+        c.confirmKill(true)
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killingText)
+        h.open.signal()
+        let stopped = AgentIsland.rowText(gone, name: "a", .stop)
+        settle(c) { c.killedRows[a.key] == stopped }
+        XCTAssertEqual(c.killedRows[a.key], stopped, "the Stop's result, held back")
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killingText, "while the Kill runs")
+        h.killGate.signal()
+        settle(c) { store.actions[a.key] != AgentIsland.killingText }
+        XCTAssertEqual(store.actions[a.key], "\(stopped); \(failed)")
+        XCTAssertNil(c.killedRows[a.key])
+        // A Stop all that ended with only a phase held for the row: the Kill's failure alone.
+        let d = AgentSessionKey(dir: "/d", name: "")
+        h.output = #"{"name":"b","phase":"ending"}"# + "\n"
+        c.askStopAll()
+        c.confirmStopAll(true)
+        c.askKill(b)
+        c.confirmKill(true)
+        h.open.signal()
+        settle(c) { !c.runner.hasJob(d) && c.killedRows[b.key] == "Ending…" && store.actions[d] != AgentIsland.stoppingText }
+        XCTAssertEqual(c.killedRows[b.key], "Ending…")
+        h.killGate.signal()
+        settle(c) { store.actions[b.key] != AgentIsland.killingText }
+        XCTAssertEqual(store.actions[b.key], failed, "a stale phase is never shown")
+        // "no session" (already ended) keeps the row, as "Killed" does.
+        h.lock.withLock { h.holdKill = false; h.killFail = "no session: a"; h.output = "dch: master gone\n" }
+        c.stop(a)
+        c.askKill(a)
+        c.confirmKill(true)
+        settle(c) { store.actions[a.key] == AgentIsland.alreadyEndedText }
+        h.open.signal()
+        settle(c) { !c.runner.isBusy(a.key) }
+        let landed = Date().addingTimeInterval(0.3)
+        settle(c) { Date() >= landed }   // the Stop's result hop to main
+        XCTAssertEqual(store.actions[a.key], AgentIsland.alreadyEndedText, "the Stop's late failure does not overwrite it")
+    }
+
+    /// #749 (QA #572 INFO-R2, INFO-R7): a refused Kill's note stays while the job that refused
+    /// it (here one the island does not show) runs, and goes once it ended, with no tick. A
+    /// killed row leaves `killedRows` on the tick that drops it.
+    @MainActor
+    func testRefusedKillNoteGoesWithItsJobAndAKilledRowIsPruned() throws {
+        let h = Hang(), dir = tempDir()
+        let sock = { (n: String) in dir.appendingPathComponent("\(n).sock").path }
+        for n in ["a", "b"] { FileManager.default.createFile(atPath: sock(n), contents: nil) }
+        let c = controller(FakeProc(), Reads(), dirs: [dir.path])
+        c.store = nil
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        let g = notched
+        c.currentGeometry = { g }
+        let path = dir.path
+        c.makePoller = { Self.sockPoller(path) }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        c.extLive = true
+        c.reload()
+        c.runner = h.runner()
+        settle(c) { c.store?.sessions.count == 2 && c.store?.controlDch != nil }
+        let store = try XCTUnwrap(c.store)
+        let sa = try XCTUnwrap(store.sessions.first { $0.name == "a" }), sb = try XCTUnwrap(store.sessions.first { $0.name == "b" })
+        XCTAssertTrue(c.runner.start(sa.key, path: "/fake/dch", args: ["--revive", "a"], env: { [:] }) { _ in })
+        c.askKill(sa)
+        c.confirmKill(true)
+        XCTAssertEqual(store.actions[sa.key], AgentIsland.killBusyText)
+        let later = Date().addingTimeInterval(1.5)
+        settle(c) { Date() >= later }
+        XCTAssertEqual(store.actions[sa.key], AgentIsland.killBusyText, "kept while the job runs")
+        h.open.signal()
+        settle(c) { store.actions[sa.key] == nil }
+        XCTAssertNil(store.actions[sa.key], "gone once it ended")
+        XCTAssertEqual(store.sessions.count, 2)
+        c.askKill(sb)
+        c.confirmKill(true)
+        settle(c) { store.actions[sb.key] == "Killed" }
+        XCTAssertEqual(c.killedRows[sb.key], "")
+        try FileManager.default.removeItem(atPath: sock("b"))
+        settle(c) { store.sessions.count == 1 }
+        XCTAssertNil(c.killedRows[sb.key], "pruned with its row")
+    }
+
+    /// #749 (QA #572 INFO-R6): Stop all's skips give their true reason (an old dch, a "-"
+    /// name); "every tab" only while the tabs are on.
+    @MainActor
+    func testStopAndKillAllQuestionsSayWhyAndScopeOnlyWithTabs() throws {
+        let c = opened(FakeProc(), [session("a", version: "1.24.1"), session("old", version: "1.23.0"),
+                                    session("-dash", version: "1.24.1"), session("-olddash", version: "1.23.0")])
+        let store = try XCTUnwrap(c.store)
+        XCTAssertEqual(store.sidekickPattern, "")
+        c.askStopAll(global: true)
+        XCTAssertTrue(store.confirmingStopAll)
+        let skips = " 2 on an old dch skipped. 1 skipped: name starts with “-”."
+        XCTAssertEqual(store.stopAllQuestion, "Stop 1 session?" + skips)
+        store.sidekickPattern = "-qa"
+        XCTAssertEqual(store.stopAllQuestion, "Stop 1 session in every tab?" + skips)
+        store.sidekickPattern = ""
+        c.askKillAll(global: true)
+        XCTAssertEqual(store.killAllQuestion, "Kill 2 sessions? No pause message first. 2 skipped: name starts with “-”.")
+        c.askKillAll()
+        XCTAssertEqual(store.killAllQuestion, "Kill 2 sessions in Sessions? No pause message first. 2 skipped: name starts with “-”.")
+    }
+
+    /// #749 (QA #572 INFO-R5): Stop all's failed lines for rows a Kill cut through count as killed.
+    func testStopAllTallyCountsKilledRowsAsKilled() {
+        let line = { (n: String, r: String) in #"{"name":"\#(n)","result":"\#(r)","reason":"x","detail":"\#(n): x"}"# }
+        let out = [line("a", "failed"), line("b", "failed"), line("c", "ok")].joined(separator: "\n") + "\n"
+        let r = AgentIsland.actionResult(status: 1, output: Data(out.utf8))
+        let t = { (k: Set<String>) in AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped", killed: k) }
+        XCTAssertEqual(t([]), "1 stopped, 2 failed")
+        XCTAssertEqual(t(["a"]), "1 stopped, 1 killed, 1 failed")
+        XCTAssertEqual(t(["a", "b"]), "1 stopped, 2 killed", "their failures explain the exit")
+        XCTAssertEqual(t(["c"]), "1 stopped, 2 failed", "only a failed row reads killed")
     }
 
     /// Visual evidence: the inline Kill all and row Kill questions, a row

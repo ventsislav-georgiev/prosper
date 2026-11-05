@@ -93,8 +93,9 @@ final class AgentIslandController {
     /// Sessions whose terminal is still launching: a double click opens one window.
     private var opening: Set<AgentSessionKey> = []
     /// #744 (QA #572 INFO-1): rows a Kill started on since their last other job: a
-    /// Stop or Restart it cut through leaves the row's text to the Kill.
-    private var killedRows: Set<AgentSessionKey> = []
+    /// Stop or Restart it cut through leaves the row's text to the Kill. #749 (QA #572
+    /// INFO-R4): the value is that job's last text held back ("" none), for a Kill that fails.
+    private(set) var killedRows: [AgentSessionKey: String] = [:]
     /// #523: every published list, on main, and nil when the island stops.
     /// LiveStatusPublisher listens (set by AppDelegate; tests leave it nil).
     var onSessions: (@MainActor ([AgentSession]?) -> Void)?
@@ -189,7 +190,7 @@ final class AgentIslandController {
         if store.actions.contains(where: { !$0.key.name.isEmpty && !live.contains($0.key) }) {
             store.actions = store.actions.filter { $0.key.name.isEmpty || live.contains($0.key) || runner.isBusy($0.key) }
         }
-        killedRows = killedRows.filter { live.contains($0) || runner.isBusy($0) }
+        killedRows = killedRows.filter { live.contains($0.key) || runner.isBusy($0.key) }
         // #581: the last session gone: one history read, so its record can keep the
         // island. On that edge only, never per tick.
         // ponytail: with no history yet the collapsed ear hides for the ~100 ms the
@@ -394,9 +395,9 @@ final class AgentIslandController {
         }
         guard started else { return false }
         if kill {
-            killedRows.insert(key)
+            killedRows[key] = ""
         } else {
-            killedRows = killedRows.filter { $0 != key && !(key.name.isEmpty && $0.dir == key.dir) }
+            killedRows = killedRows.filter { $0.key != key && !(key.name.isEmpty && $0.key.dir == key.dir) }
         }
         if let running {
             if history { store?.historyActions[key] = running } else { store?.actions[key] = running }
@@ -460,9 +461,9 @@ final class AgentIslandController {
     }
 
     /// QA #572 INFO-1: a Stop's or Restart's row text, unless a Kill cut through it:
-    /// then the row keeps the Kill's outcome.
+    /// then the row keeps the Kill's outcome, and the text is held for a Kill that fails.
     private func setRow(_ key: AgentSessionKey, _ text: String) {
-        if !killedRows.contains(key) { store?.actions[key] = text }
+        if killedRows[key] != nil { killedRows[key] = text } else { store?.actions[key] = text }
     }
 
     /// A dir job's end: the summary on the dir line; a row left on a running
@@ -511,7 +512,7 @@ final class AgentIslandController {
         let t = store.stopTargets(global: global)
         guard !t.stop.isEmpty else { return }
         store.dropQuestions()
-        store.ask(t.stop, skipped: t.skipped, global: global)
+        store.ask(t.stop, skipped: t.skipped, dashed: t.dashed, global: global)
         store.confirmingStopAll = true
         layout()
     }
@@ -535,8 +536,11 @@ final class AgentIslandController {
             let started = run(key, dch: dch, args: AgentIsland.stopArgs(rows.map(\.name)), running: AgentIsland.stoppingText,
                               bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.dirLine($0, dir: dir, .stop) }) {
                 [weak self] r in
-                self?.dirDone(dir, AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped"))
-                self?.refreshHistory()
+                guard let self else { return }
+                // #749 (QA #572 INFO-R5): a row a Kill cut through counts as killed, as the row reads.
+                let killed = Set(self.killedRows.keys.filter { $0.dir == dir }.map(\.name))
+                self.dirDone(dir, AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped", killed: killed))
+                self.refreshHistory()
             }
             if started { for s in rows { store.actions[s.key] = AgentIsland.stoppingText } }
         }
@@ -563,10 +567,30 @@ final class AgentIslandController {
         let target = store.killTarget
         store.confirmingKill = nil
         guard yes, let target, case .ok(let dch) = store.resumeGate else { return layout() }
-        if !killRow(target, dch: dch, done: { _ in }), store.actions[target.key] != AgentIsland.killingText {
-            store.actions[target.key] = AgentIsland.killBusyText
-        }
+        if !killRow(target, dch: dch, done: { _ in }) { refuseKill(target.key) }
         layout()
+    }
+
+    /// A Kill a busy row refused: the row says so, unless it reads "Killing…" (a Kill
+    /// already runs there).
+    private func refuseKill(_ key: AgentSessionKey) {
+        guard store?.actions[key] != AgentIsland.killingText else { return }
+        store?.actions[key] = AgentIsland.killBusyText
+        clearRefusal(key)
+    }
+
+    /// #749 (QA #572 INFO-R2): the refusal goes once the job that refused it ended, which
+    /// may be one the island does not show (the phone's, a History row's, a New session).
+    /// Checked each second while the row still says it; jobs are bounded, so is this.
+    private func clearRefusal(_ key: AgentSessionKey) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let store = self.store, store.actions[key] == AgentIsland.killBusyText else { return }
+                if self.runner.isBusy(key) { return self.clearRefusal(key) }
+                store.actions[key] = nil
+                self.layout()
+            }
+        }
     }
 
     /// `dch -k <name>` with its dir's control env, on the row's key, beside a Stop or
@@ -578,8 +602,18 @@ final class AgentIslandController {
                          done: @escaping @MainActor @Sendable (DchActionResult) -> Void) -> Bool {
         let key = s.key
         return run(key, dch: dch, args: AgentIsland.killArgs(s.name), running: AgentIsland.killingText, kill: true) { [weak self] r in
-            self?.store?.actions[key] = AgentIsland.killText(r)
-            if refresh { self?.refreshHistory() }
+            guard let self else { return }
+            let text = AgentIsland.killText(r)
+            if AgentIsland.killed(r) || AgentIsland.killGone(r) {
+                self.store?.actions[key] = text
+            } else {
+                // #749 (QA #572 INFO-R4): a failed or cancelled Kill hands the row back to the Stop
+                // or Restart it cut through: a result of theirs held back shows first; a phase (or
+                // none) leaves the Kill's text, until their next line.
+                let held = self.killedRows.removeValue(forKey: key) ?? ""
+                self.store?.actions[key] = held.isEmpty || AgentIsland.runningTexts.contains(held) ? text : "\(held); \(text)"
+            }
+            if refresh { self.refreshHistory() }
             done(r)
         }
     }
@@ -605,7 +639,8 @@ final class AgentIslandController {
 
     /// The asked rows by name, never `-kl` (it kills every session in the dir, listed
     /// or not). dch -k takes one name, so one call per row on the row's key, with its
-    /// dir's env; a row running a job Kill may not cut through is left alone (busy).
+    /// dir's env; a row running a job Kill may not cut through is left alone (busy) and
+    /// says so, as under its own Kill (#749).
     /// Each dir gets "N killed, N already ended, N failed, N busy" once its last call
     /// is back, unless a dir-wide job's text is up there (QA #572 INFO-2: the rows say
     /// their own). One History re-read once every call is back (INFO-3).
@@ -626,7 +661,13 @@ final class AgentIslandController {
                     all.left -= 1
                     if all.left == 0 { self?.refreshHistory() }
                 }
-                if started { all.left += 1 } else { tally.busy += 1; tally.left -= 1 }
+                if started {
+                    all.left += 1
+                } else {
+                    tally.busy += 1
+                    tally.left -= 1
+                    refuseKill(s.key)   // #749 (QA #572 INFO-R3): as the row's own Kill, under any job
+                }
             }
             finish()
         }
