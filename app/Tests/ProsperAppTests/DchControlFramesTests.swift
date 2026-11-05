@@ -694,6 +694,36 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(f.launchedArgs, [["--island"]], "no stop launched while busy")
     }
 
+    /// #750 (QA #576 INFO-3): the phone's Restart all counts a row an island Kill ended while it
+    /// ran as killed, as the island's does; the rest of its failures stay failed.
+    func testPhoneRestartAllCountsARowAKillEndedAsKilled() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1"), ("b", "1.24.1")])
+        let all = AgentIsland.restartAllArgs
+        f.out[all.joined(separator: " ")] = Self.line("a", "failed", detail: "a: master gone") + "\n"
+            + Self.line("b", "failed", detail: "b: master gone")
+        f.status = 1
+        f.out["-k a"] = "killed: a\n"
+        f.statusFor["-k a"] = 0
+        let o = ops(f)
+        let frames = Frames(), held = expectation(description: "Restart all running"), replied = expectation(description: "reply")
+        f.lock.withLock { f.holdArgs = all; f.held = held }
+        o.handle(DchFrame.restart, try! JSONSerialization.data(withJSONObject: ["all": true])) { frame in
+            frames.lock.withLock { frames.all.append(frame) }
+            replied.fulfill()
+        }
+        wait(for: [held], timeout: 5)
+        let killed = expectation(description: "kill done")
+        XCTAssertTrue(o.runner.start(AgentSessionKey(dir: "/d", name: "a"), path: "/fake/dch", args: ["-k", "a"], kill: true,
+                                     env: { [:] }) { _ in killed.fulfill() })
+        wait(for: [killed], timeout: 5)
+        f.hold.signal()
+        wait(for: [replied], timeout: 5)
+        let got = frames.lock.withLock { frames.all }
+        XCTAssertEqual(got.count, 1)
+        XCTAssertEqual(got.first.map { message(Self.decode($0)) }, "1 killed, 1 failed")
+    }
+
     /// #749 (QA #572 INFO-R1): an island Kill on a row cuts through the phone's Stop, Restart
     /// and Restart all there, as through the island's own; never its Resume, Pin or Remove.
     func testAnIslandKillCutsThroughOnlyThePhonesStopAndRestart() {

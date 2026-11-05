@@ -95,6 +95,7 @@ final class AgentIslandController {
     /// #744 (QA #572 INFO-1): rows a Kill started on since their last other job: a
     /// Stop or Restart it cut through leaves the row's text to the Kill. #749 (QA #572
     /// INFO-R4): the value is that job's last text held back ("" none), for a Kill that fails.
+    /// #750 (QA #576 INFO-4): from the row's running text when the Kill started.
     private(set) var killedRows: [AgentSessionKey: String] = [:]
     /// #523: every published list, on main, and nil when the island stops.
     /// LiveStatusPublisher listens (set by AppDelegate; tests leave it nil).
@@ -395,7 +396,10 @@ final class AgentIslandController {
         }
         guard started else { return false }
         if kill {
-            killedRows[key] = ""
+            // #750 (QA #576 INFO-4): a running text up now is held, so a dir job's result for
+            // the row (shown only over one, dirLine) is held as well.
+            let now = store?.actions[key] ?? ""
+            killedRows[key] = AgentIsland.runningTexts.contains(now) ? now : ""
         } else {
             killedRows = killedRows.filter { $0.key != key && !(key.name.isEmpty && $0.key.dir == key.dir) }
         }
@@ -449,7 +453,7 @@ final class AgentIslandController {
         } else {
             guard store.sessions.contains(where: { $0.key == key }) else { return }
         }
-        let now = history ? store.historyActions[key] : store.actions[key]
+        let now = history ? store.historyActions[key] : killedRows[key] ?? store.actions[key]   // #750: under a Kill, the held text
         let text: String
         if let t = AgentIsland.phaseText(o) {
             text = t
@@ -538,8 +542,8 @@ final class AgentIslandController {
                 [weak self] r in
                 guard let self else { return }
                 // #749 (QA #572 INFO-R5): a row a Kill cut through counts as killed, as the row reads.
-                let killed = Set(self.killedRows.keys.filter { $0.dir == dir }.map(\.name))
-                self.dirDone(dir, AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped", killed: killed))
+                // #750 (QA #576 INFO-2): only a Kill that worked before this job ended (r.killed).
+                self.dirDone(dir, AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped"))
                 self.refreshHistory()
             }
             if started { for s in rows { store.actions[s.key] = AgentIsland.stoppingText } }
@@ -582,11 +586,12 @@ final class AgentIslandController {
     /// #749 (QA #572 INFO-R2): the refusal goes once the job that refused it ended, which
     /// may be one the island does not show (the phone's, a History row's, a New session).
     /// Checked each second while the row still says it; jobs are bounded, so is this.
+    /// #750 (QA #576 INFO-1): busy as a Kill sees it; a Stop or Restart since would not refuse one.
     private func clearRefusal(_ key: AgentSessionKey) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, let store = self.store, store.actions[key] == AgentIsland.killBusyText else { return }
-                if self.runner.isBusy(key) { return self.clearRefusal(key) }
+                if self.runner.isKillBusy(key) { return self.clearRefusal(key) }   // #750 (QA #576 INFO-1)
                 store.actions[key] = nil
                 self.layout()
             }

@@ -1050,9 +1050,11 @@ struct DchControlOps: Sendable {
     }
 
     /// Every job's output as one: the first non-zero exit, lines in job order.
+    /// #750 (QA #576 INFO-3): the sessions a Kill ended in any of them.
+    /// ponytail: by name, so a killed name also failing in another dir reads killed there; key by dir if that matters.
     static func merged(_ rs: [DchActionResult]) -> DchActionResult {
         DchActionResult(status: rs.first { $0.status != 0 }?.status ?? 0, json: rs.flatMap(\.json),
-                        text: rs.flatMap(\.text), stopped: rs.contains { $0.stopped })
+                        text: rs.flatMap(\.text), stopped: rs.contains { $0.stopped }, killed: Set(rs.flatMap(\.killed)))
     }
 
     /// QA #462 H1: a result that leaves the session done: ok, or a skip with no

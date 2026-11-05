@@ -96,6 +96,9 @@ struct DchActionResult: Equatable, Sendable {
     var json: [DchJSONLine] = []
     var text: [String] = []
     var stopped = false
+    /// #750 (QA #576 INFO-2): a dir-wide Stop's or Restart's: the sessions a Kill ended (dch
+    /// said "killed: ") while it ran, set by the runner. Their failed lines read "killed".
+    var killed: Set<String> = []
 
     var line: String { text.last ?? "" }
     /// QA #449 L1: the reason behind a failure no result names.
@@ -425,38 +428,44 @@ extension AgentIsland {
     /// "all agents current". A non-zero exit no result explains reads as failed.
     static func restartAllSummary(_ r: DchActionResult) -> String {
         if r.stopped { return "Restart all cancelled: no answer in \(Verb.restart.minutes)m" }
+        let cut = cutByKill(r), killed = cut.killed, r = cut.rest   // #750 (QA #576 INFO-3)
         let masters = r.json.filter(\.isMaster), agents = r.json.filter(\.isFinal), all = masters + agents
         let moved = masters.filter { $0.result == "ok" }
         let restarted = agents.filter { $0.result == "ok" }.count
         let failed = all.filter(\.failed).count
         let skipped = all.filter { $0.result == "skipped" && !["not_claude", "current"].contains($0.reason ?? "") }.count
-        let other = r.status != 0 && failed == 0 ? failedText(r) : nil
-        guard !moved.isEmpty || restarted + failed > 0 else {
+        let other = r.status != 0 && failed + killed == 0 ? failedText(r) : nil
+        guard !moved.isEmpty || restarted + killed + failed > 0 else {
             if let other { return "Restart all \(other)" }
             return "all agents current" + (skipped > 0 ? " (\(skipped) skipped)" : "")
         }
         let dch = moved.last?.detail.flatMap { $0.isEmpty ? nil : $0 } ?? "restarted"
         return [moved.isEmpty ? nil : "\(moved.count) session\(moved.count == 1 ? "" : "s") \(dch)",
                 restarted > 0 ? "\(restarted) agent\(restarted == 1 ? "" : "s") restarted" : nil,
-                failed > 0 ? "\(failed) failed" : nil, skipped > 0 ? "\(skipped) skipped" : nil, other]
+                killed > 0 ? "\(killed) killed" : nil, failed > 0 ? "\(failed) failed" : nil, skipped > 0 ? "\(skipped) skipped" : nil, other]
             .compactMap { $0 }.joined(separator: ", ")
     }
 
     /// Resume interrupted's and Stop all's one line: "N resumed|stopped, N failed,
     /// N skipped"; `empty` when dch named no session and exited 0.
-    /// #749 (QA #572 INFO-R5): a failed session in `killed` (a Kill cut through it) counts as "killed".
-    static func tally(_ r: DchActionResult, _ verb: Verb, title: String, empty: String, killed: Set<String> = []) -> String {
+    /// #749 (QA #572 INFO-R5): a failed session a Kill ended (`r.killed`) counts as "killed".
+    static func tally(_ r: DchActionResult, _ verb: Verb, title: String, empty: String) -> String {
         if r.stopped { return "\(title) cancelled: no answer in \(verb.minutes)m" }
-        var r = r
-        let cut = { (o: DchJSONLine) in o.isFinal && o.failed && killed.contains(o.name) }
-        let k = r.json.filter(cut).count
-        r.json.removeAll(where: cut)
+        let cut = cutByKill(r), k = cut.killed, r = cut.rest
         let c = counts(r)
         let other = r.status != 0 && c.failed + k == 0 ? failedText(r) : nil
         let parts = [(c.ok, verb.done.lowercased()), (k, "killed"), (c.failed, "failed"),
                      (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
         if parts.isEmpty { return other.map { "\(title) \($0)" } ?? empty }
         return (parts + [other].compactMap { $0 }).joined(separator: ", ")
+    }
+
+    /// #750 (QA #576 INFO-2, INFO-3): the failed session lines of the sessions a Kill ended
+    /// (`r.killed`): how many, and `r` without them.
+    static func cutByKill(_ r: DchActionResult) -> (killed: Int, rest: DchActionResult) {
+        var rest = r
+        rest.json.removeAll { $0.isFinal && $0.failed && r.killed.contains($0.name) }
+        return (r.json.count - rest.json.count, rest)
     }
 
     /// #620: `tally`'s numbers, the session results by kind (dch's own --json tally line counts the same).
@@ -928,6 +937,7 @@ final class DchActionRunner: @unchecked Sendable {
         var cancelled = false
         var signalled = false
         var lastOutput = DispatchTime.now()   // #672: the idle bound counts from here
+        var killed: Set<String> = []   // #750: DchActionResult.killed
     }
 
     private let lock = NSLock()
@@ -957,6 +967,9 @@ final class DchActionRunner: @unchecked Sendable {
         jobs[key] != nil || jobs[AgentSessionKey(dir: key.dir, name: "")] != nil || kills[key] != nil
             || (key.name.isEmpty && (jobs.keys.contains { $0.dir == key.dir } || kills.keys.contains { $0.dir == key.dir }))
     }
+
+    /// #750 (QA #576 INFO-1): a Kill on the key would be refused now.
+    func isKillBusy(_ key: AgentSessionKey) -> Bool { lock.withLock { killConflicts(key) } }
 
     /// #744: a Kill refuses a second Kill on its row, and any job but a Stop or Restart on the row or its dir.
     private func killConflicts(_ key: AgentSessionKey) -> Bool {
@@ -998,12 +1011,17 @@ final class DchActionRunner: @unchecked Sendable {
                 lines.add(chunk)
             })
             lines.flush()
-            let stopped = lock.withLock { () -> Bool in
+            var result = AgentIsland.actionResult(status: r.status, output: r.out)
+            lock.withLock {
                 if kill { kills[key] = nil } else { jobs[key] = nil }
                 job.pid = nil   // reaped: never signalled again (the pid may be reused)
-                return job.cancelled
+                result.stopped = job.cancelled
+                result.killed = job.killed
+                // #750 (QA #576 INFO-2): a Kill that worked marks the dir's Stop all or Restart all it
+                // cut through, in the same lock as its reap (a row's own job reads no tally).
+                if kill, AgentIsland.killed(result) { jobs[AgentSessionKey(dir: key.dir, name: "")]?.killed.insert(key.name) }
             }
-            done(AgentIsland.actionResult(status: r.status, output: r.out, stopped: stopped))
+            done(result)
         }
         arm(job, bound: bound ?? self.bound)
         return true

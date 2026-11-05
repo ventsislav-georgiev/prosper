@@ -3011,6 +3011,8 @@ final class AgentIslandControlsTests: XCTestCase {
         let open = DispatchSemaphore(value: 0), lock = NSLock()
         var args: [[String]] = []
         var output = "dch: master gone\n"
+        /// #750: printed before the wait on `open` (a dir job's phases).
+        var progress = ""
         /// #749: `-k` exits 1 with this line instead; with `holdKill`, only once `killGate` is signalled.
         var killFail: String?
         var holdKill = false
@@ -3027,10 +3029,12 @@ final class AgentIslandControlsTests: XCTestCase {
                     if let fail { return (1, Data("\(fail)\n".utf8)) }
                     return (0, Data("killed: \(args[1])\n".utf8))
                 }
+                let early = self.lock.withLock { Data(self.progress.utf8) }
+                if !early.isEmpty { onOutput(early) }
                 self.open.wait()
                 let out = self.lock.withLock { Data(self.output.utf8) }
                 onOutput(out)
-                return (1, out)
+                return (1, early + out)
             }, signal: { _ in })
         }
     }
@@ -3131,7 +3135,8 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(h.kills.count, 3, "a Kill beside a Restart all")
         XCTAssertEqual(store.actions[a.key], "Killed")
         h.open.signal()
-        settle(c) { !c.runner.isBusy(d) }
+        settle(c) { !c.runner.isBusy(d) && store.actions[d] != AgentIsland.restartAllRunningText }
+        XCTAssertEqual(store.actions[d], "1 killed, 1 failed", "#750 (QA #576 INFO-3): Restart all counts the row killed too")
     }
 
     /// #749 (QA #572 INFO-R4): a Kill that fails hands the row back to the Stop or Restart it
@@ -3262,15 +3267,152 @@ final class AgentIslandControlsTests: XCTestCase {
     }
 
     /// #749 (QA #572 INFO-R5): Stop all's failed lines for rows a Kill cut through count as killed.
+    /// #750 (QA #576 INFO-3): Restart all's too; the master pass never.
     func testStopAllTallyCountsKilledRowsAsKilled() {
         let line = { (n: String, r: String) in #"{"name":"\#(n)","result":"\#(r)","reason":"x","detail":"\#(n): x"}"# }
         let out = [line("a", "failed"), line("b", "failed"), line("c", "ok")].joined(separator: "\n") + "\n"
-        let r = AgentIsland.actionResult(status: 1, output: Data(out.utf8))
-        let t = { (k: Set<String>) in AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped", killed: k) }
+        let r = { (k: Set<String>) in
+            var r = AgentIsland.actionResult(status: 1, output: Data(out.utf8))
+            r.killed = k
+            return r
+        }
+        let t = { (k: Set<String>) in AgentIsland.tally(r(k), .stop, title: "Stop all", empty: "nothing stopped") }
         XCTAssertEqual(t([]), "1 stopped, 2 failed")
         XCTAssertEqual(t(["a"]), "1 stopped, 1 killed, 1 failed")
         XCTAssertEqual(t(["a", "b"]), "1 stopped, 2 killed", "their failures explain the exit")
         XCTAssertEqual(t(["c"]), "1 stopped, 2 failed", "only a failed row reads killed")
+        let sum = { (k: Set<String>) in AgentIsland.restartAllSummary(r(k)) }
+        XCTAssertEqual(sum([]), "1 agent restarted, 2 failed")
+        XCTAssertEqual(sum(["a"]), "1 agent restarted, 1 killed, 1 failed")
+        XCTAssertEqual(sum(["a", "b"]), "1 agent restarted, 2 killed", "their failures explain the exit")
+        XCTAssertEqual(sum(["c"]), "1 agent restarted, 2 failed")
+        var killedOnly = AgentIsland.actionResult(status: 1, output: Data((line("a", "failed") + "\n").utf8))
+        killedOnly.killed = ["a"]
+        XCTAssertEqual(AgentIsland.restartAllSummary(killedOnly), "1 killed", "not \"all agents current\"")
+        let master = #"{"name":"a","phase":"master","result":"failed","reason":"x","detail":"a: x"}"#
+        var m = AgentIsland.actionResult(status: 1, output: Data((master + "\n").utf8))
+        m.killed = ["a"]
+        XCTAssertEqual(AgentIsland.restartAllSummary(m), "1 failed", "a master pass is no session result")
+    }
+
+    /// #750 (QA #576 INFO-1): a refused Kill's note goes once nothing a Kill refuses runs on the
+    /// row, though a Stop (which a Kill cuts through) started there since.
+    @MainActor
+    func testRefusedKillNoteGoesWhenOnlyAStopRunsThere() throws {
+        let h = Hang()
+        let a = session("a", version: "1.24.1")
+        let c = opened(FakeProc(), [a])
+        c.runner = h.runner()
+        let store = try XCTUnwrap(c.store)
+        XCTAssertTrue(c.runner.start(a.key, path: "/fake/dch", args: ["--revive", "a"], env: { [:] }) { _ in })
+        c.askKill(a)
+        c.confirmKill(true)
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killBusyText)
+        // The Revive ends and a phone Stop starts, inside the first 1 s check (main is not run here).
+        h.open.signal()
+        let end = Date().addingTimeInterval(5)
+        while c.runner.isBusy(a.key) && Date() < end { usleep(1000) }
+        XCTAssertTrue(c.runner.start(a.key, path: "/fake/dch", args: ["--stop", "a", "--json"], yields: true, env: { [:] }) { _ in })
+        settle(c) { store.actions[a.key] == nil }
+        XCTAssertNil(store.actions[a.key], "a Kill would run now")
+        XCTAssertTrue(c.runner.isBusy(a.key), "while the Stop still runs")
+        h.open.signal()
+        settle(c) { !c.runner.isBusy(a.key) }
+    }
+
+    /// #750 (QA #576 INFO-2): Stop all counts a row killed only when its Kill worked before Stop
+    /// all ended: not a Kill still out then (that fails after), not one that found the row ended.
+    @MainActor
+    func testStopAllCountsKilledOnlyForAKillThatWorked() throws {
+        let h = Hang()
+        let a = session("a", version: "1.24.1"), b = session("b", version: "1.24.1")
+        let c = opened(FakeProc(), [a, b])
+        c.runner = h.runner()
+        let store = try XCTUnwrap(c.store)
+        let d = AgentSessionKey(dir: "/d", name: "")
+        h.output = #"{"name":"a","result":"failed","reason":"gone","detail":"a: master gone"}"# + "\n"
+            + #"{"name":"b","result":"failed","reason":"gone","detail":"b: master gone"}"# + "\n"
+        h.lock.withLock { h.holdKill = true; h.killFail = "dch: permission denied" }
+        c.askStopAll()
+        c.confirmStopAll(true)
+        c.askKill(a)
+        c.confirmKill(true)
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killingText)
+        h.open.signal()
+        settle(c) { store.actions[d] != AgentIsland.stoppingText }
+        XCTAssertEqual(store.actions[d], "2 failed", "a Kill still out is no kill")
+        h.killGate.signal()
+        settle(c) { store.actions[a.key] != AgentIsland.killingText }
+        XCTAssertEqual(store.actions[a.key], "master gone; Kill failed: dch: permission denied")
+        XCTAssertEqual(store.actions[d], "2 failed")
+        // Already ended: the row says so, the dir counts it failed (dch's word on the Stop).
+        h.lock.withLock { h.holdKill = false; h.killFail = "no session: a" }
+        c.askStopAll()
+        c.confirmStopAll(true)
+        c.askKill(a)
+        c.confirmKill(true)
+        settle(c) { store.actions[a.key] == AgentIsland.alreadyEndedText }
+        XCTAssertEqual(store.actions[a.key], AgentIsland.alreadyEndedText)
+        h.open.signal()
+        settle(c) { store.actions[d] != AgentIsland.stoppingText }
+        XCTAssertEqual(store.actions[d], "2 failed", "\"Already ended\" is no kill")
+        XCTAssertEqual(store.actions[a.key], AgentIsland.alreadyEndedText)
+    }
+
+    /// #750 (QA #576 item 5): a Kill counts only in its own dir's Stop all, even where a row of
+    /// another dir has its name.
+    @MainActor
+    func testStopAllCountsAKillOnlyInItsOwnDir() throws {
+        let h = Hang()
+        let a = session("a", version: "1.24.1"), e = session("a", dir: "/e", version: "1.24.1")
+        let c = opened(FakeProc(), [a, e], dirs: ["/d", "/e"])
+        c.runner = h.runner()
+        let store = try XCTUnwrap(c.store)
+        let d = AgentSessionKey(dir: "/d", name: ""), de = AgentSessionKey(dir: "/e", name: "")
+        h.output = #"{"name":"a","result":"failed","reason":"gone","detail":"a: master gone"}"# + "\n"
+        c.askStopAll(global: true)
+        c.confirmStopAll(true)
+        XCTAssertEqual(store.actions[d], AgentIsland.stoppingText)
+        XCTAssertEqual(store.actions[de], AgentIsland.stoppingText)
+        c.askKill(a)
+        c.confirmKill(true)
+        settle(c) { store.actions[a.key] == "Killed" }
+        h.open.signal(); h.open.signal()
+        settle(c) { store.actions[d] != AgentIsland.stoppingText && store.actions[de] != AgentIsland.stoppingText }
+        XCTAssertEqual(store.actions[d], "1 killed")
+        XCTAssertEqual(store.actions[de], "1 failed", "the other dir's a was not killed")
+        XCTAssertEqual(store.actions[e.key], "master gone")
+    }
+
+    /// #750 (QA #576 INFO-4): a dir job's ok result for a row a Kill cut through is held too:
+    /// a failed Kill on a row Restart all restarted reads both.
+    @MainActor
+    func testAFailedKillUnderRestartAllShowsTheRowsRestart() throws {
+        let h = Hang()
+        h.lock.withLock { h.holdKill = true; h.killFail = "dch: permission denied" }
+        let a = session("a", version: "1.24.1")
+        let c = opened(FakeProc(), [a])
+        c.runner = h.runner()
+        let store = try XCTUnwrap(c.store)
+        let d = AgentSessionKey(dir: "/d", name: "")
+        h.progress = #"{"name":"a","phase":"pausing"}"# + "\n"
+        h.output = #"{"name":"a","result":"ok","reason":"","detail":""}"# + "\n"
+        c.askRestartAll()
+        c.confirmRestartAll(true)
+        settle(c) { store.actions[a.key] == "Pausing…" }
+        XCTAssertEqual(store.actions[a.key], "Pausing…")
+        c.askKill(a)
+        c.confirmKill(true)
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killingText)
+        XCTAssertEqual(c.killedRows[a.key], "Pausing…", "the running text it cut through, held")
+        h.open.signal()
+        settle(c) { !c.runner.hasJob(d) && store.actions[d] != AgentIsland.restartAllRunningText }
+        let restarted = AgentIsland.Verb.restart.done
+        XCTAssertEqual(c.killedRows[a.key], restarted, "Restart all's result, held back")
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killingText, "while the Kill runs")
+        h.killGate.signal()
+        settle(c) { store.actions[a.key] != AgentIsland.killingText }
+        XCTAssertEqual(store.actions[a.key], "\(restarted); Kill failed: dch: permission denied")
     }
 
     /// Visual evidence: the inline Kill all and row Kill questions, a row
