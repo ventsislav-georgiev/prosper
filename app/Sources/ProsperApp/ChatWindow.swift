@@ -46,7 +46,6 @@ final class ChatWindow {
         // The transparent title bar still drags the window.
         win.isMovableByWindowBackground = false
         win.identifier = ChatWindow.themedIdentifier
-        win.appearance = NSAppearance(named: .darkAqua)
         let s = ThemeRuntime.scale
         win.setContentSize(NSSize(width: 760 * s, height: 720 * s))
         // Min height keeps room above the input field for the full 8-row slash-command
@@ -825,7 +824,6 @@ private struct HistoryMenu: View {
         .frame(width: sz(460))
         .background(LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
                                    startPoint: .top, endPoint: .bottom))
-        .preferredColorScheme(.dark)
         .tint(Neon.blue)
     }
 
@@ -1113,7 +1111,6 @@ private struct PersonaPicker: View {
         .frame(width: sz(240))
         .background(LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
                                    startPoint: .top, endPoint: .bottom))
-        .preferredColorScheme(.dark)
         .tint(Neon.blue)
     }
 }

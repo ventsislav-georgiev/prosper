@@ -76,8 +76,8 @@ final class SettingsWindow {
         // The window is a dark, full-bleed neon console: a vertical sidebar owns
         // navigation and the content area paints its own cyberpunk backdrop. Hide
         // the title, make the titlebar transparent, and paint the frame in the
-        // backdrop's top color so the titlebar dissolves into the UI. Force dark
-        // aqua so system controls (segmented pickers, fields) match the theme.
+        // backdrop's top color so the titlebar dissolves into the UI. No appearance
+        // of its own (#753): it inherits NSApp.appearance, the active theme's.
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
         // NOT movable by background: SwiftUI controls hosted in an NSHostingView don't
@@ -86,7 +86,6 @@ final class SettingsWindow {
         // click-drag on a slider moved the whole window instead of the thumb. The
         // titlebar strip (titled style mask, just transparent/hidden) stays draggable.
         win.isMovableByWindowBackground = false
-        win.appearance = NSAppearance(named: .darkAqua)
         // Tagged so the theme onChange hook (AppDelegate) can find this window to
         // re-apply opacity + scaled min-size live when the user changes them.
         win.identifier = SettingsWindow.themedIdentifier
@@ -894,7 +893,6 @@ private struct SettingsRootView: View {
                 .environment(\.settingsPaneID, selection)
         }
         .frame(minWidth: sz(820), minHeight: sz(480))
-        .preferredColorScheme(.dark)
         .onAppear {
             let shared = SettingsHooks.shared
             model.onAutocompleteChanged = shared.onAutocompleteChanged
@@ -2622,7 +2620,6 @@ struct AppPickerMenu: View {
         .frame(width: sz(280))
         .background(LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
                                    startPoint: .top, endPoint: .bottom))
-        .preferredColorScheme(.dark)
         .tint(Neon.blue)
         .task { searchFocused = true }
     }

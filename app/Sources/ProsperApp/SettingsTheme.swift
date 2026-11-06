@@ -855,7 +855,6 @@ private struct NeonPanelSurface: ViewModifier {
             .overlay(
                 RoundedRectangle(cornerRadius: c, style: .continuous)
                     .strokeBorder(Neon.cardStroke, lineWidth: 1))
-            .preferredColorScheme(.dark)
             .tint(Neon.blue)
     }
 }

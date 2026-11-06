@@ -538,16 +538,13 @@ extension MenuBarIconChoice {
 enum MenuBarTint {
     /// The real macOS "Appearance" (System Settings → Appearance) — NOT this
     /// app's own overridden notion of it, which the menu bar (owned by the
-    /// system, not this app) ignores. Two things in this app already read
-    /// differently from the system and would give the wrong answer here:
-    /// `ThemeStore.apply` sets `NSApp.appearance` to the SELECTED PROSPER
-    /// THEME's appearance (can be light while the system is dark, or vice
-    /// versa — see #093's report), and the Settings window itself hardcodes
-    /// `.darkAqua` unconditionally (`SettingsWindow.swift`) so its own native
-    /// controls always look dark regardless of theme or system. Reading
-    /// `AppleInterfaceStyle` straight out of the global-domain defaults — the
-    /// same preference AppKit itself derives real template-image tinting
-    /// from — sidesteps both overrides instead of trying to see through them.
+    /// system, not this app) ignores. `ThemeStore.apply` sets `NSApp.appearance`
+    /// to the SELECTED PROSPER THEME's appearance (can be light while the system
+    /// is dark, or vice versa — see #093's report), and every Prosper window and
+    /// popover wears that (#752, #753), so none of them reads as the system.
+    /// Reading `AppleInterfaceStyle` straight out of the global-domain defaults —
+    /// the same preference AppKit itself derives real template-image tinting
+    /// from — sidesteps that override instead of trying to see through it.
     static func isSystemDark(interfaceStyle: String?) -> Bool {
         (interfaceStyle ?? "").caseInsensitiveCompare("Dark") == .orderedSame
     }

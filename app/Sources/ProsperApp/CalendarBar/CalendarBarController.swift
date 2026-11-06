@@ -234,7 +234,7 @@ final class CalendarBarController {
         store.monthAnchor = store.today
         store.selectedDay = store.today
         refetch()
-        let host = NSHostingController(rootView: CalendarPopupView(
+        let popup = CalendarPopupView(
             store: store,
             onMonthChanged: { [weak self] in self?.refetch() },
             onPinChanged: { [weak self] pinned in
@@ -247,7 +247,10 @@ final class CalendarBarController {
                 self?.openSettingsHandler?()
             },
             onClose: { [weak self] in self?.popover.performClose(nil) },
-            onRowsChanged: { [weak self] rows in self?.persistRows(rows) }))
+            onRowsChanged: { [weak self] rows in self?.persistRows(rows) })
+        // Themed (#753): a pinned popover outlives a theme switch; ThemeStore re-skins
+        // its appearance, and Themed rebuilds the content on the new palette.
+        let host = NSHostingController(rootView: Themed { popup })
         // Size the popover to the SwiftUI content BEFORE anchoring — without
         // this the first show anchors a 0×0 popover that then grows offscreen.
         host.sizingOptions = [.preferredContentSize]

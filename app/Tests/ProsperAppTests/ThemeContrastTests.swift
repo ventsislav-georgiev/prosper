@@ -125,6 +125,129 @@ final class ThemeContrastTests: XCTestCase {
         }
     }
 
+    /// #753 / QA #582 INFO-1: a popover already on screen (a pinned Calendar) follows a
+    /// live theme switch instead of keeping the appearance it showed with.
+    func testShownPopoverFollowsALiveThemeSwitch() throws {
+        let all = try themes()
+        ThemeStore.shared.setAvailable(Array(all.dropFirst()))
+        let light = try XCTUnwrap(all.first { $0.appearance == .light })
+        let dark = try XCTUnwrap(all.dropFirst().first { $0.appearance == .dark })
+        ThemeStore.shared.select(id: dark.id)
+        let popover = NSPopover()
+        NotificationCenter.default.post(name: NSPopover.willShowNotification, object: popover)
+        XCTAssertEqual(popover.appearance?.name, .darkAqua)
+        ThemeStore.shared.select(id: light.id)
+        XCTAssertEqual(popover.appearance?.name, .aqua, "shown popover kept the old theme's appearance")
+        ThemeStore.shared.select(id: dark.id)
+        XCTAssertEqual(popover.appearance?.name, .darkAqua)
+    }
+
+    /// #753 / QA #582 INFO-4: the observer runs on main (queue .main), so a willShow
+    /// posted off the main thread is applied there instead of trapping in assumeIsolated.
+    func testPopoverObserverIsSafeOffTheMainThread() throws {
+        let all = try themes()
+        ThemeStore.shared.setAvailable(Array(all.dropFirst()))
+        let light = try XCTUnwrap(all.first { $0.appearance == .light })
+        ThemeStore.shared.select(id: light.id)
+        let popover = NSPopover()
+        popover.appearance = NSAppearance(named: .darkAqua)
+        nonisolated(unsafe) let sent = popover
+        let posted = expectation(description: "posted off main")
+        DispatchQueue.global().async {
+            NotificationCenter.default.post(name: NSPopover.willShowNotification, object: sent)
+            posted.fulfill()
+        }
+        wait(for: [posted], timeout: 5)
+        XCTAssertEqual(popover.appearance?.name, .aqua)
+    }
+
+    /// #753: under a LIGHT theme the in-window popovers (Settings app picker, Chat
+    /// history and persona) forced `.preferredColorScheme(.dark)` over the theme's
+    /// appearance, so the light theme's dark text sat on dark fields and the system
+    /// labels drew near-white on the light backdrop (1.00-1.26:1). Offscreen, per
+    /// theme, live-switched: a themed window (no appearance of its own) and the real
+    /// app-picker popover body (in a window given the theme's appearance, as the
+    /// willShow observer gives the popover) must both render in the theme's
+    /// appearance, and the theme's text and the system labels must clear 4.5:1.
+    func testWindowsAndTheirPopoversWearTheThemeAppearance() throws {
+        _ = NSApplication.shared
+        let all = try themes()
+        ThemeStore.shared.setAvailable(Array(all.dropFirst()))
+        // The window stays open across the switches (the live path); a popover is
+        // built per show, so the picker body gets a fresh window per theme.
+        let settings = Self.offscreenWindow(Themed(rebuildOnSizeChangeOnly: true) { AppearanceSettingsPane() })
+        defer { settings.contentViewController = nil; settings.close() }
+        for d in all {
+            ThemeStore.shared.select(id: d.id)
+            let picker = Self.offscreenWindow(AppPickerMenu(label: "App", onPick: { _, _ in }).popoverBody,
+                                              appearance: d.appearance.nsAppearanceName)
+            defer { picker.contentViewController = nil; picker.close() }
+            for w in [settings, picker] { Self.pump(w) }
+            let p = ThemePalette.load(for: d)
+            let bg = NSColor(p.bgTop), card = Self.flatten(NSColor(p.card), over: bg)
+            for (surface, w) in [("window", settings), ("app picker popover", picker)] {
+                let eff = try XCTUnwrap(w.contentView).effectiveAppearance
+                XCTAssertEqual(eff.name, d.appearance.nsAppearanceName, "\(d.title): \(surface) is \(eff.name.rawValue)")
+                func resolved(_ c: NSColor) -> NSColor {
+                    var r = NSColor.clear
+                    eff.performAsCurrentDrawingAppearance { r = Self.srgbColor(c) }
+                    return r
+                }
+                for (fn, fill) in [("textBackgroundColor", NSColor.textBackgroundColor), ("controlColor", .controlColor),
+                                   ("controlBackgroundColor", .controlBackgroundColor)] {
+                    let r = Self.contrast(NSColor(p.textPrimary), on: Self.flatten(resolved(fill), over: bg))
+                    XCTAssertGreaterThanOrEqual(r, Self.minimum, "\(d.title) \(surface): textPrimary on \(fn) is \(r):1")
+                }
+                for (sn, s) in [("bgTop", bg), ("card", card)] {
+                    let r = Self.contrast(resolved(.labelColor), on: s)
+                    XCTAssertGreaterThanOrEqual(r, Self.minimum, "\(d.title) \(surface): labelColor on \(sn) is \(r):1")
+                }
+            }
+        }
+    }
+
+    /// #753: nothing pins a surface dark (or light) behind the theme's back; the
+    /// theme's appearance reaches windows through NSApp.appearance and popovers
+    /// through the willShow observer. A pin like the ones #753 removed fails here,
+    /// including in views a test cannot host (the private Chat popovers).
+    func testNoSurfacePinsItsOwnAppearance() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp", isDirectory: true)
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        XCTAssertGreaterThan(files.count, 50)
+        let pins = [".preferredColorScheme(.dark)", ".preferredColorScheme(.light)",
+                    "NSAppearance(named: .darkAqua)", "NSAppearance(named: .aqua)"]
+        for f in files {
+            let text = try String(contentsOf: f, encoding: .utf8)
+            for pin in pins where text.contains(pin) {
+                XCTFail("\(f.lastPathComponent) pins \(pin); use the theme's appearance")
+            }
+        }
+    }
+
+    /// A never-ordered window far off every screen (the harness never shows it).
+    private static func offscreenWindow<V: View>(_ root: V, appearance: NSAppearance.Name? = nil) -> NSWindow {
+        let host = NSHostingController(rootView: root)
+        host.sizingOptions = []
+        let win = NSWindow(contentViewController: host)
+        win.appearance = appearance.flatMap { NSAppearance(named: $0) }
+        win.isReleasedWhenClosed = false
+        win.setContentSize(NSSize(width: 640, height: 480))
+        win.setFrameOrigin(NSPoint(x: -30000, y: -30000))
+        return win
+    }
+
+    private static func pump(_ win: NSWindow) {
+        guard let v = win.contentView else { return }
+        for _ in 0..<3 {
+            v.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            v.displayIfNeeded()
+        }
+    }
+
     private static func srgbColor(_ c: NSColor) -> NSColor { c.usingColorSpace(.sRGB) ?? c }
 
     private static func flatten(_ c: NSColor, over bg: NSColor) -> NSColor {

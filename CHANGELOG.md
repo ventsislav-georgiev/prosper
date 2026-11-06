@@ -26,6 +26,10 @@ tag from the now-released section and put it on the new top draft.
   Switching it off and back on during a check keeps its answer and re-checks a
   session still waiting. The setting's footer now says "commands and tool
   calls". (#754, #755)
+- **Light themes reach every popover.** The Settings app picker and Chat's history
+  and persona popovers no longer open dark under a light theme, so their text and
+  search hint are readable. An open popover, such as a pinned Calendar, follows a
+  theme switch. (#753)
 
 ## v2.170.0
 

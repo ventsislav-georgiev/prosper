@@ -122,19 +122,28 @@ final class ThemeStore: ObservableObject {
     /// `Neon.textPrimary` then sat on aqua controls: white text in white fields,
     /// black segment labels on the dark Neon backdrop (the Sensors fan control).
     /// One observer for every popover — status item, SwiftUI `.popover`, future
-    /// ones — instead of an appearance line per controller. Synchronous (queue nil)
-    /// so the appearance is set before the popover draws.
+    /// ones — instead of an appearance line per controller. queue .main (#753): a
+    /// post on the main thread still runs the block before `post` returns, so the
+    /// appearance is set before the popover draws, and a post from any other
+    /// thread hops to main instead of trapping in `assumeIsolated`.
     private static let popoverAppearanceObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
-        forName: NSPopover.willShowNotification, object: nil, queue: nil
+        forName: NSPopover.willShowNotification, object: nil, queue: .main
     ) { note in
         guard let popover = note.object as? NSPopover else { return }
-        MainActor.assumeIsolated { adoptThemeAppearance(popover) }
+        MainActor.assumeIsolated {
+            shownPopovers.add(popover)
+            adoptThemeAppearance(popover)
+        }
     }
+
+    /// #753: every popover that has shown, held weakly, so `apply` can re-skin the
+    /// ones still on screen (a pinned Calendar popover) on a live theme switch.
+    private static let shownPopovers = NSHashTable<NSPopover>.weakObjects()
 
     /// The appearance a surface showing `Neon.*` colours must render in: the
     /// active theme's, whatever the system or the anchoring view says.
-    static func adoptThemeAppearance(_ popover: NSPopover) {
-        popover.appearance = NSAppearance(named: shared.appearance.nsAppearanceName)
+    static func adoptThemeAppearance(_ popover: NSPopover, _ theme: ThemeAppearance = shared.appearance) {
+        popover.appearance = NSAppearance(named: theme.nsAppearanceName)
     }
 
     /// System "Reduce transparency" wins: when it's on, windows render fully opaque
@@ -286,7 +295,10 @@ final class ThemeStore: ObservableObject {
         // default theme is usually a no-op (palette already == default), and if we
         // returned before this, NSApp.appearance would stay nil → AppKit chrome
         // would follow the macOS *system* light/dark setting instead of the theme.
+        // Windows inherit it (none pins its own, #753). Popovers carry an explicit
+        // appearance from the willShow observer, so re-skin the shown ones here.
         NSApp?.appearance = NSAppearance(named: spec.appearance.nsAppearanceName)
+        for popover in Self.shownPopovers.allObjects { Self.adoptThemeAppearance(popover, spec.appearance) }
 
         // Suppress no-op re-applies. setAvailable() runs on every registry rescan
         // (extension install/enable/file-watch); without this guard each rescan

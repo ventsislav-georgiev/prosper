@@ -430,9 +430,8 @@ struct AppearanceSettingsPane: View {
     /// own template-image tinting exactly (plain white/black, not e.g.
     /// `.labelColor`, which could drift from what a real status item shows).
     /// See `MenuBarTint.isSystemDark`'s doc for why this has to read the real
-    /// system appearance rather than `theme.appearance` (tracks the selected
-    /// Prosper THEME, which can disagree) or this window's own hardcoded
-    /// `.darkAqua` (`SettingsWindow.swift`).
+    /// system appearance rather than `theme.appearance` or this window's
+    /// appearance (both track the selected Prosper THEME, which can disagree).
     private static var menuBarTint: Color { MenuBarTint.isSystemDark ? .white : .black }
 
     /// Reads/writes the custom-emoji field straight off `theme.menuBarIconChoice`

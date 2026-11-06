@@ -128,7 +128,6 @@ final class ModelSetup: NSObject, NSWindowDelegate {
         // Neon-console chrome, same treatment as Settings / extension windows.
         window.titlebarAppearsTransparent = true
         window.backgroundColor = NSColor(Neon.bgTop)
-        window.appearance = NSAppearance(named: .darkAqua)
         window.centerOnScreen()
 
         let content = NSView(frame: window.contentView?.bounds ?? .zero)

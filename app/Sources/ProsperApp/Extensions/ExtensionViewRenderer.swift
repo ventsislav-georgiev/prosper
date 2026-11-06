@@ -19,7 +19,6 @@ struct ExtensionRenderedView: View {
             // Same neon backdrop as Settings / the floating panels so every
             // extension window shares the design system.
             .background(SettingsBackground().ignoresSafeArea())
-            .preferredColorScheme(.dark)
             .tint(Neon.blue)
     }
 
@@ -556,7 +555,7 @@ final class ExtensionViewPanel {
         win.styleMask = [.titled, .closable, .resizable]
         // Same neon-console titlebar treatment as the Settings window: hide the
         // title, make the titlebar transparent, and paint the frame in the backdrop's
-        // top color so the bar dissolves into the UI. Dark aqua for system controls.
+        // top color so the bar dissolves into the UI.
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
         win.isMovableByWindowBackground = true

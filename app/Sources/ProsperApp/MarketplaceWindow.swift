@@ -32,7 +32,6 @@ final class MarketplaceWindow {
         win.titleVisibility = .hidden
         win.isMovableByWindowBackground = false
         win.identifier = NSUserInterfaceItemIdentifier("prosper.marketplaceWindow")
-        win.appearance = NSAppearance(named: .darkAqua)
         let s = ThemeRuntime.scale
         win.setContentSize(NSSize(width: 760 * s, height: 720 * s))
         win.contentMinSize = NSSize(width: 520 * s, height: 460 * s)
