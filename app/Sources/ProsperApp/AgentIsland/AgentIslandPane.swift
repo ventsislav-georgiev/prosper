@@ -24,6 +24,12 @@ struct AgentIslandPane: View {
     /// #751: Always allow permission prompts.
     @State private var autoAllow = Preferences.agentIslandAutoAllow
 
+    /// #751: the Always allow toggle's hook (#754 INFO-R3: a function so a test drives it).
+    static func autoAllowToggled(_ on: Bool, _ c: AgentIslandController = .shared) {
+        Preferences.agentIslandAutoAllow = on
+        c.autoAllowChanged()   // QA #581 F3: off drops every hold now
+    }
+
     /// #606: the field's commit: stored trimmed, empty = unset; the field shows
     /// what was stored.
     static func commit(_ text: String) -> String {
@@ -69,13 +75,10 @@ struct AgentIslandPane: View {
             }
         }
         NeonSection("Permission prompts",
-                    footer: "Answers Claude Code's \"Do you want to proceed?\" with Yes, so Bash commands and MCP tool calls run without your review and your iPhone isn't notified. Never picks \"don't ask again\"; every other question is left to you.") {
+                    footer: "Answers Claude Code's \"Do you want to proceed?\" with Yes, so commands and tool calls run without your review and your iPhone isn't notified. Never picks \"don't ask again\"; every other question is left to you.") {
             NeonRow("Always allow permission prompts") { Toggle("", isOn: $autoAllow).labelsHidden() }
         }
-        .onChange(of: autoAllow) { _, v in
-            Preferences.agentIslandAutoAllow = v
-            AgentIslandController.shared.autoAllowChanged()   // QA #581 F3: off drops every hold now
-        }
+        .onChange(of: autoAllow) { _, v in Self.autoAllowToggled(v) }
         NeonSection("New session",
                     footer: "What New session runs in the chosen folder, e.g. claude or headroom wrap claude --chrome.") {
             NeonRow("Command") {

@@ -988,7 +988,8 @@ final class AgentIslandController {
     // MARK: - Always allow (#751)
 
     /// #751 seams: the setting, the loop guard's clock, and the re-read timer.
-    var autoAllowOn: @MainActor () -> Bool = { Preferences.agentIslandAutoAllow }
+    /// #754: Sendable, so the queue reads it again right before the send.
+    var autoAllowOn: @Sendable () -> Bool = { Preferences.agentIslandAutoAllow }
     var now: @MainActor () -> Date = { Date() }
     var after: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, fire in
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { fire() } }
@@ -1034,10 +1035,10 @@ final class AgentIslandController {
             return
         }
         autoAllow[key] = .checking
-        let io = io, t = now()
+        let io = io, t = now(), isOn = autoAllowOn
         let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
         queue.async { [weak self] in
-            let r = AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered)
+            let r = AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered, isOn: isOn)
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r) } }
         }
     }
@@ -1053,6 +1054,9 @@ final class AgentIslandController {
             Self.log.info("Always allow answered Yes in \(key.name, privacy: .public): \(p.title, privacy: .private)")
             if !runner.isBusy(key) { store?.actions[key] = Self.autoAllowedText }
         }
+        // QA #581 F2: the check held the key, so refreshCards skipped it; read the card now.
+        // #754 INFO-R2: also when the hold is already gone (switched off meanwhile).
+        if r == .human || r == .gone { refreshCards() }
         guard autoAllow[key] == .checking else { return layout() }   // not blocked any more
         if r == .human {
             autoAllow[key] = .human
@@ -1066,8 +1070,6 @@ final class AgentIslandController {
                 self.startAutoAllow(key, answered: true)
             }
         }
-        // QA #581 F2: the check held the key, so refreshCards skipped it; read the card now.
-        if r == .human || r == .gone { refreshCards() }
         layout()
     }
 

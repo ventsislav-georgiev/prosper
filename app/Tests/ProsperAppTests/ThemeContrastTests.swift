@@ -18,7 +18,7 @@ final class ThemeContrastTests: XCTestCase {
     override func tearDown() {
         // Back to the built-in default, as ThemeCardRepaintTests does.
         Preferences.defaults.removeObject(forKey: "prosper.activeThemeID")
-        ThemeStore.shared.setAvailable([])
+        MainActor.assumeIsolated { ThemeStore.shared.setAvailable([]) }   // #754: XCTest tears down on main
         super.tearDown()
     }
 

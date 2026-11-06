@@ -557,12 +557,14 @@ extension AgentPrompt {
     /// human can see, and Always allow approves any plain permission prompt.
     /// Never on a preview form (#526): there a digit only moves the focus (and
     /// the preview); Enter answers, and the island never sends Enter.
+    /// #754: `stillOn` is asked last, after the dch calls, right before the send.
     static func answer(_ key: AgentSessionKey, digit: Int, expected: AgentPrompt,
-                       io: AgentPromptIO, card: Bool = true) -> AgentPromptAnswer {
+                       io: AgentPromptIO, card: Bool = true, stillOn: () -> Bool = { true }) -> AgentPromptAnswer {
         guard (1...9).contains(digit), expected.preview.isEmpty,
               expected.options.contains(where: { $0.digit == digit && (!card || expected.isEnabled($0)) }),
               let now = parse(io.read(key)), now == expected,
-              io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) == "blocked"
+              io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) == "blocked",
+              stillOn()
         else { return .changed }
         io.send(key, String(digit))
         return .sent
@@ -607,14 +609,16 @@ extension AgentPrompt {
     /// re-read after an answer, where a screen with no prompt and dch saying a
     /// known non-blocked state is the answer taking (`gone`), not the human's.
     /// QA #581 F1: an empty or unknown status (a timed-out dch) is unsure: human.
+    /// #754 INFO-R1: `isOn` is the setting, read again on this queue right before
+    /// the send: a check stuck behind a wedged dch never types after a switch-off.
     static func autoAllow(_ key: AgentSessionKey, io: AgentPromptIO, notAgain: AgentPrompt?,
-                          answered: Bool) -> AgentAutoAllow {
+                          answered: Bool, isOn: @Sendable () -> Bool = { true }) -> AgentAutoAllow {
         guard let p = parse(io.read(key)) else {
             return answered && goneStates.contains(io.status(key).trimmingCharacters(in: .whitespacesAndNewlines))
                 ? .gone : .human
         }
         guard p != notAgain, let yes = p.allowYes,
-              answer(key, digit: yes.digit, expected: p, io: io, card: false) == .sent else { return .human }
+              answer(key, digit: yes.digit, expected: p, io: io, card: false, stillOn: isOn) == .sent else { return .human }
         return .allowed(p)
     }
 }

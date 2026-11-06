@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 import XCTest
 @testable import ProsperApp
@@ -117,13 +118,16 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         var screens: [String]
         var status = "blocked"
         var reads = 0, sends: [String] = []
+        /// #754: the next read waits on this (a wedged dch), once.
+        var gate: DispatchSemaphore?
         init(_ screens: String...) { self.screens = screens }
         func set(_ screen: String, status: String = "blocked") {
             lock.withLock { screens = [screen]; self.status = status }
         }
         var io: AgentPromptIO {
             AgentPromptIO(read: { _ in
-                self.lock.withLock {
+                self.lock.withLock { () -> DispatchSemaphore? in defer { self.gate = nil }; return self.gate }?.wait()
+                return self.lock.withLock {
                     self.reads += 1
                     return self.screens.count > 1 ? self.screens.removeFirst() : self.screens[0]
                 }
@@ -552,6 +556,62 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         drain(c)
         XCTAssertEqual(f.sends, ["1"])
         XCTAssertFalse(r.everBlocked)
+    }
+
+    // MARK: - #754
+
+    /// INFO-R1: switched off while the check is stuck on a wedged read: no send.
+    @MainActor func testSwitchedOffWhileTheCheckIsQueuedSendsNothing() {
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: FakeIO(Self.bash3).io, notAgain: nil, answered: false,
+                                             isOn: { false }), .human)
+        let f = FakeIO(Self.bash3), gate = DispatchSemaphore(value: 0), on = OSAllocatedUnfairLock(initialState: true)
+        f.gate = gate
+        let (c, r) = controller(f, on: nil)
+        c.autoAllowOn = { on.withLock { $0 } }   // the setting itself, no Settings hook
+        tick(c, .blocked)
+        on.withLock { $0 = false }
+        gate.signal()
+        drain(c)
+        XCTAssertEqual(f.sends, [], "the queue re-reads the setting before the send")
+        XCTAssertEqual(r.lastState, .blocked, "left to the human")
+        XCTAssertNil(c.store?.actions[key])
+    }
+
+    /// INFO-R2: switched off (Settings) during a check that ends .human: the card is still read.
+    @MainActor func testSwitchedOffDuringAHumanCheckStillReadsTheCard() throws {
+        let plan = Self.neverAnswered[0].1
+        let f = FakeIO(plan), gate = DispatchSemaphore(value: 0), on = OSAllocatedUnfairLock(initialState: true)
+        f.gate = gate
+        let (c, r) = controller(f, on: nil)
+        c.autoAllowOn = { on.withLock { $0 } }
+        c.store?.expanded = true
+        tick(c, .blocked)
+        c.refreshCards()   // skips the key: the check holds it
+        on.withLock { $0 = false }
+        c.autoAllowChanged()   // the hold drops now
+        XCTAssertEqual(r.lastState, .blocked)
+        gate.signal()
+        drain(c)
+        drain(c)
+        XCTAssertEqual(c.store?.cards[key], .prompt(try XCTUnwrap(AgentPrompt.parse(plan))))
+    }
+
+    /// INFO-R3: the Settings toggle's hook stores the setting and tells the controller.
+    @MainActor func testTheSettingsHookStoresAndDropsTheHold() {
+        let k = "agentIslandAutoAllow", saved = Preferences.defaults.object(forKey: k)
+        defer { Preferences.defaults.set(saved, forKey: k) }
+        Preferences.agentIslandAutoAllow = true
+        let f = FakeIO(Self.bash3), (c, r) = controller(f, on: nil)   // the real setting seam
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertFalse(r.everBlocked)
+        AgentIslandPane.autoAllowToggled(false, c)
+        XCTAssertFalse(Preferences.agentIslandAutoAllow)
+        XCTAssertEqual(r.lastState, .blocked, "published at once")
+        AgentIslandPane.autoAllowToggled(true, c)
+        XCTAssertTrue(Preferences.agentIslandAutoAllow)
+        XCTAssertEqual(r.lastState, .working, "on: the blocked session is checked again")
+        drain(c)
     }
 
     // MARK: - Offscreen renders (never on screen: an unwindowed hosting view and ImageRenderer)

@@ -18,7 +18,11 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.170.0 *(unreleased)*
+## v2.171.0 *(unreleased)*
+
+- Agent Island: Always allow re-checks the setting right before it types "Yes", so a check stuck behind a slow session never answers after you switch it off; switching it off mid-check still shows the prompt's card. The setting's footer now says "commands and tool calls". (#754)
+
+## v2.170.0
 
 - **Always allow permission prompts.** A new Agent Island setting, off by default.
   When it is on, Prosper answers Claude Code's "Do you want to proceed?" with Yes as
