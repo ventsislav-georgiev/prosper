@@ -5,7 +5,7 @@
 // every tick and the controller reads the click ones on every click, so a change
 // shows with no reload. The isolation toggle is observed (#477), so the picker
 // follows it while Settings stays open. #751: Always allow permission prompts, read by the
-// controller on every list change.
+// controller on every list change and pushed to it on every toggle.
 
 import SwiftUI
 
@@ -69,10 +69,13 @@ struct AgentIslandPane: View {
             }
         }
         NeonSection("Permission prompts",
-                    footer: "Answers Claude Code's \"Do you want to proceed?\" with Yes before it reaches your iPhone. Never picks \"don't ask again\"; every other question is left to you.") {
+                    footer: "Answers Claude Code's \"Do you want to proceed?\" with Yes, so Bash commands and MCP tool calls run without your review and your iPhone isn't notified. Never picks \"don't ask again\"; every other question is left to you.") {
             NeonRow("Always allow permission prompts") { Toggle("", isOn: $autoAllow).labelsHidden() }
         }
-        .onChange(of: autoAllow) { _, v in Preferences.agentIslandAutoAllow = v }
+        .onChange(of: autoAllow) { _, v in
+            Preferences.agentIslandAutoAllow = v
+            AgentIslandController.shared.autoAllowChanged()   // QA #581 F3: off drops every hold now
+        }
         NeonSection("New session",
                     footer: "What New session runs in the chosen folder, e.g. claude or headroom wrap claude --chrome.") {
             NeonRow("Command") {

@@ -44,6 +44,13 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         ("mode change middle row", dialog(proceed, ["Yes", "Yes, allow all edits during this session (shift+tab)", noTell])),
         ("always allow dir middle row", dialog(proceed, ["Yes", "Yes, and always allow access to /tmp/x", noTell])),
         ("four options", dialog(proceed, ["Yes", dontAsk, "Yes, and don't ask again for git commands", noTell])),
+        // QA #581: the don't-ask-again row's mode-change rule, and the hint and wrap rules on Yes and No.
+        ("don't ask again with the mode key", dialog(proceed, ["Yes", "Yes, and don't ask again for rm commands (shift+tab)", noTell])),
+        ("Yes with a key hint", dialog(proceed, ["Yes (tab)", noTell])),
+        ("Yes with a wrapped line", dialog(proceed, ["Yes", noTell]).replacingOccurrences(
+            of: " ❯ 1. Yes\n", with: " ❯ 1. Yes\n      and run every queued command\n")),
+        ("No with a wrapped line", dialog(proceed, ["Yes", "No, and tell Claude what to do"])
+            + "\n      differently\n\n Esc to cancel · Tab to amend"),
         ("AskUserQuestion Yes/No", """
         ──────────────────────────────────────────────────────────────────────────────────────────
          ☐ Proceed
@@ -189,6 +196,20 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         let f = FakeIO(Self.bash3, Self.otherBash)
         XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false), .human)
         XCTAssertEqual(f.sends, [])
+    }
+
+    /// QA #581 F1: a timed-out (empty) or unknown status is not "the answer took".
+    func testAnEmptyOrUnknownStatusAfterAnAnswerIsTheHumans() {
+        for status in ["", "\n", "garbage"] {
+            let f = FakeIO("")
+            f.status = status
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true), .human, "status \(status.debugDescription)")
+        }
+        for status in ["working", "idle\n", "done"] {
+            let f = FakeIO("")
+            f.status = status
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true), .gone, status)
+        }
     }
 
     func testNoPromptIsGoneOnlyAfterAnAnswerAndOnlyWhenDchAgrees() {
@@ -377,6 +398,124 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(tick(c, .blocked), .working)
         drain(c)
         XCTAssertEqual(f.sends, ["1", "1"], "a later appearance is answered again")
+    }
+
+    // MARK: - QA #581 fixes
+
+    /// F1: dch wedged after the answer (read and status time out to ""): Needs input goes out.
+    @MainActor func testAWedgedDchAfterTheAnswerPublishesNeedsInput() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        f.set("", status: "")
+        fire(c, r)
+        XCTAssertEqual(r.lastState, .blocked)
+        XCTAssertTrue(r.timers.isEmpty, "no further re-read")
+    }
+
+    /// F2: expanded, a prompt left to the human gets its card (the check held the
+    /// key while apply's refreshCards ran); so does the screen after a .gone.
+    @MainActor func testACardIsReadForAPromptLeftToTheHuman() throws {
+        let plan = Self.neverAnswered[0].1
+        let f = FakeIO(plan), (c, r) = controller(f)
+        c.store?.expanded = true
+        tick(c, .blocked)
+        c.refreshCards()   // apply's order: the check first, then the cards
+        drain(c)
+        drain(c)
+        XCTAssertEqual(c.store?.cards[key], .prompt(try XCTUnwrap(AgentPrompt.parse(plan))))
+        let g = FakeIO(Self.bash3), (d, s) = controller(g)
+        d.store?.expanded = true
+        tick(d, .blocked)
+        d.refreshCards()
+        drain(d)
+        XCTAssertNil(d.store?.cards[key], "answered: no card")
+        g.set(Self.unparsed[0].1, status: "working")
+        fire(d, s)
+        drain(d)
+        XCTAssertEqual(d.store?.cards[key], .context(AgentPrompt.tail(Self.unparsed[0].1)), "gone: the screen's card")
+        _ = r
+    }
+
+    /// F3: switched off between the answer and the re-read: nothing more is typed.
+    @MainActor func testSwitchedOffBeforeTheRereadTypesNothing() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        f.set(Self.otherBash)   // a new plain prompt the re-read would answer
+        c.autoAllowOn = { false }   // the seam only: no Settings hook ran
+        fire(c, r)
+        XCTAssertEqual(f.sends, ["1"])
+        XCTAssertEqual(r.lastState, .blocked, "the hold is dropped and published")
+    }
+
+    /// F3: the Settings toggle drops every hold at once.
+    @MainActor func testTurningTheSettingOffPublishesAtOnce() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertFalse(r.everBlocked)
+        c.autoAllowOn = { false }
+        c.autoAllowChanged()
+        XCTAssertEqual(r.lastState, .blocked)
+        let reads = f.reads
+        fire(c, r)
+        XCTAssertEqual(f.reads, reads, "the armed re-read is a no-op")
+        XCTAssertEqual(f.sends, ["1"])
+    }
+
+    /// The next list change with the setting off publishes as is (the clear in checkAutoAllow).
+    @MainActor func testAListChangeWithTheSettingOffDropsTheHold() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        c.autoAllowOn = { false }
+        XCTAssertEqual(tick(c, .blocked), .blocked)
+    }
+
+    /// Teardown drops every hold.
+    @MainActor func testTeardownDropsTheHold() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(c.published([session(.blocked)]).first?.state, .working)
+        c.extLive = false
+        c.reload()   // extLive off: teardown
+        XCTAssertEqual(c.published([session(.blocked)]).first?.state, .blocked)
+    }
+
+    /// INFO-3: a re-read timer from an earlier answer is a no-op.
+    @MainActor func testAStaleRereadTimerIsANoOp() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        let stale = r.timers
+        r.timers = []
+        tick(c, .working)
+        r.now += AgentIslandController.loopWindow + 1
+        f.set(Self.otherBash)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1", "1"])
+        let reads = f.reads
+        for t in stale { t() }
+        drain(c)
+        XCTAssertEqual(f.reads, reads, "the old timer starts no re-read")
+        XCTAssertEqual(r.timers.count, 1, "only the live one is armed")
+    }
+
+    /// A re-read colliding with an island click publishes Needs input.
+    @MainActor func testARereadCollidingWithAClickPublishesNeedsInput() throws {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.bash3))
+        c.answer(session(.blocked), p, p.options[0])   // in flight
+        let t = r.timers
+        r.timers = []
+        for x in t { x() }
+        XCTAssertEqual(r.lastState, .blocked)
+        drain(c)
     }
 
     @MainActor func testAnIslandClickInFlightLeavesItToTheHuman() throws {

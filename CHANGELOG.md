@@ -22,8 +22,8 @@ tag from the now-released section and put it on the new top draft.
 
 - **Always allow permission prompts.** A new Agent Island setting, off by default.
   When it is on, Prosper answers Claude Code's "Do you want to proceed?" with Yes as
-  soon as it appears, so the session keeps going and your iPhone gets no Needs input
-  for it. It never picks "Yes, and don't ask again", and it leaves every other
+  soon as it appears. The Bash command or MCP tool call then runs without your review,
+  and your iPhone gets no Needs input for it. It never picks "Yes, and don't ask again", and it leaves every other
   question to you: choices, plan approvals, and edit and file dialogs. If the answer
   does not take, or the same prompt comes back, you are notified as before. The row
   shows "Allowed automatically" each time.

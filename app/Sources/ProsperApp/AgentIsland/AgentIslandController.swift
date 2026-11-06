@@ -1005,18 +1005,28 @@ final class AgentIslandController {
     private var autoAllow: [AgentSessionKey: AutoAllowState] = [:]
     /// The prompt last answered per session, and when: the loop guard.
     private var allowed: [AgentSessionKey: (prompt: AgentPrompt, at: Date)] = [:]
+    /// QA #581 INFO-3: the live re-read timer per session; an older one is a no-op.
+    private var rereadGen: [AgentSessionKey: Int] = [:]
 
     /// Every list change, before it is published: a session that just went blocked
     /// gets one check, any tab, expanded or not. Off: nothing is read or held.
     func checkAutoAllow() {
         guard let store else { return }
-        guard autoAllowOn() else { autoAllow = [:]; return }
+        guard autoAllowOn() else { autoAllow = [:]; return }   // nothing held: published as is
         let blocked = Set(store.sessions.filter { $0.state == .blocked }.map(\.key))
         autoAllow = autoAllow.filter { blocked.contains($0.key) }
         for key in blocked where autoAllow[key] == nil { startAutoAllow(key, answered: false) }
     }
 
+    /// QA #581 F3: the setting toggled (Settings): off drops every hold and
+    /// publishes at once; on checks the sessions blocked now.
+    func autoAllowChanged() {
+        checkAutoAllow()
+        publish()
+    }
+
     private func startAutoAllow(_ key: AgentSessionKey, answered: Bool) {
+        guard autoAllowOn() else { return autoAllowChanged() }   // QA #581 F3: switched off meanwhile
         // An island click is answering it: the human's.
         guard inFlight.insert(key).inserted else {
             autoAllow[key] = .human
@@ -1039,7 +1049,8 @@ final class AgentIslandController {
         inFlight.remove(key)
         if case .allowed(let p) = r {
             allowed[key] = (p, now())
-            Self.log.info("Always allow answered Yes in \(key.name, privacy: .public): \(p.title, privacy: .public)")
+            // QA #581 INFO-1: with the head off the screen the title is a command line.
+            Self.log.info("Always allow answered Yes in \(key.name, privacy: .public): \(p.title, privacy: .private)")
             if !runner.isBusy(key) { store?.actions[key] = Self.autoAllowedText }
         }
         guard autoAllow[key] == .checking else { return layout() }   // not blocked any more
@@ -1048,11 +1059,15 @@ final class AgentIslandController {
             publish()
         } else {
             autoAllow[key] = .answered
+            rereadGen[key, default: 0] += 1
+            let gen = rereadGen[key]
             after(Self.verifyDelay) { [weak self] in
-                guard self?.autoAllow[key] == .answered else { return }
-                self?.startAutoAllow(key, answered: true)
+                guard let self, self.rereadGen[key] == gen, self.autoAllow[key] == .answered else { return }
+                self.startAutoAllow(key, answered: true)
             }
         }
+        // QA #581 F2: the check held the key, so refreshCards skipped it; read the card now.
+        if r == .human || r == .gone { refreshCards() }
         layout()
     }
 

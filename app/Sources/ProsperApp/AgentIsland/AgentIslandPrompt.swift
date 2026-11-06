@@ -597,16 +597,21 @@ extension AgentPrompt {
         context.first { !Self.isBlank($0) }?.trimmingCharacters(in: .whitespaces) ?? question
     }
 
+    /// dch --status words that say the session is not waiting on a prompt.
+    static let goneStates: Set<String> = ["working", "idle", "done"]
+
     /// One Always allow check, on the controller queue. A plain permission prompt
     /// gets its "Yes" through `answer` (the #475 full-identity re-check, without
     /// the card's own rule), unless it
     /// is `notAgain`, the prompt answered last (the loop guard). `answered`: the
-    /// re-read after an answer, where a screen with no prompt and dch no longer
-    /// saying blocked is the answer taking (`gone`), not the human's.
+    /// re-read after an answer, where a screen with no prompt and dch saying a
+    /// known non-blocked state is the answer taking (`gone`), not the human's.
+    /// QA #581 F1: an empty or unknown status (a timed-out dch) is unsure: human.
     static func autoAllow(_ key: AgentSessionKey, io: AgentPromptIO, notAgain: AgentPrompt?,
                           answered: Bool) -> AgentAutoAllow {
         guard let p = parse(io.read(key)) else {
-            return answered && io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) != "blocked" ? .gone : .human
+            return answered && goneStates.contains(io.status(key).trimmingCharacters(in: .whitespacesAndNewlines))
+                ? .gone : .human
         }
         guard p != notAgain, let yes = p.allowYes,
               answer(key, digit: yes.digit, expected: p, io: io, card: false) == .sent else { return .human }
