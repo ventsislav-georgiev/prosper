@@ -155,7 +155,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
 
     func testPicksYesNeverDontAskAgain() throws {
         let f = FakeIO(Self.bash3)
-        let r = AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false)
+        let r = AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true })
         XCTAssertEqual(r, .allowed(try XCTUnwrap(AgentPrompt.parse(Self.bash3))))
         XCTAssertEqual(f.sends, ["1"], "the plain Yes, never the don't-ask-again row (2)")
         XCTAssertEqual(f.reads, 2, "the answer re-reads (#475 full-identity check)")
@@ -169,7 +169,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
             let p = try XCTUnwrap(AgentPrompt.parse(screen), name)
             XCTAssertEqual(p.allowYes?.digit, 1, name)
             let f = FakeIO(screen)
-            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false), .allowed(p), name)
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .allowed(p), name)
             XCTAssertEqual(f.sends, ["1"], name)
             let card = FakeIO(screen)
             XCTAssertEqual(AgentPrompt.answer(key, digit: 1, expected: p, io: card.io), .changed, "\(name): the card's Yes")
@@ -181,7 +181,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
     func testEveryOtherPromptIsLeftAlone() {
         for (name, screen) in Self.neverAnswered + Self.unparsed {
             let f = FakeIO(screen)
-            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false), .human, name)
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .human, name)
             XCTAssertEqual(f.sends, [], name)
         }
     }
@@ -189,16 +189,16 @@ final class AgentIslandAutoAllowTests: XCTestCase {
     func testTheSamePromptIsNeverAnsweredTwice() throws {
         let p = try XCTUnwrap(AgentPrompt.parse(Self.bash3))
         let f = FakeIO(Self.bash3)
-        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: p, answered: true), .human)
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: p, answered: true, isOn: { true }), .human)
         XCTAssertEqual(f.sends, [])
         let other = try XCTUnwrap(AgentPrompt.parse(Self.otherBash))
-        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: other, answered: true), .allowed(p))
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: other, answered: true, isOn: { true }), .allowed(p))
         XCTAssertEqual(f.sends, ["1"])
     }
 
     func testAChangedScreenBetweenReadsSendsNothing() {
         let f = FakeIO(Self.bash3, Self.otherBash)
-        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false), .human)
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .human)
         XCTAssertEqual(f.sends, [])
     }
 
@@ -207,12 +207,12 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         for status in ["", "\n", "garbage"] {
             let f = FakeIO("")
             f.status = status
-            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true), .human, "status \(status.debugDescription)")
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true, isOn: { true }), .human, "status \(status.debugDescription)")
         }
         for status in ["working", "idle\n", "done"] {
             let f = FakeIO("")
             f.status = status
-            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true), .gone, status)
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true, isOn: { true }), .gone, status)
         }
     }
 
@@ -220,10 +220,10 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         let idle = Self.unparsed[0].1
         let f = FakeIO(idle)
         f.status = "working"
-        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true), .gone)
-        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false), .human)
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true, isOn: { true }), .gone)
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .human)
         f.status = "blocked\n"
-        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true), .human)
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: true, isOn: { true }), .human)
         XCTAssertEqual(f.sends, [])
     }
 
@@ -612,6 +612,75 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertTrue(Preferences.agentIslandAutoAllow)
         XCTAssertEqual(r.lastState, .working, "on: the blocked session is checked again")
         drain(c)
+    }
+
+    // MARK: - #755 (QA #585)
+
+    /// INFO-1: off then on within one check that types Yes: held, never Needs input.
+    @MainActor func testOffThenOnDuringACheckKeepsItsYes() {
+        let f = FakeIO(Self.bash3), gate = DispatchSemaphore(value: 0), on = OSAllocatedUnfairLock(initialState: true)
+        f.gate = gate
+        let (c, r) = controller(f, on: nil)
+        c.autoAllowOn = { on.withLock { $0 } }
+        tick(c, .blocked)
+        on.withLock { $0 = false }
+        c.autoAllowChanged()
+        XCTAssertEqual(r.lastState, .blocked)
+        on.withLock { $0 = true }
+        c.autoAllowChanged()
+        XCTAssertEqual(r.lastState, .working, "the check in flight holds it again")
+        gate.signal()
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"])
+        XCTAssertEqual(r.lastState, .working)
+        XCTAssertEqual(c.published(c.store?.sessions ?? []).first?.state, .working)
+        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(r.timers.count, 1, "its re-read is armed")
+    }
+
+    /// INFO-1: the orphaned check read the setting off and refused; back on, the
+    /// still-blocked session is checked again and answered.
+    @MainActor func testOffThenOnAfterAnOffRefusalChecksAgain() {
+        let f = FakeIO(Self.bash3), gate = DispatchSemaphore(value: 0), on = OSAllocatedUnfairLock(initialState: true)
+        f.gate = gate
+        let (c, r) = controller(f, on: nil)
+        c.autoAllowOn = { on.withLock { $0 } }
+        tick(c, .blocked)
+        on.withLock { $0 = false }
+        c.autoAllowChanged()
+        gate.signal()
+        c.queue.sync {}   // refused (.human); its main hop is still queued
+        XCTAssertEqual(f.sends, [])
+        on.withLock { $0 = true }
+        c.autoAllowChanged()
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"], "checked again while on")
+        XCTAssertEqual(r.lastState, .working)
+        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+    }
+
+    /// INFO-2: switched off after the Yes, which did not take: the card shows at once,
+    /// both when the result came first and when it lands after the toggle.
+    @MainActor func testSwitchedOffAfterAYesShowsTheCardAtOnce() throws {
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.bash3))
+        for late in [false, true] {
+            let f = FakeIO(Self.bash3), on = OSAllocatedUnfairLock(initialState: true)
+            let (c, r) = controller(f, on: nil)
+            c.autoAllowOn = { on.withLock { $0 } }
+            c.store?.expanded = true
+            tick(c, .blocked)
+            c.refreshCards()   // skips the key: the check holds it
+            if late { c.queue.sync {} } else { drain(c) }
+            XCTAssertEqual(f.sends, ["1"], "late \(late)")
+            XCTAssertNil(c.store?.cards[key], "late \(late)")
+            on.withLock { $0 = false }
+            c.autoAllowChanged()
+            XCTAssertEqual(r.lastState, .blocked, "late \(late)")
+            drain(c)
+            drain(c)
+            XCTAssertEqual(c.store?.cards[key], .prompt(p), "late \(late): the prompt still up gets its card")
+        }
     }
 
     // MARK: - Offscreen renders (never on screen: an unwindowed hosting view and ImageRenderer)

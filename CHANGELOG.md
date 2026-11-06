@@ -20,7 +20,12 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.171.0 *(unreleased)*
 
-- Agent Island: Always allow re-checks the setting right before it types "Yes", so a check stuck behind a slow session never answers after you switch it off; switching it off mid-check still shows the prompt's card. The setting's footer now says "commands and tool calls". (#754)
+- **Always allow is safer to switch off.** It re-reads the setting right before it
+  types "Yes", so a check waiting on a slow session almost never answers after you
+  switch it off, and the prompt's card shows at once whenever it does not answer.
+  Switching it off and back on during a check keeps its answer and re-checks a
+  session still waiting. The setting's footer now says "commands and tool
+  calls". (#754, #755)
 
 ## v2.170.0
 

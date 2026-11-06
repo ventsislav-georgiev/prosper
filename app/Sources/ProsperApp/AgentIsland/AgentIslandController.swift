@@ -1008,6 +1008,9 @@ final class AgentIslandController {
     private var allowed: [AgentSessionKey: (prompt: AgentPrompt, at: Date)] = [:]
     /// QA #581 INFO-3: the live re-read timer per session; an older one is a no-op.
     private var rereadGen: [AgentSessionKey: Int] = [:]
+    /// #755: the keys whose inFlight is an Always allow check, not an island click;
+    /// true once an off-toggle orphaned it and an on-toggle took it back.
+    private var checks: [AgentSessionKey: Bool] = [:]
 
     /// Every list change, before it is published: a session that just went blocked
     /// gets one check, any tab, expanded or not. Off: nothing is read or held.
@@ -1021,20 +1024,26 @@ final class AgentIslandController {
 
     /// QA #581 F3: the setting toggled (Settings): off drops every hold and
     /// publishes at once; on checks the sessions blocked now.
+    /// #755 INFO-2: a dropped hold shows its card at once.
     func autoAllowChanged() {
         checkAutoAllow()
         publish()
+        refreshCards()
+        layout()
     }
 
     private func startAutoAllow(_ key: AgentSessionKey, answered: Bool) {
         guard autoAllowOn() else { return autoAllowChanged() }   // QA #581 F3: switched off meanwhile
         // An island click is answering it: the human's.
         guard inFlight.insert(key).inserted else {
+            // #755 INFO-1: our own check, orphaned by an off-toggle: held again, its result counts.
+            if checks[key] != nil { checks[key] = true; autoAllow[key] = .checking; return }
             autoAllow[key] = .human
             if answered { publish() }
             return
         }
         autoAllow[key] = .checking
+        checks[key] = false
         let io = io, t = now(), isOn = autoAllowOn
         let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
         queue.async { [weak self] in
@@ -1048,6 +1057,10 @@ final class AgentIslandController {
     /// input goes out now.
     private func autoAllowed(_ key: AgentSessionKey, _ r: AgentAutoAllow) {
         inFlight.remove(key)
+        // #755 INFO-1: a taken-back check may have read the setting while it was off: check again.
+        if checks.removeValue(forKey: key) == true, r == .human, autoAllow[key] == .checking {
+            return startAutoAllow(key, answered: false)
+        }
         if case .allowed(let p) = r {
             allowed[key] = (p, now())
             // QA #581 INFO-1: with the head off the screen the title is a command line.
@@ -1056,7 +1069,8 @@ final class AgentIslandController {
         }
         // QA #581 F2: the check held the key, so refreshCards skipped it; read the card now.
         // #754 INFO-R2: also when the hold is already gone (switched off meanwhile).
-        if r == .human || r == .gone { refreshCards() }
+        // #755 INFO-2: and after a Yes whose hold is gone: it may not have taken.
+        if r == .human || r == .gone || autoAllow[key] != .checking { refreshCards() }
         guard autoAllow[key] == .checking else { return layout() }   // not blocked any more
         if r == .human {
             autoAllow[key] = .human
