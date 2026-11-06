@@ -27,6 +27,11 @@ tag from the now-released section and put it on the new top draft.
   question to you: choices, plan approvals, and edit and file dialogs. If the answer
   does not take, or the same prompt comes back, you are notified as before. The row
   shows "Allowed automatically" each time.
+- **Menu bar popups are readable in Light mode.** With the default theme and macOS set
+  to Light, the Sensors and Calendar popups drew some control labels in the colour of
+  the control behind them: the Automatic and Manual switch, the Headline and Order
+  menus, and the Calendar button. Every popup now follows the Prosper theme instead of
+  the menu bar.
 - **Kill and Stop all report what dch did.** Stop all and Restart all count a
   session as killed only when its Kill worked. "Kill not run" clears as soon as a
   Kill would run. And a failed Kill under Restart all keeps the row's restart result.

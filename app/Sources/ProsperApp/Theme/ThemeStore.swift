@@ -94,6 +94,7 @@ final class ThemeStore: ObservableObject {
         ThemeRuntime.scale = s
         ThemeRuntime.opacity = Self.effectiveOpacity(o)
         ThemeRuntime.frost = Self.effectiveFrost(f)
+        _ = Self.popoverAppearanceObserver
         // Re-evaluate transparency live when the user toggles the system "Reduce
         // transparency" accessibility setting while Prosper is running (otherwise the
         // downgrade only applies on next setOpacity/launch).
@@ -112,6 +113,28 @@ final class ThemeStore: ObservableObject {
                 self.onChange?()
             }
         }
+    }
+
+    /// #752: every popover wears the active theme's appearance, set as it shows.
+    /// `NSApp.appearance` (set in `apply`) reaches app windows, but a popover shown
+    /// from a status item takes the MENU BAR's appearance, which follows the system
+    /// Light/Dark setting. Under system Light the default (dark) theme's light
+    /// `Neon.textPrimary` then sat on aqua controls: white text in white fields,
+    /// black segment labels on the dark Neon backdrop (the Sensors fan control).
+    /// One observer for every popover — status item, SwiftUI `.popover`, future
+    /// ones — instead of an appearance line per controller. Synchronous (queue nil)
+    /// so the appearance is set before the popover draws.
+    private static let popoverAppearanceObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: NSPopover.willShowNotification, object: nil, queue: nil
+    ) { note in
+        guard let popover = note.object as? NSPopover else { return }
+        MainActor.assumeIsolated { adoptThemeAppearance(popover) }
+    }
+
+    /// The appearance a surface showing `Neon.*` colours must render in: the
+    /// active theme's, whatever the system or the anchoring view says.
+    static func adoptThemeAppearance(_ popover: NSPopover) {
+        popover.appearance = NSAppearance(named: shared.appearance.nsAppearanceName)
     }
 
     /// System "Reduce transparency" wins: when it's on, windows render fully opaque
