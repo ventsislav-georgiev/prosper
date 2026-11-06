@@ -2482,6 +2482,50 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(names(r.sidekicks), ["z-qa", "a-qa"])
     }
 
+    // #759: the pattern is a case-insensitive ICU regex, searched, in the name and the alias.
+
+    func testSplitRegexAlternation() {
+        let r = AgentIsland.split([session("prosper-qa", .idle), session("infra-stats-reviewer", .idle),
+                                   session("prosper-main", .idle), session("qa-notes", .idle)], pattern: "-(qa|reviewer)$")
+        XCTAssertEqual(names(r.sidekicks), ["prosper-qa", "infra-stats-reviewer"])
+        XCTAssertEqual(names(r.primary), ["prosper-main", "qa-notes"], "$ anchors the end; no leading dash, no match")
+    }
+
+    func testSplitRegexCaseInsensitive() {
+        let r = AgentIsland.split([session("Prosper-QA", .idle), session("infra-Reviewer", .idle), session("main", .idle)],
+                                  pattern: "-(qa|REVIEWER)$")
+        XCTAssertEqual(names(r.sidekicks), ["Prosper-QA", "infra-Reviewer"])
+        XCTAssertEqual(names(r.primary), ["main"])
+    }
+
+    func testSplitRegexMatchesAlias() {
+        let r = AgentIsland.split([session("build", .idle, alias: "build-reviewer"), session("notes", .idle, alias: "notes-rev")],
+                                  pattern: "-(qa|reviewer)$")
+        XCTAssertEqual(names(r.sidekicks), ["build"])
+        XCTAssertEqual(names(r.primary), ["notes"])
+    }
+
+    /// A leading "*" is not a valid regex: the pattern is matched as text, ignoring case.
+    func testSplitInvalidRegexFallsBackToText() {
+        XCTAssertNil(AgentIsland.sidekickRegex("*-qa"))
+        var r = AgentIsland.split([session("build*-QA", .idle), session("build-qa", .idle)], pattern: "*-qa")
+        XCTAssertEqual(names(r.sidekicks), ["build*-QA"])
+        XCTAssertEqual(names(r.primary), ["build-qa"])
+        r = AgentIsland.split([session("prosper-qa", .idle), session("infra-reviewer", .idle),
+                               session("x", .idle, alias: "X*.?-(QA|reviewer)")], pattern: "*.?-(qa|reviewer)")
+        XCTAssertEqual(names(r.sidekicks), ["x"], "only the literal text matches")
+        XCTAssertEqual(names(r.primary), ["prosper-qa", "infra-reviewer"])
+    }
+
+    func testSidekickRegexValidity() {
+        XCTAssertNotNil(AgentIsland.sidekickRegex("-qa"))
+        XCTAssertNotNil(AgentIsland.sidekickRegex(" -(qa|reviewer)$ "))
+        XCTAssertNil(AgentIsland.sidekickRegex("*.?-(qa|reviewer)"))
+        XCTAssertNil(AgentIsland.sidekickRegex("-(qa"))
+        XCTAssertNil(AgentIsland.sidekickRegex("  "), "empty: no regex, and no caption either")
+        XCTAssertEqual(AgentIsland.sidekickRegex("-QA")?.options.contains(.caseInsensitive), true)
+    }
+
     func testShowsSidekicksAllThreeCases() {
         let all = AgentIsland.split([session("a-qa", .idle), session("b-qa", .idle)], pattern: "-qa")
         XCTAssertTrue(AgentIsland.showsSidekicks(all, tab: false), "sidekicks are all there is")

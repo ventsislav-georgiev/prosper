@@ -1008,7 +1008,7 @@ struct AgentIslandListSection: View {
 
     var body: some View {
         NeonSection("Session list",
-                    footer: "Sessions whose name or alias contains the pattern, ignoring case, go under a Sidekicks tab. Empty shows every session together.") {
+                    footer: "Sessions whose name or alias matches the pattern, a regex ignoring case (e.g. -(qa|reviewer)$), go under a Sidekicks tab. Empty shows every session together.") {
             NeonRow("Sort sessions") {
                 // Menu, not segmented: segmented controls ignore the UI scale.
                 Picker("", selection: $sort) {
@@ -1021,8 +1021,15 @@ struct AgentIslandListSection: View {
             NeonDivider()
             NeonRow("Sidekick pattern") {
                 // Empty = no split, so the placeholder says so (QA #434 L1).
-                TextField("None", text: $pattern).frame(width: sz(140))
-                    .disabled(!tabs)
+                VStack(alignment: .trailing, spacing: sz(2)) {
+                    TextField("None", text: $pattern).frame(width: sz(180))
+                        .disabled(!tabs)
+                    if !pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       AgentIsland.sidekickRegex(pattern) == nil {
+                        Text("Not a valid regex: matched as text")
+                            .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                    }
+                }
             }
         }
         .onChange(of: sort) { _, v in Preferences.agentIslandSort = v; AgentIslandController.shared.rowDetailsChanged() }

@@ -20,10 +20,14 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.172.0 *(unreleased)*
 
-- **Prompts shown while a background agent runs get a card and Always allow.**
-  Claude Code then lengthens the prompt's footer ("Esc to cancel · … stop
-  background agents"), and the island stopped recognising the prompt at all.
-  A footer that starts with "Esc to cancel" now counts at any length. (#756)
+- **Always allow answers prompts shown while a background agent runs.** Claude
+  Code then lengthens the prompt's footer ("Esc to cancel · … stop background
+  agents"), and the island stopped recognising the prompt, so neither Always
+  allow nor its card saw it. A footer that starts with "Esc to cancel" now
+  counts at any length. (#756)
+- **Sidekick pattern is a regex.** One pattern can now catch several kinds of
+  session, e.g. `-(qa|reviewer)$`, ignoring case. A pattern that is not a valid
+  regex is matched as plain text, and Settings says so. (#759)
 
 ## v2.171.0
 

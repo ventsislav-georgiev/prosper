@@ -160,13 +160,26 @@ enum AgentIsland {
 
     typealias Split = (primary: [AgentSession], sidekicks: [AgentSession])
 
-    /// A sidekick's name or alias contains `pattern` (trimmed), case-insensitive.
-    /// An empty pattern means no split. Order is kept in both halves.
+    /// A sidekick's name or alias matches `pattern` (trimmed), an ICU regex searched
+    /// case-insensitively (#759). An invalid regex is matched as literal text, still
+    /// ignoring case. An empty pattern means no split. Order is kept in both halves.
     static func split(_ list: [AgentSession], pattern: String) -> Split {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !p.isEmpty else { return (list, []) }
-        let isSidekick = { (s: AgentSession) in [s.name, s.alias].contains { $0.range(of: p, options: .caseInsensitive) != nil } }
+        let re = sidekickRegex(p)
+        let matches = { (t: String) -> Bool in
+            guard let re else { return t.range(of: p, options: .caseInsensitive) != nil }
+            return re.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) != nil
+        }
+        let isSidekick = { (s: AgentSession) in [s.name, s.alias].contains(where: matches) }
         return (list.filter { !isSidekick($0) }, list.filter(isSidekick))
+    }
+
+    /// The trimmed pattern as a case-insensitive regex; nil when empty or not a
+    /// valid regex (Settings then says it is matched as text).
+    static func sidekickRegex(_ pattern: String) -> NSRegularExpression? {
+        let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        return p.isEmpty ? nil : try? NSRegularExpression(pattern: p, options: .caseInsensitive)
     }
 
     /// Never without sidekicks; always when they are all there is; else the chosen tab.
