@@ -1646,18 +1646,21 @@ final class AgentIslandPromptTests: XCTestCase {
 
     // MARK: - QA #310 mutant gaps
 
-    /// C3, C5, C7: below the last option only rules and, last, one short footer
-    /// saying "esc to cancel".
+    /// C3, C5, C7: below the last option only rules and, last, one footer saying
+    /// "esc to cancel": any length when it starts with it, else at most 64.
     func testOnlyRulesAndOneShortCancelFooterMayFollowTheOptions() {
         let live = bash21(["echo safe"]), footer = " Esc to cancel · Tab to amend"
         for (why, screen) in [("C3 a line above the footer", askFourScreen.replacingOccurrences(
                                    of: "\nEnter to select", with: "\nNotes: press n to add notes\n\nEnter to select")),
-                              ("C5 a 69-character footer",
-                               live.replacingOccurrences(of: footer, with: footer + " · ctrl+e to explain · shift+tab to cycle")),
+                              ("C5 #756: over 64 and only containing esc to cancel", live.replacingOccurrences(
+                                   of: footer, with: " Press Enter to select · ↑/↓ to navigate · ctrl+e to explain · Esc to cancel")),
                               ("C7 a spinner in the footer's place",
                                live.replacingOccurrences(of: footer, with: "✻ Thinking… (esc to interrupt)"))] {
             XCTAssertNil(AgentPrompt.parse(screen), why)
         }
+        // #756 (revises QA #310 C5): a real Claude Code footer runs past 64 with its hints.
+        XCTAssertNotNil(AgentPrompt.parse(live.replacingOccurrences(
+            of: footer, with: footer + " · ctrl+e to explain · shift+tab to cycle")), "C5 a 69-character footer")
         let footer64 = " " + "Esc to cancel".padding(toLength: 64, withPad: "·", startingAt: 0)
         XCTAssertNotNil(AgentPrompt.parse(live.replacingOccurrences(of: footer, with: footer64)), "64 is still a footer")
     }

@@ -178,6 +178,31 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(AgentPrompt.parse(Self.offTop)).topFound, "the fixture's head is off the screen")
     }
 
+    /// #756: a long command in Claude Code's "│ " gutter fills the screen (head
+    /// off the top), and a running background agent stretches the footer past
+    /// 64 characters, cut at the screen width; the session-title rule under it.
+    private static let backgroundAgentFooter =
+        " Esc to cancel · Tab to amend · ctrl+x ctrl+k twice to stop background ag…"
+    private static let offTopLongFooter = ((1...48).map { " │ line \($0) of a long synthetic command body" }
+        + [String(repeating: "╌", count: 75), " A variable in this command can't be checked before it runs", "",
+           " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", backgroundAgentFooter,
+           String(repeating: "─", count: 67) + " probe ─"]).joined(separator: "\n")
+
+    func testAPromptWithABackgroundAgentFooterIsAllowedButTheCardStillRefuses() throws {
+        XCTAssertGreaterThan(Self.backgroundAgentFooter.trimmingCharacters(in: .whitespaces).count, 64)
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.offTopLongFooter), "a footer past 64 still ends the dialog")
+        XCTAssertFalse(p.topFound)
+        XCTAssertEqual(p.question, "Do you want to proceed?")
+        XCTAssertEqual(p.allowYes?.digit, 1)
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, true], "the card: No only, the head is off the screen")
+        let f = FakeIO(Self.offTopLongFooter)
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .allowed(p))
+        XCTAssertEqual(f.sends, ["1"])
+        let card = FakeIO(Self.offTopLongFooter)
+        XCTAssertEqual(AgentPrompt.answer(key, digit: 1, expected: p, io: card.io), .changed, "the card's Yes")
+        XCTAssertEqual(card.sends, [])
+    }
+
     func testEveryOtherPromptIsLeftAlone() {
         for (name, screen) in Self.neverAnswered + Self.unparsed {
             let f = FakeIO(screen)

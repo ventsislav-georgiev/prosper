@@ -511,9 +511,13 @@ extension AgentPrompt {
 
     /// Claude Code's dialog footer: "Esc to cancel · Tab to amend", "Enter to
     /// select · ↑/↓ to navigate · Esc to cancel". A short line, like dch's rule.
+    /// #756 (revises QA #310 C5): a line starting with "Esc to cancel" is one at
+    /// any length: Claude Code appends hints ("· ctrl+x ctrl+k twice to stop
+    /// background ag…" while a background agent runs) and cuts at screen width.
+    /// One only containing it keeps the 64-character cap.
     static func isFooter(_ line: String) -> Bool {
-        let t = line.trimmingCharacters(in: .whitespaces)
-        return t.count <= 64 && t.lowercased().contains("esc to cancel")
+        let t = line.trimmingCharacters(in: .whitespaces).lowercased()
+        return t.hasPrefix("esc to cancel") || (t.count <= 64 && t.contains("esc to cancel"))
     }
 
     /// "[ ] Staging", "[✔] Prod", "☐ Local": a multi-select row.

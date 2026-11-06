@@ -18,7 +18,14 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.171.0 *(unreleased)*
+## v2.172.0 *(unreleased)*
+
+- **Prompts shown while a background agent runs get a card and Always allow.**
+  Claude Code then lengthens the prompt's footer ("Esc to cancel · … stop
+  background agents"), and the island stopped recognising the prompt at all.
+  A footer that starts with "Esc to cancel" now counts at any length. (#756)
+
+## v2.171.0
 
 - **Always allow is safer to switch off.** It re-reads the setting right before it
   types "Yes", so a check waiting on a slow session almost never answers after you
