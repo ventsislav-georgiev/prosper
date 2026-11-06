@@ -18,7 +18,20 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.169.0 *(unreleased)*
+## v2.170.0 *(unreleased)*
+
+- **Always allow permission prompts.** A new Agent Island setting, off by default.
+  When it is on, Prosper answers Claude Code's "Do you want to proceed?" with Yes as
+  soon as it appears, so the session keeps going and your iPhone gets no Needs input
+  for it. It never picks "Yes, and don't ask again", and it leaves every other
+  question to you: choices, plan approvals, and edit and file dialogs. If the answer
+  does not take, or the same prompt comes back, you are notified as before. The row
+  shows "Allowed automatically" each time.
+- **Kill and Stop all report what dch did.** Stop all and Restart all count a
+  session as killed only when its Kill worked. "Kill not run" clears as soon as a
+  Kill would run. And a failed Kill under Restart all keeps the row's restart result.
+
+## v2.169.0
 
 - **Both ways to resume from History are visible.** Each History row in Agent Island
   now has a right-click menu with Resume (dch types its "resume all work" message) and

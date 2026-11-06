@@ -7,6 +7,9 @@
 // still says blocked. Foundation only (the measured enable rule, `isEnabled`,
 // lives in AgentIslandView.swift), with
 // every dch call injected, so tests (and a probe) drive it without the app.
+// #751: the Always allow setting types "Yes" into a plain permission prompt
+// through the same `answer` (`allowYes`, `autoAllow`); the controller decides
+// before the session's Needs input is published.
 
 import Foundation
 
@@ -549,16 +552,75 @@ extension AgentPrompt {
     /// and dch says blocked. One keystroke, never Enter, else nothing.
     /// `isEnabled` is the card's own rule (AgentIslandView.swift, it measures
     /// with AppKit): a button drawn disabled can never send from here either.
+    /// #751: `card` false (Always allow, which shows no card) skips it: the
+    /// 10-row cap, a head off the screen and hidden characters guard what a
+    /// human can see, and Always allow approves any plain permission prompt.
     /// Never on a preview form (#526): there a digit only moves the focus (and
     /// the preview); Enter answers, and the island never sends Enter.
     static func answer(_ key: AgentSessionKey, digit: Int, expected: AgentPrompt,
-                       io: AgentPromptIO) -> AgentPromptAnswer {
+                       io: AgentPromptIO, card: Bool = true) -> AgentPromptAnswer {
         guard (1...9).contains(digit), expected.preview.isEmpty,
-              expected.options.contains(where: { $0.digit == digit && expected.isEnabled($0) }),
+              expected.options.contains(where: { $0.digit == digit && (!card || expected.isEnabled($0)) }),
               let now = parse(io.read(key)), now == expected,
               io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) == "blocked"
         else { return .changed }
         io.send(key, String(digit))
         return .sent
     }
+
+    // MARK: - Always allow (#751)
+
+    /// The "Yes" the Always allow setting may pick: only on Claude Code's plain
+    /// permission prompt, "Do you want to proceed?" over "Yes", at most one "Yes,
+    /// and don't ask again …" (never picked: it writes the user's settings) and a
+    /// last "No…". nil for everything else: question forms (a chip line), plan
+    /// approvals, trust and edit dialogs, pickers, a preview form. A head off the
+    /// screen (a long heredoc on a narrow pty) and hidden characters do not
+    /// matter here: the question, the option shape and the #475 re-check do.
+    var allowYes: AgentPromptOption? {
+        let o = options
+        guard question == "Do you want to proceed?", preview.isEmpty, notes.isEmpty,
+              !context.contains(where: Self.isChipLine), (2...3).contains(o.count),
+              o[0].label == "Yes", o[0].hint == nil, o[0].detail.isEmpty,
+              o[o.count - 1].style(first: false) == .deny, o[o.count - 1].detail.isEmpty,
+              o.count == 2 || Self.isDontAskAgain(o[1]) else { return nil }
+        return o[0]
+    }
+
+    /// "Yes, and don't ask again for …", wrapped anywhere; never a mode change.
+    private static func isDontAskAgain(_ o: AgentPromptOption) -> Bool {
+        ([o.label] + o.detail).joined().filter { !$0.isWhitespace }.hasPrefix("Yes,anddon'taskagain") && !o.isModeChange
+    }
+
+    /// The dialog's first line ("Bash command"), for the log.
+    var title: String {
+        context.first { !Self.isBlank($0) }?.trimmingCharacters(in: .whitespaces) ?? question
+    }
+
+    /// One Always allow check, on the controller queue. A plain permission prompt
+    /// gets its "Yes" through `answer` (the #475 full-identity re-check, without
+    /// the card's own rule), unless it
+    /// is `notAgain`, the prompt answered last (the loop guard). `answered`: the
+    /// re-read after an answer, where a screen with no prompt and dch no longer
+    /// saying blocked is the answer taking (`gone`), not the human's.
+    static func autoAllow(_ key: AgentSessionKey, io: AgentPromptIO, notAgain: AgentPrompt?,
+                          answered: Bool) -> AgentAutoAllow {
+        guard let p = parse(io.read(key)) else {
+            return answered && io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) != "blocked" ? .gone : .human
+        }
+        guard p != notAgain, let yes = p.allowYes,
+              answer(key, digit: yes.digit, expected: p, io: io, card: false) == .sent else { return .human }
+        return .allowed(p)
+    }
+}
+
+/// What one Always allow check did (#751).
+enum AgentAutoAllow: Equatable {
+    /// "Yes" was typed into this prompt.
+    case allowed(AgentPrompt)
+    /// After an answer: no prompt on the screen and dch no longer says blocked.
+    case gone
+    /// Left to the human: not a plain permission prompt, the same prompt again,
+    /// or the answer's re-check refused.
+    case human
 }

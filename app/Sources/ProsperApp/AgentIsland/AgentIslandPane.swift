@@ -4,7 +4,8 @@
 // session that has no local terminal window. The poller reads the preference
 // every tick and the controller reads the click ones on every click, so a change
 // shows with no reload. The isolation toggle is observed (#477), so the picker
-// follows it while Settings stays open.
+// follows it while Settings stays open. #751: Always allow permission prompts, read by the
+// controller on every list change.
 
 import SwiftUI
 
@@ -20,6 +21,8 @@ struct AgentIslandPane: View {
     @AppStorage(AgentIslandPane.isolateKey, store: Preferences.defaults) var isolate = false
     /// #606: the New session command field; saved on commit.
     @State private var command = Preferences.agentIslandNewSessionCommand
+    /// #751: Always allow permission prompts.
+    @State private var autoAllow = Preferences.agentIslandAutoAllow
 
     /// #606: the field's commit: stored trimmed, empty = unset; the field shows
     /// what was stored.
@@ -65,6 +68,11 @@ struct AgentIslandPane: View {
                 .disabled(click != .open)
             }
         }
+        NeonSection("Permission prompts",
+                    footer: "Answers Claude Code's \"Do you want to proceed?\" with Yes before it reaches your iPhone. Never picks \"don't ask again\"; every other question is left to you.") {
+            NeonRow("Always allow permission prompts") { Toggle("", isOn: $autoAllow).labelsHidden() }
+        }
+        .onChange(of: autoAllow) { _, v in Preferences.agentIslandAutoAllow = v }
         NeonSection("New session",
                     footer: "What New session runs in the chosen folder, e.g. claude or headroom wrap claude --chrome.") {
             NeonRow("Command") {

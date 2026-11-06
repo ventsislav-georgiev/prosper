@@ -8,6 +8,7 @@
 // disabled install has no panel, no timer and never forks dch.
 
 import AppKit
+import os
 import SwiftUI
 
 /// Key only while expanded (Escape needs it); collapsed it never takes focus.
@@ -183,7 +184,8 @@ final class AgentIslandController {
         guard timer != nil, let store else { return }   // a tick that raced teardown
         let wasLive = !store.sessions.isEmpty
         store.sessions = sessions
-        onSessions?(sessions)
+        checkAutoAllow()   // #751: decided before the list is published
+        publish()
         let live = Set(sessions.map(\.key))
         store.notices = store.notices.filter { live.contains($0.key) }
         // #580: a session that ended (a Stop) takes its row's text with it, so a
@@ -983,6 +985,91 @@ final class AgentIslandController {
         return cardGen[key]!
     }
 
+    // MARK: - Always allow (#751)
+
+    /// #751 seams: the setting, the loop guard's clock, and the re-read timer.
+    var autoAllowOn: @MainActor () -> Bool = { Preferences.agentIslandAutoAllow }
+    var now: @MainActor () -> Date = { Date() }
+    var after: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, fire in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { fire() } }
+    }
+    static let autoAllowedText = "Allowed automatically"
+    /// The same prompt back this soon after its answer is the human's (the loop guard).
+    static let loopWindow: TimeInterval = 30
+    /// An answered session still listed blocked has its screen read again this soon.
+    static let verifyDelay: TimeInterval = 2
+    private static let log = Logger(subsystem: "eu.illegible.prosper", category: "agentisland")
+
+    private enum AutoAllowState { case checking, answered, human }
+    /// One blocked stretch of a session; dropped once the row is not blocked.
+    private var autoAllow: [AgentSessionKey: AutoAllowState] = [:]
+    /// The prompt last answered per session, and when: the loop guard.
+    private var allowed: [AgentSessionKey: (prompt: AgentPrompt, at: Date)] = [:]
+
+    /// Every list change, before it is published: a session that just went blocked
+    /// gets one check, any tab, expanded or not. Off: nothing is read or held.
+    func checkAutoAllow() {
+        guard let store else { return }
+        guard autoAllowOn() else { autoAllow = [:]; return }
+        let blocked = Set(store.sessions.filter { $0.state == .blocked }.map(\.key))
+        autoAllow = autoAllow.filter { blocked.contains($0.key) }
+        for key in blocked where autoAllow[key] == nil { startAutoAllow(key, answered: false) }
+    }
+
+    private func startAutoAllow(_ key: AgentSessionKey, answered: Bool) {
+        // An island click is answering it: the human's.
+        guard inFlight.insert(key).inserted else {
+            autoAllow[key] = .human
+            if answered { publish() }
+            return
+        }
+        autoAllow[key] = .checking
+        let io = io, t = now()
+        let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
+        queue.async { [weak self] in
+            let r = AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered)
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r) } }
+        }
+    }
+
+    /// The check's result, on main. Answered: held, and read again after
+    /// `verifyDelay` while still listed blocked. Anything else: the normal Needs
+    /// input goes out now.
+    private func autoAllowed(_ key: AgentSessionKey, _ r: AgentAutoAllow) {
+        inFlight.remove(key)
+        if case .allowed(let p) = r {
+            allowed[key] = (p, now())
+            Self.log.info("Always allow answered Yes in \(key.name, privacy: .public): \(p.title, privacy: .public)")
+            if !runner.isBusy(key) { store?.actions[key] = Self.autoAllowedText }
+        }
+        guard autoAllow[key] == .checking else { return layout() }   // not blocked any more
+        if r == .human {
+            autoAllow[key] = .human
+            publish()
+        } else {
+            autoAllow[key] = .answered
+            after(Self.verifyDelay) { [weak self] in
+                guard self?.autoAllow[key] == .answered else { return }
+                self?.startAutoAllow(key, answered: true)
+            }
+        }
+        layout()
+    }
+
+    /// The list for the phone (LiveStatusPublisher): a session being checked or
+    /// answered reads working, so its Needs input never posts.
+    func published(_ sessions: [AgentSession]) -> [AgentSession] {
+        sessions.map { s in
+            guard s.state == .blocked, let a = autoAllow[s.key], a != .human else { return s }
+            return AgentSession(key: s.key, alias: s.alias, activity: s.activity, state: .working,
+                                agents: s.agents, meta: s.meta, version: s.version)
+        }
+    }
+
+    private func publish() {
+        if let store { onSessions?(published(store.sessions)) }
+    }
+
     // MARK: - Jump
 
     func jump(_ s: AgentSession) {
@@ -1112,6 +1199,7 @@ final class AgentIslandController {
         panel?.contentView = nil
         panel = nil
         store = nil
+        autoAllow = [:]
         shown = false
     }
 }

@@ -443,6 +443,7 @@ enum Preferences {
         static let agentIslandSidekickTabs = "agentIslandSidekickTabs"
         static let agentIslandSidekickPattern = "agentIslandSidekickPattern"
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
+        static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1201,6 +1202,12 @@ enum Preferences {
             if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandNewSessionCommand) }
             else { defaults.set(v, forKey: Keys.agentIslandNewSessionCommand) }
         }
+    }
+
+    /// #751: Always allow permission prompts; off when unset.
+    static var agentIslandAutoAllow: Bool {
+        get { defaults.bool(forKey: Keys.agentIslandAutoAllow) }
+        set { defaults.set(newValue, forKey: Keys.agentIslandAutoAllow) }
     }
 
     /// MCP servers configured for the coding agent. Stored JSON-encoded; an unreadable
