@@ -1,0 +1,15 @@
+{"type":"user","session_id":"fixture-session-future","version":"2.4.0","uuid":"f-1","newTopLevel":{"x":1},"message":{"role":"user","content":"Future shape: please check the build.","newKey":true}}
+{"type":"assistant","session_id":"fixture-session-future","version":"2.4.0","is_sidechain":false,"message":{"role":"assistant","content":[{"type":"text","text":"Checking.","citations":[]}]}}
+{"type":"assistant","session_id":"fixture-session-future","version":"2.4.0","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_future1","name":"Bash","input":{"cmd":"make","why":"renamed input key"}}]}}
+{"type":"user","session_id":"fixture-session-future","version":"2.4.0","message":{"role":"user","content":[{"type":"tool_result","toolUseId":"toolu_future1","content":"built","isError":false}]},"tool_use_result":{"stdout":"built","stderr":""}}
+{"type":"assistant","session_id":"fixture-session-future","version":"2.4.0","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_future2","name":"Edit","input":{"filePath":"/Users/example/project/a.swift","oldString":"x","newString":"y"}}]}}
+{"type":"user","session_id":"fixture-session-future","version":"2.4.0","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_future2","content":"ok"}]},"tool_use_result":{"structured_patch":[{"lines":[" a","-x","+y"]}]}}
+{"type":"assistant","session_id":"fixture-session-future","version":"2.4.0","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_future3","name":"PlanBoard","input":{"steps":["one","two"],"mode":"draft"}}]}}
+{"type":"user","session_id":"fixture-session-future","version":"2.4.0","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_future3","content":[{"type":"text","text":"Plan saved."}]}]}}
+{"type":"assistant","session_id":"fixture-session-future","version":"2.4.0","message":{"role":"assistant","content":[{"type":"citation","source":"doc-1"}]}}
+{"type":"workspace-sync","session_id":"fixture-session-future","version":"2.4.0","files":3}
+{"type":"checkpoint","session_id":"fixture-session-future","version":"2.4.0","label":"before refactor"}
+{"type":"system","session_id":"fixture-session-future","version":"2.4.0","subtype":"quota_notice"}
+{"type":"assistant","session_id":"fixture-session-future","version":"2.4.0","message":"flattened message"}
+{"type":"assistant","session_id":"fixture-session-future","version":"2.4.0","is_sidechain":true,"agent_id":"agentfx99","message":{"role":"assistant","content":[{"type":"text","text":"Subagent note in a future shape."}]}}
+{"sessionId":"fixture-session-future","version":"2.4.0","note":"an entry with no type"}
