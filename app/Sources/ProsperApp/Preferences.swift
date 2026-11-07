@@ -1203,11 +1203,11 @@ enum Preferences {
 
     /// #760: a Settings edit stores the pattern raw and stamps now, or one past the stored
     /// stamp when that is later (a phone clock ahead must not make Mac edits lose, QA #597
-    /// INFO-1). The field echoing the stored value (an adopt it follows) is no edit: nothing
+    /// INFO-1), saturating at Int64.max so a max stamp ties (Mac keeps) instead of wrapping (INFO-9). The field echoing the stored value (an adopt it follows) is no edit: nothing
     /// written, nothing re-stamped.
     static func editSidekickPattern(_ pattern: String, now: Date = Date()) {
         guard pattern != agentIslandSidekickPattern else { return }
-        let stamp = max(Int64((now.timeIntervalSince1970 * 1000).rounded()), agentIslandSidekickPatternUpdated &+ 1)
+        let stamp = max(Int64((now.timeIntervalSince1970 * 1000).rounded()), agentIslandSidekickPatternUpdated.addingReportingOverflow(1).overflow ? .max : agentIslandSidekickPatternUpdated + 1)
         agentIslandSidekickPattern = pattern
         agentIslandSidekickPatternUpdated = stamp
     }

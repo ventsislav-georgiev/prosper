@@ -177,6 +177,15 @@ final class SidekickSyncTests: XCTestCase {
         assertOK(call(Self.body(["pattern": "-phone", "updated": future])), "-mac", future + 1, adopts: 0)
     }
 
+    /// QA #597 INFO-9: a stored Int64.max stamp saturates instead of wrapping to Int64.min,
+    /// so the edit ties the phone and the tie keeps the Mac.
+    func testMacEditAfterAMaxStampSaturates() {
+        Preferences.adoptSidekickPattern("-phone", updated: .max)
+        Preferences.editSidekickPattern("-mac", now: Date(timeIntervalSince1970: 1_730_000_000))
+        XCTAssertEqual(stored(), .init(pattern: "-mac", updated: .max))
+        assertOK(call(Self.body(["pattern": "-phone", "updated": Int64.max])), "-mac", .max, adopts: 0)
+    }
+
     /// QA #597 INFO-7: the Settings field's onChange path. An edit stamps; the field echoing an
     /// adopted value re-stamps nothing.
     @MainActor
