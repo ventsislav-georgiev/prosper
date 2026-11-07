@@ -1706,13 +1706,13 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(rows.map(\.meta), [DchSessionMeta(merged: 4), nil])
     }
 
-    /// #762: tasks in the meta are never read by the row (the phone wire keeps them).
+    /// #762: the row draws no tasks (#772: the meta no longer carries them).
     func testMergedLabelAndRowLabelWithMeta() {
         XCTAssertEqual(AgentIsland.mergedLabel(DchSessionMeta(merged: 18)), "18 merged")
         XCTAssertNil(AgentIsland.mergedLabel(DchSessionMeta(merged: 0)))
         XCTAssertNil(AgentIsland.mergedLabel(nil))
         let s = session("s", .working, activity: 100, alias: "T")
-        var m = s; m.meta = DchSessionMeta(tasks: .init(done: 1, total: 2), openPRs: [pr("o/r", 12)], merged: 3)
+        var m = s; m.meta = DchSessionMeta(openPRs: [pr("o/r", 12)], merged: 3)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 12s ago", "no meta: unchanged")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
                        "T, Working, 12s ago, 3 merged, open pull requests o/r#12", "#525: owner kept here; no tasks")
@@ -1962,8 +1962,8 @@ final class AgentIslandTests: XCTestCase {
     func testRowHeightsPerRow() {
         var s = session("s", .working)
         XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "no meta: two lines, as before")
-        s.meta = DchSessionMeta(tasks: .init(done: 1, total: 2))
-        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "#762: tasks draw nothing")
+        s.meta = DchSessionMeta()
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "an empty meta draws nothing")
         s.meta = DchSessionMeta(openPRs: [.init(url: "x", repo: "o/r", num: nil, title: "")])
         XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "a PR with no label draws nothing")
         s.meta = DchSessionMeta(merged: 0)
@@ -2049,7 +2049,7 @@ final class AgentIslandTests: XCTestCase {
         let store = AgentIslandStore(geometry: g)
         var a = session("a", .working), b = session("b", .idle)
         a.meta = DchSessionMeta(merged: 2)
-        b.meta = DchSessionMeta(tasks: .init(done: 1, total: 2))
+        b.meta = DchSessionMeta()
         store.sessions = [a, b]
         store.expanded = true
         XCTAssertEqual(store.rowHeights, [three, two])
@@ -2390,7 +2390,7 @@ final class AgentIslandTests: XCTestCase {
     /// The row's accessibility label reads what the row draws.
     func testRowAccessibilityLabelHonoursRowDetails() {
         var s = session("s", .working, activity: 100, alias: "T", agents: 2)
-        s.meta = DchSessionMeta(tasks: .init(done: 1, total: 2, inProgress: 3, queued: 4), openPRs: [pr("o/r", 12)], merged: 3)
+        s.meta = DchSessionMeta(openPRs: [pr("o/r", 12)], merged: 3)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: .all),
                        "T, Working, 12s ago, 3 merged, open pull requests o/r#12", "#762: no tasks, no dch name")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(openPRs: false)),

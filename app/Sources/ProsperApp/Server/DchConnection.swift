@@ -583,6 +583,10 @@ final class DchConnection: @unchecked Sendable {
                 })
             pty = child
             child.run()
+            // QA #606 INFO-9: dch's attach respawns a session whose master is gone (it decides by
+            // connect() liveness, which a stat here cannot tell), so every attach that spawned
+            // marks the list changed; create already did in handle (listChanging).
+            if type == DchFrame.attach { watch?.changed() }
             // Our client is up and has already reported our window size, so retiring
             // the previous one can't leave the master on someone else's size. Order
             // matters: retire AFTER the spawn, never before — a failed spawn would
@@ -1483,14 +1487,6 @@ struct DchListRow: Equatable, Sendable {
     var metaWire: [String: Any] {
         guard let meta else { return [:] }
         var m: [String: Any] = [:]
-        if let t = meta.tasks {
-            var o: [String: Any] = [:]
-            if let v = t.done { o["done"] = v }
-            if let v = t.total { o["total"] = v }
-            if let v = t.inProgress { o["in_progress"] = v }
-            if let v = t.queued { o["queued"] = v }
-            if !o.isEmpty { m["tasks"] = o }
-        }
         var prs: [String: Any] = [:]
         let open = meta.openPRs.compactMap { pr -> [String: Any]? in
             // repo/num come from the URL, not dch's fields, so the chip names what opens.
@@ -1502,7 +1498,7 @@ struct DchListRow: Equatable, Sendable {
             return o
         }
         // Nothing left after filtering: no meta key at all, as with no meta.
-        guard m["tasks"] != nil || !open.isEmpty || meta.merged != nil else { return [:] }
+        guard !open.isEmpty || meta.merged != nil else { return [:] }
         prs["open"] = open
         if let v = meta.merged { prs["merged"] = v }
         m["prs"] = prs
@@ -1520,10 +1516,6 @@ struct DchListRow: Equatable, Sendable {
 /// session, so untrusted: every key is optional and decoded on its own, a wrong
 /// type drops that key only, counts clamp to >= 0, unknown keys are ignored.
 struct DchSessionMeta: Equatable, Sendable {
-    struct Tasks: Equatable, Sendable {
-        var done: Int?, total: Int?, inProgress: Int?, queued: Int?
-    }
-
     struct PR: Equatable, Sendable {
         let url: String
         let repo: String
@@ -1562,9 +1554,7 @@ struct DchSessionMeta: Equatable, Sendable {
         }
     }
 
-    /// #762: Agent Island no longer draws tasks; kept only so the 0x03 list wire
-    /// (metaWire) stays as old phones read it, until iOS #763 drops it.
-    var tasks: Tasks?
+    /// #772: dch's `tasks` key is ignored (iOS #763 stopped reading it), so it never reaches the phone.
     var openPRs: [PR] = []
     var merged: Int?
 
@@ -1581,10 +1571,6 @@ struct DchSessionMeta: Equatable, Sendable {
     /// nil when `json` is not an object (dch's null, a missing key).
     init?(json: Any?) {
         guard let o = json as? [String: Any] else { return nil }
-        if let t = o["tasks"] as? [String: Any] {
-            tasks = Tasks(done: Self.count(t["done"]), total: Self.count(t["total"]),
-                          inProgress: Self.count(t["in_progress"]), queued: Self.count(t["queued"]))
-        }
         if let p = o["prs"] as? [String: Any] {
             merged = Self.count(p["merged"])
             openPRs = ((p["open"] as? [Any]) ?? []).prefix(Self.maxOpenPRs).compactMap { e in
@@ -1595,8 +1581,8 @@ struct DchSessionMeta: Equatable, Sendable {
         }
     }
 
-    init(tasks: Tasks? = nil, openPRs: [PR] = [], merged: Int? = nil) {
-        (self.tasks, self.openPRs, self.merged) = (tasks, openPRs, merged)
+    init(openPRs: [PR] = [], merged: Int? = nil) {
+        (self.openPRs, self.merged) = (openPRs, merged)
     }
 }
 

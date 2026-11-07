@@ -68,8 +68,7 @@ final class DchListParseTests: XCTestCase {
         """
         let rows = DchCommand.parseListJSON(Data(json.utf8))
         XCTAssertEqual(rows.map(\.name), ["prosper-main", "b", "old", "nul"])
-        XCTAssertEqual(rows[0].meta, DchSessionMeta(tasks: .init(done: 485, total: 503, inProgress: 5, queued: 13),
-                                                    openPRs: [], merged: 0))
+        XCTAssertEqual(rows[0].meta, DchSessionMeta(openPRs: [], merged: 0), "#772: tasks parses fine and is dropped")
         XCTAssertEqual(rows[0].metaEpoch, 1792841470)
         XCTAssertEqual(rows[0].alias, "prosper")
         XCTAssertEqual(rows[0].agents, 2)
@@ -97,14 +96,11 @@ final class DchListParseTests: XCTestCase {
         XCTAssertEqual(rows[0].alias, "A"); XCTAssertEqual(rows[0].activityEpoch, 5)
         XCTAssertEqual(rows[0].state, "working"); XCTAssertEqual(rows[0].agents, 3)
         XCTAssertEqual(rows[0].metaEpoch, 0)
-        XCTAssertEqual(rows[0].meta?.tasks, .init(done: nil, total: nil, inProgress: nil, queued: 4),
-                       "a string, a bool and a fraction drop; the integer stays")
         XCTAssertEqual(rows[0].meta?.openPRs, [.init(url: "", repo: "o/r", num: nil, title: ""),
                                                .init(url: "", repo: "o/q", num: 3, title: "")])
         XCTAssertNil(rows[0].meta?.merged)
         XCTAssertNil(rows[1].meta, "not an object: no meta, row kept")
         XCTAssertEqual(rows[1].state, "idle")
-        XCTAssertNil(rows[2].meta?.tasks)
         XCTAssertEqual(rows[2].meta?.openPRs, [])
         XCTAssertEqual(rows[2].meta?.merged, 2)
     }
@@ -115,7 +111,6 @@ final class DchListParseTests: XCTestCase {
           "prs":{"open":[{"url":"u","repo":"o/r","num":-5,"title":""}],"merged":-6}}}]
         """
         let row = DchCommand.parseListJSON(Data(json.utf8))[0]
-        XCTAssertEqual(row.meta?.tasks, .init(done: 0, total: 0, inProgress: 0, queued: 0))
         XCTAssertEqual(row.meta?.merged, 0)
         XCTAssertEqual(row.meta?.openPRs.first?.num, 0)
         XCTAssertEqual(row.metaEpoch, 0)
@@ -200,15 +195,15 @@ final class DchListParseTests: XCTestCase {
         DchCommand.parseListJSON(Data(json.utf8))[0]
     }
 
-    /// The phone gets dch's meta re-encoded from the decode: the PRs Agent Island shows, plus
-    /// the task counts it no longer draws (#762) but old phones still read.
+    /// The phone gets dch's meta re-encoded from the decode: the PRs Agent Island shows. #772: dch's
+    /// tasks parse fine and never reach the wire (iOS #763 stopped reading them).
     func testMetaWireReencodesDecodedMeta() {
         let r = row("""
         [{"name":"a","state":"idle","meta_epoch":1784995200,"meta":{"tasks":{"done":3,"total":7,"in_progress":1,"queued":2,"x":9},
           "prs":{"open":[{"url":"https://github.com/o/prosper/pull/12","repo":"o/prosper","num":12,"title":"Fix it","extra":1}],"merged":4},
           "junk":true}}]
         """)
-        XCTAssertEqual(wire(r), #"{"meta":{"prs":{"merged":4,"open":[{"num":12,"repo":"o\/prosper","title":"Fix it","url":"https:\/\/github.com\/o\/prosper\/pull\/12"}]},"tasks":{"done":3,"in_progress":1,"queued":2,"total":7}},"meta_epoch":1784995200}"#)
+        XCTAssertEqual(wire(r), #"{"meta":{"prs":{"merged":4,"open":[{"num":12,"repo":"o\/prosper","title":"Fix it","url":"https:\/\/github.com\/o\/prosper\/pull\/12"}]}},"meta_epoch":1784995200}"#)
     }
 
     func testMetaWireAbsentWithoutMeta() {
@@ -221,8 +216,8 @@ final class DchListParseTests: XCTestCase {
         XCTAssertTrue(r.metaWire.isEmpty, "an empty meta sends no keys")
     }
 
-    /// #522: nothing left after filtering (no task fields, no allowlisted PR, no
-    /// merged count) means no meta and no meta_epoch, as with no meta at all.
+    /// #522: nothing left after filtering (no allowlisted PR, no merged count) means no
+    /// meta and no meta_epoch, as with no meta at all. #772: tasks alone counts as nothing.
     func testMetaWireAbsentWhenNothingSurvives() {
         let r = row("""
         [{"name":"a","meta_epoch":9,"meta":{"tasks":{"total":"7"},"prs":{"open":[{"url":"javascript:alert(1)","num":1}]}}}]
@@ -230,7 +225,8 @@ final class DchListParseTests: XCTestCase {
         XCTAssertNotNil(r.meta)
         XCTAssertTrue(r.metaWire.isEmpty)
         XCTAssertEqual(wire(row(#"[{"name":"a","meta":{"prs":{"merged":0}}}]"#)), #"{"meta":{"prs":{"merged":0,"open":[]}}}"#)
-        XCTAssertEqual(wire(row(#"[{"name":"a","meta":{"tasks":{"queued":0}}}]"#)), #"{"meta":{"prs":{"open":[]},"tasks":{"queued":0}}}"#)
+        XCTAssertTrue(row(#"[{"name":"a","meta_epoch":9,"meta":{"tasks":{"done":1,"total":2,"in_progress":3,"queued":0}}}]"#).metaWire.isEmpty,
+                      "#772: a meta with only tasks sends no meta and no meta_epoch")
         XCTAssertEqual(wire(row(#"[{"name":"a","meta":{"tasks":{},"prs":{"open":[{"url":"https://github.com/o/r/pull/1"}]}}}]"#)),
                        #"{"meta":{"prs":{"open":[{"num":1,"repo":"o\/r","title":"","url":"https:\/\/github.com\/o\/r\/pull\/1"}]}}}"#)
     }
@@ -244,13 +240,6 @@ final class DchListParseTests: XCTestCase {
         """)
         XCTAssertEqual(r.meta?.openPRs.count, 3)
         XCTAssertEqual(wire(r), #"{"meta":{"prs":{"open":[{"num":7,"repo":"o\/r","title":"ok","url":"https:\/\/github.com\/o\/r\/pull\/7"}]}}}"#)
-    }
-
-    func testMetaWireOmitsNilTaskFields() {
-        let r = row(#"[{"name":"a","meta":{"tasks":{"done":2,"total":"7"}}}]"#)
-        XCTAssertEqual(wire(r), #"{"meta":{"prs":{"open":[]},"tasks":{"done":2}}}"#)
-        let empty = row(#"[{"name":"a","meta":{"tasks":{}}}]"#)
-        XCTAssertTrue(empty.metaWire.isEmpty, "a fieldless tasks object is nothing")
     }
 
     func testMetaWireTruncatesRepoAndTitle() {

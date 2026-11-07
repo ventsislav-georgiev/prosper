@@ -273,7 +273,7 @@ final class DchWatchStreamTests: XCTestCase {
     // MARK: - The cache
 
     /// The island's rows encode to the bytes a fork of the same dch output does (meta,
-    /// meta_epoch and the task counts old phones read included), in name order.
+    /// meta_epoch included; #772: dch's tasks dropped), in name order.
     func testCachedPayloadMatchesTheForkPayload() {
         let out = #"""
         [{"name":"a","alias":"","harness":"claude-a","activity_epoch":5,"state":"working","agents":2,"version":"1.28.0",
@@ -288,8 +288,7 @@ final class DchWatchStreamTests: XCTestCase {
         XCTAssertEqual(cached.map { DchFrame.listPayload($0.rows) }, fork)
         let rows = (try? JSONSerialization.jsonObject(with: fork)) as? [[String: Any]] ?? []
         XCTAssertEqual(rows.first?["meta_epoch"] as? Int, 1_784_995_200)
-        XCTAssertEqual((rows.first?["meta"] as? [String: Any])?["tasks"] as? NSDictionary,
-                       ["done": 3, "total": 7, "in_progress": 1, "queued": 2] as NSDictionary)
+        XCTAssertEqual((rows.first?["meta"] as? [String: Any])?.keys.sorted(), ["prs"], "#772: no tasks key")
     }
 
     func testCacheOnlyForRemoteTerminalsDir() {
@@ -384,6 +383,33 @@ final class DchWatchStreamTests: XCTestCase {
             XCTAssertEqual(frames.forks, 2, "a publish settle s after: the cache again")
             XCTAssertEqual(frames.all.last.map(Self.body), Self.payload([Self.session("b")]))
         }
+    }
+
+    /// QA #606 INFO-9: dch's attach respawns a session whose master died, so an attach that
+    /// spawned its client marks the list changed. A stand-in dch that only sleeps: no exit
+    /// frame (which marks it too) can stand in for the attach's own mark.
+    func testAnAttachThatSpawnedMarksTheListChanged() throws {
+        let script = tempDir().appendingPathComponent("fake-dch").path
+        try "#!/bin/sh\nexec /bin/sleep 30\n".write(toFile: script, atomically: true, encoding: .utf8)
+        XCTAssertEqual(chmod(script, 0o755), 0)
+        DchCommand.dchPathOverride = script
+        defer { DchCommand.dchPathOverride = nil }
+        let timers = Timers(), h = hub(timers), frames = Frames()
+        let (conn, queue) = connection(h, frames)
+        defer { queue.sync { conn.close() } }
+        queue.sync { h.island(Self.cache([Self.session("a")])) }
+        Self.list(conn, queue)
+        XCTAssertEqual(frames.forks, 0, "no change yet: the cache")
+        queue.sync { conn.handle(type: DchFrame.attach, payload: Data(#"{"name":"a","cols":80,"rows":24}"#.utf8)) }
+        XCTAssertNotNil(queue.sync { conn.attachedSession }, "the attach went through")
+        Self.list(conn, queue)
+        XCTAssertEqual(frames.forks, 1, "the relist after an attach: a fork")
+    }
+
+    /// QA #606 INFO-10: the island has a change within a 1 s tick plus one fetch at most
+    /// AgentPollGate.floor later; `settle` keeps a margin over that, so a floor bump can't eat it.
+    func testSettleOutlastsTheIslandsCatchUp() {
+        XCTAssertGreaterThan(DchWatchHub.settle, AgentPollGate.floor + 2)
     }
 
     /// QA #606 F1: Stop, Restart and Resume run off the queue for as long as they take; their
