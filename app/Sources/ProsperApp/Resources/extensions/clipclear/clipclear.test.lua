@@ -202,6 +202,41 @@ do  -- a wipe by another trigger cancels the pending one-shot
     h.eq(env.timers["clipclear.tick"], nil, "sleep wipe cancels the timer")
 end
 
+do  -- QA #604 F1: the host timer's clock stops in sleep; wake re-arms from the wall clock
+    local G, _, env = fresh({ delay_minutes = 60 }, "")
+    G.on_copy("{}")
+    env.clipboard = "password"
+    h.eq(env.timers["clipclear.tick"].after, 3600, "armed for 60 min")
+    env.now = NOW + 8 * 3600            -- lid closed 8 h, deadline passed asleep
+    G.on_wake("{}")
+    local t = env.timers["clipclear.tick"]
+    h.eq(t and t.after, 1, "wake past the deadline: fire in 1 s")
+    G[t.handler]()
+    h.eq(env.clipboard, "", "the overdue clip clears right after wake")
+    h.eq(env.timers["clipclear.tick"], nil, "timer off again")
+end
+
+do  -- a wake before the deadline re-arms for the wall-clock remainder
+    local G, _, env = fresh({ delay_minutes = 60, last_change = NOW - 1200 }, "x")
+    G.on_wake("{}")
+    h.eq(env.timers["clipclear.tick"].after, 2400, "re-armed for the remaining 40 min")
+    h.eq(writes(env), 0, "wake itself clears nothing")
+end
+
+do  -- wake with nothing pending arms nothing
+    local G, _, env = fresh({}, "")
+    G.on_wake("{}")
+    h.eq(env.timers["clipclear.tick"], nil, "idle wake: no timer")
+end
+
+do  -- the manifest routes system.wake to on_wake
+    local f = assert(io.open(h.dir() .. "extension.toml"))
+    local toml = f:read("a"); f:close()
+    h.eq(toml:match('on_event%s*=%s*%[[^%]]*"system%.wake"') ~= nil, true, "activates on system.wake")
+    h.eq(toml:match('event%s*=%s*"system%.wake"%s*\nhandler%s*=%s*"on_wake"') ~= nil, true,
+         "system.wake -> on_wake")
+end
+
 do  -- a stray fire with nothing pending cancels instead of re-arming
     local G, _, env = fresh({}, "")
     env.timers["clipclear.tick"] = { id = "clipclear.tick", every = 60, handler = "on_tick" }

@@ -16,7 +16,10 @@
 -- pending means no timer at all. The old 60 s sweep spun a Lua worker every
 -- minute all day, also with an empty clipboard. A one-shot costs one timer write
 -- per copy, fires once per clip, on the deadline; the host persists it, and an
--- overdue one fires at once after a relaunch (TimerScheduler.restore).
+-- overdue one fires at once after a relaunch (TimerScheduler.restore). The host
+-- timer runs on DispatchTime, which stops while the Mac sleeps, so system.wake
+-- re-arms it from the wall clock (on_wake) — else a 60 min delay copied before an
+-- 8 h sleep would clear an hour after wake instead of at wake.
 
 local P_ENABLED = "enabled"
 local P_DELAY   = "delay_minutes"
@@ -102,6 +105,10 @@ function on_tick()
     end
     wipe()
 end
+
+-- Recompute the wall-clock time left; a deadline that passed asleep gets the 1 s
+-- floor, so it clears right after wake. Nothing pending: arm_timer cancels.
+function on_wake() arm_timer() end
 
 function on_sleep()
     if flag(P_ENABLED) and flag(P_SLEEP) and pending() then wipe() end

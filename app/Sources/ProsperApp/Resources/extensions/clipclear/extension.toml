@@ -1,6 +1,7 @@
 # Clipboard Auto-Clear — a copied password, OTP or token should not still be on
-# the pasteboard an hour later. Three triggers, all opt-in: an age-based sweep, a
-# wipe when the Mac sleeps, and a wipe when the screen locks.
+# the pasteboard an hour later. Three triggers, all opt-in: an age-based clear (a
+# one-shot timer at the pending clip's deadline), a wipe when the Mac sleeps, and a
+# wipe when the screen locks.
 #
 # Opt-in as a whole (`default_disabled`): this deletes something the user put on
 # the clipboard, and subscribing to `clipboard.changed` is what starts the
@@ -25,10 +26,13 @@ api_level   = 1
 [extension.entry]
 main = "init.lua"
 
-# Nothing resident. system.launch arms the durable 60 s sweep (host.timer.schedule
-# is idempotent by id); the other three events each spin a worker and exit.
+# Nothing resident, no timer while nothing is pending. A copy (or system.launch with
+# a clip already there) arms a durable one-shot at the clip's deadline; a wipe
+# cancels it. system.wake re-arms it from the wall clock: the host's DispatchSource
+# clock stops during sleep, so a deadline that passed asleep fires on wake, not
+# a sleep-length late. Every event spins a worker and exits.
 [extension.activation]
-on_event = ["system.launch", "clipboard.changed", "system.sleep", "screen.locked"]
+on_event = ["system.launch", "clipboard.changed", "system.sleep", "system.wake", "screen.locked"]
 eager    = true
 
 # No `prefix`: a prefixed command is re-invoked on every keystroke
@@ -56,6 +60,11 @@ handler = "on_copy"
 [[contributes.events]]
 event   = "system.sleep"
 handler = "on_sleep"
+
+# Re-arm the one-shot from the wall clock (see the activation note above).
+[[contributes.events]]
+event   = "system.wake"
+handler = "on_wake"
 
 [[contributes.events]]
 event   = "screen.locked"
