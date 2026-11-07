@@ -1493,24 +1493,25 @@ enum Preferences {
     }
 
     /// Base sampling period (seconds) for every System Stats module. Higher = less
-    /// CPU. Default 3s (lean to the low side). The poller tiers off this: fast metrics
+    /// CPU. Default 5s (#769, was 3s; a saved choice stays — the default is this getter's
+    /// fallback, nothing is registered, so only users with no saved value move). The poller tiers off this: fast metrics
     /// (CPU/RAM/Net/GPU) sample at this rate, temps/power at `statsSensorsInterval`,
     /// battery far slower — so one knob scales the whole cost profile. Clamped 1…10s.
     static var statsRefreshInterval: Double {
         get {
-            let v = defaults.object(forKey: Keys.statsRefreshInterval) as? Double ?? 3.0
+            let v = defaults.object(forKey: Keys.statsRefreshInterval) as? Double ?? 5.0
             return Swift.min(10, Swift.max(1, v))
         }
         set { defaults.set(Swift.min(10, Swift.max(1, newValue)), forKey: Keys.statsRefreshInterval) }
     }
 
     /// Sampling period (seconds) for the slow metrics (temps + power). SMC/IOReport
-    /// reads are the priciest tick work, so they default to a lazy 5s; users who want
+    /// reads are the priciest tick work, so they default to a lazy 10s (#769, was 5s); users who want
     /// livelier temps can lower it. Effective cadence rounds to a multiple of
     /// `statsRefreshInterval` and can never be faster than it. Clamped 1…10s.
     static var statsSensorsInterval: Double {
         get {
-            let v = defaults.object(forKey: Keys.statsSensorsInterval) as? Double ?? 5.0
+            let v = defaults.object(forKey: Keys.statsSensorsInterval) as? Double ?? 10.0
             return Swift.min(10, Swift.max(1, v))
         }
         set { defaults.set(Swift.min(10, Swift.max(1, newValue)), forKey: Keys.statsSensorsInterval) }

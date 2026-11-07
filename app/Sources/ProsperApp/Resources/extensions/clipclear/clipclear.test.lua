@@ -148,13 +148,11 @@ end
 
 -- MARK: - system.launch / timer arming
 
-do
+do  -- #769: nothing pending -> no timer at all (the old 60 s sweep is replaced)
     local G, _, env = fresh({}, "")
+    env.timers["clipclear.tick"] = { id = "clipclear.tick", every = 60, handler = "on_tick" }
     G.on_launch()
-    local t = env.timers["clipclear.tick"]
-    h.eq(t ~= nil, true, "sweep timer armed")
-    h.eq(t.every, 60, "60 s sweep")
-    h.eq(t.handler, "on_tick", "named handler, no live closure")
+    h.eq(env.timers["clipclear.tick"], nil, "empty pasteboard: no timer, old sweep cancelled")
     h.eq(env.prefs.last_change, nil, "empty pasteboard: nothing to stamp")
 end
 
@@ -162,12 +160,60 @@ do  -- a clip that predates launch gets its clock started, else it never ages ou
     local G, _, env = fresh({}, "from before")
     G.on_launch()
     h.eq(env.prefs.last_change, tostring(NOW), "pre-existing clip stamped at launch")
+    local t = env.timers["clipclear.tick"]
+    h.eq(t and t.after, 300, "one-shot armed for the full delay")
+    h.eq(t and t.handler, "on_tick", "named handler, no live closure")
+end
+
+do  -- relaunch with a stamped clip: armed for what is left, not the full delay
+    local G, _, env = fresh({ last_change = NOW - 120 }, "x")
+    G.on_launch()
+    h.eq(env.timers["clipclear.tick"].after, 180, "re-armed for the remaining 3 min")
+end
+
+do  -- #769 lifecycle: off while idle, armed by a copy, fires on time, off again
+    local G, _, env = fresh({ delay_minutes = 2 }, "")
+    G.on_launch()
+    h.eq(env.timers["clipclear.tick"], nil, "idle: no timer")
+    G.on_copy("{}")
+    env.clipboard = "secret"
+    local t = env.timers["clipclear.tick"]
+    h.eq(t and t.every, nil, "a one-shot, not a repeating sweep")
+    h.eq(t and t.after, 120, "armed for the clip's deadline")
+    env.now = NOW + t.after          -- the host fires it on the deadline
+    G[t.handler]()
+    h.eq(writes(env), 1, "pending clip cleared when the timer fires")
+    h.eq(env.clipboard, "", "pasteboard emptied")
+    h.eq(env.timers["clipclear.tick"], nil, "nothing pending again: timer off")
+end
+
+do  -- a fire before the deadline (delay raised meanwhile) re-arms for the rest
+    local G, _, env = fresh({ delay_minutes = 5, last_change = NOW - 100 }, "x")
+    G.on_tick()
+    h.eq(writes(env), 0, "too young: no clear")
+    h.eq(env.timers["clipclear.tick"].after, 200, "re-armed for the remaining 200 s")
+end
+
+do  -- a wipe by another trigger cancels the pending one-shot
+    local G, _, env = fresh({ last_change = NOW }, "secret")
+    G.on_launch()
+    h.eq(env.timers["clipclear.tick"] ~= nil, true, "armed while pending")
+    G.on_sleep()
+    h.eq(env.timers["clipclear.tick"], nil, "sleep wipe cancels the timer")
+end
+
+do  -- a stray fire with nothing pending cancels instead of re-arming
+    local G, _, env = fresh({}, "")
+    env.timers["clipclear.tick"] = { id = "clipclear.tick", every = 60, handler = "on_tick" }
+    G.on_tick()
+    h.eq(env.timers["clipclear.tick"], nil, "no stamp: timer cancelled")
 end
 
 do
     local G, _, env = fresh({ enabled = "false" }, "x")
     G.on_launch()
     h.eq(env.timers["clipclear.tick"], nil, "disabled: no timer left running")
+    h.eq(env.prefs.last_change, nil, "disabled: the clip's clock is not started")
 end
 
 -- MARK: - Manual command
@@ -204,7 +250,17 @@ do  -- toggles arrive as "set:<key>"; the master switch owns the timer
     h.eq(env.prefs.enabled, "false", "pref written")
     h.eq(env.timers["clipclear.tick"], nil, "timer cancelled when switched off")
     G.settings_action("clipclear", "set:enabled", "true", "{}")
-    h.eq(env.timers["clipclear.tick"] ~= nil, true, "timer re-armed when switched on")
+    h.eq(env.timers["clipclear.tick"], nil, "switched on, nothing pending: still no timer")
+    env.clipboard = "x"
+    G.settings_action("clipclear", "set:enabled", "false", "{}")
+    G.settings_action("clipclear", "set:enabled", "true", "{}")
+    h.eq(env.timers["clipclear.tick"] ~= nil, true, "switched on with a clip: timer armed")
+end
+
+do  -- lowering the delay moves the pending deadline earlier
+    local G, _, env = fresh({ delay_minutes = 30, last_change = NOW - 60 }, "x")
+    G.settings_action("clipclear", "set:delay_minutes", "2", "{}")
+    h.eq(env.timers["clipclear.tick"].after, 60, "re-armed for the new deadline")
 end
 
 do  -- switching auto-clear on with something already copied starts its clock

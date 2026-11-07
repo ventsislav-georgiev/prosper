@@ -116,12 +116,23 @@ final class StatsController {
         guard !modules.isEmpty else { teardown(); return }
 
         startPoller(for: Set(modules))
+        flushHeldSnapshot()   // a style change can show what the gate held back (a sparkline)
         syncItems(modules)
     }
 
     // MARK: - Poller
 
     private var pollerInterval: TimeInterval = 0
+    private var deliverGate = StatsDeliverGate()
+    /// The newest snapshot the gate kept off the store (its histories still moved).
+    /// Published before anything that reads more than the menu-bar strings.
+    private var heldSnapshot: StatsSnapshot?
+
+    private func flushHeldSnapshot() {
+        guard let s = heldSnapshot else { return }
+        heldSnapshot = nil
+        store.snapshot = s
+    }
     private var pollerSensorsInterval: TimeInterval = 0
 
     private func startPoller(for modules: Set<StatsModule>) {
@@ -146,6 +157,15 @@ final class StatsController {
             // snapshots reorder). Touches UI/store directly.
             MainActor.assumeIsolated {
                 guard let self else { return }
+                // #769: no publish (every widget re-renders) and no resize pass when
+                // nothing a menu-bar widget draws moved and no popup is reading it.
+                let key = StatsDeliverGate.key(StatsModule.allCases.filter { self.items[$0] != nil },
+                                               snap, style: self.store.style)
+                guard self.deliverGate.admit(key, popupShown: self.popover.isShown) else {
+                    self.heldSnapshot = snap
+                    return
+                }
+                self.heldSnapshot = nil
                 self.store.snapshot = snap
                 self.resizeItems()
             }
@@ -242,6 +262,7 @@ final class StatsController {
         let signpost = Perf.signposter.beginInterval("popover.show", id: Perf.signposter.makeSignpostID(), "stats")
         CATransaction.setCompletionBlock { Perf.signposter.endInterval("popover.show", signpost) }
         openModule = m
+        flushHeldSnapshot()   // the popup charts the histories the gate held back
         let host = NSHostingController(rootView: StatsPopupView(module: m, store: store))
         // Let the popover learn the view's real size BEFORE it positions itself.
         // Without this the hosting controller reports a zero content size on first
@@ -289,6 +310,45 @@ private final class PopoverDelegate: NSObject, NSPopoverDelegate {
     init(_ reconcile: @escaping () -> Void) { self.reconcile = reconcile }
     func popoverDidShow(_ n: Notification) { reconcile() }
     func popoverDidClose(_ n: Notification) { reconcile() }
+}
+
+/// #769: skips a tick's main-thread publish when nothing the menu-bar widgets draw
+/// changed. The key mirrors `StatsMenuWidget`: the rate strings for network, the
+/// charge/bolt/ramp colour for battery, else the sparkline series (graph modes),
+/// the value text and the ramp colour, plus the theme scale (a resize input). Style
+/// changes go through `reload()`, which publishes and resizes on its own.
+struct StatsDeliverGate {
+    private var last: [AnyHashable]?
+
+    @MainActor
+    static func key(_ shown: [StatsModule], _ snap: StatsSnapshot, style: StatsWidgetStyle) -> [AnyHashable] {
+        var k: [AnyHashable] = [ThemeRuntime.scale]
+        for m in shown {
+            let cfg = style.config(m)
+            let ramp = cfg.rampColor(m.rampValue(snap) ?? 0)
+            k.append(m.rawValue)
+            switch m {
+            case .network:
+                k.append(StatsFormat.rateMenu(snap.network?.uploadBytesPerSec ?? 0))
+                k.append(StatsFormat.rateMenu(snap.network?.downloadBytesPerSec ?? 0))
+            case .battery:
+                k.append(snap.battery?.charge ?? 0)
+                k.append(snap.battery?.isCharging ?? false)
+                k.append(ramp)
+            default:
+                if cfg.mode != .textOnly, let h = m.historyKey { k.append(snap.histories[h] ?? []) }
+                if cfg.mode != .graph { k.append(m.primaryText(snap, showUnit: cfg.showUnit)) }
+                k.append(ramp)
+            }
+        }
+        return k
+    }
+
+    /// True = publish. Always while a popup is open (it shows far more than the key).
+    mutating func admit(_ key: [AnyHashable], popupShown: Bool) -> Bool {
+        defer { last = key }
+        return popupShown || key != last
+    }
 }
 
 /// #189: decides which stats status items need a width re-measure on a tick.
