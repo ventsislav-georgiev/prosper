@@ -1009,7 +1009,7 @@ struct AgentIslandListSection: View {
 
     var body: some View {
         NeonSection("Session list",
-                    footer: "Sessions whose name or alias matches the pattern, a regex ignoring case (e.g. -(qa|reviewer)$), go under a Sidekicks tab. Empty shows every session together.") {
+                    footer: "Sessions whose name or alias matches the pattern, a regex ignoring case (e.g. -(qa|reviewer)$), go under a Sidekicks tab. Empty shows every session together. Syncs with Prosper on iPhone.") {
             NeonRow("Sort sessions") {
                 // Menu, not segmented: segmented controls ignore the UI scale.
                 Picker("", selection: $sort) {
@@ -1035,11 +1035,17 @@ struct AgentIslandListSection: View {
         }
         .onChange(of: sort) { _, v in Preferences.agentIslandSort = v; AgentIslandController.shared.rowDetailsChanged() }
         .onChange(of: tabs) { _, v in Preferences.agentIslandSidekickTabs = v; AgentIslandController.shared.rowDetailsChanged() }
-        .onChange(of: pattern) { _, v in Preferences.editSidekickPattern(v); AgentIslandController.shared.rowDetailsChanged() }
+        .onChange(of: pattern) { _, v in Self.patternEdited(v) }
         // #760: a phone's adopted pattern shows here; the onChange above sees it stored and stamps nothing.
         .onReceive(NotificationCenter.default.publisher(for: .sidekickPatternChangedExternally)) { _ in
             pattern = Preferences.agentIslandSidekickPattern
         }
+    }
+
+    /// The field's onChange, here so a test can drive it: an edit stamps, the echo of an adopt does not.
+    static func patternEdited(_ v: String, now: Date = Date()) {
+        Preferences.editSidekickPattern(v, now: now)
+        AgentIslandController.shared.rowDetailsChanged()
     }
 }
 

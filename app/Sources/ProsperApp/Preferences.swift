@@ -1201,12 +1201,15 @@ enum Preferences {
         set { defaults.set(NSNumber(value: newValue), forKey: Keys.agentIslandSidekickPatternUpdated) }
     }
 
-    /// #760: a Settings edit stores the pattern raw and stamps now. The field echoing the
-    /// stored value (an adopt it follows) is no edit: nothing written, nothing re-stamped.
+    /// #760: a Settings edit stores the pattern raw and stamps now, or one past the stored
+    /// stamp when that is later (a phone clock ahead must not make Mac edits lose, QA #597
+    /// INFO-1). The field echoing the stored value (an adopt it follows) is no edit: nothing
+    /// written, nothing re-stamped.
     static func editSidekickPattern(_ pattern: String, now: Date = Date()) {
         guard pattern != agentIslandSidekickPattern else { return }
+        let stamp = max(Int64((now.timeIntervalSince1970 * 1000).rounded()), agentIslandSidekickPatternUpdated &+ 1)
         agentIslandSidekickPattern = pattern
-        agentIslandSidekickPatternUpdated = Int64((now.timeIntervalSince1970 * 1000).rounded())
+        agentIslandSidekickPatternUpdated = stamp
     }
 
     /// #760: a phone's winning pattern and its stamp, both verbatim.

@@ -210,8 +210,8 @@ enum AgentIsland {
 
     /// Compiled once per trimmed pattern. Guarded by `sidekickLock`; the unsafe
     /// marker only silences Swift 6's global-state check.
-    /// ponytail: grows by one entry per distinct pattern typed in Settings; a few
-    /// hundred tiny entries at most per run.
+    /// ponytail: grows by one entry per distinct pattern, typed in Settings or adopted from
+    /// the paired phone (#760, one sync in flight per connection); a few hundred tiny entries at most per run.
     private static let sidekickLock = NSLock()
     nonisolated(unsafe) private static var sidekickCache: [String: (re: NSRegularExpression?, how: SidekickMatch, spent: UInt64)] = [:]
 

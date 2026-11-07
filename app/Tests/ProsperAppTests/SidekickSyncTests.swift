@@ -128,6 +128,23 @@ final class SidekickSyncTests: XCTestCase {
         XCTAssertEqual(stored(), .init(pattern: "-qa", updated: 1), "an error stores nothing")
     }
 
+    /// QA #597 F1: a Mac pattern over the cap goes out as the winner; the phone echoing it back on a
+    /// tie (or with an older stamp) gets ok with the Mac's value, not 0x13.
+    func testOversizeMacPatternEchoedBackIsNotAnError() {
+        let big = String(repeating: "a", count: DchSidekickOps.maxBytes + 100)
+        Preferences.adoptSidekickPattern(big, updated: 50)
+        assertOK(call(Self.body(["pattern": big, "updated": 50])), big, 50, adopts: 0)
+        assertOK(call(Self.body(["pattern": big + "b", "updated": 49])), big, 50, adopts: 0)
+        XCTAssertEqual(stored(), .init(pattern: big, updated: 50))
+    }
+
+    /// QA #597 F1: the cap still guards the adopt: an oversize phone value that would win is refused.
+    func testOversizePhoneWinnerIsRefused() {
+        Preferences.adoptSidekickPattern("-qa", updated: 50)
+        assertError(call(Self.body(["pattern": String(repeating: "a", count: DchSidekickOps.maxBytes + 1), "updated": 51])))
+        XCTAssertEqual(stored(), .init(pattern: "-qa", updated: 50), "not adopted")
+    }
+
     func testMalformedRequestsAreErrors() {
         for raw in [Data(), Data("not json".utf8), Data("[]".utf8), Self.body(["updated": 9]), Self.body(["pattern": "x"]),
                     Self.body(["pattern": 1, "updated": 9]), Self.body(["pattern": "x", "updated": "9"]),
@@ -147,6 +164,29 @@ final class SidekickSyncTests: XCTestCase {
         Preferences.adoptSidekickPattern("-phone", updated: 42)
         // The open field follows the adopt and its onChange hands the same value back.
         Preferences.editSidekickPattern("-phone", now: now.addingTimeInterval(60))
+        XCTAssertEqual(stored(), .init(pattern: "-phone", updated: 42), "the echo is no edit")
+    }
+
+    /// QA #597 INFO-1: a phone clock ahead must not pin the Mac. An edit stamps one past the stored
+    /// stamp when that is later than now, and wins the next sync against that phone stamp.
+    func testMacEditAfterAFutureStampStillWins() {
+        let future: Int64 = 32_503_680_000_000 // year 3000
+        Preferences.adoptSidekickPattern("-phone", updated: future)
+        Preferences.editSidekickPattern("-mac", now: Date(timeIntervalSince1970: 1_730_000_000))
+        XCTAssertEqual(stored(), .init(pattern: "-mac", updated: future + 1))
+        assertOK(call(Self.body(["pattern": "-phone", "updated": future])), "-mac", future + 1, adopts: 0)
+    }
+
+    /// QA #597 INFO-7: the Settings field's onChange path. An edit stamps; the field echoing an
+    /// adopted value re-stamps nothing.
+    @MainActor
+    func testSettingsFieldEditStampsAndEchoDoesNot() throws {
+        try XCTSkipIf(AgentIslandController.shared.store != nil, "an island store is up: keep its panel untouched")
+        let now = Date(timeIntervalSince1970: 1_730_000_000)
+        AgentIslandListSection.patternEdited("-rev", now: now)
+        XCTAssertEqual(stored(), .init(pattern: "-rev", updated: 1_730_000_000_000), "an edit stamps")
+        Preferences.adoptSidekickPattern("-phone", updated: 42)
+        AgentIslandListSection.patternEdited("-phone", now: now.addingTimeInterval(60))
         XCTAssertEqual(stored(), .init(pattern: "-phone", updated: 42), "the echo is no edit")
     }
 

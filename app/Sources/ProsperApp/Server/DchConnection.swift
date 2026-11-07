@@ -672,15 +672,17 @@ struct DchSidekickOps: Sendable {
         guard let phone = Self.parse(payload) else {
             return reply(DchControlOps.error("malformed sidekickSync request: send {\"pattern\": \"<text>\", \"updated\": <ms>}"))
         }
-        guard phone.pattern.utf8.count <= Self.maxBytes else {
-            return reply(DchControlOps.error("sidekick pattern over \(Self.maxBytes) UTF-8 bytes"))
-        }
         let adopted = adopted
         // Read, merge and write on main, where Settings edits it, so no edit lands between.
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 let m = Self.merge(mac: Value(pattern: Preferences.agentIslandSidekickPattern,
                                               updated: Preferences.agentIslandSidekickPatternUpdated), phone: phone)
+                // QA #597 F1: the cap guards the adopt only. A tie or a Mac win answers with the Mac's
+                // value whatever the phone sent, so a Mac pattern over the cap echoed back never wedges sync.
+                if m.adopt, phone.pattern.utf8.count > Self.maxBytes {
+                    return reply(DchControlOps.error("sidekick pattern over \(Self.maxBytes) UTF-8 bytes"))
+                }
                 if m.adopt {
                     Preferences.adoptSidekickPattern(m.winner.pattern, updated: m.winner.updated)
                     adopted()
