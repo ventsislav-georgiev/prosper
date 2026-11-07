@@ -150,8 +150,13 @@ public final class RemoteWakeCore {
     public private(set) var pinned = false
     private var lastWakeTs = Date.distantPast
     /// Start of the current quiet stretch for the AC back-off: reset on arming
-    /// (applyConfig), on a promote (a real request) and on a user (full) wake.
+    /// (applyConfig), on a promote (a real request), on a user (full) wake, and
+    /// again at the first dark wake after a user wake — so a long working session
+    /// doesn't count as quiet: the stretch runs from when the Mac went back to sleep.
     private var quietSince = Date.distantPast
+    /// A user wake was seen and no dark wake since: the next dark wake re-stamps
+    /// `quietSince` (the Mac slept in between).
+    private var userWakePending = false
     /// The request token we last promoted on. In-memory only — the daemon stays
     /// resident across dark wakes, so this survives sleep; a daemon restart resets it,
     /// which at worst replays one already-handled wake (harmless, rare).
@@ -180,22 +185,24 @@ public final class RemoteWakeCore {
     public var isResident: Bool { pinned }
     public var enabled: Bool { config.enabled }
 
-    /// Floor for the AC cadence (#767: 30 → 60 s). Applied here, not in the
-    /// config, because the app still sends openlid's 30 s default.
+    /// Floor for the AC cadence (#767: 30 → 60 s). Applied here, not only in the
+    /// config, because apps older than #767 still send openlid's old 30 s default.
     public static let minIntervalAC = 60.0
     /// AC back-off: the interval doubles after each `backoffStep` with no request
-    /// and no user wake, up to `backoffCap` — the default battery cadence, so a
-    /// wake on AC is never slower than one on battery. A config already above the
-    /// cap keeps its own value. Battery is never backed off: the user picked that cadence.
+    /// and no user wake, up to the smaller of `backoffCap` and the configured
+    /// battery cadence, so a wake on AC is never slower than one on battery. A base
+    /// already above that cap keeps its own value. Battery is never backed off: the
+    /// user picked that cadence.
     public static let backoffStep = 2.0 * 3600
     public static let backoffCap = 300.0
 
     private func interval(onAC: Bool) -> Double {
         guard onAC else { return config.intervalBatt }
         let base = max(RemoteWakeCore.minIntervalAC, config.intervalAC)
+        let cap = max(base, min(RemoteWakeCore.backoffCap, config.intervalBatt))
         let quiet = now().timeIntervalSince(quietSince)
         let level = quiet > 0 ? min(Int(quiet / RemoteWakeCore.backoffStep), 8) : 0
-        return max(base, min(RemoteWakeCore.backoffCap, base * Double(1 << level)))
+        return min(cap, base * Double(1 << level))
     }
 
     /// Apply a (sanitized) config. Enabled → go resident + arm the first wake;
@@ -247,9 +254,17 @@ public final class RemoteWakeCore {
     public func onWake(onAC: Bool, battPct: Int, userWake: Bool = false) -> WakeOutcome {
         guard pinned else { return .ignored }
         let t = now()
-        // A user (full) wake ends the quiet stretch even when debounced: the Mac was
-        // in use, so the next sleep starts back at the base cadence.
-        if userWake { quietSince = t }
+        // A user (full) wake ends the quiet stretch even when debounced; the first
+        // dark wake after it re-stamps, so the stretch is counted from the sleep that
+        // followed, not from the start of the working session: the next sleep starts
+        // back at the base cadence.
+        if userWake {
+            quietSince = t
+            userWakePending = true
+        } else if userWakePending {
+            quietSince = t
+            userWakePending = false
+        }
         if t.timeIntervalSince(lastWakeTs) < debounce {
             if config.trace { trace("onWake ignored: debounce collapsed (<\(debounce)s since last)") }
             return .ignored

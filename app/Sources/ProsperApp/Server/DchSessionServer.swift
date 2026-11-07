@@ -35,16 +35,20 @@ enum KeepAwakePolicy {
     /// releasing the hold — a ~60s grace covering a brief reconnect or output lull.
     static let graceTicks = 6
     /// Once the daemon has CONFIRMED the hold, refresh it every this many ticks
-    /// (40 s) instead of every tick (#767). The tick itself stays 10 s for the
-    /// activity window. 3 beats fit in the daemon's 120 s TTL, so the TTL still
-    /// releases the hold within 2 min of Prosper dying.
-    static let heartbeatTicks = 4
+    /// (30 s) instead of every tick (#767). The tick itself stays 10 s for the
+    /// activity window. 4 beats fit in the daemon's 120 s TTL, so two missed or
+    /// late beats (plus tick leeway) still land before it expires, and the TTL
+    /// still releases the hold within 2 min of Prosper dying.
+    static let heartbeatTicks = 3
     static let heartbeatSeconds = heartbeatTicks * activeWindowSeconds
 
     /// One holding tick: send the keep-awake XPC now? `confirmed` = the daemon
-    /// acknowledged the last hold. Unconfirmed (lid open, XPC failed, daemon
-    /// restarted and reclaimed) beats every tick, as before #767, so a missing
-    /// hold is (re)asserted within one tick.
+    /// acknowledged the last hold. Unconfirmed beats every tick, as before #767.
+    /// "Unconfirmed" is only learned from a reply: a refused beat (lid open,
+    /// sleep requested), a failed or timed-out XPC. A drop the server never hears
+    /// of — the helper restarting and reclaiming, or the lid-open hard release —
+    /// stays "confirmed" until the next beat, which re-asserts it, so the hold is
+    /// back within one beat (30 s); from then on a failing reply beats every tick.
     static func beat(confirmed: Bool, ticksSinceBeat: Int) -> (send: Bool, ticksSinceBeat: Int) {
         let n = ticksSinceBeat + 1
         if !confirmed || n >= heartbeatTicks { return (true, 0) }
@@ -130,7 +134,7 @@ final class DchSessionServer: @unchecked Sendable {
     private var holdConfirmed = false
     private var ticksSinceBeat = 0
     /// Tick cadence; the hold heartbeat is every `KeepAwakePolicy.heartbeatTicks`
-    /// ticks once confirmed (40 s, inside the daemon's 120s TTL).
+    /// ticks once confirmed (30 s, inside the daemon's 120s TTL).
     /// Kept equal to `activeWindowSeconds` so the "silent >10s ⇒ inactive" rule
     /// actually holds — a coarser tick would mis-read a session that prints between
     /// ticks as idle. Each tick re-evaluates; `beat` decides whether it refreshes the TTL.
@@ -415,7 +419,7 @@ final class DchSessionServer: @unchecked Sendable {
             idleTicks = 0
             sendKeepAwake(false)
         } else if step.hold {
-            // hold / refresh the TTL (incl. grace window), every 4th tick once confirmed
+            // hold / refresh the TTL (incl. grace window), every 3rd tick once confirmed
             let beat = KeepAwakePolicy.beat(confirmed: holdConfirmed, ticksSinceBeat: ticksSinceBeat)
             ticksSinceBeat = beat.ticksSinceBeat
             if beat.send { sendKeepAwake(true) }

@@ -24,8 +24,9 @@ private let clientRequirement =
 private let idleExitSeconds = 10
 
 // How long a remote-session keep-awake hold survives without a refresh. The app
-// heartbeats every 40 s while its hold is confirmed (10 s before #767, and still
-// 10 s from an older app) — a 3× margin; if the app crashes or the network drops,
+// heartbeats every 30 s while its hold is confirmed (10 s before #767, and still
+// 10 s from an older app) — a 4× margin, so two missed or late beats (an
+// App-Nap-throttled timer, a slow tick) still land in time; if the app crashes or the network drops,
 // the hold lapses within this window and the Mac sleeps — the crash-safety for a
 // hold that (unlike the lid override) has no client to drop. The value lives in
 // LidHelperCore so a test pins the app's beat against it.

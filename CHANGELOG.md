@@ -25,10 +25,11 @@ tag from the now-released section and put it on the new top draft.
   until then each keeps its own. (#760)
 - **Keep-awake costs less.** While a remote session keeps the Mac awake, the helper only
   runs `pmset` when the setting actually changes, instead of every 10 s. Prosper refreshes
-  the hold every 40 s once it is confirmed. The Mac still sleeps within 2 minutes if
+  the hold every 30 s once it is confirmed. The Mac still sleeps within 2 minutes if
   Prosper quits. Idle phone connections are probed every 2 minutes instead of every 30 s.
-  Remote wake on a charger checks every 60 s, then less often after long quiet stretches,
-  but never less often than on battery (5 min). (#767)
+  Remote wake on a charger checks every 60 s, then less often after long quiet stretches
+  of sleep, but never less often than on battery (5 min, or your battery setting if
+  shorter). Using the Mac resets it. (#767)
 - **Agent Island row details are simpler.** Tasks done, In progress, Queued and Session
   name are gone from Settings and from the session and History rows. Agents, Open PRs
   and Merged stay. Their saved settings are cleared once. (#762)
@@ -38,6 +39,7 @@ tag from the now-released section and put it on the new top draft.
   - A change in the subagent count alone no longer pushes; the count rides along with
     the next update.
   - A reorder of sessions sends nothing.
+  - An unchanged card is refreshed about once an hour instead of every 10 minutes.
   - Installing a Prosper update no longer ends the card and starts a new one.
   - The Mac stops its status heartbeat 12 minutes after nothing is active.
   - The beta update check runs every 30 minutes instead of 10.

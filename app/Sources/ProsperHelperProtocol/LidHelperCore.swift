@@ -42,10 +42,10 @@ public final class LidHelperCore {
     private let read: () -> Bool?
 
     /// How long a remote-session keep-awake hold survives without a refresh. The
-    /// app heartbeats every `KeepAwakePolicy.heartbeatSeconds` (40 s) while the hold
-    /// is confirmed — a 3× margin; older apps beat every 10 s. Shared here so a test
-    /// pins the beat against it. Never shorten it below 3 beats: the TTL is the
-    /// fail-safe that lets the Mac sleep when Prosper dies.
+    /// app heartbeats every `KeepAwakePolicy.heartbeatSeconds` (30 s) while the hold
+    /// is confirmed — a 4× margin; older apps beat every 10 s. Shared here so a test
+    /// pins the beat against it: two missed or late beats must still fit. The TTL
+    /// is the fail-safe that lets the Mac sleep when Prosper dies.
     public static let remoteHoldTTLSeconds = 120
 
     public init(apply: @escaping (Bool) -> Bool,

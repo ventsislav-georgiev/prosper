@@ -49,7 +49,7 @@ final class RemoteWakeCoreTests: XCTestCase {
     // MARK: - #767 J19: AC floor 60 s and the AC back-off
 
     func testACIntervalFloorIs60() {
-        // openlid still sends 30 s; the daemon wakes at most once a minute on AC.
+        // An app older than #767 still sends openlid's old 30 s; the daemon wakes at most once a minute on AC.
         let spy = Spy(); let core = make(spy)
         _ = core.applyConfig(cfg(ac: 30), onAC: true)
         XCTAssertEqual(spy.scheduled, [60])
@@ -87,6 +87,41 @@ final class RemoteWakeCoreTests: XCTestCase {
         XCTAssertEqual(acWake(core, spy, after: 5 * 3600), 240)
         XCTAssertEqual(acWake(core, spy, after: 240, userWake: true), 60)
         XCTAssertEqual(acWake(core, spy, after: 60), 60, "quiet stretch restarted at the user wake")
+    }
+
+    func testLongWorkingSessionDoesNotCountAsQuiet() {
+        // QA #598 F1: user wake at 08:00, 10 h of use, lid closed. The first dark
+        // wake after that sleep must re-arm at the base, not at the 10 h level.
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(), onAC: true)
+        XCTAssertEqual(acWake(core, spy, after: 60, userWake: true), 60)
+        XCTAssertEqual(acWake(core, spy, after: 10 * 3600), 60, "quiet counts from the sleep, not the user wake")
+        XCTAssertEqual(acWake(core, spy, after: 2 * 3600 + 60), 120, "then backs off from there")
+    }
+
+    func testDebouncedUserWakeStillResets() {
+        // A user wake that lands inside the debounce window is not acted on, but it
+        // still ends the quiet stretch.
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(), onAC: true)
+        XCTAssertEqual(acWake(core, spy, after: 5 * 3600), 240)
+        spy.tick(5)
+        XCTAssertEqual(core.onWake(onAC: true, battPct: 90, userWake: true), .ignored)   // debounced
+        XCTAssertEqual(acWake(core, spy, after: 20), 60)
+    }
+
+    func testACNeverSlowerThanTheConfiguredBatteryCadence() {
+        // QA #598 INFO-3: battery set to 2 minutes caps the AC back-off at 120 s.
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(batt: 120), onAC: true)
+        XCTAssertEqual(acWake(core, spy, after: 9 * 3600), 120)
+    }
+
+    func testBackoffStaysCappedAfterWeeksOfQuiet() {
+        // The level is clamped before the shift; an unclamped 1 << level overflows to 0.
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(), onAC: true)
+        XCTAssertEqual(acWake(core, spy, after: 60 * 24 * 3600), 300)
     }
 
     func testReapplyConfigResetsTheBackoff() {

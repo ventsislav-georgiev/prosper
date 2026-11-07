@@ -499,7 +499,7 @@ final class DchConnection: @unchecked Sendable {
                     // write() — where it ignores SIGHUP — and detaching it becomes
                     // impossible. That is how clients leaked and narrowed the session.
                     // Well past any real stall on a tailnet; TCP keepalive kills the
-                    // link at ~70s anyway, so this only fires when it is truly gone.
+                    // link at ~160s anyway, so this only fires when it is truly gone.
                     if sem.wait(timeout: .now() + 20) == .timedOut {
                         self.log.error("dch client stalled 20s — dropping the connection")
                         self.queue.async { self.close() }
@@ -1625,7 +1625,7 @@ enum DchCommand {
     /// True while the transport a remote session needs is up: the default route is
     /// alive AND a Tailscale address is assigned. Nothing here is "remote" without
     /// both: on a network drop the local pty of a detached session keeps stamping
-    /// activity and stale NWConnections linger for ~70s of TCP keepalive, so the
+    /// activity and stale NWConnections linger for ~160s of TCP keepalive, so the
     /// keep-awake hold used to be renewed forever for a session no client could
     /// possibly reach — the Mac never slept. The address check alone is NOT enough:
     /// Tailscale's utun keeps its 100.x address when the physical network drops, so

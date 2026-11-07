@@ -98,7 +98,7 @@ final class KeepAwakePolicyTests: XCTestCase {
                                              sessionsExist: false), .stop)
     }
 
-    // MARK: - #767 J15: a confirmed hold beats every 40 s, not every tick
+    // MARK: - #767 J15: a confirmed hold beats every 30 s, not every tick
 
     /// Sends over `ticks` holding ticks after a send, the way `tick()` drives `beat`.
     private func sends(confirmed: Bool, ticks: Int) -> Int {
@@ -111,11 +111,11 @@ final class KeepAwakePolicyTests: XCTestCase {
         return n
     }
 
-    func testConfirmedHoldBeatsEveryFourthTick() {
-        XCTAssertEqual(sends(confirmed: true, ticks: 3), 0)
-        XCTAssertEqual(sends(confirmed: true, ticks: 4), 1)
-        XCTAssertEqual(sends(confirmed: true, ticks: 12), 3)
-        XCTAssertEqual(KeepAwakePolicy.heartbeatSeconds, 40)
+    func testConfirmedHoldBeatsEveryThirdTick() {
+        XCTAssertEqual(sends(confirmed: true, ticks: 2), 0)
+        XCTAssertEqual(sends(confirmed: true, ticks: 3), 1)
+        XCTAssertEqual(sends(confirmed: true, ticks: 12), 4)
+        XCTAssertEqual(KeepAwakePolicy.heartbeatSeconds, 30)
     }
 
     func testUnconfirmedHoldBeatsEveryTick() {
@@ -123,11 +123,17 @@ final class KeepAwakePolicyTests: XCTestCase {
         XCTAssertEqual(sends(confirmed: false, ticks: 4), 4)
     }
 
-    func testHeartbeatFitsThreeTimesInTheDaemonTTL() {
-        // The daemon's TTL must outlive two late or lost beats, so a slow tick never
-        // drops a live session; the TTL itself stays 120 s, so a dead Prosper still
-        // lets the Mac sleep within 2 min (old apps beat at 10 s: also inside it).
-        XCTAssertLessThanOrEqual(3 * KeepAwakePolicy.heartbeatSeconds, LidHelperCore.remoteHoldTTLSeconds)
+    func testTwoMissedBeatsStillLandInsideTheDaemonTTL() {
+        // Real slack, not equality: the TTL is armed at a beat; with the next two
+        // beats lost, the third must still land before it expires, even with every
+        // tick of the way at its full leeway — and with seconds to spare for the
+        // XPC hop. The TTL itself stays 120 s, so a dead Prosper still lets the Mac
+        // sleep within 2 min (old apps beat at 10 s: also inside it).
+        let worstBeat = KeepAwakePolicy.heartbeatSeconds
+            + KeepAwakePolicy.heartbeatTicks * KeepAwakePolicy.tickLeewaySeconds
+        let thirdBeat = 3 * worstBeat
+        XCTAssertLessThan(thirdBeat + 10, LidHelperCore.remoteHoldTTLSeconds,
+                          "third beat at \(thirdBeat) s leaves under 10 s of slack to the TTL")
         XCTAssertEqual(LidHelperCore.remoteHoldTTLSeconds, 120)
     }
 

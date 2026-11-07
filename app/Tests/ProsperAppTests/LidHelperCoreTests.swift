@@ -319,6 +319,17 @@ final class LidHelperCoreTests: XCTestCase {
         XCTAssertEqual(spy.calls, [true, true])
     }
 
+    func testUnreadableSystemStateStillReleases() {
+        // QA #598 INFO-6: a nil read must never count as "already 0" — a release
+        // that skipped `pmset disablesleep 0` would leave the Mac unable to sleep.
+        var calls: [Bool] = []
+        let core = LidHelperCore(apply: { calls.append($0); return true }, read: { nil }, onIdle: {})
+        _ = core.setRemoteHold(true)
+        _ = core.setRemoteHold(false)
+        XCTAssertEqual(calls, [true, false])
+        XCTAssertFalse(core.remoteHoldOn)
+    }
+
     func testReleaseWhileLidOverrideHoldsSpawnsNothing() {
         // OR semantics with the skip: dropping the remote hold under a live lid
         // override wants 1, the system has 1 → no spawn, override still held.
