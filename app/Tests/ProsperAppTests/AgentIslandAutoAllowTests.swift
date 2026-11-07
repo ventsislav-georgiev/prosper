@@ -852,6 +852,132 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         }
     }
 
+    // MARK: - #790: subagent prompts and hook confirmations
+
+    /// Claude Code 2.1.318's Bash dialog for a subagent's call, as the operator's
+    /// phone showed it (92 columns): the title's "· from the <agent> agent", the
+    /// description over the dashed command frame, then (`hook`) a PreToolUse hook's
+    /// "ask": its reasonString (`Hook <name> requires confirmation for this
+    /// command:`, the reason, the dim "[<source>]") and its dim configString line.
+    private static func subagentBash(hook: [String]? = hookBlock, title: String = " Bash command · from the worker-opus-high agent",
+                                     top: Bool = true, footer: String = backgroundAgentFooter, titleRule: Bool = false) -> String {
+        let rule = String(repeating: "─", count: 92), dash = " " + String(repeating: "╌", count: 91)
+        return ((top ? [rule] : []) + [title, " Read changelog script and 1.69 release", dash,
+                "   cd /Users/ventsislav.georgiev/personal/a4kStreaming && cat scripts/update_changelog.py; head -40",
+                "   CHANGELOG.md; /usr/bin/git log --oneline -3 plugin.video.a4kstreaming/plugin.video.a4kstreaming-1.69.0;",
+                "   /usr/bin/git show --stat plugin.video.a4kstreaming/plugin.video.a4kstreaming-1.69.0 | head -30;",
+                "   cat .git/guard-hooks/post-commit", dash]
+            + (hook ?? []) + ["", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", footer]
+            + (titleRule ? [String(repeating: "─", count: 80) + " dch-a4k ─"] : [])).joined(separator: "\n")
+    }
+
+    private static let hookBlock = [
+        "   Hook PreToolUse:Bash requires confirmation for this command:",
+        "   a4k identity guard: guard or git/ssh config tampering (hooksPath, config hooks, pushurl,",
+        "   approval file, guard files, refs/remotes, ssh keys). [settings]",
+        " settings.json to update hooks",
+    ]
+
+    /// A subagent's prompt in every layout the report allows (title suffix, head
+    /// off the screen, long or short footer, session-title rule, a wrapped title).
+    private static let subagentLayouts: [(String, @Sendable (_ hook: [String]?) -> String)] = [
+        ("as reported", { subagentBash(hook: $0) }),
+        ("no top rule", { subagentBash(hook: $0, top: false) }),
+        ("no title suffix", { subagentBash(hook: $0, title: " Bash command") }),
+        ("short footer", { subagentBash(hook: $0, footer: " Esc to cancel · Tab to amend") }),
+        ("session-title rule", { subagentBash(hook: $0, titleRule: true) }),
+        ("title wrapped", { subagentBash(hook: $0, title: " Bash command · from the\n worker-opus-high agent") }),
+    ]
+
+    /// The hook block as a narrow pty wraps it, and with one of its two markers gone.
+    private static let hookVariants: [(String, [String])] = [
+        ("as reported", hookBlock),
+        ("no [settings]", hookBlock.map { $0.replacingOccurrences(of: " [settings]", with: "") }),
+        ("reason line only", Array(hookBlock.dropLast())),
+        ("configString line only", Array(hookBlock.dropFirst())),
+        ("wrapped inside the hook name", ["   Hook PreToolUse:", "   Bash requires confirmation for", "   this command:",
+                                          "   a4k identity guard: guard or git/ssh config tampering [settings]",
+                                          " settings.json to", " update hooks"]),
+        ("wrapped, reason marker only", ["   Hook PreToolUse:Bash requires", "   confirmation for this command:", "   a4k guard"]),
+        ("wrapped, configString only", ["   a4k guard", " plugin hooks.json to update", " hooks"]),
+        ("no reason", ["   Hook PreToolUse:Bash requires confirmation for this command.", " SKILL.md to update hooks"]),
+        // Second ruling: the user's settings "ask" permission rules.
+        ("ask rule", ["   Permission rule Bash(git push:*) requires confirmation for this command.",
+                      " /permissions to update rules"]),
+        ("ask rule, managed policy (no hint)", ["   Permission rule Bash(git push:*) requires confirmation for this command."]),
+        ("ask rule wrapped inside the rule", ["   Permission rule Bash(git", "   push:*) requires", "   confirmation for this command.",
+                                             " /permissions to update", " rules"]),
+        ("ask rule in auto mode", ["   Ask rule Bash(git push:*) overrides auto mode for this command.",
+                                   " /permissions to let auto mode decide"]),
+        ("ask rule in auto mode, wrapped", ["   Ask rule Bash(git push:*) overrides", "   auto mode for this command."]),
+        ("auto-mode hint only, wrapped", ["   a4k guard", " /permissions to let auto", " mode decide"]),
+    ]
+
+    /// #790 diagnosis: at b18a9e0 nothing in the rule refused the reported
+    /// screen (title suffix, long footer, "[settings]", the configString line are
+    /// all plain context). After the operator's ruling, only the hook block
+    /// refuses: the same subagent prompt without it still gets Yes.
+    func testASubagentPromptWithoutAHookGetsYes() throws {
+        for (name, layout) in Self.subagentLayouts {
+            let screen = layout(nil), p = try XCTUnwrap(AgentPrompt.parse(screen), name)
+            XCTAssertEqual(p.question, "Do you want to proceed?", name)
+            XCTAssertEqual(p.allowYes?.digit, 1, name)
+            let f = FakeIO(screen)
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .allowed(p), name)
+            XCTAssertEqual(f.sends, ["1"], name)
+        }
+    }
+
+    /// #790 (operator rulings): a hook's "ask" and a settings ask rule always
+    /// wait for the human, in every layout and wrap, with any marker alone.
+    func testAUserAskConfirmationIsLeftToTheHuman() throws {
+        for (name, layout) in Self.subagentLayouts {
+            for (hookName, hook) in Self.hookVariants {
+                let screen = layout(hook), what = "\(name), \(hookName)"
+                let p = try XCTUnwrap(AgentPrompt.parse(screen), "\(what): parses, so the rule is what refuses it")
+                XCTAssertEqual(p.question, "Do you want to proceed?", what)
+                XCTAssertNil(p.allowYes, what)
+                let f = FakeIO(screen)
+                XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .human, what)
+                XCTAssertEqual(f.sends, [], what)
+            }
+        }
+        // With a "don't ask again" row too.
+        let three = Self.subagentBash().replacingOccurrences(of: "   2. No", with: "   2. \(Self.dontAsk)\n   3. No")
+        XCTAssertEqual(try XCTUnwrap(AgentPrompt.parse(three)).options.count, 3)
+        XCTAssertNil(try XCTUnwrap(AgentPrompt.parse(three)).allowYes)
+    }
+
+    /// Each marker alone refuses; a working-directory reason (whose hint is also
+    /// "/permissions to update rules"), the words apart in a command, Claude
+    /// Code's ordinary Bash reason line and a classifier's ask (no ruling) do not.
+    func testOnlyTheUserAskWordingRefuses() {
+        for context in [["Path is outside the allowed working directories.", "/permissions to update rules"],
+                        ["  git hook install", "  echo requires confirmation", "  update the hooks", "  ask rule auto mode"],
+                        ["Bash command", "  rm -rf .build", "This command requires approval"],
+                        ["Classifier bash-safety requires confirmation for this command.", "Deletes files"]] {
+            XCTAssertFalse(AgentPrompt.isUserAskConfirmation(context), "\(context)")
+        }
+        for context in [["Hook PreToolUse:Bash requires confirmation for this command:"],
+                        ["settings.json to update hooks"],
+                        ["Permission rule Bash(rm:*) requires confirmation for this command."],
+                        ["Ask rule Bash(rm:*) overrides auto mode for this command."],
+                        ["/permissions to let auto mode decide"]] {
+            XCTAssertTrue(AgentPrompt.isUserAskConfirmation(context), "\(context)")
+        }
+    }
+
+    /// The card and the click path are unchanged: a human's Yes still answers a hook's prompt.
+    func testTheCardStillAnswersAHookConfirmation() throws {
+        let screen = Self.dialog(Self.proceed, ["Yes", "No"], body: ["   rm -rf .build"] + Self.hookBlock)
+        let p = try XCTUnwrap(AgentPrompt.parse(screen))
+        XCTAssertNil(p.allowYes)
+        XCTAssertTrue(p.isEnabled(p.options[0]), "the card's Yes")
+        let f = FakeIO(screen)
+        XCTAssertEqual(AgentPrompt.answer(key, digit: 1, expected: p, io: f.io), .sent)
+        XCTAssertEqual(f.sends, ["1"])
+    }
+
     // MARK: - Offscreen renders (never on screen: an unwindowed hosting view and ImageRenderer)
 
     @MainActor func testRenderTheSettingAndTheRowText() throws {

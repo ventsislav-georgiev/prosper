@@ -72,6 +72,11 @@ tag from the now-released section and put it on the new top draft.
   answer on the island. Prompts that offer "Yes, and don’t ask again" (with Claude Code's
   curly apostrophe) now get Yes too; "don't ask again" itself is never picked.
   (#784, #783)
+- **Always allow leaves prompts you asked for to you.** When one of your PreToolUse
+  hooks asks for confirmation ("Hook … requires confirmation for this command") or one
+  of your "ask" permission rules matches ("Permission rule … requires confirmation",
+  or "Ask rule … overrides auto mode"), the prompt always waits for you and shows as
+  Needs input; you can still answer it from the island. (#790)
 
 ## v2.172.0
 

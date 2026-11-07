@@ -608,18 +608,49 @@ extension AgentPrompt {
     /// permission prompt, "Do you want to proceed?" over "Yes", at most one "Yes,
     /// and don't ask again …" (never picked: it writes the user's settings) and a
     /// last "No…". nil for everything else: question forms (a chip line), plan
-    /// approvals, trust and edit dialogs, pickers, a preview form. A head off the
+    /// approvals, trust and edit dialogs, pickers, a preview form, a hook's
+    /// or an ask rule's confirmation (`isUserAskConfirmation`, #790). A head off the
     /// screen (a long heredoc on a narrow pty) and hidden characters do not
     /// matter here: the question, the option shape and the #475 re-check do.
     var allowYes: AgentPromptOption? {
         let o = options
         guard question == "Do you want to proceed?", preview.isEmpty, notes.isEmpty,
-              !context.contains(where: Self.isChipLine), (2...3).contains(o.count),
+              !context.contains(where: Self.isChipLine), !Self.isUserAskConfirmation(context), (2...3).contains(o.count),
               o[0].label == "Yes", o[0].hint == nil, o[0].detail.isEmpty,
               o[o.count - 1].style(first: false) == .deny, o[o.count - 1].detail.isEmpty,
               o.count == 2 || Self.isDontAskAgain(o[1]) else { return nil }
         return o[0]
     }
+
+    /// #790 (operator rulings): a prompt the user's own configuration routed to
+    /// a human (a hook's "ask", a settings "ask" permission rule) is never
+    /// answered by Always allow. Claude Code 2.1.318 draws them (decisionReason):
+    /// - hook: "Hook <Event>:<Tool> requires confirmation for this <t>:", the
+    ///   reason and a dim "[<source>]" (or "." with no reason), then a dim line
+    ///   "settings.json to update hooks" ("plugin hooks.json", "SKILL.md");
+    /// - ask rule: "Permission rule <rule> requires confirmation for this <t>.",
+    ///   then "/permissions to update rules" (none for a managed policy rule);
+    ///   in auto mode "Ask rule <rule> overrides auto mode for this <t>.", then
+    ///   "/permissions to let auto mode decide".
+    /// "/permissions to update rules" alone is no marker: Claude Code also draws
+    /// it under a working-directory reason, which is no ask rule. Any marker
+    /// refuses, matched with all whitespace removed (a narrow pty wraps anywhere,
+    /// even inside a hook name or rule), anywhere in the context: a command
+    /// quoting the wording also goes to the human, which fails safe. Only ever
+    /// refuses: wording that drifts away from every marker is the remaining
+    /// risk, never an extra answer.
+    static func isUserAskConfirmation(_ context: [String]) -> Bool {
+        let text = context.joined().filter { !$0.isWhitespace }
+        return userAskMarkers.contains(where: text.contains)
+            || userAskReasons.contains { text.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    private static let userAskMarkers = ["toupdatehooks", "/permissionstoletautomodedecide"]
+    private static let userAskReasons = [
+        "Hook.{1,200}?requiresconfirmationforthis",
+        "Permissionrule.{1,300}?requiresconfirmationforthis",
+        "Askrule.{1,300}?overridesautomodeforthis",
+    ]
 
     /// "Yes, and don't ask again for …", wrapped anywhere; never a mode change.
     /// #783: Claude Code 2.1.309 draws "don’t" (U+2019); both curly quotes fold to '.
