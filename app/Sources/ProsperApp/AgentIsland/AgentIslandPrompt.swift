@@ -510,7 +510,7 @@ extension AgentPrompt {
     static func isBlankOrRule(_ line: String) -> Bool { isBlank(line) || isRule(line) }
 
     /// Claude Code's dialog footer: "Esc to cancel · Tab to amend", "Enter to
-    /// select · ↑/↓ to navigate · Esc to cancel". A short line, like dch's rule.
+    /// select · ↑/↓ to navigate · Esc to cancel".
     /// #756 (revises QA #310 C5): a line starting with "Esc to cancel" is one at
     /// any length: Claude Code appends hints ("· ctrl+x ctrl+k twice to stop
     /// background ag…" while a background agent runs) and cuts at screen width.

@@ -1648,7 +1648,7 @@ final class AgentIslandPromptTests: XCTestCase {
 
     /// C3, C5, C7: below the last option only rules and, last, one footer saying
     /// "esc to cancel": any length when it starts with it, else at most 64.
-    func testOnlyRulesAndOneShortCancelFooterMayFollowTheOptions() {
+    func testOnlyRulesAndOneCancelFooterMayFollowTheOptions() {
         let live = bash21(["echo safe"]), footer = " Esc to cancel · Tab to amend"
         for (why, screen) in [("C3 a line above the footer", askFourScreen.replacingOccurrences(
                                    of: "\nEnter to select", with: "\nNotes: press n to add notes\n\nEnter to select")),

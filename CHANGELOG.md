@@ -32,6 +32,10 @@ tag from the now-released section and put it on the new top draft.
   saved pattern with regex characters now means something new: `.` is any
   character, `c++` matches any name containing "c", so check yours after
   updating; the default `-qa` is unchanged. (#759)
+- Ships dch 1.28.6. A session no longer reads "Needs input" when a prompt's words
+  only appear in its scrollback or a quoted message above the input box, and a
+  prompt shown while background agents run is now seen as waiting, which
+  Always allow needs. (#757, #758)
 
 ## v2.171.0
 
