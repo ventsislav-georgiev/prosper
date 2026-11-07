@@ -279,10 +279,10 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(f.calls.count, 1)
         f.now += 1; XCTAssertNil(p.tick()); XCTAssertEqual(f.calls.count, 1, "nothing changed")
         f.now += 1; _ = p.tick(); XCTAssertEqual(f.calls.count, 2, "one trailing fetch 2 s after a change")
-        for _ in 0..<9 { f.now += 1; _ = p.tick() }
-        XCTAssertEqual(f.calls.count, 2, "quiet dir: no fork for 9 s")
+        for _ in 0..<29 { f.now += 1; _ = p.tick() }
+        XCTAssertEqual(f.calls.count, 2, "quiet dir: no fork for 29 s")
         f.now += 1; _ = p.tick()
-        XCTAssertEqual(f.calls.count, 3, "10 s backstop")
+        XCTAssertEqual(f.calls.count, 3, "#768: 30 s backstop")
     }
 
     func testActBumpFetchesButNeverWithinTheTwoSecondFloor() {
@@ -354,6 +354,107 @@ final class AgentIslandTests: XCTestCase {
         f.now += 0.5
         XCTAssertEqual(p.tick(), [], "a vanished socket drops at once, no fork")
         XCTAssertEqual(f.calls.count, 1)
+    }
+
+    // MARK: - #768: fewer forks
+
+    /// Ticks once a second for `seconds`; `act` (if any) is touched to the tick's time first.
+    private func run(_ p: AgentIslandPoller, _ f: Fake, seconds: Int, printing: (Int) -> [URL] = { _ in [] }) -> Int {
+        let before = f.calls.reduce(0) { $0 + $1.count }
+        for i in 0..<seconds {
+            f.now += 1
+            for dir in printing(i) { touch(dir, "s.sock.act", mtime: f.now - 0.2) }
+            _ = p.tick()
+        }
+        return f.calls.reduce(0) { $0 + $1.count } - before   // one dch fork per listed dir
+    }
+
+    /// Output alone forks nothing while the session stays working: ages come from the stat.
+    func testActivityOnlyChangeOfAWorkingSessionDoesNotFork() {
+        let dir = tempDir(), f = Fake()
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: f.now)
+        f.rows = [session("s", .working, dir: dir.path)]
+        let p = poller([dir.path], f)
+        _ = p.tick(); f.now += 2; _ = p.tick()   // first fetch and its trailing read
+        XCTAssertEqual(f.calls.count, 2)
+        for _ in 0..<20 {
+            f.now += 1
+            touch(dir, "s.sock.act", mtime: f.now - 0.2)
+            XCTAssertEqual(p.tick()?.first?.activity, (f.now - 0.2).rounded(.down), "the age still moves every tick")
+        }
+        XCTAssertEqual(f.calls.count, 2, "printing for 20 s: no fork")
+        f.now += 1; _ = p.tick()
+        XCTAssertEqual(f.calls.count, 2, "quiet 1.2 s: not yet")
+        f.now += 1; _ = p.tick()
+        XCTAssertEqual(f.calls.count, 3, "one read once the output is quiet 2 s (a prompt that just rendered)")
+    }
+
+    /// Idle or blocked and printing again: its state changes, so it forks at the floor.
+    func testAStateChangeStillForksPromptly() {
+        let dir = tempDir(), f = Fake()
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: 9_000)
+        f.rows = [session("s", .idle, dir: dir.path)]
+        let p = poller([dir.path], f)
+        _ = p.tick(); f.now += 2; _ = p.tick()
+        f.now += 5; _ = p.tick()
+        XCTAssertEqual(f.calls.count, 2)
+        touch(dir, "s.sock.act", mtime: f.now)
+        f.rows = [session("s", .working, dir: dir.path)]
+        f.now += 1
+        XCTAssertEqual(p.tick()?.first?.state, .working, "an idle session printing again is re-listed at once")
+        XCTAssertEqual(f.calls.count, 3)
+        touch(dir, "s.sock.state", mtime: f.now)
+        f.rows = [session("s", .blocked, dir: dir.path)]
+        f.now += 2
+        XCTAssertEqual(p.tick()?.first?.state, .blocked, "a hook's report forks at the floor")
+        touch(dir, "s2.sock")
+        f.rows.append(session("s2", .idle, dir: dir.path))
+        f.now += 2
+        XCTAssertEqual(p.tick()?.map(\.name).sorted(), ["s", "s2"], "a new session forks at the floor")
+        XCTAssertEqual(f.calls.count, 5)
+    }
+
+    /// Idle, 2 dirs: 12 forks/min at the old 10 s backstop, 4 at 30 s.
+    func testIdleTwoDirsForkFourTimesAMinute() {
+        let a = tempDir(), b = tempDir(), f = Fake()
+        for d in [a, b] { touch(d, "s.sock"); touch(d, "s.sock.act", mtime: 9_000) }
+        f.rows = [session("s", .idle, dir: a.path), session("s", .idle, dir: b.path)]
+        let p = poller([a.path, b.path], f)
+        _ = p.tick()
+        _ = run(p, f, seconds: 30)   // the trailing read, then the first backstop
+        XCTAssertEqual(run(p, f, seconds: 60), 4)
+    }
+
+    /// While the display sleeps or the screen is locked: 60 s, 2 forks/min with 2 dirs.
+    func testHiddenBackstopIsSixtySeconds() {
+        let a = tempDir(), b = tempDir(), f = Fake()
+        for d in [a, b] { touch(d, "s.sock"); touch(d, "s.sock.act", mtime: 9_000) }
+        let p = poller([a.path, b.path], f)
+        _ = p.tick(); f.now += 2; _ = p.tick()
+        p.hidden = true
+        XCTAssertEqual(run(p, f, seconds: 59), 0, "no backstop at 30 s while hidden")
+        XCTAssertEqual(run(p, f, seconds: 1), 2, "60 s after the last fetch")
+        XCTAssertEqual(run(p, f, seconds: 120), 4)
+        p.hidden = false
+        XCTAssertEqual(run(p, f, seconds: 60), 4, "back to 30 s once seen")
+    }
+
+    /// A working agent: 30 forks/min per dir while it prints (the 2 s floor), now 2
+    /// (the backstop); each pause of 6 s or more adds a quiet read and an idle flip.
+    func testWorkingAgentForksOnTheBackstopAndPerPause() {
+        let dir = tempDir(), f = Fake()
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: f.now)
+        f.rows = [session("s", .working, dir: dir.path)]
+        let p = poller([dir.path], f)
+        _ = p.tick()
+        _ = run(p, f, seconds: 30) { _ in [dir] }
+        XCTAssertEqual(run(p, f, seconds: 60) { _ in [dir] }, 2, "printing all minute")
+        // Prints 20 s, pauses 10 s (dch stays "working" in the fake: no idle flip lands).
+        XCTAssertEqual(run(p, f, seconds: 60) { $0 % 30 < 20 ? [dir] : [] }, 5,
+                       "one backstop, then per pause a quiet read (act + 2) and the idle flip (act + 6)")
     }
 
     /// G5d: the isolated dir before first use is "no sessions" there, not an error.
@@ -433,6 +534,105 @@ final class AgentIslandTests: XCTestCase {
         c.reload()
         try XCTSkipIf(AgentIslandGeometry.current() == nil, "no screen geometry: reload() starts no timer")
         wait(for: [ticked], timeout: 5)
+    }
+
+    /// #768 J2: while collapsed (or the display asleep) a list whose only change is
+    /// activity skips the store and the layout, but still reaches onSessions; a
+    /// state change applies as before, and opening the island takes the held list.
+    @MainActor func testActivityOnlyListSkipsTheViewWhileCollapsedButStillPublishes() {
+        final class Rows: @unchecked Sendable {
+            let lock = NSLock(); var rows: [AgentSession] = []
+            func get() -> [AgentSession] { lock.withLock { rows } }
+            func set(_ r: [AgentSession]) { lock.withLock { rows = r } }
+        }
+        let dir = tempDir(), path = dir.path, rows = Rows(), key = AgentSessionKey(dir: path, name: "s")
+        let t0 = Date().timeIntervalSince1970.rounded(.down)
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: t0 - 30)
+        rows.set([AgentSession(key: key, alias: "", activity: 0, state: .working, agents: 0)])
+        let c = AgentIslandController()
+        c.showsPanel = false
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        c.autoAllowOn = { false }
+        c.monitorClicks = { _ in nil }
+        c.currentGeometry = { self.notched }
+        c.makePoller = { AgentIslandPoller(dirs: { [path] }, list: { _, _ in rows.get() }) }
+        var got: [[AgentSession]] = []
+        c.onSessions = { if let l = $0 { got.append(l) } }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        c.extLive = true
+        c.reload()
+        func waitUntil(_ what: String, _ ok: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !ok(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            XCTAssertTrue(ok(), what)
+        }
+        func printAt(_ at: TimeInterval) {
+            touch(dir, "s.sock.act", mtime: at)
+            waitUntil("published at \(at)") { got.last?.first?.activity == at }
+        }
+        waitUntil("first list") { c.store?.sessions.first?.activity == t0 - 30 }
+
+        printAt(t0 - 20)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 30, "collapsed: the store is not touched")
+        XCTAssertEqual(c.deferred?.first?.activity, t0 - 20)
+        c.setExpanded(true)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 20, "opening takes the held list")
+        XCTAssertNil(c.deferred)
+        printAt(t0 - 15)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 15, "open: applied as before")
+
+        c.screenChanged(.sleep)
+        printAt(t0 - 10)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 15, "open but the display asleep: not applied")
+        c.screenChanged(.wake)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 10, "applied on wake")
+
+        c.setExpanded(false)
+        rows.set([AgentSession(key: key, alias: "", activity: 0, state: .blocked, agents: 0)])
+        touch(dir, "s.sock.state", mtime: t0)
+        waitUntil("a state change applies while collapsed") { c.store?.sessions.first?.state == .blocked }
+        XCTAssertEqual(got.last?.first?.state, .blocked)
+        XCTAssertNil(c.deferred)
+    }
+
+    /// #768 J2: a publish that apply does not drive (an Always allow toggle) while a
+    /// list is held back sends the held rows, never the store's older ages.
+    @MainActor func testPublishOutsideApplySendsTheDeferredRows() {
+        let dir = tempDir(), path = dir.path, key = AgentSessionKey(dir: path, name: "s")
+        let t0 = Date().timeIntervalSince1970.rounded(.down)
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: t0 - 30)
+        let c = AgentIslandController()
+        c.showsPanel = false
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        c.autoAllowOn = { false }
+        c.currentGeometry = { self.notched }
+        c.makePoller = {
+            AgentIslandPoller(dirs: { [path] }, list: { _, _ in
+                [AgentSession(key: key, alias: "", activity: 0, state: .working, agents: 0)]
+            })
+        }
+        var got: [[AgentSession]] = []
+        c.onSessions = { if let l = $0 { got.append(l) } }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        c.extLive = true
+        c.reload()
+        func waitUntil(_ what: String, _ ok: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !ok(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            XCTAssertTrue(ok(), what)
+        }
+        waitUntil("first list") { c.store?.sessions.first?.activity == t0 - 30 }
+        touch(dir, "s.sock.act", mtime: t0 - 20)
+        waitUntil("held back") { c.deferred?.first?.activity == t0 - 20 }
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 30)
+        let before = got.count
+        c.autoAllowChanged()   // publishes outside apply
+        XCTAssertEqual(got.count, before + 1)
+        XCTAssertEqual(got.last?.first?.activity, t0 - 20, "the held rows, not the store's")
     }
 
     // MARK: - Answer lock, card generations, live IO (#475 K2, N9, N4)
@@ -1708,7 +1908,7 @@ final class AgentIslandTests: XCTestCase {
     }
 
     /// QA I1: `dch --meta` writes only .sock.meta; the stamp must see it or PRs
-    /// and tasks wait for the 10 s backstop.
+    /// and tasks wait for the 30 s backstop (#768; 10 s then).
     func testMetaSidecarAloneTriggersAFetch() {
         let dir = tempDir(), f = Fake()
         touch(dir, "s.sock")

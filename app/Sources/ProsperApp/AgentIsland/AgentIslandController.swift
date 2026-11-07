@@ -40,6 +40,13 @@ final class AgentIslandController {
     private(set) var timer: DispatchSourceTimer?
     private(set) var outsideClick: Any?
     private(set) var screenObserver: NSObjectProtocol?
+    /// #768: display sleep and screen lock (the same notifications Stats pauses on).
+    private var sleepObservers: [NSObjectProtocol] = []
+    private(set) var screen = ScreenGate()
+    private var poller: AgentIslandPoller?
+    /// #768: the newest list when only its activity moved while collapsed or
+    /// unseen: published, but not in the store until the island opens or shows again.
+    private(set) var deferred: [AgentSession]?
     /// #581: layout()'s last decision (the panel shown or ordered out); tests read it.
     private(set) var shown = false
     /// #475: the activity each blocked session's screen was last read at, and a
@@ -156,10 +163,22 @@ final class AgentIslandController {
                 MainActor.assumeIsolated { self?.reload(); self?.layout() }
             }
         }
+        if sleepObservers.isEmpty {
+            for (name, event) in ScreenGate.notifications {
+                let c = ScreenGate.center(for: event) == .distributed
+                    ? DistributedNotificationCenter.default() : NSWorkspace.shared.notificationCenter
+                sleepObservers.append(c.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.screenChanged(event) }
+                })
+            }
+        }
         guard timer == nil, let geometry = currentGeometry() else { return }
         store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails,
                                  sort: Preferences.agentIslandSort, sidekickPattern: Self.sidekickPattern)
-        let t = Self.makePollTimer(makePoller(), queue: queue) { [weak self] sessions in
+        let poller = makePoller(), hidden = screen.hidden
+        queue.async { poller.hidden = hidden }
+        self.poller = poller
+        let t = Self.makePollTimer(poller, queue: queue) { [weak self] sessions in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions) } }
         }
         t.resume()
@@ -183,8 +202,33 @@ final class AgentIslandController {
         return t
     }
 
+    /// #768: a display sleep, wake, lock or unlock. The poller backs off to the
+    /// hidden backstop; a list held back while unseen goes in once the island shows.
+    func screenChanged(_ e: ScreenGate.Event) {
+        screen.apply(e)
+        if let poller { let h = screen.hidden; queue.async { poller.hidden = h } }
+        if !screen.hidden, store?.expanded == true { flushDeferred() }
+    }
+
+    private func flushDeferred() {
+        guard let d = deferred, let store else { return }
+        deferred = nil
+        store.sessions = d
+        refreshCards()
+        layout()
+    }
+
     private func apply(_ sessions: [AgentSession]) {
         guard timer != nil, let store else { return }   // a tick that raced teardown
+        // #768: only ages moved and nobody sees them (collapsed, or the display
+        // asleep or locked): Live status and the watch stream still get the list,
+        // the store, cards and panel do not.
+        if !store.expanded || screen.hidden, AgentIsland.onlyActivityMoved(sessions, store.sessions) {
+            deferred = sessions
+            onSessions?(published(sessions))
+            return
+        }
+        deferred = nil
         let wasLive = !store.sessions.isEmpty
         store.sessions = sessions
         checkAutoAllow()   // #751: decided before the list is published
@@ -908,6 +952,7 @@ final class AgentIslandController {
     func setExpanded(_ on: Bool) {
         guard let store, store.expanded != on, !on || store.showsIsland else { return }
         store.expanded = on
+        if on, let d = deferred { deferred = nil; store.sessions = d }   // #768
         // #581: nothing live: open on History.
         if on, store.sessions.isEmpty, !store.history.isEmpty { store.historyTab = true }
         if !on {
@@ -1102,7 +1147,7 @@ final class AgentIslandController {
     }
 
     private func publish() {
-        if let store { onSessions?(published(store.sessions)) }
+        if let store { onSessions?(published(deferred ?? store.sessions)) }
     }
 
     // MARK: - Jump
@@ -1230,6 +1275,14 @@ final class AgentIslandController {
         outsideClick = nil
         if let o = screenObserver { center.removeObserver(o) }
         screenObserver = nil
+        for o in sleepObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(o)
+            DistributedNotificationCenter.default().removeObserver(o)
+        }
+        sleepObservers = []
+        poller = nil
+        deferred = nil
+        screen = ScreenGate()
         panel?.orderOut(nil)
         panel?.contentView = nil
         panel = nil

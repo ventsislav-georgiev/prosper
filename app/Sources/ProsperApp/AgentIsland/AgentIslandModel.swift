@@ -129,6 +129,15 @@ enum AgentIslandSort: String, CaseIterable {
 enum AgentIsland {
     // MARK: - Display
 
+    /// #768: the lists hold the same sessions and differ only in activity (and so
+    /// maybe in the order it sorts by): nothing the collapsed island shows.
+    static func onlyActivityMoved(_ a: [AgentSession], _ b: [AgentSession]) -> Bool {
+        func flat(_ l: [AgentSession]) -> [AgentSessionKey: AgentSession] {
+            Dictionary(l.map { var s = $0; s.activity = 0; return ($0.key, s) }, uniquingKeysWith: { x, _ in x })
+        }
+        return a.count == b.count && flat(a) == flat(b)
+    }
+
     /// `.activity`: blocked, working, done, idle; newest activity first inside a
     /// group. `.name` (#571): flat by the row title (alias, else name),
     /// numeric-aware ("a2" before "a10"), ties on name then dir; no state groups,
@@ -700,9 +709,15 @@ final class AgentDirScanner {
 }
 
 /// When to fork `dch --ls-json`. Clock is wall time, the same clock as the mtimes.
+/// #768: output alone (.act) is not a change: ages come from the stat. A session
+/// that was not working at the last fetch and prints again forks (it turns
+/// working); a working one is re-read once its output has been quiet `trailing` s
+/// (a prompt that just rendered) and at dch's idle flip. Everything else (.state,
+/// .alias, .meta, a session coming or going) forks as before.
 struct AgentPollGate {
     static let floor: TimeInterval = 2       // never more often
-    static let backstop: TimeInterval = 10   // never less often while sessions exist
+    static let backstop: TimeInterval = 30   // never less often while sessions exist
+    static let hiddenBackstop: TimeInterval = 60   // display asleep or screen locked
     static let trailing: TimeInterval = 2    // re-read after a change: a blocker can be mid-render
     /// dch says "working" while now - act <= 5 s (whole seconds), so a session
     /// that stops printing turns idle at floor(act) + 6 without touching a file.
@@ -710,24 +725,41 @@ struct AgentPollGate {
 
     private(set) var lastFetch: TimeInterval?
     private var seen: AgentDirSnapshot?
+    private var states: [AgentSessionKey: AgentState] = [:]
     private var trailingAt: TimeInterval?
-    private var idleAt: TimeInterval?
 
-    func shouldFetch(_ snap: AgentDirSnapshot, now: TimeInterval) -> Bool {
-        guard let last = lastFetch else { return true }
+    /// The snapshot with each .act reduced to whether it exists.
+    private static func shape(_ snap: AgentDirSnapshot) -> AgentDirSnapshot {
+        snap.mapValues { var s = $0; s.act = s.act.map { _ in 0 }; return s }
+    }
+
+    func shouldFetch(_ snap: AgentDirSnapshot, now: TimeInterval, hidden: Bool = false) -> Bool {
+        guard let last = lastFetch, let seen else { return true }
         guard now - last >= Self.floor else { return false }
-        return snap != seen || now - last >= Self.backstop
-            || trailingAt.map { now >= $0 } == true || idleAt.map { now >= $0 } == true
+        if now - last >= (hidden ? Self.hiddenBackstop : Self.backstop) { return true }
+        if trailingAt.map({ now >= $0 }) == true || Self.shape(snap) != Self.shape(seen) { return true }
+        for (key, stamp) in snap {
+            guard let act = stamp.act else { continue }
+            if act != seen[key]?.act {
+                switch states[key] {
+                case .done: continue                              // done always wins: output changes nothing
+                case .working: if now >= act + Self.trailing { return true }   // quiet again
+                default: return true                              // idle or blocked printing: it turns working
+                }
+            }
+            // The idle flip; one already past at the last fetch is working for another reason.
+            if states[key] == .working {
+                let flip = act.rounded(.down) + Self.idleAfter
+                if flip > last, now >= flip { return true }
+            }
+        }
+        return false
     }
 
     mutating func didFetch(_ snap: AgentDirSnapshot, sessions: [AgentSession], now: TimeInterval) {
-        let changed = snap != seen
+        let changed = seen.map { Self.shape(snap) != Self.shape($0) } ?? true
         trailingAt = changed ? now + Self.trailing : nil
-        // The earliest still-working session's idle flip; one already past it is
-        // working for another reason (a hook report) and arms nothing.
-        idleAt = sessions.filter { $0.state == .working }
-            .compactMap { snap[$0.key]?.act.map { $0.rounded(.down) + Self.idleAfter } }
-            .filter { $0 > now }.min()
+        states = Dictionary(sessions.map { ($0.key, $0.state) }, uniquingKeysWith: { a, _ in a })
         seen = snap
         lastFetch = now
     }
@@ -744,6 +776,8 @@ final class AgentIslandPoller: @unchecked Sendable {
     private var gate = AgentPollGate()
     private var fetched: [AgentSession] = []
     private var published: [AgentSession]?
+    /// #768: display asleep or screen locked (the controller's ScreenGate): the longer backstop.
+    var hidden = false
 
     init(now: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 },
          dirs: @escaping () -> [String] = AgentIsland.liveSocketDirs,
@@ -762,7 +796,7 @@ final class AgentIslandPoller: @unchecked Sendable {
             // Nothing to list: no fork, and the next session to appear fetches at once.
             fetched = []
             gate = AgentPollGate()
-        } else if gate.shouldFetch(snap, now: t) {
+        } else if gate.shouldFetch(snap, now: t, hidden: hidden) {
             let live = Set(snap.keys.map(\.dir))
             fetched = list(dirs.filter(live.contains), fetched)
             gate.didFetch(snap, sessions: fetched, now: t)
