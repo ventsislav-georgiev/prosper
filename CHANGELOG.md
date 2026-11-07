@@ -20,11 +20,12 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.174.0 *(unreleased)*
 
-- Ships dch 1.30.1 (was 1.28.6). dch now has a config file (`dch --config`) with its own
+- Ships dch 1.30.2 (was 1.28.6). dch now has a config file (`dch --config`) with its own
   auto-allow for permission prompts, off unless you turn it on; it never answers a prompt
   raised by your hooks or "ask" rules, however long the rule. When it is on, Prosper's
   Always allow stands down for those sessions (#792). `dch --ls-json` also reports each
   session's Claude Code session id and transcript path, for the agent window to come.
+  A dch attach whose terminal closes while output is still unread no longer hangs on exit.
 - Always allow now checks a prompt that replaces one it left to you while the session is
   still waiting, such as the next of several queued subagent prompts. The prompt left to
   you is never answered. (#791)
