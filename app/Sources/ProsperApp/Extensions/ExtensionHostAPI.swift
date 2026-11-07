@@ -837,7 +837,7 @@ struct ExtensionHost {
             }
             lua.register("__h_caf_remotewake") { rt in
                 let enabled = rt.boolArgument(1) ?? false
-                let ac = finiteNumber(rt, 2) ?? 30
+                let ac = finiteNumber(rt, 2) ?? 60
                 let batt = finiteNumber(rt, 3) ?? 300
                 let floor = intArgument(rt, 4, in: 0...100) ?? 20
                 let devID = rt.stringArgument(5) ?? ""
@@ -1380,7 +1380,7 @@ struct ExtensionHost {
         set_remote_wake       = function(t)
             t = t or {}
             raw_caf_remotewake(t.enabled and true or false,
-                               t.interval_ac or 30, t.interval_batt or 300,
+                               t.interval_ac or 60, t.interval_batt or 300,
                                t.battery_floor or 20, t.device_id or "")
         end,
         lock_screen           = function() raw_caf_lock() end,

@@ -24,13 +24,12 @@ private let clientRequirement =
 private let idleExitSeconds = 10
 
 // How long a remote-session keep-awake hold survives without a refresh. The app
-// heartbeats every ~10s (the keep-awake tick) while a session is live — a 12×
-// margin that absorbs an App-Nap-throttled timer; if the app crashes or the
-// network drops, the hold lapses within this window and the Mac sleeps — the
-// crash-safety for a hold that (unlike the lid override) has no client to drop.
-// Also the bootstrap window after a remote-wake promote: long enough for DchTerm
-// to dial back in over Tailscale and start its own heartbeat.
-private let remoteHoldTTLSeconds = 120
+// heartbeats every 40 s while its hold is confirmed (10 s before #767, and still
+// 10 s from an older app) — a 3× margin; if the app crashes or the network drops,
+// the hold lapses within this window and the Mac sleeps — the crash-safety for a
+// hold that (unlike the lid override) has no client to drop. The value lives in
+// LidHelperCore so a test pins the app's beat against it.
+private let remoteHoldTTLSeconds = LidHelperCore.remoteHoldTTLSeconds
 
 // @unchecked Sendable: every mutable member (`core`, `idleTimer`) is touched
 // only inside a `q.sync`/`q.async` block, so the serial queue is the lock.
@@ -42,7 +41,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
     private var idleTimer: DispatchSourceTimer?
     // Auto-expiry for the remote-session keep-awake hold (see remoteHoldTTLSeconds).
     private var remoteHoldTimer: DispatchSourceTimer?
-    private let core = LidHelperCore(apply: Helper.applyPmset, onIdle: { exit(0) })
+    private let core = LidHelperCore(apply: Helper.applyPmset, read: Helper.readDisableSleep, onIdle: { exit(0) })
     // Remote-wake lives in its own observer with its own state machine — zero
     // shared mutable state with `core` (the only coupling is the idle-exit guard
     // below, which keeps the daemon resident while remote-wake is armed). Uses the
@@ -352,7 +351,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // cancel+create per heartbeat ON PURPOSE (not reschedule-in-place): cancel()
         // guarantees a pending-but-undelivered fire is dropped, while schedule() on a
         // live timer does not retract one — a stale expiry sneaking in right after a
-        // refresh would flap the hold. One timer alloc per ~10s beat is nothing.
+        // refresh would flap the hold. One timer alloc per beat is nothing.
         cancelRemoteHoldExpiry_locked()
         let t = DispatchSource.makeTimerSource(queue: q)
         t.schedule(deadline: .now() + .seconds(remoteHoldTTLSeconds))
@@ -390,9 +389,19 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         fanQ.sync { fanCore.reclaimAtStartup() }
     }
 
-    // pmset is a one-shot toggle (not a hot path); shelling it matches openlid and
-    // is trivially correct. Runs as root here, so no sudo. // ponytail: pmset over
-    // raw IOKit IOPMSetSystemPowerSetting — switch only if spawn cost ever matters.
+    /// The live `disablesleep` value: the same `SleepDisabled` entry that
+    /// `pmset -a disablesleep` writes and `pmset -g` prints, read in-process (no
+    /// spawn). nil when the dictionary or the key is missing → the core applies.
+    private static func readDisableSleep() -> Bool? {
+        guard let d = IOPMCopySystemPowerSettings()?.takeRetainedValue() as? [String: Any],
+              let v = d["SleepDisabled"] as? NSNumber else { return nil }
+        return v.boolValue
+    }
+
+    // pmset spawns only on an edge now (the core skips it when readDisableSleep
+    // already shows the wanted value); shelling it matches openlid and is trivially
+    // correct. Runs as root here, so no sudo. // ponytail: pmset over raw IOKit
+    // IOPMSetSystemPowerSetting — switch only if spawn cost ever matters.
     private static func applyPmset(_ on: Bool) -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")

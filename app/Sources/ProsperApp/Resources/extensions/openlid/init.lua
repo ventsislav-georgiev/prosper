@@ -27,7 +27,7 @@ local DEFAULTS = {
     caffeine_at_launch    = false, -- arm display-awake (☕) on every launch
     remote_wake           = false, -- opt-in: dark-wake + poll the server to wake this Mac remotely
     rw_interval_batt_min  = 5,     -- dark-wake check cadence on battery (minutes); dropdown 2..1440
-    rw_interval_ac_sec    = 30,    -- dark-wake check cadence on charger (seconds; cost ~free)
+    rw_interval_ac_sec    = 60,    -- dark-wake check cadence on charger (seconds; the daemon floor is 60)
     rw_battery_floor_pct  = 20,    -- refuse to wake-promote on battery below this %
     rw_device_id          = "",    -- wake handle (LAN/Tailscale IP, hostname); "" = host auto-detects
 }
@@ -911,7 +911,7 @@ function settings_render(section_id, state)
                    subtitle = "Dark-wakes on a timer to check for a wake request while asleep",
                    value = b2s(c.remoteWake) },
             s.row{ kind = "enum", key = "rw_interval_batt_min", title = "Check every (on battery)",
-                   subtitle = "Less often = less battery, slower wake. On charger it checks every 30s.",
+                   subtitle = "Less often = less battery, slower wake. On charger it checks every 1 to 5 min.",
                    value = tostring(c.rwIntervalBattMin),
                    options      = { "2", "5", "10", "30", "60", "1440" },
                    optionLabels = { "2 minutes", "5 minutes", "10 minutes", "30 minutes", "1 hour", "1 day" } },
@@ -925,7 +925,7 @@ function settings_render(section_id, state)
             s.row{ kind = "button", key = "rw_info",
                    title = "ⓘ How it works & limitations",
                    help =
-                "While asleep your Mac briefly dark-wakes on a timer (~5 min on battery, ~30s on charger), "
+                "While asleep your Mac briefly dark-wakes on a timer (~5 min on battery, 1 to 5 min on charger), "
                 .. "makes ONE tiny encrypted check to Prosper's server, and either wakes fully (if you "
                 .. "asked it to remotely) or goes right back to sleep. The CPU is up only a few seconds "
                 .. "per check.\n\n"

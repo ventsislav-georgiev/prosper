@@ -41,3 +41,8 @@ IOReturn IOPMConnectionScheduleWithRunLoop(IOPMConnection myConnection,
                                            CFStringRef runLoopMode);
 IOReturn IOPMConnectionAcknowledgeEvent(IOPMConnection myConnection,
                                         IOPMConnectionMessageToken token);
+
+// System power settings dictionary, incl. "SleepDisabled" (what `pmset -a
+// disablesleep` sets). Exported, declared only in IOPMLibPrivate.h. Read-only use:
+// the lid core skips a pmset spawn when the value already matches.
+CFDictionaryRef IOPMCopySystemPowerSettings(void);

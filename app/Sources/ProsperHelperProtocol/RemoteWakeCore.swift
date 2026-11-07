@@ -54,7 +54,7 @@ public struct RemoteWakeConfig: Codable, Equatable, Sendable {
     /// daemon treats this exactly like an explicit user-disable (idle-exit).
     public static let disabled = RemoteWakeConfig(
         version: currentVersion, enabled: false, pollURL: "",
-        intervalAC: 30, intervalBatt: 300, batteryFloor: 20)
+        intervalAC: 60, intervalBatt: 300, batteryFloor: 20)
 
     /// Validate + clamp. Returns `disabled` (fail-safe) on any unknown version,
     /// bad URL, or non-allowlisted host so a corrupt file can never arm the daemon
@@ -149,6 +149,9 @@ public final class RemoteWakeCore {
     /// count: the daemon must survive with zero clients while remote-wake is on.
     public private(set) var pinned = false
     private var lastWakeTs = Date.distantPast
+    /// Start of the current quiet stretch for the AC back-off: reset on arming
+    /// (applyConfig), on a promote (a real request) and on a user (full) wake.
+    private var quietSince = Date.distantPast
     /// The request token we last promoted on. In-memory only — the daemon stays
     /// resident across dark wakes, so this survives sleep; a daemon restart resets it,
     /// which at worst replays one already-handled wake (harmless, rare).
@@ -177,8 +180,22 @@ public final class RemoteWakeCore {
     public var isResident: Bool { pinned }
     public var enabled: Bool { config.enabled }
 
+    /// Floor for the AC cadence (#767: 30 → 60 s). Applied here, not in the
+    /// config, because the app still sends openlid's 30 s default.
+    public static let minIntervalAC = 60.0
+    /// AC back-off: the interval doubles after each `backoffStep` with no request
+    /// and no user wake, up to `backoffCap` — the default battery cadence, so a
+    /// wake on AC is never slower than one on battery. A config already above the
+    /// cap keeps its own value. Battery is never backed off: the user picked that cadence.
+    public static let backoffStep = 2.0 * 3600
+    public static let backoffCap = 300.0
+
     private func interval(onAC: Bool) -> Double {
-        onAC ? config.intervalAC : config.intervalBatt
+        guard onAC else { return config.intervalBatt }
+        let base = max(RemoteWakeCore.minIntervalAC, config.intervalAC)
+        let quiet = now().timeIntervalSince(quietSince)
+        let level = quiet > 0 ? min(Int(quiet / RemoteWakeCore.backoffStep), 8) : 0
+        return max(base, min(RemoteWakeCore.backoffCap, base * Double(1 << level)))
     }
 
     /// Apply a (sanitized) config. Enabled → go resident + arm the first wake;
@@ -189,6 +206,7 @@ public final class RemoteWakeCore {
         config = raw.sanitized()
         if config.enabled {
             pinned = true
+            quietSince = now()
             if config.trace {
                 trace("applyConfig: armResident interval(AC=\(config.intervalAC)s,batt=\(config.intervalBatt)s) "
                     + "floor=\(config.batteryFloor)% onAC=\(onAC) firstWake=+\(interval(onAC: onAC))s")
@@ -226,9 +244,12 @@ public final class RemoteWakeCore {
     /// to keep the wake window short and the radio/CPU on-time minimal. Budget:
     /// **< 1 µs/call** decision-only (the real `poll` GET dominates wall time and is
     /// bounded separately at 10 s + 1 retry). Guarded by `RemoteWakeCorePerfTests`.
-    public func onWake(onAC: Bool, battPct: Int) -> WakeOutcome {
+    public func onWake(onAC: Bool, battPct: Int, userWake: Bool = false) -> WakeOutcome {
         guard pinned else { return .ignored }
         let t = now()
+        // A user (full) wake ends the quiet stretch even when debounced: the Mac was
+        // in use, so the next sleep starts back at the base cadence.
+        if userWake { quietSince = t }
         if t.timeIntervalSince(lastWakeTs) < debounce {
             if config.trace { trace("onWake ignored: debounce collapsed (<\(debounce)s since last)") }
             return .ignored
@@ -272,6 +293,7 @@ public final class RemoteWakeCore {
             return .slept
         }
         lastWakeToken = token
+        quietSince = now()   // before the deferred schedule: next wake at the base cadence
         if config.trace { trace("onWake PROMOTING: new request token") }
         promote()
         return .promoted

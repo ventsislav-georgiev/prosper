@@ -1,3 +1,5 @@
+import Network
+import ProsperHelperProtocol
 import XCTest
 @testable import ProsperApp
 
@@ -94,6 +96,49 @@ final class KeepAwakePolicyTests: XCTestCase {
     func testWatchStopsWhenNothingLeftToWatch() {
         XCTAssertEqual(KeepAwakePolicy.watch(clientConnected: false, sessionActive: false,
                                              sessionsExist: false), .stop)
+    }
+
+    // MARK: - #767 J15: a confirmed hold beats every 40 s, not every tick
+
+    /// Sends over `ticks` holding ticks after a send, the way `tick()` drives `beat`.
+    private func sends(confirmed: Bool, ticks: Int) -> Int {
+        var since = 0, n = 0
+        for _ in 0..<ticks {
+            let b = KeepAwakePolicy.beat(confirmed: confirmed, ticksSinceBeat: since)
+            since = b.ticksSinceBeat
+            if b.send { n += 1 }
+        }
+        return n
+    }
+
+    func testConfirmedHoldBeatsEveryFourthTick() {
+        XCTAssertEqual(sends(confirmed: true, ticks: 3), 0)
+        XCTAssertEqual(sends(confirmed: true, ticks: 4), 1)
+        XCTAssertEqual(sends(confirmed: true, ticks: 12), 3)
+        XCTAssertEqual(KeepAwakePolicy.heartbeatSeconds, 40)
+    }
+
+    func testUnconfirmedHoldBeatsEveryTick() {
+        // Lid open, failed XPC or a restarted daemon: re-assert within one tick.
+        XCTAssertEqual(sends(confirmed: false, ticks: 4), 4)
+    }
+
+    func testHeartbeatFitsThreeTimesInTheDaemonTTL() {
+        // The daemon's TTL must outlive two late or lost beats, so a slow tick never
+        // drops a live session; the TTL itself stays 120 s, so a dead Prosper still
+        // lets the Mac sleep within 2 min (old apps beat at 10 s: also inside it).
+        XCTAssertLessThanOrEqual(3 * KeepAwakePolicy.heartbeatSeconds, LidHelperCore.remoteHoldTTLSeconds)
+        XCTAssertEqual(LidHelperCore.remoteHoldTTLSeconds, 120)
+    }
+
+    // MARK: - #767 J17: TCP keepalive idle 120 s
+
+    func testKeepaliveIdleIs120AndDeadLinkSeenWithinThreeMinutes() {
+        let tcp = NWProtocolTCP.Options()
+        DchSessionServer.configureKeepalive(tcp)
+        XCTAssertTrue(tcp.enableKeepalive)
+        XCTAssertEqual(tcp.keepaliveIdle, 120)
+        XCTAssertLessThanOrEqual(tcp.keepaliveIdle + tcp.keepaliveInterval * tcp.keepaliveCount, 180)
     }
 
     /// Hot-ish path budget: `step` runs every tick for the life of every remote

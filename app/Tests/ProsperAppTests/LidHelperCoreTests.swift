@@ -272,6 +272,67 @@ final class LidHelperCoreTests: XCTestCase {
         XCTAssertEqual(spy.calls, [])
     }
 
+    // MARK: - #767 J15: pmset only on an edge, re-read from the system
+
+    /// A fake `disablesleep` the core reads back: apply() writes it, a test can
+    /// flip it behind the core's back (the user or another app running pmset).
+    private final class SystemSpy {
+        var calls: [Bool] = []
+        var system: Bool? = false
+        func apply(_ on: Bool) -> Bool { calls.append(on); system = on; return true }
+        func read() -> Bool? { system }
+    }
+
+    private func make(_ spy: SystemSpy) -> LidHelperCore {
+        LidHelperCore(apply: spy.apply, read: spy.read, onIdle: {})
+    }
+
+    func testHeartbeatSpawnsPmsetOnlyOnTheEdge() {
+        let spy = SystemSpy()
+        let core = make(spy)
+        for _ in 0..<5 { XCTAssertTrue(core.setRemoteHold(true)) }   // five beats
+        XCTAssertTrue(core.remoteHoldOn)
+        XCTAssertEqual(spy.calls, [true], "one spawn for the edge, none for the refreshes")
+        XCTAssertTrue(core.setRemoteHold(false))
+        XCTAssertEqual(spy.calls, [true, false])
+        XCTAssertFalse(core.remoteHoldOn)
+    }
+
+    func testExternalClearIsReassertedOnTheNextBeat() {
+        // Someone ran `pmset -a disablesleep 0` while our hold is on. An in-memory
+        // "applied == want" would skip forever; the read-back re-asserts.
+        let spy = SystemSpy()
+        let core = make(spy)
+        _ = core.setRemoteHold(true)
+        spy.system = false
+        XCTAssertTrue(core.setRemoteHold(true))
+        XCTAssertEqual(spy.calls, [true, true])
+    }
+
+    func testUnreadableSystemStateAlwaysApplies() {
+        // nil read (key missing, IOKit failed) falls back to the pre-#767 behavior.
+        let spy = SystemSpy()
+        spy.system = nil
+        let core = LidHelperCore(apply: { spy.calls.append($0); return true }, read: { nil }, onIdle: {})
+        _ = core.setRemoteHold(true)
+        _ = core.setRemoteHold(true)
+        XCTAssertEqual(spy.calls, [true, true])
+    }
+
+    func testReleaseWhileLidOverrideHoldsSpawnsNothing() {
+        // OR semantics with the skip: dropping the remote hold under a live lid
+        // override wants 1, the system has 1 → no spawn, override still held.
+        let spy = SystemSpy()
+        let core = make(spy)
+        core.connectionOpened(a)
+        _ = core.setOverride(true)
+        _ = core.setRemoteHold(true)
+        _ = core.setRemoteHold(false)
+        XCTAssertEqual(spy.calls, [true])
+        XCTAssertTrue(core.overrideOn)
+        XCTAssertFalse(core.remoteHoldOn)
+    }
+
     /// Hot-path budget: the daemon serializes every connection/method event
     /// through the core, so a transition must be effectively free — no allocation,
     /// no locking. 1M open+set+close cycles under 500ms is ~500ns/cycle, a

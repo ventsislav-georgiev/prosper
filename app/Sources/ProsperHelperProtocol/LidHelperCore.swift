@@ -36,17 +36,36 @@ public final class LidHelperCore {
     /// until the user explicitly sleeps it".
     public private(set) var remoteHoldSticky = false
 
-    public init(apply: @escaping (Bool) -> Bool, onIdle: @escaping () -> Void) {
+    /// The system's CURRENT `disablesleep` (nil = unreadable). Read on every apply
+    /// so a value someone else flipped is re-asserted on the next beat; an
+    /// in-memory "last applied" would skip forever after an external clear.
+    private let read: () -> Bool?
+
+    /// How long a remote-session keep-awake hold survives without a refresh. The
+    /// app heartbeats every `KeepAwakePolicy.heartbeatSeconds` (40 s) while the hold
+    /// is confirmed — a 3× margin; older apps beat every 10 s. Shared here so a test
+    /// pins the beat against it. Never shorten it below 3 beats: the TTL is the
+    /// fail-safe that lets the Mac sleep when Prosper dies.
+    public static let remoteHoldTTLSeconds = 120
+
+    public init(apply: @escaping (Bool) -> Bool,
+                read: @escaping () -> Bool? = { nil },
+                onIdle: @escaping () -> Void) {
         self.apply = apply
+        self.read = read
         self.onIdle = onIdle
     }
 
     /// Push the OR of both sources to pmset. Both the lid override and the remote-
     /// session hold disable sleep; sleep is only re-enabled when NEITHER holds. The
-    /// caller commits a source's flag only on a successful apply.
+    /// caller commits a source's flag only on a successful apply. Skips the spawn
+    /// when the system already holds the wanted value (#767: the 10 s heartbeat
+    /// spawned a root pmset every beat).
     @discardableResult
     private func applyEffective(lid: Bool, remote: Bool) -> Bool {
-        apply(lid || remote)
+        let want = lid || remote
+        if read() == want { return true }
+        return apply(want)
     }
 
     /// A client connected. Caller must cancel any pending idle-exit timer.

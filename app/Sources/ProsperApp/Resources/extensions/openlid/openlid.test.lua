@@ -974,4 +974,16 @@ do
     h.eq(state(host).caffeine, false, "0.5 s left: display ends")
 end
 
+-- ── #767 Remote wake: the charger cadence default matches the daemon floor (60 s) ─
+do
+    local host, env = h.makeHost { power = "AC Power" }
+    local sent
+    host.caffeinate.set_remote_wake = function(t) sent = t end
+    local G = h.load(INIT, host)
+    G.settings_action("openlid", "set:remote_wake", "true", "{}")
+    h.eq(sent and sent.enabled, true, "remote wake armed")
+    h.eq(sent and sent.interval_ac, 60, "charger cadence default is 60 s")
+    h.eq(sent and sent.interval_batt, 300, "battery cadence default unchanged")
+end
+
 print("ok openlid")

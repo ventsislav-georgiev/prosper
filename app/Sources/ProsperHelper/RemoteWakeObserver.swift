@@ -109,13 +109,15 @@ final class RemoteWakeObserver: @unchecked Sendable {
     func handleWake(conn: IOPMConnection?, token: IOPMConnectionMessageToken, caps: IOPMCapabilityBits) {
         let cpu = (caps & UInt32(kIOPMCapabilityCPU)) != 0
         let net = (caps & UInt32(kIOPMCapabilityNetwork)) != 0
-        dtrace("handleWake: caps cpu=\(cpu) net=\(net)")
+        // Graphics up = a user (full) wake, not a dark one: resets the AC back-off.
+        let user = (caps & UInt32(kIOPMCapabilityVideo)) != 0
+        dtrace("handleWake: caps cpu=\(cpu) net=\(net) user=\(user)")
         if cpu {
             var hold: IOPMAssertionID = 0
             IOPMAssertionCreateWithName(kIOPMAssertionTypePreventSystemSleep as CFString,
                                         IOPMAssertionLevel(kIOPMAssertionLevelOn),
                                         "ProsperRemoteWakeCheck" as CFString, &hold)
-            let outcome = q.sync { core.onWake(onAC: Self.onAC(), battPct: Self.battPct()) }
+            let outcome = q.sync { core.onWake(onAC: Self.onAC(), battPct: Self.battPct(), userWake: user) }
             dtrace("handleWake: outcome=\(outcome)")
             if hold != 0 { IOPMAssertionRelease(hold) }
         }

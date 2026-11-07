@@ -23,6 +23,12 @@ tag from the now-released section and put it on the new top draft.
 - **Sidekick pattern syncs with Prosper on iPhone.** Set it on the Mac or the phone and
   both use it: the newer edit wins. The phone side arrives in a Prosper iPhone update;
   until then each keeps its own. (#760)
+- **Keep-awake costs less.** While a remote session keeps the Mac awake, the helper only
+  runs `pmset` when the setting actually changes, instead of every 10 s. Prosper refreshes
+  the hold every 40 s once it is confirmed. The Mac still sleeps within 2 minutes if
+  Prosper quits. Idle phone connections are probed every 2 minutes instead of every 30 s.
+  Remote wake on a charger checks every 60 s, then less often after long quiet stretches,
+  but never less often than on battery (5 min). (#767)
 
 ## v2.172.0
 

@@ -42,8 +42,73 @@ final class RemoteWakeCoreTests: XCTestCase {
 
     func testEnableOnACUsesACInterval() {
         let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(ac: 90), onAC: true)
+        XCTAssertEqual(spy.scheduled, [90])
+    }
+
+    // MARK: - #767 J19: AC floor 60 s and the AC back-off
+
+    func testACIntervalFloorIs60() {
+        // openlid still sends 30 s; the daemon wakes at most once a minute on AC.
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(ac: 30), onAC: true)
+        XCTAssertEqual(spy.scheduled, [60])
+    }
+
+    /// One acted AC wake `after` seconds from now; returns the interval it re-armed.
+    private func acWake(_ core: RemoteWakeCore, _ spy: Spy, after: Double, userWake: Bool = false) -> Double? {
+        spy.tick(after)
+        _ = core.onWake(onAC: true, battPct: 90, userWake: userWake)
+        return spy.scheduled.last
+    }
+
+    func testACBacksOffEveryTwoQuietHoursUpTo5Min() {
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(), onAC: true)                            // quiet from here
+        XCTAssertEqual(acWake(core, spy, after: 2 * 3600 - 60), 60)        // < 2 h: base
+        XCTAssertEqual(acWake(core, spy, after: 120), 120)                 // 2 h: ×2
+        XCTAssertEqual(acWake(core, spy, after: 2 * 3600), 240)            // 4 h: ×4
+        XCTAssertEqual(acWake(core, spy, after: 2 * 3600), 300)            // 6 h: capped at the battery cadence
+        XCTAssertEqual(acWake(core, spy, after: 48 * 3600), 300)           // stays capped
+    }
+
+    func testPromoteResetsTheBackoff() {
+        let spy = Spy(); let core = make(spy)
         _ = core.applyConfig(cfg(), onAC: true)
-        XCTAssertEqual(spy.scheduled, [30])
+        XCTAssertEqual(acWake(core, spy, after: 5 * 3600), 240)
+        spy.pollToken = "11111111-1111-4111-8111-111111111111"
+        XCTAssertEqual(acWake(core, spy, after: 240), 60, "a real request re-arms at the base cadence")
+        XCTAssertEqual(spy.promotes, 1)
+    }
+
+    func testUserWakeResetsTheBackoff() {
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(), onAC: true)
+        XCTAssertEqual(acWake(core, spy, after: 5 * 3600), 240)
+        XCTAssertEqual(acWake(core, spy, after: 240, userWake: true), 60)
+        XCTAssertEqual(acWake(core, spy, after: 60), 60, "quiet stretch restarted at the user wake")
+    }
+
+    func testReapplyConfigResetsTheBackoff() {
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(), onAC: true)
+        XCTAssertEqual(acWake(core, spy, after: 9 * 3600), 300)
+        _ = core.applyConfig(cfg(), onAC: true)
+        XCTAssertEqual(spy.scheduled.last, 60)
+    }
+
+    func testBatteryIntervalNeverBacksOff() {
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(batt: 300), onAC: false)
+        spy.tick(9 * 3600)
+        _ = core.onWake(onAC: false, battPct: 90)
+        XCTAssertEqual(spy.scheduled, [300, 300])
+    }
+
+    func testACConfigAboveTheCapKeepsItsValue() {
+        let spy = Spy(); let core = make(spy)
+        _ = core.applyConfig(cfg(ac: 900), onAC: true)
+        XCTAssertEqual(acWake(core, spy, after: 9 * 3600), 900)
     }
 
     func testDisableCancelsAndIdleExits() {

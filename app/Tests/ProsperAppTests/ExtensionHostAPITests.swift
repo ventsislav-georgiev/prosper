@@ -1022,15 +1022,16 @@ final class ExtensionHostAPITests: XCTestCase {
                                              interval_batt = 0/0, battery_floor = 1e300 }
             host.caffeinate.set_remote_wake{ enabled = true, interval_ac = -math.huge,
                                              interval_batt = 60, battery_floor = 0/0 }
+            host.caffeinate.set_remote_wake{ enabled = true }   -- #767: nil cadence → defaults
         end
         """)
         _ = try lua.callGlobal("go")
         let deadline = Date().addingTimeInterval(5)
-        while svc.lock.withLock({ svc.remoteWakes.count }) < 2, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        while svc.lock.withLock({ svc.remoteWakes.count }) < 3, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
         let wakes = svc.lock.withLock { svc.remoteWakes }
-        XCTAssertEqual(wakes.map(\.ac), [30, 30])
-        XCTAssertEqual(wakes.map(\.batt), [300, 60])
-        XCTAssertEqual(wakes.map(\.floor), [100, 20])
+        XCTAssertEqual(wakes.map(\.ac), [60, 60, 60])     // #767: the daemon's AC floor
+        XCTAssertEqual(wakes.map(\.batt), [300, 60, 300])
+        XCTAssertEqual(wakes.map(\.floor), [100, 20, 20])
         XCTAssertTrue(svc.logs.contains { $0.level == "warn" && $0.message.contains("non-finite") })
     }
 

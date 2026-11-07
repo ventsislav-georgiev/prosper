@@ -34,6 +34,22 @@ enum KeepAwakePolicy {
     /// Consecutive idle ticks (each `tickSeconds` ≈ this many seconds) before
     /// releasing the hold — a ~60s grace covering a brief reconnect or output lull.
     static let graceTicks = 6
+    /// Once the daemon has CONFIRMED the hold, refresh it every this many ticks
+    /// (40 s) instead of every tick (#767). The tick itself stays 10 s for the
+    /// activity window. 3 beats fit in the daemon's 120 s TTL, so the TTL still
+    /// releases the hold within 2 min of Prosper dying.
+    static let heartbeatTicks = 4
+    static let heartbeatSeconds = heartbeatTicks * activeWindowSeconds
+
+    /// One holding tick: send the keep-awake XPC now? `confirmed` = the daemon
+    /// acknowledged the last hold. Unconfirmed (lid open, XPC failed, daemon
+    /// restarted and reclaimed) beats every tick, as before #767, so a missing
+    /// hold is (re)asserted within one tick.
+    static func beat(confirmed: Bool, ticksSinceBeat: Int) -> (send: Bool, ticksSinceBeat: Int) {
+        let n = ticksSinceBeat + 1
+        if !confirmed || n >= heartbeatTicks { return (true, 0) }
+        return (false, n)
+    }
 
     struct Step: Equatable {
         let hold: Bool      // send/refresh the keep-awake hold this tick
@@ -109,10 +125,15 @@ final class DchSessionServer: @unchecked Sendable {
     private var keepAwakeActive = false
     private var holdTimer: DispatchSourceTimer?
     private var idleTicks = 0
-    /// Tick cadence; also the hold heartbeat (well inside the daemon's 120s TTL).
+    /// The daemon acknowledged the last hold (set from the XPC result) and ticks
+    /// since that send: a confirmed hold is refreshed every `heartbeatTicks` only.
+    private var holdConfirmed = false
+    private var ticksSinceBeat = 0
+    /// Tick cadence; the hold heartbeat is every `KeepAwakePolicy.heartbeatTicks`
+    /// ticks once confirmed (40 s, inside the daemon's 120s TTL).
     /// Kept equal to `activeWindowSeconds` so the "silent >10s ⇒ inactive" rule
     /// actually holds — a coarser tick would mis-read a session that prints between
-    /// ticks as idle. Each tick re-evaluates AND refreshes the TTL.
+    /// ticks as idle. Each tick re-evaluates; `beat` decides whether it refreshes the TTL.
     private static let tickSeconds = KeepAwakePolicy.activeWindowSeconds
 
     init(bindHost: @escaping @Sendable () -> String? = { DchSessionServer.tailscaleIPv4() },
@@ -187,10 +208,7 @@ final class DchSessionServer: @unchecked Sendable {
         // never runs and its dch client — plus that client's pty — leaks. 44 of them
         // had piled up over one day, all still attached to their sessions.
         if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
-            tcp.enableKeepalive = true
-            tcp.keepaliveIdle = 30
-            tcp.keepaliveInterval = 10
-            tcp.keepaliveCount = 4   // dead link noticed in ~70s
+            Self.configureKeepalive(tcp)
         }
         // Port MUST stay `.any` here. Listener params are inherited by every accepted
         // connection, so a port in requiredLocalEndpoint makes each accepted socket try to
@@ -200,6 +218,18 @@ final class DchSessionServer: @unchecked Sendable {
         params.requiredLocalEndpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(host), port: .any)
         return try NWListener(using: params, on: NWEndpoint.Port(rawValue: bindPort)!)
+    }
+
+    /// Idle 120 s (#767; was 30 s): each probe wakes the phone's radio, so an idle
+    /// attached connection now costs 0.5 probes/min instead of 2. A dead link is
+    /// noticed in ~160 s (was ~70 s); a reconnect never waits on it, because
+    /// `retireOlderClients` drops the old client on the new attach.
+    static let keepaliveIdle = 120
+    static func configureKeepalive(_ tcp: NWProtocolTCP.Options) {
+        tcp.enableKeepalive = true
+        tcp.keepaliveIdle = keepaliveIdle
+        tcp.keepaliveInterval = 10
+        tcp.keepaliveCount = 4   // dead link noticed in ~160s
     }
 
     /// On `lifecycle`. A `.failed` clears the listener — only if it is still the current one,
@@ -304,7 +334,7 @@ final class DchSessionServer: @unchecked Sendable {
 
     /// One phone, one client per session. A reconnect (backgrounded app, tunnel switch,
     /// no signal) opens a new connection while the old one still looks `.ready`; without
-    /// this the old client lingers until TCP keepalive notices, ~70s during which the
+    /// this the old client lingers until TCP keepalive notices, ~160s during which the
     /// master takes ITS window size and the phone sees a narrow, garbled screen. So the
     /// newest attach retires the older clients for that session immediately.
     /// Runs on `queue`, called from the connection that just attached.
@@ -324,6 +354,8 @@ final class DchSessionServer: @unchecked Sendable {
     private func startKeepAwake() {
         idleTicks = 0
         keepAwakeActive = true
+        holdConfirmed = false
+        ticksSinceBeat = 0
         sendKeepAwake(true)
         if holdTimer != nil { return }   // already ticking (hold or watch mode)
         let t = DispatchSource.makeTimerSource(queue: queue)
@@ -383,7 +415,10 @@ final class DchSessionServer: @unchecked Sendable {
             idleTicks = 0
             sendKeepAwake(false)
         } else if step.hold {
-            sendKeepAwake(true)        // hold / refresh the TTL (incl. grace window)
+            // hold / refresh the TTL (incl. grace window), every 4th tick once confirmed
+            let beat = KeepAwakePolicy.beat(confirmed: holdConfirmed, ticksSinceBeat: ticksSinceBeat)
+            ticksSinceBeat = beat.ticksSinceBeat
+            if beat.send { sendKeepAwake(true) }
         }
     }
 
@@ -416,7 +451,13 @@ final class DchSessionServer: @unchecked Sendable {
         // a heartbeat can't invalidate the shared XPC connection out from under an
         // in-flight lid / remote-wake op between its awaits. enqueueApply appends
         // synchronously on this queue thread; the op crosses to @MainActor itself.
-        LidSleepHelper.enqueueApply { await LidSleepHelper.setRemoteSessionActive(on) }
+        // The result feeds `holdConfirmed`; the chain is FIFO and so is `queue`, so
+        // the last send's result is the one that sticks.
+        LidSleepHelper.enqueueApply { [weak self] in
+            let ok = await LidSleepHelper.setRemoteSessionActive(on)
+            guard let self else { return }
+            self.queue.async { self.holdConfirmed = on && ok }
+        }
     }
 
     // MARK: - Tailscale interface resolution (variant-independent)
