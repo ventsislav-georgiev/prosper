@@ -999,7 +999,8 @@ struct AgentIslandRowDetailsSection: View {
 }
 
 /// #571: Agent Island › Session list: the sort and the Sessions / Sidekicks
-/// tabs (prosper-ios's split). Per Mac (not in SyncedKeys). A change re-sorts
+/// tabs (prosper-ios's split). Per Mac (not in SyncedKeys); #760: the pattern
+/// syncs with the phone over sidekickSync instead. A change re-sorts
 /// or re-splits the open island at once, with no animation.
 struct AgentIslandListSection: View {
     @State private var sort = Preferences.agentIslandSort
@@ -1034,7 +1035,11 @@ struct AgentIslandListSection: View {
         }
         .onChange(of: sort) { _, v in Preferences.agentIslandSort = v; AgentIslandController.shared.rowDetailsChanged() }
         .onChange(of: tabs) { _, v in Preferences.agentIslandSidekickTabs = v; AgentIslandController.shared.rowDetailsChanged() }
-        .onChange(of: pattern) { _, v in Preferences.agentIslandSidekickPattern = v; AgentIslandController.shared.rowDetailsChanged() }
+        .onChange(of: pattern) { _, v in Preferences.editSidekickPattern(v); AgentIslandController.shared.rowDetailsChanged() }
+        // #760: a phone's adopted pattern shows here; the onChange above sees it stored and stamps nothing.
+        .onReceive(NotificationCenter.default.publisher(for: .sidekickPatternChangedExternally)) { _ in
+            pattern = Preferences.agentIslandSidekickPattern
+        }
     }
 }
 

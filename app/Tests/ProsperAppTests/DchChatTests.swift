@@ -176,7 +176,8 @@ final class DchChatTests: XCTestCase {
                               DchFrame.clipboardItemResp, DchFrame.clipboardResp, DchFrame.addClipboardHistory,
                               DchFrame.clipboardUpload, DchFrame.models, DchFrame.chat, DchFrame.chatDelta,
                               DchFrame.chatDone, DchFrame.modelsResp, DchFrame.commands, DchFrame.runCommand,
-                              DchFrame.commandsResp, DchFrame.commandResult, DchFrame.putPhoneSnippets]
+                              DchFrame.commandsResp, DchFrame.commandResult, DchFrame.putPhoneSnippets,
+                              DchFrame.sidekickSync]
         XCTAssertEqual(Set(every).count, every.count, "no two frames share a code")
     }
 

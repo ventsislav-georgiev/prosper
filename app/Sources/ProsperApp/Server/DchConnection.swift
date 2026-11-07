@@ -51,6 +51,8 @@ enum DchFrame {
     static let runCommand: UInt8 = 0x29  // {id, argument?} → commandResult | error
     // #731: the phone's own snippets, shown here read-only (DchLibraryOps.put). One reply.
     static let putPhoneSnippets: UInt8 = 0x2c  // {device_id, device_name?, hash, snippets} → ok {count, hash} | error
+    // #760: the one sidekick pattern of the Mac and the phone (DchSidekickOps). One reply.
+    static let sidekickSync: UInt8 = 0x2d  // {pattern, updated} → ok {pattern, updated} (the winner) | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -80,7 +82,7 @@ enum DchFrame {
 
     /// #591: the requests beyond the original set this Mac answers, in machineInfoResp's
     /// "ops" (an older phone ignores the key; a newer one hides what an older Mac lacks).
-    static let ops = ["history", "revive", "restart", "stop", "library", "pin", "forget", "snippets_put"]
+    static let ops = ["history", "revive", "restart", "stop", "library", "pin", "forget", "snippets_put", "sidekick"]
 
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set
@@ -135,6 +137,8 @@ final class DchConnection: @unchecked Sendable {
     var ops = DchControlOps.live
     /// #616: the library request's files (DchLibraryOps.dir).
     var library = DchLibraryOps()
+    /// #760: sidekickSync's merge; its adopt runs on main.
+    var sidekick = DchSidekickOps()
     /// #617: the clipboard requests' store, folders and gate.
     var clipboard = DchClipboardOps()
     /// #617: this connection's clipboardUpload, which its data frames feed. On `queue`.
@@ -388,7 +392,7 @@ final class DchConnection: @unchecked Sendable {
             let reply: DchControlOps.Reply = { self.finalReply($0) }
             commandTask = Task { await commands.handle(type, payload, reply: reply) }
         case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.library,
-             DchFrame.putPhoneSnippets, DchFrame.pin, DchFrame.forget, DchFrame.forgetAll,
+             DchFrame.putPhoneSnippets, DchFrame.sidekickSync, DchFrame.pin, DchFrame.forget, DchFrame.forgetAll,
              DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.addClipboardHistory:
             // #591: off this queue, unlike kill: the reads fork dch and a restart can
             // take minutes, while every connection (and each attached pty's send
@@ -400,12 +404,13 @@ final class DchConnection: @unchecked Sendable {
             guard !closed else { return }
             guard !inFlight else { return send(DchControlOps.error("busy with an earlier request")) }
             inFlight = true
-            let ops = ops, library = library, clipboard = clipboard
+            let ops = ops, library = library, clipboard = clipboard, sidekick = sidekick
             DispatchQueue.global(qos: .userInitiated).async {
                 let reply: DchControlOps.Reply = { self.finalReply($0) }
                 switch type {
                 case DchFrame.library: library.handle(payload, reply: reply)
                 case DchFrame.putPhoneSnippets: library.put(payload, reply: reply)
+                case DchFrame.sidekickSync: sidekick.handle(payload, reply: reply)
                 case DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.addClipboardHistory:
                     clipboard.handle(type, payload, send: { self.sendStreamed($0) }, reply: reply)
                 default: ops.handle(type, payload, reply: reply)
@@ -617,6 +622,72 @@ struct DchLibraryOps: Sendable {
         }
         guard data.count <= maxReply else { return DchControlOps.error("library too large for one frame") }
         return DchFrame.encode(DchFrame.libraryResp, [UInt8](data))
+    }
+}
+
+// MARK: - Sidekick pattern sync (#760)
+
+extension Notification.Name {
+    /// #760: a phone's sidekick pattern was adopted; the open Settings field re-reads it.
+    static let sidekickPatternChangedExternally = Notification.Name("sidekickPatternChangedExternally")
+}
+
+/// #760: 0x2d sidekickSync. The phone sends its pattern and when it last edited it; the
+/// newer one wins on both ends, so the pattern set on either applies to both. Exactly
+/// one reply: ok {pattern, updated} carrying the winner, or error {message}.
+struct DchSidekickOps: Sendable {
+    /// The wire cap, in UTF-8 bytes.
+    static let maxBytes = 512
+
+    struct Value: Equatable, Sendable {
+        /// Raw, as typed: only matching trims.
+        var pattern: String
+        /// Ms since epoch of the last edit; 0 = never edited.
+        var updated: Int64
+    }
+
+    /// The newer `updated` wins and the Mac adopts a phone winner; a tie (both 0
+    /// included) keeps the Mac's.
+    static func merge(mac: Value, phone: Value) -> (winner: Value, adopt: Bool) {
+        phone.updated > mac.updated ? (phone, true) : (mac, false)
+    }
+
+    /// {"pattern": String, "updated": integer}; nil for anything else.
+    static func parse(_ payload: Data) -> Value? {
+        guard let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
+              let pattern = o["pattern"] as? String,
+              let n = o["updated"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
+              let updated = n as? Int64 else { return nil }
+        return Value(pattern: pattern, updated: updated)
+    }
+
+    /// After an adopt, on main: the island re-splits and an open Settings field follows.
+    /// Tests swap it.
+    var adopted: @MainActor @Sendable () -> Void = {
+        AgentIslandController.shared.rowDetailsChanged()
+        NotificationCenter.default.post(name: .sidekickPatternChangedExternally, object: nil)
+    }
+
+    func handle(_ payload: Data, reply: @escaping DchControlOps.Reply) {
+        guard let phone = Self.parse(payload) else {
+            return reply(DchControlOps.error("malformed sidekickSync request: send {\"pattern\": \"<text>\", \"updated\": <ms>}"))
+        }
+        guard phone.pattern.utf8.count <= Self.maxBytes else {
+            return reply(DchControlOps.error("sidekick pattern over \(Self.maxBytes) UTF-8 bytes"))
+        }
+        let adopted = adopted
+        // Read, merge and write on main, where Settings edits it, so no edit lands between.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                let m = Self.merge(mac: Value(pattern: Preferences.agentIslandSidekickPattern,
+                                              updated: Preferences.agentIslandSidekickPatternUpdated), phone: phone)
+                if m.adopt {
+                    Preferences.adoptSidekickPattern(m.winner.pattern, updated: m.winner.updated)
+                    adopted()
+                }
+                reply(DchFrame.encode(DchFrame.ok, json: ["pattern": m.winner.pattern, "updated": m.winner.updated]))
+            }
+        }
     }
 }
 

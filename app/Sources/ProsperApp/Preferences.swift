@@ -442,6 +442,7 @@ enum Preferences {
         static let agentIslandSort = "agentIslandSort"
         static let agentIslandSidekickTabs = "agentIslandSidekickTabs"
         static let agentIslandSidekickPattern = "agentIslandSidekickPattern"
+        static let agentIslandSidekickPatternUpdated = "agentIslandSidekickPatternUpdated"
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
@@ -1191,6 +1192,27 @@ enum Preferences {
     static var agentIslandSidekickPattern: String {
         get { defaults.string(forKey: Keys.agentIslandSidekickPattern) ?? AgentIsland.sidekickDefault }
         set { defaults.set(newValue, forKey: Keys.agentIslandSidekickPattern) }
+    }
+
+    /// #760: ms since epoch of the pattern's last edit here, or the adopted phone's;
+    /// unset reads 0 (never edited). Per Mac; the phone syncs it over sidekickSync.
+    static var agentIslandSidekickPatternUpdated: Int64 {
+        get { (defaults.object(forKey: Keys.agentIslandSidekickPatternUpdated) as? NSNumber)?.int64Value ?? 0 }
+        set { defaults.set(NSNumber(value: newValue), forKey: Keys.agentIslandSidekickPatternUpdated) }
+    }
+
+    /// #760: a Settings edit stores the pattern raw and stamps now. The field echoing the
+    /// stored value (an adopt it follows) is no edit: nothing written, nothing re-stamped.
+    static func editSidekickPattern(_ pattern: String, now: Date = Date()) {
+        guard pattern != agentIslandSidekickPattern else { return }
+        agentIslandSidekickPattern = pattern
+        agentIslandSidekickPatternUpdated = Int64((now.timeIntervalSince1970 * 1000).rounded())
+    }
+
+    /// #760: a phone's winning pattern and its stamp, both verbatim.
+    static func adoptSidekickPattern(_ pattern: String, updated: Int64) {
+        agentIslandSidekickPattern = pattern
+        agentIslandSidekickPatternUpdated = updated
     }
 
     /// #606: what New session runs, as typed; "" = unset (inferred, else claude).

@@ -18,7 +18,13 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.172.0 *(unreleased)*
+## v2.173.0 *(unreleased)*
+
+- **Sidekick pattern syncs with Prosper on iPhone.** Set it on the Mac or the phone and
+  both use it: the newer edit wins. The phone side arrives in a Prosper iPhone update;
+  until then each keeps its own. (#760)
+
+## v2.172.0
 
 - **Always allow answers prompts shown while a background agent runs.** Claude
   Code then lengthens the prompt's footer ("Esc to cancel · … stop background
