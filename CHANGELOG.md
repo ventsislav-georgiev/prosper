@@ -65,6 +65,13 @@ tag from the now-released section and put it on the new top draft.
   arrives at once, and so does its clearing. Real-time stays the default. A failed card
   update is retried on the next minute instead of an hour later, and an update install
   that was cancelled no longer keeps Prosper from marking the Mac offline on quit. (#770)
+- **Always allow answers prompts with Claude Code's auto-block countdown.** A
+  permission prompt showing "will automatically block this request in 1:35" was left to
+  you when the countdown ticked while Prosper checked it; only the time may now differ,
+  any other change still leaves the prompt to you. The same fix applies to clicking an
+  answer on the island. Prompts that offer "Yes, and don’t ask again" (with Claude Code's
+  curly apostrophe) now get Yes too; "don't ask again" itself is never picked.
+  (#784, #783)
 
 ## v2.172.0
 

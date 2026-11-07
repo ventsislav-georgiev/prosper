@@ -566,12 +566,40 @@ extension AgentPrompt {
                        io: AgentPromptIO, card: Bool = true, stillOn: () -> Bool = { true }) -> AgentPromptAnswer {
         guard (1...9).contains(digit), expected.preview.isEmpty,
               expected.options.contains(where: { $0.digit == digit && (!card || expected.isEnabled($0)) }),
-              let now = parse(io.read(key)), now == expected,
+              let now = parse(io.read(key)), now.sameDialog(expected),
               io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) == "blocked",
               stillOn()
         else { return .changed }
         io.send(key, String(digit))
         return .sent
+    }
+
+    /// #784: the identity `answer` and the Always allow loop guard compare: the
+    /// whole prompt, except the M:SS of Claude Code's auto-block countdown ("⚠
+    /// Claude Code will automatically block this request in 1:35, to avoid
+    /// holding up an unattended session"), which ticks every second between two
+    /// reads. Only that time, and only on context lines that are exactly that
+    /// wording (wrapped at any space on a narrow pty); everything else, the
+    /// line breaks too, still compares literally.
+    func sameDialog(_ other: AgentPrompt) -> Bool {
+        Self.maskingCountdown(self) == Self.maskingCountdown(other)
+    }
+
+    private static let countdown: NSRegularExpression = {
+        let w = "[ \\n]+"
+        let head = "Claude Code will automatically block this request in".split(separator: " ").joined(separator: w)
+        let tail = "to avoid holding up an unattended session".split(separator: " ").joined(separator: w)
+        // swiftlint:disable:next force_try
+        return try! NSRegularExpression(
+            pattern: "(?:\\A|(?<=\\n))( *⚠\\x{FE0F}?\(w)\(head)\(w))[0-9]{1,2}:[0-9]{2}(,\(w)\(tail))(?=\\n|\\z)")
+    }()
+
+    private static func maskingCountdown(_ p: AgentPrompt) -> AgentPrompt {
+        let s = p.context.joined(separator: "\n")
+        let masked = countdown.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "$1m:ss$2")
+        guard masked != s else { return p }
+        return AgentPrompt(question: p.question, context: masked.components(separatedBy: "\n"), options: p.options,
+                           preview: p.preview, notes: p.notes, topFound: p.topFound)
     }
 
     // MARK: - Always allow (#751)
@@ -594,8 +622,10 @@ extension AgentPrompt {
     }
 
     /// "Yes, and don't ask again for …", wrapped anywhere; never a mode change.
+    /// #783: Claude Code 2.1.309 draws "don’t" (U+2019); both curly quotes fold to '.
     private static func isDontAskAgain(_ o: AgentPromptOption) -> Bool {
-        ([o.label] + o.detail).joined().filter { !$0.isWhitespace }.hasPrefix("Yes,anddon'taskagain") && !o.isModeChange
+        ([o.label] + o.detail).joined().filter { !$0.isWhitespace }.replacingOccurrences(of: "\u{2019}", with: "'")
+            .replacingOccurrences(of: "\u{2018}", with: "'").hasPrefix("Yes,anddon'taskagain") && !o.isModeChange
     }
 
     /// The dialog's first line ("Bash command"), for the log.
@@ -622,7 +652,7 @@ extension AgentPrompt {
             return answered && goneStates.contains(io.status(key).trimmingCharacters(in: .whitespacesAndNewlines))
                 ? .gone : .human
         }
-        guard p != notAgain, let yes = p.allowYes,
+        guard notAgain.map({ !p.sameDialog($0) }) ?? true, let yes = p.allowYes,
               answer(key, digit: yes.digit, expected: p, io: io, card: false, stillOn: isOn) == .sent else { return .human }
         return .allowed(p)
     }

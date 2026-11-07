@@ -227,6 +227,150 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(f.sends, [])
     }
 
+    // MARK: - #784: the auto-block countdown
+
+    private static func countdown(_ t: String, tail: String = "to avoid holding up an unattended session") -> String {
+        " ⚠ Claude Code will automatically block this request in \(t), \(tail)"
+    }
+    private static let rmCommand = "   cd ~/personal/dobby && rtk git status -sb | head -1 && git merge --no-ff dobby-557c"
+        + " -m \"Merge #557 r5: ...\" && git push origin main; ... rm -rf ~/personal/dobby-557-review && echo cleaned;"
+        + " ... --expect-version $v >/dev/null && echo ledger-ok"
+    private static let rmReason =
+        "   Dangerous rm operation on working directory or its ancestor: /Users/ventsislav.georgiev/personal/dobby-557-review"
+
+    /// The operator's screen (#784): a Bash dialog with its reason line and Claude
+    /// Code's auto-block countdown above the question. `lines`: the countdown rows.
+    private static func rmScreen(_ lines: [String], command: String = rmCommand, reason: String = rmReason) -> String {
+        ([String(repeating: "─", count: 90), " Bash command", " Merge #557 r5, push, clean, record",
+          " " + String(repeating: "╌", count: 89), command, " " + String(repeating: "╌", count: 89), reason]
+            + lines + ["", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel · Tab to amend"])
+            .joined(separator: "\n")
+    }
+    private static func rmScreen(_ t: String) -> String { rmScreen([countdown(t)]) }
+
+    func testTheCountdownTickingBetweenTheReadsIsStillAllowed() throws {
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.rmScreen("1:35")))
+        XCTAssertEqual(p.allowYes?.digit, 1, "the operator's screen is a plain permission prompt")
+        XCTAssertEqual(p.context.last, String(Self.countdown("1:35").dropFirst()), "the countdown is context")
+        let f = FakeIO(Self.rmScreen("1:35"), Self.rmScreen("1:34"))
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .allowed(p))
+        XCTAssertEqual(f.sends, ["1"])
+        XCTAssertEqual(f.reads, 2)
+        // A minute boundary and the U+FE0F glyph form too.
+        let fe = { (t: String) in Self.rmScreen("1:00").replacingOccurrences(of: "⚠ Claude", with: "⚠\u{FE0F} Claude")
+            .replacingOccurrences(of: "1:00", with: t) }
+        let g = FakeIO(fe("1:00"), fe("0:59"))
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: g.io, notAgain: nil, answered: false, isOn: { true }),
+                       .allowed(try XCTUnwrap(AgentPrompt.parse(fe("1:00")))))
+        XCTAssertEqual(g.sends, ["1"])
+    }
+
+    /// A narrow pty wraps the countdown; its time can land on either row.
+    func testAWrappedCountdownTickingIsStillAllowed() throws {
+        let wraps: [(String) -> [String]] = [
+            { [" ⚠ Claude Code will automatically block this", "   request in \($0), to avoid holding up an", "   unattended session"] },
+            { [" ⚠ Claude Code will automatically block this request in", "   \($0), to avoid holding up an unattended", "   session"] },
+        ]
+        for (n, wrap) in wraps.enumerated() {
+            let a = Self.rmScreen(wrap("1:35"), command: "   rm -rf ~/personal/dobby-557-review", reason: "   Dangerous rm")
+            let b = Self.rmScreen(wrap("1:34"), command: "   rm -rf ~/personal/dobby-557-review", reason: "   Dangerous rm")
+            let p = try XCTUnwrap(AgentPrompt.parse(a), "wrap \(n)")
+            let f = FakeIO(a, b)
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .allowed(p), "wrap \(n)")
+            XCTAssertEqual(f.sends, ["1"], "wrap \(n)")
+            // The card's Yes: the same tick is accepted.
+            XCTAssertTrue(p.options.allSatisfy { p.isEnabled($0) }, "wrap \(n): the card shows Yes enabled")
+            let c = FakeIO(b)
+            XCTAssertEqual(AgentPrompt.answer(key, digit: 1, expected: p, io: c.io), .sent, "wrap \(n): the card")
+            XCTAssertEqual(c.sends, ["1"], "wrap \(n)")
+        }
+    }
+
+    func testTheCardsAnswerAcceptsTheCountdownTicking() throws {
+        let short = { (t: String) in Self.rmScreen([Self.countdown(t)], command: "   rm -rf ~/personal/dobby-557-review",
+                                                   reason: "   Dangerous rm operation") }
+        let p = try XCTUnwrap(AgentPrompt.parse(short("1:35")))
+        XCTAssertTrue(p.options.allSatisfy { p.isEnabled($0) }, "the card shows Yes enabled")
+        let f = FakeIO(short("1:34"))
+        XCTAssertEqual(AgentPrompt.answer(key, digit: 1, expected: p, io: f.io), .sent)
+        XCTAssertEqual(f.sends, ["1"])
+        // Anything else changed: the card's Yes refuses (no fallback key).
+        let g = FakeIO(short("1:34").replacingOccurrences(of: "dobby-557-review", with: "dobby"))
+        XCTAssertEqual(AgentPrompt.answer(key, digit: 1, expected: p, io: g.io), .changed)
+        XCTAssertEqual(g.sends, [])
+    }
+
+    /// Only the M:SS on the countdown's own wording may differ between the reads.
+    func testAnythingElseChangedBetweenTheReadsIsRefused() {
+        let first = Self.rmScreen("1:35")
+        let changed: [(String, String)] = [
+            ("the command (the subject), countdown ticking too",
+             Self.rmScreen([Self.countdown("1:34")], command: Self.rmCommand.replacingOccurrences(of: "dobby-557-review", with: "dobby"))),
+            ("the command only, same countdown",
+             Self.rmScreen([Self.countdown("1:35")], command: Self.rmCommand.replacingOccurrences(of: "557", with: "558"))),
+            ("the reason line", Self.rmScreen([Self.countdown("1:34")], reason: Self.rmReason + "x")),
+            ("the countdown's tail", Self.rmScreen([Self.countdown("1:34", tail: "to avoid holding up a busy session")])),
+            ("the countdown's head", Self.rmScreen([Self.countdown("1:34").replacingOccurrences(of: "block", with: "allow")])),
+            ("the countdown's glyph", Self.rmScreen([Self.countdown("1:34").replacingOccurrences(of: "⚠", with: "!")])),
+            ("text after the time", Self.rmScreen([Self.countdown("1:34 x")])),
+            ("the time's shape", Self.rmScreen([Self.countdown("1:34:00")])),
+            ("the time gone", Self.rmScreen([Self.countdown("soon")])),
+            ("an extra line", Self.rmScreen([Self.countdown("1:34"), " rm -rf ~"])),
+            ("the countdown gone", Self.rmScreen([])),
+        ]
+        for (name, second) in changed {
+            let f = FakeIO(first, second)
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .human, name)
+            XCTAssertEqual(f.sends, [], name)
+        }
+        // A time in the command is no countdown: it never masks.
+        let timed = { (t: String) in Self.rmScreen([Self.countdown("1:35")], command: "   sleep \(t)") }
+        let f = FakeIO(timed("1:35"), timed("1:34"))
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .human)
+        XCTAssertEqual(f.sends, [])
+        // Only the time ticks, on a line that is not exactly the countdown wording: refused.
+        let notCountdown: [(String, (String) -> String)] = [
+            ("text before it", { " echo x && " + Self.countdown($0).dropFirst() }),
+            ("text after it", { Self.countdown($0) + " && rm -rf ~" }),
+            ("another tail", { Self.countdown($0, tail: "to avoid holding up a busy session") }),
+            ("another head", { Self.countdown($0).replacingOccurrences(of: "block", with: "allow") }),
+            ("no glyph", { Self.countdown($0).replacingOccurrences(of: "⚠ ", with: "") }),
+            ("another glyph", { Self.countdown($0).replacingOccurrences(of: "⚠", with: "!") }),
+        ]
+        for (name, line) in notCountdown {
+            let g = FakeIO(Self.rmScreen([line("1:35")]), Self.rmScreen([line("1:34")]))
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: g.io, notAgain: nil, answered: false, isOn: { true }), .human, name)
+            XCTAssertEqual(g.sends, [], name)
+        }
+    }
+
+    /// The loop guard holds across a tick: the same prompt answered last is not answered again.
+    func testTheLoopGuardHoldsAcrossATick() throws {
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.rmScreen("1:35")))
+        let f = FakeIO(Self.rmScreen("1:30"))
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: p, answered: true, isOn: { true }), .human)
+        XCTAssertEqual(f.sends, [])
+    }
+
+    // MARK: - #783: the don't-ask-again row's apostrophe
+
+    private func assertYesOnThreeOptions(_ apostrophe: Character, file: StaticString = #filePath, line: UInt = #line) throws {
+        let screen = Self.dialog(Self.proceed, ["Yes", "Yes, and don\(apostrophe)t ask again for: /usr/bin/true qa310 *", Self.noTell])
+        let p = try XCTUnwrap(AgentPrompt.parse(screen), file: file, line: line)
+        XCTAssertEqual(p.allowYes?.digit, 1, file: file, line: line)
+        let f = FakeIO(screen)
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .allowed(p),
+                       file: file, line: line)
+        XCTAssertEqual(f.sends, ["1"], "Yes, never the don't-ask-again row", file: file, line: line)
+    }
+
+    func testThreeOptionsWithAStraightApostropheGetYes() throws { try assertYesOnThreeOptions("'") }
+
+    /// Claude Code 2.1.309 draws "don’t" with U+2019.
+    func testThreeOptionsWithACurlyApostropheGetYes() throws { try assertYesOnThreeOptions("\u{2019}") }
+
+    func testThreeOptionsWithALeftCurlyQuoteGetYes() throws { try assertYesOnThreeOptions("\u{2018}") }
+
     /// QA #581 F1: a timed-out (empty) or unknown status is not "the answer took".
     func testAnEmptyOrUnknownStatusAfterAnAnswerIsTheHumans() {
         for status in ["", "\n", "garbage"] {
