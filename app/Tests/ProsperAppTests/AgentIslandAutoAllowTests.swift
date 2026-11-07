@@ -1442,8 +1442,9 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(f.lock.withLock { f.sends }, [])
     }
 
-    /// The prompt left to the human is never answered, however long it stays up and prints:
-    /// here one the loop guard left (Prosper's Yes did not take), past the loop window.
+    /// The prompt left to the human is never answered, however long it stays up and prints the
+    /// identical screen: here one the loop guard left (Prosper's Yes did not take), past the loop
+    /// window. Re-wrapped renders of it: testARewrappedLeftPromptIsNeverAnswered.
     @MainActor func testThePromptLeftToTheHumanIsNeverAnswered() {
         let f = FakeIO(Self.bash3), (c, r) = controller(f)
         tick(c, .blocked)
@@ -1457,6 +1458,190 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(f.sends, ["1"], "never answered again")
         XCTAssertEqual(r.lastState, .blocked)
         XCTAssertEqual(c.published(c.store?.sessions ?? []).first?.state, .blocked)
+    }
+
+    // MARK: - QA #620 F1: a re-wrapped render is the same prompt
+
+    /// One Bash prompt drawn at two pty widths (an attach or a resize re-wraps the command and its
+    /// description), and at a narrow one with its head scrolled off the top.
+    private static let wideBody = ["   cd /Users/probe/proj && swift build -c release && swift test --parallel --num-workers 4",
+                                   "   Build and test the package"]
+    private static let wide = dialog(proceed, ["Yes", noTell], body: wideBody)
+    private static let narrow = dialog(proceed, ["Yes", noTell], body: [
+        "   cd /Users/probe/proj && swift build -c release &&", "   swift test --parallel --num-workers 4",
+        "   Build and test the", "   package"])
+    private static let narrowOffTop = ["   swift test --parallel --num-workers 4", "   Build and test the", "   package", "",
+                                       " Do you want to proceed?", " ❯ 1. Yes", "   2. \(noTell)"].joined(separator: "\n")
+
+    func testSameIdentityIgnoresTheWrapAndAHeadOffTheTop() throws {
+        let w = try XCTUnwrap(AgentPrompt.parse(Self.wide)), n = try XCTUnwrap(AgentPrompt.parse(Self.narrow))
+        let off = try XCTUnwrap(AgentPrompt.parse(Self.narrowOffTop))
+        XCTAssertFalse(n.sameDialog(w), "#784: the rows compare literally")
+        XCTAssertTrue(n.sameIdentity(w))
+        XCTAssertTrue(w.sameIdentity(n))
+        XCTAssertFalse(off.topFound)
+        XCTAssertTrue(off.sameIdentity(w), "the head off the top: a suffix of the full one")
+        XCTAssertTrue(w.sameIdentity(off))
+        XCTAssertNotNil(n.allowYes, "a plain prompt: only the identity keeps it from a Yes")
+        for other in [Self.otherBash, Self.bash2, Self.dialog(Self.proceed, ["Yes", Self.noTell], body: [Self.wideBody[0]])] {
+            XCTAssertFalse(try XCTUnwrap(AgentPrompt.parse(other)).sameIdentity(w), other)
+        }
+        // The loop guard: the re-wrapped render of the prompt answered last is the human's.
+        let f = FakeIO(Self.narrow)
+        XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: w, answered: true, isOn: { true }), .human)
+        XCTAssertEqual(f.sends, [])
+    }
+
+    /// The loop guard leaves A to the human; A is drawn again at another width (the human attaches
+    /// or resizes): never answered, inside the loop window or past it.
+    @MainActor func testARewrappedLeftPromptIsNeverAnswered() {
+        let f = FakeIO(Self.wide), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"])
+        r.now += AgentIslandController.verifyDelay
+        fire(c, r)   // A back: the loop guard's, the human's
+        XCTAssertEqual(r.lastState, .blocked)
+        f.set(Self.narrow)
+        printed(c, r, 2)
+        XCTAssertEqual(f.sends, ["1"], "inside the loop window")
+        r.now += AgentIslandController.loopWindow
+        f.set(Self.wide)
+        printed(c, r, 3)
+        f.set(Self.narrowOffTop)
+        printed(c, r, 4)
+        f.set(Self.narrow)
+        printed(c, r, 5)
+        XCTAssertEqual(f.sends, ["1"], "past it too")
+        XCTAssertEqual(r.lastState, .blocked)
+    }
+
+    /// A prompt left by the #475 rule (the screen re-rendered between the two reads), re-wrapped:
+    /// never answered.
+    @MainActor func testARewrappedPromptLeftByTheChangedScreenRuleIsNeverAnswered() {
+        let f = FakeIO(Self.wide, Self.narrow), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(f.sends, [], "#475: changed between the reads")
+        XCTAssertEqual(r.lastState, .blocked)
+        r.now += AgentIslandController.loopWindow
+        for a in 2...4 { printed(c, r, TimeInterval(a)) }
+        XCTAssertEqual(f.sends, [])
+        XCTAssertEqual(f.reads, 5, "the check's two reads, then one per print")
+    }
+
+    /// A different prompt, re-wrapped, replacing the one left to the human: still checked, gets Yes.
+    @MainActor func testADifferentRewrappedPromptIsStillAnswered() {
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        f.set(Self.narrow)
+        printed(c, r, 2)
+        XCTAssertEqual(f.sends, ["1"])
+    }
+
+    /// QA #620 INFO-2: with the dch gate on, a re-wrapped left prompt forks only its --read: no
+    /// --config, no stand-down, Needs input stays out.
+    @MainActor func testARewrappedLeftPromptForksOnlyTheRead() {
+        let f = FakeIO(Self.wide), (c, r) = controller(f), d = FakeDch(c)
+        list(c, row(.blocked))
+        drain(c)
+        fire(c, r)   // no answer from dch: the human's
+        r.now += AgentPollGate.floor
+        list(c, row(.blocked, activity: 2))
+        drain(c)     // learns A
+        for (n, screen) in [Self.narrow, Self.wide, Self.narrowOffTop].enumerated() {
+            f.set(screen)
+            r.now += AgentPollGate.floor
+            list(c, row(.blocked, activity: TimeInterval(3 + n)))
+            drain(c)
+            drain(c)
+        }
+        XCTAssertEqual(f.reads, 4, "one --read per print")
+        XCTAssertEqual(d.calls, [["--build"], ["--config"]], "the first check's only")
+        XCTAssertTrue(r.timers.isEmpty, "no stand-down")
+        XCTAssertEqual(c.published(c.store?.sessions ?? []).map(\.state), [.blocked])
+        XCTAssertEqual(f.sends, [])
+    }
+
+    // MARK: - QA #620 INFO-1: a human click is never dropped or overridden
+
+    /// Plan approval left to the human, expanded, its card read (the check's read, then the card's).
+    @MainActor private func leftWithItsCard(_ f: FakeIO) -> (AgentIslandController, Rec) {
+        let (c, r) = controller(f)
+        c.store?.expanded = true
+        tick(c, .blocked)
+        c.refreshCards()
+        drain(c)
+        drain(c)
+        XCTAssertEqual(r.lastState, .blocked)
+        return (c, r)
+    }
+
+    /// The human clicks No on the replacing prompt B's card before B's re-read runs, and the
+    /// screen still shows B (the redraw is slow): No goes out, "1" never does.
+    @MainActor func testAClickOnAReplacingPromptWinsOverItsRecheck() throws {
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
+        f.set(Self.bash2)
+        tick(c, .blocked, activity: 2)   // inside the floor: the re-read waits on its timer
+        c.refreshCards()                 // B's card is read meanwhile
+        drain(c)
+        let b = try XCTUnwrap(AgentPrompt.parse(Self.bash2))
+        XCTAssertEqual(c.store?.cards[key], .prompt(b), "B's card is up")
+        c.answer(session(.blocked, activity: 2), b, b.options[1])   // No
+        drain(c)
+        XCTAssertEqual(f.sends, ["2"])
+        r.now += AgentPollGate.floor
+        fire(c, r)   // the timer
+        drain(c)
+        tick(c, .blocked, activity: 3)   // the screen still shows B
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, ["2"], "the human's No only")
+    }
+
+    /// The same click while B's re-read is held: the click waits its turn on the queue, the
+    /// re-read is dropped, and only No goes out.
+    @MainActor func testAClickDuringAHeldRereadWins() throws {
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
+        let hold = DispatchSemaphore(value: 0)
+        f.lock.withLock { f.gate = hold }
+        f.set(Self.bash2)
+        r.now += AgentPollGate.floor
+        tick(c, .blocked, activity: 2)   // the re-read, held
+        let b = try XCTUnwrap(AgentPrompt.parse(Self.bash2))
+        c.answer(session(.blocked, activity: 2), b, b.options[1])
+        hold.signal()
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, ["2"])
+    }
+
+    /// B's own check holds the row with no card, so no click can be dropped under it: a card drawn
+    /// before goes, and a card read in flight when the check starts is never shown.
+    @MainActor func testNoCardWhileTheRecheckHoldsTheRow() throws {
+        // Drawn before (the re-read waited on the floor timer).
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
+        f.set(Self.bash2)
+        tick(c, .blocked, activity: 2)
+        c.refreshCards()
+        drain(c)
+        XCTAssertEqual(c.store?.cards[key], .prompt(try XCTUnwrap(AgentPrompt.parse(Self.bash2))))
+        r.now += AgentPollGate.floor
+        fire(c, r)   // the re-read: B, a plain prompt: its check answers
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"])
+        XCTAssertNil(c.store?.cards[key], "taken down when the check started")
+        // A card read queued behind the re-read (apply's order) lands after the check started.
+        let g = FakeIO(Self.neverAnswered[0].1), (d, s) = leftWithItsCard(g)
+        g.set(Self.bash2)
+        s.now += AgentPollGate.floor
+        tick(d, .blocked, activity: 2)   // the re-read
+        d.refreshCards()                 // then the card read
+        drain(d)
+        drain(d)
+        XCTAssertEqual(g.sends, ["1"])
+        XCTAssertNil(d.store?.cards[key], "the card read in flight is dropped")
     }
 
     /// The countdown ticking under a prompt left to the human is that prompt: one read per

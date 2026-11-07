@@ -574,7 +574,7 @@ extension AgentPrompt {
         return .sent
     }
 
-    /// #784: the identity `answer` and the Always allow loop guard compare: the
+    /// #784: the identity `answer` compares (the loop guard: `sameIdentity`, #791): the
     /// whole prompt, except the M:SS of Claude Code's auto-block countdown ("⚠
     /// Claude Code will automatically block this request in 1:35, to avoid
     /// holding up an unattended session"), which ticks every second between two
@@ -583,6 +583,22 @@ extension AgentPrompt {
     /// line breaks too, still compares literally.
     func sameDialog(_ other: AgentPrompt) -> Bool {
         Self.maskingCountdown(self) == Self.maskingCountdown(other)
+    }
+
+    /// #791 (QA #620 F1): the identity a prompt left to the human and the loop guard compare:
+    /// sameDialog's countdown mask, then every character in order with all whitespace removed, so the
+    /// same prompt re-wrapped at another pty width (an attach, a resize) is still that prompt; a
+    /// head scrolled off the top (topFound false) matches as a suffix of the full one. Looser than
+    /// sameDialog, so it only keeps more prompts with the human; answer()'s #475 re-read stays literal.
+    func sameIdentity(_ other: AgentPrompt) -> Bool {
+        let a = Self.identity(self), b = Self.identity(other)
+        return a == b || (!topFound && b.hasSuffix(a)) || (!other.topFound && a.hasSuffix(b))
+    }
+
+    private static func identity(_ p: AgentPrompt) -> String {
+        let m = maskingCountdown(p)
+        let options = m.options.flatMap { o in ["\(o.digit).", o.label, o.hint.map { "(\($0))" } ?? ""] + o.detail }
+        return (m.context + [m.question] + options + m.preview + m.notes).joined().filter { !$0.isWhitespace }
     }
 
     private static let countdown: NSRegularExpression = {
@@ -686,7 +702,7 @@ extension AgentPrompt {
             return answered && goneStates.contains(io.status(key).trimmingCharacters(in: .whitespacesAndNewlines))
                 ? .gone : .human
         }
-        guard notAgain.map({ !p.sameDialog($0) }) ?? true, let yes = p.allowYes,
+        guard notAgain.map({ !p.sameIdentity($0) }) ?? true, let yes = p.allowYes,
               answer(key, digit: yes.digit, expected: p, io: io, card: false, stillOn: isOn) == .sent else { return .human }
         return .allowed(p)
     }

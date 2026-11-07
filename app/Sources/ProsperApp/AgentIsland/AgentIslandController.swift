@@ -1024,6 +1024,9 @@ final class AgentIslandController {
     func answer(_ s: AgentSession, _ p: AgentPrompt, _ o: AgentPromptOption) {
         guard let store, inFlight.insert(s.key).inserted else { return }
         store.cards[s.key] = nil
+        // QA #620 INFO-1: the prompt a human clicks is the human's: a re-read still seeing it (or one
+        // in flight) never checks it, and the next prompt is a fresh check.
+        if case .human = autoAllow[s.key] { autoAllow[s.key] = .human(left: p, seen: activity(s.key), at: now()) }
         let key = s.key, gen = bump(key), io = io
         layout()
         queue.async { [weak self] in
@@ -1135,15 +1138,16 @@ final class AgentIslandController {
         }
     }
 
-    /// The re-read, on main. The prompt left to the human stays the human's (its countdown ticking
-    /// is the same prompt: sameDialog), as does no prompt, and any prompt while none was read before
+    /// The re-read, on main. The prompt left to the human stays the human's (its countdown ticking,
+    /// or the same prompt re-wrapped at another width: sameIdentity, QA #620 F1), as does no prompt,
+    /// and any prompt while none was read before
     /// (left by a stand-down or a click): fail safe, nothing more is forked. A different prompt gets
     /// the full check on this screen (gate, #790 refusals, loop guard, the #475 re-read).
     private func reread(_ key: AgentSessionKey, _ was: AutoAllowState?, _ screen: String, _ act: TimeInterval, _ t: Date) {
         rereading.remove(key)
         guard autoAllow[key] == was, case .human(let left, _, _) = was, !inFlight.contains(key) else { return }
         let p = AgentPrompt.parse(screen)
-        guard let p, let left, !p.sameDialog(left) else {
+        guard let p, let left, !p.sameIdentity(left) else {
             autoAllow[key] = .human(left: left ?? p, seen: act, at: t)
             return recheckHuman()   // printed again meanwhile
         }
@@ -1189,6 +1193,11 @@ final class AgentIslandController {
         }
         autoAllow[key] = .checking
         checks[key] = false
+        // QA #620 INFO-1: no card, and no click, while the check holds the row: one drawn for a
+        // replacing prompt goes, a card read in flight is dropped; refreshCards reads it again after.
+        store?.cards[key] = nil
+        readAt[key] = nil
+        _ = bump(key)
         let io = io, t = now(), isOn = autoAllowOn, act = screen?.act ?? activity(key), retry = Self.dchBuildRetry
         let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
         // #792: a fresh blocked stretch only; the re-read after Prosper's own answer stays Prosper's.
