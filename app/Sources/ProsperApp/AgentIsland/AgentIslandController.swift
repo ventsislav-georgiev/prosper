@@ -1026,7 +1026,13 @@ final class AgentIslandController {
         store.cards[s.key] = nil
         // QA #620 INFO-1: the prompt a human clicks is the human's: a re-read still seeing it (or one
         // in flight) never checks it, and the next prompt is a fresh check.
-        if case .human = autoAllow[s.key] { autoAllow[s.key] = .human(left: p, seen: activity(s.key), at: now()) }
+        // QA #620 INFO-2: from any state: a pending verify (.answered) or stand-down (.dch) timer
+        // finds its state gone and does nothing, so it never types "1" after the human's answer;
+        // the dropped hold goes out as Needs input now (what that timer did on finding the click).
+        if let was = autoAllow[s.key] {
+            autoAllow[s.key] = .human(left: p, seen: activity(s.key), at: now())
+            if case .human = was {} else { publish() }
+        }
         let key = s.key, gen = bump(key), io = io
         layout()
         queue.async { [weak self] in

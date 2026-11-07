@@ -1644,6 +1644,52 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertNil(d.store?.cards[key], "the card read in flight is dropped")
     }
 
+    /// QA #620 INFO-2: Always allow answered A; a queued B prints inside the verify window, its
+    /// card is drawn and the human clicks No. The screen still shows B (slow redraw) when the
+    /// verify timer fires: the timer is dropped, "1" is never typed after the human's No.
+    @MainActor func testAClickInsideTheVerifyWindowIsTheHumans() throws {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f)
+        c.store?.expanded = true
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"], "A answered")
+        XCTAssertEqual(r.timers.count, 1, "the verify is armed")
+        f.set(Self.bash2)
+        tick(c, .blocked, activity: 2)
+        c.refreshCards()
+        drain(c)
+        let b = try XCTUnwrap(AgentPrompt.parse(Self.bash2))
+        XCTAssertEqual(c.store?.cards[key], .prompt(b), "B's card is up")
+        c.answer(session(.blocked, activity: 2), b, b.options[1])   // No
+        drain(c)
+        XCTAssertEqual(f.sends, ["1", "2"])
+        r.now += AgentIslandController.verifyDelay
+        fire(c, r)   // the verify timer: B still on screen
+        drain(c)
+        XCTAssertEqual(f.sends, ["1", "2"], "the human's No stands")
+        XCTAssertEqual(c.published(c.store?.sessions ?? []).first?.state, .blocked, "the human's row")
+    }
+
+    /// QA #620 INFO-1: B's card was read for this activity before its check took the row down;
+    /// the check leaves B to the human, and the card is read again and shown.
+    @MainActor func testAHeldCheckLeftToTheHumanShowsTheCardAgain() throws {
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
+        let trust = Self.neverAnswered[1].1
+        f.set(trust)
+        tick(c, .blocked, activity: 2)   // inside the floor: the re-read waits on its timer
+        c.refreshCards()                 // B's card is read for activity 2
+        drain(c)
+        let b = try XCTUnwrap(AgentPrompt.parse(trust))
+        XCTAssertEqual(c.store?.cards[key], .prompt(b))
+        r.now += AgentPollGate.floor
+        fire(c, r)   // the re-read: a different prompt, checked, left to the human
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, [])
+        XCTAssertEqual(r.lastState, .blocked)
+        XCTAssertEqual(c.store?.cards[key], .prompt(b), "the card is back")
+    }
+
     /// The countdown ticking under a prompt left to the human is that prompt: one read per
     /// print, no check (no gate fork, no second read, no send).
     @MainActor func testACountdownTickIsNotADifferentPrompt() {

@@ -28,6 +28,8 @@ tag from the now-released section and put it on the new top draft.
 - Always allow now checks a prompt that replaces one it left to you while the session is
   still waiting, such as the next of several queued subagent prompts. The prompt left to
   you is never answered. (#791)
+- A prompt you answer yourself while Always allow is still confirming its own answer to the
+  one before stays yours: Always allow no longer types "1" after your choice. (#794)
 
 ## v2.173.0
 
