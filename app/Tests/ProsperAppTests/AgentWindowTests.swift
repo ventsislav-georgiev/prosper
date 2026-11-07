@@ -151,6 +151,40 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertEqual(a.blocks[1].children.count, 1)
     }
 
+    // QA #621 F4: model text links open http/https only.
+    func testMarkdownLinksKeepOnlyHttpAndHttps() throws {
+        let a = try XCTUnwrap(transcriptMarkdown(
+            "[a](https://a.test/x) [b](http://b.test) [c](prosper://sleep) [d](file:///tmp/x.command) "
+            + "[e](javascript:alert(1)) [f](mailto:f@example.com) <prosper://sleep> ![g](file:///tmp/g.png)"))
+        XCTAssertEqual(a.runs.compactMap { $0.link?.absoluteString }, ["https://a.test/x", "http://b.test"])
+        XCTAssertTrue(a.runs.allSatisfy { $0.imageURL == nil })
+        let plain = String(a.characters)
+        for t in ["a", "b", "c", "d", "e", "f"] { XCTAssertTrue(plain.contains(t), "\(t) stays as text: \(plain)") }
+    }
+
+    // QA #621 INFO-2: "Show all" on the text of a [thinking, text] line expands the text.
+    func testExpandReturnsTheClipItWasCutFrom() throws {
+        let think = String(repeating: "t", count: 7000), say = String(repeating: "s", count: 7000)
+        let d = line(assistant([["type": "thinking", "thinking": think], ["type": "text", "text": say]]))
+        let e = TranscriptDecoder.decode(line: d, source: 0..<UInt64(d.count))
+        let clips = e.items.compactMap { item -> Clip? in
+            switch item {
+            case .block(.assistant(let c), _), .block(.thinking(let c), _): c
+            default: nil
+            }
+        }
+        XCTAssertEqual(clips.count, 2)
+        XCTAssertTrue(clips.allSatisfy(\.capped))
+        XCTAssertEqual(clips.map { TranscriptDecoder.fullText(line: d, clip: $0) }, [think, say])
+    }
+
+    // QA #621 INFO-6: a startLine near Int.max does not trap.
+    func testAReadRangeThatWouldOverflowIsSkipped() {
+        let (body, _) = ToolRenderer.render(name: "Read", input: ["file_path": "/x"], result: ToolResultInfo(
+            text: Clip("", cap: 1), isError: false, extra: ["file": ["startLine": Int.max, "numLines": 5]]))
+        XCTAssertEqual(body, .read(path: "/x", detail: nil))
+    }
+
     func testUnknownKeysAndNumbersOfTheWrongTypeAreIgnored() {
         let a = assemble([entry("system", ["subtype": "compact_boundary", "extra": ["x": 1],
                                            "compactMetadata": ["trigger": 7, "preTokens": "many"]])])
@@ -358,6 +392,22 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertEqual(m.mode, .terminalFirst("No transcript matched this session"))
     }
 
+    // QA #621 F3: another session's row with no path never shows the old transcript.
+    @MainActor
+    func testAnotherSessionWithNoPathDropsThePreviousTranscript() throws {
+        let url = tempDir().appendingPathComponent("k.jsonl")
+        try write(url, [assistant([["type": "text", "text": "a"]])])
+        let m = model(url.path)
+        m.start()
+        defer { m.stop() }
+        XCTAssertEqual(m.blocks.count, 1)
+        m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "other"), dchVersion: "1.30.0",
+                                       dchState: "working", sessionId: nil, transcriptPath: nil))
+        XCTAssertTrue(m.blocks.isEmpty)
+        XCTAssertNil(m.tail, "the old file is no longer polled")
+        XCTAssertEqual(m.mode, .terminalFirst("No transcript matched this session"))
+    }
+
     @MainActor
     func testARotatedIdFollowsTheNewFileAndCompactionStaysInTheSameView() throws {
         let dir = tempDir()
@@ -444,7 +494,8 @@ final class AgentWindowTests: XCTestCase {
         while m.olderAvailable && guardN < 100 { m.loadEarlier(); guardN += 1 }
         XCTAssertEqual(m.blocks.count, 200)
         XCTAssertFalse(m.blocks.contains(where: \.failed))
-        XCTAssertEqual(m.blocks.map(\.id), m.blocks.map(\.id).sorted())
+        let ids = m.blocks.map(\.id)
+        XCTAssertTrue(zip(ids, ids.dropFirst()).allSatisfy(<), "ids strictly increase: \(ids)")
         guard case .assistant(let c) = m.blocks[0].body else { return XCTFail() }
         XCTAssertTrue(c.text.hasPrefix("message number 0 "))
     }
@@ -459,6 +510,117 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertEqual(later.blocks.count, 1)
         guard case .bash("ls", _, let out?, _) = later.blocks[0].body else { return XCTFail("\(later.blocks)") }
         XCTAssertEqual(out.text, "out")
+    }
+
+    // QA #621 F1: a line longer than a page at the page edge.
+    @MainActor
+    func testALineLongerThanAPageNeverStallsPagingOrOpensEmpty() throws {
+        let dir = tempDir()
+        let big = String(repeating: "b", count: 10_000)
+        func open(_ url: URL) -> AgentTranscriptModel {
+            let m = AgentTranscriptModel()
+            m.makeWatch = { _, _ in NSObject() }
+            m.tickInterval = 3600
+            m.pageBytes = 4096
+            m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0",
+                                           dchState: "idle", sessionId: "s", transcriptPath: url.path))
+            m.start()
+            return m
+        }
+        let mid = dir.appendingPathComponent("mid.jsonl")
+        try write(mid, [assistant([["type": "text", "text": "A"]]), assistant([["type": "text", "text": big]]),
+                        assistant([["type": "text", "text": "C"]])])
+        let m = open(mid)
+        defer { m.stop() }
+        XCTAssertEqual(texts(m), ["C"])
+        m.loadEarlier()
+        XCTAssertEqual(texts(m).map { String($0.prefix(1)) }, ["b", "C"], "the long line pages in whole")
+        XCTAssertFalse(m.blocks.contains(where: \.failed))
+        m.loadEarlier()
+        XCTAssertEqual(texts(m).map { String($0.prefix(1)) }, ["A", "b", "C"])
+        XCTAssertFalse(m.olderAvailable)
+
+        let last = dir.appendingPathComponent("last.jsonl")
+        try write(last, [assistant([["type": "text", "text": "A"]]), assistant([["type": "text", "text": big]])])
+        let n = open(last)
+        defer { n.stop() }
+        XCTAssertEqual(texts(n).map { String($0.prefix(1)) }, ["b"], "a long last line still opens")
+        n.loadEarlier()
+        XCTAssertEqual(texts(n).map { String($0.prefix(1)) }, ["A", "b"])
+    }
+
+    // QA #621 F1 + INFO-3: past maxLine the paged line is a counted "too large" block.
+    func testALinePastTheBoundPagesInAsTooLarge() throws {
+        let url = tempDir().appendingPathComponent("o.jsonl")
+        try write(url, [assistant([["type": "text", "text": "A"]]),
+                        assistant([["type": "text", "text": String(repeating: "b", count: 1000)]]),
+                        assistant([["type": "text", "text": "C"]])])
+        var t = TranscriptTail(path: url.path, pageBytes: 64)
+        t.maxLine = 256
+        guard case .lines(let live, _) = t.poll() else { return XCTFail() }
+        XCTAssertEqual(live.count, 1)
+        let back = t.previousPage()
+        guard back.count == 1, case .oversized = back[0] else { return XCTFail("\(back)") }
+        guard case .block(.failed(let why, nil), .generic) = TranscriptDecoder.decode(back[0]).items.first else { return XCTFail() }
+        XCTAssertTrue(why.hasPrefix("Entry too large to show"), why)
+        guard case .line(let d, _) = t.previousPage().first else { return XCTFail() }
+        XCTAssertEqual(texts(TranscriptDecoder.decode(line: d)), ["A"])
+        XCTAssertEqual(t.earliestLoaded, 0)
+    }
+
+    func texts(_ e: DecodedEntry) -> [String] {
+        e.items.compactMap { if case .block(.assistant(let c), _) = $0 { c.text } else { nil } }
+    }
+
+    // QA #621 F2 (+ INFO-5): three pages, the pair split across the 2nd boundary.
+    func testPagingPairsAcrossEveryBoundaryAndIdsNeverCollide() {
+        func asm(_ es: [[String: Any]]) -> TranscriptAssembler {
+            var a = TranscriptAssembler()
+            for e in es { a.add(TranscriptDecoder.decode(line: line(e)), source: nil) }
+            return a
+        }
+        var live = asm([assistant([["type": "text", "text": "side"]], ["isSidechain": true, "agentId": "ag"]),
+                        assistant([["type": "text", "text": "last"]])])
+        live.prepend(asm([toolResult("t1", "out", extra: ["stdout": "out"]), assistant([["type": "text", "text": "mid"]])]))
+        live.prepend(asm([toolUse("t1", "Bash", ["command": "ls"])]))
+        XCTAssertEqual(live.blocks.count, 4, "the result card folded into its call: \(live.blocks.map(\.body))")
+        guard case .bash("ls", _, let out?, _) = live.blocks[0].body else { return XCTFail("\(live.blocks[0].body)") }
+        XCTAssertEqual(out.text, "out")
+        let top = live.blocks.map(\.id)
+        XCTAssertTrue(zip(top, top.dropFirst()).allSatisfy(<), "\(top)")
+        let all = live.blocks.flatMap { [$0.id] + $0.children.map(\.id) }
+        XCTAssertEqual(Set(all).count, all.count, "no id shared across levels: \(all)")
+    }
+
+    // QA #621 INFO-7: a quiet subagent is a running tool, not a stale file.
+    func testAnOpenSubagentAsTheLastBlockCountsAsAPendingTool() {
+        var a = TranscriptAssembler()
+        a.add(TranscriptDecoder.decode(line: line(toolUse("a1", "Agent", ["description": "Audit"]))), source: nil)
+        a.add(TranscriptDecoder.decode(line: line(assistant([["type": "text", "text": "step"]],
+                                                            ["isSidechain": true, "agentId": "ag"]))), source: nil)
+        XCTAssertTrue(a.toolPending, "the Agent call is open and its thread is last")
+        a.add(TranscriptDecoder.decode(line: line(toolResult("a1", "done", extra: ["agentId": "ag"]))), source: nil)
+        XCTAssertFalse(a.toolPending)
+    }
+
+    @MainActor
+    func testAtTheBlockCapOlderHistoryIsInTheTerminal() throws {
+        let url = tempDir().appendingPathComponent("cap.jsonl")
+        try write(url, (0..<200).map { assistant([["type": "text", "text": "message \($0) " + String(repeating: "x", count: 40)]]) })
+        let m = AgentTranscriptModel()
+        m.makeWatch = { _, _ in NSObject() }
+        m.tickInterval = 3600
+        m.pageBytes = 4096
+        m.maxBlocks = 5
+        m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0", dchState: "idle",
+                                       sessionId: "s", transcriptPath: url.path))
+        m.start()
+        defer { m.stop() }
+        XCTAssertTrue(m.olderAvailable)
+        XCTAssertTrue(m.atHistoryCap)
+        let before = m.blocks.map(\.id)
+        m.loadEarlier()
+        XCTAssertEqual(m.blocks.map(\.id), before)
     }
 
     func testMemoryIsBoundedPerSessionAndDroppedBlocksStayCounted() {

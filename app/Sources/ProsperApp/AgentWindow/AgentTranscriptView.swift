@@ -32,7 +32,9 @@ struct AgentTranscriptView: View {
     }
 
     @ViewBuilder private var rows: some View {
-        if model.olderAvailable {
+        if model.olderAvailable && model.atHistoryCap {
+            Text("Older history is in the terminal").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
+        } else if model.olderAvailable {
             Button { model.loadEarlier() } label: {
                 Label("Load earlier", systemImage: "arrow.up").font(Neon.font(11, weight: .medium))
             }
@@ -42,7 +44,7 @@ struct AgentTranscriptView: View {
             TranscriptBlockView(block: b, expand: { model.fullText($0) })
         }
         if model.hiddenCount > 0 {
-            Text("\(model.hiddenCount) internal entries hidden")
+            Text(plural(model.hiddenCount, "internal entry", "internal entries") + " hidden")
                 .font(Neon.font(10)).foregroundStyle(Neon.textSecondary.opacity(0.7))
         }
     }
@@ -158,7 +160,7 @@ struct TranscriptBlockView: View {
                 .clipShape(RoundedRectangle(cornerRadius: sz(4)))
                 let hidden = more + (expanded ? 0 : max(0, lines.count - 12))
                 if hidden > 0 {
-                    Text("\(hidden) more lines").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
+                    Text(plural(hidden, "more line")).font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
                 }
             }
         case .read(let path, let detail):
@@ -207,7 +209,7 @@ struct TranscriptBlockView: View {
             VStack(alignment: .leading, spacing: sz(8)) {
                 ToolHeader(icon: "person.2", title: "Subagent", detail: title == "Subagent" ? nil : title)
                 if block.droppedChildren > 0 {
-                    Text("\(block.droppedChildren) earlier steps not shown").font(Neon.font(10))
+                    Text(plural(block.droppedChildren, "earlier step") + " not shown").font(Neon.font(10))
                         .foregroundStyle(Neon.textSecondary)
                 }
                 ForEach(block.children) { c in
@@ -257,7 +259,25 @@ struct TranscriptBlockView: View {
 
 // MARK: - Pieces
 
-private func plural(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
+private func plural(_ n: Int, _ word: String, _ many: String? = nil) -> String {
+    "\(n) \(n == 1 ? word : many ?? word + "s")"
+}
+
+/// Inline Markdown for model text, with links only for http/https. Model output is
+/// untrusted: any other scheme (prosper://sleep, file://, javascript:, mailto:, other
+/// apps' schemes) is reduced to plain text, so it is neither drawn as a link nor clickable.
+func transcriptMarkdown(_ s: String) -> AttributedString? {
+    guard var a = try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+    else { return nil }
+    let unsafe = a.runs.filter { r in
+        r.imageURL != nil || r.link.map { !["http", "https"].contains($0.scheme?.lowercased() ?? "") } == true
+    }.map(\.range)
+    for r in unsafe {
+        a[r].link = nil
+        a[r].imageURL = nil
+    }
+    return a
+}
 
 private struct Card<Content: View>: View {
     let error: Bool
@@ -367,8 +387,7 @@ private struct ClipText: View {
     }
 
     private func text(_ s: String) -> Text {
-        guard markdown, let a = try? AttributedString(
-            markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) else { return Text(s) }
+        guard markdown, let a = transcriptMarkdown(s) else { return Text(s) }
         return Text(a)
     }
 }

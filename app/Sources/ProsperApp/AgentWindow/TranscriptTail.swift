@@ -11,22 +11,21 @@ struct LineBuffer {
     enum Line: Equatable {
         case line(Data, Range<UInt64>)
         case oversized(Range<UInt64>)
+
+        var range: Range<UInt64> {
+            switch self { case .line(_, let r), .oversized(let r): r }
+        }
     }
 
     var maxLine = 16 << 20
     private var pending = Data()
     private var start: UInt64 = 0
     private var skipping = false
-    /// Mid-line start (paging): drop bytes up to the first newline silently.
-    private var discarding = false
-    /// File offset where the first whole line began; nil until known.
-    private(set) var firstLineStart: UInt64?
 
-    init(at offset: UInt64 = 0, discardFirst: Bool = false, maxLine: Int = 16 << 20) {
+    /// `offset` must be a line start: callers find one first (TranscriptTail.pageStart).
+    init(at offset: UInt64 = 0, maxLine: Int = 16 << 20) {
         self.maxLine = maxLine
         start = offset
-        discarding = discardFirst
-        firstLineStart = discardFirst ? nil : offset
     }
 
     mutating func feed(_ d: Data, at offset: UInt64) -> [Line] {
@@ -35,7 +34,7 @@ struct LineBuffer {
         var pos = offset
         while i < d.endIndex {
             guard let nl = d[i...].firstIndex(of: 0x0A) else {
-                if !discarding && !skipping {
+                if !skipping {
                     pending.append(d[i...])
                     if pending.count > maxLine { pending = Data(); skipping = true }
                 }
@@ -43,10 +42,7 @@ struct LineBuffer {
                 break
             }
             let end = pos + UInt64(nl - i)
-            if discarding {
-                discarding = false
-                firstLineStart = end + 1
-            } else if skipping {
+            if skipping {
                 out.append(.oversized(start..<end))
                 skipping = false
             } else {
@@ -84,8 +80,8 @@ struct TranscriptTail {
     private(set) var offset: UInt64 = 0
     private(set) var inode: UInt64?
     private var buffer = LineBuffer()
-    /// The first byte of the earliest line decoded so far; 0 = the whole file is in.
-    var earliest: UInt64 { buffer.firstLineStart ?? offset }
+    /// The line start the live tail opened at; 0 = the whole file is in.
+    private(set) var earliest: UInt64 = 0
     private var pagedEarliest: UInt64?
 
     init(path: String, pageBytes: UInt64 = 1 << 20) {
@@ -103,9 +99,14 @@ struct TranscriptTail {
             if ino != inode || size < offset { return .reopened }
         } else {
             inode = ino
-            let from = size > pageBytes ? size - pageBytes : 0
+            // Open on the last page, from a line start, with at least the last whole line in it
+            // (a line longer than the page is taken whole). `last` = where the trailing partial
+            // line starts, or `size` when the file ends with a newline.
+            var from: UInt64 = 0
+            if size > pageBytes, let last = lineStart(before: size), last > 0 { from = pageStart(end: last) ?? 0 }
             offset = from
-            buffer = LineBuffer(at: from, discardFirst: from > 0, maxLine: maxLine)
+            earliest = from
+            buffer = LineBuffer(at: from, maxLine: maxLine)
         }
         guard size > offset else { return .lines([], more: false) }
         let n = Int(min(size - offset, UInt64(chunkBytes)))
@@ -115,27 +116,46 @@ struct TranscriptTail {
         return .lines(lines, more: offset < size)
     }
 
-    /// The page before everything loaded so far: complete lines only.
+    /// The page before everything loaded so far: whole lines only, at least one
+    /// (a line longer than a page comes whole, or as `.oversized` past `maxLine`).
     mutating func previousPage() -> [LineBuffer.Line] {
         let end = earliestLoaded
-        guard end > 0 else { return [] }
-        var span = pageBytes
-        while true {
-            let lo = end > span ? end - span : 0
-            guard let data = read(lo..<end) else { return [] }
-            var b = LineBuffer(at: lo, discardFirst: lo > 0, maxLine: maxLine)
-            let lines = b.feed(data, at: lo)
-            if let first = b.firstLineStart {
-                pagedEarliest = first
-                return lines
-            }
-            // No newline in the span: one line longer than a page.
-            if span >= UInt64(maxLine) {
-                pagedEarliest = lo
-                return [.oversized(lo..<end)]
-            }
-            span *= 2
+        guard end > 0, let lo = pageStart(end: end) else { return [] }
+        var b = LineBuffer(at: lo, maxLine: maxLine)
+        var out: [LineBuffer.Line] = []
+        var at = lo
+        while at < end {
+            guard let d = read(at..<min(end, at + UInt64(chunkBytes))), !d.isEmpty else { return [] }
+            out += b.feed(d, at: at)
+            at += UInt64(d.count)
         }
+        pagedEarliest = lo
+        return out
+    }
+
+    /// The first line start at or after `end - pageBytes` and before `end`, where `end`
+    /// is a line start: [result, end) then holds at least one whole line. When the
+    /// line before `end` is longer than a page, its own start.
+    func pageStart(end: UInt64) -> UInt64? {
+        guard end > pageBytes else { return 0 }
+        let lo = end - pageBytes
+        guard let d = read(lo..<(end - 1)) else { return nil }
+        if let nl = d.firstIndex(of: 0x0A) { return lo + UInt64(nl - d.startIndex) + 1 }
+        return lineStart(before: lo)
+    }
+
+    /// The start of the line holding byte `pos - 1` (`pos` itself when that byte is a newline).
+    // ponytail: scans back through one long line unbounded (reads only, 64 KiB at a time);
+    // cap it at maxLine if a multi-GB single line ever shows up.
+    func lineStart(before pos: UInt64) -> UInt64? {
+        var hi = pos
+        while hi > 0 {
+            let lo = hi > 1 << 16 ? hi - (1 << 16) : 0
+            guard let d = read(lo..<hi) else { return nil }
+            if let nl = d.lastIndex(of: 0x0A) { return lo + UInt64(nl - d.startIndex) + 1 }
+            hi = lo
+        }
+        return 0
     }
 
     /// Bytes at `range`, read-only; nil when the file cannot be read.

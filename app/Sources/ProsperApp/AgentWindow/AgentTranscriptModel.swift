@@ -120,17 +120,25 @@ struct TranscriptAssembler {
         return a.counts().values.reduce(TierCounts(), +)
     }
 
-    /// The last tool call is still waiting for its result (a long Bash, a subagent):
-    /// a quiet file then is expected, not stale.
+    /// The last block still waits on a tool (a long Bash, a subagent at work): a quiet
+    /// file then is expected, not stale. A subagent counts while its Agent/Task call
+    /// is open or one of its own steps is.
     var toolPending: Bool {
-        guard let last = pendingOrder.last, let p = pending[last] else { return false }
-        return p.thread == nil && blocks.last?.id == p.block
+        guard let last = blocks.last else { return false }
+        let isThread = if case .thread = last.body { true } else { false }
+        return pending.values.contains { p in
+            if p.thread == nil && p.block == last.id { return true }
+            return isThread && (p.thread == last.id || (p.thread == nil && (p.name == "Agent" || p.name == "Task")))
+        }
     }
 
     /// Paging: put an earlier page's blocks in front, pairing its tool calls with
-    /// results that arrived here as orphans.
+    /// results that arrived here as orphans; the page's own orphans carry over for
+    /// the page before it.
     mutating func prepend(_ page: TranscriptAssembler) {
-        let shift = (blocks.first?.id ?? nextID) - page.nextID
+        // Below every id here, children included (a thread's first child takes its id before the thread).
+        let floor = blocks.first.map { min($0.id, $0.children.first?.id ?? $0.id) } ?? nextID
+        let shift = floor - page.nextID
         func renumber(_ b: TranscriptBlock) -> TranscriptBlock {
             var b = TranscriptBlock(id: b.id + shift, body: b.body, tier: b.tier, version: b.version,
                                     source: b.source, children: b.children, droppedChildren: b.droppedChildren)
@@ -153,6 +161,11 @@ struct TranscriptAssembler {
             remove(o.block, thread: o.thread)
         }
         blocks = front + blocks
+        for (id, o) in page.orphans where orphans[id] == nil {
+            orphans[id] = (o.block + shift, o.thread.map { $0 + shift }, o.result)
+        }
+        // ponytail: same arbitrary eviction as add(); only paging uses orphans.
+        while orphans.count > maxPending { orphans.remove(at: orphans.startIndex) }
         for (v, n) in page.hiddenCounts { hiddenCounts[v, default: 0] += n }
     }
 
@@ -295,6 +308,11 @@ final class AgentTranscriptModel: ObservableObject {
     func update(_ s: AgentTranscriptSource) {
         let old = source
         source = s
+        // Another session: never keep (or keep polling) the previous one's transcript.
+        if let old, old.key != s.key {
+            close()
+            nullSince = nil
+        }
         if !Self.dchSupportsMapping(s.dchVersion) {
             close()
         } else if let path = s.transcriptPath, !path.isEmpty, s.sessionId != nil {
@@ -362,15 +380,7 @@ final class AgentTranscriptModel: ObservableObject {
             case .lines(let lines, let m):
                 missing = false
                 if !lines.isEmpty { lastGrowth = now() }
-                for l in lines {
-                    switch l {
-                    case .line(let d, let r): assembler.add(TranscriptDecoder.decode(line: d, source: r), source: r)
-                    case .oversized(let r):
-                        assembler.add(DecodedEntry(items: [.block(.failed(
-                            reason: "Entry too large to show (\(ByteCountFormatter.string(fromByteCount: Int64(r.count), countStyle: .file)))",
-                            raw: nil), .generic)]), source: r)
-                    }
-                }
+                for l in lines { assembler.add(TranscriptDecoder.decode(l), source: l.range) }
                 more = m
                 break loop
             }
@@ -384,12 +394,10 @@ final class AgentTranscriptModel: ObservableObject {
     /// Rule 9 paging: decode the page before the earliest loaded line, while the
     /// per-session block bound has room.
     func loadEarlier() {
-        guard running, var t = tail, assembler.blocks.count < maxBlocks else { return }
+        guard running, var t = tail, !atHistoryCap else { return }
         var page = TranscriptAssembler()
         page.maxBlocks = maxBlocks
-        for l in t.previousPage() {
-            if case .line(let d, let r) = l { page.add(TranscriptDecoder.decode(line: d, source: r), source: r) }
-        }
+        for l in t.previousPage() { page.add(TranscriptDecoder.decode(l), source: l.range) }
         tail = t
         assembler.prepend(page)
         publish()
@@ -398,8 +406,11 @@ final class AgentTranscriptModel: ObservableObject {
     /// Lazy expand: the full text of a capped clip, re-read from its line.
     func fullText(_ c: Clip) -> String? {
         guard c.capped, let r = c.source, let d = tail?.read(r) else { return nil }
-        return TranscriptDecoder.fullText(line: d, toolID: c.toolID)
+        return TranscriptDecoder.fullText(line: d, clip: c)
     }
+
+    /// The block bound is full: older history stays in the terminal.
+    var atHistoryCap: Bool { assembler.blocks.count >= maxBlocks }
 
     // MARK: private
 
@@ -416,7 +427,9 @@ final class AgentTranscriptModel: ObservableObject {
     private func close() {
         tail = nil
         watch = nil
+        missing = false
         assembler = TranscriptAssembler()
+        assembler.maxBlocks = maxBlocks
         publish()
     }
 
@@ -482,7 +495,7 @@ enum TranscriptCanary {
         a.maxBlocks = 200
         var read: UInt64 = 0
         while read < maxBytes, case .lines(let lines, let more) = t.poll() {
-            for case .line(let d, let r) in lines { a.add(TranscriptDecoder.decode(line: d, source: r), source: r) }
+            for l in lines { a.add(TranscriptDecoder.decode(l), source: l.range) }
             read = t.offset
             if !more { break }
         }

@@ -184,6 +184,16 @@ enum TranscriptDecoder {
         "turn_duration", "stop_hook_summary", "scheduled_task_fire", "agents_killed",
     ]
 
+    /// One tail line; a line over the size bound becomes a counted "too large" block.
+    static func decode(_ l: LineBuffer.Line) -> DecodedEntry {
+        switch l {
+        case .line(let d, let r): return decode(line: d, source: r)
+        case .oversized(let r):
+            let size = ByteCountFormatter.string(fromByteCount: Int64(clamping: r.count), countStyle: .file)
+            return DecodedEntry(items: [.block(.failed(reason: "Entry too large to show (\(size))", raw: nil), .generic)])
+        }
+    }
+
     static func decode(line: Data, source: Range<UInt64>? = nil, cap: Int = textCap) -> DecodedEntry {
         guard let o = (try? JSONSerialization.jsonObject(with: line, options: [.fragmentsAllowed])) as? [String: Any] else {
             let raw = String(decoding: line.prefix(rawCap * 4), as: UTF8.self)
@@ -330,20 +340,21 @@ enum TranscriptDecoder {
         return t.isEmpty ? nil : t.joined(separator: "\n")
     }
 
-    /// Lazy expand: the full text a capped clip was cut from, re-read from its line.
-    static func fullText(line: Data, toolID: String?) -> String? {
+    /// Lazy expand: the full text `clip` was cut from, re-read from its line. A line can
+    /// carry several texts ([thinking, text]): the one the clip is a prefix of is it.
+    static func fullText(line: Data, clip: Clip) -> String? {
         let e = decode(line: line, cap: Int.max)
         for item in e.items {
+            let full: String
             switch item {
-            case .toolResult(let id, let r) where toolID != nil && id == toolID:
+            case .toolResult(let id, let r) where clip.toolID != nil && id == clip.toolID:
                 return ToolRenderer.outputText(r) ?? r.text.text
-            case .block(.user(let c), _) where toolID == nil, .block(.assistant(let c), _) where toolID == nil,
-                 .block(.thinking(let c), _) where toolID == nil:
-                return c.text
-            case .block(.compaction(_, _, let s?), _) where toolID == nil:
-                return s.text
+            case .block(.user(let c), _), .block(.assistant(let c), _), .block(.thinking(let c), _),
+                 .block(.compaction(_, _, let c?), _):
+                full = c.text
             default: continue
             }
+            if clip.toolID == nil, full.hasPrefix(clip.text) { return full }
         }
         return nil
     }
@@ -394,8 +405,9 @@ enum ToolRenderer {
             guard let path = K.str(input, "file_path"), !path.isBlank else { return nil }
             let file = K.obj(result?.extra as? [String: Any], "file")
             var detail: String?
-            if let start = K.int(file, "startLine"), let n = K.int(file, "numLines"), n > 0 {
-                detail = "lines \(start)–\(start + n - 1)" + (K.int(file, "totalLines").map { " of \($0)" } ?? "")
+            if let start = K.int(file, "startLine"), let n = K.int(file, "numLines"), n > 0,
+               case (let last, false) = start.addingReportingOverflow(n - 1) {
+                detail = "lines \(start)–\(last)" + (K.int(file, "totalLines").map { " of \($0)" } ?? "")
             } else if let off = K.int(input, "offset") {
                 detail = "from line \(off)" + (K.int(input, "limit").map { ", \($0) lines" } ?? "")
             }
