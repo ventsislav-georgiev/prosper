@@ -155,7 +155,8 @@ final class StatsHotPathBudgetTests: XCTestCase {
     /// exposes ~77) a few times per tick on the MAIN thread — it must stay a
     /// linear scan with no per-call string churn worth noticing. 10k picks over
     /// 77 sensors ≪ a frame.
-    func testHeadlineTemperatureBudget() {
+    func testHeadlineTemperatureBudget() throws {
+        try requireHeavyTests()
         var snap = StatsSnapshot()
         snap.temperatures = (0..<77).map { (i: Int) -> TempSensor in
             let name = i == 40 ? "PMU tcal" : "pACC MTR Temp Sensor\(i)"
