@@ -428,13 +428,13 @@ final class MenuBarTests: XCTestCase {
         XCTAssertNil(pick(nil, 150), "no identifier, no minX match")
     }
 
-    /// #192: beta polls every 10 minutes, stable every 4 hours.
+    /// #192: beta polls every 30 minutes (#766: 10 before), stable every 4 hours.
     @MainActor
     func testPollIntervalFollowsTheChannel() {
         let saved = Preferences.allowBetaUpdates
         defer { Preferences.allowBetaUpdates = saved }
         Preferences.allowBetaUpdates = true
-        XCTAssertEqual(AppUpdater.pollInterval, 600)
+        XCTAssertEqual(AppUpdater.pollInterval, 1800)
         Preferences.allowBetaUpdates = false
         XCTAssertEqual(AppUpdater.pollInterval, 4 * 3600)
     }
@@ -453,13 +453,13 @@ final class MenuBarTests: XCTestCase {
         func distance() -> TimeInterval? { updater.nextCheckDate?.timeIntervalSinceNow }
         updater.automaticChecks = true
         updater.allowBetaUpdates = true
-        XCTAssertEqual(distance() ?? -1, 600, accuracy: 5)
+        XCTAssertEqual(distance() ?? -1, 1800, accuracy: 5)
         updater.allowBetaUpdates = false
         XCTAssertEqual(distance() ?? -1, 4 * 3600, accuracy: 5, "channel toggle must restart polling")
         updater.automaticChecks = false
         XCTAssertNil(distance())
         updater.allowBetaUpdates = true
         updater.automaticChecks = true
-        XCTAssertEqual(distance() ?? -1, 600, accuracy: 5, "re-enabling checks must use the current channel")
+        XCTAssertEqual(distance() ?? -1, 1800, accuracy: 5, "re-enabling checks must use the current channel")
     }
 }

@@ -4,14 +4,18 @@
 //
 // The source is Agent Island's poller (AgentIslandController.onSessions): no dch
 // poll of its own, so nothing is posted while Agent Island is off. The full list
-// goes out on a change (coalesced over 2 s) and as the heartbeat, 60 s after the
-// last post. Offline goes out on sleep, quit, sign-out, toggle-off and when the
-// island stops. Posts only while signed in, activated and switched on; a 401/403
-// stops posting until the next activation (sign-in activates). A response to a post
-// sent before the last sign-out or activation is ignored (#532).
+// goes out on a change and as the heartbeat, 60 s after the last post. #766 (each post
+// can wake the phone): a blocked edge or the card start goes out in 2 s, any other change
+// in 25 s; the list is sorted by name, so a reorder is no change; the heartbeat stops once
+// nothing has been working or blocked for 12 min. Offline goes out on sleep, quit (not a Sparkle update
+// relaunch), sign-out, toggle-off and when the island stops. Posts only while signed in,
+// activated and switched on; a 401/403 stops posting until the next activation (sign-in
+// activates). A response to a post sent before the last sign-out or activation is
+// ignored (#532).
 
 import AppKit
 import os.log
+import Sparkle
 
 @MainActor
 final class LiveStatusPublisher {
@@ -32,8 +36,20 @@ final class LiveStatusPublisher {
         var offline: Bool?
     }
 
+    /// A blocked edge (a session entering or leaving blocked, the "needs you" latency) and the
+    /// card start (nothing active -> something working or blocked, once per activity period).
     static let debounce: TimeInterval = 2
+    /// #766 J6b: every other change (working <-> idle, done, alias, agents, a session
+    /// coming or going) waits this long, so a burst of them is one post and one phone wake.
+    static let calmDebounce: TimeInterval = 25
     static let heartbeat: TimeInterval = 60
+    /// #766 J5: once nothing is working or blocked, heartbeats go on this long and then
+    /// stop. The Worker ends an idle card at IDLE_END_S (600 s) + one cron minute, so it is
+    /// ended (online) before the missing heartbeat lapses the Mac (LAPSE_S 180 s after the
+    /// last one, which would end it as "Mac offline"). With no card left, a lapse is a D1 row.
+    static let idleTail: TimeInterval = 720
+    /// Sparkle posts this right before it installs and relaunches the app (#766 J7).
+    static let updateWillRelaunch = Notification.Name.SUUpdaterWillRestart
     nonisolated static let maxSessions = 20   // pushLogic MAX_SESSIONS
     nonisolated static let maxText = 64       // name and alias, in code points (pushLogic isText)
 
@@ -61,6 +77,8 @@ final class LiveStatusPublisher {
     var loadSeq: @MainActor () -> Int64 = { Preferences.liveStatusSeq }
     var saveSeq: @MainActor (Int64) -> Void = { Preferences.liveStatusSeq = $0 }
     var center = NSWorkspace.shared.notificationCenter
+    /// Where Sparkle posts updateWillRelaunch.
+    var appCenter = NotificationCenter.default
 
     // MARK: - State
 
@@ -80,6 +98,17 @@ final class LiveStatusPublisher {
     /// so a 401 sent before a sign-out cannot halt the next session (#532).
     private var generation = 0
     private var cancelDebounce: (() -> Void)?
+    /// When the pending change post fires; an earlier one (a blocked edge) replaces it.
+    private var debounceDue: Date?
+    /// The list last sent while live: blocked edges are measured against it.
+    private var posted: [Session]?
+    /// When the posted list stopped having anything working or blocked; nil while it does.
+    private var idleSince: Date?
+    /// #766 J5: the session token, read from SupporterStore (a file and a keychain read)
+    /// once, not per post. Dropped on sign-out, activation and a 401/403.
+    private var bearerCache: String?
+    /// Sparkle is relaunching the app into an update: the quit posts no offline.
+    private(set) var updateRelaunch = false
     private var cancelHeartbeat: (() -> Void)?
     private var observers: [NSObjectProtocol] = []
     private var loggedBadRequest = false
@@ -97,6 +126,9 @@ final class LiveStatusPublisher {
             center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.didWake() }
             },
+            appCenter.addObserver(forName: Self.updateWillRelaunch, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateRelaunch = true }
+            },
         ]
     }
 
@@ -107,10 +139,17 @@ final class LiveStatusPublisher {
         let wire = sessions.map(Self.wire)
         guard wire != latest else { return }   // an activity-only tick changes nothing here
         latest = wire
-        guard isLive, wire != nil else { refresh(); return }
-        if cancelDebounce == nil {
-            cancelDebounce = after(Self.debounce) { [weak self] in self?.postList() }
-        }
+        guard isLive, let wire else { refresh(); return }
+        // A blocked edge, or the card start (nothing working or blocked -> something is):
+        // 2 s. Everything else, the card going idle included: 25 s.
+        let urgent = Self.blocked(wire) != Self.blocked(posted ?? [])
+            || (Self.isActive(wire) && !Self.isActive(posted ?? []))
+        let delay = urgent ? Self.debounce : Self.calmDebounce
+        let due = now().addingTimeInterval(delay)
+        if let debounceDue, debounceDue <= due { return }   // an earlier post covers it
+        cancelDebounce?()
+        debounceDue = due
+        cancelDebounce = after(delay) { [weak self] in self?.postList() }
     }
 
     /// Re-check the gates (toggle, sign-in, activation): going live posts the full
@@ -124,6 +163,17 @@ final class LiveStatusPublisher {
             goQuiet()
             if let bearer = offlineBearer() { send(body(nil), bearer) }
         }
+    }
+
+    /// Quit (applicationWillTerminate): offline like a sleep, except when Sparkle is
+    /// relaunching into an update (#766 J7). The new process posts the list within
+    /// seconds, inside the Worker's 180 s lapse, so the phone's card just stays, where an
+    /// offline would end it and push-start a new one (two phone wakes per update). A
+    /// relaunch that never comes lapses the Mac after 180 s and ends the card then.
+    func quit() {
+        guard updateRelaunch else { pause(); return }
+        paused = true
+        goQuiet()
     }
 
     /// Sleep and quit: offline now, waited on; nothing more until wake.
@@ -145,6 +195,7 @@ final class LiveStatusPublisher {
     func signOut() -> Data? {
         halted = false   // the next sign-in starts clean
         generation += 1
+        defer { bearerCache = nil }   // after the offline body's check: the session goes next
         guard isLive else { return nil }
         goQuiet()
         return offlineBearer() == nil ? nil : body(nil)
@@ -153,6 +204,7 @@ final class LiveStatusPublisher {
     /// A successful POST /activate (every sign-in does one): a 401/403 stop lifts.
     func deviceActivated() {
         halted = false
+        bearerCache = nil
         generation += 1
         refresh()
     }
@@ -162,27 +214,40 @@ final class LiveStatusPublisher {
     /// The bearer when every gate is open, else nil.
     private func gatedBearer() -> String? {
         guard latest != nil, !paused, !halted, enabled(), isActivated() else { return nil }
-        return bearer()
+        return cachedBearer()
     }
 
     /// Offline only where the Worker would take it: not after a 401/403, not deactivated.
     private func offlineBearer() -> String? {
         guard !halted, isActivated() else { return nil }
-        return bearer()
+        return cachedBearer()
+    }
+
+    /// A missing token is not cached: signing in fills it.
+    private func cachedBearer() -> String? {
+        if bearerCache == nil { bearerCache = bearer() }
+        return bearerCache
     }
 
     private func goQuiet() {
         isLive = false
-        cancelDebounce?(); cancelDebounce = nil
+        cancelDebounce?(); cancelDebounce = nil; debounceDue = nil
         cancelHeartbeat?(); cancelHeartbeat = nil
+        posted = nil       // offline: the Worker holds no sessions for us any more
+        idleSince = nil
     }
 
     private func postList(_ checked: String? = nil) {
-        cancelDebounce?(); cancelDebounce = nil
+        cancelDebounce?(); cancelDebounce = nil; debounceDue = nil
         guard isLive, let latest else { return }
         guard let bearer = checked ?? gatedBearer() else { refresh(); return }   // a gate closed unseen
-        cancelHeartbeat?()
-        cancelHeartbeat = after(Self.heartbeat) { [weak self] in self?.postList() }
+        let t = now()
+        if Self.isActive(latest) { idleSince = nil } else if idleSince == nil { idleSince = t }
+        cancelHeartbeat?(); cancelHeartbeat = nil
+        if idleSince.map({ t.timeIntervalSince($0) < Self.idleTail }) ?? true {
+            cancelHeartbeat = after(Self.heartbeat) { [weak self] in self?.postList() }
+        }
+        posted = latest
         send(body(latest), bearer)
     }
 
@@ -199,6 +264,7 @@ final class LiveStatusPublisher {
         switch code {
         case 401, 403:
             halted = true
+            bearerCache = nil
             goQuiet()
         case 400, 413:   // a clock or a bug on our side: logged once, then treated like a 5xx
             if code == 400 {
@@ -242,8 +308,19 @@ final class LiveStatusPublisher {
 
     // MARK: - Wire list
 
+    /// The pushLogic isActive: something working or blocked (a card can be showing).
+    nonisolated static func isActive(_ list: [Session]) -> Bool {
+        list.contains { $0.state == "working" || $0.state == "blocked" }
+    }
+
+    nonisolated static func blocked(_ list: [Session]) -> Set<String> {
+        Set(list.lazy.filter { $0.state == "blocked" }.map(\.name))
+    }
+
     /// The island's (urgency-sorted) sessions as the Worker takes them: stripped,
-    /// cut to 64 code points, deduped by name, empty names dropped, at most 20.
+    /// cut to 64 code points, deduped by name, empty names dropped, at most 20 (the most
+    /// urgent), then sorted by name (#766 J6c): the island reorders by activity, and the
+    /// Worker sorts by itself, so a reorder must not look like a change.
     nonisolated static func wire(_ sessions: [AgentSession]) -> [Session] {
         var seen = Set<String>(), out: [Session] = []
         for s in sessions where out.count < maxSessions {
@@ -253,7 +330,7 @@ final class LiveStatusPublisher {
             out.append(Session(name: name, alias: alias.isEmpty ? nil : alias, state: s.state.wireName,
                                agents: s.agents > 0 ? min(s.agents, 999) : nil))
         }
-        return out
+        return out.sorted { $0.name < $1.name }
     }
 
     /// Strip the characters the Worker rejects, then keep the first 64 scalars. A

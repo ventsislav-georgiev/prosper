@@ -224,7 +224,7 @@ test("flow: start edge -> push-to-start; card token -> catch-up; blocked -> prio
   assert.equal(calls[0].headers["apns-priority"], "5");
   assert.equal(calls[0].body.aps.event, "start");
   assert.equal(calls[0].body.aps.timestamp, t.clock.now);
-  assert.equal(calls[0].body.aps["stale-date"], t.clock.now + 900);
+  assert.equal(calls[0].body.aps["stale-date"], t.clock.now + 3600);
   assert.deepEqual(calls[0].body.aps.attributes, { mac_id: MAC, mac_name: "Studio" });
   assert.deepEqual(calls[0].body.aps["content-state"].counts, { blocked: 0, working: 1, idle: 0, done: 0 });
 
@@ -336,30 +336,32 @@ test("offline post ends the cards at once", async () => {
   assert.equal(t.rows(`SELECT * FROM push_tokens`).length, 0);
 });
 
-test("cron: idle for 10 min ends the card now; a live card is re-pushed every 10 min", async () => {
+test("cron: idle for 10 min ends the card now; a live card is re-pushed every 50 min (#766)", async () => {
   const t = setup();
   await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
   await putToken(t.deps, ALICE, { device_id: PHONE, kind: "la_update", token: tok("3"), env: "production", activity_id: "act-1", mac_id: MAC });
   await t.settle();
   t.takeCalls();
   const beat = async (seq) => postSessions(t.deps, ALICE, { mac_id: MAC, seq });
-  t.clock.now += 590;
-  await beat(2);
-  await runCron(t.deps);
+  for (let s = 2; s <= 50; s++) {
+    t.clock.now += 59; // a heartbeat a minute, the cron after each: no re-push for 49 min
+    await beat(s);
+    await runCron(t.deps);
+  }
   assert.deepEqual(t.takeCalls(), []);
-  t.clock.now += 10;
+  t.clock.now += 3000 - 49 * 59;
   await runCron(t.deps);
   let calls = t.takeCalls();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].body.aps.event, "update");
   assert.equal(calls[0].headers["apns-priority"], "5");
-  assert.equal(calls[0].body.aps["stale-date"], t.clock.now + 900);
+  assert.equal(calls[0].body.aps["stale-date"], t.clock.now + 3600);
 
-  await postSessions(t.deps, ALICE, sessions(3, [S("a", "idle")]));
+  await postSessions(t.deps, ALICE, sessions(51, [S("a", "idle")]));
   await t.settle();
   t.takeCalls();
   const idleAt = t.clock.now;
-  for (let s = 4; t.clock.now < idleAt + 599; s++) {
+  for (let s = 52; t.clock.now < idleAt + 599; s++) {
     t.clock.now += 60;
     if (t.clock.now >= idleAt + 600) t.clock.now = idleAt + 599;
     await beat(s);

@@ -9,8 +9,10 @@ export const CUT = 40; // name/alias characters inside the content-state
 export const ALERT_LIMIT_S = 120; // one "needs you" alert per session per 120 s
 export const LAPSE_S = 180; // no heartbeat for this long = offline
 export const IDLE_END_S = 600; // nothing working/blocked this long ends the card
-export const REPUSH_S = 600; // re-push a live card whose last push is older
-export const STALE_S = 900; // stale-date = now + 15 min
+// #766: the re-push only moves the stale-date, and the Worker ends a card itself (lapse,
+// idle end), so the stale-date is a backstop for a dead cron: 1 phone wake an hour, not 6.
+export const REPUSH_S = 3000; // re-push a live card whose last push is older
+export const STALE_S = 3600; // stale-date = now + 1 h
 export const OFFLINE_DISMISS_S = 600; // an offline card stays 10 min, then goes
 export const START_GAP_S = 60; // no second push-to-start while the first is landing
 export const RATE_PER_MIN = 60; // POST /push/sessions per Mac per minute
@@ -221,6 +223,11 @@ export const emptyMac = () => ({
   blocked: [],
 });
 
+// #766: the card's content without the subagent counts, which move constantly in a busy
+// session. A count change alone wakes no phone; the next push (a real change, a re-push,
+// a start) carries the latest count, since contentState always includes it.
+const shown = (sessions) => JSON.stringify(contentState(sessions.map(({ agents, ...s }) => s)));
+
 const noPush = () => ({ start: false, update: false, priority: 5, end: null, alerts: [] });
 
 /**
@@ -269,8 +276,7 @@ export function reduceSessions(prev, input, now) {
 
   const startEdge = (isActive(after) && !isActive(before)) || entered.length > 0;
   push.start = startEdge && !(base.started_at !== null && now - base.started_at < START_GAP_S);
-  push.update =
-    !base.online || JSON.stringify(contentState(before)) !== JSON.stringify(contentState(after));
+  push.update = !base.online || shown(before) !== shown(after);
   push.priority = entered.length > 0 ? 10 : 5;
 
   mac.online = true;
@@ -288,7 +294,7 @@ export function reduceSessions(prev, input, now) {
  * token for it. Returns null (nothing to do) or {kind, mac, push}:
  *  lapse  - no heartbeat for 180 s: offline, cards end with online:false, dismissal +600;
  *  end    - nothing working/blocked for 10 min: cards end now;
- *  repush - last push over 10 min ago: same state again so the stale-date moves.
+ *  repush - last push over 50 min ago: same state again so the stale-date moves.
  */
 export function cronStep(mac, hasCard, now) {
   if (!mac.online) return null;

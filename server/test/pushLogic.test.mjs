@@ -367,6 +367,23 @@ test("update only when the content-state changes; heartbeat sends nothing", () =
   assert.equal(c.push.update, true);
 });
 
+test("#766: a subagent count change alone pushes nothing; the next real push carries the latest count", () => {
+  const a = step(null, post(1, [S("a", "working", { agents: 1 }), S("b", "idle")]), 1000);
+  const more = step(a.mac, post(2, [S("a", "working", { agents: 3 }), S("b", "idle")]), 1010);
+  assert.equal(more.push.update, false, "1 -> 3 agents: no phone wake");
+  assert.equal(more.mac.last_push_at, 1000);
+  assert.deepEqual(more.mac.sessions[0], S("a", "working", { agents: 3 }), "stored for the next push");
+  const none = step(more.mac, post(3, [S("a", "working"), S("b", "idle")]), 1020);
+  assert.equal(none.push.update, false, "3 -> none: no phone wake either");
+  const back = step(none.mac, post(4, [S("a", "working", { agents: 2 }), S("b", "working")]), 1030);
+  assert.equal(back.push.update, true, "b starts working: a real change");
+  assert.deepEqual(contentState(back.mac.sessions).sessions.find((s) => s.name === "a"), S("a", "working", { agents: 2 }));
+  // The cron's re-push sends the stored list, latest count included.
+  const late = step(back.mac, post(5, [S("a", "working", { agents: 4 }), S("b", "working")]), 1040);
+  assert.equal(late.push.update, false);
+  assert.equal(contentState(late.mac.sessions).sessions.find((s) => s.name === "a").agents, 4);
+});
+
 test("offline post ends the card: online false, dismissal now+600", () => {
   const a = step(null, post(1, [S("a", "working")]), 1000);
   const off = step(a.mac, { mac_id: HEX, seq: 2, offline: true, sessions: null }, 1100);
@@ -411,15 +428,16 @@ test("cron ends a card after 10 min with nothing working/blocked", () => {
   assert.equal(cronStep(idle, false, 1600), null, "no card, nothing to end");
 });
 
-test("cron re-pushes a live card whose last push is over 10 min old", () => {
-  const m = live({ last_seen: 1590, last_push_at: 1000 });
-  assert.equal(cronStep(m, true, 1599), null);
-  const r = cronStep(m, true, 1600);
+test("#766: cron re-pushes a live card whose last push is over 50 min old, not 10", () => {
+  const m = live({ last_seen: 3990, last_push_at: 1000 });
+  assert.equal(cronStep(m, true, 1600), null, "10 min: no phone wake");
+  assert.equal(cronStep(m, true, 3999), null);
+  const r = cronStep(m, true, 4000);
   assert.equal(r.kind, "repush");
   assert.equal(r.push.update, true);
   assert.equal(r.push.priority, 5);
-  assert.equal(r.mac.last_push_at, 1600);
-  assert.equal(cronStep(m, false, 1600), null);
+  assert.equal(r.mac.last_push_at, 4000);
+  assert.equal(cronStep(m, false, 4000), null);
 });
 
 test("lapse: a session blocked throughout never alerts again on return; the start still goes", () => {
@@ -497,7 +515,7 @@ test("planCron: lapses first, then ends, then re-pushes, oldest due first; a ste
   });
   const repush = (id, last_push_at, cards) => ({ id, cards, mac: live({ last_seen: now - 10, last_push_at }) });
   const rows = [
-    repush("r-new", now - 700, 3), repush("r-old", now - 900, 3),
+    repush("r-new", now - 3100, 3), repush("r-old", now - 3300, 3),
     end("e-new", now - 650, 4), end("e-old", now - 800, 4),
     lapse("l-new", now - 200, 5), lapse("l-old", now - 400, 5), lapse("l-free", now - 190, 0),
   ];
@@ -542,7 +560,7 @@ test("planCron: restarts after lapses and ends, before re-pushes; an end, a star
   const now = 10_000;
   const lapse = { id: "lapse", cards: 2, mac: live({ last_seen: now - 300, last_push_at: now - 300 }) };
   const end = { id: "end", cards: 1, mac: live({ sessions: [S("a", "idle")], idle_since: now - 700, last_seen: now - 10, last_push_at: now - 10 }) };
-  const repush = { id: "repush", cards: 1, mac: live({ last_seen: now - 10, last_push_at: now - 700 }) };
+  const repush = { id: "repush", cards: 1, mac: live({ last_seen: now - 10, last_push_at: now - 3100 }) };
   const mac = live({ last_seen: now - 10 });
   const x = (id, created_at, over = {}) => ({ id, created_at, mac, start_token: HEX, has_card: 0, ...over });
   const expired = [x("x-new", 50), x("x-old", 10), x("x-drop", 30, { start_token: null }), x("x-wait", 5, { mac: live({ last_seen: now - 10, started_at: now - 30 }) })];
@@ -564,17 +582,17 @@ test("planCron: restarts after lapses and ends, before re-pushes; an end, a star
 
 // ---- payloads ---------------------------------------------------------------
 
-test("Live Activity payloads carry timestamp + stale-date; start carries attributes and a silent alert", () => {
+test("Live Activity payloads carry timestamp + stale-date (#766: now + 1 h); start carries attributes and a silent alert", () => {
   const cs = contentState([S("a", "working")]);
   const u = laPayload("update", cs, 1000);
-  assert.deepEqual(u, { aps: { timestamp: 1000, event: "update", "content-state": cs, "stale-date": 1900 } });
+  assert.deepEqual(u, { aps: { timestamp: 1000, event: "update", "content-state": cs, "stale-date": 4600 } });
   const s = startPayload(cs, 1000, HEX, "Studio");
   assert.equal(s.aps.event, "start");
   assert.equal(s.aps["attributes-type"], "ProsperSessionsAttributes");
   assert.deepEqual(s.aps.attributes, { mac_id: HEX, mac_name: "Studio" });
   assert.deepEqual(s.aps.alert, { title: "Studio", body: "Agents are working" });
   assert.equal(s.aps.sound, undefined);
-  assert.equal(s.aps["stale-date"], 1900);
+  assert.equal(s.aps["stale-date"], 4600);
   const a = alertPayload(HEX, "Studio", [{ name: "a", label: "Fix it" }]);
   assert.deepEqual(a, {
     aps: { alert: { title: "Studio", body: "Fix it needs you" }, sound: "default", "thread-id": HEX },

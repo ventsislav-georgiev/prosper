@@ -32,6 +32,16 @@ tag from the now-released section and put it on the new top draft.
 - **Agent Island row details are simpler.** Tasks done, In progress, Queued and Session
   name are gone from Settings and from the session and History rows. Agents, Open PRs
   and Merged stay. Their saved settings are cleared once. (#762)
+- **The iPhone Live Activity wakes the phone less.**
+  - Blocked and "needs you" still arrive within 2 s, and so does the card's start.
+  - Working/idle changes are batched over 25 s.
+  - A change in the subagent count alone no longer pushes; the count rides along with
+    the next update.
+  - A reorder of sessions sends nothing.
+  - Installing a Prosper update no longer ends the card and starts a new one.
+  - The Mac stops its status heartbeat 12 minutes after nothing is active.
+  - The beta update check runs every 30 minutes instead of 10.
+  (#766)
 
 ## v2.172.0
 

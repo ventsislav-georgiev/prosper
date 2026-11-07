@@ -25,6 +25,7 @@ final class LiveStatusPublisherTests: XCTestCase {
         /// old one's value is a relaunch.
         var savedSeq: Int64 = 0
         var bearer: String? = "tok"
+        var bearerReads = 0
         var activated = true
         var enabled = true
 
@@ -43,13 +44,14 @@ final class LiveStatusPublisherTests: XCTestCase {
             p.postAndWait = { [unowned self] body, bearer in
                 self.posts.append(Post(json: String(decoding: body, as: UTF8.self), bearer: bearer, waited: true))
             }
-            p.bearer = { [unowned self] in self.bearer }
+            p.bearer = { [unowned self] in self.bearerReads += 1; return self.bearer }
             p.isActivated = { [unowned self] in self.activated }
             p.enabled = { [unowned self] in self.enabled }
             p.macID = { "mac1" }
             p.loadSeq = { [unowned self] in self.savedSeq }
             p.saveSeq = { [unowned self] in self.savedSeq = $0 }
             p.center = center
+            p.appCenter = center
             p.start()
         }
 
@@ -109,19 +111,50 @@ final class LiveStatusPublisherTests: XCTestCase {
 
     // MARK: - Debounce and heartbeat
 
-    func testChangesCoalesceOverTwoSeconds() {
+    /// #766 J6b: a blocked edge goes out in 2 s and takes any calm change pending with it.
+    func testABlockedEdgePostsInTwoSecondsAndCarriesThePendingChange() {
         let r = Rig()
-        r.p.sessionsChanged([s("a")])
+        r.p.sessionsChanged([s("a", .working), s("c", .working)])
         XCTAssertEqual(r.posts.count, 1)
-        r.p.sessionsChanged([s("a", .working)])
+        r.p.sessionsChanged([s("a", .working), s("c", .idle)])   // calm: 25 s
         r.advance(1)
-        r.p.sessionsChanged([s("a", .blocked)])
-        r.advance(0.9)
+        r.p.sessionsChanged([s("a", .blocked), s("c", .idle)])
+        r.advance(1.9)
         XCTAssertEqual(r.posts.count, 1, "nothing inside the 2 s window")
         r.advance(0.1)
-        XCTAssertEqual(r.posts.count, 2, "one post for both changes")
-        XCTAssertEqual((r.last["sessions"] as? [[String: Any]])?.first?["state"] as? String, "blocked")
+        XCTAssertEqual(r.posts.count, 2, "one post for both changes, 2 s after the edge")
+        let states = (r.last["sessions"] as? [[String: Any]])?.compactMap { $0["state"] as? String }
+        XCTAssertEqual(states, ["blocked", "idle"])
+        r.advance(30)
+        XCTAssertEqual(r.posts.count, 2, "the calm timer went with it")
+        // Leaving blocked (answered on the Mac) is an edge too: the card stops saying "needs you".
+        r.p.sessionsChanged([s("a", .working), s("c", .idle)])
+        r.advance(2)
+        XCTAssertEqual(r.posts.count, 3)
+        // A new session that appears blocked is an edge.
+        r.p.sessionsChanged([s("a", .working), s("b", .blocked), s("c", .idle)])
+        r.advance(2)
+        XCTAssertEqual(r.posts.count, 4)
+    }
+
+    /// #766 J6b: working <-> idle, done, alias, agents and sessions coming or going
+    /// coalesce over 25 s: one post, so the phone wakes once for the burst.
+    func testCalmChangesCoalesceOverTwentyFiveSeconds() {
+        let r = Rig()
+        r.p.sessionsChanged([s("a", .working)])
+        XCTAssertEqual(r.posts.count, 1)
+        r.p.sessionsChanged([s("a", .idle)])
         r.advance(10)
+        r.p.sessionsChanged([s("a", .working, agents: 2)])
+        r.advance(5)
+        r.p.sessionsChanged([s("a", .done, alias: "x"), s("b", .working)])
+        r.advance(9.9)
+        XCTAssertEqual(r.posts.count, 1, "nothing inside the 25 s window")
+        r.advance(0.1)
+        XCTAssertEqual(r.posts.count, 2, "one post for the burst, 25 s after its first change")
+        XCTAssertEqual(r.names, ["a", "b"])
+        XCTAssertEqual((r.last["sessions"] as? [[String: Any]])?.first?["state"] as? String, "done")
+        r.advance(24)
         XCTAssertEqual(r.posts.count, 2)
     }
 
@@ -146,13 +179,103 @@ final class LiveStatusPublisherTests: XCTestCase {
         r.advance(30)
         r.p.sessionsChanged([s("a", .working), s("b")])
         r.advance(2)
-        XCTAssertEqual(r.posts.count, 3, "the change at 90 s posts at 92 s")
+        XCTAssertEqual(r.posts.count, 3, "the change at 90 s (a card start) posts at 92 s")
         r.advance(59)
         XCTAssertEqual(r.posts.count, 3, "the heartbeat restarted at the change post")
         r.advance(1)
         XCTAssertEqual(r.posts.count, 4)
         r.advance(60)
         XCTAssertEqual(r.posts.count, 5)
+    }
+
+    /// #766 J6b (review round 2): nothing active -> something working or blocked is the
+    /// card start, once per activity period: 2 s. Active -> nothing active stays calm.
+    func testTheCardStartIsUrgentAndGoingIdleIsCalm() {
+        let r = Rig()
+        r.p.sessionsChanged([s("a", .idle), s("b", .done)])
+        r.p.sessionsChanged([s("a", .working), s("b", .done)])
+        r.advance(2)
+        XCTAssertEqual(r.posts.count, 2, "the card start goes out in 2 s")
+        r.p.sessionsChanged([s("a", .idle), s("b", .done)])
+        r.advance(24.9)
+        XCTAssertEqual(r.posts.count, 2, "going idle waits")
+        r.advance(0.1)
+        XCTAssertEqual(r.posts.count, 3)
+        r.p.sessionsChanged([s("a", .idle), s("b", .working)])
+        r.advance(2)
+        XCTAssertEqual(r.posts.count, 4, "the next activity period starts the card in 2 s again")
+        r.p.sessionsChanged([s("a", .working), s("b", .working)])
+        r.advance(24.9)
+        XCTAssertEqual(r.posts.count, 4, "more work while active is calm")
+        let e = Rig()
+        e.p.sessionsChanged([])
+        e.p.sessionsChanged([s("x", .working)])
+        e.advance(2)
+        XCTAssertEqual(e.posts.count, 2, "from an empty list too")
+    }
+
+    /// #766 J5: while something works or is blocked the heartbeat runs on; once nothing
+    /// has for idleTail (12 min) it stops, after the Worker ended the idle card (600 s).
+    func testHeartbeatStopsTwelveMinutesAfterNothingIsActive() {
+        let r = Rig()
+        r.p.sessionsChanged([s("a", .working)])
+        r.advance(7200)
+        XCTAssertEqual(r.posts.count, 121, "2 h working: a heartbeat a minute")
+        r.p.sessionsChanged([s("a", .idle)])
+        r.advance(25)
+        XCTAssertEqual(r.posts.count, 122)
+        r.advance(720)
+        XCTAssertEqual(r.posts.count, 134, "heartbeats for 12 min after going idle")
+        r.advance(3600)
+        XCTAssertEqual(r.posts.count, 134, "then none")
+        r.p.sessionsChanged([s("a", .idle), s("b")])
+        r.advance(25)
+        XCTAssertEqual(r.posts.count, 135, "an idle change still posts")
+        r.advance(3600)
+        XCTAssertEqual(r.posts.count, 135, "and re-arms nothing")
+        r.p.sessionsChanged([s("a", .blocked), s("b")])
+        r.advance(2)
+        XCTAssertEqual(r.posts.count, 136)
+        r.advance(60)
+        XCTAssertEqual(r.posts.count, 137, "active again: the heartbeat is back")
+    }
+
+    func testAnEmptyListHeartbeatsOnlyForTheIdleTail() {
+        let r = Rig()
+        r.p.sessionsChanged([])
+        r.advance(3600)
+        XCTAssertEqual(r.posts.count, 13, "the first post and 12 heartbeats")
+    }
+
+    /// #766 J5: the session token is read once, not per post (SupporterStore.load is a
+    /// file and a keychain read); sign-out, activation and a 401 drop it.
+    func testTheBearerIsReadOncePerSignIn() {
+        let r = Rig()
+        r.p.sessionsChanged([s("a", .working)])
+        r.advance(3600)
+        r.p.sessionsChanged([s("a", .blocked)])
+        r.advance(2)
+        XCTAssertEqual(r.posts.count, 62)
+        XCTAssertEqual(r.bearerReads, 1)
+        XCTAssertNotNil(r.p.signOut())
+        r.bearer = "tok2"
+        r.p.deviceActivated()
+        XCTAssertEqual(r.posts.last?.bearer, "tok2", "a new sign-in is read again")
+        let reads = r.bearerReads
+        r.reply = 401
+        r.advance(60)
+        XCTAssertTrue(r.p.halted)
+        r.bearer = "tok3"
+        r.reply = 204
+        r.p.deviceActivated()
+        XCTAssertEqual(r.posts.last?.bearer, "tok3")
+        XCTAssertEqual(r.bearerReads, reads + 1)
+        // A re-activation (a new sign-in) re-reads the token, live or not.
+        r.bearer = "tok4"
+        r.p.deviceActivated()
+        r.p.sessionsChanged([s("a", .idle)])
+        r.advance(25)
+        XCTAssertEqual(r.posts.last?.bearer, "tok4")
     }
 
     // MARK: - Offline events
@@ -177,13 +300,33 @@ final class LiveStatusPublisherTests: XCTestCase {
     func testQuitPostsOfflineWaitedOnAndThenNothing() {
         let r = Rig()
         r.p.sessionsChanged([s("a")])
-        r.p.pause()   // applicationWillTerminate
+        r.p.quit()   // applicationWillTerminate
         XCTAssertEqual(r.posts.count, 2)
         XCTAssertTrue(r.isOffline)
         XCTAssertTrue(r.posts[1].waited)
         r.p.sessionsChanged([s("b")])
         r.advance(300)
         XCTAssertEqual(r.posts.count, 2)
+    }
+
+    /// #766 J7: Sparkle relaunching into an update posts no offline (the new process
+    /// posts the list within seconds, so the phone's card just stays); a sleep still does.
+    func testAnUpdateRelaunchQuitPostsNoOfflineButASleepStillDoes() {
+        let r = Rig()
+        r.p.sessionsChanged([s("a", .working)])
+        r.center.post(name: LiveStatusPublisher.updateWillRelaunch, object: nil)
+        XCTAssertTrue(r.p.updateRelaunch)
+        r.center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        XCTAssertEqual(r.posts.count, 2)
+        XCTAssertTrue(r.isOffline, "a sleep is still an honest offline")
+        r.center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        XCTAssertEqual(r.posts.count, 3)
+        r.p.quit()
+        XCTAssertEqual(r.posts.count, 3, "no offline for the relaunch")
+        r.p.sessionsChanged([s("b", .blocked)])
+        r.advance(300)
+        XCTAssertEqual(r.posts.count, 3, "and nothing after it")
+        XCTAssertFalse(r.p.isLive)
     }
 
     func testSignOutHandsBackTheOfflineBodyAndGoesQuiet() throws {
@@ -264,10 +407,23 @@ final class LiveStatusPublisherTests: XCTestCase {
 
     // MARK: - Caps, dedupe, stripping
 
-    func testCapsAtTwentyKeepingTheIslandOrder() {
+    /// The 20 most urgent (the island's order), then sorted by name (#766 J6c).
+    func testCapsAtTwentyKeepingTheMostUrgent() {
         let r = Rig()
         r.p.sessionsChanged((0..<25).map { s("s\($0)") })
-        XCTAssertEqual(r.names, (0..<20).map { "s\($0)" })
+        XCTAssertEqual(r.names, (0..<20).map { "s\($0)" }.sorted())
+    }
+
+    /// #766 J6c: the island sorts by activity, so two sessions printing in turn swap
+    /// places; the same sessions in another order post nothing.
+    func testAReorderPostsNothing() {
+        let r = Rig()
+        r.p.sessionsChanged([s("b", .working), s("a", .working)])
+        XCTAssertEqual(r.names, ["a", "b"])
+        r.p.sessionsChanged([s("a", .working), s("b", .working)])
+        r.p.sessionsChanged([s("b", .working), s("a", .working)])
+        r.advance(30)
+        XCTAssertEqual(r.posts.count, 1)
     }
 
     func testNamesAndAliasesCutToSixtyFourScalars() {
@@ -371,7 +527,7 @@ final class LiveStatusPublisherTests: XCTestCase {
         XCTAssertEqual(fast.savedSeq, ms + 1_800_000, "persisted as it goes out")
         fast.clock -= 1800   // the clock is fixed (the fake timers keep their fast due times)
         fast.p.sessionsChanged([s("b")])
-        fast.advance(2)
+        fast.advance(25)
         XCTAssertEqual(fast.posts.count, 2)
         XCTAssertEqual(fast.seq, ms + 1_800_001, "same process: never below the last seq")
         let relaunched = Rig()
@@ -404,10 +560,10 @@ final class LiveStatusPublisherTests: XCTestCase {
         r.clock -= 7200   // the clock is fixed (the fake timers keep their fast due times)
         r.reply = 204
         r.p.sessionsChanged([s("b")])
-        r.advance(2)
+        r.advance(25)
         XCTAssertEqual(r.posts.count, 2)
-        XCTAssertEqual(r.seq, ms + 2000, "the next post goes out on wall time")
-        XCTAssertEqual(r.savedSeq, ms + 2000)
+        XCTAssertEqual(r.seq, ms + 25000, "the next post goes out on wall time")
+        XCTAssertEqual(r.savedSeq, ms + 25000)
     }
 
     func testA400BeforeARelaunchStillPostsOnWallTime() {
@@ -434,7 +590,7 @@ final class LiveStatusPublisherTests: XCTestCase {
             XCTAssertEqual(r.posts.count, 2, "\(String(describing: code)): the heartbeat retries")
             XCTAssertEqual(r.names, ["a"])
             r.p.sessionsChanged([s("a"), s("b")])
-            r.advance(2)
+            r.advance(25)
             XCTAssertEqual(r.posts.count, 3, "\(String(describing: code)): so does the next change")
             XCTAssertEqual(r.names, ["a", "b"])
         }
@@ -478,7 +634,7 @@ final class LiveStatusPublisherTests: XCTestCase {
         XCTAssertTrue(r.p.isLive)
         r.hold = false
         r.p.sessionsChanged([s("b")])
-        r.advance(2)
+        r.advance(25)
         XCTAssertEqual(r.posts.count, 3, "the change still posts")
         XCTAssertEqual(r.names, ["b"])
         r.advance(60)
@@ -494,7 +650,7 @@ final class LiveStatusPublisherTests: XCTestCase {
         r.pending[0](403)
         XCTAssertFalse(r.p.halted, "sent before the activation")
         r.p.sessionsChanged([s("b")])
-        r.advance(2)
+        r.advance(25)
         XCTAssertEqual(r.pending.count, 2, "the change posted")
         guard r.pending.count == 2 else { return }
         r.pending[1](403)

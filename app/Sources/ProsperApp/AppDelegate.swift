@@ -1041,8 +1041,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // #523: the phone's card goes offline (waited on up to 1.5 s).
-        LiveStatusPublisher.shared.pause()
+        // #523: the phone's card goes offline (waited on up to 1.5 s), unless Sparkle is
+        // relaunching into an update (#766).
+        LiveStatusPublisher.shared.quit()
         // Before the atexit shortcut below — a hyper remap must never outlive the app.
         HyperKey.shared.clearMapping()
         autocomplete.stop()
