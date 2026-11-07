@@ -53,7 +53,8 @@ enum DchFrame {
     static let putPhoneSnippets: UInt8 = 0x2c  // {device_id, device_name?, hash, snippets} → ok {count, hash} | error
     // #760: the one sidekick pattern of the Mac and the phone (DchSidekickOps). One reply.
     static let sidekickSync: UInt8 = 0x2d  // {pattern, updated} → ok {pattern, updated} (the winner) | error
-    // #765: the phone's push stream instead of its 3 s list poll (DchWatchHub), only while "watch" is in ops.
+    // #765: the phone's push stream instead of its list poll (5-30 s live, 15-120 s in battery saver;
+    // DchWatchHub), only while "watch" is in ops.
     static let watch: UInt8 = 0x2e  // {} → listResp, ok {sidekick}, then listResp | ok {sidekick} | ok {} … | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
@@ -73,6 +74,10 @@ enum DchFrame {
     static let modelsResp: UInt8 = 0x27 // [{id, name, loaded}] (empty: no local model on disk)
     static let commandsResp: UInt8 = 0x2a  // [{id, title, subtitle?, ext, argument?, icon?}]
     static let commandResult: UInt8 = 0x2b // {text, detail?}
+
+    /// QA #606 F1: the requests that change the list. After one, the list frame forks until
+    /// the island has caught up (DchWatchHub.changed).
+    static let listChanging: Set<UInt8> = [kill, rename, create, revive, restart, stop]
 
     /// #617: the phone's ProsperTransport.maxFrame: what the Mac sends stays within it
     /// (list paging, item checks). The Mac's receive side is bounded by maxRequestFrame.
@@ -176,6 +181,8 @@ final class DchConnection: @unchecked Sendable {
     private var commandTask: Task<Void, Never>?
     /// #627: the kill frame's `dch -k <name>`; tests set a recorder so no real dch runs.
     var kill: (String) -> Void = { DchCommand.kill($0) }
+    /// QA #606 F1: the rename frame's `dch -m <name> <alias>`; tests set a recorder.
+    var rename: (String, String) -> Void = { DchCommand.setAlias($0, alias: $1) }
     /// #765: the island's list cache and the watch streams, server-wide; nil = always fork.
     var watch: DchWatchHub?
     /// #765 J16: the list frame's dch fork when the island has no list; tests count it.
@@ -270,8 +277,10 @@ final class DchConnection: @unchecked Sendable {
     /// A request's one final reply, from any thread: back on `queue`, dropped once closed.
     /// It ends an upload too: data frames after it (the phone's, sent before it read an
     /// early reply) find no upload and no pty, and are dropped.
-    private func finalReply(_ frame: Data) {
+    /// QA #606 F1: `listChanged`, the reply of a verb that changes the list.
+    private func finalReply(_ frame: Data, listChanged: Bool = false) {
         queue.async {
+            if listChanged { self.watch?.changed() }
             self.inFlight = false
             self.upload = nil
             self.chatTask = nil
@@ -301,10 +310,13 @@ final class DchConnection: @unchecked Sendable {
     }
 
     func handle(type: UInt8, payload: Data) {
+        // QA #606 F1: once a list-changing request ran (for #591's verbs: was sent off, then
+        // again on the reply), the list frame forks until the island has the change.
+        defer { if DchFrame.listChanging.contains(type) { watch?.changed() } }
         switch type {
         case DchFrame.list:
-            // #765 J16: the island's list when it has one for this dir, else one dch fork.
-            send(DchFrame.encode(DchFrame.listResp, [UInt8](watch?.cachedList() ?? DchFrame.listPayload(listSessions()))))
+            // #765 J16: the island's list when it has one for this dir and no change is pending, else one dch fork.
+            send(DchFrame.encode(DchFrame.listResp, [UInt8](watch?.listReply() ?? DchFrame.listPayload(listSessions()))))
         case DchFrame.watch:
             startWatch(payload)
         case DchFrame.kill:
@@ -318,7 +330,7 @@ final class DchConnection: @unchecked Sendable {
         case DchFrame.rename:
             if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
                let n = o["name"] as? String {
-                DchCommand.setAlias(n, alias: o["alias"] as? String ?? "")
+                rename(n, o["alias"] as? String ?? "")
             }
             send(DchFrame.encode(DchFrame.ok, []))
         case DchFrame.attach, DchFrame.create:
@@ -425,8 +437,9 @@ final class DchConnection: @unchecked Sendable {
             guard !inFlight else { return send(DchControlOps.error("busy with an earlier request")) }
             inFlight = true
             let ops = ops, library = library, clipboard = clipboard, sidekick = sidekick
+            let changes = DchFrame.listChanging.contains(type)
             DispatchQueue.global(qos: .userInitiated).async {
-                let reply: DchControlOps.Reply = { self.finalReply($0) }
+                let reply: DchControlOps.Reply = { self.finalReply($0, listChanged: changes) }
                 switch type {
                 case DchFrame.library: library.handle(payload, reply: reply)
                 case DchFrame.putPhoneSnippets: library.put(payload, reply: reply)
@@ -555,6 +568,8 @@ final class DchConnection: @unchecked Sendable {
                 },
                 onExit: { [weak self] code in
                     guard let self else { return }
+                    // QA #606 F1: the session ended; the phone relists on the exit frame.
+                    self.queue.async { self.watch?.changed() }
                     // Close only after the exit frame is handed to the stack, and mark
                     // it the final message so the FIN follows the data. cancel() right
                     // after send() could drop the unflushed frame — the client then
@@ -758,7 +773,8 @@ struct DchSidekickOps: Sendable {
 /// the only timers are a stream's 1 s trailing flush and its 25 s heartbeat. One stream:
 ///   listResp (the list snapshot), ok {"sidekick": {pattern, updated}}, then
 ///   listResp when the payload differs from the last one sent, at most 1 per second, the
-///   trailing change always sent; the sidekick frame when the Mac's pattern changes;
+///   trailing change always sent; the sidekick frame when the Mac's pattern changes, on
+///   the same 1 s gap (a pattern typed in Settings is one frame per second, not per key);
 ///   ok {} after 25 s with nothing else sent (the phone calls 60 s of silence dead).
 /// All on the server queue; tests drive it directly with their own clock and timers.
 final class DchWatchHub: @unchecked Sendable {
@@ -783,9 +799,9 @@ final class DchWatchHub: @unchecked Sendable {
         let id: ObjectIdentifier, device: String
         let send: Send, close: () -> Void
         var sent = Data(), pending: Data?, listAt: TimeInterval = 0
-        var sidekick: DchSidekickOps.Value?
+        var sidekick: DchSidekickOps.Value?, sidekickAt: TimeInterval = 0
         var backlog = 0
-        var cancelFlush: (() -> Void)?, cancelBeat: (() -> Void)?
+        var cancelFlush: (() -> Void)?, cancelBeat: (() -> Void)?, cancelSidekick: (() -> Void)?
 
         init(id: ObjectIdentifier, device: String, send: @escaping Send, close: @escaping () -> Void) {
             (self.id, self.device, self.send, self.close) = (id, device, send, close)
@@ -798,6 +814,13 @@ final class DchWatchHub: @unchecked Sendable {
     var remoteDir: @Sendable () -> String = { DchCommand.remoteSocketDir() }
     var sidekick: @Sendable () -> DchSidekickOps.Value = { DchSidekickOps.current() }
     private var cache: Cache?
+    /// QA #606 F1: when a list-changing request last ran (DchFrame.listChanging, a session's exit).
+    /// dch has the change at once, the island a tick later: within ~3 s (a 1 s tick, then a
+    /// fetch at most AgentPollGate.floor after its last). A publish sooner than `settle` may
+    /// carry a read from before the change (a fork already running, or an activity-only tick),
+    /// so only one `settle` or more after it clears this; until then the list frame forks.
+    private var changedAt: TimeInterval?
+    static let settle: TimeInterval = 5
     /// Open order: the first of a device is its oldest.
     private(set) var streams: [Stream] = []
 
@@ -845,9 +868,19 @@ final class DchWatchHub: @unchecked Sendable {
 
     func available() -> Bool { cache.map { $0.dir == remoteDir() } ?? false }
 
+    /// QA #606 F1: a request changed the list; the list frame forks until the island has it.
+    func changed() { changedAt = now() }
+
+    /// The list frame's payload from the cache; nil (one dch fork) with no cache or a change
+    /// the island may not have yet.
+    func listReply() -> Data? { changedAt == nil ? cachedList() : nil }
+
     /// Every island publish (nil: it stopped). No list any more closes the streams, so the
     /// phone reconnects and, refused, polls.
+    /// ponytail: with no publish after `settle` (every session idle, nothing changes) the list
+    /// keeps forking, as before #765, until the next one; add a time cap if that ever costs.
     func island(_ new: Cache?) {
+        if let t = changedAt, now() - t >= Self.settle { changedAt = nil }
         cache = new
         guard !streams.isEmpty else { return }
         guard let payload = cachedList() else { return streams.forEach(drop) }
@@ -866,7 +899,7 @@ final class DchWatchHub: @unchecked Sendable {
         (s.sent, s.listAt) = (payload, now())
         emit(s, DchFrame.encode(DchFrame.listResp, [UInt8](payload)))
         let v = sidekick()
-        s.sidekick = v
+        (s.sidekick, s.sidekickAt) = (v, now())
         emit(s, DchSidekickOps.watchFrame(v))
         return true
     }
@@ -875,18 +908,32 @@ final class DchWatchHub: @unchecked Sendable {
     func remove(_ id: ObjectIdentifier) {
         guard let i = streams.firstIndex(where: { $0.id == id }) else { return }
         let s = streams.remove(at: i)
-        s.cancelFlush?(); s.cancelBeat?()
-        s.cancelFlush = nil; s.cancelBeat = nil
+        s.cancelFlush?(); s.cancelBeat?(); s.cancelSidekick?()
+        s.cancelFlush = nil; s.cancelBeat = nil; s.cancelSidekick = nil
     }
 
     /// The Mac's pattern may have changed (AgentIslandController.rowDetailsChanged).
     func sidekickChanged() {
-        guard !streams.isEmpty else { return }
+        streams.forEach(offerSidekick)
+    }
+
+    /// A pattern that differs from the phone's goes at once, or `minGap` after the last
+    /// sidekick frame; the timer re-reads it then, so the trailing edit is the one sent.
+    private func offerSidekick(_ s: Stream) {
+        guard s.cancelSidekick == nil else { return }
         let v = sidekick()
-        for s in streams where s.sidekick != v {
-            s.sidekick = v
-            emit(s, DchSidekickOps.watchFrame(v))
+        guard v != s.sidekick else { return }
+        let wait = s.sidekickAt + Self.minGap - now()
+        guard wait <= 0 else {
+            s.cancelSidekick = schedule(wait) { [weak self, weak s] in
+                guard let self, let s, self.streams.contains(where: { $0 === s }) else { return }
+                s.cancelSidekick = nil
+                self.offerSidekick(s)
+            }
+            return
         }
+        (s.sidekick, s.sidekickAt) = (v, now())
+        emit(s, DchSidekickOps.watchFrame(v))
     }
 
     private func drop(_ s: Stream) {

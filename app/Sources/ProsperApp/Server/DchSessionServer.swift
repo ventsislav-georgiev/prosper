@@ -350,6 +350,8 @@ final class DchSessionServer: @unchecked Sendable {
         handler.watch = watch
         connections[ObjectIdentifier(handler)] = handler
         handler.start()
+        // QA #606 INFO-2: a watch stream takes this ~60 s hold too (no frame says "watch" yet),
+        // as the phone's 0x08 handshake connection just before it does; the tick never counts it.
         startKeepAwake()
     }
 
@@ -397,9 +399,8 @@ final class DchSessionServer: @unchecked Sendable {
         // network drop this used to renew the hold forever for a session nothing
         // could reach, so the Mac never slept.
         let up = DchCommand.transportUp
-        // #765: a watch stream is no client: it stays open while the phone app is
-        // suspended, and would hold the Mac awake for as long as it does.
-        let clients = up && connections.values.contains { !$0.watching }
+        let n = Self.keepAwakeClients(connections.values)
+        let clients = up && n > 0
         let active = up && !clients
             && DchCommand.anySessionActive(within: KeepAwakePolicy.tickActivityWindowSeconds)
         guard keepAwakeActive else {
@@ -428,7 +429,7 @@ final class DchSessionServer: @unchecked Sendable {
         }
         let step = KeepAwakePolicy.step(
             clientConnected: clients, sessionActive: active, idleTicks: idleTicks)
-        TraceLog.emit("keepAwake tick: clients=\(connections.count) transport=\(up) activeSession=\(active) "
+        TraceLog.emit("keepAwake tick: clients=\(n) transport=\(up) activeSession=\(active) "
             + "idleTicks=\(idleTicks)→\(step.idleTicks) hold=\(step.hold) release=\(step.release)")
         idleTicks = step.idleTicks
         if step.release {
@@ -443,6 +444,12 @@ final class DchSessionServer: @unchecked Sendable {
             ticksSinceBeat = beat.ticksSinceBeat
             if beat.send { sendKeepAwake(true) }
         }
+    }
+
+    /// #765: a watch stream is no client: it stays open while the phone app is suspended,
+    /// and would hold the Mac awake for as long as it does. On `queue`.
+    static func keepAwakeClients(_ connections: some Collection<DchConnection>) -> Int {
+        connections.count { !$0.watching }
     }
 
     /// Full stop (server stop): release the hold AND the timer.
