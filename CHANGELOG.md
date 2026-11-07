@@ -82,8 +82,9 @@ tag from the now-released section and put it on the new top draft.
   its config), Prosper's Always allow stands down for those sessions, so a prompt is
   answered once instead of getting a second "1". The island shows dch's answer as
   "Allowed automatically". If dch leaves a prompt alone, it reaches you as Needs input
-  after about 5 seconds. Sessions on an older dch, or with dch's auto-allow off, are
-  answered by Prosper as before. (#792)
+  after about 5 seconds. Sessions on a pre-1.29 dch, or with dch's auto-allow off, are
+  answered by Prosper as before. Until dch releases the same rule as #790, its own
+  auto-allow still answers prompts raised by your hooks and "ask" rules. (#792)
 
 ## v2.172.0
 
