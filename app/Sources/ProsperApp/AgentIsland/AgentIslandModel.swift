@@ -154,25 +154,102 @@ enum AgentIsland {
         }
     }
 
-    // MARK: - Sidekicks (#571, prosper-ios DchSession.split)
+    // MARK: - Sidekicks (#571; prosper-ios DchSession.split is the substring-only original, #759 made this a regex)
 
     static let sidekickDefault = "-qa"
 
     typealias Split = (primary: [AgentSession], sidekicks: [AgentSession])
 
     /// A sidekick's name or alias matches `pattern` (trimmed), an ICU regex searched
-    /// case-insensitively (#759). An invalid regex is matched as literal text, still
-    /// ignoring case. An empty pattern means no split. Order is kept in both halves.
+    /// case-insensitively (#759). A pattern that is not a usable regex (see
+    /// `SidekickMatch`) is matched as literal text, still ignoring case. An empty
+    /// pattern means no split. Order is kept in both halves.
     static func split(_ list: [AgentSession], pattern: String) -> Split {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !p.isEmpty else { return (list, []) }
-        let re = sidekickRegex(p)
-        let matches = { (t: String) -> Bool in
-            guard let re else { return t.range(of: p, options: .caseInsensitive) != nil }
-            return re.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) != nil
+        let hits = sidekickFind(p, in: list.flatMap { [$0.name, $0.alias] }).hits
+        let tagged = zip(list, list.indices.map { hits[2 * $0] || hits[2 * $0 + 1] })
+        return (tagged.filter { !$0.1 }.map(\.0), tagged.filter(\.1).map(\.0))
+    }
+
+    /// How a non-empty pattern is matched. Every case but `.regex` matches it as text.
+    enum SidekickMatch: Equatable {
+        case regex, invalid, matchesEmpty, slow
+
+        var caption: String? {
+            switch self {
+            case .regex: nil
+            case .invalid: "Not a valid regex: matched as text"
+            case .matchesEmpty: "Matches every session: matched as text"
+            case .slow: "Too slow on a session name: matched as text"
+            }
         }
-        let isSidekick = { (s: AgentSession) in [s.name, s.alias].contains(where: matches) }
-        return (list.filter { !isSidekick($0) }, list.filter(isSidekick))
+    }
+
+    /// Settings' caption under the pattern field: none while the tabs are off (the
+    /// field is disabled) or the pattern is empty. `names` are the live sessions'
+    /// names and aliases, so a pattern too slow on them says so before the island does.
+    static func sidekickCaption(_ pattern: String, tabs: Bool, names: [String]) -> String? {
+        let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        return tabs && !p.isEmpty ? sidekickFind(p, in: names).how.caption : nil
+    }
+
+    /// QA #592 F1: split runs on main several times a second, and an ICU regex can
+    /// backtrack for seconds. Bounds, in this thread's CPU time (a busy machine
+    /// preempting main is not the pattern's fault): a split call stops its search
+    /// at `sidekickDeadline`; a call slower than `sidekickSlowCall` adds to the
+    /// pattern's tally, which may reach `sidekickSlowTotal`. Either flips the
+    /// pattern to text for the life of the process. Worst case: 1 ms per call
+    /// forever, or about 50 + 10 ms once per pattern. Vars only so a test can make
+    /// the tally deterministic; nothing else writes them.
+    nonisolated(unsafe) static var sidekickDeadline: UInt64 = 10_000_000
+    nonisolated(unsafe) static var sidekickSlowCall: UInt64 = 1_000_000
+    nonisolated(unsafe) static var sidekickSlowTotal: UInt64 = 50_000_000
+
+    /// Compiled once per trimmed pattern. Guarded by `sidekickLock`; the unsafe
+    /// marker only silences Swift 6's global-state check.
+    /// ponytail: grows by one entry per distinct pattern typed in Settings; a few
+    /// hundred tiny entries at most per run.
+    private static let sidekickLock = NSLock()
+    nonisolated(unsafe) private static var sidekickCache: [String: (re: NSRegularExpression?, how: SidekickMatch, spent: UInt64)] = [:]
+
+    /// Which of `texts` the trimmed, non-empty `p` finds, and how it was matched.
+    private static func sidekickFind(_ p: String, in texts: [String]) -> (how: SidekickMatch, hits: [Bool]) {
+        let (re, cached) = sidekickLock.withLock {
+            if let e = sidekickCache[p] { return (e.re, e.how) }
+            let re = sidekickRegex(p)
+            // An empty match makes every session a sidekick (QA #592 INFO-2).
+            let how: SidekickMatch = re == nil ? .invalid : re!.firstMatch(in: "", range: NSRange()) != nil ? .matchesEmpty : .regex
+            sidekickCache[p] = (re, how, 0)
+            return (re, how)
+        }
+        var how = cached
+        var hits: [Bool] = []
+        if let re, how == .regex {
+            let cpu = { clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) }
+            let start = cpu()
+            for t in texts where how == .regex {
+                var hit = false
+                // .reportProgress: ICU calls back inside a backtracking search, so the
+                // deadline ends one catastrophic search, not only the gaps between hits.
+                // A zero-width match (\b, ^, a lookahead) is no hit, or it would take every name.
+                re.enumerateMatches(in: t, options: .reportProgress, range: NSRange(t.startIndex..., in: t)) { r, _, stop in
+                    if let r, r.range.length > 0 { hit = true; stop.pointee = true }
+                    else if cpu() - start > sidekickDeadline { how = .slow; stop.pointee = true }
+                }
+                hits.append(hit)
+            }
+            let spent = cpu() - start
+            how = sidekickLock.withLock {
+                guard var e = sidekickCache[p], e.how == .regex else { return sidekickCache[p]?.how ?? how }
+                if spent > sidekickSlowCall { e.spent += spent }
+                if how == .slow || e.spent > sidekickSlowTotal { e.how = .slow }
+                sidekickCache[p] = e
+                return e.how
+            }
+        }
+        if how != .regex { hits = texts.map { $0.range(of: p, options: .caseInsensitive) != nil } }
+        return (how, hits)
     }
 
     /// The trimmed pattern as a case-insensitive regex; nil when empty or not a

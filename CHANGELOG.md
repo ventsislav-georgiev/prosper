@@ -27,7 +27,11 @@ tag from the now-released section and put it on the new top draft.
   counts at any length. (#756)
 - **Sidekick pattern is a regex.** One pattern can now catch several kinds of
   session, e.g. `-(qa|reviewer)$`, ignoring case. A pattern that is not a valid
-  regex is matched as plain text, and Settings says so. (#759)
+  regex is matched as plain text, and Settings says so. So is a pattern that
+  would match every session, or one too slow to check against a name. A
+  saved pattern with regex characters now means something new: `.` is any
+  character, `c++` matches any name containing "c", so check yours after
+  updating; the default `-qa` is unchanged. (#759)
 
 ## v2.171.0
 

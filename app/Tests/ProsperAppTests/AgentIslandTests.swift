@@ -2526,6 +2526,77 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(AgentIsland.sidekickRegex("-QA")?.options.contains(.caseInsensitive), true)
     }
 
+    // QA #592: the matcher's bounds and fallbacks. The cache is process-wide, so
+    // each pattern here is used by this one test only.
+
+    /// F1: unbounded, each search took 1-7 s on main (QA's timings). The deadline is
+    /// 10 ms of CPU per split call; 1 s leaves room for a loaded CI host.
+    func testSplitCatastrophicPatternIsBoundedThenText() {
+        let list = [session("infra-stats-weekly-report-x", .idle), session("abcdefghijklmnopqr", .idle)]
+        let start = Date()
+        for p in ["^(.*)*-qa$", "(.+)+x"] {
+            XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.count, 0, p)
+            XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: []), "Too slow on a session name: matched as text", p)
+            let r = AgentIsland.split([session("z\(p)Z", .idle)] + list, pattern: p)
+            XCTAssertEqual(names(r.sidekicks), ["z\(p)Z"], "\(p): matched as text from now on")
+            // A tick re-splits several times a second: after the flip no call pays the deadline again
+            // (400 calls at 10 ms would be 4 s).
+            for _ in 0..<200 { _ = AgentIsland.split(list, pattern: p) }
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+    }
+
+    /// INFO-2: a regex that matches "" would make every session a sidekick.
+    func testSplitEmptyMatchingPatternFallsBackToText() {
+        let list = [session("build", .idle), session("notes-QA|x", .idle), session("a", .idle, alias: "x*y")]
+        for (p, hit) in [("x*", "a"), ("-qa|", "notes-QA|x"), ("b|", "")] {
+            XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: []), "Matches every session: matched as text", p)
+            XCTAssertEqual(names(AgentIsland.split(list, pattern: p).sidekicks), hit.isEmpty ? [] : [hit], p)
+        }
+        // Zero-width patterns never match "" alone but match inside every name: a zero-width match is no hit.
+        for p in ["\\b", "(?=build)", "(?<=a)"] {
+            XCTAssertNil(AgentIsland.sidekickCaption(p, tabs: true, names: []), p)
+            XCTAssertEqual(names(AgentIsland.split(list, pattern: p).sidekicks), [], p)
+        }
+    }
+
+    /// Point (c): a pattern always under the deadline still flips once its slow calls add up.
+    /// Deterministic: the deadline is out of reach and the thresholds are set outright, never timed.
+    func testSplitSlowCallTallyFlipsToText() {
+        let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal)
+        defer { (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal) = saved }
+        let list = (0..<200).map { session("build-\($0)-tally", .idle) }   // 400 searches, far over a µs of CPU
+        AgentIsland.sidekickDeadline = .max
+        AgentIsland.sidekickSlowCall = .max   // no call counts toward the tally, so even a zero total holds
+        AgentIsland.sidekickSlowTotal = 0
+        XCTAssertEqual(AgentIsland.split(list, pattern: "-1\\d-tally$").sidekicks.count, 10)
+        XCTAssertNil(AgentIsland.sidekickCaption("-1\\d-tally$", tabs: true, names: []))
+        AgentIsland.sidekickSlowCall = 0     // every call counts, and any tally is over the total
+        XCTAssertEqual(AgentIsland.split(list, pattern: "-2\\d-tally$").sidekicks.count, 0, "flipped: matched as text")
+        XCTAssertEqual(AgentIsland.sidekickCaption("-2\\d-tally$", tabs: true, names: []), "Too slow on a session name: matched as text")
+    }
+
+    /// INFO-4: ranges are UTF-16, so `$` finds the end of a Cyrillic + emoji name.
+    func testSplitRegexNonASCIIName() {
+        let r = AgentIsland.split([session("Проспер-😀-qa", .idle), session("Проспер-😀-qa-x", .idle),
+                                   session("бележки", .idle, alias: "ревю-👩‍💻-REVIEWER")], pattern: "😀-qa$|-reviewer$")
+        XCTAssertEqual(names(r.sidekicks), ["Проспер-😀-qa", "бележки"])
+        XCTAssertEqual(names(r.primary), ["Проспер-😀-qa-x"])
+    }
+
+    /// INFO-4/5: one caption per state, none for a usable regex, an empty pattern or the tabs off.
+    func testSidekickCaptionStates() {
+        let slow = "([a-z]+)*-qa$", names = [String(repeating: "a", count: 20)]
+        XCTAssertNil(AgentIsland.sidekickCaption("-(qa|reviewer)$", tabs: true, names: names))
+        XCTAssertNil(AgentIsland.sidekickCaption("  ", tabs: true, names: names))
+        XCTAssertNil(AgentIsland.sidekickCaption("\\b", tabs: true, names: names), "zero-width: a regex, it just takes no session")
+        XCTAssertEqual(AgentIsland.sidekickCaption("*-qa", tabs: true, names: names), "Not a valid regex: matched as text")
+        XCTAssertEqual(AgentIsland.sidekickCaption("a|", tabs: true, names: names), "Matches every session: matched as text")
+        XCTAssertNil(AgentIsland.sidekickCaption(slow, tabs: false, names: names), "tabs off: the field is disabled, no caption")
+        XCTAssertEqual(AgentIsland.sidekickCaption(slow, tabs: true, names: names), "Too slow on a session name: matched as text")
+        XCTAssertNil(AgentIsland.sidekickCaption("*-qa", tabs: false, names: names))
+    }
+
     func testShowsSidekicksAllThreeCases() {
         let all = AgentIsland.split([session("a-qa", .idle), session("b-qa", .idle)], pattern: "-qa")
         XCTAssertTrue(AgentIsland.showsSidekicks(all, tab: false), "sidekicks are all there is")

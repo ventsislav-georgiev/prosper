@@ -1024,9 +1024,9 @@ struct AgentIslandListSection: View {
                 VStack(alignment: .trailing, spacing: sz(2)) {
                     TextField("None", text: $pattern).frame(width: sz(180))
                         .disabled(!tabs)
-                    if !pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                       AgentIsland.sidekickRegex(pattern) == nil {
-                        Text("Not a valid regex: matched as text")
+                    let names = AgentIslandController.shared.store?.sessions.flatMap { [$0.name, $0.alias] } ?? []
+                    if let caption = AgentIsland.sidekickCaption(pattern, tabs: tabs, names: names) {
+                        Text(caption)
                             .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     }
                 }
