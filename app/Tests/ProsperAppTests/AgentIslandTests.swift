@@ -2576,6 +2576,47 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(AgentIsland.sidekickCaption("-2\\d-tally$", tabs: true, names: []), "Too slow on a session name: matched as text")
     }
 
+    /// QA #592 INFO-7: the "" probe backtracks too; unbounded, `(x?|y?){32}\b` took 1.3 s on "" alone here
+    /// (QA: about 30 s at {30}). The caption goes first with no names, so only the probe can say slow.
+    func testSplitEmptyProbeIsBoundedThenText() {
+        let p = "(x?|y?){32}\\b"
+        let start = Date()
+        XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: []), "Too slow on a session name: matched as text")
+        let r = AgentIsland.split([session("xy", .idle), session("z\(p)Z", .idle)], pattern: p)
+        XCTAssertEqual(names(r.sidekicks), ["z\(p)Z"], "matched as text")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+    }
+
+    /// QA #592 INFO-8: the slow-call bar scales with the texts searched, so many sessions
+    /// under a cheap pattern never flip it. The old whole-call rule flips here.
+    func testSplitManySessionsCheapPatternStaysRegex() {
+        let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal)
+        defer { (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal) = saved }
+        let list = (0..<1600).map { session("s\($0)-many", .idle, alias: $0 % 2 == 0 ? "a\($0)-reviewer" : "") }
+        AgentIsland.sidekickDeadline = .max
+        // A call measured 4.4 ms of CPU here (1.4 µs a text), 22 µs per 16 texts: 0.3 ms sits ~14x from both.
+        AgentIsland.sidekickSlowCall = 300_000
+        AgentIsland.sidekickSlowTotal = 0   // any call that counts flips it
+        for _ in 0..<3 { XCTAssertEqual(AgentIsland.split(list, pattern: "-(qa|reviewer|many-x)$").sidekicks.count, 800) }
+        XCTAssertNil(AgentIsland.sidekickCaption("-(qa|reviewer|many-x)$", tabs: true, names: []))
+    }
+
+    /// INFO-8, the other side: one pathological name among 1600 cheap sessions still counts the call,
+    /// though spread over 3200 texts it is under the per-16 bar. Same 300 µs bar as above; the x{16}
+    /// search measured 4.3 ms of CPU here (14x over it), the whole call per 16 texts about 40 µs.
+    func testSplitOneSlowNameAmongManyStillFlips() {
+        let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal)
+        defer { (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal) = saved }
+        let slow = String(repeating: "x", count: 16)
+        // As a regex it takes "xxy"; as text, only the name holding the pattern.
+        let list = (0..<1600).map { session("s\($0)-few", .idle) } + [session(slow, .idle), session("xxy", .idle), session("z(x+x+)+yZ", .idle)]
+        AgentIsland.sidekickDeadline = .max
+        AgentIsland.sidekickSlowCall = 300_000
+        AgentIsland.sidekickSlowTotal = 0
+        XCTAssertEqual(names(AgentIsland.split(list, pattern: "(x+x+)+y").sidekicks), ["z(x+x+)+yZ"], "flipped: matched as text")
+        XCTAssertEqual(AgentIsland.sidekickCaption("(x+x+)+y", tabs: true, names: []), "Too slow on a session name: matched as text")
+    }
+
     /// INFO-4: ranges are UTF-16, so `$` finds the end of a Cyrillic + emoji name.
     func testSplitRegexNonASCIIName() {
         let r = AgentIsland.split([session("Проспер-😀-qa", .idle), session("Проспер-😀-qa-x", .idle),

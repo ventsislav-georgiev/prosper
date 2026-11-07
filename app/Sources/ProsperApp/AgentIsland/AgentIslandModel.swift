@@ -197,7 +197,8 @@ enum AgentIsland {
     /// QA #592 F1: split runs on main several times a second, and an ICU regex can
     /// backtrack for seconds. Bounds, in this thread's CPU time (a busy machine
     /// preempting main is not the pattern's fault): a split call stops its search
-    /// at `sidekickDeadline`; a call slower than `sidekickSlowCall` adds to the
+    /// at `sidekickDeadline`, as does the "" probe; a call slower than
+    /// `sidekickSlowCall` per 16 texts searched, or on any one text, adds to the
     /// pattern's tally, which may reach `sidekickSlowTotal`. Either flips the
     /// pattern to text for the life of the process. Worst case: 1 ms per call
     /// forever, or about 50 + 10 ms once per pattern. Vars only so a test can make
@@ -215,21 +216,35 @@ enum AgentIsland {
 
     /// Which of `texts` the trimmed, non-empty `p` finds, and how it was matched.
     private static func sidekickFind(_ p: String, in texts: [String]) -> (how: SidekickMatch, hits: [Bool]) {
-        let (re, cached) = sidekickLock.withLock {
-            if let e = sidekickCache[p] { return (e.re, e.how) }
-            let re = sidekickRegex(p)
-            // An empty match makes every session a sidekick (QA #592 INFO-2).
-            let how: SidekickMatch = re == nil ? .invalid : re!.firstMatch(in: "", range: NSRange()) != nil ? .matchesEmpty : .regex
-            sidekickCache[p] = (re, how, 0)
-            return (re, how)
+        let cpu = { clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) }
+        let entry = sidekickLock.withLock { sidekickCache[p] }
+        var (re, how) = (entry?.re, entry?.how ?? .invalid)
+        if entry == nil {
+            // Off the lock: two first callers may both probe, and the first to store wins.
+            re = sidekickRegex(p)
+            if let re {
+                // An empty match makes every session a sidekick (QA #592 INFO-2). The probe
+                // gets the same CPU deadline as a search: `(x?|y?){30}\b` backtracks for
+                // about 30 s on "" alone (QA #592 INFO-7).
+                how = .regex
+                let start = cpu()
+                re.enumerateMatches(in: "", options: .reportProgress, range: NSRange()) { r, _, stop in
+                    if r != nil { how = .matchesEmpty; stop.pointee = true }
+                    else if cpu() - start > sidekickDeadline { how = .slow; stop.pointee = true }
+                }
+            }
+            (re, how) = sidekickLock.withLock {
+                if sidekickCache[p] == nil { sidekickCache[p] = (re, how, 0) }
+                return (sidekickCache[p]!.re, sidekickCache[p]!.how)
+            }
         }
-        var how = cached
         var hits: [Bool] = []
         if let re, how == .regex {
-            let cpu = { clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) }
             let start = cpu()
+            var worst: UInt64 = 0
             for t in texts where how == .regex {
                 var hit = false
+                let t0 = cpu()
                 // .reportProgress: ICU calls back inside a backtracking search, so the
                 // deadline ends one catastrophic search, not only the gaps between hits.
                 // A zero-width match (\b, ^, a lookahead) is no hit, or it would take every name.
@@ -238,11 +253,14 @@ enum AgentIsland {
                     else if cpu() - start > sidekickDeadline { how = .slow; stop.pointee = true }
                 }
                 hits.append(hit)
+                worst = max(worst, cpu() - t0)
             }
             let spent = cpu() - start
             how = sidekickLock.withLock {
                 guard var e = sidekickCache[p], e.how == .regex else { return sidekickCache[p]?.how ?? how }
-                if spent > sidekickSlowCall { e.spent += spent }
+                // Per 16 texts, so a cheap pattern over 100 sessions never counts (QA #592 INFO-8);
+                // one name over the whole budget still counts, however many cheap names dilute it.
+                if worst > sidekickSlowCall || spent / UInt64(max(1, texts.count / 16)) > sidekickSlowCall { e.spent += spent }
                 if how == .slow || e.spent > sidekickSlowTotal { e.how = .slow }
                 sidekickCache[p] = e
                 return e.how
