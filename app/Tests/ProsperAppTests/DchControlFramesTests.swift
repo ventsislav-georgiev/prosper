@@ -1321,10 +1321,13 @@ final class DchControlFramesTests: XCTestCase {
     /// #704: through the real probe (a script that hangs, never dch): a `--version`
     /// that timed out is cached, so the very next handshake answers at once and runs
     /// nothing; a new mtime probes again, and its answer carries the bit.
+    /// #793: only the hung probe gets a short bound (2 s, so its count line lands before the
+    /// kill); the new mtime's probe gets 30 s, so a slow fresh exec under load never times
+    /// out (and caches nil for 60 s), which failed the run-count asserts in QA #615.
     func testATimedOutProbeIsNotRerunOnTheNextHandshake() throws {
         let dir = tempDir(), script = dir.appendingPathComponent("dch").path, count = dir.appendingPathComponent("count").path
         let timeout = DchCommand.islandTimeout
-        DchCommand.islandTimeout = 1
+        DchCommand.islandTimeout = 2
         defer { DchCommand.islandTimeout = timeout }
         func install(_ body: String, mtime: TimeInterval) throws {
             try "#!/bin/sh\necho \"$1\" >> '\(count)'\n\(body)\n".write(toFile: script, atomically: true, encoding: .utf8)
@@ -1343,24 +1346,26 @@ final class DchControlFramesTests: XCTestCase {
             queue.async { conn.handle(type: DchFrame.machineInfo, payload: Data()) }
             let info = machineInfoResp(frames, timeout: 2)
             let reply = Date().timeIntervalSince(start)
-            wait(for: [probed], timeout: 5)
+            wait(for: [probed], timeout: DchCommand.islandTimeout + 5)
             return (info?["ops"] as? [String] ?? ["no reply"], reply, Date().timeIntervalSince(start))
         }
         let first = handshake()
         XCTAssertLessThan(first.reply, 0.5, "the reply waited on the hung probe")
         XCTAssertFalse(first.ops.contains("revive_no_message"))
-        XCTAssertGreaterThanOrEqual(first.probe, 1, "the probe timed out")
+        XCTAssertGreaterThanOrEqual(first.probe, 2, "the probe timed out")
         let ran = runs()   // 1, or 0 when a fresh script's first exec outlasts the timeout
         let next = handshake()
         XCTAssertLessThan(next.reply, 0.5)
         XCTAssertFalse(next.ops.contains("revive_no_message"))
-        XCTAssertLessThan(next.probe, 0.5, "the timed-out probe ran again")
+        XCTAssertLessThan(next.probe, 1, "the timed-out probe ran again")   // a rerun takes the 2 s bound
         XCTAssertEqual(runs(), ran, "the timed-out probe ran again")
+        DchCommand.islandTimeout = 30   // the hung phase is over; this probe must answer, however slow
         try install("echo 'dch 1.27.0'", mtime: 2_000)
-        _ = handshake()   // a new mtime probes again; its bit may miss this reply's 0.25 s under load
+        _ = handshake()   // a new mtime probes again (waits for its answer); its bit may miss this reply's 0.25 s
         XCTAssertEqual(runs(), ran + 1, "a new mtime probes again")
-        XCTAssertTrue(handshake().ops.contains("revive_no_message"), "the new mtime's answer")
-        XCTAssertEqual(runs(), ran + 1)
+        // The answer is cached now; a reply may still miss 0.25 s on a starved pool, so up to 3 handshakes.
+        XCTAssertTrue((1...3).contains { _ in handshake().ops.contains("revive_no_message") }, "the new mtime's answer")
+        XCTAssertEqual(runs(), ran + 1, "the cached answer ran nothing")
     }
 
     /// #704: a timed-out probe stays cached only for probeTimeoutTTL; past it, the next call runs it again.
