@@ -1276,6 +1276,8 @@ struct DchSessionMeta: Equatable, Sendable {
         }
     }
 
+    /// #762: Agent Island no longer draws tasks; kept only so the 0x03 list wire
+    /// (metaWire) stays as old phones read it, until iOS #763 drops it.
     var tasks: Tasks?
     var openPRs: [PR] = []
     var merged: Int?

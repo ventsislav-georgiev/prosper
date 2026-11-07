@@ -971,21 +971,19 @@ private struct SettingsRootView: View {
 }
 
 /// #534: Agent Island › Row details, one toggle per detail a session row can
-/// draw. Per Mac (not in SyncedKeys); prosper-ios (#533) has the same labels and
-/// defaults. A toggle redraws the open island at once, with no animation.
+/// draw. Per Mac (not in SyncedKeys). A toggle redraws the open island at once,
+/// with no animation.
 struct AgentIslandRowDetailsSection: View {
     @State private var show = Preferences.agentIslandRowDetails
 
     /// #596 (QA #465 INFO-3): label -> the detail its toggle binds, in drawn order.
     static let toggles: [(label: String, path: WritableKeyPath<AgentIslandRowDetails, Bool>)] = [
-        ("Agents", \.agents), ("Open PRs", \.openPRs), ("Merged", \.merged), ("Tasks done", \.tasksDone),
-        ("In progress", \.inProgress), ("Queued", \.queued),
-        ("Session name", \.sessionName), // #587: the dch session name beside an alias; off by default.
+        ("Agents", \.agents), ("Open PRs", \.openPRs), ("Merged", \.merged),
     ]
 
     var body: some View {
         // NeonRow + a trailing toggle, as the manifest's own toggle rows above.
-        NeonSection("Row details", footer: "What each session row shows besides its title, age and state.") {
+        NeonSection("Row details", footer: "Shown on each session row besides its title, state and age.") {
             ForEach(Self.toggles.indices, id: \.self) { i in
                 if i > 0 { NeonDivider() }
                 NeonRow(Self.toggles[i].label) { Toggle("", isOn: $show[dynamicMember: Self.toggles[i].path]).labelsHidden() }

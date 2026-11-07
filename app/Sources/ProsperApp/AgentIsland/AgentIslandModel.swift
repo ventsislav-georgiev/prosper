@@ -98,22 +98,15 @@ enum AgentIslandSource: String, CaseIterable {
 }
 
 /// #534: which of a row's details the island draws (Settings › Agent Island ›
-/// Row details). Per Mac, never synced. prosper-ios (#533) has the same six
-/// labels and defaults: Agents, Open PRs and Merged on; Tasks done, In progress
-/// and Queued off, so a fresh install draws no task summary on line 2.
-/// #587: Session name (the dch name beside an alias on line 2) is Mac only, off.
+/// Row details). Per Mac, never synced. #762: Agents, Open PRs and Merged, all on
+/// by default (Tasks done, In progress, Queued and Session name were removed).
 /// The pure functions below take it as a parameter and never read defaults.
 struct AgentIslandRowDetails: Equatable {
     var agents = true
     var openPRs = true
     var merged = true
-    var tasksDone = false
-    var inProgress = false
-    var queued = false
-    var sessionName = false
 
-    static let all = AgentIslandRowDetails(agents: true, openPRs: true, merged: true,
-                                           tasksDone: true, inProgress: true, queued: true, sessionName: true)
+    static let all = AgentIslandRowDetails(agents: true, openPRs: true, merged: true)
 }
 
 /// #571: Settings › Agent Island › Sort sessions. Per Mac, never synced.
@@ -329,41 +322,23 @@ enum AgentIsland {
         return (["Agent Island"] + (parts.isEmpty ? none : parts)).joined(separator: ", ")
     }
 
-    /// #587: the grey dch name after the state label: only with Session name on,
-    /// and only beside an alias (with no alias the title already is the name).
-    static func sessionNameLabel(_ s: AgentSession, show d: AgentIslandRowDetails) -> String? {
-        sessionNameLabel(title: s.title, name: s.name, show: d)
-    }
-
-    /// #592: the same rule for a History row (title from alias or agent name).
-    static func sessionNameLabel(_ r: DchHistoryRecord, show d: AgentIslandRowDetails) -> String? {
-        sessionNameLabel(title: r.title, name: r.name, show: d)
-    }
-
-    static func sessionNameLabel(title: String, name: String, show d: AgentIslandRowDetails) -> String? {
-        d.sessionName && title != name ? name : nil
-    }
-
-    /// #592: a History row's VoiceOver text; the dch name only when the row draws it.
-    /// #605: "pinned" after the title on a pinned record.
-    static func historyAccessibilityLabel(_ r: DchHistoryRecord, line2: String, age: String, cwd: String,
-                                          show d: AgentIslandRowDetails) -> String {
-        ([r.title, r.pinned ? "pinned" : nil, line2, sessionNameLabel(r, show: d), age.isEmpty ? nil : "\(age) ago", cwd] as [String?])
+    /// #592: a History row's VoiceOver text. #605: "pinned" after the title on a pinned record.
+    static func historyAccessibilityLabel(_ r: DchHistoryRecord, line2: String, age: String, cwd: String) -> String {
+        ([r.title, r.pinned ? "pinned" : nil, line2, age.isEmpty ? nil : "\(age) ago", cwd] as [String?])
             .compactMap { $0 }.joined(separator: ", ")
     }
 
-    /// #594 (QA #464 T6): the History row's label; a Resume status replaces line 2, dch name included.
-    static func historyRowAccessibilityLabel(_ r: DchHistoryRecord, status: String?, end: String, age: String, cwd: String,
-                                             show d: AgentIslandRowDetails) -> String {
-        historyAccessibilityLabel(r, line2: status ?? end, age: age, cwd: cwd, show: status == nil ? d : AgentIslandRowDetails())
+    /// #594 (QA #464 T6): the History row's label; a Resume status replaces line 2.
+    static func historyRowAccessibilityLabel(_ r: DchHistoryRecord, status: String?, end: String, age: String, cwd: String) -> String {
+        historyAccessibilityLabel(r, line2: status ?? end, age: age, cwd: cwd)
     }
 
-    /// #596 (QA #465 INFO-1): the dch name after the state, as line 2 draws it (#587's rule).
+    /// #596 (QA #465 INFO-1): what the row draws, in drawn order.
     static func rowAccessibilityLabel(_ s: AgentSession, now: TimeInterval, show d: AgentIslandRowDetails = .all) -> String {
         let age = age(of: s, now: now)
         let (chips, more) = prChips(s.meta, show: d, budget: .infinity)
         let prs = chips.map(\.fullName).joined(separator: ", ") + (more > 0 ? " and \(more) more pending PR\(more == 1 ? "" : "s")" : "")
-        return [s.title, s.state.label, sessionNameLabel(s, show: d), age.isEmpty ? nil : "\(age) ago", metaSummary(s.meta, show: d), mergedLabel(s.meta, show: d),
+        return [s.title, s.state.label, age.isEmpty ? nil : "\(age) ago", mergedLabel(s.meta, show: d),
                 chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
     }
@@ -371,20 +346,8 @@ enum AgentIsland {
     // MARK: - Session meta (#506)
 
     /// Every count the row draws: "99999+" above 99999, so a runaway number
-    /// cannot squeeze the title. done > total is drawn as is.
+    /// cannot squeeze the title.
     static func count(_ n: Int) -> String { n > 99_999 ? "99999+" : "\(n)" }
-
-    /// The second line's "22/26 done · 2 in progress · 2 queued": zero and
-    /// unknown parts left out, and (#534) the parts toggled off; nil when nothing
-    /// is left (the row looks as before).
-    static func metaSummary(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all) -> String? {
-        guard let t = m?.tasks else { return nil }
-        var parts: [String] = []
-        if d.tasksDone, let total = t.total, total > 0 { parts.append("\(count(t.done ?? 0))/\(count(total)) done") }
-        if d.inProgress, let n = t.inProgress, n > 0 { parts.append("\(count(n)) in progress") }
-        if d.queued, let n = t.queued, n > 0 { parts.append("\(count(n)) queued") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
 
     /// "18 merged", right-aligned on the PR line; nil for none or Merged off.
     static func mergedLabel(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all) -> String? {
@@ -684,7 +647,7 @@ enum AgentTerminal: String, CaseIterable {
 
 /// Mtimes of one session's sidecars: output (.act), a hook's reported state
 /// (.state, where "done" always wins), the alias (.alias, the title) and
-/// `dch --meta`'s PRs and tasks (.meta, #506).
+/// `dch --meta`'s PRs (.meta, #506).
 struct AgentSidecarStamp: Equatable {
     var act: TimeInterval?
     var state: TimeInterval?

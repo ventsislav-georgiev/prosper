@@ -636,7 +636,7 @@ struct AgentIslandView: View {
                 ForEach(historyDrawn) { r in
                     AgentIslandHistoryRow(record: r.record, now: ctx.date.timeIntervalSince1970,
                                           status: r.status, enabled: r.enabled,
-                                          show: store.details, action: r.resume, pin: r.pin, remove: r.remove,
+                                          action: r.resume, pin: r.pin, remove: r.remove,
                                           resumeNoMessage: r.resumeNoMessage, older: r.older,
                                           olderUnpinned: r.olderUnpinned)
                     .contextMenu { ForEach(r.menu, id: \.title) { Button($0.title, action: $0.action) } }   // #742
@@ -935,16 +935,13 @@ struct AgentIslandView: View {
 }
 
 /// #578: one ended session. Line 1: the title (#592: alias, else the agent's
-/// name, else the dch name) and how long ago it ended; line 2: the end in words,
-/// the dch name (Session name on, #587's rule) and the cwd, or the Resume status
-/// as static text. A click is Resume.
+/// name, else the dch name) and how long ago it ended; line 2: the end in words
+/// and the cwd, or the Resume status as static text. A click is Resume.
 struct AgentIslandHistoryRow: View {
     let record: DchHistoryRecord
     let now: TimeInterval
     let status: String?
     let enabled: Bool
-    /// #592: the row details toggled on (Session name).
-    var show = AgentIslandRowDetails()
     let action: () -> Void
     /// #605: the pin toggle and the X (nil: not drawn); like the PR chips, buttons
     /// inside the row and, for VoiceOver, the row's actions.
@@ -998,11 +995,6 @@ struct AgentIslandHistoryRow: View {
                                 // #585: only a crash is colored; "ended (signal 15)" stays neutral.
                                 .foregroundStyle(end.hasPrefix("crashed") ? AgentState.blocked.color : Color.white.opacity(0.5))
                                 .fixedSize()
-                            if let name = AgentIsland.sessionNameLabel(record, show: show) {
-                                Text(verbatim: name)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(Color.white.opacity(0.35))
-                            }
                             Text(verbatim: cwd)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(Color.white.opacity(0.35))
@@ -1025,8 +1017,8 @@ struct AgentIslandHistoryRow: View {
         .disabled(!enabled)
         .onHover { hover = $0 }
         .help(Text(verbatim: enabled ? AgentIsland.resumeWithMessageHelp : ""))
-        // A Resume status replaces line 2, dch name included.
-        .accessibilityLabel(AgentIsland.historyRowAccessibilityLabel(record, status: status, end: end, age: age, cwd: cwd, show: show))
+        // A Resume status replaces line 2.
+        .accessibilityLabel(AgentIsland.historyRowAccessibilityLabel(record, status: status, end: end, age: age, cwd: cwd))
         .accessibilityHint(enabled ? AgentIsland.resumeWithMessageHelp : "")
         .accessibilityActions {
             if let resumeNoMessage { Button(AgentIsland.resumeNoMessageLabel, action: resumeNoMessage) }
@@ -1077,9 +1069,9 @@ struct AgentIslandRow: View {
         let prs = AgentIsland.prChips(session.meta, show: show)   // once per body
         let prLine = AgentIsland.hasPRLine(session.meta, show: show)
         Button(action: action) {
-            // #525: line 1 title, agents, age; line 2 state, branch, tasks; line 3
-            // PRs, merged. Every line spans the text column, so the right-hand
-            // columns (age, tasks, merged) line up across rows.
+            // #525: line 1 title, agents, age; line 2 state; line 3 PRs, merged.
+            // Every line spans the text column, so the right-hand columns (age,
+            // merged) line up across rows.
             HStack(alignment: .firstTextBaseline, spacing: AgentIslandGeometry.glyphGap) {
                 Text(session.state.glyph)
                     .font(.system(size: 12, weight: .bold))
@@ -1110,19 +1102,6 @@ struct AgentIslandRow: View {
                             Text(notice).foregroundStyle(Color.white.opacity(0.7))
                         } else {
                             Text(session.state.label).foregroundStyle(session.state.color)
-                            if let name = AgentIsland.sessionNameLabel(session, show: show) {
-                                Text(verbatim: name)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(Color.white.opacity(0.35))
-                            }
-                            if let summary = AgentIsland.metaSummary(session.meta, show: show) {
-                                Spacer(minLength: 6)
-                                Text(verbatim: summary)
-                                    .font(.system(size: 10).monospacedDigit())
-                                    .foregroundStyle(Color.white.opacity(0.5))
-                                    .frame(maxWidth: Self.summaryMaxWidth, alignment: .trailing)
-                                    .layoutPriority(1)
-                            }
                         }
                     }
                     .font(.system(size: 11))
@@ -1150,10 +1129,6 @@ struct AgentIslandRow: View {
             }
         }
     }
-
-    /// #506: the task summary never takes more than this of the second
-    /// line, so the state label keeps its room whatever the numbers are.
-    static let summaryMaxWidth: CGFloat = 220
 
     /// #525: the PR line. Open PRs as "repo#12" chips in the agents capsule's
     /// style (a button when the URL passed the allowlist, else a dimmer label),

@@ -1217,37 +1217,25 @@ final class AgentIslandControlsTests: XCTestCase {
         if let extra { try png.write(to: extra.appendingPathComponent("\(name).png")) }
     }
 
-    /// #594 (T8): the view hands store.details to both row kinds. Session name on vs
-    /// off redraws a History row titled by its agent and a Sessions row titled by its
-    /// alias. One render difference each, never two equal renders.
+    /// #594 (T8): the view hands store.details to the Sessions rows: Agents on vs
+    /// off redraws a row with agents. One render difference, never two equal renders.
     @MainActor
-    func testTheViewPassesItsDetailsToHistoryAndSessionsRows() throws {
+    func testTheViewPassesItsDetailsToSessionsRows() throws {
         let now = Date().timeIntervalSince1970
         let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
-        store.sessions = [session("live")]
         store.controlDch = Self.v124
-        var a = record("dobby-main", ended: now - 7200, end: "signal 9")
-        a.agent = .init(name: "dobby-qa")
-        store.history = [a]
-        store.historyTab = true
+        store.sessions = [AgentSession(key: AgentSessionKey(dir: "/d", name: "dobby-main"), alias: "A", activity: now - 7200,
+                                       state: .idle, agents: 2)]
         store.expanded = true
         func pixels() throws -> Data {
             let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
             r.scale = 1
             return try XCTUnwrap(try XCTUnwrap(r.cgImage).dataProvider?.data) as Data
         }
-        let historyOff = try pixels()
-        XCTAssertEqual(historyOff, try pixels(), "control: same input, same render")
-        store.details.sessionName = true
-        XCTAssertNotEqual(historyOff, try pixels(), "History row: the dch name drawn only with Session name on")
-        store.details = AgentIslandRowDetails()
-        store.historyTab = false
-        store.sessions = [AgentSession(key: AgentSessionKey(dir: "/d", name: "dobby-main"), alias: "A", activity: now - 7200,
-                                       state: .idle, agents: 0)]
-        let sessionsOff = try pixels()
-        XCTAssertEqual(sessionsOff, try pixels(), "control: same input, same render")
-        store.details.sessionName = true
-        XCTAssertNotEqual(sessionsOff, try pixels(), "Sessions row: the dch name drawn only with Session name on")
+        let agentsOn = try pixels()
+        XCTAssertEqual(agentsOn, try pixels(), "control: same input, same render")
+        store.details.agents = false
+        XCTAssertNotEqual(agentsOn, try pixels(), "Sessions row: the agents capsule drawn only with Agents on")
     }
 
     // MARK: - #581: the island with history and no live session
@@ -3707,8 +3695,7 @@ final class AgentIslandControlsTests: XCTestCase {
     func testVoiceOverLabelsForPinAndRemove() {
         let p = pinned("p"), x = record("x")
         func label(_ r: DchHistoryRecord) -> String {
-            AgentIsland.historyRowAccessibilityLabel(r, status: nil, end: "crashed (signal 9)", age: "2m", cwd: "/src",
-                                                     show: AgentIslandRowDetails())
+            AgentIsland.historyRowAccessibilityLabel(r, status: nil, end: "crashed (signal 9)", age: "2m", cwd: "/src")
         }
         XCTAssertEqual(label(p), "p, pinned, crashed (signal 9), 2m ago, /src")
         XCTAssertEqual(label(x), "x, crashed (signal 9), 2m ago, /src")

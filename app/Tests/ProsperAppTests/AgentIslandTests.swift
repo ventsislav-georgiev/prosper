@@ -71,7 +71,7 @@ final class AgentIslandTests: XCTestCase {
 
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(
             session("fix-auth", .blocked, activity: 100, alias: "fix auth bug"), now: 112),
-            "fix auth bug, Needs input, fix-auth, 12s ago")
+            "fix auth bug, Needs input, 12s ago")
     }
 
     // MARK: - Socket dirs and listing (G5)
@@ -1506,49 +1506,31 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(rows.map(\.meta), [DchSessionMeta(merged: 4), nil])
     }
 
-    func testMetaSummary() {
-        XCTAssertEqual(AgentIsland.metaSummary(DchSessionMeta(
-            tasks: .init(done: 22, total: 26, inProgress: 2, queued: 2), merged: 18)),
-            "22/26 done · 2 in progress · 2 queued")
+    /// #762: tasks in the meta are never read by the row (the phone wire keeps them).
+    func testMergedLabelAndRowLabelWithMeta() {
         XCTAssertEqual(AgentIsland.mergedLabel(DchSessionMeta(merged: 18)), "18 merged")
         XCTAssertNil(AgentIsland.mergedLabel(DchSessionMeta(merged: 0)))
-        XCTAssertNil(AgentIsland.metaSummary(DchSessionMeta(merged: 18)), "merged is the title line's")
-        XCTAssertEqual(AgentIsland.metaSummary(DchSessionMeta(tasks: .init(done: 485, total: 503, inProgress: 5,
-                                                                           queued: 13), merged: 0)),
-                       "485/503 done · 5 in progress · 13 queued")
-        XCTAssertNil(AgentIsland.metaSummary(nil))
-        XCTAssertNil(AgentIsland.metaSummary(DchSessionMeta(tasks: .init(done: 0, total: 0, inProgress: 0, queued: 0),
-                                                            merged: 0)), "all zero: the row looks as before")
+        XCTAssertNil(AgentIsland.mergedLabel(nil))
         let s = session("s", .working, activity: 100, alias: "T")
         var m = s; m.meta = DchSessionMeta(tasks: .init(done: 1, total: 2), openPRs: [pr("o/r", 12)], merged: 3)
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, s, 12s ago", "no meta: unchanged")
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 12s ago", "no meta: unchanged")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, s, 12s ago, 1/2 done, 3 merged, open pull requests o/r#12", "#525: owner kept here")
+                       "T, Working, 12s ago, 3 merged, open pull requests o/r#12", "#525: owner kept here; no tasks")
         m.meta = DchSessionMeta(openPRs: (1...5).map { pr("o/r", $0) })
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, s, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 2 more pending PRs", "QA #347 L-e")
+                       "T, Working, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 2 more pending PRs", "QA #347 L-e")
         m.meta = DchSessionMeta(openPRs: (1...4).map { pr("o/r", $0) })
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, s, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 1 more pending PR")
+                       "T, Working, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 1 more pending PR")
     }
 
-    /// QA #347 L-d: every drawn count caps at "99999+"; done > total stays as drawn.
+    /// QA #347 L-d: every drawn count caps at "99999+".
     func testCountsCapAt99999() {
         XCTAssertEqual([99_999, 100_000, Int.max].map(AgentIsland.count), ["99999", "99999+", "99999+"])
-        func summary(done: Int = 1, total: Int = 2, inProgress: Int = 3, queued: Int = 4) -> String? {
-            AgentIsland.metaSummary(DchSessionMeta(tasks: .init(done: done, total: total, inProgress: inProgress,
-                                                                queued: queued)))
-        }
-        XCTAssertEqual(summary(done: 100_000), "99999+/2 done · 3 in progress · 4 queued", "done")
-        XCTAssertEqual(summary(total: 100_000), "1/99999+ done · 3 in progress · 4 queued", "total")
-        XCTAssertEqual(summary(inProgress: 100_000), "1/2 done · 99999+ in progress · 4 queued", "in progress")
-        XCTAssertEqual(summary(queued: 100_000), "1/2 done · 3 in progress · 99999+ queued", "queued")
-        XCTAssertEqual(summary(done: 7, total: 3), "7/3 done · 3 in progress · 4 queued", "done > total as is")
         XCTAssertEqual(AgentIsland.mergedLabel(DchSessionMeta(merged: 100_000)), "99999+ merged")
         var s = session("s", .working, activity: 100, alias: "T")
-        s.meta = DchSessionMeta(tasks: .init(done: Int.max, total: Int.max), merged: Int.max)
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112),
-                       "T, Working, s, 12s ago, 99999+/99999+ done, 99999+ merged")
+        s.meta = DchSessionMeta(merged: Int.max)
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 12s ago, 99999+ merged")
         // Layout: an Int.max merged label still leaves the chips their room.
         let three = (1...3).map { pr("o/r", $0) }
         XCTAssertEqual(AgentIsland.prChips(DchSessionMeta(openPRs: three, merged: Int.max)).chips.count, 3)
@@ -1781,7 +1763,7 @@ final class AgentIslandTests: XCTestCase {
         var s = session("s", .working)
         XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "no meta: two lines, as before")
         s.meta = DchSessionMeta(tasks: .init(done: 1, total: 2))
-        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "tasks ride on line 2")
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "#762: tasks draw nothing")
         s.meta = DchSessionMeta(openPRs: [.init(url: "x", repo: "o/r", num: nil, title: "")])
         XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "a PR with no label draws nothing")
         s.meta = DchSessionMeta(merged: 0)
@@ -1919,12 +1901,10 @@ final class AgentIslandTests: XCTestCase {
         ])
         // #525: the operator's preview rows, sec-1 and perf-1.
         var sec = session("sec-branch-name", .working, activity: now, alias: "sec-1", agents: 3)
-        sec.meta = DchSessionMeta(tasks: .init(done: 39, total: 64, inProgress: 3, queued: 22),
-                                  openPRs: [pr("payhawk/cde-codebase", 370), pr("payhawk/solution", 20399),
+        sec.meta = DchSessionMeta(openPRs: [pr("payhawk/cde-codebase", 370), pr("payhawk/solution", 20399),
                                             pr("o/r", 1), pr("o/s", 2)], merged: 66)
         var perf = session("solution-master-perf", .idle, activity: now - 15, alias: "perf-1")
-        perf.meta = DchSessionMeta(tasks: .init(done: 74, total: 81, inProgress: 2, queued: 5),
-                                   openPRs: [pr("payhawk/account-data-service", 13509), pr("payhawk/solution", 20399)],
+        perf.meta = DchSessionMeta(openPRs: [pr("payhawk/account-data-service", 13509), pr("payhawk/solution", 20399)],
                                    merged: 63)
         store.sessions[1] = sec
         store.sessions[2] = perf
@@ -1945,7 +1925,7 @@ final class AgentIslandTests: XCTestCase {
         }
     }
 
-    /// #506 (c): rows with PR chips and task counts, worst cases included, stay
+    /// #506 (c): rows with PR chips and merged counts, worst cases included, stay
     /// inside the island at every audited UI scale. The island's sizes are fixed
     /// (nothing follows ThemeRuntime.scale), so every scale renders the same
     /// bitmap (to the rasterizer's ±1 antialiasing noise); and left and right of the rows' inset nothing but the shape's black
@@ -1953,8 +1933,8 @@ final class AgentIslandTests: XCTestCase {
     @MainActor
     func testMetaRowsStayInsideTheIslandAtEveryScale() throws {
         let now = Date().timeIntervalSince1970, old = now - 50 * 86400
-        func m(_ prs: [DchSessionMeta.PR], tasks: DchSessionMeta.Tasks? = nil, merged: Int? = nil) -> DchSessionMeta {
-            DchSessionMeta(tasks: tasks, openPRs: prs, merged: merged)
+        func m(_ prs: [DchSessionMeta.PR], merged: Int? = nil) -> DchSessionMeta {
+            DchSessionMeta(openPRs: prs, merged: merged)
         }
         let big = Int.max
         var rows = [
@@ -1964,12 +1944,10 @@ final class AgentIslandTests: XCTestCase {
             session("dobby-main", .idle, activity: old, alias: "dobby"),
             session("plain", .idle, activity: old, alias: "no meta, as before"),
         ]
-        rows[0].meta = m([pr("o/prosper", 12, title: "Fix the thing"), pr("o/prosper", 13)],
-                         tasks: .init(done: 22, total: 26, inProgress: 2, queued: 2), merged: 18)
-        rows[1].meta = m((1...50).map { pr("o/a-very-long-repository-name", 123_456_780 + $0) },
-                         tasks: .init(done: big, total: big, inProgress: big, queued: big), merged: big)
+        rows[0].meta = m([pr("o/prosper", 12, title: "Fix the thing"), pr("o/prosper", 13)], merged: 18)
+        rows[1].meta = m((1...50).map { pr("o/a-very-long-repository-name", 123_456_780 + $0) }, merged: big)
         rows[2].meta = m([pr("payhawk/solution", 12794), pr("o/r", 7, url: "http://evil.example/o/r/pull/7"),
-                          pr("o/s", 8), pr("o/t", 9)], tasks: .init(done: 485, total: 503, inProgress: 5, queued: 13))
+                          pr("o/s", 8), pr("o/t", 9)])
         rows[3].meta = m([], merged: 3)
         let store = AgentIslandStore(geometry: notched)
         store.sessions = rows
@@ -2016,11 +1994,9 @@ final class AgentIslandTests: XCTestCase {
 
     // MARK: - Row details (#534)
 
-    private static let rowDetailKeys = ["agentIslandShowAgents", "agentIslandShowOpenPRs", "agentIslandShowMerged",
-                                        "agentIslandShowTasksDone", "agentIslandShowInProgress", "agentIslandShowQueued",
-                                        "agentIslandShowSessionName"]
+    private static let rowDetailKeys = ["agentIslandShowAgents", "agentIslandShowOpenPRs", "agentIslandShowMerged"]
 
-    /// Clears the six keys in the scratch Preferences domain for one test and
+    /// Clears the three keys in the scratch Preferences domain for one test and
     /// puts back whatever was there.
     private func clearRowDetailKeys() {
         let saved = Self.rowDetailKeys.map { Preferences.defaults.object(forKey: $0) }
@@ -2032,93 +2008,64 @@ final class AgentIslandTests: XCTestCase {
         Self.rowDetailKeys.forEach(Preferences.defaults.removeObject(forKey:))
     }
 
-    /// The defaults match prosper-ios #533: Agents, Open PRs, Merged on; Tasks
-    /// done, In progress, Queued off. Per Mac: no key syncs.
+    /// The defaults: Agents, Open PRs and Merged all on (#762: the only three).
+    /// Per Mac: no key syncs.
     func testRowDetailDefaultsAndKeysAreNotSynced() {
         clearRowDetailKeys()
         let d = Preferences.agentIslandRowDetails
         XCTAssertTrue(d.agents, "Agents on")
         XCTAssertTrue(d.openPRs, "Open PRs on")
         XCTAssertTrue(d.merged, "Merged on")
-        XCTAssertFalse(d.tasksDone, "Tasks done off")
-        XCTAssertFalse(d.inProgress, "In progress off")
-        XCTAssertFalse(d.queued, "Queued off")
         XCTAssertEqual(d, AgentIslandRowDetails())
+        XCTAssertEqual(d, .all)
         for k in Self.rowDetailKeys { XCTAssertFalse(SyncedKeys.isSynced(k), "\(k): per Mac") }
-        // A set writes only what changed, so the other five keep following the default.
-        var on = d; on.tasksDone = true
-        Preferences.agentIslandRowDetails = on
-        XCTAssertEqual(Preferences.agentIslandRowDetails, on)
+        // A set writes only what changed, so the other two keep following the default.
+        var off = d; off.openPRs = false
+        Preferences.agentIslandRowDetails = off
+        XCTAssertEqual(Preferences.agentIslandRowDetails, off)
         XCTAssertEqual(Self.rowDetailKeys.filter { Preferences.defaults.object(forKey: $0) != nil },
-                       ["agentIslandShowTasksDone"])
-        Preferences.agentIslandRowDetails = .all
-        XCTAssertEqual(Preferences.agentIslandRowDetails, .all)
+                       ["agentIslandShowOpenPRs"])
+        for f in [\AgentIslandRowDetails.agents, \.openPRs, \.merged] {
+            var one = AgentIslandRowDetails.all; one[keyPath: f] = false
+            Preferences.agentIslandRowDetails = one
+            XCTAssertEqual(Preferences.agentIslandRowDetails, one, "\(f) round-trips on its own key")
+        }
         Preferences.agentIslandRowDetails = AgentIslandRowDetails(agents: false, openPRs: false, merged: false)
         XCTAssertEqual(Preferences.agentIslandRowDetails,
                        AgentIslandRowDetails(agents: false, openPRs: false, merged: false))
+        Preferences.agentIslandRowDetails = .all
+        XCTAssertEqual(Preferences.agentIslandRowDetails, .all)
     }
 
-    /// #587: Session name is off by default and on in `.all`; per Mac; unset reads
-    /// false, a set writes only the keys that changed.
-    func testSessionNameRowDetailDefaultsOffAndRoundTrips() {
-        clearRowDetailKeys()
-        XCTAssertFalse(AgentIslandRowDetails().sessionName, "off by default")
-        XCTAssertTrue(AgentIslandRowDetails.all.sessionName, "on in .all")
-        XCTAssertFalse(SyncedKeys.isSynced("agentIslandShowSessionName"), "per Mac")
-        XCTAssertFalse(Preferences.agentIslandRowDetails.sessionName, "unset reads false")
-        var d = Preferences.agentIslandRowDetails
-        d.queued = true
-        Preferences.agentIslandRowDetails = d
-        XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandShowSessionName"), "another field leaves the key unwritten")
-        d.sessionName = true
-        Preferences.agentIslandRowDetails = d
-        XCTAssertEqual(Preferences.defaults.object(forKey: "agentIslandShowSessionName") as? Bool, true)
-        XCTAssertTrue(Preferences.agentIslandRowDetails.sessionName, "set true reads true")
-        XCTAssertEqual(Preferences.agentIslandRowDetails, d)
-    }
-
-    /// #587: the grey dch name after the state shows only with Session name on and
-    /// an alias; a row with no alias keeps its name as the title either way.
+    /// #762: the removed details' four keys go at reload() (launch), whatever their
+    /// value; the kept three and unrelated keys stay; a second reload writes nothing.
     @MainActor
-    func testRowDrawsSessionNameOnlyWhenToggledOn() throws {
-        let aliased = session("solution-master-7", .working, activity: 100, alias: "fix auth")
-        let plain = session("solution-master-4", .idle, activity: 100)
-        let on = AgentIslandRowDetails(sessionName: true)
-        XCTAssertNil(AgentIsland.sessionNameLabel(aliased, show: AgentIslandRowDetails()), "default: hidden")
-        XCTAssertEqual(AgentIsland.sessionNameLabel(aliased, show: on), "solution-master-7")
-        XCTAssertEqual(AgentIsland.sessionNameLabel(aliased, show: .all), "solution-master-7")
-        XCTAssertNil(AgentIsland.sessionNameLabel(plain, show: on), "no alias: the title is the name")
-        XCTAssertEqual(plain.title, "solution-master-4", "no alias: the name is still the title")
-        // The drawn row: the toggle changes the aliased row's pixels and never its height
-        // (the name sits on line 2 beside the state). No pixel-equality check: two
-        // renders of one row differ now and then (a solo run failed 1 in 2).
-        func pixels(_ s: AgentSession, _ d: AgentIslandRowDetails) throws -> (Data, Int) {
-            let r = ImageRenderer(content: AgentIslandRow(session: s, now: 112, notice: nil, show: d) {}
-                .frame(width: AgentIslandGeometry.rowTextWidth + 60).background(Color.black))
-            r.scale = 1
-            let cg = try XCTUnwrap(r.cgImage)
-            let data = try XCTUnwrap(cg.dataProvider?.data) as Data
-            return (data, cg.height)
+    func testReloadRemovesTheRetiredRowDetailKeysOnce() {
+        let retired = ["agentIslandShowTasksDone", "agentIslandShowInProgress", "agentIslandShowQueued",
+                       "agentIslandShowSessionName"]
+        XCTAssertEqual(Preferences.retiredRowDetailKeys, retired)
+        let all = retired + Self.rowDetailKeys + ["agentIslandSort"]
+        let saved = all.map { Preferences.defaults.object(forKey: $0) }
+        addTeardownBlock {
+            for (k, v) in zip(all, saved) {
+                if let v { Preferences.defaults.set(v, forKey: k) } else { Preferences.defaults.removeObject(forKey: k) }
+            }
         }
-        let (aOff, hOff) = try pixels(aliased, AgentIslandRowDetails())
-        let (aOn, hOn) = try pixels(aliased, on)
-        XCTAssertNotEqual(aOff, aOn, "alias != name: the name is drawn only when on")
-        XCTAssertEqual(hOff, hOn, "same height")
-        XCTAssertEqual(CGFloat(hOn), AgentIslandGeometry.height(of: aliased, show: on))
-    }
-
-    /// #596 (QA #465 INFO-1): a Sessions row's label carries the dch name exactly
-    /// when the row draws it, after the state as on line 2.
-    func testRowAccessibilityLabelCarriesSessionNameAsDrawn() {
-        let aliased = session("solution-master-7", .working, activity: 100, alias: "fix auth")
-        let plain = session("solution-master-4", .idle, activity: 100)
-        let on = AgentIslandRowDetails(sessionName: true)
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(aliased, now: 112, show: AgentIslandRowDetails()),
-                       "fix auth, Working, 12s ago", "off: no dch name")
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(aliased, now: 112, show: on),
-                       "fix auth, Working, solution-master-7, 12s ago", "on: the dch name after the state")
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(plain, now: 112, show: on),
-                       "solution-master-4, Idle, 12s ago", "no alias: never read twice")
+        for (i, k) in all.enumerated() { Preferences.defaults.set(i % 2 == 0, forKey: k) }
+        let c = AgentIslandController()
+        c.showsPanel = false
+        c.reload()   // extLive off: the cleanup, then teardown
+        for k in retired { XCTAssertNil(Preferences.defaults.object(forKey: k), "\(k) removed") }
+        for (i, k) in all.enumerated() where !retired.contains(k) {
+            XCTAssertEqual(Preferences.defaults.object(forKey: k) as? Bool, i % 2 == 0, "\(k) kept")
+        }
+        final class Count: @unchecked Sendable { var n = 0 }
+        let writes = Count()
+        let o = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
+                                                       object: Preferences.defaults, queue: nil) { _ in writes.n += 1 }
+        c.reload()
+        NotificationCenter.default.removeObserver(o)
+        XCTAssertEqual(writes.n, 0, "already gone: nothing written")
     }
 
     /// #592: a History row's title is the alias, else the agent's session name,
@@ -2135,36 +2082,14 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(rec(alias: "fix auth", agent: "dobby-qa").name, "dobby-main")
     }
 
-    /// #592: a History row draws the dch name on line 2 only with Session name on
-    /// and a title that differs from it (#587's rule); never twice.
-    @MainActor
-    func testHistoryRowDrawsSessionNameOnlyWhenToggledOn() throws {
+    /// #592: a History row's label reads the title, the end and the cwd (#762: never the dch name).
+    func testHistoryAccessibilityLabel() {
         let agented = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dobby-main"), cwd: "/src", ended: 100,
                                        end: "exit 0", agent: .init(name: "dobby-qa"))
         let plain = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dobby-main"), cwd: "/src", ended: 100, end: "exit 0")
-        let on = AgentIslandRowDetails(sessionName: true)
-        XCTAssertNil(AgentIsland.sessionNameLabel(agented, show: AgentIslandRowDetails()), "default: hidden")
-        XCTAssertEqual(AgentIsland.sessionNameLabel(agented, show: on), "dobby-main")
-        XCTAssertNil(AgentIsland.sessionNameLabel(plain, show: on), "title == name: not drawn twice")
         let end = AgentIsland.endLabel("exit 0")
-        XCTAssertEqual(AgentIsland.historyAccessibilityLabel(agented, line2: end, age: "", cwd: "/src", show: AgentIslandRowDetails()),
-                       "dobby-qa, \(end), /src", "off: title, end, cwd")
-        XCTAssertEqual(AgentIsland.historyAccessibilityLabel(agented, line2: end, age: "", cwd: "/src", show: on),
-                       "dobby-qa, \(end), dobby-main, /src", "on: the dch name as drawn")
-        XCTAssertEqual(AgentIsland.historyAccessibilityLabel(plain, line2: end, age: "", cwd: "/src", show: on),
-                       "dobby-main, \(end), /src")
-        // One render difference, never two equal renders (#587: pixel equality flakes).
-        func pixels(_ r: DchHistoryRecord, _ d: AgentIslandRowDetails) throws -> (Data, Int) {
-            let ir = ImageRenderer(content: AgentIslandHistoryRow(record: r, now: 112, status: nil, enabled: true, show: d) {}
-                .frame(width: AgentIslandGeometry.rowTextWidth + 60).background(Color.black))
-            ir.scale = 1
-            let cg = try XCTUnwrap(ir.cgImage)
-            return (try XCTUnwrap(cg.dataProvider?.data) as Data, cg.height)
-        }
-        let (off, hOff) = try pixels(agented, AgentIslandRowDetails())
-        let (drawn, hOn) = try pixels(agented, on)
-        XCTAssertNotEqual(off, drawn, "title != name: the dch name is drawn only when on")
-        XCTAssertEqual(hOff, hOn, "same height")
+        XCTAssertEqual(AgentIsland.historyAccessibilityLabel(agented, line2: end, age: "", cwd: "/src"), "dobby-qa, \(end), /src")
+        XCTAssertEqual(AgentIsland.historyAccessibilityLabel(plain, line2: end, age: "", cwd: "/src"), "dobby-main, \(end), /src")
     }
 
     /// #742: an enabled History row draws its Resume-with-message icon (play.fill) at
@@ -2192,37 +2117,15 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(try lit(false), 0, "disabled: no icon")
     }
 
-    /// #594 (QA #464 T6): a Resume status replaces line 2, so the VoiceOver label drops the dch name with it.
-    func testHistoryRowLabelDropsTheDchNameWhileAStatusShows() {
+    /// #594 (QA #464 T6): a Resume status replaces line 2 in the VoiceOver label too.
+    func testHistoryRowLabelShowsTheStatusInPlaceOfLine2() {
         let r = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "dobby-main"), cwd: "/src", ended: 100,
                                  end: "signal 9", agent: .init(name: "dobby-qa"))
-        let on = AgentIslandRowDetails(sessionName: true), end = AgentIsland.endLabel("signal 9")
-        XCTAssertEqual(AgentIsland.historyRowAccessibilityLabel(r, status: nil, end: end, age: "2m", cwd: "/src", show: on),
-                       "dobby-qa, \(end), dobby-main, 2m ago, /src")
-        XCTAssertEqual(AgentIsland.historyRowAccessibilityLabel(r, status: "Starting…", end: end, age: "2m", cwd: "/src", show: on),
-                       "dobby-qa, Starting…, 2m ago, /src", "the status replaces line 2, dch name included")
-    }
-
-    /// Line 2's summary drops each part toggled off; nothing left is nil.
-    func testMetaSummaryHonoursRowDetails() {
-        let m = DchSessionMeta(tasks: .init(done: 22, total: 26, inProgress: 2, queued: 3), merged: 18)
-        func with(_ f: (inout AgentIslandRowDetails) -> Void) -> String? {
-            var d = AgentIslandRowDetails.all; f(&d); return AgentIsland.metaSummary(m, show: d)
-        }
-        XCTAssertNil(AgentIsland.metaSummary(m, show: AgentIslandRowDetails()), "defaults: no task summary")
-        XCTAssertEqual(AgentIsland.metaSummary(m, show: .all), "22/26 done · 2 in progress · 3 queued")
-        XCTAssertNil(AgentIsland.metaSummary(m, show: AgentIslandRowDetails(agents: false, openPRs: false, merged: false)),
-                     "all off")
-        XCTAssertEqual(with { $0.tasksDone = false }, "2 in progress · 3 queued")
-        XCTAssertEqual(with { $0.inProgress = false }, "22/26 done · 3 queued")
-        XCTAssertEqual(with { $0.queued = false }, "22/26 done · 2 in progress")
-        XCTAssertEqual(with { $0.tasksDone = false; $0.queued = false }, "2 in progress")
-        XCTAssertEqual(with { $0.inProgress = false; $0.queued = false }, "22/26 done")
-        XCTAssertEqual(with { $0.tasksDone = false; $0.inProgress = false }, "3 queued")
-        XCTAssertNil(with { $0.tasksDone = false; $0.inProgress = false; $0.queued = false }, "the other three are not line 2's")
-        let zeroQueued = DchSessionMeta(tasks: .init(done: 1, total: 2, inProgress: 0, queued: 0))
-        XCTAssertNil(AgentIsland.metaSummary(zeroQueued, show: AgentIslandRowDetails(tasksDone: false, inProgress: true, queued: true)),
-                     "on but zero: still nothing")
+        let end = AgentIsland.endLabel("signal 9")
+        XCTAssertEqual(AgentIsland.historyRowAccessibilityLabel(r, status: nil, end: end, age: "2m", cwd: "/src"),
+                       "dobby-qa, \(end), 2m ago, /src")
+        XCTAssertEqual(AgentIsland.historyRowAccessibilityLabel(r, status: "Starting…", end: end, age: "2m", cwd: "/src"),
+                       "dobby-qa, Starting…, 2m ago, /src", "the status replaces line 2")
     }
 
     /// The PR line and the row height follow Open PRs and Merged; the store,
@@ -2289,11 +2192,9 @@ final class AgentIslandTests: XCTestCase {
         var s = session("s", .working, activity: 100, alias: "T", agents: 2)
         s.meta = DchSessionMeta(tasks: .init(done: 1, total: 2, inProgress: 3, queued: 4), openPRs: [pr("o/r", 12)], merged: 3)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: .all),
-                       "T, Working, s, 12s ago, 1/2 done · 3 in progress · 4 queued, 3 merged, open pull requests o/r#12")
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails()),
-                       "T, Working, 12s ago, 3 merged, open pull requests o/r#12", "defaults")
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(openPRs: false, queued: true)),
-                       "T, Working, 12s ago, 4 queued, 3 merged")
+                       "T, Working, 12s ago, 3 merged, open pull requests o/r#12", "#762: no tasks, no dch name")
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(openPRs: false)),
+                       "T, Working, 12s ago, 3 merged")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(merged: false)),
                        "T, Working, 12s ago, open pull requests o/r#12")
     }
@@ -2309,7 +2210,7 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertNil(c.store)
         c.store = AgentIslandStore(geometry: notched)
         var s = session("s", .working)
-        s.meta = DchSessionMeta(tasks: .init(done: 1, total: 2), openPRs: [pr("o/r", 1)], merged: 2)
+        s.meta = DchSessionMeta(openPRs: [pr("o/r", 1)], merged: 2)
         c.store?.sessions = [s]
         c.store?.expanded = true
         let before = c.store?.size
@@ -2323,25 +2224,21 @@ final class AgentIslandTests: XCTestCase {
     /// #596 (QA #465 INFO-3): each Row details toggle binds its own detail.
     @MainActor
     func testRowDetailsTogglesBindTheirOwnDetail() {
-        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.label),
-                       ["Agents", "Open PRs", "Merged", "Tasks done", "In progress", "Queued", "Session name"])
-        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.path),
-                       [\.agents, \.openPRs, \.merged, \.tasksDone, \.inProgress, \.queued, \.sessionName])
+        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.label), ["Agents", "Open PRs", "Merged"])
+        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.path), [\.agents, \.openPRs, \.merged])
     }
 
-    /// Visual evidence: the island with the default row details and with all on,
+    /// Visual evidence: the island with the default row details (all on) and with all off,
     /// at UI scale 0.7, 0.85 and 1.0, and the Settings section at the same scales.
     /// Offscreen only (ImageRenderer, a windowless hosting view).
     @MainActor
     func testRendersRowDetailsOffscreen() throws {
         let now = Date().timeIntervalSince1970
         var sec = session("sec-branch-name", .working, activity: now - 5, alias: "sec-1", agents: 3)
-        sec.meta = DchSessionMeta(tasks: .init(done: 22, total: 26, inProgress: 2, queued: 2),
-                                  openPRs: [pr("payhawk/cde-codebase", 370), pr("payhawk/solution", 20399)], merged: 18)
+        sec.meta = DchSessionMeta(openPRs: [pr("payhawk/cde-codebase", 370), pr("payhawk/solution", 20399)], merged: 18)
         var perf = session("solution-master-perf", .idle, activity: now - 900, alias: "perf-1")
-        perf.meta = DchSessionMeta(tasks: .init(done: 74, total: 81, inProgress: 2, queued: 5), merged: 63)
-        var plain = session("prosper-main", .done, activity: now - 7200, agents: 1)
-        plain.meta = DchSessionMeta(tasks: .init(done: 3, total: 9, inProgress: 1, queued: 0))
+        perf.meta = DchSessionMeta(merged: 63)
+        let plain = session("prosper-main", .done, activity: now - 7200, agents: 1)
         let store = AgentIslandStore(geometry: notched)
         store.sessions = [sec, perf, plain]
         store.expanded = true
@@ -2355,7 +2252,8 @@ final class AgentIslandTests: XCTestCase {
         defer { ThemeRuntime.scale = saved }
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
-            for (name, d) in [("defaults", AgentIslandRowDetails()), ("all", AgentIslandRowDetails.all)] {
+            for (name, d) in [("defaults", AgentIslandRowDetails()),
+                              ("none", AgentIslandRowDetails(agents: false, openPRs: false, merged: false))] {
                 store.details = d
                 let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
                 r.scale = 2
@@ -2372,12 +2270,12 @@ final class AgentIslandTests: XCTestCase {
             h.layoutSubtreeIfNeeded()
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
             h.layoutSubtreeIfNeeded()
-            XCTAssertGreaterThan(h.bounds.height, 6 * sz(20), "scale \(scale): six toggle rows laid out")
+            XCTAssertGreaterThan(h.bounds.height, 3 * sz(20), "scale \(scale): three toggle rows laid out")
             let rep = try XCTUnwrap(h.bitmapImageRepForCachingDisplay(in: h.bounds))
             h.cacheDisplay(in: h.bounds, to: rep)
             try write(try XCTUnwrap(rep.representation(using: .png, properties: [:])), "settings-row-details-\(scale)")
         }
-        XCTAssertEqual(store.details, .all)
+        XCTAssertEqual(store.details, AgentIslandRowDetails(agents: false, openPRs: false, merged: false))
         store.details = AgentIslandRowDetails()
         // #571: drawn in the island's order (working, done, idle), whatever order the store was given.
         XCTAssertEqual(store.rowHeights, [AgentIslandGeometry.prRowHeight, AgentIslandGeometry.rowHeight, AgentIslandGeometry.prRowHeight])

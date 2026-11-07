@@ -143,6 +143,7 @@ final class AgentIslandController {
 
     /// Idempotent — launch, every extension toggle and every screen change.
     func reload() {
+        Preferences.removeRetiredRowDetailKeys()   // #762
         touchFonts()   // build the card fonts on main, before any queue work
         guard extLive else { teardown(); return }
         // #477 L4: observe before the geometry guard, so a screen that appears

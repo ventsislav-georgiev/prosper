@@ -29,6 +29,9 @@ tag from the now-released section and put it on the new top draft.
   Prosper quits. Idle phone connections are probed every 2 minutes instead of every 30 s.
   Remote wake on a charger checks every 60 s, then less often after long quiet stretches,
   but never less often than on battery (5 min). (#767)
+- **Agent Island row details are simpler.** Tasks done, In progress, Queued and Session
+  name are gone from Settings and from the session and History rows. Agents, Open PRs
+  and Merged stay. Their saved settings are cleared once. (#762)
 
 ## v2.172.0
 

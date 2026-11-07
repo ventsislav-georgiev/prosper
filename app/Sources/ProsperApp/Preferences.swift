@@ -433,10 +433,6 @@ enum Preferences {
         static let agentIslandShowAgents = "agentIslandShowAgents"
         static let agentIslandShowOpenPRs = "agentIslandShowOpenPRs"
         static let agentIslandShowMerged = "agentIslandShowMerged"
-        static let agentIslandShowTasksDone = "agentIslandShowTasksDone"
-        static let agentIslandShowInProgress = "agentIslandShowInProgress"
-        static let agentIslandShowQueued = "agentIslandShowQueued"
-        static let agentIslandShowSessionName = "agentIslandShowSessionName"   // #587
         // #571: the list order (AgentIslandSort) and the Sessions / Sidekicks
         // tabs; per Mac, so not in SyncedKeys.
         static let agentIslandSort = "agentIslandSort"
@@ -1156,11 +1152,7 @@ enum Preferences {
             return AgentIslandRowDetails(
                 agents: on(Keys.agentIslandShowAgents, d.agents),
                 openPRs: on(Keys.agentIslandShowOpenPRs, d.openPRs),
-                merged: on(Keys.agentIslandShowMerged, d.merged),
-                tasksDone: on(Keys.agentIslandShowTasksDone, d.tasksDone),
-                inProgress: on(Keys.agentIslandShowInProgress, d.inProgress),
-                queued: on(Keys.agentIslandShowQueued, d.queued),
-                sessionName: on(Keys.agentIslandShowSessionName, d.sessionName))
+                merged: on(Keys.agentIslandShowMerged, d.merged))
         }
         set {
             let old = agentIslandRowDetails
@@ -1168,10 +1160,18 @@ enum Preferences {
             put(newValue.agents, old.agents, Keys.agentIslandShowAgents)
             put(newValue.openPRs, old.openPRs, Keys.agentIslandShowOpenPRs)
             put(newValue.merged, old.merged, Keys.agentIslandShowMerged)
-            put(newValue.tasksDone, old.tasksDone, Keys.agentIslandShowTasksDone)
-            put(newValue.inProgress, old.inProgress, Keys.agentIslandShowInProgress)
-            put(newValue.queued, old.queued, Keys.agentIslandShowQueued)
-            put(newValue.sessionName, old.sessionName, Keys.agentIslandShowSessionName)
+        }
+    }
+
+    /// #762: the removed row details' keys (Tasks done, In progress, Queued,
+    /// Session name). Removed by AgentIslandController.reload(), so at launch;
+    /// a read first, so once they are gone it writes nothing.
+    static let retiredRowDetailKeys = ["agentIslandShowTasksDone", "agentIslandShowInProgress",
+                                       "agentIslandShowQueued", "agentIslandShowSessionName"]
+
+    static func removeRetiredRowDetailKeys() {
+        for key in retiredRowDetailKeys where defaults.object(forKey: key) != nil {
+            defaults.removeObject(forKey: key)
         }
     }
 
