@@ -25,6 +25,9 @@ tag from the now-released section and put it on the new top draft.
   raised by your hooks or "ask" rules, however long the rule. When it is on, Prosper's
   Always allow stands down for those sessions (#792). `dch --ls-json` also reports each
   session's Claude Code session id and transcript path, for the agent window to come.
+- Always allow now checks a prompt that replaces one it left to you while the session is
+  still waiting, such as the next of several queued subagent prompts. The prompt left to
+  you is never answered. (#791)
 
 ## v2.173.0
 

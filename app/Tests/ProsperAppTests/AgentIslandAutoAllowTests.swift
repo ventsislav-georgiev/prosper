@@ -438,14 +438,14 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         return (c, r)
     }
 
-    private func session(_ state: AgentState) -> AgentSession {
-        AgentSession(key: key, alias: "", activity: 1, state: state, agents: 0)
+    private func session(_ state: AgentState, activity: TimeInterval = 1) -> AgentSession {
+        AgentSession(key: key, alias: "", activity: activity, state: state, agents: 0)
     }
 
     /// One poll that changed the list, as apply runs it; returns what apply publishes.
     @MainActor @discardableResult
-    private func tick(_ c: AgentIslandController, _ state: AgentState) -> AgentState? {
-        c.store?.sessions = [session(state)]
+    private func tick(_ c: AgentIslandController, _ state: AgentState, activity: TimeInterval = 1) -> AgentState? {
+        c.store?.sessions = [session(state, activity: activity)]
         c.checkAutoAllow()
         return c.published(c.store?.sessions ?? []).first?.state
     }
@@ -1026,8 +1026,8 @@ final class AgentIslandAutoAllowTests: XCTestCase {
     private static let dchAnswer = DchAutoAllowed(at: 1_000_005, title: "Bash command")
 
     private func row(_ state: AgentState, master: String = "1.29.2", allowed: DchAutoAllowed? = nil,
-                     name: String = "s") -> AgentSession {
-        AgentSession(key: AgentSessionKey(dir: "/d", name: name), alias: "", activity: 1, state: state, agents: 0,
+                     name: String = "s", activity: TimeInterval = 1) -> AgentSession {
+        AgentSession(key: AgentSessionKey(dir: "/d", name: name), alias: "", activity: activity, state: state, agents: 0,
                      version: master, autoAllowed: allowed)
     }
 
@@ -1224,6 +1224,373 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertNil(c.store?.actions[new.key])
         XCTAssertEqual(c.published([old, new]).map(\.state), [.working, .working], "both held")
         _ = r
+    }
+
+    // MARK: - #792 INFO-4 (QA #614): the --build cache and the wait's re-check
+
+    /// INFO-3: a timed-out --build is not asked again inside `dchBuildRetry` (Prosper answers
+    /// meanwhile, no 12 s poll stall per stretch); past it, it is.
+    @MainActor func testATimedOutBuildIsAskedAgainOnlyAfterTheRetryWindow() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+        d.build = nil
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(d.calls, [["--build"]])
+        XCTAssertEqual(f.sends, ["1"], "timed out: Prosper answers")
+        list(c, row(.working))
+        r.now += AgentIslandController.dchBuildRetry - 1
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(d.calls, [["--build"]], "inside the window: not asked")
+        XCTAssertEqual(f.sends, ["1", "1"], "and Prosper answers")
+        d.build = "full\n"
+        list(c, row(.working))
+        r.now += 1
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(d.calls, [["--build"], ["--build"], ["--config"]], "past it: asked again")
+        XCTAssertEqual(f.sends, ["1", "1"], "dch's now: stood down")
+    }
+
+    /// A cached "full" is per installed version: a new dch is asked again, the same one never.
+    @MainActor func testANewInstalledVersionAsksBuildAgain() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f), d = FakeDch(c)
+        list(c, row(.blocked))
+        drain(c)
+        list(c, row(.working))
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(d.calls, [["--build"], ["--config"], ["--config"]], "same version: cached")
+        d.version = [1, 30, 0]
+        list(c, row(.working))
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(d.calls.suffix(2), [["--build"], ["--config"]], "a new version: asked again")
+        XCTAssertEqual(f.sends, [])
+    }
+
+    /// The wait ends with dch's auto_allow switched off meanwhile. dch answered (its
+    /// auto_allowed moved): the next prompt is checked, the gate is false, Prosper answers it.
+    @MainActor func testTheWaitsRecheckAnswersOnceDchsAutoAllowIsOff() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+        list(c, row(.blocked))
+        drain(c)
+        d.config = "/Users/probe/.config/dch/config\nauto_allow = false\n"
+        f.set(Self.otherBash)
+        XCTAssertEqual(list(c, row(.blocked, allowed: Self.dchAnswer)), [.working], "still held")
+        fire(c, r)
+        XCTAssertEqual(d.calls, [["--build"], ["--config"], ["--config"]], "checked again")
+        XCTAssertEqual(f.sends, ["1"], "Prosper answers the next prompt")
+        XCTAssertFalse(r.everBlocked)
+    }
+
+    /// No answer from dch, auto_allow switched off: the wait's end is the human's as designed (the
+    /// gate is not asked); the prompt it showed stays the human's at the next print (#791).
+    @MainActor func testTheWaitsEndWithNoAnswerIsTheHumansEvenWithDchsAutoAllowOff() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+        list(c, row(.blocked))
+        drain(c)
+        d.config = "/Users/probe/.config/dch/config\nauto_allow = false\n"
+        fire(c, r)
+        XCTAssertEqual(r.lastState, .blocked, "Needs input")
+        XCTAssertEqual(d.calls.count, 2)
+        r.now += AgentPollGate.floor
+        list(c, row(.blocked, activity: 2))
+        drain(c)
+        XCTAssertEqual(f.reads, 1, "read once")
+        XCTAssertEqual(d.calls.count, 2, "no gate: that prompt is the human's")
+        XCTAssertEqual(f.sends, [])
+        XCTAssertEqual(c.published(c.store?.sessions ?? []).map(\.state), [.blocked])
+    }
+
+    // MARK: - #791: a different prompt replacing the one left to the human
+
+    /// A row's print, `floor` after the last: one list with the new activity, its re-read and check.
+    @MainActor private func printed(_ c: AgentIslandController, _ r: Rec, _ activity: TimeInterval) {
+        r.now += AgentPollGate.floor
+        tick(c, .blocked, activity: activity)
+        drain(c)   // the re-read
+        drain(c)   // a check it started
+    }
+
+    /// The operator's case: the first prompt (a hook's) goes to the human; the subagent's next
+    /// prompt, queued behind it, replaces it while the row stays blocked, and gets Yes.
+    @MainActor func testAPromptQueuedBehindOneLeftToTheHumanGetsYes() {
+        let f = FakeIO(Self.subagentBash()), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(r.lastState, .blocked, "the first prompt is the human's")
+        XCTAssertEqual(f.reads, 1)
+        f.set(Self.subagentBash(hook: nil))
+        XCTAssertEqual(tick(c, .blocked, activity: 2), .blocked, "inside the floor: not read yet")
+        XCTAssertEqual(f.reads, 1)
+        XCTAssertEqual(r.timers.count, 1, "a timer covers the print")
+        r.now += AgentPollGate.floor
+        fire(c, r)   // the re-read: a different prompt
+        drain(c)     // its check, on that screen
+        XCTAssertEqual(f.sends, ["1"])
+        XCTAssertEqual(f.reads, 3, "the re-read, then the #475 identity re-read")
+        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.published(c.store?.sessions ?? []).first?.state, .working, "answered: held")
+    }
+
+    /// A print while the first check runs (a prompt still rendering) is read once that check
+    /// leaves it to the human, with no further list change needed.
+    @MainActor func testAPrintDuringTheCheckIsReadAfterIt() {
+        let f = FakeIO(Self.neverAnswered[0].1, Self.subagentBash(hook: nil)), (c, r) = controller(f)
+        tick(c, .blocked)   // its read sees the first screen, every later read the second
+        tick(c, .blocked, activity: 2)   // still being checked: nothing yet
+        drain(c)
+        XCTAssertEqual(f.reads, 1)
+        XCTAssertEqual(r.timers.count, 1, "the print is due a read")
+        r.now += AgentPollGate.floor
+        fire(c, r)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"], "the prompt it rendered into gets Yes")
+    }
+
+    /// Review round 1: a re-read whose blocked stretch ended while it was in flight is dropped
+    /// (no check, no state, nothing sent); the next stretch gets a fresh check of its own.
+    @MainActor func testAStaleRereadIsDropped() {
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        let hold = DispatchSemaphore(value: 0)
+        f.lock.withLock { f.gate = hold }
+        f.set(Self.bash2)   // a different, plain prompt: what the held read returns
+        r.now += AgentPollGate.floor
+        tick(c, .blocked, activity: 2)   // the re-read, held inside the fake read
+        XCTAssertEqual(tick(c, .working, activity: 2), .working, "the stretch ends meanwhile")
+        hold.signal()
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, [])
+        XCTAssertEqual(f.reads, 2, "the held re-read only: no check started")
+        XCTAssertEqual(c.published([session(.blocked, activity: 2)]).first?.state, .blocked, "no state left for the row")
+        tick(c, .blocked, activity: 3)
+        drain(c)
+        XCTAssertEqual(f.reads, 4, "a fresh check: its read, then the #475 re-read")
+        XCTAssertEqual(f.sends, ["1"])
+    }
+
+    /// Blocked, not blocked and blocked again before the held re-read returns: the stale read is
+    /// dropped and the new stretch's own check answers, once.
+    @MainActor func testAStaleRereadAcrossARestartedStretchAnswersOnce() {
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        let hold = DispatchSemaphore(value: 0)
+        f.lock.withLock { f.gate = hold }
+        f.set(Self.bash2)
+        r.now += AgentPollGate.floor
+        tick(c, .blocked, activity: 2)   // the re-read, held
+        tick(c, .working, activity: 2)
+        XCTAssertEqual(tick(c, .blocked, activity: 3), .working, "a new stretch: held while its check queues")
+        hold.signal()
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"], "answered once, by the new stretch's check")
+        XCTAssertEqual(f.reads, 4, "the held re-read, the check's read, the #475 re-read")
+    }
+
+    /// Review round 1 (QA #581: off reads nothing): a row left to the human, the setting turned off
+    /// with no autoAllowChanged, then a print on the collapsed path: no --read, nothing sent.
+    @MainActor func testOffReadsNothingOnACollapsedPrint() {
+        final class Rows: @unchecked Sendable {
+            let lock = NSLock(); var rows: [AgentSession] = []
+            func get() -> [AgentSession] { lock.withLock { rows } }
+            func set(_ r: [AgentSession]) { lock.withLock { rows = r } }
+        }
+        func touch(_ dir: URL, _ name: String, mtime: TimeInterval) {
+            let path = dir.appendingPathComponent(name).path
+            FileManager.default.createFile(atPath: path, contents: nil)
+            try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: mtime)], ofItemAtPath: path)
+        }
+        let dir = tempDir(), path = dir.path, rows = Rows(), k = AgentSessionKey(dir: path, name: "s")
+        let t0 = Date().timeIntervalSince1970.rounded(.down)
+        touch(dir, "s.sock", mtime: t0 - 60)
+        touch(dir, "s.sock.act", mtime: t0 - 30)
+        rows.set([AgentSession(key: k, alias: "", activity: 0, state: .blocked, agents: 0)])
+        let f = FakeIO(Self.subagentBash()), c = AgentIslandController(), r = Rec()
+        let on = OSAllocatedUnfairLock(initialState: true)
+        c.io = f.io
+        c.showsPanel = false
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        c.autoAllowOn = { on.withLock { $0 } }
+        c.now = { r.now }
+        c.monitorClicks = { _ in nil }
+        c.currentGeometry = { Self.geometry }
+        c.makePoller = { AgentIslandPoller(dirs: { [path] }, list: { _, _ in rows.get() }) }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        c.extLive = true
+        c.reload()
+        func waitUntil(_ what: String, _ ok: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !ok(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            XCTAssertTrue(ok(), what)
+        }
+        waitUntil("the first prompt is the human's") { f.lock.withLock { f.reads } == 1 && c.published(c.store?.sessions ?? []).first?.state == .blocked }
+        on.withLock { $0 = false }   // Settings off, no autoAllowChanged
+        r.now += 60                  // past the floor: a re-read would start at once
+        f.set(Self.subagentBash(hook: nil))
+        touch(dir, "s.sock.act", mtime: t0 - 20)
+        waitUntil("the print went the collapsed way") { c.deferred?.first?.activity == t0 - 20 }
+        c.queue.sync {}
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(f.lock.withLock { f.reads }, 1, "off: nothing read")
+        XCTAssertEqual(f.lock.withLock { f.sends }, [])
+    }
+
+    /// The prompt left to the human is never answered, however long it stays up and prints:
+    /// here one the loop guard left (Prosper's Yes did not take), past the loop window.
+    @MainActor func testThePromptLeftToTheHumanIsNeverAnswered() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"])
+        r.now += AgentIslandController.verifyDelay
+        fire(c, r)   // the same prompt back: the loop guard's, the human's
+        XCTAssertEqual(r.lastState, .blocked)
+        r.now += AgentIslandController.loopWindow
+        for a in 2...6 { printed(c, r, TimeInterval(a)) }
+        XCTAssertEqual(f.sends, ["1"], "never answered again")
+        XCTAssertEqual(r.lastState, .blocked)
+        XCTAssertEqual(c.published(c.store?.sessions ?? []).first?.state, .blocked)
+    }
+
+    /// The countdown ticking under a prompt left to the human is that prompt: one read per
+    /// print, no check (no gate fork, no second read, no send).
+    @MainActor func testACountdownTickIsNotADifferentPrompt() {
+        let screen = { (t: String) in Self.subagentBash(hook: Self.hookBlock + [Self.countdown(t)]) }
+        let f = FakeIO(screen("1:35")), (c, r) = controller(f), d = FakeDch(c)
+        d.config = "/Users/probe/.config/dch/config\nauto_allow = false\n"
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(r.lastState, .blocked)
+        XCTAssertEqual(d.calls, [["--build"], ["--config"]])
+        for (n, t) in ["1:33", "1:31", "1:29"].enumerated() {
+            f.set(screen(t))
+            r.now += AgentPollGate.floor
+            list(c, row(.blocked, activity: TimeInterval(2 + n)))
+            drain(c)
+            drain(c)
+        }
+        XCTAssertEqual(f.reads, 4, "one read per print")
+        XCTAssertEqual(d.calls.count, 2, "no check")
+        XCTAssertEqual(f.sends, [])
+        XCTAssertEqual(r.lastState, .blocked)
+    }
+
+    /// A hook's prompt queued second is checked and refused (#790), then is the human's.
+    @MainActor func testAHookPromptQueuedSecondIsRefused() {
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        f.set(Self.subagentBash())
+        printed(c, r, 2)
+        XCTAssertEqual(f.sends, [])
+        XCTAssertEqual(f.reads, 2, "the re-read; the check decides on that screen")
+        XCTAssertEqual(r.lastState, .blocked, "the human's again")
+        printed(c, r, 3)
+        XCTAssertEqual(f.reads, 3, "now the prompt left to the human: read, not checked")
+        XCTAssertEqual(f.sends, [])
+    }
+
+    /// A row dch's auto-allow answers: left to the human after the wait (nothing read), its
+    /// first re-read only learns the prompt; a different one stands down again.
+    @MainActor func testADchGatedRowStandsDownOnTheRecheck() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+        list(c, row(.blocked))
+        drain(c)
+        fire(c, r)   // no answer from dch: the human's
+        XCTAssertEqual(r.lastState, .blocked)
+        XCTAssertEqual(f.reads, 0)
+        r.now += AgentPollGate.floor
+        list(c, row(.blocked, activity: 2))
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.reads, 1)
+        XCTAssertEqual(f.sends, [], "the prompt the human was given: never checked")
+        XCTAssertEqual(d.calls.count, 2)
+        f.set(Self.otherBash)
+        r.now += AgentPollGate.floor
+        list(c, row(.blocked, activity: 3))
+        drain(c)
+        drain(c)
+        XCTAssertEqual(d.calls, [["--build"], ["--config"], ["--config"]], "the gate, again")
+        XCTAssertEqual(f.sends, [], "dch's: stood down")
+        XCTAssertEqual(c.published(c.store?.sessions ?? []).map(\.state), [.working], "held for dch's answer")
+        XCTAssertEqual(r.timers.count, 1, "the wait")
+        fire(c, r)
+        XCTAssertEqual(r.lastState, .blocked)
+        XCTAssertEqual(f.sends, [])
+    }
+
+    /// The fork budget: a row left to the human that does not print forks nothing; one that
+    /// prints every second (a countdown) is read once per poll floor, 30 reads a minute.
+    @MainActor func testTheRecheckForkBudget() {
+        let f = FakeIO(Self.subagentBash()), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        for _ in 0..<60 {
+            r.now += 1
+            tick(c, .blocked)
+            fire(c, r)
+        }
+        XCTAssertEqual(f.reads, 1, "a still row: no fork")
+        XCTAssertTrue(r.timers.isEmpty)
+        for s in 1...60 {
+            r.now += 1
+            tick(c, .blocked, activity: TimeInterval(1 + s))
+            fire(c, r)
+        }
+        XCTAssertEqual(f.reads, 1 + 30, "printing every second: one read per floor")
+        XCTAssertEqual(f.sends, [])
+    }
+
+    /// Collapsed, a print is a list where only the activity moved, held back from the view
+    /// (#768): the re-check runs from there too. Real poller over sidecar files, fake dch IO.
+    @MainActor func testARecheckRunsWhileCollapsed() {
+        final class Rows: @unchecked Sendable {
+            let lock = NSLock(); var rows: [AgentSession] = []
+            func get() -> [AgentSession] { lock.withLock { rows } }
+            func set(_ r: [AgentSession]) { lock.withLock { rows = r } }
+        }
+        func touch(_ dir: URL, _ name: String, mtime: TimeInterval) {
+            let path = dir.appendingPathComponent(name).path
+            FileManager.default.createFile(atPath: path, contents: nil)
+            try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: mtime)], ofItemAtPath: path)
+        }
+        let dir = tempDir(), path = dir.path, rows = Rows(), k = AgentSessionKey(dir: path, name: "s")
+        let t0 = Date().timeIntervalSince1970.rounded(.down)
+        touch(dir, "s.sock", mtime: t0 - 60)
+        touch(dir, "s.sock.act", mtime: t0 - 30)
+        rows.set([AgentSession(key: k, alias: "", activity: 0, state: .blocked, agents: 0)])
+        let f = FakeIO(Self.subagentBash()), c = AgentIslandController()
+        c.io = f.io
+        c.showsPanel = false
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        c.autoAllowOn = { true }
+        c.monitorClicks = { _ in nil }
+        c.currentGeometry = { Self.geometry }
+        c.makePoller = { AgentIslandPoller(dirs: { [path] }, list: { _, _ in rows.get() }) }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        c.extLive = true
+        c.reload()
+        func waitUntil(_ what: String, _ ok: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !ok(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            XCTAssertTrue(ok(), what)
+        }
+        waitUntil("the first prompt is the human's") { f.lock.withLock { f.reads } == 1 && c.published(c.store?.sessions ?? []).first?.state == .blocked }
+        f.set(Self.subagentBash(hook: nil))
+        touch(dir, "s.sock.act", mtime: t0 - 20)
+        waitUntil("the queued prompt gets Yes") { f.lock.withLock { f.sends } == ["1"] }
+        XCTAssertEqual(c.store?.expanded, false)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 30, "collapsed: held back, the store untouched")
+        XCTAssertEqual(c.deferred?.first?.activity, t0 - 20)
     }
 
     // MARK: - Offscreen renders (never on screen: an unwindowed hosting view and ImageRenderer)

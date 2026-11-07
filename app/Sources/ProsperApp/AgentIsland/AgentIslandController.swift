@@ -236,6 +236,7 @@ final class AgentIslandController {
         // the store, cards and panel do not.
         if !store.expanded || screen.hidden, AgentIsland.onlyActivityMoved(sessions, store.sessions) {
             deferred = sessions
+            recheckHuman()   // #791: a print on a row left to the human is all that moved
             onSessions?(published(sessions))
             return
         }
@@ -1070,8 +1071,17 @@ final class AgentIslandController {
     static let standDownWait: TimeInterval = verifyDelay + AgentPollGate.floor + 1
     private static let log = Logger(subsystem: "eu.illegible.prosper", category: "agentisland")
 
+    /// #792: a `--build` that timed out is asked again only this long after (QA #614 INFO-3: each
+    /// ask holds the poll queue up to DchCommand.islandTimeout); meanwhile Prosper answers.
+    static let dchBuildRetry: TimeInterval = 300
+
     /// `dch`: left to dch's auto-allow (#792), with the row's `auto_allowed` when it was.
-    private enum AutoAllowState: Equatable { case checking, answered, human, dch(DchAutoAllowed?) }
+    /// `human` (#791): the prompt it was left with (nil: none read), the row's activity at that read
+    /// and when the read began; a different prompt on a later read gets a check of its own.
+    private enum AutoAllowState: Equatable {
+        case checking, answered, dch(DchAutoAllowed?)
+        case human(left: AgentPrompt?, seen: TimeInterval, at: Date)
+    }
     /// One blocked stretch of a session; dropped once the row is not blocked.
     private var autoAllow: [AgentSessionKey: AutoAllowState] = [:]
     /// The prompt last answered per session, and when: the loop guard.
@@ -1088,8 +1098,10 @@ final class AgentIslandController {
     var runDch: @Sendable (_ path: String, _ args: [String], _ env: [String: String]) -> Data? = {
         DchCommand.runIsland(args: $1, env: $2, path: $0)
     }
-    /// #792: `--build` per installed binary and version ("<path>@1.29.2": "full").
-    private let dchBuilds = OSAllocatedUnfairLock<[String: String]>(initialState: [:])
+    /// #792: `--build` per installed binary and version ("<path>@1.29.2": "full"), nil = timed out at `at`.
+    private let dchBuilds = OSAllocatedUnfairLock<[String: (build: String?, at: Date)]>(initialState: [:])
+    /// #791: the rows left to the human whose screen is being read again.
+    private var rereading: Set<AgentSessionKey> = []
 
     /// Every list change, before it is published: a session that just went blocked
     /// gets one check, any tab, expanded or not. Off: nothing is read or held.
@@ -1100,6 +1112,42 @@ final class AgentIslandController {
         let blocked = Set(store.sessions.filter { $0.state == .blocked }.map(\.key))
         autoAllow = autoAllow.filter { blocked.contains($0.key) }
         for key in blocked where autoAllow[key] == nil { startAutoAllow(key, answered: false) }
+        recheckHuman()
+    }
+
+    /// #791: a row left to the human that printed since its last read (its activity moved: a
+    /// queued prompt replacing the one left, or a countdown tick) has its screen read once more,
+    /// at most once per poll floor (a timer covers a print inside it), never while a read, a check
+    /// or a click is in flight. A row that does not print costs no fork.
+    func recheckHuman() {
+        guard autoAllowOn() else { return }
+        for s in deferred ?? store?.sessions ?? [] where s.state == .blocked {
+            guard case .human(_, let seen, let at) = autoAllow[s.key], s.activity != seen,
+                  !inFlight.contains(s.key), !rereading.contains(s.key) else { continue }
+            let wait = AgentPollGate.floor - now().timeIntervalSince(at)
+            if wait > 0 { after(wait) { [weak self] in self?.recheckHuman() }; continue }
+            let key = s.key, io = io, was = autoAllow[key], act = s.activity, t = now()
+            rereading.insert(key)
+            queue.async { [weak self] in
+                let screen = io.read(key)
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.reread(key, was, screen, act, t) } }
+            }
+        }
+    }
+
+    /// The re-read, on main. The prompt left to the human stays the human's (its countdown ticking
+    /// is the same prompt: sameDialog), as does no prompt, and any prompt while none was read before
+    /// (left by a stand-down or a click): fail safe, nothing more is forked. A different prompt gets
+    /// the full check on this screen (gate, #790 refusals, loop guard, the #475 re-read).
+    private func reread(_ key: AgentSessionKey, _ was: AutoAllowState?, _ screen: String, _ act: TimeInterval, _ t: Date) {
+        rereading.remove(key)
+        guard autoAllow[key] == was, case .human(let left, _, _) = was, !inFlight.contains(key) else { return }
+        let p = AgentPrompt.parse(screen)
+        guard let p, let left, !p.sameDialog(left) else {
+            autoAllow[key] = .human(left: left ?? p, seen: act, at: t)
+            return recheckHuman()   // printed again meanwhile
+        }
+        startAutoAllow(key, answered: false, screen: (screen, act))
     }
 
     /// #792: a row whose dch `auto_allowed` moved since the last check: dch answered its
@@ -1123,19 +1171,25 @@ final class AgentIslandController {
         layout()
     }
 
-    private func startAutoAllow(_ key: AgentSessionKey, answered: Bool) {
+    /// The row's activity now (the held-back list's when collapsed).
+    private func activity(_ key: AgentSessionKey) -> TimeInterval {
+        (deferred ?? store?.sessions)?.first { $0.key == key }?.activity ?? 0
+    }
+
+    /// `screen`: #791's re-read, the screen this check decides on and the row's activity then.
+    private func startAutoAllow(_ key: AgentSessionKey, answered: Bool, screen: (text: String, act: TimeInterval)? = nil) {
         guard autoAllowOn() else { return autoAllowChanged() }   // QA #581 F3: switched off meanwhile
         // An island click is answering it: the human's.
         guard inFlight.insert(key).inserted else {
             // #755 INFO-1: our own check, orphaned by an off-toggle: held again, its result counts.
             if checks[key] != nil { checks[key] = true; autoAllow[key] = .checking; return }
-            autoAllow[key] = .human
+            autoAllow[key] = .human(left: nil, seen: activity(key), at: now())
             if answered { publish() }
             return
         }
         autoAllow[key] = .checking
         checks[key] = false
-        let io = io, t = now(), isOn = autoAllowOn
+        let io = io, t = now(), isOn = autoAllowOn, act = screen?.act ?? activity(key), retry = Self.dchBuildRetry
         let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
         // #792: a fresh blocked stretch only; the re-read after Prosper's own answer stays Prosper's.
         let master = answered ? "" : store?.sessions.first { $0.key == key }?.version ?? ""
@@ -1144,21 +1198,28 @@ final class AgentIslandController {
             let env = AgentIsland.listEnv(dir: key.dir)
             let dch = DchAutoAllowGate.answers(master: master, dch: probe, build: { bin in
                 let k = "\(bin.path)@\(DchCommand.versionString(bin.version))"
-                if let hit = builds.withLock({ $0[k] }) { return hit }
-                guard let out = run(bin.path, ["--build"], env) else { return nil }   // timed out: asked again next time
-                let b = String(decoding: out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                builds.withLock { $0[k] = b }
+                // QA #614 INFO-3: a timeout is kept `retry` s, so a hung dch stalls the poll once per window.
+                if let hit = builds.withLock({ $0[k] }), hit.build != nil || t.timeIntervalSince(hit.at) < retry {
+                    return hit.build
+                }
+                let b = run(bin.path, ["--build"], env).map {
+                    String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                builds.withLock { $0[k] = (b, t) }
                 return b
             }, config: { bin in run(bin.path, ["--config"], env).map { String(decoding: $0, as: UTF8.self) } })
-            let r = dch ? .dch : AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered, isOn: isOn)
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r) } }
+            let s = dch ? nil : screen?.text ?? io.read(key), read = s.flatMap(AgentPrompt.parse)
+            let r = s.map { AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered, isOn: isOn, screen: $0) } ?? .dch
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r, read, act, t) } }
         }
     }
 
     /// The check's result, on main. Answered: held, and read again after
     /// `verifyDelay` while still listed blocked. Anything else: the normal Needs
-    /// input goes out now.
-    private func autoAllowed(_ key: AgentSessionKey, _ r: AgentAutoAllow) {
+    /// input goes out now. `read`, `act`, `t`: the prompt it read, the row's activity and the
+    /// time when it began (#791: what a later re-read compares against).
+    private func autoAllowed(_ key: AgentSessionKey, _ r: AgentAutoAllow, _ read: AgentPrompt?,
+                             _ act: TimeInterval, _ t: Date) {
         inFlight.remove(key)
         // #755 INFO-1: a taken-back check may have read the setting while it was off: check again.
         if checks.removeValue(forKey: key) == true, r == .human, autoAllow[key] == .checking {
@@ -1176,8 +1237,9 @@ final class AgentIslandController {
         if r == .human || r == .gone || autoAllow[key] != .checking { refreshCards() }
         guard autoAllow[key] == .checking else { return layout() }   // not blocked any more
         if r == .human {
-            autoAllow[key] = .human
+            autoAllow[key] = .human(left: read, seen: act, at: t)
             publish()
+            recheckHuman()   // #791: printed while it was checked
         } else if r == .dch {
             standDown(key)
         } else {
@@ -1206,7 +1268,7 @@ final class AgentIslandController {
             if self.store?.sessions.first(where: { $0.key == key })?.autoAllowed != seen {
                 return self.startAutoAllow(key, answered: false)
             }
-            self.autoAllow[key] = .human
+            self.autoAllow[key] = .human(left: nil, seen: self.activity(key), at: self.now())
             self.publish()
             self.refreshCards()
             self.layout()
@@ -1217,7 +1279,8 @@ final class AgentIslandController {
     /// answered reads working, so its Needs input never posts.
     func published(_ sessions: [AgentSession]) -> [AgentSession] {
         sessions.map { s in
-            guard s.state == .blocked, let a = autoAllow[s.key], a != .human else { return s }
+            guard s.state == .blocked, let a = autoAllow[s.key] else { return s }
+            if case .human = a { return s }
             return AgentSession(key: s.key, alias: s.alias, activity: s.activity, state: .working,
                                 agents: s.agents, meta: s.meta, version: s.version, metaEpoch: s.metaEpoch,
                                 autoAllowed: s.autoAllowed)

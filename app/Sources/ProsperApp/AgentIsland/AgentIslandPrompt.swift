@@ -679,9 +679,10 @@ extension AgentPrompt {
     /// #754 INFO-R1: `isOn` is the setting, read again on this queue right before
     /// the send: a check stuck behind a wedged dch never types after a switch-off.
     /// #755 INFO-4: required, so no caller can drop the guard.
+    /// #791: `screen`, a read already made, decided on instead of a new one.
     static func autoAllow(_ key: AgentSessionKey, io: AgentPromptIO, notAgain: AgentPrompt?,
-                          answered: Bool, isOn: @Sendable () -> Bool) -> AgentAutoAllow {
-        guard let p = parse(io.read(key)) else {
+                          answered: Bool, isOn: @Sendable () -> Bool, screen: String? = nil) -> AgentAutoAllow {
+        guard let p = parse(screen ?? io.read(key)) else {
             return answered && goneStates.contains(io.status(key).trimmingCharacters(in: .whitespacesAndNewlines))
                 ? .gone : .human
         }
