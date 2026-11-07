@@ -101,6 +101,8 @@ final class AgentIslandController {
     /// #523: every published list, on main, and nil when the island stops.
     /// LiveStatusPublisher listens (set by AppDelegate; tests leave it nil).
     var onSessions: (@MainActor ([AgentSession]?) -> Void)?
+    /// #765: every rowDetailsChanged, a sidekick pattern edit or adopt among them (the watch stream).
+    var onRowDetails: (@MainActor () -> Void)?
     /// #578 seams: the control binary (probed and cached), the history read
     /// with it, the dirs to read (the poller's), and the long-verb runner.
     /// Under XCTest the default finds no binary even unstubbed, so a test that
@@ -209,6 +211,7 @@ final class AgentIslandController {
     /// row losing its PR line is 48 pt again, a tab change shows other rows);
     /// no animation.
     func rowDetailsChanged() {
+        onRowDetails?()
         guard let store else { return }
         store.details = Preferences.agentIslandRowDetails
         store.sort = Preferences.agentIslandSort
@@ -1094,7 +1097,7 @@ final class AgentIslandController {
         sessions.map { s in
             guard s.state == .blocked, let a = autoAllow[s.key], a != .human else { return s }
             return AgentSession(key: s.key, alias: s.alias, activity: s.activity, state: .working,
-                                agents: s.agents, meta: s.meta, version: s.version)
+                                agents: s.agents, meta: s.meta, version: s.version, metaEpoch: s.metaEpoch)
         }
     }
 

@@ -53,6 +53,8 @@ enum DchFrame {
     static let putPhoneSnippets: UInt8 = 0x2c  // {device_id, device_name?, hash, snippets} → ok {count, hash} | error
     // #760: the one sidekick pattern of the Mac and the phone (DchSidekickOps). One reply.
     static let sidekickSync: UInt8 = 0x2d  // {pattern, updated} → ok {pattern, updated} (the winner) | error
+    // #765: the phone's push stream instead of its 3 s list poll (DchWatchHub), only while "watch" is in ops.
+    static let watch: UInt8 = 0x2e  // {} → listResp, ok {sidekick}, then listResp | ok {sidekick} | ok {} … | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -91,11 +93,13 @@ enum DchFrame {
     /// #618: "chat" only while the agent model is on disk. #619: "commands" only while
     /// "Run commands from iPhone" is on. #669: "revive_no_message" only while the control
     /// dch passes 1.27.0 (historyResp is a bare array, so the capability lives here).
+    /// #765: "watch" only while Agent Island lists Remote Terminal's dir (DchWatchHub.available).
     static func machineInfo(deviceID: String, hostname: String, wakeId: String?, clipboard: Bool = false,
-                            chat: Bool = false, commands: Bool = false, reviveNoMessage: Bool = false) -> [String: Any] {
-        var info: [String: Any] = ["device_id": deviceID, "hostname": hostname,
-                                   "ops": ops + (reviveNoMessage ? ["revive_no_message"] : []) + (clipboard ? ["clipboard", "clipboard_max_side"] : [])
-                                       + (chat ? ["chat"] : []) + (commands ? ["commands"] : [])]
+                            chat: Bool = false, commands: Bool = false, reviveNoMessage: Bool = false,
+                            watch: Bool = false) -> [String: Any] {
+        var all = ops + (reviveNoMessage ? ["revive_no_message"] : []) + (clipboard ? ["clipboard", "clipboard_max_side"] : [])
+        all += (chat ? ["chat"] : []) + (commands ? ["commands"] : []) + (watch ? ["watch"] : [])
+        var info: [String: Any] = ["device_id": deviceID, "hostname": hostname, "ops": all]
         if let wakeId { info["wakeId"] = wakeId }
         return info
     }
@@ -112,6 +116,20 @@ enum DchFrame {
     static func encode(_ type: UInt8, json obj: Any) -> Data {
         let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
         return encode(type, [UInt8](data))
+    }
+
+    /// listResp's payload, from dch's rows (a fork) or the island's (#765). Keys sorted, so the
+    /// same rows are the same bytes and the watch stream can compare payloads.
+    static func listPayload(_ rows: [DchListRow]) -> Data {
+        let o = rows.map { row -> [String: Any] in
+            var o: [String: Any] = ["name": row.name]
+            if !row.alias.isEmpty { o["alias"] = row.alias }
+            if !row.state.isEmpty { o["state"] = row.state }   // working|idle|blocked|done
+            if row.agents > 0 { o["agents"] = row.agents }     // live subagents; absent from older dch
+            o.merge(row.metaWire) { $1 }                       // "meta"/"meta_epoch", dch 1.22+
+            return o
+        }
+        return (try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])) ?? Data("[]".utf8)
     }
 }
 
@@ -158,6 +176,12 @@ final class DchConnection: @unchecked Sendable {
     private var commandTask: Task<Void, Never>?
     /// #627: the kill frame's `dch -k <name>`; tests set a recorder so no real dch runs.
     var kill: (String) -> Void = { DchCommand.kill($0) }
+    /// #765: the island's list cache and the watch streams, server-wide; nil = always fork.
+    var watch: DchWatchHub?
+    /// #765 J16: the list frame's dch fork when the island has no list; tests count it.
+    var listSessions: () -> [DchListRow] = { DchCommand.listSessions() }
+    /// #765: this connection is a watch stream (not a keep-awake client). On `queue`.
+    private(set) var watching = false
     /// QA #462 M3: a history/control request of this connection awaits its reply. On `queue`.
     private(set) var inFlight = false
     /// Test seam (#591): frames go here instead of the socket.
@@ -192,6 +216,7 @@ final class DchConnection: @unchecked Sendable {
         upload?.cancel()       // #617: a dropped upload discards its partial item
         chatTask?.cancel()     // #618: a dropped chat stops its generation
         commandTask?.cancel()  // #619: its reply is dropped (a handler already running finishes)
+        watch?.remove(ObjectIdentifier(self))   // #765: its timers go with it
         conn.cancel()
         onClose(ObjectIdentifier(self))
     }
@@ -278,15 +303,10 @@ final class DchConnection: @unchecked Sendable {
     func handle(type: UInt8, payload: Data) {
         switch type {
         case DchFrame.list:
-            let rows = DchCommand.listSessions().map { row -> [String: Any] in
-                var o: [String: Any] = ["name": row.name]
-                if !row.alias.isEmpty { o["alias"] = row.alias }
-                if !row.state.isEmpty { o["state"] = row.state }   // working|idle|blocked|done
-                if row.agents > 0 { o["agents"] = row.agents }     // live subagents; absent from older dch
-                o.merge(row.metaWire) { $1 }                       // "meta"/"meta_epoch", dch 1.22+
-                return o
-            }
-            send(DchFrame.encode(DchFrame.listResp, json: rows))
+            // #765 J16: the island's list when it has one for this dir, else one dch fork.
+            send(DchFrame.encode(DchFrame.listResp, [UInt8](watch?.cachedList() ?? DchFrame.listPayload(listSessions()))))
+        case DchFrame.watch:
+            startWatch(payload)
         case DchFrame.kill:
             if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
                let n = o["name"] as? String {
@@ -347,7 +367,7 @@ final class DchConnection: @unchecked Sendable {
             let deviceID = SupporterStore.deviceID(), hostname = SupporterStore.deviceName()
             let wakeId = LiveExtensionHostServices.currentWakeId, clip = clipboard.enabled()
             clipboard.log(.default, "machineInfo: clipboard \(clip ? "advertised" : "not advertised")")   // #701
-            let chat = chat.available, commands = commands.enabled(), ops = ops
+            let chat = chat.available, commands = commands.enabled(), ops = ops, watch = watch?.available() ?? false
             // #704: the phone gives up after 2 s and a cold probe can take 4 s per hung
             // candidate, so the reply waits at most 0.25 s for it (a cached probe is a stat
             // per candidate). Past that it goes without the bit; the probe runs on and fills
@@ -357,7 +377,7 @@ final class DchConnection: @unchecked Sendable {
                 guard answered.withLock({ done in defer { done = true }; return !done }) else { return }
                 let frame = DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
                     deviceID: deviceID, hostname: hostname, wakeId: wakeId, clipboard: clip, chat: chat,
-                    commands: commands, reviveNoMessage: revive))
+                    commands: commands, reviveNoMessage: revive, watch: watch))
                 self.queue.async { if !self.closed { self.send(frame) } }
             }
             DispatchQueue.global(qos: .userInitiated).async {
@@ -421,6 +441,34 @@ final class DchConnection: @unchecked Sendable {
         }
     }
 
+    /// #765: 0x2e on a connection of its own: {} (or {"device_id"}) → the stream DchWatchHub
+    /// runs until this connection closes. Refused while the island has no list for this dir:
+    /// the phone keeps polling then.
+    private func startWatch(_ payload: Data) {
+        guard !closed, !watching else { return }
+        guard pty == nil, !inFlight, !uploaded, !chatted else { return send(DchControlOps.error("watch needs its own connection")) }
+        let o = payload.isEmpty ? [:] : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+        guard let o else { return send(DchControlOps.error("malformed watch request: send {}")) }
+        // The phone sends {}: its tailnet address stands for its device_id.
+        var device = o["device_id"] as? String ?? ""
+        if device.isEmpty, case let .hostPort(host, _) = conn.endpoint { device = "\(host)" }
+        watching = true
+        let ok = watch?.open(ObjectIdentifier(self), device: device,
+                             send: { [weak self] frame, done in self?.streamSend(frame, done) ?? done() },
+                             close: { [weak self] in self?.close() }) ?? false
+        guard ok else {
+            watching = false
+            return send(DchControlOps.error("watch needs Agent Island listing Remote Terminal's sessions"))
+        }
+    }
+
+    /// #765: one stream frame, on `queue`; `done` once the socket took it (DchWatchHub's backlog).
+    private func streamSend(_ frame: Data, _ done: @escaping @Sendable () -> Void) {
+        guard !closed else { return done() }
+        if let sendOverride { sendOverride(frame); return done() }
+        conn.send(content: frame, completion: .contentProcessed { _ in done() })
+    }
+
     /// Put an image the phone copied onto THIS Mac's clipboard. Claude Code's image
     /// paste reads the clipboard of the machine it runs on, so a phone that only
     /// sends ctrl-V pastes whatever the Mac happens to hold — Universal Clipboard
@@ -468,9 +516,9 @@ final class DchConnection: @unchecked Sendable {
     private func startSession(type: UInt8, payload: Data) {
         guard pty == nil else { return }  // one session per connection
         // #617 fix round 1: never on a connection that carried an upload (see `uploaded`).
-        // #618: nor on one that chatted.
-        guard !uploaded, !chatted else {
-            return send(DchControlOps.error("\(uploaded ? "clipboardUpload" : "chat") connections cannot attach or create"))
+        // #618: nor on one that chatted. #765: nor on a watch stream.
+        guard !uploaded, !chatted, !watching else {
+            return send(DchControlOps.error("\(uploaded ? "clipboardUpload" : chatted ? "chat" : "watch") connections cannot attach or create"))
         }
         let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
         let name = o["name"] as? String
@@ -668,6 +716,16 @@ struct DchSidekickOps: Sendable {
         NotificationCenter.default.post(name: .sidekickPatternChangedExternally, object: nil)
     }
 
+    /// #765: the Mac's pattern and stamp now (UserDefaults, any thread).
+    static func current() -> Value {
+        Value(pattern: Preferences.agentIslandSidekickPattern, updated: Preferences.agentIslandSidekickPatternUpdated)
+    }
+
+    /// #765: the watch stream's sidekick frame, ok {"sidekick": <what 0x2d answers>}.
+    static func watchFrame(_ v: Value) -> Data {
+        DchFrame.encode(DchFrame.ok, json: ["sidekick": ["pattern": v.pattern, "updated": v.updated]])
+    }
+
     func handle(_ payload: Data, reply: @escaping DchControlOps.Reply) {
         guard let phone = Self.parse(payload) else {
             return reply(DchControlOps.error("malformed sidekickSync request: send {\"pattern\": \"<text>\", \"updated\": <ms>}"))
@@ -689,6 +747,187 @@ struct DchSidekickOps: Sendable {
                 }
                 reply(DchFrame.encode(DchFrame.ok, json: ["pattern": m.winner.pattern, "updated": m.winner.updated]))
             }
+        }
+    }
+}
+
+// MARK: - Watch stream (#765)
+
+/// #765: the phone's push stream (0x2e) and the island's list cache behind it. The island's
+/// poller (AgentIslandController.onSessions) feeds `island`; nothing here forks dch or polls:
+/// the only timers are a stream's 1 s trailing flush and its 25 s heartbeat. One stream:
+///   listResp (the list snapshot), ok {"sidekick": {pattern, updated}}, then
+///   listResp when the payload differs from the last one sent, at most 1 per second, the
+///   trailing change always sent; the sidekick frame when the Mac's pattern changes;
+///   ok {} after 25 s with nothing else sent (the phone calls 60 s of silence dead).
+/// All on the server queue; tests drive it directly with their own clock and timers.
+final class DchWatchHub: @unchecked Sendable {
+    static let maxPerDevice = 4
+    static let minGap: TimeInterval = 1
+    static let heartbeat: TimeInterval = 25
+    /// Frames the socket has not taken yet: past this the phone is not reading (a
+    /// suspended app whose socket stays open) and the stream closes instead of piling up.
+    static let maxBacklog = 32
+
+    /// Runs `work` after `delay` seconds; the returned closure cancels it.
+    typealias Schedule = @Sendable (_ delay: TimeInterval, _ work: @escaping @Sendable () -> Void) -> () -> Void
+    typealias Send = (_ frame: Data, _ done: @escaping @Sendable () -> Void) -> Void
+
+    /// The island's rows for one socket dir, sorted by name.
+    struct Cache: Equatable, Sendable {
+        let dir: String
+        let rows: [DchListRow]
+    }
+
+    final class Stream: @unchecked Sendable {
+        let id: ObjectIdentifier, device: String
+        let send: Send, close: () -> Void
+        var sent = Data(), pending: Data?, listAt: TimeInterval = 0
+        var sidekick: DchSidekickOps.Value?
+        var backlog = 0
+        var cancelFlush: (() -> Void)?, cancelBeat: (() -> Void)?
+
+        init(id: ObjectIdentifier, device: String, send: @escaping Send, close: @escaping () -> Void) {
+            (self.id, self.device, self.send, self.close) = (id, device, send, close)
+        }
+    }
+
+    private let now: @Sendable () -> TimeInterval
+    private let schedule: Schedule
+    /// Remote Terminal's dir now: a cache for another dir (isolation toggled since) is no cache.
+    var remoteDir: @Sendable () -> String = { DchCommand.remoteSocketDir() }
+    var sidekick: @Sendable () -> DchSidekickOps.Value = { DchSidekickOps.current() }
+    private var cache: Cache?
+    /// Open order: the first of a device is its oldest.
+    private(set) var streams: [Stream] = []
+
+    init(now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         schedule: @escaping Schedule) {
+        self.now = now
+        self.schedule = schedule
+    }
+
+    static func schedule(on queue: DispatchQueue) -> Schedule {
+        { delay, work in
+            let item = DispatchWorkItem(block: work)
+            queue.asyncAfter(deadline: .now() + delay, execute: item)
+            return { item.cancel() }
+        }
+    }
+
+    /// The island's published sessions as Remote Terminal's rows: nil while the island is
+    /// off or does not list `remote` (then a request forks, as before). Sorted by name, so
+    /// an activity reorder of the island is no change; `published` already reads a session
+    /// the island is auto-answering as working, as Live status does.
+    static func cache(island sessions: [AgentSession]?, dirs: [String], remote: String) -> Cache? {
+        guard let sessions, dirs.contains(remote) else { return nil }
+        let rows = sessions.filter { $0.key.dir == remote }.sorted { $0.name < $1.name }.map { s in
+            DchListRow(name: s.name, alias: s.alias, activityEpoch: Int(s.activity), state: wireState(s.state),
+                       agents: s.agents, meta: s.meta, metaEpoch: s.metaEpoch, version: s.version)
+        }
+        return Cache(dir: remote, rows: rows)
+    }
+
+    static func wireState(_ s: AgentState) -> String {
+        switch s {
+        case .blocked: "blocked"
+        case .working: "working"
+        case .done: "done"
+        case .idle: "idle"
+        }
+    }
+
+    /// listResp's payload from the cache, nil when there is none for Remote Terminal's dir.
+    func cachedList() -> Data? {
+        guard let cache, cache.dir == remoteDir() else { return nil }
+        return DchFrame.listPayload(cache.rows)
+    }
+
+    func available() -> Bool { cache.map { $0.dir == remoteDir() } ?? false }
+
+    /// Every island publish (nil: it stopped). No list any more closes the streams, so the
+    /// phone reconnects and, refused, polls.
+    func island(_ new: Cache?) {
+        cache = new
+        guard !streams.isEmpty else { return }
+        guard let payload = cachedList() else { return streams.forEach(drop) }
+        for s in streams { offer(s, payload) }
+    }
+
+    /// A 5th stream of a device closes its oldest first. False (nothing sent): no list.
+    func open(_ id: ObjectIdentifier, device: String, send: @escaping Send, close: @escaping () -> Void) -> Bool {
+        guard let payload = cachedList() else { return false }
+        while streams.filter({ $0.device == device }).count >= Self.maxPerDevice,
+              let oldest = streams.first(where: { $0.device == device }) {
+            drop(oldest)
+        }
+        let s = Stream(id: id, device: device, send: send, close: close)
+        streams.append(s)
+        (s.sent, s.listAt) = (payload, now())
+        emit(s, DchFrame.encode(DchFrame.listResp, [UInt8](payload)))
+        let v = sidekick()
+        s.sidekick = v
+        emit(s, DchSidekickOps.watchFrame(v))
+        return true
+    }
+
+    /// The connection closed: forget the stream and cancel its timers. Idempotent.
+    func remove(_ id: ObjectIdentifier) {
+        guard let i = streams.firstIndex(where: { $0.id == id }) else { return }
+        let s = streams.remove(at: i)
+        s.cancelFlush?(); s.cancelBeat?()
+        s.cancelFlush = nil; s.cancelBeat = nil
+    }
+
+    /// The Mac's pattern may have changed (AgentIslandController.rowDetailsChanged).
+    func sidekickChanged() {
+        guard !streams.isEmpty else { return }
+        let v = sidekick()
+        for s in streams where s.sidekick != v {
+            s.sidekick = v
+            emit(s, DchSidekickOps.watchFrame(v))
+        }
+    }
+
+    private func drop(_ s: Stream) {
+        remove(s.id)
+        s.close()
+    }
+
+    private func offer(_ s: Stream, _ payload: Data) {
+        guard payload != s.sent else {
+            // Back to what the phone has: nothing to send.
+            s.pending = nil
+            s.cancelFlush?(); s.cancelFlush = nil
+            return
+        }
+        s.pending = payload
+        let wait = s.listAt + Self.minGap - now()
+        if wait <= 0 { return flush(s) }
+        guard s.cancelFlush == nil else { return }
+        s.cancelFlush = schedule(wait) { [weak self, weak s] in
+            guard let self, let s else { return }
+            s.cancelFlush = nil
+            self.flush(s)
+        }
+    }
+
+    private func flush(_ s: Stream) {
+        guard let p = s.pending, streams.contains(where: { $0 === s }) else { return }
+        s.pending = nil
+        (s.sent, s.listAt) = (p, now())
+        emit(s, DchFrame.encode(DchFrame.listResp, [UInt8](p)))
+    }
+
+    /// Every frame re-arms the heartbeat, so it goes only after 25 s of silence.
+    private func emit(_ s: Stream, _ frame: Data) {
+        s.backlog += 1
+        guard s.backlog <= Self.maxBacklog else { return drop(s) }
+        s.send(frame) { [weak s] in s?.backlog -= 1 }
+        s.cancelBeat?()
+        s.cancelBeat = schedule(Self.heartbeat) { [weak self, weak s] in
+            guard let self, let s, self.streams.contains(where: { $0 === s }) else { return }
+            self.emit(s, DchFrame.encode(DchFrame.ok, json: [String: Any]()))
         }
     }
 }

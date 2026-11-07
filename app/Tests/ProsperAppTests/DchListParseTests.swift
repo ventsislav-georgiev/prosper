@@ -200,7 +200,8 @@ final class DchListParseTests: XCTestCase {
         DchCommand.parseListJSON(Data(json.utf8))[0]
     }
 
-    /// The phone gets the same meta Agent Island shows, re-encoded from the decode.
+    /// The phone gets dch's meta re-encoded from the decode: the PRs Agent Island shows, plus
+    /// the task counts it no longer draws (#762) but old phones still read.
     func testMetaWireReencodesDecodedMeta() {
         let r = row("""
         [{"name":"a","state":"idle","meta_epoch":1784995200,"meta":{"tasks":{"done":3,"total":7,"in_progress":1,"queued":2,"x":9},

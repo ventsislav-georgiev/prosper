@@ -158,7 +158,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // and no dch fork until the user enables it.
         AgentIslandController.shared.extLive = agentIslandExtLive
         // #523: Live status on iPhone reads the island's list (no second dch poll).
-        AgentIslandController.shared.onSessions = { LiveStatusPublisher.shared.sessionsChanged($0) }
+        // #765: and the phone's list and watch stream (no second dch poll either).
+        AgentIslandController.shared.onSessions = {
+            LiveStatusPublisher.shared.sessionsChanged($0)
+            DchSessionServer.shared.islandSessions($0)
+        }
+        AgentIslandController.shared.onRowDetails = { DchSessionServer.shared.sidekickChanged() }
         LiveStatusPublisher.shared.start()
         AgentIslandController.shared.reload()
 

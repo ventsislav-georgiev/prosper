@@ -75,6 +75,8 @@ struct AgentSession: Equatable, Identifiable {
     var meta: DchSessionMeta? = nil
     /// #578: its master's dch version, "" when too old to say (the control gate).
     var version: String = ""
+    /// #765: dch's `meta_epoch`, kept so the phone's list served from here matches a fork's.
+    var metaEpoch: Int = 0
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -494,7 +496,7 @@ enum AgentIsland {
             return rows.map {
                 AgentSession(key: AgentSessionKey(dir: dir, name: $0.name), alias: $0.alias,
                              activity: TimeInterval($0.activityEpoch), state: AgentState(dch: $0.state),
-                             agents: $0.agents, meta: $0.meta, version: $0.version)
+                             agents: $0.agents, meta: $0.meta, version: $0.version, metaEpoch: $0.metaEpoch)
             }
         }
     }

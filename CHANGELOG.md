@@ -44,6 +44,10 @@ tag from the now-released section and put it on the new top draft.
   - The Mac stops its status heartbeat 12 minutes after nothing is active.
   - The beta update check runs every 30 minutes instead of 10.
   (#766)
+- **Prosper on iPhone no longer polls the Mac for the session list.** With Agent Island
+  on, the phone keeps one connection open and the Mac sends the list only when it changes,
+  from the list Agent Island already reads, so no extra session checks run on the Mac.
+  The phone side arrives in a Prosper iPhone update. (#765)
 - **System Stats and Clipboard auto-clear use less energy.** Stats now sample every 5 s
   (temperatures and power every 10 s) unless you picked a rate yourself; a saved choice
   stays. The menu bar skips a redraw when nothing it shows changed. Clipboard auto-clear

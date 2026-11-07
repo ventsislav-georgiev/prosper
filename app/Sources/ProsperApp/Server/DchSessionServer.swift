@@ -105,6 +105,8 @@ final class DchSessionServer: @unchecked Sendable {
     let lifecycle = DispatchQueue(label: "com.prosper.dchserver.listener")
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: DchConnection] = [:]
+    /// #765: the island's list for the phone and the watch streams. On `queue`.
+    private(set) lazy var watch = DchWatchHub(schedule: DchWatchHub.schedule(on: queue))
 
     // Bind recovery (#715). `wanted` = start() was asked and stop() was not; while it
     // holds, a failed bind (EADDRINUSE) or a missing Tailscale address retries after
@@ -316,6 +318,20 @@ final class DchSessionServer: @unchecked Sendable {
 
     enum ServerError: Error { case noTailscale }
 
+    /// #765: AgentIslandController.onSessions, on main: the rows for Remote Terminal's dir
+    /// (nil once the island stops or lists other dirs), cached for the list frame and pushed
+    /// to the watch streams. No dch fork: these are the island poller's own sessions.
+    @MainActor func islandSessions(_ sessions: [AgentSession]?) {
+        let cache = DchWatchHub.cache(island: sessions, dirs: sessions == nil ? [] : AgentIsland.liveSocketDirs(),
+                                      remote: DchCommand.remoteSocketDir())
+        queue.async { self.watch.island(cache) }
+    }
+
+    /// #765: AgentIslandController.onRowDetails (the sidekick pattern may have changed).
+    func sidekickChanged() {
+        queue.async { self.watch.sidekickChanged() }
+    }
+
     private func accept(_ conn: NWConnection) {
         // Belt-and-suspenders source-IP gate (the bind already restricts us).
         if !Self.isTailscalePeer(conn) {
@@ -331,6 +347,7 @@ final class DchSessionServer: @unchecked Sendable {
                 // detached session still working or a quick reconnect.
             },
             onAttach: { [weak self] id, name in self?.retireOlderClients(of: name, keep: id) })
+        handler.watch = watch
         connections[ObjectIdentifier(handler)] = handler
         handler.start()
         startKeepAwake()
@@ -380,8 +397,10 @@ final class DchSessionServer: @unchecked Sendable {
         // network drop this used to renew the hold forever for a session nothing
         // could reach, so the Mac never slept.
         let up = DchCommand.transportUp
-        let clients = up && !connections.isEmpty
-        let active = up && connections.isEmpty
+        // #765: a watch stream is no client: it stays open while the phone app is
+        // suspended, and would hold the Mac awake for as long as it does.
+        let clients = up && connections.values.contains { !$0.watching }
+        let active = up && !clients
             && DchCommand.anySessionActive(within: KeepAwakePolicy.tickActivityWindowSeconds)
         guard keepAwakeActive else {
             // Watch mode: the hold was released after the idle grace, but detached
