@@ -50,6 +50,10 @@ final class LiveStatusPublisher {
     static let idleTail: TimeInterval = 720
     /// Sparkle posts this right before it installs and relaunches the app (#766 J7).
     static let updateWillRelaunch = Notification.Name.SUUpdaterWillRestart
+    /// QA #600 INFO-1: a quit this soon after updateWillRelaunch is the update's. Sparkle quits
+    /// the app right after posting it; an install that aborts instead leaves no flag behind, so
+    /// a later quit posts offline again. No Sparkle abort hook needed.
+    static let relaunchWindow: TimeInterval = 60
     nonisolated static let maxSessions = 20   // pushLogic MAX_SESSIONS
     nonisolated static let maxText = 64       // name and alias, in code points (pushLogic isText)
 
@@ -107,8 +111,13 @@ final class LiveStatusPublisher {
     /// #766 J5: the session token, read from SupporterStore (a file and a keychain read)
     /// once, not per post. Dropped on sign-out, activation and a 401/403.
     private var bearerCache: String?
-    /// Sparkle is relaunching the app into an update: the quit posts no offline.
-    private(set) var updateRelaunch = false
+    /// When Sparkle last said it is relaunching the app into an update.
+    private var updateRelaunchAt: Date?
+    /// Sparkle is relaunching the app into an update: the quit posts no offline. Only inside
+    /// relaunchWindow of the notification (a clock set back reads as outside).
+    var updateRelaunch: Bool {
+        updateRelaunchAt.map { (0..<Self.relaunchWindow).contains(now().timeIntervalSince($0)) } ?? false
+    }
     private var cancelHeartbeat: (() -> Void)?
     private var observers: [NSObjectProtocol] = []
     private var loggedBadRequest = false
@@ -127,7 +136,7 @@ final class LiveStatusPublisher {
                 MainActor.assumeIsolated { self?.didWake() }
             },
             appCenter.addObserver(forName: Self.updateWillRelaunch, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.updateRelaunch = true }
+                MainActor.assumeIsolated { if let self { self.updateRelaunchAt = self.now() } }
             },
         ]
     }
@@ -169,7 +178,8 @@ final class LiveStatusPublisher {
     /// relaunching into an update (#766 J7). The new process posts the list within
     /// seconds, inside the Worker's 180 s lapse, so the phone's card just stays, where an
     /// offline would end it and push-start a new one (two phone wakes per update). A
-    /// relaunch that never comes lapses the Mac after 180 s and ends the card then.
+    /// relaunch that never comes lapses the Mac after 180 s and ends the card then; an
+    /// install that aborted (no quit within relaunchWindow) is forgotten.
     func quit() {
         guard updateRelaunch else { pause(); return }
         paused = true

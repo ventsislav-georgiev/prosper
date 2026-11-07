@@ -65,7 +65,7 @@ const putToken = (deps, email, body, hash = HASH[email]) => putTokenAs(deps, ema
 
 function setup() {
   const raw = new DatabaseSync(":memory:");
-  for (const f of ["0001_init.sql", "0006_push.sql", "0007_push_harden.sql"]) {
+  for (const f of ["0001_init.sql", "0006_push.sql", "0007_push_harden.sql", "0008_push_mode.sql"]) {
     raw.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"));
   }
   raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, MAC, "Studio");
@@ -1326,7 +1326,8 @@ const CARDS = [
 ];
 function insertCard(t, [email, device, kind, activity, mac, token, hash]) {
   t.raw
-    .prepare(`INSERT INTO push_tokens VALUES (?, ?, ?, ?, ?, ?, 'production', ?, ?, ?)`)
+    .prepare(`INSERT INTO push_tokens (email, device_id, kind, activity_id, mac_id, token, env, created_at, updated_at, token_hash)
+      VALUES (?, ?, ?, ?, ?, ?, 'production', ?, ?, ?)`)
     .run(email, device, kind, activity, mac, token.length === 1 ? tok(token) : token, t.clock.now, t.clock.now, hash);
 }
 function withCards() {
@@ -1452,4 +1453,324 @@ test("#573: past END_MAX cards every route stays under 50 subrequests and still 
     assert.ok(n.d1 + n.apns + around <= 50, `${name}: ${n.d1} + ${n.apns} + ${around}`);
     assert.equal(t.rows(`SELECT * FROM push_tokens WHERE email = ? AND kind LIKE 'la_%'`, ALICE).length, 0, `${name}: every row goes`);
   }
+});
+
+// ---- #770: Battery saver mode per token; QA #600 INFO-2 retries -------------
+
+const saverCard = (device, c, mode = "saver", mac_id = MAC) => ({ ...cardBody(device, mac_id, c), mode });
+const due = (t) => t.rows(`SELECT token, mode, pushed_at, due_at, fails FROM push_tokens WHERE kind = 'la_update' ORDER BY token`);
+const updates = (t) => t.takeCalls().map((c) => [c.token, c.body.aps.event, c.headers["apns-priority"]]);
+const beatAt = (t, seq) => postSessions(t.deps, ALICE, { mac_id: MAC, seq });
+
+test("#770 tokens: the mode is stored per token; a re-post sets it; missing or junk is live; old rows read live", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, { ...alertBody(PHONE, "1"), mode: "saver" });
+  await putToken(t.deps, ALICE, { ...startBody(PHONE, "2"), mode: "saver" });
+  await putToken(t.deps, ALICE, saverCard(PHONE, "3"));
+  await putToken(t.deps, ALICE, alertBody(PHONE2, "5")); // an old phone: no mode
+  const modes = () => t.rows(`SELECT device_id, kind, mode FROM push_tokens ORDER BY device_id, kind`).map((r) => `${r.device_id.slice(0, 2)} ${r.kind} ${r.mode}`);
+  assert.deepEqual(modes(), ["3F alert saver", "3F la_start saver", "3F la_update saver", "9C alert live"]);
+  await putToken(t.deps, ALICE, saverCard(PHONE, "3", "live")); // same token, Settings > Updates flipped
+  await putToken(t.deps, ALICE, { ...alertBody(PHONE, "1"), mode: "SAVER" });
+  await putToken(t.deps, ALICE, { ...alertBody(PHONE2, "5"), mode: "saver" });
+  assert.deepEqual(modes(), ["3F alert live", "3F la_start saver", "3F la_update live", "9C alert saver"]);
+  await putToken(t.deps, ALICE, saverCard(PHONE, "4")); // a new token value for the card
+  assert.deepEqual(t.rows(`SELECT token, mode FROM push_tokens WHERE kind = 'la_update'`), [{ token: tok("4"), mode: "saver" }]);
+  insertCard(t, [BOB, PHONE, "la_update", "act-old", BOB_MAC, "9", HASH[BOB]]); // the Worker before #770 inserting
+  assert.deepEqual(t.rows(`SELECT mode, pushed_at, due_at, fails FROM push_tokens WHERE email = ?`, BOB), [
+    { mode: "live", pushed_at: null, due_at: null, fails: 0 },
+  ]);
+});
+
+test("#770 saver: a content change pushes at most once per 120 s; the cron flushes the deferred one with the latest state", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, saverCard(PHONE, "3"));
+  await t.settle();
+  assert.deepEqual(updates(t), [[tok("3"), "update", "5"]], "the catch-up");
+  const t0 = t.clock.now;
+  assert.equal(due(t)[0].pushed_at, t0, "the catch-up counts as the card's last push");
+
+  t.clock.now = t0 + 30;
+  await postSessions(t.deps, ALICE, sessions(2, [S("a", "working"), S("b", "idle")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [], "30 s after the last push: deferred");
+  assert.equal(due(t)[0].due_at, t0 + 120);
+  t.clock.now = t0 + 60;
+  const base = t.deps;
+  t.deps = { ...base };
+  const n = countSubrequests(t);
+  await runCron(t.deps);
+  t.deps = base;
+  assert.deepEqual(n, { d1: 2, apns: 0 }, "a card due later costs the cron no step");
+  t.clock.now = t0 + 90;
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "working"), S("b", "working")]));
+  await t.settle();
+  t.clock.now = t0 + 119;
+  await runCron(t.deps);
+  assert.deepEqual(updates(t), [], "nothing before 120 s");
+  assert.equal(due(t)[0].due_at, t0 + 120, "a second deferred change keeps the first due time");
+
+  t.clock.now = t0 + 120;
+  await runCron(t.deps);
+  const [flush] = t.takeCalls();
+  assert.equal(flush.body.aps.event, "update");
+  assert.equal(flush.body.aps["content-state"].counts.working, 2, "the latest state, both changes in one wake");
+  assert.equal(flush.body.aps["stale-date"], t0 + 120 + 3600);
+  assert.deepEqual(due(t)[0], { token: tok("3"), mode: "saver", pushed_at: t0 + 120, due_at: null, fails: 0 });
+  await runCron(t.deps);
+  assert.deepEqual(updates(t), [], "flushed once");
+
+  t.clock.now = t0 + 125;
+  await postSessions(t.deps, ALICE, sessions(4, [S("a", "idle"), S("b", "working")]));
+  t.clock.now = t0 + 180;
+  await runCron(t.deps);
+  assert.deepEqual(updates(t), []);
+  t.clock.now = t0 + 240;
+  await runCron(t.deps);
+  assert.deepEqual(updates(t), [[tok("3"), "update", "5"]], "120 s after the flush");
+
+  t.clock.now = t0 + 400;
+  await postSessions(t.deps, ALICE, sessions(5, [S("a", "working"), S("b", "working")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [[tok("3"), "update", "5"]], "a change 160 s after the last push goes at once");
+  assert.equal(due(t)[0].due_at, null);
+});
+
+test("#770 saver: a blocked edge pushes at once, entering (priority 10 + the alert) or leaving (priority 5); working <-> idle in the window is deferred", async () => {
+  const t = setup();
+  await putToken(t.deps, ALICE, { ...alertBody(PHONE, "1"), mode: "saver" });
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, saverCard(PHONE, "3"));
+  await t.settle();
+  t.takeCalls();
+  t.clock.now += 10;
+  await postSessions(t.deps, ALICE, sessions(2, [S("a", "working"), S("b", "idle")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [], "deferred");
+  t.clock.now += 10;
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "working"), S("b", "blocked")]));
+  await t.settle();
+  const calls = t.takeCalls();
+  assert.deepEqual(calls.map((c) => [c.token, c.headers["apns-push-type"], c.headers["apns-priority"]]).sort(), [
+    [tok("1"), "alert", "10"],
+    [tok("3"), "liveactivity", "10"],
+  ]);
+  assert.equal(calls.find((c) => c.token === tok("3")).body.aps["content-state"].counts.blocked, 1);
+  assert.deepEqual(due(t)[0], { token: tok("3"), mode: "saver", pushed_at: t.clock.now, due_at: null, fails: 0 }, "the deferral it carried is cleared");
+  const edgeAt = t.clock.now;
+  t.clock.now += 10;
+  await postSessions(t.deps, ALICE, sessions(4, [S("a", "idle"), S("b", "blocked")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [], "working -> idle 10 s after a push, b still blocked: deferred");
+  t.clock.now += 10;
+  await postSessions(t.deps, ALICE, sessions(5, [S("a", "idle"), S("b", "working")]));
+  await t.settle();
+  const out = t.takeCalls();
+  assert.deepEqual(out.map((c) => [c.token, c.headers["apns-push-type"], c.headers["apns-priority"]]), [[tok("3"), "liveactivity", "5"]], "answered: at once, inside the 120 s window, priority 5, no alert");
+  assert.deepEqual(out[0].body.aps["content-state"].counts, { blocked: 0, working: 1, idle: 1, done: 0 }, "the deferred idle rides along");
+  assert.ok(t.clock.now - edgeAt < 120);
+  assert.equal(due(t)[0].due_at, null, "nothing left due");
+  t.clock.now += 10;
+  await postSessions(t.deps, ALICE, sessions(6, [S("a", "working"), S("b", "working")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [], "idle -> working right after: paced again");
+  await runCron(t.deps);
+  assert.deepEqual(updates(t), []);
+});
+
+test("#770 saver: an agent-count-only change never pushes and defers nothing, on saver as on live", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, saverCard(PHONE, "3"));
+  await putToken(t.deps, ALICE, saverCard(PHONE2, "4", "live"));
+  await t.settle();
+  t.takeCalls();
+  for (let i = 1; i <= 6; i++) {
+    t.clock.now += i === 1 ? 10 : 60;
+    await postSessions(t.deps, ALICE, sessions(1 + i, [S("a", "working", { agents: i })]));
+    await t.settle();
+    await runCron(t.deps);
+  }
+  assert.deepEqual(updates(t), []);
+  assert.deepEqual(due(t).map((r) => r.due_at), [null, null]);
+});
+
+test("#770 mixed: one Mac feeds a live and a saver phone, each at its own cadence", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, saverCard(PHONE, "3", "live"));
+  await putToken(t.deps, ALICE, saverCard(PHONE2, "4", "saver"));
+  await t.settle();
+  t.takeCalls();
+  const t0 = t.clock.now;
+  t.clock.now = t0 + 30;
+  await postSessions(t.deps, ALICE, sessions(2, [S("a", "working"), S("b", "idle")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [[tok("3"), "update", "5"]], "live at once, saver deferred");
+  t.clock.now = t0 + 60;
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "working"), S("b", "working")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [[tok("3"), "update", "5"]]);
+  await runCron(t.deps);
+  assert.deepEqual(updates(t), []);
+  t.clock.now = t0 + 120;
+  await runCron(t.deps);
+  assert.deepEqual(updates(t), [[tok("4"), "update", "5"]], "the flush goes to the saver card only");
+  t.clock.now = t0 + 130;
+  await postSessions(t.deps, ALICE, sessions(4, [S("a", "blocked"), S("b", "working")]));
+  await t.settle();
+  assert.deepEqual(updates(t).sort(), [[tok("3"), "update", "10"], [tok("4"), "update", "10"]], "a blocked edge: both at once");
+});
+
+test("QA #600 INFO-2: a failed re-push is retried on the next cron, at most 3 sends in a row; a dead token is not hammered", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, saverCard(PHONE, "3", "live"));
+  await putToken(t.deps, ALICE, saverCard(PHONE2, "4", "saver"));
+  await t.settle();
+  t.takeCalls();
+  let seq = 2;
+  const minute = async () => {
+    t.clock.now += 60;
+    await beatAt(t, seq++);
+    await runCron(t.deps);
+    return updates(t).map(([token]) => token).sort();
+  };
+  t.clock.now += 3000 - 60;
+  await beatAt(t, seq++);
+  t.answers.set(tok("3"), { status: 500, reason: "InternalServerError" });
+  t.answers.set(tok("4"), { status: 403, reason: "ExpiredProviderToken" }); // auth: our JWT, not the token
+  assert.deepEqual(await minute(), [tok("3"), tok("4")], "the re-push, both fail");
+  assert.deepEqual(due(t).map((r) => r.fails), [1, 1]);
+  t.answers.delete(tok("4"));
+  assert.deepEqual(await minute(), [tok("3"), tok("4")], "the next cron retries both, not 50 min later");
+  assert.deepEqual(due(t).map((r) => [r.fails, r.due_at]), [[2, t.clock.now], [0, null]], "the saver card took it");
+  assert.deepEqual(await minute(), [tok("3")], "third send in a row");
+  assert.deepEqual(due(t)[0], { token: tok("3"), mode: "live", pushed_at: T0, due_at: null, fails: 3 }, "given up; pushed_at is the catch-up");
+  for (let i = 0; i < 5; i++) assert.deepEqual(await minute(), [], "no more until the next real push");
+  t.answers.delete(tok("3"));
+  await postSessions(t.deps, ALICE, sessions(seq++, [S("a", "working"), S("b", "idle")]));
+  await t.settle();
+  assert.deepEqual(updates(t).map(([token]) => token).sort(), [tok("3"), tok("4")], "the saver card is past its 120 s too");
+  assert.deepEqual(due(t)[0], { token: tok("3"), mode: "live", pushed_at: t.clock.now, due_at: null, fails: 0 }, "a success resets the count");
+});
+
+test("QA #600 INFO-2: a later paced change does not push a failed card's retry back to its 120 s slot", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, saverCard(PHONE, "3"));
+  await t.settle();
+  t.takeCalls();
+  const t0 = t.clock.now;
+  t.clock.now = t0 + 10;
+  t.answers.set(tok("3"), { status: 500, reason: "InternalServerError" });
+  await postSessions(t.deps, ALICE, sessions(2, [S("a", "blocked")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [[tok("3"), "update", "10"]], "the blocked edge, failed");
+  t.answers.delete(tok("3"));
+  t.clock.now = t0 + 20;
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "blocked"), S("b", "idle")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [], "paced (a stays blocked): deferred");
+  assert.equal(due(t)[0].due_at, t0 + 10, "still due from the failure");
+  t.clock.now = t0 + 60;
+  await runCron(t.deps);
+  const [c] = t.takeCalls();
+  assert.equal(c.body.aps["content-state"].counts.idle, 1, "retried at the next cron with the latest state");
+});
+
+test("QA #600 INFO-2: a failed idle end keeps its card and is retried on the next cron; 3 failures drop it", async () => {
+  for (const recovers of [true, false]) {
+    const t = setup();
+    await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+    await putToken(t.deps, ALICE, saverCard(PHONE, "3", "live"));
+    await putToken(t.deps, ALICE, saverCard(PHONE2, "4", "saver"));
+    await t.settle();
+    t.takeCalls();
+    await postSessions(t.deps, ALICE, sessions(2, [S("a", "idle")]));
+    await t.settle();
+    t.takeCalls();
+    t.answers.set(tok("3"), { status: 500, reason: "InternalServerError" });
+    let seq = 3;
+    const minute = async (dt = 60) => {
+      t.clock.now += dt;
+      await beatAt(t, seq++);
+      await runCron(t.deps);
+      return t.takeCalls().map((c) => `${c.token[0]} ${c.body.aps.event}`).sort();
+    };
+    assert.deepEqual(await minute(600), ["3 end", "4 end"]);
+    assert.deepEqual(due(t).map((r) => [r.token[0], r.fails]), [["3", 1]], "the ended card goes, the failed one stays");
+    if (recovers) t.answers.delete(tok("3"));
+    assert.deepEqual(await minute(), ["3 end"], "retried on the next cron");
+    if (recovers) {
+      assert.deepEqual(due(t), []);
+    } else {
+      assert.deepEqual(await minute(), ["3 end"]);
+      assert.deepEqual(due(t), [], "the third failure drops it");
+    }
+    assert.deepEqual(await minute(), [], "nothing left to end");
+  }
+});
+
+test("#770 budget: a cron over 6 Macs x 10 saver cards, all due and some failing, stays within 44 + 2 per run; none lost", async () => {
+  const t = setup();
+  const macs = Array.from({ length: 6 }, (_, k) => String(k + 1).repeat(64));
+  const token = (p, k) => `${p}${k}`.repeat(32); // unique per card
+  for (const m of macs) t.raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, m, "Mac");
+  for (const [k, m] of macs.entries()) {
+    await postSessions(t.deps, ALICE, { mac_id: m, seq: 1, sessions: [S("a", "working")] });
+    for (let p = 0; p < 10; p++) {
+      await putToken(t.deps, ALICE, { ...saverCard(phoneId(p), String(p), "saver", m), token: token(p, k) });
+    }
+  }
+  await t.settle();
+  t.takeCalls();
+  const t0 = t.clock.now;
+  t.clock.now = t0 + 30;
+  for (const m of macs) await postSessions(t.deps, ALICE, { mac_id: m, seq: 2, sessions: [S("a", "working"), S("b", "idle")] });
+  await t.settle();
+  assert.deepEqual(t.takeCalls(), [], "60 cards deferred");
+  for (let k = 0; k < 6; k++) t.answers.set(token(0, k), { status: 500, reason: "InternalServerError" }); // phone 0 fails everywhere
+  const sends = new Map();
+  const base = t.deps;
+  let seq = 3;
+  for (let run = 0; run < 8; run++) {
+    t.clock.now = t0 + 120 + 60 * run;
+    t.deps = base;
+    for (const m of macs) await postSessions(t.deps, ALICE, { mac_id: m, seq, sessions: [S("a", "working"), S("b", "idle")] });
+    seq++;
+    t.deps = { ...base };
+    const n = countSubrequests(t);
+    await runCron(t.deps);
+    const calls = t.takeCalls();
+    for (const c of calls) sends.set(c.token, (sends.get(c.token) ?? 0) + 1);
+    assert.ok(n.d1 + n.apns <= 44 + 2, `run ${run}: ${n.d1} + ${n.apns}`);
+    assert.equal((n.d1 - 2) % 3, 0, `run ${run}: 2 up front + 3 queries per step, ${n.d1}`);
+    assert.ok(n.apns <= ((n.d1 - 2) / 3) * 10, `run ${run}: at most the steps' due cards`);
+  }
+  t.deps = base;
+  assert.equal(sends.size, 60, "every card got its deferred update");
+  for (const [tk, c] of sends) assert.equal(c, tk.startsWith("0") ? 3 : 1, `${tk.slice(0, 2)}: ${c} sends`);
+  assert.equal(t.rows(`SELECT COUNT(*) AS n FROM push_tokens WHERE due_at IS NOT NULL`)[0].n, 0, "nothing left due");
+});
+
+test("#770 budget: a paced post over 10 cards (5 live sent, 5 saver deferred, a failure) spends 5 D1 queries + 5 sends", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  for (let p = 0; p < 10; p++) await putToken(t.deps, ALICE, saverCard(phoneId(p), String(p), p % 2 ? "saver" : "live"));
+  await t.settle();
+  t.takeCalls();
+  t.clock.now += 30;
+  t.answers.set(tok("0"), { status: 500, reason: "InternalServerError" });
+  const n = countSubrequests(t);
+  await postSessions(t.deps, ALICE, sessions(2, [S("a", "working"), S("b", "idle")]));
+  await t.settle();
+  assert.deepEqual(t.takeCalls().map((c) => c.token[0]).sort(), ["0", "2", "4", "6", "8"]);
+  assert.deepEqual(n, { d1: 5, apns: 5 }, "device, load, upsert, card SELECT, one state batch");
+  assert.ok(n.d1 + n.apns + SESSION_CHECK <= 50);
+  const rows = t.rows(`SELECT token, due_at, fails FROM push_tokens WHERE kind = 'la_update' ORDER BY token`);
+  assert.deepEqual(rows[0], { token: tok("0"), due_at: t.clock.now, fails: 1 }, "the failed live card is due next cron");
+  assert.deepEqual(rows.filter((r) => r.due_at !== null).map((r) => r.token[0]), ["0", "1", "3", "5", "7", "9"]);
 });

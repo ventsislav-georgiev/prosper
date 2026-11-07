@@ -3,6 +3,7 @@ export type SessionState = "blocked" | "working" | "done" | "idle";
 export type Session = { name: string; alias?: string; state: SessionState; agents?: number };
 export type TokenKind = "alert" | "la_start" | "la_update";
 export type ApnsEnv = "production" | "sandbox";
+export type UpdateMode = "live" | "saver";
 export type Parsed<T> = { value: T; error?: undefined } | { error: string; value?: undefined };
 export type TokenBody = {
   device_id: string;
@@ -11,6 +12,7 @@ export type TokenBody = {
   env: ApnsEnv;
   activity_id: string;
   mac_id: string | null;
+  mode: UpdateMode;
 };
 export type DeleteBody = { device_id: string; kind: TokenKind | null; activity_id: string | null };
 export type SessionsBody = { mac_id: string; seq: number; offline: boolean; sessions: Session[] | null };
@@ -29,8 +31,10 @@ export type PushIntents = {
   start: boolean;
   update: boolean;
   priority: 5 | 10;
-  end: { dismissal: number } | null;
+  end: { dismissal: number; retry?: boolean } | null; // retry: the cron's idle end keeps a failed card
   alerts: { name: string; label: string }[];
+  paced?: boolean; // #770: a saver card may defer this update
+  flush?: boolean; // #770: only the cards with an update due
 };
 export type ContentState = {
   v: 1;
@@ -69,6 +73,9 @@ export const CRON_BUDGET: number;
 export const STEP_D1: number;
 export const SEQ_AHEAD_MS: number;
 export const MAX_BODY: number;
+export const MODES: UpdateMode[];
+export const SAVER_GAP_S: number;
+export const SEND_TRIES: number;
 
 export function parseTokenBody(b: unknown): Parsed<TokenBody>;
 export function parseDeleteBody(b: unknown): Parsed<DeleteBody>;
@@ -88,22 +95,25 @@ export function reduceSessions(
   input: SessionsBody,
   now: number,
 ): { mac: MacState; push: PushIntents } | null;
+export type CronKind = "lapse" | "end" | "repush" | "flush";
 export function cronStep(
   mac: MacState,
   hasCard: boolean,
   now: number,
-): { kind: "lapse" | "end" | "repush"; mac: MacState; push: PushIntents } | null;
+  due?: number,
+): { kind: CronKind; mac: MacState; push: PushIntents } | null;
+export function sendNow(row: { mode: string; pushed_at: number | null }, push: PushIntents, now: number): boolean;
 export type LiveMac = Pick<MacState, "online" | "last_seen" | "sessions" | "started_at">;
 export function wantsCard(mac: Pick<MacState, "online" | "last_seen" | "sessions">, now: number): boolean;
 export type ExpiredCard = { mac: LiveMac | null; start_token: string | null; has_card: number | boolean; created_at: number };
 export function restartStep(p: ExpiredCard, now: number): "start" | "drop" | "wait";
-export function planCron<R extends { mac: MacState; cards: number }, E extends ExpiredCard = ExpiredCard>(
+export function planCron<R extends { mac: MacState; cards: number; due?: number }, E extends ExpiredCard = ExpiredCard>(
   rows: R[],
   now: number,
   budget?: number,
   expired?: E[],
 ): (
-  | { kind: "lapse" | "end" | "repush"; mac: MacState; push: PushIntents; row: R }
+  | { kind: CronKind; mac: MacState; push: PushIntents; row: R }
   | { kind: "restart"; start: boolean; row: E }
 )[];
 export function laPayload(event: string, cs: ContentState, now: number, extra?: Record<string, unknown>): unknown;

@@ -7,10 +7,11 @@
 //
 // Free plan: 50 subrequests per invocation, D1 queries (a batch is one) and APNs
 // fetches alike. A post spends at most 2 (requireSession) + 9 D1 (device, 2 x load and
-// upsert, card/start/alert SELECTs, one drop batch) + 20 sends (per phone: one card
-// update or start, one alert); a cron run, 2 + its budget. A la_start post with a new
-// token: 2 + the upsert batch, the Mac SELECT, M starts (M <= DEVICE_LIMIT Macs of the
-// account), one drop + started_at batch: under 50 unless DEVICE_LIMIT goes past ~45.
+// upsert, card/start/alert SELECTs, one drop batch that also writes the cards' #770
+// send state) + 20 sends (per phone: one card update or start, one alert); a cron run,
+// 2 + its budget. A la_start post with a new token: 2 + the upsert batch, the Mac SELECT,
+// M starts (M <= DEVICE_LIMIT Macs of the account), one drop + started_at batch: under 50
+// unless DEVICE_LIMIT goes past ~45.
 
 import {
   parseTokenBody,
@@ -32,10 +33,16 @@ import {
   OFFLINE_DISMISS_S,
   MAX_PHONES,
   CRON_BUDGET,
+  SAVER_GAP_S,
+  SEND_TRIES,
+  sendNow,
 } from "./pushLogic.mjs";
 
 const NO_CONTENT = { status: 204 };
 const TOKEN_COLS = "email, device_id, kind, activity_id, token, env";
+// A card's #770 send state: its mode, last update APNs took, when one is due, failures in a row.
+const CARD_COLS = `${TOKEN_COLS}, mode, pushed_at, due_at, fails`;
+const ROW_KEY = `email = ?1 AND device_id = ?2 AND kind = ?3 AND activity_id = ?4 AND token = ?5`;
 const MAC_COLS =
   "m.seq, m.last_seen, m.online, m.snapshot, m.last_push_at, m.last_alert, m.idle_since, m.started_at, m.blocked, m.rev";
 // Binds ?1 email, ?2 device_id, ?4 activity_id: that activity's card is being rotated out.
@@ -73,7 +80,7 @@ async function loadMac(db, email, macId) {
 
 async function tokens(db, where, ...binds) {
   const { results } = await db
-    .prepare(`SELECT ${TOKEN_COLS} FROM push_tokens WHERE email = ?1 AND ${where}`)
+    .prepare(`SELECT ${CARD_COLS} FROM push_tokens WHERE email = ?1 AND ${where}`)
     .bind(...binds)
     .all();
   return results;
@@ -96,12 +103,7 @@ async function dropTokens(db, rows, also = []) {
   if (!rows.length && !also.length) return;
   await db.batch([
     ...rows.map((r) =>
-      db
-        .prepare(
-          `DELETE FROM push_tokens WHERE email = ?1 AND device_id = ?2 AND kind = ?3
-           AND activity_id = ?4 AND token = ?5`,
-        )
-        .bind(r.email, r.device_id, r.kind, r.activity_id, r.token),
+      db.prepare(`DELETE FROM push_tokens WHERE ${ROW_KEY}`).bind(r.email, r.device_id, r.kind, r.activity_id, r.token),
     ),
     ...also,
   ]);
@@ -141,13 +143,53 @@ function startedStatements(db, pushes, results, now) {
 
 const laPush = (row, priority, payload) => ({ row, pushType: "liveactivity", priority, payload });
 
+const keyed = (st, r, ...more) => st.bind(r.email, r.device_id, r.kind, r.activity_id, r.token, ...more);
+
+/**
+ * #770 / QA #600 INFO-2: the card rows' send state after `cards` went out as the first
+ * pushes, results[i] for cards[i], plus the `deferred` saver rows. ok: pushed_at = now,
+ * nothing due (a live row known to hold nothing to clear is not written). error or auth:
+ * due now, so the next cron sends again, unless that was the SEND_TRIES-th failure in a row. A deferred row is
+ * due 120 s after its last update. With `ending` (the cron's idle end) a failed end keeps
+ * its row, failures counted, so the next cron ends it again; every other row goes.
+ */
+function cardStatements(db, cards, results, deferred, now, ending = false) {
+  const out = [];
+  cards.forEach((r, i) => {
+    const res = results[i];
+    const failed = res === "error" || res === "auth";
+    if (ending) {
+      out.push(
+        failed && r.fails + 1 < SEND_TRIES
+          ? keyed(db.prepare(`UPDATE push_tokens SET fails = fails + 1 WHERE ${ROW_KEY}`), r)
+          : keyed(db.prepare(`DELETE FROM push_tokens WHERE ${ROW_KEY}`), r),
+      );
+    } else if (failed) {
+      const sql = `UPDATE push_tokens SET fails = fails + 1, due_at = CASE WHEN fails + 1 < ?7 THEN ?6 END WHERE ${ROW_KEY}`;
+      out.push(keyed(db.prepare(sql), r, now, SEND_TRIES));
+    } else if (res === "ok" && (r.mode === "saver" || r.due_at !== null || r.fails !== 0)) {
+      out.push(keyed(db.prepare(`UPDATE push_tokens SET pushed_at = ?6, due_at = NULL, fails = 0 WHERE ${ROW_KEY}`), r, now));
+    }
+  });
+  for (const r of deferred) {
+    if (r.due_at != null) continue; // already due
+    out.push(keyed(db.prepare(`UPDATE push_tokens SET due_at = ?6 WHERE ${ROW_KEY}`), r, r.pushed_at + SAVER_GAP_S));
+  }
+  return out;
+}
+
 /** Turn the intents of reduceSessions/cronStep into APNs pushes. */
 async function dispatch(deps, email, macId, name, mac, push, now) {
   const { db } = deps;
   const cs = contentState(mac.sessions, mac.online);
   const pushes = [];
-  const la = push.end || push.update ? await tokens(db, `kind = 'la_update' AND mac_id = ?2`, email, macId) : [];
-  for (const row of la) {
+  // A flush takes only the cards with an update due.
+  const where = push.flush ? `kind = 'la_update' AND mac_id = ?2 AND due_at <= ?3` : `kind = 'la_update' AND mac_id = ?2`;
+  const la = push.end || push.update ? await tokens(db, where, email, macId, ...(push.flush ? [now] : [])) : [];
+  const cards = push.end ? la : la.filter((row) => sendNow(row, push, now));
+  const deferred = push.end ? [] : la.filter((row) => !cards.includes(row));
+  for (const row of cards) {
+    // First in `pushes`: cardStatements reads their results by index.
     pushes.push(
       push.end
         ? laPush(row, 5, laPayload("end", cs, now, { "dismissal-date": push.end.dismissal }))
@@ -167,7 +209,11 @@ async function dispatch(deps, email, macId, name, mac, push, now) {
       pushes.push({ row, pushType: "alert", priority: 10, payload, collapseId: id });
     }
   }
-  await deliver(deps, pushes, push.end ? la : []); // an ended activity takes no more updates
+  // An ended activity takes no more updates; the cron's idle end keeps a failed one to retry.
+  const ending = !!push.end?.retry;
+  await deliver(deps, pushes, push.end && !ending ? la : [], (sent) =>
+    push.end && !ending ? [] : cardStatements(db, cards, sent, deferred, now, ending),
+  );
 }
 
 /** POST /push/tokens. tokenHash = the session's token_hash: logout and expiry take the row. */
@@ -198,10 +244,10 @@ export async function putToken(deps, email, body, tokenHash) {
     upsert,
     db
       .prepare(
-        `UPDATE push_tokens SET mac_id = ?5, env = ?6, updated_at = ?7, token_hash = ?8
+        `UPDATE push_tokens SET mac_id = ?5, env = ?6, updated_at = ?7, token_hash = ?8, mode = ?9
          WHERE email = ?1 AND device_id = ?2 AND kind = ?3 AND activity_id = ?4`,
       )
-      .bind(email, v.device_id, v.kind, v.activity_id, v.mac_id, v.env, now, tokenHash),
+      .bind(email, v.device_id, v.kind, v.activity_id, v.mac_id, v.env, now, tokenHash, v.mode), // #770: every post sets the mode, a new row's too
     // At most MAX_PHONES install ids per account: past that, the least recently
     // updated phones go with all their rows, so a reinstalled phone always gets in.
     // max(0, ...): a negative LIMIT is no limit in SQLite.
@@ -285,7 +331,12 @@ async function catchUp(deps, email, v, name, now) {
   const mac = (await loadMac(deps.db, email, v.mac_id))?.mac ?? emptyMac();
   const row = { email, device_id: v.device_id, kind: v.kind, activity_id: v.activity_id, token: v.token, env: v.env };
   if (mac.online) {
-    await deliver(deps, [laPush(row, 5, laPayload("update", contentState(mac.sessions), now))]);
+    // Its send state as any update's: a saver card's 120 s count from here, a failure retries.
+    // due_at/fails were not read, so an ok is always written (it clears a pending retry).
+    const card = { ...row, mode: v.mode };
+    await deliver(deps, [laPush(row, 5, laPayload("update", contentState(mac.sessions), now))], [], (sent) =>
+      cardStatements(deps.db, [card], sent, [], now),
+    );
   } else {
     const cs = contentState([], false);
     await deliver(deps, [laPush(row, 5, laPayload("end", cs, now, { "dismissal-date": now + OFFLINE_DISMISS_S }))], [row]);
@@ -415,7 +466,7 @@ export async function postSessions(deps, email, body) {
 
 /**
  * The every-minute cron: lapse silent Macs, end idle cards, restart expired ones,
- * re-push old ones.
+ * flush due updates (#770: saver deferrals, failed sends), re-push old ones.
  */
 export async function runCron(deps) {
   const { db } = deps;
@@ -448,10 +499,13 @@ export async function runCron(deps) {
     .prepare(
       `SELECT m.email, m.mac_id, ${MAC_COLS}, d.name AS mac_name,
          (SELECT COUNT(*) FROM push_tokens t WHERE t.email = m.email
-           AND t.kind = 'la_update' AND t.mac_id = m.mac_id) AS cards
+           AND t.kind = 'la_update' AND t.mac_id = m.mac_id) AS cards,
+         (SELECT COUNT(*) FROM push_tokens t WHERE t.email = m.email
+           AND t.kind = 'la_update' AND t.mac_id = m.mac_id AND t.due_at <= ?1) AS due
        FROM push_macs m LEFT JOIN devices d ON d.email = m.email AND d.device_id = m.mac_id
        WHERE m.online = 1`,
     )
+    .bind(now)
     .all();
   // One invocation serves every account, so its subrequests are budgeted (a run past
   // the cap would fail everyone's pushes); what does not fit runs next minute.

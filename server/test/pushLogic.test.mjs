@@ -24,6 +24,9 @@ import {
   planCron,
   restartStep,
   wantsCard,
+  sendNow,
+  SAVER_GAP_S,
+  STEP_D1,
 } from "../src/pushLogic.mjs";
 
 const S = (name, state, extra = {}) => ({ name, state, ...extra });
@@ -58,9 +61,22 @@ test("parseTokenBody: kind/env enums, token hex, la_update needs activity + mac"
     kind: "la_update",
     activity_id: "act-1",
     mac_id: HEX,
+    mode: "live",
   });
   assert.deepEqual(parseTokenBody({ ...base, kind: "alert", activity_id: null }).value.activity_id, "");
   for (const b of [null, [], "x", 1]) assert.equal(parseTokenBody(b).error, "invalid_body");
+});
+
+test("#770 parseTokenBody: mode live or saver; missing, null or unknown is live, never a 400", () => {
+  const base = { device_id: PHONE, kind: "alert", token: HEX, env: "production" };
+  assert.equal(parseTokenBody({ ...base, mode: "live" }).value.mode, "live");
+  assert.equal(parseTokenBody({ ...base, mode: "saver" }).value.mode, "saver");
+  assert.equal(parseTokenBody(base).value.mode, "live", "an old phone sends no mode");
+  for (const mode of [null, "SAVER", "battery", "", 1, true, ["saver"], { saver: 1 }]) {
+    assert.equal(parseTokenBody({ ...base, mode }).value.mode, "live", JSON.stringify(mode));
+  }
+  const card = { ...base, kind: "la_update", activity_id: "act-1", mac_id: HEX, mode: "saver" };
+  assert.equal(parseTokenBody(card).value.mode, "saver", "a card carries it too");
 });
 
 test("parseDeleteBody: device required, kind/activity optional", () => {
@@ -424,7 +440,7 @@ test("cron ends a card after 10 min with nothing working/blocked", () => {
   assert.equal(cronStep(idle, true, 1599), null);
   const r = cronStep(idle, true, 1600);
   assert.equal(r.kind, "end");
-  assert.deepEqual(r.push.end, { dismissal: 1600 });
+  assert.deepEqual(r.push.end, { dismissal: 1600, retry: true }, "QA #600 INFO-2: a failed idle end is retried");
   assert.equal(cronStep(idle, false, 1600), null, "no card, nothing to end");
 });
 
@@ -503,6 +519,66 @@ test("alertPayload: one session as before; two or more aggregate under the first
   assert.notEqual(perMac, await collapseId(HEX, "a"));
   assert.notEqual(perMac, await collapseId(HEX, ""));
   assert.notEqual(perMac, await collapseId("f".repeat(64)));
+});
+
+// ---- #770: battery saver -----------------------------------------------------
+
+test("#770 sendNow: a live card always; a saver card on an unpaced update, its first push, or 120 s after its last", () => {
+  const paced = { update: true, paced: true };
+  assert.equal(sendNow({ mode: "live", pushed_at: 1000 }, paced, 1001), true);
+  assert.equal(sendNow({ mode: "junk", pushed_at: 1000 }, paced, 1001), true, "only saver is paced");
+  assert.equal(sendNow({ mode: "saver", pushed_at: null }, paced, 1001), true, "first push");
+  assert.equal(sendNow({ mode: "saver", pushed_at: 1000 }, paced, 1000 + SAVER_GAP_S - 1), false);
+  assert.equal(sendNow({ mode: "saver", pushed_at: 1000 }, paced, 1000 + SAVER_GAP_S), true);
+  assert.equal(sendNow({ mode: "saver", pushed_at: 1000 }, { update: true, paced: false }, 1001), true, "blocked edge");
+  assert.equal(sendNow({ mode: "saver", pushed_at: 1000 }, { update: true }, 1001), true, "a cron step is never paced");
+  assert.equal(SAVER_GAP_S, 120);
+});
+
+test("#770 reduceSessions: a content change is paced, a blocked edge in either direction is not; a heartbeat sends nothing", () => {
+  const a = step(null, post(1, [S("a", "working")]), 1000);
+  const b = step(a.mac, post(2, [S("a", "working"), S("b", "idle")]), 1010);
+  assert.equal(b.push.update, true);
+  assert.equal(b.push.paced, true);
+  const c = step(b.mac, post(3, [S("a", "working"), S("b", "blocked")]), 1020);
+  assert.equal(c.push.paced, false, "blocked edge: every card at once");
+  assert.equal(c.push.priority, 10);
+  const d = step(c.mac, post(4, [S("a", "working"), S("b", "idle")]), 1030);
+  assert.equal(d.push.paced, false, "leaving blocked is an edge too");
+  assert.equal(d.push.priority, 5, "but not urgent");
+  const g = step(c.mac, post(4, [S("a", "working")]), 1030);
+  assert.equal(g.push.paced, false, "a blocked session going away leaves blocked");
+  const h = step(c.mac, post(4, [S("a", "idle"), S("b", "blocked")]), 1030);
+  assert.equal(h.push.paced, true, "working -> idle while b stays blocked: paced");
+  const e = step(d.mac, post(5, [S("a", "working", { agents: 4 }), S("b", "idle")]), 1040);
+  assert.equal(e.push.update, false, "an agent count alone: nothing to pace or send");
+});
+
+test("#770 cronStep: due cards flush when nothing else is due; lapse, end and re-push take precedence", () => {
+  const f = cronStep(live({ last_seen: 1100 }), true, 1110, 2);
+  assert.equal(f.kind, "flush");
+  assert.equal(f.push.update, true);
+  assert.equal(f.push.flush, true);
+  assert.equal(f.push.paced, undefined);
+  assert.equal(f.mac.last_push_at, 1000, "a flush is per card; the Mac's re-push clock stays");
+  assert.equal(cronStep(live({ last_seen: 1100 }), true, 1110, 0), null);
+  assert.equal(cronStep(live({ last_seen: 1100 }), true, 1110), null, "due defaults to none");
+  assert.equal(cronStep(live({ last_seen: 1000 }), true, 1180, 2).kind, "lapse");
+  assert.equal(cronStep(live({ sessions: [S("a", "idle")], idle_since: 500, last_seen: 1100 }), true, 1110, 2).kind, "end");
+  assert.equal(cronStep(live({ last_seen: 4000 }), true, 4000, 2).kind, "repush", "a re-push sends every card anyway");
+});
+
+test("#770 planCron: a flush costs its due cards + 3 queries, after the restarts, before the re-pushes", () => {
+  const now = 10_000;
+  const flush = (id, due, cards = 5) => ({ id, cards, due, mac: live({ last_seen: now - 10, last_push_at: now - 100 }) });
+  const repush = { id: "repush", cards: 1, due: 0, mac: live({ last_seen: now - 10, last_push_at: now - 3100 }) };
+  const lapse = { id: "lapse", cards: 2, due: 2, mac: live({ last_seen: now - 300, last_push_at: now - 300 }) };
+  const ids = (plan) => plan.map((s) => s.row.id);
+  assert.deepEqual(ids(planCron([repush, flush("f", 2), lapse], now, 100)), ["lapse", "f", "repush"]);
+  assert.equal(planCron([flush("f", 2)], now, 100)[0].kind, "flush");
+  assert.deepEqual(ids(planCron([flush("f", 2)], now, 2 + STEP_D1)), ["f"], "due cards, not every card");
+  assert.deepEqual(ids(planCron([flush("f", 2)], now, 1 + STEP_D1)), []);
+  assert.deepEqual(ids(planCron([flush("f", 0)], now, 100)), [], "nothing due");
 });
 
 // ---- cron budget --------------------------------------------------------------

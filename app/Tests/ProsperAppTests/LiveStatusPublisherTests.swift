@@ -240,6 +240,30 @@ final class LiveStatusPublisherTests: XCTestCase {
         XCTAssertEqual(r.posts.count, 137, "active again: the heartbeat is back")
     }
 
+    /// QA #600 INFO-5: the tail outlasts the Worker's idle end, IDLE_END_S (600 s) in
+    /// server/src/pushLogic.mjs, plus one cron minute, so the idle card is ended (online)
+    /// before the heartbeats stop and the Mac lapses into "Mac offline".
+    func testIdleTailOutlastsTheWorkersIdleEndPlusACronMinute() {
+        XCTAssertEqual(LiveStatusPublisher.idleTail, 720)
+        XCTAssertGreaterThan(LiveStatusPublisher.idleTail, 600 + 60, "pushLogic.mjs IDLE_END_S + the cron minute")
+    }
+
+    /// QA #600 INFO-5 (goQuiet mutant): going quiet resets the idle clock, so the list a
+    /// wake posts gets its own 12 min of heartbeats, not the remainder of the old one.
+    func testGoingQuietRestartsTheIdleTail() {
+        let r = Rig()
+        r.p.sessionsChanged([s("a", .idle)])
+        r.advance(1000)
+        XCTAssertEqual(r.posts.count, 13, "the first post and 12 heartbeats, then none")
+        r.center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        XCTAssertTrue(r.isOffline)
+        r.advance(60)
+        r.center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        XCTAssertEqual(r.posts.count, 15, "the wake posts the list")
+        r.advance(3600)
+        XCTAssertEqual(r.posts.count, 27, "and 12 heartbeats from the wake, not none")
+    }
+
     func testAnEmptyListHeartbeatsOnlyForTheIdleTail() {
         let r = Rig()
         r.p.sessionsChanged([])
@@ -343,6 +367,43 @@ final class LiveStatusPublisherTests: XCTestCase {
         r.advance(300)
         XCTAssertEqual(r.posts.count, 1)
         XCTAssertNil(r.p.signOut(), "nothing live, nothing to send")
+    }
+
+    /// QA #600 INFO-5 (sign-out cache mutant): the signed-out session's token is not
+    /// reused: a gate re-check after sign-out reads the store again, before any activation.
+    func testSignOutDropsTheCachedBearer() {
+        let r = Rig()
+        r.p.sessionsChanged([s("a")])
+        XCTAssertNotNil(r.p.signOut())
+        r.bearer = nil   // the credentials go; the activation flag is not touched
+        r.p.refresh()
+        r.advance(300)
+        XCTAssertEqual(r.posts.count, 1, "no post under the revoked token")
+        r.bearer = "tok2"
+        r.p.refresh()
+        XCTAssertEqual(r.posts.count, 2)
+        XCTAssertEqual(r.posts.last?.bearer, "tok2")
+    }
+
+    /// QA #600 INFO-1: Sparkle said it would relaunch but the install aborted: a quit past
+    /// relaunchWindow is an ordinary quit and posts offline; inside it, none.
+    func testAnAbortedUpdateRelaunchIsForgottenAfterTheWindow() {
+        for (wait, offline) in [(59.0, false), (60.0, true), (3600.0, true)] {
+            let r = Rig()
+            r.p.sessionsChanged([s("a", .working)])
+            r.center.post(name: LiveStatusPublisher.updateWillRelaunch, object: nil)
+            r.advance(wait)
+            XCTAssertEqual(r.p.updateRelaunch, !offline, "\(wait) s")
+            let before = r.posts.count
+            r.p.quit()
+            XCTAssertEqual(r.posts.count, before + (offline ? 1 : 0), "\(wait) s")
+            if offline { XCTAssertTrue(r.isOffline && r.posts.last!.waited, "\(wait) s") }
+        }
+        let back = Rig()
+        back.p.sessionsChanged([s("a", .working)])
+        back.center.post(name: LiveStatusPublisher.updateWillRelaunch, object: nil)
+        back.clock -= 3600   // the wall clock set back
+        XCTAssertFalse(back.p.updateRelaunch, "a clock set back reads as outside the window")
     }
 
     func testToggleOffPostsOfflineAndStopsThenOnPostsTheList() {

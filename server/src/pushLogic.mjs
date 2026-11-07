@@ -28,6 +28,14 @@ export const STEP_D1 = 3; // D1 queries per cron step: the guarded UPDATE, the c
 export const SEQ_AHEAD_MS = 3600 * 1000; // a seq more than 1 h past the Worker's clock is a 400
 export const MAX_BODY = 32768; // bytes; a larger push route body is a 413
 export const ATTRIBUTES_TYPE = "ProsperSessionsAttributes";
+// #770: a phone in Battery saver ("saver") gets at most one paced card update per 120 s; the
+// minute cron flushes a deferred one, so a change lands 120-180 s late. Blocked edges (in or out), starts,
+// ends and the cron's re-push are never paced. "live" (and anything else) is the #766 timing.
+export const MODES = ["live", "saver"];
+export const SAVER_GAP_S = 120;
+// QA #600 INFO-2: a card update or idle end APNs failed (error, not a dead token) is tried
+// again on the next cron, at most this many sends in a row, so a dead token is not hammered.
+export const SEND_TRIES = 3;
 
 const RANK = { blocked: 0, working: 1, done: 2, idle: 3 }; // Agent Island urgency
 const byUrgency = (a, b) => RANK[a.state] - RANK[b.state] || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
@@ -76,6 +84,7 @@ export function parseTokenBody(b) {
       env: b.env,
       activity_id: b.kind === "la_update" ? b.activity_id : "",
       mac_id: b.kind === "la_update" ? b.mac_id : null,
+      mode: MODES.includes(b.mode) ? b.mode : "live", // missing or unknown: live (an old phone)
     },
   };
 }
@@ -175,6 +184,8 @@ export function cut(s, n = CUT) {
   const cps = [...s];
   return cps.length > n ? cps.slice(0, n).join("") : s;
 }
+
+const blockedSet = (sessions) => JSON.stringify(sessions.filter((s) => s.state === "blocked").map((s) => s.name).sort());
 
 export const isActive = (sessions) => sessions.some((s) => s.state === "working" || s.state === "blocked");
 
@@ -278,6 +289,10 @@ export function reduceSessions(prev, input, now) {
   push.start = startEdge && !(base.started_at !== null && now - base.started_at < START_GAP_S);
   push.update = !base.online || shown(before) !== shown(after);
   push.priority = entered.length > 0 ? 10 : 5;
+  // #770: a saver card may defer it, but not a blocked edge in either direction: a card must
+  // not say "needs you" for minutes after the prompt was answered (the Mac posts both at once).
+  // Leaving blocked stays priority 5; only entering it is urgent.
+  push.paced = blockedSet(before) === blockedSet(after);
 
   mac.online = true;
   mac.sessions = after;
@@ -291,12 +306,14 @@ export function reduceSessions(prev, input, now) {
 
 /**
  * The every-minute cron for one online Mac. hasCard = some phone holds a la_update
- * token for it. Returns null (nothing to do) or {kind, mac, push}:
+ * token for it; due = how many of those have an update due (a saver deferral, a failed
+ * send's retry). Returns null (nothing to do) or {kind, mac, push}:
  *  lapse  - no heartbeat for 180 s: offline, cards end with online:false, dismissal +600;
- *  end    - nothing working/blocked for 10 min: cards end now;
- *  repush - last push over 50 min ago: same state again so the stale-date moves.
+ *  end    - nothing working/blocked for 10 min: cards end now (a failed end stays, retried);
+ *  repush - last push over 50 min ago: same state again so the stale-date moves;
+ *  flush  - only the due cards get the current state.
  */
-export function cronStep(mac, hasCard, now) {
+export function cronStep(mac, hasCard, now, due = 0) {
   if (!mac.online) return null;
   const push = noPush();
   if (now - mac.last_seen >= LAPSE_S) {
@@ -305,17 +322,31 @@ export function cronStep(mac, hasCard, now) {
   }
   if (!hasCard) return null;
   if (mac.idle_since !== null && now - mac.idle_since >= IDLE_END_S) {
-    push.end = { dismissal: now };
+    push.end = { dismissal: now, retry: true };
     return { kind: "end", mac: { ...mac, last_push_at: now }, push };
   }
   if (now - (mac.last_push_at ?? 0) >= REPUSH_S) {
     push.update = true;
     return { kind: "repush", mac: { ...mac, last_push_at: now }, push };
   }
+  if (due > 0) {
+    push.update = true;
+    push.flush = true;
+    return { kind: "flush", mac, push };
+  }
   return null;
 }
 
-const KIND_ORDER = { lapse: 0, end: 1, restart: 2, repush: 3 };
+/**
+ * #770: does this la_update row get an update now? A live card always; a saver card when
+ * the update is not paced (blocked edge, cron step), on its first push, or 120 s after its
+ * last one. Otherwise it is deferred to due_at = last push + 120 s, which the cron flushes.
+ * row = {mode, pushed_at}.
+ */
+export const sendNow = (row, push, now) =>
+  row.mode !== "saver" || !push.paced || row.pushed_at === null || now - row.pushed_at >= SAVER_GAP_S;
+
+const KIND_ORDER = { lapse: 0, end: 1, restart: 2, flush: 3, repush: 4 };
 const dueAt = ({ kind, row }) =>
   kind === "restart"
     ? row.created_at
@@ -323,12 +354,13 @@ const dueAt = ({ kind, row }) =>
       ? row.mac.last_seen
       : kind === "end"
         ? row.mac.idle_since
-        : (row.mac.last_push_at ?? 0);
+        : (row.mac.last_push_at ?? 0); // repush, flush
 
 /**
- * One cron run over every online Mac: rows = [{mac, cards, ...}] where cards = the
- * phones holding a card for it. A step costs its APNs sends (cards) plus STEP_D1
- * queries. Lapses go first, then ends, then re-pushes, each oldest due first; a step
+ * One cron run over every online Mac: rows = [{mac, cards, due, ...}] where cards = the
+ * phones holding a card for it, due = those with an update due. A step costs its APNs
+ * sends (cards; a flush, due) plus STEP_D1 queries. Lapses go first, then ends, then
+ * flushes (#770), then re-pushes, each oldest due first; a step
  * that no longer fits the budget waits for the next minute (its row is untouched, so
  * it is due again). -> [{kind, mac, push, row}] in send order.
  *
@@ -340,7 +372,7 @@ const dueAt = ({ kind, row }) =>
 export function planCron(rows, now, budget = CRON_BUDGET, expired = []) {
   const steps = [];
   for (const row of rows) {
-    const r = cronStep(row.mac, row.cards > 0, now);
+    const r = cronStep(row.mac, row.cards > 0, now, row.due ?? 0);
     if (r) steps.push({ ...r, row });
   }
   for (const row of expired) {
@@ -352,7 +384,8 @@ export function planCron(rows, now, budget = CRON_BUDGET, expired = []) {
   let left = budget;
   let batch = 0; // the restarts' shared delete batch, paid by the first one taken
   for (const s of steps) {
-    const cost = s.kind === "restart" ? (s.start ? 2 : 1) + (batch ? 0 : 1) : s.row.cards + STEP_D1;
+    const cost =
+      s.kind === "restart" ? (s.start ? 2 : 1) + (batch ? 0 : 1) : (s.kind === "flush" ? s.row.due : s.row.cards) + STEP_D1;
     if (cost > left) continue;
     left -= cost;
     if (s.kind === "restart") batch = 1;

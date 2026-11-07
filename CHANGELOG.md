@@ -49,6 +49,11 @@ tag from the now-released section and put it on the new top draft.
   stays. The menu bar skips a redraw when nothing it shows changed. Clipboard auto-clear
   no longer wakes every minute: it sets one timer for the copied item's deadline, so it
   also clears on time instead of up to a minute late. (#769)
+- **Battery saver for the iPhone Live Activity.** With Battery saver picked on the phone
+  (or Low Power Mode on), the card updates at most every 2-3 minutes; "needs you" still
+  arrives at once, and so does its clearing. Real-time stays the default. A failed card
+  update is retried on the next minute instead of an hour later, and an update install
+  that was cancelled no longer keeps Prosper from marking the Mac offline on quit. (#770)
 
 ## v2.172.0
 
