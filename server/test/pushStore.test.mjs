@@ -1538,6 +1538,25 @@ test("#770 saver: a content change pushes at most once per 120 s; the cron flush
   assert.equal(due(t)[0].due_at, null);
 });
 
+test("QA #605 INFO-1: a saver card sent at once (nothing due, no failures) records pushed_at, so the next change inside 120 s is deferred", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, saverCard(PHONE, "3"));
+  await t.settle();
+  t.takeCalls();
+  const t0 = t.clock.now;
+  t.clock.now = t0 + 200;
+  await postSessions(t.deps, ALICE, sessions(2, [S("a", "working"), S("b", "idle")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [[tok("3"), "update", "5"]], "past its 120 s: at once");
+  assert.deepEqual(due(t)[0], { token: tok("3"), mode: "saver", pushed_at: t0 + 200, due_at: null, fails: 0 }, "an ok with nothing due is still written");
+  t.clock.now = t0 + 230;
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "working"), S("b", "working")]));
+  await t.settle();
+  assert.deepEqual(updates(t), [], "30 s after that push: deferred, not live cadence");
+  assert.equal(due(t)[0].due_at, t0 + 320);
+});
+
 test("#770 saver: a blocked edge pushes at once, entering (priority 10 + the alert) or leaving (priority 5); working <-> idle in the window is deferred", async () => {
   const t = setup();
   await putToken(t.deps, ALICE, { ...alertBody(PHONE, "1"), mode: "saver" });

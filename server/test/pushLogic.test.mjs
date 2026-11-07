@@ -27,6 +27,7 @@ import {
   sendNow,
   SAVER_GAP_S,
   STEP_D1,
+  IDLE_END_S,
 } from "../src/pushLogic.mjs";
 
 const S = (name, state, extra = {}) => ({ name, state, ...extra });
@@ -433,6 +434,15 @@ test("cron lapse at 180 s without a heartbeat", () => {
   assert.deepEqual(r.mac.sessions, [], "absent, never stale");
   assert.equal(cronStep(live(), false, 1180).kind, "lapse", "lapses with no card too");
   assert.equal(cronStep(live({ online: false }), true, 5000), null);
+});
+
+// QA #605 INFO-5: the Mac's heartbeat tail, LiveStatusPublisher.idleTail (720 s, pinned in
+// app/Tests/ProsperAppTests/LiveStatusPublisherTests.swift), must outlast the idle end plus one
+// cron minute, so the idle card ends online before the missing heartbeat lapses the Mac.
+test("QA #605: IDLE_END_S + the cron minute stays under the Mac's idleTail (720 s)", () => {
+  const MAC_IDLE_TAIL_S = 720; // LiveStatusPublisher.idleTail
+  assert.equal(IDLE_END_S, 600);
+  assert.ok(IDLE_END_S + 60 < MAC_IDLE_TAIL_S, `${IDLE_END_S} + 60 < ${MAC_IDLE_TAIL_S}`);
 });
 
 test("cron ends a card after 10 min with nothing working/blocked", () => {
