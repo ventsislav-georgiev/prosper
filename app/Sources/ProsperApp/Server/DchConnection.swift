@@ -1466,6 +1466,20 @@ struct DchControlOps: Sendable {
 
 // MARK: - Session list rows
 
+/// #792: `--ls-json`'s per-row "auto_allowed" {at, title}: when (epoch seconds) and which
+/// dialog the master's auto-allow answered last. nil for null, absent or malformed.
+struct DchAutoAllowed: Equatable, Sendable {
+    let at: Int
+    let title: String
+
+    init(at: Int, title: String) { (self.at, self.title) = (at, title) }
+
+    init?(json: Any?) {
+        guard let o = json as? [String: Any], let at = o["at"] as? Int, let title = o["title"] as? String else { return nil }
+        (self.at, self.title) = (at, title)
+    }
+}
+
 /// One `dch --ls-json` (or `-lj`) row: the one decode Agent Island and Remote
 /// Terminal share. `meta`/`metaEpoch` are dch 1.22+; older dch omits them (nil, 0).
 struct DchListRow: Equatable, Sendable {
@@ -1479,6 +1493,8 @@ struct DchListRow: Equatable, Sendable {
     var metaEpoch: Int = 0
     /// #578: the dch version of the master serving it; "" from a master too old to say.
     var version: String = ""
+    /// #792: the prompt the master's own auto-allow answered last (dch 1.29.2+), nil when none.
+    var autoAllowed: DchAutoAllowed? = nil
 
     /// The phone's `meta`/`meta_epoch` row keys, re-encoded from the decoded fields
     /// (never dch's raw JSON); empty when there is no meta or nothing survives the
@@ -1817,7 +1833,8 @@ enum DchCommand {
                               agents: o["agents"] as? Int ?? 0,
                               meta: DchSessionMeta(json: o["meta"]),
                               metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0,
-                              version: o["version"] as? String ?? "")
+                              version: o["version"] as? String ?? "",
+                              autoAllowed: DchAutoAllowed(json: o["auto_allowed"]))
         }
     }
 

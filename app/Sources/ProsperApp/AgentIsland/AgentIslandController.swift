@@ -1062,9 +1062,16 @@ final class AgentIslandController {
     static let loopWindow: TimeInterval = 30
     /// An answered session still listed blocked has its screen read again this soon.
     static let verifyDelay: TimeInterval = 2
+    /// #792: how long a prompt left to dch's own auto-allow waits for its answer before the
+    /// normal Needs input goes out (a DCH_NO_DETECT master, a hook or ask prompt dch refuses, a
+    /// non-permission prompt). dch answers at most 2 s (its AA_MAX_MS, = verifyDelay) into the
+    /// prompt's output, which began before this check saw it blocked; the answer's output is
+    /// then re-listed at most AgentPollGate.floor after the last list, on a 1 s tick.
+    static let standDownWait: TimeInterval = verifyDelay + AgentPollGate.floor + 1
     private static let log = Logger(subsystem: "eu.illegible.prosper", category: "agentisland")
 
-    private enum AutoAllowState { case checking, answered, human }
+    /// `dch`: left to dch's auto-allow (#792), with the row's `auto_allowed` when it was.
+    private enum AutoAllowState: Equatable { case checking, answered, human, dch(DchAutoAllowed?) }
     /// One blocked stretch of a session; dropped once the row is not blocked.
     private var autoAllow: [AgentSessionKey: AutoAllowState] = [:]
     /// The prompt last answered per session, and when: the loop guard.
@@ -1074,15 +1081,36 @@ final class AgentIslandController {
     /// #755: the keys whose inFlight is an Always allow check, not an island click;
     /// true once an off-toggle orphaned it and an on-toggle took it back.
     private var checks: [AgentSessionKey: Bool] = [:]
+    /// #792: each session's dch `auto_allowed` at the last check, so a new one shows once.
+    private var dchSeen: [AgentSessionKey: DchAutoAllowed?] = [:]
+    /// #792 seam: one call of the installed dch (`--build`, `--config`); nil = timed out. Only
+    /// reached through controlDch, which finds no binary under XCTest.
+    var runDch: @Sendable (_ path: String, _ args: [String], _ env: [String: String]) -> Data? = {
+        DchCommand.runIsland(args: $1, env: $2, path: $0)
+    }
+    /// #792: `--build` per installed binary and version ("<path>@1.29.2": "full").
+    private let dchBuilds = OSAllocatedUnfairLock<[String: String]>(initialState: [:])
 
     /// Every list change, before it is published: a session that just went blocked
     /// gets one check, any tab, expanded or not. Off: nothing is read or held.
     func checkAutoAllow() {
         guard let store else { return }
-        guard autoAllowOn() else { autoAllow = [:]; return }   // nothing held: published as is
+        guard autoAllowOn() else { autoAllow = [:]; dchSeen = [:]; return }   // nothing held: published as is
+        showDchAnswers(store.sessions)
         let blocked = Set(store.sessions.filter { $0.state == .blocked }.map(\.key))
         autoAllow = autoAllow.filter { blocked.contains($0.key) }
         for key in blocked where autoAllow[key] == nil { startAutoAllow(key, answered: false) }
+    }
+
+    /// #792: a row whose dch `auto_allowed` moved since the last check: dch answered its
+    /// prompt, so it reads "Allowed automatically". A row first seen shows nothing.
+    private func showDchAnswers(_ sessions: [AgentSession]) {
+        for s in sessions {
+            guard let a = s.autoAllowed, let was = dchSeen[s.key], was != a else { continue }
+            Self.log.info("dch auto-allow answered in \(s.key.name, privacy: .public): \(a.title, privacy: .private)")
+            if !runner.isBusy(s.key) { store?.actions[s.key] = Self.autoAllowedText }
+        }
+        dchSeen = Dictionary(sessions.map { ($0.key, $0.autoAllowed) }, uniquingKeysWith: { a, _ in a })
     }
 
     /// QA #581 F3: the setting toggled (Settings): off drops every hold and
@@ -1109,8 +1137,20 @@ final class AgentIslandController {
         checks[key] = false
         let io = io, t = now(), isOn = autoAllowOn
         let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
+        // #792: a fresh blocked stretch only; the re-read after Prosper's own answer stays Prosper's.
+        let master = answered ? "" : store?.sessions.first { $0.key == key }?.version ?? ""
+        let probe = controlDch, run = runDch, builds = dchBuilds
         queue.async { [weak self] in
-            let r = AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered, isOn: isOn)
+            let env = AgentIsland.listEnv(dir: key.dir)
+            let dch = DchAutoAllowGate.answers(master: master, dch: probe, build: { bin in
+                let k = "\(bin.path)@\(DchCommand.versionString(bin.version))"
+                if let hit = builds.withLock({ $0[k] }) { return hit }
+                guard let out = run(bin.path, ["--build"], env) else { return nil }   // timed out: asked again next time
+                let b = String(decoding: out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                builds.withLock { $0[k] = b }
+                return b
+            }, config: { bin in run(bin.path, ["--config"], env).map { String(decoding: $0, as: UTF8.self) } })
+            let r = dch ? .dch : AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered, isOn: isOn)
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r) } }
         }
     }
@@ -1138,6 +1178,8 @@ final class AgentIslandController {
         if r == .human {
             autoAllow[key] = .human
             publish()
+        } else if r == .dch {
+            standDown(key)
         } else {
             autoAllow[key] = .answered
             rereadGen[key, default: 0] += 1
@@ -1150,13 +1192,35 @@ final class AgentIslandController {
         layout()
     }
 
+    /// #792: dch answers this prompt, Prosper sends nothing. Held (no Needs input) until the
+    /// row leaves blocked (checkAutoAllow drops the hold) or `standDownWait` runs out: with
+    /// dch's `auto_allowed` moved (it answered, and a new prompt is up) the next one is
+    /// checked; with no answer from dch, the normal Needs input goes out.
+    private func standDown(_ key: AgentSessionKey) {
+        let seen = store?.sessions.first { $0.key == key }?.autoAllowed
+        autoAllow[key] = .dch(seen)
+        rereadGen[key, default: 0] += 1
+        let gen = rereadGen[key]
+        after(Self.standDownWait) { [weak self] in
+            guard let self, self.rereadGen[key] == gen, self.autoAllow[key] == .dch(seen) else { return }
+            if self.store?.sessions.first(where: { $0.key == key })?.autoAllowed != seen {
+                return self.startAutoAllow(key, answered: false)
+            }
+            self.autoAllow[key] = .human
+            self.publish()
+            self.refreshCards()
+            self.layout()
+        }
+    }
+
     /// The list for the phone (LiveStatusPublisher): a session being checked or
     /// answered reads working, so its Needs input never posts.
     func published(_ sessions: [AgentSession]) -> [AgentSession] {
         sessions.map { s in
             guard s.state == .blocked, let a = autoAllow[s.key], a != .human else { return s }
             return AgentSession(key: s.key, alias: s.alias, activity: s.activity, state: .working,
-                                agents: s.agents, meta: s.meta, version: s.version, metaEpoch: s.metaEpoch)
+                                agents: s.agents, meta: s.meta, version: s.version, metaEpoch: s.metaEpoch,
+                                autoAllowed: s.autoAllowed)
         }
     }
 
@@ -1299,6 +1363,7 @@ final class AgentIslandController {
         panel = nil
         store = nil
         autoAllow = [:]
+        dchSeen = [:]
         shown = false
     }
 }
@@ -1454,5 +1519,25 @@ extension AgentPromptIO {
             read: { dch(["--read", $0.name], $0) },
             status: { dch(["--status", $0.name], $0) },
             send: { _ = dch(["--send", $0.name, $1], $0) })
+    }
+}
+
+/// #792: whether dch's own auto-allow answers a row's prompts, so Always allow stands down.
+/// Only when dch clearly does: the row's master at 1.29.0+ (older ones never auto-allow;
+/// standing down on one that cannot leaves the prompt to the human after the wait, never two
+/// engines), the installed dch at 1.29.2+ (its normalised `--config` listing is the verified
+/// one), the installed build "full" (lite never auto-allows; asked only past the version,
+/// since older dch exits 1 on --build), and that listing has exactly "auto_allow = true".
+/// Anything else (off, unreadable, timed out, an older or lite dch, none): Prosper answers.
+enum DchAutoAllowGate {
+    static let masterMinimum = [1, 29, 0]
+    static let installedMinimum = [1, 29, 2]
+
+    static func answers(master: String, dch: () -> DchCommand.Binary?, build: (DchCommand.Binary) -> String?,
+                        config: (DchCommand.Binary) -> String?) -> Bool {
+        guard DchCommand.isAtLeast(DchCommand.masterVersion(master), masterMinimum), let bin = dch(),
+              DchCommand.isAtLeast(bin.version, installedMinimum), build(bin) == "full", let text = config(bin) else { return false }
+        // Line 1 is the config's path; bools are normalised to true/false (never the raw "yes").
+        return text.split(separator: "\n").dropFirst().contains("auto_allow = true")
     }
 }

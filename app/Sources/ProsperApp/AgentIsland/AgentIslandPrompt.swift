@@ -700,4 +700,6 @@ enum AgentAutoAllow: Equatable {
     /// Left to the human: not a plain permission prompt, the same prompt again,
     /// or the answer's re-check refused.
     case human
+    /// #792: dch's own auto-allow answers this session's prompts: nothing was read or sent.
+    case dch
 }

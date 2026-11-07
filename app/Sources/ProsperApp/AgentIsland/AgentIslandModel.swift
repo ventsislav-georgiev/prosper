@@ -77,6 +77,8 @@ struct AgentSession: Equatable, Identifiable {
     var version: String = ""
     /// #765: dch's `meta_epoch`, kept so the phone's list served from here matches a fork's.
     var metaEpoch: Int = 0
+    /// #792: dch's `auto_allowed`, the prompt its master answered last; nil when none.
+    var autoAllowed: DchAutoAllowed? = nil
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -505,7 +507,8 @@ enum AgentIsland {
             return rows.map {
                 AgentSession(key: AgentSessionKey(dir: dir, name: $0.name), alias: $0.alias,
                              activity: TimeInterval($0.activityEpoch), state: AgentState(dch: $0.state),
-                             agents: $0.agents, meta: $0.meta, version: $0.version, metaEpoch: $0.metaEpoch)
+                             agents: $0.agents, meta: $0.meta, version: $0.version, metaEpoch: $0.metaEpoch,
+                             autoAllowed: $0.autoAllowed)
             }
         }
     }

@@ -1000,6 +1000,232 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         }
     }
 
+    // MARK: - #792: dch's own auto-allow answers, Prosper stands down
+
+    /// The installed dch, faked: its version (nil = none installed), `--build` and
+    /// `--config` (nil = timed out); every call and its env recorded.
+    private final class FakeDch: @unchecked Sendable {
+        let lock = NSLock()
+        var version: [Int]? = [1, 29, 2]
+        var build: String? = "full\n"
+        var config: String? = "/Users/probe/.config/dch/config\nauto_allow = true\nsidekick_pattern = -qa\n"
+        var calls: [[String]] = [], envs: [[String: String]] = []
+        @MainActor init(_ c: AgentIslandController) {
+            c.controlDch = { self.lock.withLock { self.version.map { DchCommand.Binary(path: "/fake/dch", version: $0) } } }
+            c.runDch = { path, args, env in
+                self.lock.withLock {
+                    XCTAssertEqual(path, "/fake/dch")
+                    self.calls.append(args)
+                    self.envs.append(env)
+                    return (args == ["--build"] ? self.build : args == ["--config"] ? self.config : nil).map { Data($0.utf8) }
+                }
+            }
+        }
+    }
+
+    private static let dchAnswer = DchAutoAllowed(at: 1_000_005, title: "Bash command")
+
+    private func row(_ state: AgentState, master: String = "1.29.2", allowed: DchAutoAllowed? = nil,
+                     name: String = "s") -> AgentSession {
+        AgentSession(key: AgentSessionKey(dir: "/d", name: name), alias: "", activity: 1, state: state, agents: 0,
+                     version: master, autoAllowed: allowed)
+    }
+
+    /// One list change, as apply runs it; what goes to the phone.
+    @MainActor @discardableResult
+    private func list(_ c: AgentIslandController, _ rows: AgentSession...) -> [AgentState] {
+        c.store?.sessions = rows
+        c.checkAutoAllow()
+        return c.published(rows).map(\.state)
+    }
+
+    func testTheListParsesDchsAutoAllowed() {
+        let rows = DchCommand.parseListJSON(Data("""
+        [{"name":"a","state":"working","version":"1.29.2","auto_allowed":{"at":1000005,"title":"Bash command"}},
+         {"name":"b","state":"blocked","version":"1.29.2","auto_allowed":null},
+         {"name":"c","state":"idle"},
+         {"name":"d","state":"idle","auto_allowed":{"at":"soon","title":"Bash command"}}]
+        """.utf8))
+        XCTAssertEqual(rows.map(\.autoAllowed), [Self.dchAnswer, nil, nil, nil])
+        let s = AgentIsland.list(dirs: ["/d"]) { _, _ in
+            Data(#"[{"name":"a","state":"working","auto_allowed":{"at":1000005,"title":"Bash command"}}]"#.utf8)
+        }
+        XCTAssertEqual(s.first?.autoAllowed, Self.dchAnswer, "carried into the island's session")
+    }
+
+    @MainActor func testStandingDownSendsNothingHoldsTheRowThenShowsDchsAnswer() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+        XCTAssertEqual(list(c, row(.blocked)), [.working], "held while it is checked")
+        drain(c)
+        XCTAssertEqual(f.sends, [], "Prosper sends nothing")
+        XCTAssertEqual(f.reads, 0, "nor reads the screen")
+        XCTAssertEqual(d.calls, [["--build"], ["--config"]])
+        XCTAssertEqual(d.envs.last?["DCH_SOCKET_DIR"], "/d", "the island's dch env (listEnv)")
+        XCTAssertNil(d.envs.last?["DCH_SESSION"])
+        XCTAssertEqual(c.published(c.store?.sessions ?? []).map(\.state), [.working], "still held: no Needs input")
+        XCTAssertFalse(r.everBlocked)
+        XCTAssertNil(c.store?.actions[key])
+        XCTAssertEqual(r.timers.count, 1, "the bounded wait is armed")
+        // dch answers: the row leaves blocked with its auto_allowed.
+        XCTAssertEqual(list(c, row(.working, allowed: Self.dchAnswer)), [.working])
+        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        fire(c, r)
+        XCTAssertFalse(r.everBlocked, "the wait's end is a no-op once the row left blocked")
+        XCTAssertEqual(f.sends, [])
+        XCTAssertEqual(d.calls.count, 2, "and checks nothing: the row is not blocked")
+        XCTAssertTrue(r.timers.isEmpty)
+        // The next prompt: one --config per blocked event, --build cached.
+        XCTAssertEqual(list(c, row(.blocked, allowed: Self.dchAnswer)), [.working])
+        drain(c)
+        XCTAssertEqual(d.calls, [["--build"], ["--config"], ["--config"]])
+        XCTAssertEqual(f.sends, [])
+    }
+
+    @MainActor func testNoAnswerFromDchFallsBackToNeedsInputAfterTheWait() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+        var delays: [TimeInterval] = []
+        c.after = { delay, fire in delays.append(delay); r.timers.append(fire) }
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(delays, [AgentIslandController.standDownWait])
+        XCTAssertEqual(AgentIslandController.standDownWait, 5, "verifyDelay 2 + the poll floor 2 + one 1 s tick")
+        XCTAssertFalse(r.everBlocked)
+        fire(c, r)
+        XCTAssertEqual(r.lastState, .blocked, "the normal Needs input")
+        XCTAssertEqual(c.published(c.store?.sessions ?? []).map(\.state), [.blocked])
+        XCTAssertEqual(f.sends, [], "and still nothing typed")
+        XCTAssertTrue(r.timers.isEmpty)
+        XCTAssertEqual(list(c, row(.blocked)), [.blocked], "the human's for the rest of the stretch")
+        drain(c)
+        XCTAssertEqual(d.calls.count, 2, "not checked again")
+    }
+
+    /// dch answered and a new prompt is already up when the wait ends: that one is left to dch too.
+    @MainActor func testANewPromptAfterDchsAnswerIsStoodDownAgain() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(list(c, row(.blocked, allowed: Self.dchAnswer)), [.working])
+        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        fire(c, r)
+        XCTAssertEqual(d.calls, [["--build"], ["--config"], ["--config"]], "checked again")
+        XCTAssertFalse(r.everBlocked)
+        XCTAssertEqual(r.timers.count, 1, "a new wait")
+        fire(c, r)   // no further answer: the human's
+        XCTAssertEqual(r.lastState, .blocked)
+        XCTAssertEqual(f.sends, [])
+    }
+
+    /// Every case dch does not clearly answer: Prosper's engine as today (it types Yes).
+    @MainActor func testEveryOtherCaseRunsProspersEngineAsToday() {
+        let listing = "/Users/probe/.config/dch/config\n"
+        let cases: [(String, String, (FakeDch) -> Void, [[String]])] = [
+            ("auto_allow off", "1.29.2", { $0.config = listing + "auto_allow = false\nsidekick_pattern = -qa\n" },
+             [["--build"], ["--config"]]),
+            ("config timed out", "1.29.2", { $0.config = nil }, [["--build"], ["--config"]]),
+            ("config empty", "1.29.2", { $0.config = "" }, [["--build"], ["--config"]]),
+            ("config garbage", "1.29.2", { $0.config = "dch: no config path (set HOME or DCH_CONFIG)\n\u{1}\u{2}" },
+             [["--build"], ["--config"]]),
+            ("master older", "1.28.9", { _ in }, []),
+            ("master too old to say", "", { _ in }, []),
+            ("lite build", "1.30.0", { $0.build = "lite\n" }, [["--build"]]),
+            ("build timed out", "1.30.0", { $0.build = nil }, [["--build"]]),
+            ("no dch installed", "1.30.0", { $0.version = nil }, []),
+            ("installed dch older: --build never called", "1.30.0", { $0.version = [1, 29, 1] }, []),
+        ]
+        for (name, master, setUp, calls) in cases {
+            let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+            setUp(d)
+            XCTAssertEqual(list(c, row(.blocked, master: master)), [.working], name)
+            drain(c)
+            XCTAssertEqual(f.sends, ["1"], "\(name): Prosper answers")
+            XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText, name)
+            XCTAssertEqual(d.calls, calls, name)
+            XCTAssertFalse(r.everBlocked, name)
+            fire(c, r)   // the re-read after Prosper's own answer
+            XCTAssertEqual(d.calls, calls, "\(name): the re-read asks dch nothing")
+        }
+    }
+
+    /// Only the normalised listing line counts: the single-key form's raw value and
+    /// anything not exactly "auto_allow = true" on a listing line is not true.
+    @MainActor func testOnlyTheNormalisedListingLineCountsAsOn() {
+        let path = "/Users/probe/.config/dch/config\n"
+        for config in ["yes\n", "true\n", "auto_allow = true\n", path + "auto_allow = yes\n", path + "auto_allow = on\n",
+                       path + "auto_allow = 1\n", path + "auto_allow=true\n", path + " auto_allow = true\n",
+                       path + "auto_allow = TRUE\n", path + "auto_allow = true # on\n", path + "# auto_allow = true\n"] {
+            let f = FakeIO(Self.bash3), (c, _) = controller(f), d = FakeDch(c)
+            d.config = config
+            list(c, row(.blocked))
+            drain(c)
+            XCTAssertEqual(f.sends, ["1"], "\(config.debugDescription): Prosper answers")
+        }
+        let f = FakeIO(Self.bash3), (c, _) = controller(f), d = FakeDch(c)
+        d.config = path + "sidekick_pattern = -qa\nauto_allow = true"   // any order, no trailing newline
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(f.sends, [], "the listing line: dch's")
+    }
+
+    /// A row first seen with an old answer, or the same answer again, shows nothing; off, nothing either.
+    @MainActor func testOnlyANewDchAnswerShows() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f)
+        list(c, row(.working, allowed: Self.dchAnswer))
+        XCTAssertNil(c.store?.actions[key], "first seen: not this run's")
+        list(c, row(.idle, allowed: Self.dchAnswer))
+        XCTAssertNil(c.store?.actions[key], "unchanged")
+        c.autoAllowOn = { false }
+        list(c, row(.working, allowed: DchAutoAllowed(at: 1_000_009, title: "Bash command")))
+        XCTAssertNil(c.store?.actions[key], "Always allow off: as today")
+        c.autoAllowOn = { true }
+        list(c, row(.working, allowed: DchAutoAllowed(at: 1_000_009, title: "Bash command")))
+        XCTAssertNil(c.store?.actions[key], "seen again after off: first seen")
+        list(c, row(.working, allowed: DchAutoAllowed(at: 1_000_012, title: "Bash command")))
+        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+    }
+
+    /// #792 review: a 1.29.0 or 1.29.1 master auto-allows, so it is dch's too; an installed
+    /// dch under 1.29.2 still leaves every row to Prosper.
+    @MainActor func testTheMasterGateIs1290AndTheInstalledGate1292() {
+        for master in ["1.29.0", "1.29.1"] {
+            let f = FakeIO(Self.bash3), (c, _) = controller(f), d = FakeDch(c)
+            XCTAssertEqual(list(c, row(.blocked, master: master)), [.working], master)
+            drain(c)
+            XCTAssertEqual(f.sends, [], "\(master): stood down")
+            XCTAssertEqual(d.calls, [["--build"], ["--config"]], master)
+        }
+        for master in ["1.28.2", "1.28.99", ""] {
+            let f = FakeIO(Self.bash3), (c, _) = controller(f), d = FakeDch(c)
+            list(c, row(.blocked, master: master))
+            drain(c)
+            XCTAssertEqual(f.sends, ["1"], "\(master.debugDescription): Prosper answers")
+            XCTAssertEqual(d.calls, [], master)
+        }
+        let f = FakeIO(Self.bash3), (c, _) = controller(f), d = FakeDch(c)
+        d.version = [1, 29, 1]
+        list(c, row(.blocked, master: "1.29.1"))
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"], "installed 1.29.1: Prosper answers")
+        XCTAssertEqual(d.calls, [], "--build never asked of it")
+    }
+
+    /// Per row: an old master's prompt is Prosper's, a 1.29.2+ master's is dch's.
+    @MainActor func testMixedMastersArePerRow() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+        let sentTo = OSAllocatedUnfairLock<[String]>(initialState: []), base = f.io
+        c.io = AgentPromptIO(read: base.read, status: base.status,
+                             send: { k, digit in sentTo.withLock { $0.append(k.name) }; base.send(k, digit) })
+        let old = row(.blocked, master: "1.28.2", name: "old"), new = row(.blocked, master: "1.30.0", name: "new")
+        XCTAssertEqual(list(c, old, new), [.working, .working])
+        drain(c)
+        XCTAssertEqual(sentTo.withLock { $0 }, ["old"], "Prosper answers the old master's row only")
+        XCTAssertEqual(d.calls.filter { $0 == ["--config"] }.count, 1, "the new row's check only")
+        XCTAssertEqual(c.store?.actions[old.key], AgentIslandController.autoAllowedText)
+        XCTAssertNil(c.store?.actions[new.key])
+        XCTAssertEqual(c.published([old, new]).map(\.state), [.working, .working], "both held")
+        _ = r
+    }
+
     // MARK: - Offscreen renders (never on screen: an unwindowed hosting view and ImageRenderer)
 
     @MainActor func testRenderTheSettingAndTheRowText() throws {

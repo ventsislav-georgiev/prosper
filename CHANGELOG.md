@@ -77,6 +77,13 @@ tag from the now-released section and put it on the new top draft.
   of your "ask" permission rules matches ("Permission rule … requires confirmation",
   or "Ask rule … overrides auto mode"), the prompt always waits for you and shows as
   Needs input; you can still answer it from the island. (#790)
+- **Always allow and dch's auto-allow no longer both answer.** When dch answers
+  permission prompts itself (dch 1.29.2 or newer, full build, `auto_allow = true` in
+  its config), Prosper's Always allow stands down for those sessions, so a prompt is
+  answered once instead of getting a second "1". The island shows dch's answer as
+  "Allowed automatically". If dch leaves a prompt alone, it reaches you as Needs input
+  after about 5 seconds. Sessions on an older dch, or with dch's auto-allow off, are
+  answered by Prosper as before. (#792)
 
 ## v2.172.0
 
