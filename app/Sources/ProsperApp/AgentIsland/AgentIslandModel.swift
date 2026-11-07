@@ -664,6 +664,8 @@ struct AgentSidecarStamp: Equatable {
     var state: TimeInterval?
     var alias: TimeInterval?
     var meta: TimeInterval?
+    /// #768 (QA #607 INFO-2): the master's version stamp; `dch --restart` rewrites only this.
+    var ver: TimeInterval?
 }
 
 typealias AgentDirSnapshot = [AgentSessionKey: AgentSidecarStamp]
@@ -694,7 +696,8 @@ final class AgentDirScanner {
                 let base = "\(dir)/\(name).sock"
                 snap[AgentSessionKey(dir: dir, name: name)] = AgentSidecarStamp(
                     act: Self.mtime(base + ".act"), state: Self.mtime(base + ".state"),
-                    alias: Self.mtime(base + ".alias"), meta: Self.mtime(base + ".meta"))
+                    alias: Self.mtime(base + ".alias"), meta: Self.mtime(base + ".meta"),
+                    ver: Self.mtime(base + ".ver"))
             }
         }
         cache = cache.filter { dirs.contains($0.key) }
@@ -719,6 +722,12 @@ struct AgentPollGate {
     static let backstop: TimeInterval = 30   // never less often while sessions exist
     static let hiddenBackstop: TimeInterval = 60   // display asleep or screen locked
     static let trailing: TimeInterval = 2    // re-read after a change: a blocker can be mid-render
+    /// QA #607 F1: a working session that keeps printing (a spinner, subagents under a
+    /// prompt) is never quiet, and dch finds a prompt on the screen with no sidecar
+    /// change, so it is re-listed at least this often while it prints, hidden or not.
+    /// 6 s = dch's 5 s working window + 1: a needs-you under a busy pane shows within
+    /// about 6 s, at 10 forks/min per dir instead of 30 before #768.
+    static let printingCap: TimeInterval = 6
     /// dch says "working" while now - act <= 5 s (whole seconds), so a session
     /// that stops printing turns idle at floor(act) + 6 without touching a file.
     static let idleAfter: TimeInterval = 6
@@ -743,7 +752,8 @@ struct AgentPollGate {
             if act != seen[key]?.act {
                 switch states[key] {
                 case .done: continue                              // done always wins: output changes nothing
-                case .working: if now >= act + Self.trailing { return true }   // quiet again
+                case .working:   // quiet again, or printing on past the cap
+                    if now >= act + Self.trailing || now - last >= Self.printingCap { return true }
                 default: return true                              // idle or blocked printing: it turns working
                 }
             }

@@ -41,7 +41,15 @@ final class AgentIslandController {
     private(set) var outsideClick: Any?
     private(set) var screenObserver: NSObjectProtocol?
     /// #768: display sleep and screen lock (the same notifications Stats pauses on).
-    private var sleepObservers: [NSObjectProtocol] = []
+    private var sleepObservers: [(NSObjectProtocol, NotificationCenter)] = []
+    /// QA #607 INFO-4 seam: the center each screen event is observed on. Under XCTest
+    /// a private one, so no test registers a real workspace or distributed observer.
+    var screenCenter: @MainActor (ScreenGate.Event) -> NotificationCenter = { e in
+        if NSClassFromString("XCTestCase") != nil { return AgentIslandController.testScreenCenter }
+        return ScreenGate.center(for: e) == .distributed
+            ? DistributedNotificationCenter.default() : NSWorkspace.shared.notificationCenter
+    }
+    static let testScreenCenter = NotificationCenter()
     private(set) var screen = ScreenGate()
     private var poller: AgentIslandPoller?
     /// #768: the newest list when only its activity moved while collapsed or
@@ -165,11 +173,10 @@ final class AgentIslandController {
         }
         if sleepObservers.isEmpty {
             for (name, event) in ScreenGate.notifications {
-                let c = ScreenGate.center(for: event) == .distributed
-                    ? DistributedNotificationCenter.default() : NSWorkspace.shared.notificationCenter
-                sleepObservers.append(c.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                let c = screenCenter(event)
+                sleepObservers.append((c.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                     MainActor.assumeIsolated { self?.screenChanged(event) }
-                })
+                }, c))
             }
         }
         guard timer == nil, let geometry = currentGeometry() else { return }
@@ -206,8 +213,12 @@ final class AgentIslandController {
     /// hidden backstop; a list held back while unseen goes in once the island shows.
     func screenChanged(_ e: ScreenGate.Event) {
         screen.apply(e)
-        if let poller { let h = screen.hidden; queue.async { poller.hidden = h } }
+        pushHidden()
         if !screen.hidden, store?.expanded == true { flushDeferred() }
+    }
+
+    private func pushHidden() {
+        if let poller { let h = screen.hidden; queue.async { poller.hidden = h } }
     }
 
     private func flushDeferred() {
@@ -952,6 +963,9 @@ final class AgentIslandController {
     func setExpanded(_ on: Bool) {
         guard let store, store.expanded != on, !on || store.showsIsland else { return }
         store.expanded = on
+        // QA #607 INFO-1: only a lit, unlocked screen takes a click: a missed wake or
+        // unlock clears here (Stats does the same on popover open).
+        if on, screen.hidden { screen.apply(.popoverShown); pushHidden() }
         if on, let d = deferred { deferred = nil; store.sessions = d }   // #768
         // #581: nothing live: open on History.
         if on, store.sessions.isEmpty, !store.history.isEmpty { store.historyTab = true }
@@ -1275,10 +1289,7 @@ final class AgentIslandController {
         outsideClick = nil
         if let o = screenObserver { center.removeObserver(o) }
         screenObserver = nil
-        for o in sleepObservers {
-            NSWorkspace.shared.notificationCenter.removeObserver(o)
-            DistributedNotificationCenter.default().removeObserver(o)
-        }
+        for (o, c) in sleepObservers { c.removeObserver(o) }
         sleepObservers = []
         poller = nil
         deferred = nil

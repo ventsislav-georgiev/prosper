@@ -49,12 +49,12 @@ tag from the now-released section and put it on the new top draft.
   sends the list only when it changes, from the list Agent Island already reads, so no
   extra session checks run on the Mac. The phone side arrives in a Prosper iPhone update.
   (#765)
-- **Agent Island checks sessions less often.** An agent that is printing no longer
-  triggers a session read every 2 seconds: the island reads once its output pauses and
-  again when it turns idle, and a new prompt still shows within about 2 seconds. With
-  nothing changing it checks every 30 seconds instead of 10, and every 60 while the
-  display sleeps or the screen is locked. A closed island skips redrawing when only the
-  session ages moved. (#768)
+- **Agent Island checks sessions less often.** An agent that is printing is read every
+  6 seconds instead of every 2, plus once when its output pauses and again when it
+  turns idle. A new prompt shows within about 2 seconds, or about 6 while the agent
+  keeps printing. With nothing changing the island checks every 30 seconds instead of
+  10, and every 60 while the display sleeps or the screen is locked. A closed island
+  skips redrawing when only the session ages moved. (#768)
 - **System Stats and Clipboard auto-clear use less energy.** Stats now sample every 5 s
   (temperatures and power every 10 s) unless you picked a rate yourself; a saved choice
   stays. The menu bar skips a redraw when nothing it shows changed. Clipboard auto-clear

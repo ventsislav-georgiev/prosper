@@ -378,12 +378,12 @@ final class AgentIslandTests: XCTestCase {
         let p = poller([dir.path], f)
         _ = p.tick(); f.now += 2; _ = p.tick()   // first fetch and its trailing read
         XCTAssertEqual(f.calls.count, 2)
-        for _ in 0..<20 {
+        for _ in 0..<3 {
             f.now += 1
             touch(dir, "s.sock.act", mtime: f.now - 0.2)
             XCTAssertEqual(p.tick()?.first?.activity, (f.now - 0.2).rounded(.down), "the age still moves every tick")
         }
-        XCTAssertEqual(f.calls.count, 2, "printing for 20 s: no fork")
+        XCTAssertEqual(f.calls.count, 2, "printing, under the cap: no fork")
         f.now += 1; _ = p.tick()
         XCTAssertEqual(f.calls.count, 2, "quiet 1.2 s: not yet")
         f.now += 1; _ = p.tick()
@@ -441,9 +441,9 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(run(p, f, seconds: 60), 4, "back to 30 s once seen")
     }
 
-    /// A working agent: 30 forks/min per dir while it prints (the 2 s floor), now 2
-    /// (the backstop); each pause of 6 s or more adds a quiet read and an idle flip.
-    func testWorkingAgentForksOnTheBackstopAndPerPause() {
+    /// A working agent: 30 forks/min per dir while it prints (the 2 s floor), now 10
+    /// (the 6 s printing cap); each pause of 6 s or more adds a quiet read and an idle flip.
+    func testWorkingAgentForksOnTheCapAndPerPause() {
         let dir = tempDir(), f = Fake()
         touch(dir, "s.sock")
         touch(dir, "s.sock.act", mtime: f.now)
@@ -451,10 +451,69 @@ final class AgentIslandTests: XCTestCase {
         let p = poller([dir.path], f)
         _ = p.tick()
         _ = run(p, f, seconds: 30) { _ in [dir] }
-        XCTAssertEqual(run(p, f, seconds: 60) { _ in [dir] }, 2, "printing all minute")
+        XCTAssertEqual(run(p, f, seconds: 60) { _ in [dir] }, 10, "printing all minute: the cap")
         // Prints 20 s, pauses 10 s (dch stays "working" in the fake: no idle flip lands).
-        XCTAssertEqual(run(p, f, seconds: 60) { $0 % 30 < 20 ? [dir] : [] }, 5,
-                       "one backstop, then per pause a quiet read (act + 2) and the idle flip (act + 6)")
+        XCTAssertEqual(run(p, f, seconds: 60) { $0 % 30 < 20 ? [dir] : [] }, 11,
+                       "the cap while printing, then per pause a quiet read (act + 2) and the idle flip (act + 6)")
+    }
+
+    /// QA #607 F1: a pane that repaints every second is never quiet; dch finds a
+    /// prompt on its screen with no sidecar change. It is re-listed within the cap,
+    /// and hidden does not stretch it.
+    func testPrintingSessionForksWithinTheCapVisibleAndHidden() {
+        for hidden in [false, true] {
+            let dir = tempDir(), f = Fake()
+            touch(dir, "s.sock")
+            touch(dir, "s.sock.act", mtime: f.now)
+            f.rows = [session("s", .working, dir: dir.path)]
+            let p = poller([dir.path], f)
+            p.hidden = hidden
+            _ = p.tick()
+            var at: [TimeInterval] = [f.now]
+            for _ in 0..<60 {
+                f.now += 1
+                touch(dir, "s.sock.act", mtime: f.now - 0.2)
+                let n = f.calls.count
+                _ = p.tick()
+                if f.calls.count > n { at.append(f.now) }
+            }
+            let gaps = zip(at.dropFirst(), at).map { $0 - $1 }
+            XCTAssertEqual(gaps.max(), AgentPollGate.printingCap, "hidden \(hidden)")
+            XCTAssertEqual(at.count - 1, 10, "hidden \(hidden): 10 forks a minute")
+        }
+    }
+
+    /// QA #607 INFO-5: a blocked session printing forks at the floor (it may be
+    /// answered); a done one does not (done always wins), until the backstop.
+    func testBlockedPrintingForksAndDonePrintingDoesNot() {
+        for (state, forks) in [(AgentState.blocked, true), (.done, false)] {
+            let dir = tempDir(), f = Fake()
+            touch(dir, "s.sock")
+            touch(dir, "s.sock.act", mtime: 9_000)
+            f.rows = [session("s", state, dir: dir.path)]
+            let p = poller([dir.path], f)
+            _ = p.tick(); f.now += 2; _ = p.tick()
+            f.now += 2; _ = p.tick()
+            XCTAssertEqual(f.calls.count, 2)
+            touch(dir, "s.sock.act", mtime: f.now)
+            f.now += 0.5; _ = p.tick()
+            XCTAssertEqual(f.calls.count, forks ? 3 : 2, "\(state)")
+        }
+    }
+
+    /// QA #607 INFO-2: `dch --restart` rewrites only .sock.ver.
+    func testVerSidecarAloneTriggersAFetch() {
+        let dir = tempDir(), f = Fake()
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: 9_000)
+        touch(dir, "s.sock.ver", mtime: 9_000)
+        let p = poller([dir.path], f)
+        _ = p.tick(); f.now += 2; _ = p.tick()
+        f.now += 5; _ = p.tick()
+        XCTAssertEqual(f.calls.count, 2)
+        touch(dir, "s.sock.ver", mtime: 10_007)
+        f.now += 1; _ = p.tick()
+        XCTAssertEqual(f.calls.count, 3, ".ver only")
     }
 
     /// G5d: the isolated dir before first use is "no sessions" there, not an error.
@@ -633,6 +692,69 @@ final class AgentIslandTests: XCTestCase {
         c.autoAllowChanged()   // publishes outside apply
         XCTAssertEqual(got.count, before + 1)
         XCTAssertEqual(got.last?.first?.activity, t0 - 20, "the held rows, not the store's")
+    }
+
+    /// QA #607 INFO-1/4/5: the screen events arrive through the `screenCenter` seam
+    /// and reach the poller; a wake while collapsed keeps the held list; opening the
+    /// island clears a stale hidden (a missed unlock); teardown stops observing.
+    @MainActor func testScreenEventsReachThePollerAndOpeningClearsAStaleHidden() {
+        final class Box: @unchecked Sendable { var poller: AgentIslandPoller? }
+        let dir = tempDir(), path = dir.path, key = AgentSessionKey(dir: path, name: "s"), box = Box()
+        let t0 = Date().timeIntervalSince1970.rounded(.down)
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: t0 - 30)
+        let c = AgentIslandController(), center = NotificationCenter()
+        c.screenCenter = { _ in center }
+        c.showsPanel = false
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        c.autoAllowOn = { false }
+        c.monitorClicks = { _ in nil }
+        c.currentGeometry = { self.notched }
+        c.makePoller = {
+            let p = AgentIslandPoller(dirs: { [path] }, list: { _, _ in
+                [AgentSession(key: key, alias: "", activity: 0, state: .working, agents: 0)]
+            })
+            box.poller = p
+            return p
+        }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        c.extLive = true
+        c.reload()
+        func waitUntil(_ what: String, _ ok: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !ok(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            XCTAssertTrue(ok(), what)
+        }
+        func pollerHidden() -> Bool? { c.queue.sync {}; return box.poller?.hidden }
+        func post(_ e: ScreenGate.Event) {
+            center.post(name: ScreenGate.notifications.first { $0.1 == e }!.0, object: nil)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        waitUntil("first list") { c.store?.sessions.first?.activity == t0 - 30 }
+
+        post(.sleep)
+        waitUntil("sleep observed") { c.screen.displayAsleep }
+        XCTAssertEqual(pollerHidden(), true, "the poller takes the 60 s backstop")
+        touch(dir, "s.sock.act", mtime: t0 - 20)
+        waitUntil("held back") { c.deferred?.first?.activity == t0 - 20 }
+        post(.wake)
+        waitUntil("wake observed") { !c.screen.hidden }
+        XCTAssertEqual(pollerHidden(), false)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 30, "a wake while collapsed shows nothing new")
+        XCTAssertNotNil(c.deferred)
+
+        post(.lock)
+        waitUntil("lock observed") { c.screen.screenLocked }
+        c.setExpanded(true)   // the unlock was missed; a click means the screen is lit
+        XCTAssertFalse(c.screen.hidden)
+        XCTAssertEqual(pollerHidden(), false)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 20, "opening takes the held list")
+
+        c.extLive = false
+        c.reload()
+        post(.sleep)
+        XCTAssertFalse(c.screen.displayAsleep, "torn down: no longer observed")
     }
 
     // MARK: - Answer lock, card generations, live IO (#475 K2, N9, N4)
