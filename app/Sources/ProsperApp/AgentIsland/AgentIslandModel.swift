@@ -200,8 +200,9 @@ enum AgentIsland {
     /// at `sidekickDeadline`, as does the "" probe; a call slower than
     /// `sidekickSlowCall` per 16 texts searched, or on any one text, adds to the
     /// pattern's tally, which may reach `sidekickSlowTotal`. Either flips the
-    /// pattern to text for the life of the process. Worst case: 1 ms per call
-    /// forever, or about 50 + 10 ms once per pattern. Vars only so a test can make
+    /// pattern to text for the life of the process. Worst case: a call that never
+    /// counts costs min(10 ms, 1 ms per 16 texts) forever (10 ms from 160 texts);
+    /// a flip costs about 50 + 10 ms once per pattern, plus up to 10 ms of probe. Vars only so a test can make
     /// the tally deterministic; nothing else writes them.
     nonisolated(unsafe) static var sidekickDeadline: UInt64 = 10_000_000
     nonisolated(unsafe) static var sidekickSlowCall: UInt64 = 1_000_000
@@ -224,8 +225,8 @@ enum AgentIsland {
             re = sidekickRegex(p)
             if let re {
                 // An empty match makes every session a sidekick (QA #592 INFO-2). The probe
-                // gets the same CPU deadline as a search: `(x?|y?){30}\b` backtracks for
-                // about 30 s on "" alone (QA #592 INFO-7).
+                // gets the same CPU deadline as a search: `(x?|y?){32}\b` backtracks for
+                // 0.35-1.3 s on "" alone before ICU's own limit stops it (QA #592 INFO-7, #594).
                 how = .regex
                 let start = cpu()
                 re.enumerateMatches(in: "", options: .reportProgress, range: NSRange()) { r, _, stop in

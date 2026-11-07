@@ -30,10 +30,9 @@ tag from the now-released section and put it on the new top draft.
   regex is matched as plain text, and Settings says so. So is a pattern that
   matches an empty name (such as `x*`) or one too slow to check. A saved
   pattern with regex characters now means something new: `.` is any
-  character, and `c++` matches any name or alias containing "c" (every
-  Claude session, through its "claude" alias), so check yours after updating;
-  the default `-qa` is unchanged. A pattern made only of lookarounds, such as
-  `(?=-qa)`, matches nothing: write `-qa`. (#759)
+  character, and `c++` matches any name or alias containing "c", so check
+  yours after updating; the default `-qa` is unchanged. A pattern made only of
+  lookarounds, such as `(?=-qa)`, matches nothing: write `-qa`. (#759)
 - Ships dch 1.28.6. A session no longer reads "Needs input" when a prompt's words
   only appear in its scrollback or a quoted message above the input box, and a
   prompt shown while background agents run (such as an Edit or Write) is now

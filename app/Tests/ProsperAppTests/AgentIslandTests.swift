@@ -2577,7 +2577,7 @@ final class AgentIslandTests: XCTestCase {
     }
 
     /// QA #592 INFO-7: the "" probe backtracks too; unbounded, `(x?|y?){32}\b` took 1.3 s on "" alone here
-    /// (QA: about 30 s at {30}). The caption goes first with no names, so only the probe can say slow.
+    /// (QA #594: ICU's own limit stops it at 0.35-1.3 s). The caption goes first with no names, so only the probe can say slow.
     func testSplitEmptyProbeIsBoundedThenText() {
         let p = "(x?|y?){32}\\b"
         let start = Date()
