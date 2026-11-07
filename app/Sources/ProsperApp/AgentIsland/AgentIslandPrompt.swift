@@ -648,8 +648,10 @@ extension AgentPrompt {
     private static let userAskMarkers = ["toupdatehooks", "/permissionstoletautomodedecide"]
     private static let userAskReasons = [
         "Hook.{1,200}?requiresconfirmationforthis",
-        "Permissionrule.{1,300}?requiresconfirmationforthis",
-        "Askrule.{1,300}?overridesautomodeforthis",
+        // QA #613 INFO-1: unbounded, so a long rule never fails open; a managed policy
+        // rule draws no hint line to catch it. The hook keeps its bound ("toupdatehooks" backs it).
+        "Permissionrule.+?requiresconfirmationforthis",
+        "Askrule.+?overridesautomodeforthis",
     ]
 
     /// "Yes, and don't ask again for …", wrapped anywhere; never a mode change.

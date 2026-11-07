@@ -978,6 +978,28 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(f.sends, ["1"])
     }
 
+    /// QA #613 INFO-1: a managed policy ask rule draws no hint line, so only the reason
+    /// refuses it; a rule over 300 characters (the old bound) must still be the human's.
+    func testALongManagedPolicyAskRuleIsLeftToTheHuman() throws {
+        let rule = "Bash(/usr/bin/" + String(repeating: "x", count: 320) + ":*)"
+        XCTAssertGreaterThan(rule.count, 300)
+        let wrapped = { (head: String, tail: String) -> [String] in
+            let text = head + rule + tail
+            return stride(from: 0, to: text.count, by: 80).map { i in
+                "   " + String(text.dropFirst(i).prefix(80))
+            }
+        }
+        for (name, hook) in [("permission rule", wrapped("Permission rule ", " requires confirmation for this command.")),
+                             ("ask rule in auto mode", wrapped("Ask rule ", " overrides auto mode for this command."))] {
+            let screen = Self.subagentBash(hook: hook), p = try XCTUnwrap(AgentPrompt.parse(screen), name)
+            XCTAssertEqual(p.question, "Do you want to proceed?", name)
+            XCTAssertNil(p.allowYes, name)
+            let f = FakeIO(screen)
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .human, name)
+            XCTAssertEqual(f.sends, [], name)
+        }
+    }
+
     // MARK: - Offscreen renders (never on screen: an unwindowed hosting view and ImageRenderer)
 
     @MainActor func testRenderTheSettingAndTheRowText() throws {
