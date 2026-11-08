@@ -479,6 +479,21 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(g.typed, "Te")
     }
 
+    /// #810 (QA #634 INFO 1): "Type something." as the answer would be typed, never confirm (the row
+    /// still reads as the placeholder) and stay in the row, so a retry typed "Type something.X".
+    /// Refused before any key, with its own reason, in every whitespace form.
+    func testAgentWindowOtherRefusesThePlaceholderAsTheAnswer() throws {
+        for text in ["Type something.", "Type something", "Typesomething.", " Type  something. "] {
+            let f = FormSim(.single)
+            XCTAssertEqual(driver(f.io).other(try screen(Self.singleScreen(caret: 1)), digit: 4, text: text),
+                           .failed(AgentWindowText.placeholder), text)
+            XCTAssertEqual(f.log, [], "nothing typed: \(text)")
+            XCTAssertEqual(f.typed, "", text)
+            XCTAssertNil(AgentWindowDriver.otherText(text), text)
+        }
+        XCTAssertEqual(AgentWindowDriver.otherText("Type something else"), "Type something else")
+    }
+
     /// #805 (QA #629 R2 item 1): an answer inside the placeholder ("some", "Type", "thing.") is in
     /// "Typesomething." before the row redraws. A row still showing the placeholder never confirms
     /// the text, so no Enter; once the row shows it, the answer goes through.

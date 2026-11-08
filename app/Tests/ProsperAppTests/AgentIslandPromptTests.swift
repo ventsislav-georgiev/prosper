@@ -2158,6 +2158,30 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertNil(AgentPrompt.parse(altered(rowLayoutScreen, "\n\n" + footer, "")), "footer removed")
     }
 
+    /// #810 (QA #634 INFO 3): since #805 `isFooter` also matches the preview footer, so a preview
+    /// form whose box split fails reaches the plain parse with an accepted last line; only the
+    /// unnumbered "Chat about this" above it rejects it. Never a single-select card or screen.
+    func testPreviewFormWithAFailedSplitIsNeverAPlainSingleSelect() {
+        let footer = "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel"
+        XCTAssertTrue(AgentPrompt.isFooter(footer), "the premise: #805's rule takes the preview footer")
+        let rows = rowLayoutScreen.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let bottom = rows.firstIndex { $0.hasSuffix("┘") }!, perf = rows.firstIndex { $0.contains("perf-1") }!
+        let without = { (k: Int, row: String) in
+            rows.enumerated().map { $0.offset == k ? row : $0.element }.joined(separator: "\n")
+        }
+        let notes = String(repeating: " ", count: 34) + "Notes: press n to add notes\n"
+        let hint = "Enter to select · ↑/↓ to navigate · n to add notes · ctrl+g to edit in VS Code · Esc to cancel"
+        for (why, broken) in [("no box bottom", without(bottom, "")),
+                              ("a box row without its right bar", without(perf, String(rows[perf].dropLast())))] {
+            let noNotes = altered(broken, notes, "")
+            for (form, screen) in [(why, broken), (why + ", no notes", noNotes),
+                                   (why + ", no notes, ctrl+g footer", altered(noNotes, footer, hint))] {
+                XCTAssertNil(AgentPrompt.parse(screen), form)
+                XCTAssertNil(AgentPrompt.screen(screen), form)
+            }
+        }
+    }
+
     /// I5: a preview form whose box is empty ("┌─┐" over "└─┘") is no preview
     /// form; the plain parse rejects it ("Chat about this"), so parse is nil and
     /// no digit is ever sent. The same box with one line still splits.

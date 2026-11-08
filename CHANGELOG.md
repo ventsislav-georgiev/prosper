@@ -53,8 +53,10 @@ tag from the now-released section and put it on the new top draft.
   why and offers "Open in terminal". An answer from the window counts as your own click, so
   Always allow never types over it. (#798)
 - A typed answer of your own (the "Type something." choice) now works from the Agent Sessions
-  window. In v2.174.0-beta.2 every typed answer stopped at "Couldn't confirm": Claude Code shows a
-  longer hint line while that choice is selected, and Prosper did not recognize it. (#805)
+  window, and the Agent Island card reads a question again while that choice is selected. In
+  v2.174.0-beta.2 Prosper did not recognize the longer hint line Claude Code shows then, so a
+  typed answer stopped at "Couldn't confirm" or the prompt showed as unreadable. "Type
+  something." itself is refused as an answer. (#805, #810)
 - Remote Terminal hosts now tell the phone which server they run (Prosper or dch), the host's
   macOS version, its name and the protocol version, so the phone can label a host and later
   work with dch-only hosts such as a Linux machine. The protocol is written down in

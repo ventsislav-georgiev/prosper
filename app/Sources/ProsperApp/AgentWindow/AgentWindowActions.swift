@@ -88,6 +88,8 @@ enum AgentWindowText {
     /// QA #629 INFO-6: one text for every hold (an island click, an Always allow check or answer, dch's own).
     static let held = "This prompt is being answered or checked elsewhere…"
     static let oneLine = "Your own answer must be one line of plain text"
+    /// #810: Claude Code shows "Type something." on the empty Other row, so that answer never shows as typed.
+    static let placeholder = "Your own answer can't be Claude Code's \"Type something.\" placeholder"
 }
 
 enum AgentWindowOutcome: Equatable, Sendable {
@@ -313,8 +315,10 @@ struct AgentWindowDriver: Sendable {
         let p = e.prompt
         let flat = { (t: String) in t.filter { !$0.isWhitespace } }
         let row = { (s: AgentPromptScreen) in s.prompt.options.first { $0.digit == k }.map { flat(([$0.label] + $0.detail).joined()) } }
-        let empty = { (s: AgentPromptScreen) -> Bool in row(s).map { ["Typesomething.", "Typesomething"].contains($0) } ?? false }
+        let empty = { (s: AgentPromptScreen) -> Bool in row(s).map(Self.isPlaceholder) ?? false }
         let shows = { (s: AgentPromptScreen) -> Bool in !empty(s) && (row(s)?.contains(flat(text)) ?? false) }
+        // #810: the placeholder as the answer would be typed but never confirmed, and stay in the row.
+        guard !Self.isPlaceholder(text) else { return .failed(AgentWindowText.placeholder) }
         var caret = e.caret
         for _ in 0..<(p.options.count + 1) {
             guard let c = caret, c != k else { break }
@@ -345,8 +349,13 @@ struct AgentWindowDriver: Sendable {
     /// Other text the window types: one line, printable, at most 500 characters.
     static func otherText(_ text: String) -> String? {
         let t = text.trimmingCharacters(in: .whitespaces)
-        guard !t.isEmpty, t.count <= 500, !t.unicodeScalars.contains(where: AgentPrompt.isHidden) else { return nil }
+        guard !t.isEmpty, t.count <= 500, !t.unicodeScalars.contains(where: AgentPrompt.isHidden), !isPlaceholder(t) else { return nil }
         return t
+    }
+
+    /// Claude Code's empty Other row text, whitespace dropped as the screen read may split it.
+    static func isPlaceholder(_ text: String) -> Bool {
+        ["Typesomething.", "Typesomething"].contains(text.filter { !$0.isWhitespace })
     }
 }
 
@@ -386,7 +395,7 @@ enum AgentWindowPanel: Equatable {
         }
         // A single choice: the island card's own rule decides each button (AgentPrompt.answer asks it again).
         let other = question && !review && ask != nil && safe
-            ? p.options.first { ["Typesomething.", "Typesomething"].contains($0.label.filter { !$0.isWhitespace }) } : nil
+            ? p.options.first { AgentWindowDriver.isPlaceholder($0.label) } : nil
         let rows = p.options.filter { $0.digit != other?.digit }
         return .prompt(AgentWindowPrompt(kind: .choose, screen: s, buttons: rows,
                                          enabled: Set(rows.filter { p.isEnabled($0) }.map(\.digit)),
@@ -553,7 +562,10 @@ final class AgentWindowInteraction: ObservableObject {
     /// The Other row: the typed answer.
     func sendOther() {
         guard case .prompt(let w) = panel, let o = w.other, let s = session else { return }
-        guard let text = AgentWindowDriver.otherText(otherText) else { notice = AgentWindowText.oneLine; return }
+        guard let text = AgentWindowDriver.otherText(otherText) else {
+            notice = AgentWindowDriver.isPlaceholder(otherText) ? AgentWindowText.placeholder : AgentWindowText.oneLine
+            return
+        }
         let d = driver(s), e = w.screen
         act(s, prompt: e.prompt) { io in d(io).other(e, digit: o.digit, text: text) }
     }
