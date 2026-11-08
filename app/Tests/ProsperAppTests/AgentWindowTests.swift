@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 import XCTest
 @testable import ProsperApp
@@ -75,6 +76,7 @@ final class AgentWindowTests: XCTestCase {
     func model(_ path: String?, dch: String = "1.30.0", state: String = "idle", sid: String? = "s-1",
                clock: @escaping () -> Date = Date.init) -> AgentTranscriptModel {
         let m = AgentTranscriptModel()
+        m.offMain = { $0() }   // #797: step the off-main half inline
         m.makeWatch = { _, _ in NSObject() }
         m.tickInterval = 3600
         m.now = clock
@@ -478,6 +480,7 @@ final class AgentWindowTests: XCTestCase {
         let url = tempDir().appendingPathComponent("p.jsonl")
         try write(url, (0..<200).map { assistant([["type": "text", "text": "message number \($0) " + String(repeating: "x", count: 40)]]) })
         let m = AgentTranscriptModel()
+        m.offMain = { $0() }   // #797: step the off-main half inline
         m.makeWatch = { _, _ in NSObject() }
         m.tickInterval = 3600
         m.pageBytes = 4096
@@ -519,6 +522,7 @@ final class AgentWindowTests: XCTestCase {
         let big = String(repeating: "b", count: 10_000)
         func open(_ url: URL) -> AgentTranscriptModel {
             let m = AgentTranscriptModel()
+            m.offMain = { $0() }   // #797: step the off-main half inline
             m.makeWatch = { _, _ in NSObject() }
             m.tickInterval = 3600
             m.pageBytes = 4096
@@ -608,6 +612,7 @@ final class AgentWindowTests: XCTestCase {
         let url = tempDir().appendingPathComponent("cap.jsonl")
         try write(url, (0..<200).map { assistant([["type": "text", "text": "message \($0) " + String(repeating: "x", count: 40)]]) })
         let m = AgentTranscriptModel()
+        m.offMain = { $0() }   // #797: step the off-main half inline
         m.makeWatch = { _, _ in NSObject() }
         m.tickInterval = 3600
         m.pageBytes = 4096
@@ -634,7 +639,7 @@ final class AgentWindowTests: XCTestCase {
     }
 
     @MainActor
-    func testAHugeResultIsCappedAndExpandsLazilyFromTheFile() throws {
+    func testAHugeResultIsCappedAndExpandsLazilyFromTheFile() async throws {
         let url = tempDir().appendingPathComponent("h.jsonl")
         let big = (0..<2000).map { "output line \($0)" }.joined(separator: "\n")
         try write(url, [toolUse("t1", "Bash", ["command": "seq"]), toolResult("t1", big, extra: ["stdout": big, "stderr": ""])])
@@ -645,7 +650,8 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertTrue(out.capped)
         XCTAssertEqual(out.text.count, TranscriptDecoder.outputCap)
         XCTAssertEqual(out.total, big.count)
-        XCTAssertEqual(m.fullText(out), big)
+        let full = await m.fullText(out)
+        XCTAssertEqual(full, big)
     }
 
     @MainActor
@@ -741,11 +747,23 @@ final class AgentWindowTests: XCTestCase {
         TranscriptCanary.resetForTests()
         defer { TranscriptCanary.resetForTests() }
         let f = Self.corpus.appendingPathComponent("2.4.0/future-renamed-and-unknown.jsonl")
-        var lines: [String] = []
-        let line = try XCTUnwrap(TranscriptCanary.runIfNew(version: "2.4.0", path: f.path) { lines.append($0) })
-        XCTAssertNil(TranscriptCanary.runIfNew(version: "2.4.0", path: f.path) { lines.append($0) }, "once per version")
-        XCTAssertNil(TranscriptCanary.runIfNew(version: "not a version", path: f.path) { lines.append($0) })
-        XCTAssertEqual(lines, [line])
+        // #797 (a): the scan runs on the given queue, never on main.
+        let queue = DispatchQueue(label: "canary-test")
+        let lines = OSAllocatedUnfairLock(initialState: [String]())
+        let emitted = expectation(description: "emitted")
+        let emit: @Sendable (String) -> Void = { line in
+            XCTAssertFalse(Thread.isMainThread, "the canary scans off main")
+            lines.withLock { $0.append(line) }
+            emitted.fulfill()
+        }
+        XCTAssertTrue(TranscriptCanary.runIfNew(version: "2.4.0", path: f.path, queue: queue, emit: emit))
+        XCTAssertFalse(TranscriptCanary.runIfNew(version: "2.4.0", path: f.path, queue: queue, emit: emit), "once per version")
+        XCTAssertFalse(TranscriptCanary.runIfNew(version: "not a version", path: f.path, queue: queue, emit: emit))
+        wait(for: [emitted], timeout: 10)
+        queue.sync {}
+        let all = lines.withLock { $0 }
+        XCTAssertEqual(all.count, 1)
+        let line = try XCTUnwrap(all.first)
         XCTAssertTrue(line.hasPrefix("claude-code 2.4.0 (newer than tested): specific="), line)
         let re = try NSRegularExpression(pattern: #"^claude-code [0-9.]+( \(newer than tested\))?: specific=\d+ generic=\d+ degraded=\d+ failed=\d+ hidden=\d+ tested=[0-9.]+-[0-9.]+$"#)
         XCTAssertNotNil(re.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)), "numbers and versions only")

@@ -79,6 +79,10 @@ struct AgentSession: Equatable, Identifiable {
     var metaEpoch: Int = 0
     /// #792: dch's `auto_allowed`, the prompt its master answered last; nil when none.
     var autoAllowed: DchAutoAllowed? = nil
+    /// #797: dch 1.30's `claude_session_id` and `transcript_path`, the Agents window's only
+    /// session ↔ transcript mapping (design rule 6); nil from older dch or no confident match.
+    var claudeSessionID: String? = nil
+    var transcriptPath: String? = nil
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -499,7 +503,9 @@ enum AgentIsland {
                      run: Runner = { DchCommand.runIsland(args: $0, env: $1) }) -> [AgentSession] {
         dirs.flatMap { dir -> [AgentSession] in
             let env = listEnv(dir: dir)
-            var rows = DchCommand.parseListJSON(run(["--ls-json"], env) ?? Data())
+            let json = run(["--ls-json"], env) ?? Data()
+            var rows = DchCommand.parseListJSON(json)
+            let mapping = AgentTranscriptMapping.parse(json)   // #797: the same bytes, no second fork
             if rows.isEmpty {
                 guard let tsv = run(["-lj"], env) else { return previous.filter { $0.key.dir == dir } }
                 rows = DchCommand.parseListTSV(String(decoding: tsv, as: UTF8.self))
@@ -508,7 +514,8 @@ enum AgentIsland {
                 AgentSession(key: AgentSessionKey(dir: dir, name: $0.name), alias: $0.alias,
                              activity: TimeInterval($0.activityEpoch), state: AgentState(dch: $0.state),
                              agents: $0.agents, meta: $0.meta, version: $0.version, metaEpoch: $0.metaEpoch,
-                             autoAllowed: $0.autoAllowed)
+                             autoAllowed: $0.autoAllowed,
+                             claudeSessionID: mapping[$0.name]?.sessionID, transcriptPath: mapping[$0.name]?.path)
             }
         }
     }

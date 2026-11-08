@@ -41,13 +41,16 @@ struct TranscriptAssembler {
     private(set) var droppedCounts: [String: TierCounts] = [:]
     private(set) var hiddenCounts: [String: Int] = [:]
     private(set) var latestVersion: String?
+    /// The newest entry's working directory: the header's project line.
+    private(set) var cwd: String?
     private var lastVersion = "unknown"
     private(set) var nextID = 0
 
     private struct Pending { var block: Int; var thread: Int?; var name: String; var input: [String: Any] }
     private var pending: [String: Pending] = [:]
     private var pendingOrder: [String] = []
-    private var orphans: [String: (block: Int, thread: Int?, result: ToolResultInfo)] = [:]
+    /// Results whose call is on an earlier page; bounded by `maxPending` (tests read the count).
+    private(set) var orphans: [String: (block: Int, thread: Int?, result: ToolResultInfo)] = [:]
     private var threads: [String: Int] = [:]
     private var agentTitles: [String: String] = [:]
 
@@ -56,6 +59,7 @@ struct TranscriptAssembler {
     mutating func add(_ e: DecodedEntry, source: Range<UInt64>?) {
         let v = e.version.map { ClaudeCodeCompat.sanitized($0) } ?? lastVersion
         lastVersion = v
+        if let c = e.cwd { cwd = c }
         if v != "unknown", latestVersion.map({ !DchCommand.isAtLeast(ClaudeCodeCompat.parts($0), ClaudeCodeCompat.parts(v)) }) ?? true {
             latestVersion = v
         }
@@ -269,6 +273,13 @@ enum AgentWindowMode: Equatable {
     case terminalFirst(String)
 }
 
+/// #797: a value handed once between the IO queue and main. The assembler and the
+/// decoded entries hold JSON (`[String: Any]`), which is not Sendable; each box is
+/// filled on one side and read on the other after the hop, never shared.
+struct TranscriptHandoff<T>: @unchecked Sendable {
+    var value: T
+}
+
 @MainActor
 final class AgentTranscriptModel: ObservableObject {
     nonisolated static let minimumDch = [1, 30, 0]
@@ -282,6 +293,11 @@ final class AgentTranscriptModel: ObservableObject {
     @Published private(set) var banner: String?
     @Published private(set) var hiddenCount = 0
     @Published private(set) var olderAvailable = false
+    /// The newest entry's working directory (the window header's project line).
+    @Published private(set) var cwd: String?
+    /// "Show the conversation anyway" over a terminal-first reason. Per session:
+    /// #797 (c) resets it when another session is selected.
+    @Published var showAnyway = false
 
     private(set) var source: AgentTranscriptSource?
     private(set) var running = false
@@ -292,6 +308,18 @@ final class AgentTranscriptModel: ObservableObject {
     private var nullSince: Date?
     private var lastGrowth: Date?
     private var missing = false
+
+    /// #797 (a): file reads, decoding, assembly and paging run on this serial queue;
+    /// every result is applied on main.
+    nonisolated static let io = DispatchQueue(label: "eu.illegible.prosper.agent-transcript", qos: .userInitiated)
+    /// Where that work runs. Tests that step the model synchronously run it inline.
+    var offMain: (@escaping @Sendable () -> Void) -> Void = { AgentTranscriptModel.io.async(execute: $0) }
+    /// Bumped whenever the tail or the assembler is replaced (open, close, stop): a
+    /// result started before is dropped, never applied to another file or session.
+    private(set) var generation = 0
+    /// One read in flight per generation; a poll asked for meanwhile runs after it.
+    private(set) var busy = false
+    private var pollAgain = false
 
     // Seams.
     var now: () -> Date = Date.init
@@ -312,6 +340,7 @@ final class AgentTranscriptModel: ObservableObject {
         if let old, old.key != s.key {
             close()
             nullSince = nil
+            showAnyway = false
         }
         if !Self.dchSupportsMapping(s.dchVersion) {
             close()
@@ -341,15 +370,16 @@ final class AgentTranscriptModel: ObservableObject {
     }
 
     /// The view closed: stop the watch and timer and free the blocks (per-session
-    /// memory is zero while closed; reopening re-reads only the last page).
+    /// memory is zero while closed; reopening re-reads only the last page). A read
+    /// still in flight is dropped when it lands.
     func stop() {
         running = false
         timer?.invalidate()
         timer = nil
         watch = nil
         if let path = tail?.path { tail = TranscriptTail(path: path, pageBytes: pageBytes) }
-        assembler = TranscriptAssembler()
-        assembler.maxBlocks = maxBlocks
+        assembler = fresh()
+        bump()
         publish()
     }
 
@@ -360,76 +390,153 @@ final class AgentTranscriptModel: ObservableObject {
         poll()
     }
 
+    /// Reads and decodes the next chunk off main, then applies it on main.
     func poll() {
-        guard running, var t = tail else { evaluate(); return }
+        guard running, let t = tail else { evaluate(); return }
+        guard !busy else { pollAgain = true; return }
+        busy = true
+        let gen = generation, pageBytes = pageBytes
+        let job = TranscriptHandoff(value: (t, assembler, fresh()))
+        offMain { [weak self] in
+            let r = Self.read(job.value.0, into: job.value.1, fresh: job.value.2, pageBytes: pageBytes)
+            Self.onMain { self?.finishPoll(r, gen) }
+        }
+    }
+
+    struct PollResult {
+        var tail: TranscriptTail
+        var assembler: TranscriptAssembler
+        /// nil: unchanged (two reopens in a row).
+        var missing: Bool?
+        var grew = false
+        /// Replaced or shrunk: the watch re-arms on the new file.
+        var reopened = false
         var more = false
+    }
+
+    /// The IO half of `poll`: no main-actor state, only the values handed in.
+    nonisolated static func read(_ t0: TranscriptTail, into a0: TranscriptAssembler, fresh: TranscriptAssembler,
+                                 pageBytes: UInt64) -> TranscriptHandoff<PollResult> {
+        var r = PollResult(tail: t0, assembler: a0)
         var reopens = 0
         loop: while true {
-            switch t.poll() {
+            switch r.tail.poll() {
             case .missing:
-                missing = true
+                r.missing = true
                 break loop
             case .reopened:
                 // Rule 6: inode change or shrink → start over on the same path.
                 reopens += 1
-                assembler = TranscriptAssembler()
-                assembler.maxBlocks = maxBlocks
-                t = TranscriptTail(path: t.path, pageBytes: pageBytes)
-                watch = nil
+                r.reopened = true
+                r.assembler = fresh
+                r.tail = TranscriptTail(path: r.tail.path, pageBytes: pageBytes)
                 if reopens > 1 { break loop }
-            case .lines(let lines, let m):
-                missing = false
-                if !lines.isEmpty { lastGrowth = now() }
-                for l in lines { assembler.add(TranscriptDecoder.decode(l), source: l.range) }
-                more = m
+            case .lines(let lines, let more):
+                r.missing = false
+                r.grew = !lines.isEmpty
+                for l in lines { r.assembler.add(TranscriptDecoder.decode(l), source: l.range) }
+                r.more = more
                 break loop
             }
         }
-        tail = t
-        if watch == nil, !missing { arm(t.path) }
+        return TranscriptHandoff(value: r)
+    }
+
+    private func finishPoll(_ h: TranscriptHandoff<PollResult>, _ gen: Int) {
+        guard gen == generation else { return }
+        busy = false
+        let r = h.value
+        tail = r.tail
+        assembler = r.assembler
+        if r.reopened { watch = nil }
+        if let m = r.missing { missing = m }
+        if r.grew { lastGrowth = now() }
+        if running, watch == nil, !missing { arm(r.tail.path) }
         publish()
-        if more { DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.poll() } } }
+        if let v = assembler.latestVersion { TranscriptCanary.runIfNew(version: v, path: r.tail.path) }
+        if r.more || pollAgain {
+            pollAgain = false
+            poll()
+        }
     }
 
     /// Rule 9 paging: decode the page before the earliest loaded line, while the
-    /// per-session block bound has room.
+    /// per-session block bound has room. Read, decoded and prepended off main.
     func loadEarlier() {
-        guard running, var t = tail, !atHistoryCap else { return }
-        var page = TranscriptAssembler()
-        page.maxBlocks = maxBlocks
-        for l in t.previousPage() { page.add(TranscriptDecoder.decode(l), source: l.range) }
-        tail = t
-        assembler.prepend(page)
-        publish()
+        guard running, let t = tail, !atHistoryCap, !busy else { return }
+        busy = true
+        let gen = generation
+        let job = TranscriptHandoff(value: (t, assembler, fresh()))
+        offMain { [weak self] in
+            var (t, a, page) = job.value
+            for l in t.previousPage() { page.add(TranscriptDecoder.decode(l), source: l.range) }
+            a.prepend(page)
+            let done = TranscriptHandoff(value: (t, a))
+            Self.onMain { self?.finishEarlier(done, gen) }
+        }
     }
 
-    /// Lazy expand: the full text of a capped clip, re-read from its line.
-    func fullText(_ c: Clip) -> String? {
-        guard c.capped, let r = c.source, let d = tail?.read(r) else { return nil }
-        return TranscriptDecoder.fullText(line: d, clip: c)
+    private func finishEarlier(_ h: TranscriptHandoff<(TranscriptTail, TranscriptAssembler)>, _ gen: Int) {
+        guard gen == generation else { return }
+        busy = false
+        (tail, assembler) = (h.value.0, h.value.1)
+        publish()
+        if pollAgain {
+            pollAgain = false
+            poll()
+        }
+    }
+
+    /// Lazy expand: the full text of a capped clip, re-read from its line off main.
+    func fullText(_ c: Clip) async -> String? {
+        guard c.capped, let r = c.source, let t = tail else { return nil }
+        let run = offMain
+        return await withCheckedContinuation { k in
+            run { k.resume(returning: t.read(r).flatMap { TranscriptDecoder.fullText(line: $0, clip: c) }) }
+        }
     }
 
     /// The block bound is full: older history stays in the terminal.
     var atHistoryCap: Bool { assembler.blocks.count >= maxBlocks }
 
+    /// Runs `f` on main: inline when already there (the inline test seam), else queued.
+    nonisolated static func onMain(_ f: @escaping @MainActor @Sendable () -> Void) {
+        if Thread.isMainThread { MainActor.assumeIsolated { f() } }
+        else { DispatchQueue.main.async { MainActor.assumeIsolated { f() } } }
+    }
+
     // MARK: private
 
+    private func fresh() -> TranscriptAssembler {
+        var a = TranscriptAssembler()
+        a.maxBlocks = maxBlocks
+        return a
+    }
+
+    /// A new tail or assembler: whatever is in flight belongs to the old one.
+    private func bump() {
+        generation += 1
+        busy = false
+        pollAgain = false
+    }
+
     private func open(_ path: String) {
-        assembler = TranscriptAssembler()
-        assembler.maxBlocks = maxBlocks
+        bump()
+        assembler = fresh()
         tail = TranscriptTail(path: path, pageBytes: pageBytes)
         missing = false
         lastGrowth = now()
         watch = nil
-        if running { poll() } else { publish() }
+        publish()
+        if running { poll() }
     }
 
     private func close() {
+        bump()
         tail = nil
         watch = nil
         missing = false
-        assembler = TranscriptAssembler()
-        assembler.maxBlocks = maxBlocks
+        assembler = fresh()
         publish()
     }
 
@@ -442,6 +549,7 @@ final class AgentTranscriptModel: ObservableObject {
     private func publish() {
         blocks = assembler.blocks
         hiddenCount = assembler.hiddenTotal
+        cwd = assembler.cwd
         olderAvailable = (tail?.earliestLoaded ?? 0) > 0 || assembler.dropped > 0
         banner = assembler.latestVersion.map(ClaudeCodeCompat.isNewer) == true ? ClaudeCodeCompat.newerBanner : nil
         evaluate()
@@ -502,20 +610,26 @@ enum TranscriptCanary {
         return a.counts()
     }
 
-    /// Runs `scan` and logs once per version per process; returns the line logged,
-    /// nil when this version was already logged or the file has no versioned entry.
-    @MainActor @discardableResult
-    static func runIfNew(version: String, path: String, emit: (String) -> Void = { TranscriptCanary.log.notice("\($0, privacy: .public)") }) -> String? {
-        let v = ClaudeCodeCompat.sanitized(version)
-        guard v != "unknown", !logged.contains(v) else { return nil }
-        logged.insert(v)
-        let counts = scan(path: path)
+    /// The logged line: counts for `v` (else all versions) and the tested range.
+    static func line(version v: String, _ counts: [String: TierCounts]) -> String {
         let c = counts[v] ?? counts.values.reduce(TierCounts(), +)
-        let line = "claude-code \(v)\(ClaudeCodeCompat.isNewer(v) ? " (newer than tested)" : ""): "
+        return "claude-code \(v)\(ClaudeCodeCompat.isNewer(v) ? " (newer than tested)" : ""): "
             + "specific=\(c.specific) generic=\(c.generic) degraded=\(c.degraded) failed=\(c.failed) hidden=\(c.hidden) "
             + "tested=\(ClaudeCodeCompat.lower)-\(ClaudeCodeCompat.upper)"
-        emit(line)
-        return line
+    }
+
+    /// Once per version per process: scans `path` on `queue` (#797 (a): never on
+    /// main) and hands the line to `emit` there. False when this version was already
+    /// logged or is not a version.
+    @MainActor @discardableResult
+    static func runIfNew(version: String, path: String, queue: DispatchQueue = .global(qos: .utility),
+                         emit: @escaping @Sendable (String) -> Void = { TranscriptCanary.log.notice("\($0, privacy: .public)") })
+        -> Bool {
+        let v = ClaudeCodeCompat.sanitized(version)
+        guard v != "unknown", !logged.contains(v) else { return false }
+        logged.insert(v)
+        queue.async { emit(line(version: v, scan(path: path))) }
+        return true
     }
 
     @MainActor static func resetForTests() { logged = [] }

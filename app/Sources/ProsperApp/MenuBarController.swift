@@ -11,6 +11,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let secureInputItem: NSMenuItem
     private let agentStatusItem: NSMenuItem
     private let agentItem: NSMenuItem
+    /// #797: "Agent Sessions…" opens the Agents window; hidden while Agent Island is off.
+    private let agentsWindowItem = NSMenuItem(title: "Agent Sessions\u{2026}", action: nil, keyEquivalent: "")
     private let runnerItem: NSMenuItem
     private let clipboardOpenItem: NSMenuItem
     private let settingsItem: NSMenuItem
@@ -292,6 +294,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         agentItem.isHidden = !Preferences.agentEnabled
         addReused(agentItem, to: menu)
 
+        agentsWindowItem.action = #selector(openAgentsWindowSelected)
+        agentsWindowItem.target = self
+        agentsWindowItem.isHidden = AgentIslandController.shared.store == nil
+        addReused(agentsWindowItem, to: menu)
+
         // Per-app inline-completions toggle for the focused-app override.
         focusedAppItem.action = #selector(toggleFocusedAppSelected)
         focusedAppItem.target = self
@@ -380,6 +387,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             agentStatusItem.isHidden = false
         }
         agentItem.isHidden = !Preferences.agentEnabled
+        agentsWindowItem.isHidden = AgentIslandController.shared.store == nil
         clipboardOpenItem.isHidden = !Preferences.clipboardHistoryEnabled
         syncShortcutKeyEquivalents()
         refreshFocusedAppItem()
@@ -425,6 +433,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func openCodingAgentSelected() {
         ChatWindow.shared.show()
+    }
+
+    @objc private func openAgentsWindowSelected() {
+        AgentsWindow.shared.show()
     }
 
     /// Toggles inline completions for the focused app by writing an explicit

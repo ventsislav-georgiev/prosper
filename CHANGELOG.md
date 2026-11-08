@@ -31,6 +31,13 @@ tag from the now-released section and put it on the new top draft.
   you is never answered. (#791)
 - A prompt you answer yourself while Always allow is still confirming its own answer to the
   one before stays yours: Always allow no longer types "1" after your choice. (#794)
+- New Agents window: every coding agent session in one place. Sessions waiting for you are on
+  top, then the Agent Island groups and recent history. Selecting one shows its Claude Code
+  conversation, read-only, beside the list: messages, tool calls, diffs and subagents.
+  "Open in terminal" (or Return) jumps to the session. Open it from the new button in the Agent
+  Island header or "Agent Sessions…" in the menu bar menu. It adds no polling of its own and
+  reads nothing while closed or hidden; a session it cannot show reliably opens in the
+  terminal instead. (#797)
 - Remote Terminal hosts now tell the phone which server they run (Prosper or dch), the host's
   macOS version, its name and the protocol version, so the phone can label a host and later
   work with dch-only hosts such as a Linux machine. The protocol is written down in

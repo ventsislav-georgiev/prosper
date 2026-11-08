@@ -118,6 +118,13 @@ final class AgentIslandController {
     var onSessions: (@MainActor ([AgentSession]?) -> Void)?
     /// #765: every rowDetailsChanged, a sidekick pattern edit or adopt among them (the watch stream).
     var onRowDetails: (@MainActor () -> Void)?
+    /// #797: the Agents window is open and visible. It reads the store, so a list
+    /// where only activity moved goes in as while expanded, not held back.
+    var windowWatching = false {
+        didSet { if windowWatching { flushDeferred() } }
+    }
+    /// #797: the store was built or dropped (the Agents window rebinds).
+    var onStoreChanged: (@MainActor () -> Void)?
     /// #578 seams: the control binary (probed and cached), the history read
     /// with it, the dirs to read (the poller's), and the long-verb runner.
     /// Under XCTest the default finds no binary even unstubbed, so a test that
@@ -182,6 +189,7 @@ final class AgentIslandController {
         guard timer == nil, let geometry = currentGeometry() else { return }
         store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails,
                                  sort: Preferences.agentIslandSort, sidekickPattern: Self.sidekickPattern)
+        onStoreChanged?()
         let poller = makePoller(), hidden = screen.hidden
         queue.async { poller.hidden = hidden }
         self.poller = poller
@@ -234,7 +242,7 @@ final class AgentIslandController {
         // #768: only ages moved and nobody sees them (collapsed, or the display
         // asleep or locked): Live status and the watch stream still get the list,
         // the store, cards and panel do not.
-        if !store.expanded || screen.hidden, AgentIsland.onlyActivityMoved(sessions, store.sessions) {
+        if !(store.expanded || windowWatching) || screen.hidden, AgentIsland.onlyActivityMoved(sessions, store.sessions) {
             deferred = sessions
             recheckHuman()   // #791: a print on a row left to the human is all that moved
             onSessions?(published(sessions))
@@ -944,6 +952,7 @@ final class AgentIslandController {
             onResumeAllNoMessage: { [weak self] in self?.resumeCrashed(noMessage: true) },
             onRestart: { [weak self] in self?.restart($0) },
             onControls: { [weak self] in self?.showControlsMenu() },
+            onAgentsWindow: { [weak self] in self?.setExpanded(false); AgentsWindow.shared.show() },
             onConfirmRestartAll: { [weak self] in self?.confirmRestartAll($0) },
             onStop: { [weak self] in self?.stop($0) },
             onConfirmStopAll: { [weak self] in self?.confirmStopAll($0) },
@@ -1439,7 +1448,9 @@ final class AgentIslandController {
         panel?.orderOut(nil)
         panel?.contentView = nil
         panel = nil
+        let had = store != nil
         store = nil
+        if had { onStoreChanged?() }
         autoAllow = [:]
         dchSeen = [:]
         shown = false

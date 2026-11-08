@@ -656,6 +656,67 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertNil(c.deferred)
     }
 
+    /// #797: while the Agents window shows, an activity-only list goes into the store
+    /// even with the island collapsed (the window's ages read it); turning the window
+    /// on takes a held list at once; off again, lists are held back as before. A store
+    /// rebuild tells the window.
+    @MainActor func testAgentWindowWatchingTakesActivityOnlyListsWhileCollapsed() {
+        final class Rows: @unchecked Sendable {
+            let lock = NSLock(); var rows: [AgentSession] = []
+            func get() -> [AgentSession] { lock.withLock { rows } }
+            func set(_ r: [AgentSession]) { lock.withLock { rows = r } }
+        }
+        let dir = tempDir(), path = dir.path, rows = Rows(), key = AgentSessionKey(dir: path, name: "s")
+        let t0 = Date().timeIntervalSince1970.rounded(.down)
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: t0 - 30)
+        rows.set([AgentSession(key: key, alias: "", activity: 0, state: .working, agents: 0)])
+        let c = AgentIslandController()
+        c.showsPanel = false
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        c.autoAllowOn = { false }
+        c.monitorClicks = { _ in nil }
+        c.currentGeometry = { self.notched }
+        c.makePoller = { AgentIslandPoller(dirs: { [path] }, list: { _, _ in rows.get() }) }
+        var got: [[AgentSession]] = []
+        c.onSessions = { if let l = $0 { got.append(l) } }
+        var rebuilt = 0
+        c.onStoreChanged = { rebuilt += 1 }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        c.extLive = true
+        c.reload()
+        XCTAssertEqual(rebuilt, 1, "the window hears of a new store")
+        func waitUntil(_ what: String, _ ok: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !ok(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            XCTAssertTrue(ok(), what)
+        }
+        func printAt(_ at: TimeInterval) {
+            touch(dir, "s.sock.act", mtime: at)
+            waitUntil("published at \(at)") { got.last?.first?.activity == at }
+        }
+        waitUntil("first list") { c.store?.sessions.first?.activity == t0 - 30 }
+
+        printAt(t0 - 20)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 30, "collapsed, no window: held back")
+        c.windowWatching = true
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 20, "the window showing takes the held list")
+        XCTAssertNil(c.deferred)
+        printAt(t0 - 15)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 15, "collapsed but the window shows: applied")
+        XCTAssertNil(c.deferred)
+        c.windowWatching = false
+        printAt(t0 - 10)
+        XCTAssertEqual(c.store?.sessions.first?.activity, t0 - 15, "the window hidden: held back again")
+        XCTAssertEqual(c.deferred?.first?.activity, t0 - 10)
+
+        c.extLive = false
+        c.reload()
+        XCTAssertNil(c.store)
+        XCTAssertEqual(rebuilt, 2, "and of the store going away")
+    }
+
     /// #768 J2: a publish that apply does not drive (an Always allow toggle) while a
     /// list is held back sends the held rows, never the store's older ages.
     @MainActor func testPublishOutsideApplySendsTheDeferredRows() {

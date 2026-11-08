@@ -119,7 +119,17 @@ struct TranscriptTail {
     /// The page before everything loaded so far: whole lines only, at least one
     /// (a line longer than a page comes whole, or as `.oversized` past `maxLine`).
     mutating func previousPage() -> [LineBuffer.Line] {
-        let end = earliestLoaded
+        var end = earliestLoaded
+        // #797: a line longer than lineStart's bound was shown as `.oversized` from the
+        // bound's floor, inside the line. Skip back over the rest of it (a few bounded
+        // scans per call) so it never shows twice.
+        var scans = 0
+        while end > 0, read((end - 1)..<end) != Data([0x0A]) {
+            guard scans < 4, let s = lineStart(before: end) else { pagedEarliest = end; return [] }
+            end = s
+            scans += 1
+        }
+        if end != earliestLoaded { pagedEarliest = end }
         guard end > 0, let lo = pageStart(end: end) else { return [] }
         var b = LineBuffer(at: lo, maxLine: maxLine)
         var out: [LineBuffer.Line] = []
@@ -139,23 +149,28 @@ struct TranscriptTail {
     func pageStart(end: UInt64) -> UInt64? {
         guard end > pageBytes else { return 0 }
         let lo = end - pageBytes
-        guard let d = read(lo..<(end - 1)) else { return nil }
-        if let nl = d.firstIndex(of: 0x0A) { return lo + UInt64(nl - d.startIndex) + 1 }
+        // From lo - 1: a line starting exactly at lo (its newline at lo - 1) belongs to this page.
+        guard let d = read((lo - 1)..<(end - 1)) else { return nil }
+        if let nl = d.firstIndex(of: 0x0A) { return lo + UInt64(nl - d.startIndex) }
         return lineStart(before: lo)
     }
 
     /// The start of the line holding byte `pos - 1` (`pos` itself when that byte is a newline).
-    // ponytail: scans back through one long line unbounded (reads only, 64 KiB at a time);
-    // cap it at maxLine if a multi-GB single line ever shows up.
+    /// #797: the scan goes back at most `maxLine + pageBytes` bytes (64 KiB reads). A line
+    /// longer than that is oversized whatever its start, so the scan's floor stands in for
+    /// it: reading on from there, LineBuffer passes more than `maxLine` bytes before the
+    /// newline and yields one `.oversized` marker.
     func lineStart(before pos: UInt64) -> UInt64? {
+        let (cap, over) = UInt64(maxLine).addingReportingOverflow(pageBytes)
+        let floor = !over && pos > cap ? pos - cap : 0
         var hi = pos
-        while hi > 0 {
-            let lo = hi > 1 << 16 ? hi - (1 << 16) : 0
+        while hi > floor {
+            let lo = max(floor, hi > 1 << 16 ? hi - (1 << 16) : 0)
             guard let d = read(lo..<hi) else { return nil }
             if let nl = d.lastIndex(of: 0x0A) { return lo + UInt64(nl - d.startIndex) + 1 }
             hi = lo
         }
-        return 0
+        return floor
     }
 
     /// Bytes at `range`, read-only; nil when the file cannot be read.

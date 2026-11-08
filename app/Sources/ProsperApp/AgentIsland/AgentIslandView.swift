@@ -553,6 +553,8 @@ struct AgentIslandView: View {
     /// controller's), and the inline Restart all answer.
     var onRestart: (AgentSession) -> Void = { _ in }
     var onControls: () -> Void = {}
+    /// #797: the header's Agents window button.
+    var onAgentsWindow: () -> Void = {}
     var onConfirmRestartAll: (Bool) -> Void = { _ in }
     /// #580: a row's Stop and the inline Stop all answer.
     var onStop: (AgentSession) -> Void = { _ in }
@@ -721,6 +723,21 @@ struct AgentIslandView: View {
         .buttonStyle(.plain)
         .fixedSize()
         .accessibilityLabel("Session controls")
+    }
+
+    /// #797: opens the Agents window (every session and its conversation).
+    private var agentsWindowButton: some View {
+        Button(action: onAgentsWindow) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .frame(minWidth: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Agents window")
+        .accessibilityLabel("Open the Agents window")
     }
 
     /// #579: the line over the rows: the inline Restart all question (Restart,
@@ -898,6 +915,7 @@ struct AgentIslandView: View {
                         .accessibilityLabel("\(n) \(st.label.lowercased())")
                     }
                 }
+                agentsWindowButton   // #797
                 controlsButton   // #579: at the right end, on every tab
             }
         }

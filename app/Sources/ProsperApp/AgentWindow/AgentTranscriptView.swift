@@ -8,13 +8,17 @@ struct AgentTranscriptView: View {
     @ObservedObject var model: AgentTranscriptModel
     /// False for offscreen evidence: a plain stack instead of a ScrollView.
     var scrolls = true
-    @State private var showAnyway = false
+    /// #797: the terminal-first state's "Open in terminal" (the island's own open path).
+    var openTerminal: (() -> Void)?
+    /// Standalone, the view starts and stops the model on appear and disappear. The
+    /// Agents window passes false: it owns start/stop (selection, close, hide).
+    var ownsLifecycle = true
 
     var body: some View {
         VStack(spacing: 0) {
             if let b = model.banner { TranscriptBanner(text: b) }
-            if case .terminalFirst(let reason) = model.mode, !showAnyway {
-                TerminalFirstView(reason: reason) { showAnyway = true }
+            if case .terminalFirst(let reason) = model.mode, !model.showAnyway {
+                TerminalFirstView(reason: reason, openTerminal: openTerminal) { model.showAnyway = true }
             } else {
                 if case .waiting(let hint) = model.mode { TranscriptHint(text: hint) }
                 if scrolls {
@@ -27,8 +31,8 @@ struct AgentTranscriptView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: scrolls ? .infinity : nil, alignment: .top)
         .background(Neon.bgBottom)
-        .onAppear { if scrolls { model.start() } }
-        .onDisappear { if scrolls { model.stop() } }
+        .onAppear { if scrolls && ownsLifecycle { model.start() } }
+        .onDisappear { if scrolls && ownsLifecycle { model.stop() } }
     }
 
     @ViewBuilder private var rows: some View {
@@ -41,7 +45,7 @@ struct AgentTranscriptView: View {
             .buttonStyle(.plain).foregroundStyle(Neon.blue)
         }
         ForEach(model.blocks) { b in
-            TranscriptBlockView(block: b, expand: { model.fullText($0) })
+            TranscriptBlockView(block: b, expand: { await model.fullText($0) })
         }
         if model.hiddenCount > 0 {
             Text(plural(model.hiddenCount, "internal entry", "internal entries") + " hidden")
@@ -80,6 +84,7 @@ struct TranscriptHint: View {
 
 struct TerminalFirstView: View {
     let reason: String
+    var openTerminal: (() -> Void)?
     var showConversation: () -> Void = {}
     var body: some View {
         VStack(spacing: sz(10)) {
@@ -87,6 +92,7 @@ struct TerminalFirstView: View {
             Text("Opens in the terminal").font(Neon.font(14, weight: .semibold)).foregroundStyle(Neon.textPrimary)
             Text(reason).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            if let openTerminal { OpenInTerminalButton(action: openTerminal) }
             Button("Show the conversation anyway", action: showConversation)
                 .buttonStyle(.plain).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.blue)
         }
@@ -101,7 +107,7 @@ struct TranscriptBlockView: View {
     let block: TranscriptBlock
     /// Initial fold state; the offscreen renders draw both.
     var expanded = false
-    var expand: (Clip) -> String? = { _ in nil }
+    var expand: (Clip) async -> String? = { _ in nil }
 
     var body: some View {
         content.frame(maxWidth: .infinity, alignment: .leading)
@@ -126,6 +132,20 @@ struct TranscriptBlockView: View {
                  open: expanded && !c.text.isEmpty) {
                 ClipText(clip: c, color: Neon.textSecondary, expand: expand).italic()
             }
+        case .command(let name, let args):
+            HStack(spacing: sz(5)) {
+                Image(systemName: "chevron.right.square").foregroundStyle(Neon.indigo)
+                Text(name).font(Neon.font(11, weight: .semibold, design: .monospaced)).foregroundStyle(Neon.textPrimary)
+                if let args {
+                    Text(args).font(Neon.font(11, design: .monospaced)).foregroundStyle(Neon.textSecondary)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+            }
+            .font(Neon.font(11))
+            .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
+            .background(Capsule().fill(Neon.indigo.opacity(0.14)))
+            .overlay(Capsule().stroke(Neon.indigo.opacity(0.35), lineWidth: 1))
+            .fixedSize(horizontal: false, vertical: true)
         case .image:
             Label("Image", systemImage: "photo").font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
         case .bash(let cmd, let desc, let out, let err):
@@ -259,6 +279,36 @@ struct TranscriptBlockView: View {
 
 // MARK: - Pieces
 
+/// #797: the one "Open in terminal" look (the window header and the terminal-first state).
+struct OpenInTerminalButton: View {
+    let action: () -> Void
+    /// Icon only (a narrow window's header).
+    var compact = false
+    var body: some View {
+        Button(action: action) {
+            Label("Open in terminal", systemImage: "terminal")
+                .labelStyle(OpenInTerminalLabelStyle(compact: compact))
+                .font(Neon.font(11, weight: .semibold))
+                .foregroundStyle(Neon.terminal)
+                .padding(.horizontal, sz(10)).padding(.vertical, sz(5))
+                .background(Capsule().fill(Neon.terminal.opacity(0.12)))
+                .overlay(Capsule().stroke(Neon.terminal.opacity(0.45), lineWidth: 1))
+                .contentShape(Capsule())
+                .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .help("Open this session in the terminal (Return)")
+        .accessibilityLabel("Open in terminal")
+    }
+}
+
+private struct OpenInTerminalLabelStyle: LabelStyle {
+    let compact: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        if compact { configuration.icon } else { Label(configuration) }
+    }
+}
+
 private func plural(_ n: Int, _ word: String, _ many: String? = nil) -> String {
     "\(n) \(n == 1 ? word : many ?? word + "s")"
 }
@@ -369,7 +419,7 @@ private struct ClipText: View {
     var mono = false
     var markdown = false
     var color: Color = Neon.textPrimary
-    var expand: (Clip) -> String? = { _ in nil }
+    var expand: (Clip) async -> String? = { _ in nil }
     @State private var full: String?
 
     var body: some View {
@@ -380,7 +430,7 @@ private struct ClipText: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if clip.capped && full == nil {
-                Button("Show all (\(clip.total) chars)") { full = expand(clip) ?? clip.text }
+                Button("Show all (\(clip.total) chars)") { Task { full = await expand(clip) ?? clip.text } }
                     .buttonStyle(.plain).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.blue)
             }
         }

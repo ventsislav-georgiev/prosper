@@ -70,6 +70,8 @@ enum BlockBody: Equatable, Sendable {
     case compaction(trigger: String?, preTokens: Int?, summary: Clip?)
     case notice(String)
     case thread(agentId: String, title: String)
+    /// A slash command the user ran (`/model opus`): a small chip (OQ-56 default).
+    case command(name: String, args: String?)
     /// Tier 2: a tool's name and inputs, or "Unrecognized entry (type)" with raw JSON.
     case card(title: String, fields: [CardField], body: Clip?, raw: Clip?, isError: Bool)
     /// A line that failed to decode at all.
@@ -120,6 +122,7 @@ enum TranscriptKeys {
         "numLines": ["numLines", "num_lines"],
         "startLine": ["startLine", "start_line"],
         "totalLines": ["totalLines", "total_lines"],
+        "cwd": ["cwd", "workingDirectory", "working_directory"],
     ]
 
     static func get(_ o: [String: Any]?, _ key: String) -> Any? {
@@ -161,6 +164,8 @@ struct DecodedEntry {
     var sessionId: String?
     /// The agentId of a sidechain (subagent) entry; nil on the main thread.
     var sidechain: String?
+    /// The working directory the entry was written in (the header's project line).
+    var cwd: String?
     var items: [Item] = []
 }
 
@@ -203,6 +208,7 @@ enum TranscriptDecoder {
         var e = DecodedEntry()
         e.version = K.str(o, "version")
         e.sessionId = K.str(o, "sessionId")
+        e.cwd = K.str(o, "cwd").flatMap { $0.hasPrefix("/") && $0.count <= 1024 ? $0 : nil }
         if K.bool(o, "isSidechain") { e.sidechain = K.str(o, "agentId") ?? "subagent" }
         let type = K.str(o, "type") ?? ""
         if noiseTypes.contains(type) {
@@ -245,6 +251,7 @@ enum TranscriptDecoder {
                                        summary: t.isEmpty ? nil : Clip(t, cap: cap, source: source)), .specific)]
         }
         if let s = content as? String {
+            if let c = command(s) { return [.block(c, .specific)] }
             return s.isBlank ? [.hidden("user/empty")] : [.block(.user(Clip(s, cap: cap, source: source)), .specific)]
         }
         guard let parts = content as? [Any] else { return [unrecognized("user without content", o)] }
@@ -264,7 +271,8 @@ enum TranscriptDecoder {
             default: items.append(unrecognized("content \(K.str(b, "type") ?? "?")", b))
             }
         }
-        if !text.isBlank { items.insert(.block(.user(Clip(text, cap: cap, source: source)), .specific), at: 0) }
+        if let c = command(text) { items.insert(.block(c, .specific), at: 0) }
+        else if !text.isBlank { items.insert(.block(.user(Clip(text, cap: cap, source: source)), .specific), at: 0) }
         return items.isEmpty ? [.hidden("user/empty")] : items
     }
 
@@ -285,7 +293,10 @@ enum TranscriptDecoder {
                 items.append(t.isBlank ? .hidden("assistant/empty")
                                        : .block(.assistant(Clip(t, cap: cap, source: source)), .specific))
             case "thinking", "redacted_thinking":
-                items.append(.block(.thinking(Clip(K.str(b, "thinking") ?? "", cap: cap, source: source)), .specific))
+                // OQ-56 default: a thinking block with no recorded text (signature only) is hidden.
+                let t = K.str(b, "thinking") ?? ""
+                items.append(t.isBlank ? .hidden("assistant/thinking-unrecorded")
+                                       : .block(.thinking(Clip(t, cap: cap, source: source)), .specific))
             case "tool_use", "server_tool_use":
                 items.append(.toolUse(id: K.str(b, "id"), name: K.str(b, "name") ?? "Tool",
                                       input: K.obj(b, "input") ?? [:]))
@@ -315,6 +326,24 @@ enum TranscriptDecoder {
             return [.block(.user(Clip(p, cap: cap)), .specific)]
         }
         return [.hidden("attachment")]
+    }
+
+    /// `<command-name>/model</command-name><command-args>opus</command-args>` → a
+    /// command chip. Only when the text is that markup and nothing else, so prose
+    /// that mentions the tags stays prose; nil otherwise.
+    static func command(_ s: String) -> BlockBody? {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasPrefix("<command-"), let name = tag("command-name", in: t), name.hasPrefix("/"),
+              name.count <= 80, !name.contains(where: \.isNewline),
+              t.replacingOccurrences(of: "<(command-[a-z-]+)>[\\s\\S]*?</\\1>", with: "", options: .regularExpression).isBlank
+        else { return nil }
+        let args = tag("command-args", in: t).map { String($0.prefix(fieldCap)) }
+        return .command(name: name, args: args?.isBlank == false ? args : nil)
+    }
+
+    private static func tag(_ name: String, in s: String) -> String? {
+        guard let a = s.range(of: "<\(name)>"), let b = s.range(of: "</\(name)>", range: a.upperBound..<s.endIndex) else { return nil }
+        return s[a.upperBound..<b.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// `<local-command-stdout>x</local-command-stdout>` → `x`: Claude Code's wrapper tags
