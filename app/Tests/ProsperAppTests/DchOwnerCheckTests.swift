@@ -55,11 +55,12 @@ final class DchOwnerCheckTests: XCTestCase {
             case out(TailscaleCLIOutput)
             /// Killed at its bound: the production runner answers nil.
             case timeout
-            /// Still running when the check's own bound passes.
+            /// Still running when the check's own bound passes; killed at the call's bound.
             case hang(TimeInterval)
         }
         private let lock = NSLock()
         private var log: [String] = []
+        private var boundLog: [TimeInterval] = []
         private var table: [String: Reply]
         let installed: Set<String>
         init(_ replies: [String: Reply], installed: Set<String> = ["/cli"]) {
@@ -67,21 +68,23 @@ final class DchOwnerCheckTests: XCTestCase {
             self.installed = installed
         }
         var calls: [String] { lock.withLock { log } }
+        /// The bound each call was given, in call order.
+        var bounds: [TimeInterval] { lock.withLock { boundLog } }
         func set(_ key: String, _ reply: Reply) { lock.withLock { table[key] = reply } }
-        func run(_ path: String, _ args: [String]) -> TailscaleCLIOutput? {
+        func run(_ path: String, _ args: [String], _ bound: TimeInterval) -> TailscaleCLIOutput? {
             let key = "\(path) \(args[0])"
-            let reply: Reply? = lock.withLock { log.append(key); return table[key] }
+            let reply: Reply? = lock.withLock { log.append(key); boundLog.append(bound); return table[key] }
             switch reply {
             case .out(let o)?: return o
             case .timeout?: return nil
-            case .hang(let s)?: Thread.sleep(forTimeInterval: s); return nil
+            case .hang(let s)?: Thread.sleep(forTimeInterval: min(s, bound)); return nil
             case nil: return TailscaleCLIOutput(exit: 99, err: "unexpected call \(key)")
             }
         }
-        func whois(_ candidates: [String] = ["/cli"]) -> DchOwnerCheck.Lookup {
+        func whois(_ candidates: [String] = ["/cli"], bound: TimeInterval = DchOwnerCheck.timeout) -> DchOwnerCheck.Lookup {
             { ip, answered in
                 try DchOwnerCheck.tailscaleWhois(ip, statusAnswered: answered, candidates: candidates,
-                                                 isExecutable: { self.installed.contains($0) }, run: self.run)
+                                                 isExecutable: { self.installed.contains($0) }, bound: bound, run: self.run)
             }
         }
     }
@@ -101,9 +104,11 @@ final class DchOwnerCheckTests: XCTestCase {
     }
 
     private func gate(whois: @escaping DchOwnerCheck.Lookup, relax: Flag = Flag(), timeout: TimeInterval = 2,
-                      clock: Clock = Clock(), local: Set<String> = []) -> DchOwnerCheck {
+                      clock: Clock = Clock(), local: Set<String> = [],
+                      timerFired: @escaping @Sendable () -> Void = {}) -> DchOwnerCheck {
         DchOwnerCheck(whois: whois, allowWhenDown: { relax.value },
-                      isLocalAddress: { local.contains($0) }, timeout: timeout, now: { clock.now })
+                      isLocalAddress: { local.contains($0) }, timeout: timeout, now: { clock.now },
+                      timerFired: timerFired)
     }
 
     private func verdict(_ c: DchOwnerCheck, _ ip: String = phoneIP) -> Verdict? {
@@ -316,7 +321,12 @@ final class DchOwnerCheckTests: XCTestCase {
         XCTAssertEqual(DchOwnerCheck.statusText(ip: ip, .taggedPeer(TailscaleNode(userID: 1, name: "exit-node", tagged: true))),
                        "Refused exit-node (100.64.0.1): tagged Tailscale devices aren't allowed.")
         XCTAssertEqual(DchOwnerCheck.statusText(ip: ip, .unusable("tailscale whois failed (boom)")),
-                       "Couldn't verify 100.64.0.1: tailscale whois failed (boom). Tailscale is answering, so this can't be allowed.")
+                       "Couldn't verify 100.64.0.1: tailscale whois failed (boom). "
+                       + "Refused; \"Allow when Tailscale isn't answering\" doesn't cover this.")
+        // QA #635 r2 N4: a host not Running reads plainly, with nothing claiming Tailscale is up.
+        XCTAssertEqual(DchOwnerCheck.statusText(ip: ip, .unusable("Tailscale on this Mac is Stopped, not connected")),
+                       "Couldn't verify 100.64.0.1: Tailscale on this Mac is Stopped, not connected. "
+                       + "Refused; \"Allow when Tailscale isn't answering\" doesn't cover this.")
         XCTAssertEqual(DchOwnerCheck.statusText(ip: ip, .thisMac),
                        "Refused 100.64.0.1: it's this Mac's own address, which any app or user on this Mac can use.")
         XCTAssertEqual(DchOwnerCheck.statusText(ip: ip, .unknownPeer),
@@ -376,9 +386,9 @@ final class DchOwnerCheckTests: XCTestCase {
         }
         for state in ["Stopped", "NeedsLogin", "Starting"] {
             XCTAssertEqual(error(#"{"BackendState":"\#(state)","Self":{"UserID":1}}"#),
-                           WhoisUnusable(cause: "Tailscale isn't connected (\(state))", askAgain: true))
+                           WhoisUnusable(cause: "Tailscale on this Mac is \(state), not connected", askAgain: true))
         }
-        XCTAssertEqual(error(#"{"Self":{"UserID":1}}"#), WhoisUnusable(cause: "Tailscale isn't connected (no state)", askAgain: true))
+        XCTAssertEqual(error(#"{"Self":{"UserID":1}}"#), WhoisUnusable(cause: "Tailscale on this Mac is in no state, not connected", askAgain: true))
         XCTAssertEqual(error(#"{"BackendState":"Running","Self":{}}"#), WhoisUnusable(cause: "Tailscale's status has no user for this Mac"))
         XCTAssertEqual(error("not json"), WhoisUnusable(cause: "Tailscale's status couldn't be read"))
         XCTAssertEqual(error(#"{"Node":{"Name":"x"},"UserProfile":{"LoginName":"me@example.com"}}"#, peer: true),
@@ -418,9 +428,9 @@ final class DchOwnerCheckTests: XCTestCase {
                 want: .unavailable("Tailscale isn't answering (\(Self.refusedToConnect))"), cached: false),
             Row(name: "status exits 1, no message", status: Self.fail(""),
                 want: .unavailable("Tailscale isn't answering (no message)"), cached: false),
-            Row(name: "Stopped", status: Self.status("Stopped"), want: .unusable("Tailscale isn't connected (Stopped)"), cached: false),
-            Row(name: "NeedsLogin", status: Self.status("NeedsLogin"), want: .unusable("Tailscale isn't connected (NeedsLogin)"), cached: false),
-            Row(name: "Starting", status: Self.status("Starting"), want: .unusable("Tailscale isn't connected (Starting)"), cached: false),
+            Row(name: "Stopped", status: Self.status("Stopped"), want: .unusable("Tailscale on this Mac is Stopped, not connected"), cached: false),
+            Row(name: "NeedsLogin", status: Self.status("NeedsLogin"), want: .unusable("Tailscale on this Mac is NeedsLogin, not connected"), cached: false),
+            Row(name: "Starting", status: Self.status("Starting"), want: .unusable("Tailscale on this Mac is Starting, not connected"), cached: false),
             Row(name: "status unreadable", status: Self.json("Warning: something\n{"),
                 want: .unusable("Tailscale's status couldn't be read"), cached: true),
             Row(name: "CLI can't start", status: .out(TailscaleCLIOutput(exit: -1)),
@@ -499,7 +509,7 @@ final class DchOwnerCheckTests: XCTestCase {
         relax.value = true
         let cli = FakeCLI(["/cli status": Self.status("Starting"), "/cli whois": Self.phoneWhois])
         let c = gate(whois: cli.whois(), relax: relax)
-        XCTAssertEqual(verdict(c), .unusable("Tailscale isn't connected (Starting)"))
+        XCTAssertEqual(verdict(c), .unusable("Tailscale on this Mac is Starting, not connected"))
         cli.set("/cli status", Self.running)
         XCTAssertEqual(verdict(c), .owner, "no 30 s lockout once Tailscale is up")
         XCTAssertEqual(cli.calls, ["/cli status", "/cli status", "/cli whois"])
@@ -531,12 +541,111 @@ final class DchOwnerCheckTests: XCTestCase {
         XCTAssertEqual(verdict(gate(whois: noneUp.whois(all))), .unavailable("Tailscale isn't answering (first)"))
         let oneAnswered = FakeCLI(["\(app) status": Self.status("NeedsLogin"), "\(brew) status": Self.fail("down")],
                                   installed: [app, brew])
-        XCTAssertEqual(verdict(gate(whois: oneAnswered.whois(all), relax: relax)), .unusable("Tailscale isn't connected (NeedsLogin)"),
+        XCTAssertEqual(verdict(gate(whois: oneAnswered.whois(all), relax: relax)), .unusable("Tailscale on this Mac is NeedsLogin, not connected"),
                        "one CLI answered: Tailscale is answering, never relaxed")
         let unreadable = FakeCLI(["\(app) status": Self.json("{"), "\(brew) status": Self.running], installed: [app, brew])
         XCTAssertEqual(verdict(gate(whois: unreadable.whois(all), relax: relax)), .unusable("Tailscale's status couldn't be read"))
         XCTAssertEqual(unreadable.calls, ["\(app) status"], "an answer it can't read stops there")
         XCTAssertEqual(verdict(gate(whois: FakeCLI([:], installed: []).whois(all), relax: relax)), .unverified("Tailscale isn't installed"))
+    }
+
+    /// QA #635 r2 N3: a CLI that answered "Stopped" means Tailscale is answering, so a later CLI
+    /// that hangs past the bound is "unusable", never relaxed by the setting.
+    func testNotRunningThenHungCLIIsNeverRelaxed() {
+        let app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale", brew = "/opt/homebrew/bin/tailscale"
+        let relax = Flag()
+        relax.value = true
+        let cli = FakeCLI(["\(app) status": Self.status("Stopped"), "\(brew) status": .hang(3)], installed: [app, brew])
+        let v = verdict(gate(whois: cli.whois(DchOwnerCheck.cliCandidates), relax: relax, timeout: 0.3))
+        XCTAssertEqual(v, .unusable(DchOwnerCheck.lateCause(0.3)))
+        XCTAssertEqual(v?.allowed, false)
+        XCTAssertEqual(cli.calls, ["\(app) status", "\(brew) status"])
+    }
+
+    /// QA #635 r2 N1: the installed CLIs split the bound for their status calls, so a hung one
+    /// still leaves a Running later one time to answer inside the check's own bound. QA #640
+    /// INFO 1: never under `minStatusBound` each, so a cold CLI launch isn't cut.
+    func testHungCLIsLeaveTimeForALaterOne() {
+        let all = DchOwnerCheck.cliCandidates
+        let (app, brew, ports) = (all[0], all[1], all[3])
+        let cli = FakeCLI(["\(app) status": .hang(10), "\(ports) status": Self.running, "\(ports) whois": Self.phoneWhois],
+                          installed: [app, ports])
+        XCTAssertEqual(verdict(gate(whois: cli.whois(all, bound: 2.5), timeout: 2.5)), .owner)
+        XCTAssertEqual(cli.calls, ["\(app) status", "\(ports) status", "\(ports) whois"])
+        XCTAssertEqual(cli.bounds, [1.25, 1.25, 2.5], "status calls share the bound, whois gets all of it")
+
+        let three = FakeCLI(["\(app) status": Self.fail("down"), "\(brew) status": Self.fail("down"),
+                             "\(ports) status": Self.running, "\(ports) whois": Self.phoneWhois], installed: [app, brew, ports])
+        XCTAssertEqual(verdict(gate(whois: three.whois(all, bound: 1.5))), .owner)
+        XCTAssertEqual(three.bounds, [1, 1, 1, 1.5], "a third of 1.5 s is floored to minStatusBound")
+        XCTAssertEqual(DchOwnerCheck.timeoutCause(2.0 / 3), "Tailscale didn't answer within 0.7 s")
+    }
+
+    /// QA #635 r2 N2: a lookup that outlives its bound is not stacked: a reconnect from that
+    /// address meanwhile gets the timeout verdict at once, and only once the lookup returns is
+    /// Tailscale asked again.
+    func testLookupOutlivingItsBoundIsNotAskedAgain() {
+        let w = answer(peer: Self.phone)
+        let hold = DispatchSemaphore(value: 0)
+        w.hold = hold
+        let c = gate(w, timeout: 0.2)
+        let late = Verdict.unavailable(DchOwnerCheck.timeoutCause(0.2))
+        XCTAssertEqual(verdict(c), late)
+        XCTAssertEqual(verdict(c), late, "the reconnect gets the timeout verdict")
+        XCTAssertEqual(w.asked, [Self.phoneIP], "and starts no second lookup")
+        XCTAssertEqual(verdict(c, "100.64.0.3"), late, "another address asks on its own")
+        XCTAssertEqual(w.asked, [Self.phoneIP, "100.64.0.3"])
+        w.hold = nil
+        hold.signal()
+        hold.signal()
+        var v = verdict(c)
+        let end = Date() + 5
+        while v != .owner, Date() < end {
+            Thread.sleep(forTimeInterval: 0.02)
+            v = verdict(c)
+        }
+        XCTAssertEqual(v, .owner, "asked again once the lookup returned")
+        XCTAssertEqual(w.asked.filter { $0 == Self.phoneIP }.count, 2)
+    }
+
+    /// #812: a lookup that returns inside its bound leaves no timeout verdict behind once the
+    /// timer fires; the next connect from that address (uncached answer) asks again.
+    func testFastLookupLeavesNoTimeoutVerdictBehind() {
+        final class Asked: @unchecked Sendable { var n = 0 }
+        let asked = Asked()
+        let fired = DispatchSemaphore(value: 0)
+        let c = gate(whois: { _, _ in
+            asked.n += 1
+            throw WhoisUnusable(cause: "down", askAgain: true)
+        }, timeout: 0.2, timerFired: { fired.signal() })
+        let first = verdict(c)
+        XCTAssertNotEqual(first, .unavailable(DchOwnerCheck.timeoutCause(0.2)))
+        XCTAssertEqual(fired.wait(timeout: .now() + 5), .success, "the first lookup's timer fired")
+        XCTAssertEqual(verdict(c), first, "the real verdict, not the timer's")
+        XCTAssertEqual(asked.n, 2, "a second lookup")
+    }
+
+    /// QA #640 F1: `tailscale status` answering just after the timer fired turns the verdict kept
+    /// for reconnects into the refusal, so with "Allow when Tailscale isn't answering" on no
+    /// reconnect gets in unverified while whois, which may refuse the device, still runs.
+    func testStatusAnsweringAfterTheTimerRefusesReconnects() {
+        let relax = Flag()
+        relax.value = true
+        let fired = DispatchSemaphore(value: 0), answered = DispatchSemaphore(value: 0), hold = DispatchSemaphore(value: 0)
+        let other = TailscaleNode(userID: 2, nodeID: "n3", login: "other@example.com", name: "their-phone")
+        let c = gate(whois: { _, statusAnswered in
+            fired.wait()
+            statusAnswered()
+            answered.signal()
+            hold.wait()
+            return TailscaleWhois(host: Self.me, peer: other)
+        }, relax: relax, timeout: 0.2, timerFired: { fired.signal() })
+        XCTAssertEqual(verdict(c), .unverified(DchOwnerCheck.timeoutCause(0.2)), "the timer, before status answered")
+        XCTAssertEqual(answered.wait(timeout: .now() + 5), .success)
+        let v = verdict(c)
+        XCTAssertEqual(v, .unusable(DchOwnerCheck.lateCause(0.2)), "the reconnect, once status answered")
+        XCTAssertEqual(v?.allowed, false)
+        hold.signal()
     }
 
     /// QA #635 INFO 4: connections from an address whose check is in flight wait for that check;

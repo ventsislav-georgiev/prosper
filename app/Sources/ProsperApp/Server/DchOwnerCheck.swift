@@ -106,11 +106,17 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
     private let timeout: TimeInterval
     private let ttl: TimeInterval
     private let now: @Sendable () -> Date
+    /// Test seam: runs after the verdict timer did its work.
+    private let timerFired: @Sendable () -> Void
     private let log = Logger(subsystem: "com.prosper.app", category: "DchServer")
     private let lock = NSLock()
     private var cache: [String: (verdict: Verdict, until: Date)] = [:]
     /// Who waits on the check in flight per address (QA #635 INFO 4).
     private var waiting: [String: [@Sendable (Verdict) -> Void]] = [:]
+    /// QA #635 r2 N2: the timeout verdict of an address whose lookup outlived its bound, until
+    /// that lookup returns. A peer reconnecting meanwhile gets it at once and forks no CLI, so
+    /// a hung Tailscale never stacks lookups per address.
+    private var outlived: [String: Verdict] = [:]
     private var lastLogged: String?
 
     /// Why the last device was refused, or let in unverified; nil once an owner's device
@@ -122,17 +128,21 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
          isLocalAddress: @escaping @Sendable (String) -> Bool = { DchOwnerCheck.isLocalAddress($0) },
          timeout: TimeInterval = DchOwnerCheck.timeout,
          ttl: TimeInterval = DchOwnerCheck.ttl,
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() },
+         timerFired: @escaping @Sendable () -> Void = {}) {
         self.whois = whois
         self.allowWhenDown = allowWhenDown
         self.isLocalAddress = isLocalAddress
         self.timeout = timeout
         self.ttl = ttl
         self.now = now
+        self.timerFired = timerFired
     }
 
     /// Decides `ip` off the caller's queue and calls `done` exactly once, within `timeout`.
-    /// A whois that answers later is ignored (the production CLI is killed at the same bound).
+    /// A whois that answers later is ignored. The production lookup ends within its status calls'
+    /// share of the bound (at least `minStatusBound` each) plus whois's bound, and `outlived`
+    /// covers that tail.
     func check(_ ip: String, done: @escaping @Sendable (Verdict) -> Void) {
         // This Mac's own addresses: a process of any local user can connect from them, and whois
         // would name this Mac, so its owner. Decided with no whois. Loopback is the address gate's:
@@ -146,6 +156,7 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
                 cache[ip] = nil
             }
             if own { return .known(.thisMac) }
+            if let v = outlived[ip] { return .known(v) }
             // A phone's burst (handshake, watch, attach) asks once: later connections from an
             // address being checked wait for that check.
             // ponytail: per address only, no global cap: N new addresses at once fork N CLIs;
@@ -166,18 +177,37 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         case .ask:
             break
         }
-        let answered = OSAllocatedUnfairLock(initialState: false)
         let claimed = OSAllocatedUnfairLock(initialState: false)
         let once: @Sendable (Verdict, Bool) -> Void = { v, keep in
             if claimed.withLock({ let first = !$0; $0 = true; return first }) { self.finish(ip, v, cache: keep, only: nil) }
         }
-        let whois = whois
+        // All guarded by `lock`: whether `tailscale status` answered, and whether the lookup
+        // returned, so whether `outlived` is ours.
+        final class Ran: @unchecked Sendable { var answered = false, returned = false }
+        let lookup = Ran()
+        let whois = whois, late = Verdict.unusable(Self.lateCause(timeout))
         DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result {
+                try whois(ip) {
+                    self.lock.withLock {
+                        lookup.answered = true
+                        // QA #640 F1: Tailscale is answering after all, so reconnects served the
+                        // timer's relaxable verdict now get the refusal. Set only while this
+                        // lookup runs, so it's ours.
+                        if self.outlived[ip] != nil { self.outlived[ip] = late }
+                    }
+                }
+            }
+            let answered: Bool = self.lock.withLock {
+                lookup.returned = true
+                self.outlived[ip] = nil
+                return lookup.answered
+            }
             do {
-                once(Self.decide(try whois(ip) { answered.withLock { $0 = true } }), true)
+                once(Self.decide(try result.get()), true)
             } catch let e as WhoisUnavailable {
                 // Once status answered, Tailscale is answering: nothing after it is relaxed.
-                once(answered.withLock { $0 } ? .unusable(e.cause) : .unavailable(e.cause), false)
+                once(answered ? .unusable(e.cause) : .unavailable(e.cause), false)
             } catch let e as WhoisUnusable {
                 once(.unusable(e.cause), !e.askAgain)
             } catch {
@@ -186,8 +216,14 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
             // QA #635 F2: only a timeout before `tailscale status` answered is "not answering".
-            once(answered.withLock { $0 } ? .unusable(Self.lateCause(self.timeout))
-                                          : .unavailable(Self.timeoutCause(self.timeout)), false)
+            // Read under the same lock as the `outlived` write (QA #640 F1).
+            let v: Verdict = self.lock.withLock {
+                let v = lookup.answered ? late : .unavailable(Self.timeoutCause(self.timeout))
+                if !lookup.returned { self.outlived[ip] = v }
+                return v
+            }
+            once(v, false)
+            self.timerFired()
         }
     }
 
@@ -228,13 +264,16 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         callers.forEach { $0(v) }
     }
 
+    /// Seconds for user copy, at most one decimal: "0.7", not "0.666667".
+    static func seconds(_ t: TimeInterval) -> String { String(format: "%g", (t * 10).rounded() / 10) }
+
     static func timeoutCause(_ t: TimeInterval) -> String {
-        "Tailscale didn't answer within \(String(format: "%g", t)) s"
+        "Tailscale didn't answer within \(seconds(t)) s"
     }
 
     /// The bound passed after `tailscale status` answered: Tailscale is up, whois didn't finish.
     static func lateCause(_ t: TimeInterval) -> String {
-        "Tailscale answered but didn't finish within \(String(format: "%g", t)) s"
+        "Tailscale answered but didn't finish within \(seconds(t)) s"
     }
 
     /// The settings status line (and the log line) for a verdict; nil for the owner.
@@ -260,7 +299,9 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         case .unavailable(let cause):
             return "Couldn't verify \(ip): \(cause). Turning on \"Allow when Tailscale isn't answering\" would let it in."
         case .unusable(let cause):
-            return "Couldn't verify \(ip): \(cause). Tailscale is answering, so this can't be allowed."
+            // QA #635 r2 N4: no "Tailscale is answering" here, it read as contradicting a cause
+            // like "Tailscale on this Mac is Stopped".
+            return "Couldn't verify \(ip): \(cause). Refused; \"Allow when Tailscale isn't answering\" doesn't cover this."
         }
     }
 
@@ -293,20 +334,30 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         "/opt/local/bin/tailscale",
     ]
 
+    /// The least a status call gets when the CLIs split the bound: a cold CLI launch needs it.
+    static let minStatusBound: TimeInterval = 1
+
     /// Status, then whois, through the first CLI whose `tailscale status` answers Running (QA #635
     /// INFO 6: the App Store app can be installed with its daemon off while a Homebrew tailscaled
     /// runs). A CLI that isn't answering, or answers not Running, hands over to the next one. When
     /// none is Running: a not-Running answer wins (Tailscale is answering, never relaxed), else
-    /// the first "not answering". `run` and `isExecutable` are the tests' seams.
+    /// the first "not answering". QA #635 r2 N1: the installed CLIs split `bound` for their status
+    /// calls (never under `minStatusBound`), so a hung first one still leaves a later Running one
+    /// time to answer; whois gets the whole `bound`. `run(cli, args, bound)`, `isExecutable`
+    /// and `bound` are the tests' seams.
     static func tailscaleWhois(_ ip: String, statusAnswered: () -> Void = {},
                                candidates: [String] = cliCandidates,
                                isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
-                               run: (String, [String]) -> TailscaleCLIOutput? = { runCLI($0, $1) }) throws -> TailscaleWhois {
+                               bound: TimeInterval = timeout,
+                               run: (String, [String], TimeInterval) -> TailscaleCLIOutput? = { runCLI($0, $1, bound: $2) }) throws -> TailscaleWhois {
         var notAnswering: WhoisUnavailable?, notRunning: WhoisUnusable?
-        for cli in candidates where isExecutable(cli) {
+        let installed = candidates.filter(isExecutable)
+        // ponytail: worst case is now N x minStatusBound + bound when every CLI hangs.
+        let statusBound = max(bound / Double(max(installed.count, 1)), min(bound, minStatusBound))
+        for cli in installed {
             let host: TailscaleNode
             do {
-                host = try Self.host(fromStatus: run(cli, ["status", "--json", "--peers=false"]))
+                host = try Self.host(fromStatus: run(cli, ["status", "--json", "--peers=false"], statusBound), bound: statusBound)
             } catch let e as WhoisUnavailable {
                 notAnswering = notAnswering ?? e
                 continue
@@ -316,7 +367,7 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
                 continue
             }
             statusAnswered()
-            return TailscaleWhois(host: host, peer: try peer(fromWhois: run(cli, ["whois", "--json", ip])))
+            return TailscaleWhois(host: host, peer: try peer(fromWhois: run(cli, ["whois", "--json", ip], bound), bound: bound))
         }
         throw notRunning ?? notAnswering ?? WhoisUnavailable(cause: "Tailscale isn't installed")
     }
@@ -324,8 +375,8 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
     /// `tailscale status --json --peers=false` (nil: timed out). Anything short of an answer is
     /// "not answering"; `--json` exits 0 in every backend state, so a non-zero exit means the CLI
     /// couldn't reach tailscaled.
-    static func host(fromStatus r: TailscaleCLIOutput?) throws -> TailscaleNode {
-        guard let r else { throw WhoisUnavailable(cause: timeoutCause(timeout)) }
+    static func host(fromStatus r: TailscaleCLIOutput?, bound: TimeInterval = timeout) throws -> TailscaleNode {
+        guard let r else { throw WhoisUnavailable(cause: timeoutCause(bound)) }
         guard r.exit != -1 else { throw WhoisUnavailable(cause: "the Tailscale command couldn't start") }
         guard r.exit == 0 else { throw WhoisUnavailable(cause: "Tailscale isn't answering (\(firstLine(r.err)))") }
         return try parseHost(r.out)
@@ -333,8 +384,8 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
 
     /// `tailscale whois --json <ip>` once status answered (nil: timed out); nil for a peer
     /// Tailscale doesn't know. Every failure here is "unusable": Tailscale is answering.
-    static func peer(fromWhois r: TailscaleCLIOutput?) throws -> TailscaleNode? {
-        guard let r else { throw WhoisUnusable(cause: "tailscale whois didn't answer within \(String(format: "%g", timeout)) s", askAgain: true) }
+    static func peer(fromWhois r: TailscaleCLIOutput?, bound: TimeInterval = timeout) throws -> TailscaleNode? {
+        guard let r else { throw WhoisUnusable(cause: "tailscale whois didn't answer within \(seconds(bound)) s", askAgain: true) }
         guard r.exit != -1 else { throw WhoisUnusable(cause: "tailscale whois couldn't start", askAgain: true) }
         if r.exit == 0 { return try parsePeer(r.out) }
         if r.err.contains("peer not found") { return nil }
@@ -383,7 +434,7 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
             throw WhoisUnusable(cause: "Tailscale's status couldn't be read")
         }
         guard s.BackendState == "Running" else {
-            throw WhoisUnusable(cause: "Tailscale isn't connected (\(s.BackendState ?? "no state"))", askAgain: true)
+            throw WhoisUnusable(cause: "Tailscale on this Mac is \(s.BackendState ?? "in no state"), not connected", askAgain: true)
         }
         guard let me = s.me, let id = me.UserID else {
             throw WhoisUnusable(cause: "Tailscale's status has no user for this Mac")
@@ -415,12 +466,12 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         var status: Int32 = -1
     }
 
-    /// One CLI call, killed by its pid after `timeout` (DchCommand.bounded); nil when it was.
-    static func runCLI(_ cli: String, _ args: [String]) -> TailscaleCLIOutput? {
+    /// One CLI call, killed by its pid after `bound` (DchCommand.bounded); nil when it was.
+    static func runCLI(_ cli: String, _ args: [String], bound: TimeInterval = timeout) -> TailscaleCLIOutput? {
         var vars = ProcessInfo.processInfo.environment
         vars["TAILSCALE_BE_CLI"] = "1"   // the app binary acts as the CLI, never the GUI
         let env = vars, exit = Exit()
-        guard let out = DchCommand.bounded(timeout, { onPid in
+        guard let out = DchCommand.bounded(bound, { onPid in
             let r = DchCommand.runCapturingBoth(args: args, env: env, path: cli, onPid: onPid)
             exit.err = r.err
             exit.status = r.status

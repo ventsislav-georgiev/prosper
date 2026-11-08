@@ -73,7 +73,7 @@ tag from the now-released section and put it on the new top draft.
   devices are refused too, unless you turn on "Allow when Tailscale isn't answering" in
   Settings, which lets any device that can reach this Mac in while Tailscale isn't answering.
   Remote Terminal's settings now say why a device was refused, and when port 8771 is taken
-  (say by `dch serve`) or this Mac has no Tailscale address. (#777)
+  (say by `dch serve`) or this Mac has no Tailscale address. (#777, #812)
 
 ## v2.173.0
 
